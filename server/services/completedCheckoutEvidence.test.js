@@ -29,7 +29,8 @@ describe('completed claim checkout evidence', () => {
   afterEach(async () => { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); });
 
   it('captures the exact ordinary checkout before completion without granting claim authority', async () => {
-    agent.metadata = { isWorktree: true, sourceWorkspace: repoPath, workspacePath: path, worktreeBranch: branch };
+    agent.metadata = { isWorktree: true, sourceWorkspace: repoPath, workspacePath: path, worktreeBranch: branch,
+      claimBranches: ['claim/reserved-other-checkout'] };
     const receipts = await captureCompletedCheckouts(agent, { success: true });
     expect(receipts).toHaveLength(1);
     expect(receipts[0]).toMatchObject({ branch, head, incarnation: { pointer: { ino: expect.any(String) } } });
@@ -37,8 +38,8 @@ describe('completed claim checkout evidence', () => {
     expect(await captureCompletedCheckouts({ ...agent, metadata: { ...agent.metadata, workspacePath: repoPath } }, { success: true })).toEqual([]);
   });
 
-  it('captures a claim run that works from the source checkout without a separate sourceWorkspace', async () => {
-    agent.metadata = { claimPicksOwnBranch: true, isWorktree: false, workspacePath: repoPath, claimBranches: [branch] };
+  it.each([true, false])('captures a bound claim run from the source checkout, picker=%s', async picker => {
+    agent.metadata = { claimPicksOwnBranch: picker, isWorktree: false, workspacePath: repoPath, claimBranches: [branch] };
     const receipts = await captureCompletedCheckouts(agent, { success: true });
     expect(receipts).toEqual([expect.objectContaining({ branch, head, path: expect.stringMatching(/claim$/) })]);
     expect(await hasCompletedCheckoutEvidence([completed(receipts)], target())).toBe(true);

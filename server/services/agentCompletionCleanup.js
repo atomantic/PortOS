@@ -35,7 +35,7 @@ import { updateAgent } from './cosAgentLifecycle.js';
 import { updateTask, addTask, reviveBlockedTask } from './cosTaskStore.js';
 import { checkStagePrecondition } from './cosTaskGenerator.js';
 import { PIPELINE_STAGE_BEHAVIOR_FLAGS, normalizeReviewers } from '../lib/validation.js';
-import { PATHS, rmGuarded, tryReadFile } from '../lib/fileUtils.js';
+import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, doneSentinelName, doneSentinelPath as resolveDoneSentinelPath } from '../lib/agentSentinel.js';
 import * as jiraService from './jira.js';
 import * as git from './git.js';
@@ -46,27 +46,20 @@ import { PR_COMPLETIONS, PR_CREATION, resolvePrCompletion, resolvePrCreation } f
 import { resolvePrOpenedBy, PR_OPENED_BY } from '../lib/slashdoInvocation.js';
 import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '../lib/agentExecutionProfiles.js';
 import { ensureTaskThread } from './brainTaskThreads.js';
+import { acknowledgeCompletionSentinel, completionSentinelPresent } from './agentCompletionSentinel.js';
 
 const ROOT_DIR = PATHS.root;
 
 /**
- * What a failed completion-cleanup step does to the steps after it. Chosen once,
- * at the entry point, because it is a property of the CALLER: the runner hands a
- * throw to its completion handler; the in-process spawners, which run this from
- * a `finally`, log it and keep going so one bad step cannot strand the worktree
- * cleanup or the pipeline hand-off behind it.
+ * Every independent step runs. The runner propagates its first failure only
+ * after recording the other stages; in-process spawners log and return.
  */
 export const STEP_ERROR_POLICY = Object.freeze({
   PROPAGATE: 'propagate',
   LOG_AND_CONTINUE: 'log-and-continue',
 });
 
-const STEP_FAILURE_HANDLERS = {
-  [STEP_ERROR_POLICY.PROPAGATE]: (err) => { throw err; },
-  [STEP_ERROR_POLICY.LOG_AND_CONTINUE]: (err, name, { agentId, task }) => {
-    emitLog('warn', `${name} failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id });
-  },
-};
+const cleanupRuns = new Map();
 
 /**
  * Advance a pipeline to its next stage after the current stage completes.
@@ -75,6 +68,12 @@ const STEP_FAILURE_HANDLERS = {
 export async function handlePipelineProgression(task, agentId, success) {
   const pipeline = task.metadata?.pipeline;
   if (!pipeline || pipeline.status !== 'running') return;
+
+  const updatePipeline = async patch => {
+    const written = await updateTask(task.id, patch, task.taskType);
+    if (written?.error || written?.statusChanged) throw new Error(`pipeline-write-unverified: ${written.error || 'task changed'}`);
+    return written;
+  };
 
   const { currentStage, stages } = pipeline;
   const stageResult = {
@@ -87,18 +86,18 @@ export async function handlePipelineProgression(task, agentId, success) {
   const updatedResults = [...(pipeline.stageResults || []), stageResult];
 
   if (!success) {
-    await updateTask(task.id, {
-      metadata: { ...task.metadata, pipeline: { ...pipeline, status: 'failed', stageResults: updatedResults } }
-    }, task.taskType);
+    await updatePipeline({
+      metadata: { pipeline: { ...pipeline, status: 'failed', stageResults: updatedResults } }
+    });
     emitLog('warn', `⛔ Pipeline ${pipeline.id} failed at stage ${currentStage}: ${stages[currentStage]?.name}`, { pipelineId: pipeline.id });
     return;
   }
 
   const nextStageIndex = currentStage + 1;
   if (nextStageIndex >= stages.length) {
-    await updateTask(task.id, {
-      metadata: { ...task.metadata, pipeline: { ...pipeline, status: 'completed', stageResults: updatedResults } }
-    }, task.taskType);
+    await updatePipeline({
+      metadata: { pipeline: { ...pipeline, status: 'completed', stageResults: updatedResults } }
+    });
     // Clean up pipeline artifacts (e.g., REVIEW.md left by stage 1)
     if (task.metadata.repoPath) {
       const repoRoot = resolve(task.metadata.repoPath);
@@ -126,9 +125,9 @@ export async function handlePipelineProgression(task, agentId, success) {
   // entered a restricted profile and whose next stage declares none fails
   // closed rather than handing that content to an unrestricted agent.
   if (isPublicReviewRestrictedProfile(task.metadata?.executionProfile) && !nextStage.executionProfile) {
-    await updateTask(task.id, {
-      metadata: { ...task.metadata, pipeline: { ...pipeline, status: 'failed', stageResults: updatedResults } }
-    }, task.taskType);
+    await updatePipeline({
+      metadata: { pipeline: { ...pipeline, status: 'failed', stageResults: updatedResults } }
+    });
     emitLog('warn', `⛔ Pipeline ${pipeline.id} stage ${nextStageIndex} declares no execution profile after a restricted stage`, { pipelineId: pipeline.id });
     return;
   }
@@ -137,9 +136,9 @@ export async function handlePipelineProgression(task, agentId, success) {
   if (nextStage.precondition && task.metadata.repoPath) {
     const check = checkStagePrecondition(nextStage, task.metadata.repoPath);
     if (!check.passed) {
-      await updateTask(task.id, {
-        metadata: { ...task.metadata, pipeline: { ...pipeline, status: 'failed', stageResults: updatedResults } }
-      }, task.taskType);
+      await updatePipeline({
+        metadata: { pipeline: { ...pipeline, status: 'failed', stageResults: updatedResults } }
+      });
       emitLog('info', `⏭️ Pipeline ${pipeline.id} stage ${nextStageIndex} precondition failed: ${check.reason}`, { pipelineId: pipeline.id });
       return;
     }
@@ -344,39 +343,114 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
  * entry point from its own source of truth.
  */
 async function runCompletionCleanupSteps(context, { onStepError }) {
-  const onFailure = STEP_FAILURE_HANDLERS[onStepError];
-  if (!onFailure) throw new Error(`Unknown completion-cleanup step error policy: ${onStepError}`);
-  const runStep = (name, step) => step().catch(err => onFailure(err, name, context));
-  await runStep('JIRA hand-off', () => completeJiraHandOff(context));
-  await runStep('Plan question notification', () => notifyPlanQuestionIfNeeded(context));
-  await runStep('Pipeline progression', () => handlePipelineProgression(context.task, context.agentId, context.effectiveSuccess));
-  await runStep('Creative Director completion', () => advanceCreativeDirectorIfNeeded(context));
+  if (!Object.values(STEP_ERROR_POLICY).includes(onStepError)) throw new Error(`Unknown completion-cleanup step error policy: ${onStepError}`);
+  if (cleanupRuns.has(context.agentId)) return cleanupRuns.get(context.agentId);
+  const run = performCompletionCleanupSteps(context, onStepError);
+  cleanupRuns.set(context.agentId, run);
+  try { return await run; } finally { cleanupRuns.delete(context.agentId); }
+}
+
+async function performCompletionCleanupSteps(context, onStepError) {
+  const state = context.agentState;
+  const durable = state?.status === 'completed' && typeof state.startedAt === 'string';
+  const stages = { ...state?.metadata?.completionCleanup?.stages };
+  const { recordCompletionCleanup } = durable ? await import('./cosAgentLifecycle.js') : {};
+  const persist = async patch => {
+    if (durable && !await recordCompletionCleanup(context.agentId, state.startedAt, patch)) throw new Error('completion-cleanup-write-unverified');
+  };
+  // A crash after terminal ingestion but before any step leaves this exact
+  // continuation on disk. Replays do not rerun completed external side effects.
+  await persist({ version: 1, status: 'pending', startedAt: state?.startedAt,
+    context: state?.metadata?.completionCleanup?.context || {
+      task: context.task, effectiveSuccess: context.effectiveSuccess, prOwnership: context.prOwnership,
+      prClaimVerified: context.prClaimVerified, branchProvenEmpty: context.branchProvenEmpty, outputBuffer: context.outputBuffer,
+    } });
+  let firstError;
+  const runStep = async (key, name, step, retryable = false) => {
+    const prior = stages[key];
+    if (prior?.status === 'done') return prior.value;
+    if (prior && !retryable) return; // An uncertain external hand-off needs its owning service's evidence.
+    try {
+      stages[key] = { status: 'running', retryable };
+      await persist({ stages: { [key]: stages[key] } });
+      const value = await step();
+      const held = (key === 'worktree' && Array.isArray(value) && value.length > 0)
+        || (key === 'sentinel' && auditEvidencePending(context));
+      stages[key] = { status: held ? 'held' : 'done', retryable: false, ...(value !== undefined && { value }) };
+      await persist({ stages: { [key]: stages[key] } });
+      return value;
+    } catch (err) {
+      const deferred = ['checkout-capture-pending', 'checkout-retirement-pending',
+        'completion-sentinel-generation-pending', 'completion-sentinel-generation-changed'].includes(err.message);
+      if (!deferred) firstError ||= err;
+      stages[key] = { status: deferred ? 'held' : 'failed', retryable: deferred || retryable, reason: err.message };
+      await persist({ stages: { [key]: stages[key] } }).catch(() => {});
+      emitLog(deferred ? 'info' : 'warn', `${name} ${deferred ? 'deferred' : 'failed'} for ${context.agentId}: ${err.message}`,
+        { agentId: context.agentId, taskId: context.task?.id });
+    }
+  };
+  // Durable ingestion and its continuation are sufficient to acknowledge this
+  // exact signal. An unrelated hand-off failure must not leave it as Git dirt.
+  if (['completed', 'failed'].includes(state?.status)) {
+    await runStep('sentinel', 'Completion sentinel removal', () => removeCompletionSentinel(context), true);
+  }
+  const deliveryContext = { ...context,
+    effectiveSuccess: state?.metadata?.completionCleanup?.context?.effectiveSuccess ?? context.effectiveSuccess };
+  await runStep('jira', 'JIRA hand-off', () => {
+    if (context.task?.metadata?.jiraTicketId && state?.metadata?.checkoutCapture?.status === 'pending') throw new Error('checkout-capture-pending');
+    return completeJiraHandOff(deliveryContext);
+  }, stages.jira?.reason === 'checkout-capture-pending');
+  await runStep('notification', 'Plan question notification', () => notifyPlanQuestionIfNeeded(context));
+  const waitForRepository = () => {
+    if (state?.metadata?.checkoutCapture?.status === 'pending') throw new Error('checkout-capture-pending');
+    if (state?.result?.cleanupPending === true
+      && (state.metadata?.repoStateVerification?.status !== 'completed'
+        || state.metadata?.completionCleanup?.stages?.worktree?.verifiedBy !== 'repository-preservation-receipt')) throw new Error('checkout-retirement-pending');
+  };
+  await runStep('pipeline', 'Pipeline progression', () => {
+    if (context.task?.metadata?.pipeline?.status === 'running') waitForRepository();
+    return handlePipelineProgression(context.task, context.agentId, deliveryContext.effectiveSuccess);
+  }, ['checkout-capture-pending', 'checkout-retirement-pending'].includes(stages.pipeline?.reason));
+  await runStep('creative', 'Creative Director completion', () => {
+    if (context.task?.metadata?.creativeDirector) waitForRepository();
+    return advanceCreativeDirectorIfNeeded(deliveryContext);
+  }, ['checkout-capture-pending', 'checkout-retirement-pending'].includes(stages.creative?.reason));
   // A terminal rejection is not proof that its audit artifacts were consumed.
   // Keep the checkout and original signal available for explicit recovery.
   const preserveAuditEvidence = auditEvidencePending(context);
   if (preserveAuditEvidence) {
     emitLog('warn', `Audit disposition incomplete for ${context.agentId}; preserving worktree and completion evidence`, { agentId: context.agentId });
   }
-  const cleanupWarnings = preserveAuditEvidence ? [] : await runStep('Worktree cleanup', () => completeWorktreeCleanup(context));
-  await runStep('Cleanup warning reporting', () => reportWorktreeCleanupWarnings({ ...context, cleanupWarnings }));
-  // Last, and never fatal under either policy: a janitorial `rm` that hits EPERM
-  // must not be able to abort the worktree cleanup and pipeline hand-off above.
-  //
-  // Gated on the record actually reaching an outcome. `finalizeAgent` runs
-  // `persistCompletionSummary` and `resolveFailedTaskUpdate` BEFORE it
-  // dispatches the output hook and calls `completeAgent`; a throw in either
-  // leaves the record `running`, and the orphan sweep's recovery hook is then
-  // what salvages the run — for a programmatic-I/O type the sentinel IS the
-  // deliverable it reads (an LI proposal, an issue-filing payload). Both
-  // spawners run this from a `finally`, so they reach here on exactly that
-  // path. An unreadable record counts as not-over: leaving the file for the
-  // stale sweep is the recoverable direction, destroying a deliverable is not.
-  // `failed` is an outcome too: left behind in a preserved worktree, the sentinel
-  // reads as uncommitted work and blocks every later merged-worktree cleanup.
-  if (['completed', 'failed'].includes(context.agentState?.status)) {
-    await removeCompletionSentinel(context)
-      .catch(err => emitLog('warn', `Completion sentinel removal failed for ${context.agentId}: ${err.message}`, { agentId: context.agentId }));
+  const cleanupWarnings = preserveAuditEvidence ? [] : await runStep('worktree', 'Worktree cleanup', async () => {
+    if (state?.metadata?.checkoutCapture?.status === 'pending') throw new Error('checkout-capture-pending');
+    if (await completionSentinelPresent(context.agentId, state?.metadata?.workspacePath)) throw new Error('completion-sentinel-generation-pending');
+    return completeWorktreeCleanup(context);
+  },
+    !stages.worktree || stages.worktree.retryable === true);
+  if (['done', 'held'].includes(stages.worktree?.status)) {
+    await runStep('report', 'Cleanup warning reporting', () => reportWorktreeCleanupWarnings({ ...context, cleanupWarnings }));
   }
+  await persist({ status: Object.values(stages).every(stage => stage.status === 'done') && !preserveAuditEvidence ? 'completed' : 'pending' });
+  if (firstError && onStepError === STEP_ERROR_POLICY.PROPAGATE) throw firstError;
+}
+
+/** Late completion callbacks replay only durable unfinished cleanup, never the
+ * provider result, output hook, task verdict or a completed external hand-off.
+ */
+export async function replayAgentCompletionCleanup(agentState) {
+  const receipt = agentState?.metadata?.completionCleanup;
+  if (agentState?.status !== 'completed' || receipt?.version !== 1 || receipt.status === 'completed') return;
+  const saved = receipt.context;
+  if (!saved || receipt.startedAt !== agentState.startedAt || saved.task?.id !== agentState.taskId) return;
+  if (agentState.metadata.checkoutCapture?.status === 'pending') {
+    const lifecycle = await import('./cosAgentLifecycle.js');
+    if (await lifecycle.retryCompletionCheckoutCapture(agentState.id).catch(() => false)) {
+      agentState = await lifecycle.getAgentRecord(agentState.id);
+    }
+  }
+  return runCompletionCleanupSteps({ ...saved,
+    prOwnership: saved.prOwnership || resolveRunnerPrOwnership({ task: saved.task, agent: {}, agentState }),
+    agentId: agentState.id, agentState }, { onStepError: STEP_ERROR_POLICY.LOG_AND_CONTINUE });
 }
 
 function resolveRunnerPrOwnership({ task, agent, agentState }) {
@@ -505,8 +579,6 @@ async function notifyPlanQuestionIfNeeded({ agentId, task, agentState }) {
         priority: PRIORITY_LEVELS.MEDIUM,
         link: appId ? `/apps/${appId}/documents` : undefined,
         metadata: { appId, agentId, taskType: planAnalysisType, category: 'plan-question' }
-      }).catch(err => {
-        emitLog('warn', `Failed to create plan_question notification: ${err.message}`, { agentId });
       });
 
       await rm(markerPath).catch(() => {});
@@ -524,8 +596,7 @@ async function advanceCreativeDirectorIfNeeded({ agentId, task, effectiveSuccess
   // user can resume from the UI.
   if (task?.metadata?.creativeDirector) {
     const { handleCreativeDirectorCompletion } = await import('./creativeDirector/completionHook.js');
-    handleCreativeDirectorCompletion(task, agentId, effectiveSuccess)
-      .catch((err) => console.log(`⚠️ creativeDirector completion hook failed: ${err.message}`));
+    await handleCreativeDirectorCompletion(task, agentId, effectiveSuccess);
   }
 }
 
@@ -562,8 +633,11 @@ export async function removeCompletionSentinel({ agentId, agent, agentState, tas
   if (typeof agentId !== 'string' || doneSentinelName(agentId) === DONE_SENTINEL_NAME) return;
   const workspace = agentState?.metadata?.workspacePath || agent?.workspacePath || null;
   if (!workspace) return;
-  // `rmGuarded`, like the stale-sentinel sweep that deletes these same files.
-  await rmGuarded(resolveDoneSentinelPath(workspace, agentId), { force: true });
+  const receipt = agentState?.metadata?.completionSentinel;
+  // No sentinel is harmless. An occupied marker without ingestion evidence is
+  // not acknowledged, even for a completed record predating this protocol.
+  if (!receipt && !await tryReadFile(resolveDoneSentinelPath(workspace, agentId))) return;
+  await acknowledgeCompletionSentinel({ agentId, workspace, receipt });
 }
 
 async function completeWorktreeCleanup({ agentId, task, effectiveSuccess, prOwnership, outputBuffer, prClaimVerified, branchProvenEmpty }) {

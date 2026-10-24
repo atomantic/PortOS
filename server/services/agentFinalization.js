@@ -1,3 +1,5 @@
+import { prepareCompletionTaskHandoff, recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
+import { hasClaimCheckoutBindings } from './completedCheckoutEvidence.js';
 import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 import { retryHoldMetadata, isDeliveryCleanupHeld } from '../lib/taskRetryHold.js';
 import { PR_COMPLETIONS, resolvePrCompletion, PR_MISSING_CATEGORY, prClaimWasVerified } from '../lib/prDisposition.js';
@@ -1938,8 +1940,8 @@ export async function finalizeAgent({
     errorAnalysis: { category: hookResult?.outcome?.reason || `task-${taskOutcome.status}`,
       message: taskOutcome.reason, permanent: true, actionable: false, requiresFallback: false },
   } : verdict;
-  const cleanupOwner = taskOutcome?.recovery?.mode === 'cleanup' ? await getAgentRecord(agentId) : null;
-  const cleanupEligible = cleanupOwner?.metadata?.isWorktree === true || isTruthyMeta(cleanupOwner?.metadata?.claimPicksOwnBranch);
+  const cleanupOwner = await getAgentRecord(agentId);
+  const cleanupEligible = cleanupOwner?.metadata?.isWorktree === true || hasClaimCheckoutBindings(cleanupOwner?.metadata);
   const terminalFailure = !verdict.success && (verdict.errorAnalysis?.actionable || verdict.errorAnalysis?.permanent)
     && !(verdict.source === 'reported' && verdict.errorAnalysis?.category === `task-${reportedTaskOutcome?.status}`);
   const taskUpdate = (deliveryHeld || (verdict.success && outcomeHeld)) && !terminatedByUser
@@ -1960,19 +1962,34 @@ export async function finalizeAgent({
     }
   }
 
-  // Sequential by design: completeAgent + updateTask share the cosState
-  // mutex (`withStateLock`) so parallelism gains nothing, AND ordering
-  // matters — if completeAgent throws, we must not mark the task completed.
+  // Each write shares the cosState mutex, but separate records are not atomic.
+  // Persist cleanup intent first so a crash after completeAgent can replay only
+  // the guarded task handoff; full finalization and hooks must not run twice.
   // completeAgentRun writes its own runs/<id>/metadata.json (separate lock),
   // so its place in the chain is purely about progress reporting on partial
   // failure.
-  await completeAgent(agentId, { ...completionRecord({
+  await stampLiExecutionVerdict(taskUpdate, task, { success: deliverySuccess, validationPassed, errorAnalysis: deliveryVerdict.errorAnalysis });
+  await updateAgent(agentId, { metadata: { completionCleanup: cleanupOwner?.metadata?.completionCleanup || { version: 1, status: 'pending', stages: {},
+    context: { task, effectiveSuccess: deliverySuccess, outputBuffer,
+      prClaimVerified: prClaimWasVerified(prEvidence.cleanupEvidence), branchProvenEmpty: prEvidence.branchProvenEmpty } } } });
+  if (cleanupEligible) await prepareCompletionTaskHandoff(await getAgentRecord(agentId),
+    Object.fromEntries(Object.entries(taskUpdate.metadata || {}).filter(([key, value]) =>
+      key !== 'privateSecurityScope' && JSON.stringify(value) !== JSON.stringify(preHookTask.metadata?.[key]))));
+  const completedAgent = await completeAgent(agentId, { ...completionRecord({
     task, verdict: deliveryVerdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed,
   }), executionSuccess, taskOutcome,
+    requireCheckoutSettlement: deliverySuccess && taskUpdate.status === 'completed' && cleanupEligible
+      && resolvePrCompletion(task.metadata) === PR_COMPLETIONS.REVIEW_THEN_MERGE,
     ...(['task-approval', 'task-recovery-exhausted'].includes(taskUpdate.metadata?.blockedCategory)
       || taskUpdate.metadata?.retryPendingCleanup === agentId || taskUpdate.metadata?.deliveryRecoveryAgentId === agentId
       ? { deliveryRecoveryOwned: true } : {}),
     ...(taskUpdate.metadata?.deliveryRecoveryAgentId === agentId ? { cleanupPending: true } : {}) });
+  const capturePending = completedAgent?.result?.cleanupPending === true;
+  if (capturePending) {
+    taskUpdate.status = 'in_progress';
+    taskUpdate.metadata = { ...taskUpdate.metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agentId,
+      taskOutcome: completedAgent.result.taskOutcome };
+  }
 
   if (runId) {
     // Every failed verdict overrides exit-code/commit rescue in run tracking,
@@ -1985,12 +2002,6 @@ export async function finalizeAgent({
     await completeAgentRun(runId, runOutput, exitCode, duration, deliveryVerdict.errorAnalysis, deliverySuccess ? null : false, { executionSuccess, taskOutcome });
   }
 
-  // LI hand-off execution verdict (#2779): stamp the per-proposal execution outcome into
-  // the task's FEDERATED metadata as part of this completion write, so the originating peer
-  // (which filed the proposal and runs LI for that app) can derive `recordProposalExecution`
-  // from the terminal synced task — cross-peer parity for the #2765 LOCAL write, which only
-  // lands on the peer that ran the agent.
-  await stampLiExecutionVerdict(taskUpdate, task, { success: deliverySuccess, validationPassed, errorAnalysis: deliveryVerdict.errorAnalysis });
 
   // The bounded source inventory belongs only to this run and its private
   // report. Task metadata is replicated to peers and reused in later prompts.
@@ -1998,7 +2009,9 @@ export async function finalizeAgent({
     delete task.privateSecurityScope;
     if (taskUpdate.metadata) delete taskUpdate.metadata.privateSecurityScope;
   }
-  const taskResult = await updateTask(task.id, taskUpdate, taskType);
+  const taskResult = capturePending
+    ? await recoverCompletionTaskHandoff(await getAgentRecord(agentId)) || { error: 'Completion cleanup task ownership changed' }
+    : await updateTask(task.id, taskUpdate, taskType);
   if (taskResult?.error && !isExpectedUnpersistedMiss(task, taskResult.error)) {
     const label = terminatedByUser ? 'blocked' : verdict.success ? 'completed' : 'failed';
     emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, { taskId: task.id, agentId, error: taskResult.error });
@@ -2022,7 +2035,7 @@ export async function finalizeAgent({
   // removed, local branch deleted, and no resume pointer recorded — destroying
   // the state the retry needs to open the PR that is missing.
   return {
-    success: deliverySuccess,
+    success: capturePending ? false : deliverySuccess,
     taskOutcome,
     prClaimVerified: prClaimWasVerified(prEvidence.cleanupEvidence),
     branchProvenEmpty: prEvidence.branchProvenEmpty,
@@ -2299,8 +2312,10 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
  */
 async function persistCompletionSummary(agentId, { workspacePath, finalSummary = null, existingRecord = null }) {
   const { doneSentinelPath, parseSentinelPayload } = await import('../lib/agentSentinel.js');
+  const { readCompletionSentinel } = await import('./agentCompletionSentinel.js');
+  const ingested = await readCompletionSentinel(agentId, workspacePath);
   const sentinelPath = doneSentinelPath(workspacePath, agentId);
-  const contents = sentinelPath ? await tryReadFile(sentinelPath) : null;
+  const contents = ingested?.contents ?? (sentinelPath ? await tryReadFile(sentinelPath) : null);
   let summary = null;
   let source = null;
   let taskOutcome = null;
@@ -2347,6 +2362,7 @@ async function persistCompletionSummary(agentId, { workspacePath, finalSummary =
       && existing.metadata.taskSummary.trim()) return taskOutcome;
   }
   await updateAgent(agentId, { metadata: {
+    ...(ingested ? { completionSentinel: ingested.receipt, completionSentinelContents: ingested.contents } : {}),
     taskSummary: summary,
     taskSummarySource: source,
     taskOutcome,
