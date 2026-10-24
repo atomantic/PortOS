@@ -163,6 +163,8 @@ describe('dataManager purge scope (#3327)', () => {
   const USER_STATE_CATEGORIES = {
     messages: 'drafts, the delivery_unknown send audit, triage rules and account config',
     review: 'Review Hub todos, pending CoS action requests and security assessment reports',
+    'image-render-usage': 'historical image accounting and deduplication identities',
+    'image-render-usage-backfills': 'import plans, preservation fingerprints and recovery journals',
   };
   it.each(Object.entries(USER_STATE_CATEGORIES))(
     'never offers a purge for %s, which holds %s',
@@ -201,9 +203,10 @@ describe('dataManager purge scope (#3327)', () => {
     await expect(purgeCategory('beeper', { subPath: 'attachments' })).rejects.toThrow(/is not purgeable/);
     await expect(purgeCategory('peer-execution')).rejects.toThrow(/is not purgeable/);
     await expect(purgeCategory('peer-execution', { subPath: 'fixture-operation/evidence.json' })).rejects.toThrow(/is not purgeable/);
-    for (const options of [undefined, { subPath: 'account' }]) {
-      await expect(purgeCategory('messages', options)).rejects.toMatchObject({ status: 403, code: 'CATEGORY_NOT_PURGEABLE' });
-      await expect(purgeCategory('review', options)).rejects.toMatchObject({ status: 403, code: 'CATEGORY_NOT_PURGEABLE' });
+    for (const category of Object.keys(USER_STATE_CATEGORIES)) {
+      for (const options of [undefined, { subPath: 'account' }]) {
+        await expect(purgeCategory(category, options)).rejects.toMatchObject({ status: 403, code: 'CATEGORY_NOT_PURGEABLE' });
+      }
     }
   });
 

@@ -112,6 +112,19 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('managed app repository sources', () => {
+  it('updates stale submodules through the managed flow without a recovery agent', async () => {
+    const status = canonicalStatus();
+    status.sources = [{ ...status.sources[0], clean: false, submodulesOnly: true, localVsOrigin: { ahead: 0, behind: 0, state: 'current' } }];
+    api.getAppRepositorySources.mockResolvedValue(status);
+    render(<RepositorySourcePanel appId="portos-default" appName="PortOS" hasLocalChanges />);
+    expect(await screen.findByText('submodules need updating')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resolve with agent' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Update app' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Update app' }));
+    expect(useAppOperation().startUpdate).toHaveBeenCalledWith('portos-default', 'PortOS', { syncFork: false });
+    expect(api.addCosTask).not.toHaveBeenCalled();
+  });
+
   it('explains and versions both independent checkouts', async () => {
     render(<RepositorySourcePanel appId="app-example" appName="Example App" />);
 

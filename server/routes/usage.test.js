@@ -3,6 +3,8 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
+vi.mock('../services/imageRenderUsage.js', () => ({ getImageRenderUsage: vi.fn(async () => ({ renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null })) }));
+
 vi.mock('../services/usage.js', () => ({
   getUsageSummary: vi.fn(),
   getUsage: vi.fn(),
@@ -55,6 +57,7 @@ vi.mock('../services/usageBackfill.js', () => ({
 }));
 
 import * as usage from '../services/usage.js';
+import { getImageRenderUsage } from '../services/imageRenderUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getHistoricalUsageBackfillStatus, startHistoricalUsageBackfill } from '../services/usageBackfill.js';
@@ -75,6 +78,28 @@ const buildApp = () => {
 describe('usage routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('GET /api/usage includes local image activity in the selected range without changing the text cost report', async () => {
+    usage.getUsageSummary.mockReturnValue({ report: { totals: { estimatedCost: 12 } } });
+    const response = await request(buildApp()).get('/api/usage?from=2026-07-01&to=2026-07-31');
+    expect(response.status).toBe(200);
+    expect(getImageRenderUsage).toHaveBeenCalledWith({ from: '2026-07-01', to: '2026-07-31' });
+    expect(response.body.imageRenders).toEqual({ renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null });
+    expect(response.body.report.totals.estimatedCost).toBe(12);
+  });
+
+  it('keeps text reporting available when the optional image ledger is damaged', async () => {
+    usage.getUsageSummary.mockReturnValue({ report: { totals: { estimatedCost: 12 } } });
+    getImageRenderUsage.mockRejectedValueOnce(new Error('Invalid image render usage receipt'));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await request(buildApp()).get('/api/usage');
+      expect(response.status).toBe(200);
+      expect(response.body.report.totals.estimatedCost).toBe(12);
+      expect(response.body.imageRenders).toEqual({ error: 'Image render usage is unavailable.' });
+      expect(logged).toHaveBeenCalled();
+    } finally { logged.mockRestore(); }
   });
 
   it('GET /api/usage/hourly projects only counters and bypasses all reporting work', async () => {
@@ -134,6 +159,7 @@ describe('usage routes', () => {
       providers: ['anthropic'],
       subscriptionSavings: { configured: false, families: [] },
       fleet: { instances: [], totals: null },
+      imageRenders: { renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null },
       monthlyHistory: [],
       monthlySeries: [],
       monthlyInstanceCount: 1,
@@ -414,12 +440,14 @@ describe('usage routes', () => {
     expect(startHistoricalUsageBackfill).toHaveBeenCalledTimes(1);
   });
 
-  it('POST /api/usage/backfill returns the Grok repair summary on the job', async () => {
+  it('POST /api/usage/backfill returns the Grok and Antigravity repair summaries on the job', async () => {
     const grok = { added: 2, turns: 1, images: 1, videos: 0, backedUp: true, note: null };
-    startHistoricalUsageBackfill.mockResolvedValue({ status: 'complete', corrected: 1, grok });
+    const agy = { added: 3, images: 3, backedUp: true, note: null };
+    startHistoricalUsageBackfill.mockResolvedValue({ status: 'complete', corrected: 1, grok, agy });
     const started = await request(buildApp()).post('/api/usage/backfill');
     expect(started.status).toBe(202);
     expect(started.body.grok).toEqual(grok);
+    expect(started.body.agy).toEqual(agy);
   });
 
   it('POST /api/usage/session records a session and returns its number', async () => {

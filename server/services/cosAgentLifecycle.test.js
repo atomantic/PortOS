@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 
-import { mkdir, rm, writeFile, readFile } from 'fs/promises';
+import { mkdir, rm, writeFile, readFile, mkdtemp, rename } from 'fs/promises';
+import { tmpdir } from 'node:os';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -25,14 +26,18 @@ vi.mock('./cosState.js', () => ({
   readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: mockCosState.state?.agents ?? {} })),
 }));
 
+vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: vi.fn(async () => Object.values(mockCosState.state?.agents || {})) }));
 const recoveryTasks = vi.hoisted(() => new Map());
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn(async id => recoveryTasks.get(id) || null) }));
+vi.mock('./cosTaskStore.js', () => ({
+  getTaskById: vi.fn(async id => recoveryTasks.get(id) || null),
+  getTaskView: vi.fn(async () => ({ user: { tasks: [...recoveryTasks.values()] }, cos: { tasks: [] } })),
+}));
 
 vi.mock('./domainUsage.js', () => ({
   recordDomainUsage: vi.fn(async () => {})
 }));
 
-vi.mock('./completedCheckoutEvidence.js', () => ({ captureCompletedCheckouts: vi.fn(async () => []) }));
+vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original(), captureCompletedCheckouts: vi.fn(async () => []), captureCheckoutSeeds: vi.fn(async () => [{ synthetic: true }]) }));
 
 // Pass-through fs shim with opt-in failure injection, so one test can force the
 // archive's cross-filesystem fallback AND a failure partway through its copy.
@@ -93,7 +98,7 @@ vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await import
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -101,7 +106,9 @@ import { loadAgentIndex } from './cosAgentIndex.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { getActiveAgentsFromRunner, requestSecurityScanViaRunner } from './cosRunnerClient.js';
 import { persistAgentSecurityScan } from './agentSecurityScan.js';
-import { captureCompletedCheckouts } from './completedCheckoutEvidence.js';
+import { captureCompletedCheckouts, captureCheckoutSeeds, completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
+import { materializeGitRepo } from '../lib/gitTestRepo.js';
+import { execGit } from '../lib/execGit.js';
 import { activeAgents, runnerAgents, completingAgents, spawningTasks } from './agentState.js';
 
 afterAll(cleanupTempDataRoots);
@@ -543,11 +550,11 @@ describe('completeAgent idempotence (#3384)', () => {
     cosEvents.removeAllListeners('agent:completed');
   });
 
-  it.each([true, false])('archives checkout evidence before releasing a delivered or cleanup-pending claim (success=%s)', async success => {
+  it.each([{ success: true, pinned: false }, { success: false, pinned: false }, { success: true, pinned: true }, { success: false, pinned: true }])('archives checkout evidence before releasing a delivered or cleanup-pending claim ($success, pinned=$pinned)', async ({ success, pinned }) => {
     const agentId = 'claim-completion';
     const receipt = { version: 1, agentId, branch: 'claim/issue-1' };
     mockCosState.state.agents[agentId] = { id: agentId, status: 'running', startedAt: '2026-01-01T00:00:00Z',
-      metadata: { claimPicksOwnBranch: true, claimBranches: [receipt.branch] }, output: [] };
+      metadata: { claimPicksOwnBranch: !pinned, ...(pinned ? { claimBranch: receipt.branch } : {}), claimBranches: [receipt.branch] }, output: [] };
     captureCompletedCheckouts.mockImplementationOnce(async agent => {
       expect(agent.status).toBe('running');
       expect(mockCosState.state.agents[agentId].status).toBe('running');
@@ -556,6 +563,7 @@ describe('completeAgent idempotence (#3384)', () => {
     const result = await completeAgent(agentId, { success, cleanupPending: !success });
     expect(result.result.success).toBe(success);
     expect(result.metadata.repoStateVerification.status).toBe('pending');
+    expect(result.metadata.completionCleanup).toMatchObject({ status: 'abandoned', reason: 'completion-context-unavailable' });
     expect(result.metadata.completedCheckouts).toEqual([receipt]);
     const archived = JSON.parse(await readFile(join(mockCosState.agentsDir, result.completedAt.slice(0, 10), agentId, 'metadata.json'), 'utf8'));
     expect(archived.metadata.completedCheckouts).toEqual([receipt]);
@@ -563,17 +571,92 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(captureCompletedCheckouts).toHaveBeenCalledTimes(1);
   });
 
-  it('completes without checkout authority when capture fails or the claim fails', async () => {
+  it('drops replay inputs from durable terminal ledgers without erasing independent preservation holds', async () => {
+    const id = 'claim-terminal-ledger';
+    const startedAt = '2026-01-01T00:00:00Z';
+    mockCosState.state.agents[id] = { id, status: 'running', startedAt, output: [], metadata: {
+      claimPicksOwnBranch: true, completionCleanup: { version: 1, status: 'pending',
+        context: { task: { id: 'original' }, outputBuffer: 'large legacy output' },
+        replay: { version: 1, kind: 'replay', bytes: 123, sha256: 'a'.repeat(64) }, stages: {} } } };
+    const completed = await completeAgent(id, { success: true });
+    expect(await recordCompletionCleanup(id, startedAt, { status: 'failed', stages: {
+      pipeline: { status: 'failed', retryable: false, reason: 'external-state-unknown' } } })).toBe(true);
+    const archived = JSON.parse(await readFile(join(mockCosState.agentsDir, completed.completedAt.slice(0, 10), id, 'metadata.json'), 'utf8'));
+    expect(archived.metadata.completionCleanup.status).toBe('failed');
+    expect(archived.metadata.completionCleanup).not.toHaveProperty('context');
+    expect(archived.metadata.completionCleanup).not.toHaveProperty('replay');
+    expect(archived.metadata.repoStateVerification.status).toBe('pending');
+  });
+
+  it('records transient capture failure as a durable unknown obligation without rerunning finalization', async () => {
     const agentId = 'claim-capture-failed';
     mockCosState.state.agents[agentId] = { id: agentId, status: 'running', metadata: { claimPicksOwnBranch: true }, output: [] };
     captureCompletedCheckouts.mockRejectedValueOnce(new Error('checkout unreadable'));
     const result = await completeAgent(agentId, { success: true });
-    expect(result).toMatchObject({ status: 'completed', result: { success: true }, metadata: { completedCheckouts: [] } });
+    expect(result).toMatchObject({ status: 'completed', result: { success: false, executionSuccess: true, cleanupPending: true },
+      metadata: { claimPicksOwnBranch: true, completedCheckouts: [], checkoutCapture: { status: 'pending', unknown: true } } });
+    await completeAgent(agentId, { success: false, exitCode: 143 });
+    expect(mockCosState.state.agents[agentId].result.executionSuccess).toBe(true);
     mockCosState.state.agents['claim-failed'] = { id: 'claim-failed', status: 'running',
       metadata: { claimPicksOwnBranch: true, completedCheckouts: [{ stale: true }] }, output: [] };
     const failed = await completeAgent('claim-failed', { success: false });
     expect(failed.metadata.completedCheckouts).toEqual([]);
     expect(captureCompletedCheckouts).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['unchanged', 'physical-generation', 'new-owner'])('retries the first completion Git-read failure from the early registered physical seed after restart, scenario=%s', async scenario => {
+    const changed = scenario !== 'unchanged';
+    const scratch = await mkdtemp(join(tmpdir(), 'portos-completion-capture-seed-'));
+    let failFirstRead;
+    try {
+      const repo = join(scratch, 'repo');
+      const checkout = join(scratch, 'checkout');
+      await materializeGitRepo(repo);
+      await execGit(['worktree', 'add', '-b', 'feature/seeded', checkout, 'main'], repo);
+      const actual = await vi.importActual('./completedCheckoutEvidence.js');
+      captureCheckoutSeeds.mockImplementationOnce(actual.captureCheckoutSeeds);
+      captureCompletedCheckouts.mockImplementationOnce(actual.captureCompletedCheckouts);
+      const agentId = `seeded-${changed}`;
+      await registerAgent(agentId, 'seeded-task', { isWorktree: true, sourceWorkspace: repo,
+        workspacePath: checkout, worktreeBranch: 'feature/seeded' });
+      const seed = mockCosState.state.agents[agentId].metadata.checkoutSeeds[0];
+      expect(seed).toMatchObject({ agentId, branch: 'feature/seeded' });
+      await writeFile(join(checkout, 'delivery.txt'), 'wanted original work');
+      await execGit(['add', 'delivery.txt'], checkout);
+      await execGit(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'final delivered head'], checkout);
+      const head = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
+      failFirstRead = vi.spyOn(await import('./worktreeManager.js'), 'listWorktrees').mockRejectedValueOnce(new Error('first completion Git read unavailable'));
+      const completed = await completeAgent(agentId, { success: true });
+      expect(completed).toMatchObject({ status: 'completed', result: { cleanupPending: true, executionSuccess: true },
+        metadata: { checkoutCapture: { status: 'pending', unknown: true } } });
+      expect(cosEvents.listenerCount('agent:completed')).toBeGreaterThan(0);
+      delete mockCosState.state.agents[agentId]; // Restart: only the real archived metadata remains.
+      if (scenario === 'new-owner') {
+        mockCosState.state.agents['new-owner'] = { id: 'new-owner', status: 'completed', startedAt: new Date().toISOString(),
+          metadata: { sourceWorkspace: repo, workspacePath: checkout, worktreeBranch: 'feature/seeded' } };
+      }
+      if (scenario === 'physical-generation') {
+        const pointer = join(checkout, '.git');
+        const bytes = await readFile(pointer);
+        await rename(pointer, join(scratch, 'original-git-pointer'));
+        await writeFile(pointer, bytes);
+      }
+      expect(await retryCompletionCheckoutCapture(agentId)).toBe(!changed);
+      const recovered = await getAgent(agentId);
+      if (changed) expect(recovered.metadata.checkoutCapture.status).toBe('pending');
+      else {
+        const receipt = recovered.metadata.completedCheckouts[0];
+        expect(receipt).toMatchObject({ version: 2, head, seededAt: seed.seededAt });
+        expect(Date.parse(receipt.capturedAt)).toBeGreaterThanOrEqual(Date.parse(completed.completedAt));
+        expect(completedCheckoutReceiptValid(recovered, receipt)).toBe(true);
+      }
+      expect(await readFile(join(checkout, 'delivery.txt'), 'utf8')).toBe('wanted original work');
+      expect((await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim()).toBe(head);
+      expect(emittedCompletions).toHaveLength(1);
+    } finally {
+      failFirstRead?.mockRestore();
+      await rm(scratch, { recursive: true, force: true, maxRetries: 3 });
+    }
   });
 
   it('keeps the first verdict when a duplicate completion arrives', async () => {

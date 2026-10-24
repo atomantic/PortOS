@@ -1,3 +1,4 @@
+import { bindCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { join } from 'path';
 import { existsSync } from 'fs';
@@ -303,6 +304,8 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       await context.cleanupOnError('Failed to update task status');
       return null;
     }
+
+    if (!updateResult.error && !updateResult.statusChanged) await bindCompletionTaskDispatch(agentId, { ...updateResult, taskType: task.taskType || 'user' });
 
     if (task.metadata?.autonomousJob && task.metadata?.jobId) {
       cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });

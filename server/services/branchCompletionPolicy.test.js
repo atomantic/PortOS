@@ -313,6 +313,31 @@ describe('reviewed reused-branch checkout incarnation', () => {
     expect(reviewedRetirementPolicy({ ...input(), agents }).reason).toBeTruthy();
   });
 
+  it('settles legacy pinned cleanup outcomes only with fresh exact-head integration evidence', () => {
+    const current = owners()[0];
+    current.metadata.workspacePath = repoPath;
+    current.metadata.reviewLoopMergeTarget = null;
+    current.result = { success: false, executionSuccess: true,
+      taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
+    const integrated = { ...input(), agents: [current], integratedCleanupHead: 'c'.repeat(40) };
+    expect(reviewedRetirementPolicy(integrated).reason).toBeNull();
+    // Modern replay/seed failures cannot be reclassified as legacy evidence.
+    current.metadata.checkoutSeeds = [];
+    expect(reviewedRetirementPolicy(integrated).reason).toBeTruthy();
+    delete current.metadata.checkoutSeeds;
+    for (const patch of [{ integratedCleanupHead: null }, { verifiedPrHead: 'b'.repeat(40) }]) {
+      expect(reviewedRetirementPolicy({ ...integrated, ...patch }).reason).toBeTruthy();
+    }
+    current.result.validationPassed = false;
+    expect(reviewedRetirementPolicy(integrated).reason).toBeTruthy();
+    current.result.validationPassed = null;
+    current.result.taskOutcome.recovery = undefined;
+    expect(reviewedRetirementPolicy(integrated).reason).toBeTruthy();
+    current.result.taskOutcome.recovery = { mode: 'cleanup' };
+    current.metadata.prCompletionPolicy = 'leave-open';
+    expect(reviewedRetirementPolicy(integrated).reason).toBe('pr-completion-human-handoff');
+  });
+
   it('separates explicit prior checkout history only under fresh current PR/head proof', () => {
     const agents = owners();
     const result = reviewedRetirementPolicy({ ...input(), agents });

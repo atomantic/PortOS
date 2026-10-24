@@ -63,6 +63,8 @@ describe('claim ownership binding instructions (#10089)', () => {
       const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example', prStaysOpen });
       expect(prompt).toContain('"agentId":"parent-example","action":"bind","branch":"BRANCH"');
       expect(prompt).toContain('a tracking epic');
+      expect(prompt).toContain('Immediately after creating that worktree, repeat the same bind command');
+      expect(prompt).toContain('BEFORE editing or running work there');
       expect(prompt).toContain('do not create or enter that worktree');
       expect(prompt).toContain('"action":"release"');
     }

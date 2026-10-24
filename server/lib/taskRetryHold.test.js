@@ -6,6 +6,8 @@ import {
   isRetryHeld,
   isRetryHoldOwner,
   isStaleRetryHold,
+  isDeliveryCleanupHeld,
+  collectProtectedCleanupOwners,
 } from './taskRetryHold.js';
 
 const NOW = Date.parse('2026-08-02T12:00:00.000Z');
@@ -98,5 +100,43 @@ describe('isStaleRetryHold', () => {
   it('is false for a task that is not held at all, however old', () => {
     expect(isStaleRetryHold({ retryPendingSince: new Date(0).toISOString() }, NOW)).toBe(false);
     expect(isStaleRetryHold({}, NOW)).toBe(false);
+  });
+});
+
+describe('collectProtectedCleanupOwners (#13430)', () => {
+  it('identifies active delivery-cleanup and retry-cleanup owners only while the task is in_progress', () => {
+    const deliveryHeld = {
+      id: 'sys-rl-example',
+      status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' },
+    };
+    const retryHeld = {
+      id: 'task-retry',
+      status: 'in_progress',
+      metadata: { retryPendingCleanup: 'agent-retry' },
+    };
+    const completedTask = {
+      id: 'task-done',
+      status: 'completed',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-stale' },
+    };
+
+    expect(isDeliveryCleanupHeld(deliveryHeld.metadata)).toBe(true);
+
+    const collected = collectProtectedCleanupOwners([deliveryHeld, retryHeld, completedTask]);
+    expect([...collected.ownerIds]).toEqual(['agent-example', 'agent-retry']);
+    expect(collected.hasUnattributedRetryHold).toBe(false);
+    expect(collected.isProtected('agent-example')).toBe(true);
+    expect(collected.isProtected('agent-other')).toBe(false);
+    expect(collected.isProtected('agent-retry')).toBe(true);
+    expect(collected.isProtected('agent-stale')).toBe(false);
+  });
+
+  it('protects all candidate agents when an in_progress task carries an unattributed legacy retry hold', () => {
+    const collected = collectProtectedCleanupOwners([
+      { id: 'task-legacy', status: 'in_progress', metadata: { retryPendingCleanup: true } },
+    ]);
+    expect(collected.hasUnattributedRetryHold).toBe(true);
+    expect(collected.isProtected('agent-any')).toBe(true);
   });
 });

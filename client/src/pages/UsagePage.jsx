@@ -23,6 +23,7 @@ import { USAGE_PERIOD_OPTIONS, DEFAULT_USAGE_PERIOD } from '../lib/usagePeriods'
 
 
 const BACKFILL_EVENTS = ['usage-backfill:updated'];
+const IMAGE_USAGE_EVENTS = ['image-gen:completed'];
 
 function joinAnd(parts) {
   if (parts.length <= 1) return parts[0] || '';
@@ -39,6 +40,15 @@ function grokRepairLine(grok) {
   if (grok.videos) parts.push(`${formatCount(grok.videos)} video${grok.videos === 1 ? '' : 's'}`);
   const added = parts.length ? `Added ${joinAnd(parts)}.` : 'Grok usage was already recorded.';
   return grok.note ? `${added} ${grok.note}` : added;
+}
+
+/** What Reconcile now added to the Antigravity ledger. Absent until that job finishes. */
+function agyRepairLine(agy) {
+  if (!agy) return '';
+  const parts = [];
+  if (agy.images) parts.push(`${formatCount(agy.images)} image${agy.images === 1 ? '' : 's'}`);
+  const added = parts.length ? `Added ${joinAnd(parts)}.` : 'Antigravity usage was already recorded.';
+  return agy.note ? `${added} ${agy.note}` : added;
 }
 
 // A subscription is one account across every federated instance, but each
@@ -632,6 +642,8 @@ function InternalUsageMetrics() {
     return () => { requestRef.current += 1; };
   }, [fetchUsage]);
 
+  useSocketResource(fetchUsage, { events: IMAGE_USAGE_EVENTS, immediate: false });
+
   const [startBackfill, startingBackfill] = useAsyncAction(async () => {
     const status = await api.startUsageBackfill({ silent: true });
     setBackfill(status);
@@ -710,7 +722,7 @@ function InternalUsageMetrics() {
             Reconcile historical usage
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Re-read saved transcripts and Grok sessions to replace older estimates and record Imagine and long-context charges. This changes recorded history but makes no provider calls.
+            Re-read saved transcripts, Grok sessions, and Antigravity media to replace older estimates and record media and long-context charges. This changes recorded history but makes no provider calls.
           </p>
           {backfill?.status === 'running' && (
             <p className="text-xs text-port-accent mt-1" role="status">
@@ -724,6 +736,9 @@ function InternalUsageMetrics() {
           )}
           {backfill?.grok && (backfill.status === 'complete' || backfill.status === 'error') && (
             <p className="text-xs text-port-success mt-1" role="status">{grokRepairLine(backfill.grok)}</p>
+          )}
+          {backfill?.agy && (backfill.status === 'complete' || backfill.status === 'error') && (
+            <p className="text-xs text-port-success mt-1" role="status">{agyRepairLine(backfill.agy)}</p>
           )}
           {backfill?.status === 'error' && (
             <p className="text-xs text-port-error mt-1" role="alert">{backfill.error}</p>
@@ -739,6 +754,36 @@ function InternalUsageMetrics() {
           {backfill?.status === 'running' ? 'Reconciling…' : 'Reconcile now'}
         </button>
       </div>
+
+      {usage.imageRenders && (
+        <section className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-2" aria-label="Codex image usage">
+          <h3 className="text-sm font-medium text-white">Codex image usage · this machine</h3>
+          {usage.imageRenders.error ? (
+            <p className="text-sm text-gray-400" role="status">Image render usage is unavailable. Text usage remains available.</p>
+          ) : (
+            <>
+          <p className="text-sm text-gray-300">
+            {formatCount(usage.imageRenders.codexSessions)} Codex sessions · {formatCount(usage.imageRenders.savedOutputs)} saved outputs in this period
+          </p>
+          <p className="text-xs text-gray-400">
+            Image tokens, image cost and subscription allowance attribution: unknown.
+            Any driver tokens already captured by text accounting stay in the text report. Image costs are excluded from the API estimate.
+            Saved outputs show observed activity; they do not measure every image-tool call or failed attempt.
+            Historical saved records do not establish which machine executed a render.
+          </p>
+          <p className="text-xs text-gray-400">
+            {usage.imageRenders.driverTokens
+              ? `${formatCount(usage.imageRenders.driverTokens.reportedTotal)} reported driver tokens across ${formatCount(usage.imageRenders.driverTokens.sessionsMeasured)} sessions; no input/output split or image attribution.`
+              : 'Driver tokens: unknown.'}
+            {usage.imageRenders.driverTokens && ` Driver tokens are unknown for ${formatCount(usage.imageRenders.driverSessionsUnknown)} other render groups.`}
+          </p>
+          {usage.imageRenders.jobIdentityGroups > 0 && (
+            <p className="text-xs text-gray-400">{formatCount(usage.imageRenders.jobIdentityGroups)} additional render groups use saved job IDs; their Codex session IDs are unavailable.</p>
+          )}
+            </>
+          )}
+        </section>
+      )}
 
       {/* Summary Stats (all-time) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">

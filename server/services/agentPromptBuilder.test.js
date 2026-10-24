@@ -1790,11 +1790,13 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/\/data\/slashdo-resolved\/local-agent-review-loop\.md/);
       expect(prompt).not.toMatch(/RECIPE HEADER/);
       // This ceiling detects accidentally inlining the staged 40KB recipe.
-      // Exclude the exact shared safety contracts, whose independently tested
-      // required prose is not recipe content; retain the original ceiling.
+      // Exclude the exact shared safety contracts and the checkout root prefix
+      // embedded in doc pointers, whose independently tested required prose and
+      // worktree path length are not recipe content; retain the original ceiling.
       expect(prompt).toContain(MANAGED_WORKTREE_CLEANUP_CONTRACT);
       const withoutFixedGuidance = prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '')
-        .replace(MANAGED_WORKTREE_CLEANUP_CONTRACT, '');
+        .replace(MANAGED_WORKTREE_CLEANUP_CONTRACT, '')
+        .replaceAll(PATHS.root, '');
       expect(withoutFixedGuidance.length).toBeLessThan(33_000);
     });
 

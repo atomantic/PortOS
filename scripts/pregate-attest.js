@@ -113,6 +113,9 @@ export function planAttestation(report, { sha, treeOf, isPushed, remote, default
   if (typeof report.plan?.downgraded !== 'boolean') {
     throw refusal(`receipt at ${PREGATE_REPORT_PATH} predates attestation (no plan.downgraded); ${RERUN}`);
   }
+  if (report.validationMode === 'focused' || (report.version >= 3 && report.validationMode !== 'ci')) {
+    throw refusal('focused local validation does not attest CI suites; wait for required hosted CI. Do not rerun solely to attest.');
+  }
   if (report.passed !== true) throw refusal(`receipt at ${PREGATE_REPORT_PATH} did not pass; fix the failure and ${RERUN}`);
   if (report.treeStable !== true) {
     throw refusal(`the working tree changed while pregate ran (${String(report.tree).slice(0, 12)} → ${String(report.treeAfterRun).slice(0, 12)}); ${RERUN}`);
@@ -226,11 +229,19 @@ export function runAttest({ argv = [], cwd = REPO_ROOT, exec = spawnSync, log = 
     const target = `${repository.owner}/${repository.repo}`;
 
     const treeOf = (commit) => git(['rev-parse', '--verify', '--quiet', `${commit}^{tree}`]);
-    // Remote-tracking refs are current right after a push; a commit nothing
-    // under `<remote>/` contains has not been pushed (or not fetched back).
+    // Keep the local containment fast path. URL/path pushes may leave these
+    // refs stale, so ask the configured remote through its existing transport
+    // for exact advertised branch tips without fetching or changing the tree.
     const isPushed = (commit) => {
       const branches = git(['branch', '-r', '--contains', commit, '--format=%(refname:short)']);
-      return branches !== null && branches.split('\n').some((name) => name.startsWith(`${remote}/`));
+      if (branches !== null && branches.split('\n').some((name) => name.startsWith(`${remote}/`))) return true;
+      const advertised = git(['ls-remote', '--heads', remote]);
+      if (advertised === null) throw refusal(`cannot verify publication of ${commit.slice(0, 9)} on ${remote}: remote branch tips could not be read; check remote access, then attest again.`);
+      const tips = advertised ? advertised.split('\n') : [];
+      if (tips.some((line) => !/^[0-9a-f]{40}\trefs\/heads\/[^\s]+$/.test(line))) {
+        throw refusal(`cannot verify publication of ${commit.slice(0, 9)} on ${remote}: malformed remote branch tips; no status posted.`);
+      }
+      return tips.some((line) => line.startsWith(`${commit}\t`));
     };
 
     if (options.revoke !== null) {

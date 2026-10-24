@@ -11,7 +11,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { followUpRoster } from './mergeFollowUpPolicy.js';
-import { readFile } from 'node:fs/promises';
+import { readReviewEvidence } from './mergeReviewEvidence.js';
 import { resolve } from 'node:path';
 import { execGh } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
@@ -53,24 +53,6 @@ async function checkoutAtHead(workspace, branch, head, repository, repositoryKey
     execGit(['rev-parse', '--verify', 'HEAD^{commit}'], workspace).catch(() => null),
   ]);
   return ref?.stdout?.trim() === branch && sha?.stdout?.trim().toLowerCase() === head;
-}
-
-// The worktree-private status the review phase writes: `REVIEW_STATUS=<verdict>`
-// plus `REVIEW_HEAD=<sha>`, the commit its final round reviewed. status null =
-// no file (no local reviewers ran); 'unreadable' covers an unreadable or empty file.
-async function readReviewEvidence(workspace) {
-  const gitPath = await execGit(['rev-parse', '--git-path', 'portos-review-status'], workspace).catch(() => null);
-  const relative = gitPath?.stdout?.trim();
-  if (!relative) return { status: 'unreadable', head: null };
-  const content = await readFile(resolve(workspace, relative), 'utf-8').catch((err) => (err.code === 'ENOENT' ? null : undefined));
-  if (content === null) return { status: null, head: null };
-  const values = (pattern) => [...String(content ?? '').matchAll(pattern)].map((m) => m[1].trim());
-  const statuses = values(/^REVIEW_STATUS=(.*)$/gm);
-  const heads = values(/^REVIEW_HEAD=(.*)$/gm);
-  return {
-    status: statuses.length === 1 ? statuses[0] : 'unreadable',
-    head: heads.length === 1 ? heads[0].toLowerCase() : null,
-  };
 }
 
 // A clean verdict counts only for the head it reviewed; merge-on-green runs no

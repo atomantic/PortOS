@@ -9,9 +9,10 @@ changes to traversal, admission or event meaning require a new runtime version
 and corresponding hosted regression tests.
 
 This is the runtime foundation for [external package export #13104](https://github.com/atomantic/PortOS/issues/13104).
-It does not yet implement an exporter, downloadable package or reference player.
-PortOS remains a private authoring/rehearsal service. An external host runs its
-own backend, credentials and transport; it never relays public calls into PortOS.
+The exporter copies this document into each package. `includePlayer` also adds
+the dependency-free reference player below. PortOS remains a private
+authoring/rehearsal service. An external host runs its own backend, credentials
+and transport; it never relays public calls into PortOS.
 
 ## Graph and playback
 
@@ -83,6 +84,17 @@ A host can expose `resolveTurn(nodeId, message)` returning
 map stay text to narration. This adapter shape is not the private endpoint's
 response shape. A choice-only/keyword adapter needs no network or LLM.
 
+The reference player implements that adapter with `createSession`,
+`createKeywordResolver`, `liveInputAllowed` and `mediaUrl`. `createSession`
+plays one episode from the packaged manifest. `createKeywordResolver` matches
+one exact intent, trigger, or transition id on the current scene and performs
+no network request. `liveInputAllowed` is the admission policy above.
+`mediaUrl` accepts only a packaged `media/<sha256>.<ext>` path. A host may
+replace the keyword adapter by assigning `resolveTurn` before the page loads.
+`player/contract-example.js` shows a host-owned `POST /story/turn` and is not
+loaded by the page. The host owns that request. An unknown edge or a missing
+target stays on the current scene.
+
 ## Live-input admission and half duplex
 
 `evaluateFableLoomLiveInput({node, phase, asset})` is the shared pure admission
@@ -112,6 +124,11 @@ or emit after session end.
 Portable hosts finish narration playback before committing a chosen transition
 and before admitting another turn. Hosted v1 binds that wait to the current
 turn and the designated output socket.
+
+The exported reference player waits for a speech outcome bound to the turn,
+node, episode and generation before it commits a move. `completed` or an
+explicit `empty` may commit. `failed`, `cancelled`, `unavailable` and `missing`
+leave the scene in place. A later episode or turn ignores a stale outcome.
 
 When synthesis returns audio and the `audioTarget` role (`host` or `audience`)
 has a connected socket, the server emits `hosted:turn:tts` and leaves the turn

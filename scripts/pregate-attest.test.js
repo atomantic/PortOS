@@ -6,6 +6,10 @@
  * `runAttest` with an injected exec, so the only thing left to a live run is
  * `gh`'s own authentication.
  */
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseArgs, planAttestation, resolveRepository, runAttest, statusRequest, USAGE } from './pregate-attest.js';
 import {
@@ -27,7 +31,7 @@ const plan = { full: false, reason: 'scoped', server: { mode: 'files', files: []
 
 /** A receipt as pregate writes it, with the given stage outcomes. */
 const receipt = ({ stages, tree = TREE, treeAfterRun = tree, downgraded = false, skipped = [], base = { ref: 'origin/main', sha: BASE } }) => buildPregateReport({
-  plan, options: { base: base.ref }, base, head: { sha: SHA }, tree, treeAfterRun, stages, skipped,
+  plan, options: { base: base.ref, full: true }, base, head: { sha: SHA }, tree, treeAfterRun, stages, skipped,
   runtime: { node: 'v26.10.0', platform: OS }, startedAt: 's', finishedAt: 'f', downgraded,
 });
 
@@ -210,6 +214,7 @@ describe('runAttest', () => {
     [/^git remote get-url upstream$/, 'git@github.com:acme/widget.git'],
     [/^git rev-parse --verify --quiet .*\^\{tree\}$/, TREE],
     [/^git branch -r --contains .* --format=/, 'upstream/feature\nfork/feature'],
+    [/^git ls-remote --heads upstream$/, `${BASE}\trefs/heads/main`],
     [/^git symbolic-ref --short -q refs\/remotes\/upstream\/HEAD$/, 'upstream/main'],
     [/^git merge-base upstream\/main /, BASE],
   ];
@@ -254,6 +259,69 @@ describe('runAttest', () => {
       expect(err[0]).toMatch(/^⛔ Not attested: /);
       expect(err[0]).toMatch(message);
       expect(calls.some((call) => call.startsWith('gh '))).toBe(false);
+    }
+  });
+
+  it('refuses unreadable or malformed remote publication evidence without posting', () => {
+    for (const result of [{ status: 1, stderr: 'unreachable' }, `${SHA}\trefs/tags/only`, 'malformed']) {
+      const calls = [];
+      const output = io();
+      const exec = fakeExec(gitTable([
+        [/^git branch -r --contains/, ''], [/^git ls-remote --heads upstream$/, result],
+      ]), calls);
+      expect(run({ exec, ...output, readReceipt: () => green })).toBe(1);
+      expect(output.err[0]).toMatch(/cannot verify publication/);
+      expect(calls.some((call) => call.startsWith('gh api'))).toBe(false);
+    }
+  });
+
+  it('attests an explicit-path push with stale tracking refs using real Git, without changing the checkout', () => {
+    const root = mkdtempSync(join(tmpdir(), 'pregate-published-'));
+    const remote = join(root, 'remote.git');
+    const cwd = join(root, 'checkout');
+    const git = (...args) => {
+      const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+      if (result.status !== 0) throw new Error(result.stderr);
+      return result.stdout.trim();
+    };
+    try {
+      git('init', '--bare', remote);
+      git('init', '-b', 'main', cwd);
+      git('-C', cwd, 'config', 'user.name', 'Fixture');
+      git('-C', cwd, 'config', 'user.email', 'fixture@example.invalid');
+      git('-C', cwd, 'remote', 'add', 'origin', remote);
+      const commit = (text) => {
+        writeFileSync(join(cwd, 'file'), text);
+        git('-C', cwd, 'add', 'file');
+        git('-C', cwd, 'commit', '-m', text);
+        return git('-C', cwd, 'rev-parse', 'HEAD');
+      };
+      commit('initial');
+      git('-C', cwd, 'push', '-u', 'origin', 'main');
+      const published = commit('published');
+      git('-C', cwd, 'push', remote, 'main');
+      expect(git('-C', cwd, 'branch', '-r', '--contains', published)).toBe('');
+      const before = git('-C', cwd, 'show-ref');
+      const calls = [];
+      const exec = (command, args, options) => {
+        if (command === 'gh') {
+          calls.push(args);
+          return { status: 0, stdout: args[0] === 'repo' ? JSON.stringify({ nameWithOwner: 'acme/widget', url: 'https://github.com/acme/widget' }) : '{}' };
+        }
+        return spawnSync(command, args, options);
+      };
+      const attest = () => run({ cwd, exec, ...io(), readReceipt: () => receipt({ tree: git('-C', cwd, 'rev-parse', 'HEAD^{tree}'), stages: [stage('scan')] }) });
+      expect(attest()).toBe(0);
+      expect(calls.filter((args) => args[0] === 'api')).toHaveLength(1);
+      expect(git('-C', cwd, 'show-ref')).toBe(before);
+      expect(git('-C', cwd, 'status', '--porcelain')).toBe('');
+      commit('unpublished');
+      expect(attest()).toBe(1);
+      git('-C', cwd, 'remote', 'set-url', 'origin', join(root, 'missing.git'));
+      expect(attest()).toBe(1);
+      expect(calls.filter((args) => args[0] === 'api')).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -331,5 +399,15 @@ describe('runAttest', () => {
     const { err, log, error } = io();
     expect(run({ argv: ['--nope'], exec: fakeExec([]), log, error })).toBe(2);
     expect(err[0]).toContain(USAGE);
+  });
+});
+
+describe('focused receipt boundary', () => {
+  it('refuses focused or unspecified v3 proof while preserving legacy stage evidence', () => {
+    const report = { version: 3, validationMode: 'focused', plan: { downgraded: false }, stages: [{ suite: 'server', status: 'passed' }] };
+    expect(attestedStagesFromReceipt(report)).toEqual([]);
+    expect(() => planAttestation(report, {})).toThrow(/focused local validation/);
+    expect(attestedStagesFromReceipt({ ...report, validationMode: undefined })).toEqual([]);
+    expect(attestedStagesFromReceipt({ ...report, version: 2, validationMode: undefined })).toEqual(['server']);
   });
 });

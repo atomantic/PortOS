@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
-import { captureCompletedCheckouts, hasCompletedCheckoutEvidence } from './completedCheckoutEvidence.js';
+import { captureCompletedCheckouts, hasCompletedCheckoutEvidence, readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 
 describe('completed claim checkout evidence', () => {
   let scratch, repoPath, path, head, agent;
@@ -28,8 +28,10 @@ describe('completed claim checkout evidence', () => {
   });
   afterEach(async () => { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); });
 
-  it('captures the exact ordinary checkout before completion without granting claim authority', async () => {
-    agent.metadata = { isWorktree: true, sourceWorkspace: repoPath, workspacePath: path, worktreeBranch: branch };
+  it.each([false, true])('captures the registered checkout without granting unbound claim authority (pinned=%s)', async pinned => {
+    agent.metadata = { isWorktree: true, sourceWorkspace: repoPath, workspacePath: path, worktreeBranch: branch,
+      claimBranches: ['claim/reserved-other-checkout'],
+      ...(pinned ? { claimBranch: branch, claimPicksOwnBranch: false } : {}) };
     const receipts = await captureCompletedCheckouts(agent, { success: true });
     expect(receipts).toHaveLength(1);
     expect(receipts[0]).toMatchObject({ branch, head, incarnation: { pointer: { ino: expect.any(String) } } });
@@ -37,13 +39,22 @@ describe('completed claim checkout evidence', () => {
     expect(await captureCompletedCheckouts({ ...agent, metadata: { ...agent.metadata, workspacePath: repoPath } }, { success: true })).toEqual([]);
   });
 
-  it('captures a claim run that works from the source checkout without a separate sourceWorkspace', async () => {
-    agent.metadata = { claimPicksOwnBranch: true, isWorktree: false, workspacePath: repoPath, claimBranches: [branch] };
+  it.each([false, true])('captures a source-checkout claim without a separate sourceWorkspace (pinned=%s)', async pinned => {
+    agent.metadata = { claimPicksOwnBranch: !pinned, ...(pinned ? { claimBranch: branch } : {}), isWorktree: false, workspacePath: repoPath, claimBranches: [branch] };
     const receipts = await captureCompletedCheckouts(agent, { success: true });
     expect(receipts).toEqual([expect.objectContaining({ branch, head, path: expect.stringMatching(/claim$/) })]);
     expect(await hasCompletedCheckoutEvidence([completed(receipts)], target())).toBe(true);
     // An ordinary worktree run's workspace is its own checkout, never the repository.
     expect(await captureCompletedCheckouts({ ...agent, metadata: { isWorktree: true, workspacePath: repoPath, worktreeBranch: branch } }, { success: true })).toEqual([]);
+  });
+
+  it('allows a scoped identity fact-read of a locked checkout without changing default capture refusal or its lock', async () => {
+    await execGit(['worktree', 'lock', '--reason', 'owned operator checkout', path], repoPath);
+    expect(await readCompletedCheckoutIdentity(target())).toBeNull();
+    const identity = await readCompletedCheckoutIdentity({ ...target(), allowLocked: true });
+    expect(identity).toMatchObject({ branch, head, incarnation: { pointer: { ino: expect.any(String) } } });
+    expect(await captureCompletedCheckouts(agent, { success: true })).toEqual([]);
+    expect((await execGit(['worktree', 'list', '--porcelain'], repoPath)).stdout).toContain('locked owned operator checkout');
   });
 
   it('rejects a new checkout reusing the completed branch, path and exact head', async () => {

@@ -753,7 +753,10 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const leaveOpen = isTruthyMeta(metadata.reviewLoopLeaveOpen);
   const prUrl = metadata.reviewLoopPRUrl || '';
   const prBranch = metadata.reviewLoopPRBranch || '';
-  const forkNote = buildForkBranchInstructions(prBranch, metadata.forkHead)
+  const completedTargetNote = !inline && !localOnly && !leaveOpen
+    ? '\n**Already merged on entry:** Verify the assigned PR/MR state before reviewing. If it is MERGED, this follow-up is a successful `no-action-needed` result: skip reviews, fixes, validation and publication. Preserve local corrections and name their existing follow-up issue; do not reopen this task for separate delivery or unavailable retirement inventory. Request safe reconciliation for retained checkouts, then write the completion sentinel.\n'
+    : '';
+  const forkNote = completedTargetNote + buildForkBranchInstructions(prBranch, metadata.forkHead)
     + buildDefaultBranchHeadInstructions(prBranch, isTruthyMeta(metadata.headIsDefaultBranch));
   const prNumber = metadata.reviewLoopPRNumber ?? '';
   const prOwner = metadata.reviewLoopPROwner ?? '';
@@ -1095,7 +1098,7 @@ export const LEAVE_PR_OPEN_STEP = (step, jiraTracked = false) => `${step}. **Lea
  * numbers hold; it belongs between the push and the CI wait because the
  * status must exist before the impact job plans the run.
  */
-const PREGATE_ATTESTATION_STEP = '**Pregate attestation (GitHub, right after the push):** if this repository has `scripts/pregate-attest.js`, run it from the checkout you pushed — for a new pull request, after the push and before opening it. It posts a `pregate` commit status bound to the tree your green `npm run pregate` validated, so the pull request\'s CI skips the attested stages (docs/GITHUB_ACTIONS.md "Pregate attestation"). If it refuses, do not rerun pregate or retry just to attest: say why in your completion summary and wait for full CI as before.';
+const PREGATE_ATTESTATION_STEP = '**Local validation:** Honor repo-focused lint/style, structural guards and changed-behavior tests; broad local suites are opt-in. Hosted CI and configured reviews remain mandatory. For repositories with `scripts/pregate-attest.js`, inspect receipt `validationMode`: `focused` never attests CI; only explicit `ci` or compatible legacy proof may attest after push. Report refusals; never rerun solely to attest.';
 
 export function buildCiMergeGateSteps(startStep, { prRef, mrRef = '<MR_NUMBER>', forge = 'github', alreadyMergedHint = ' (a saved `/do:pr` default can merge it for you)', localReviewers = [], localReviewRequired = false, reviewRecheckReviewers = [], mergeEquivalentLine = null, deleteBranch = true }) {
   const gh = forge !== 'gitlab';

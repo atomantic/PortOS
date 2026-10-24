@@ -1,11 +1,5 @@
-/**
- * Contract for the local pre-push gate (`npm run pregate`).
- *
- * The value of this gate is that it runs exactly what CI runs, so the failures
- * worth pinning are the ones where it would quietly diverge: handing a runner a
- * scope CI skipped (or skipping one CI selected), passing the wrong selector
- * list, naming a downgraded test file that is not tracked, or reporting
- * "CI will also run: db" from a plan field that has since been renamed.
+/** Local validation selection, stage execution, process ownership and receipt
+ * contracts. Hosted CI owns the broader test-impact plan.
  */
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from 'vitest';
@@ -27,6 +21,7 @@ import {
   describeBrowserSelection,
   describeStageCommand,
   downgradeFullPlan,
+  focusedLocalPlan,
   parseArgs,
   pregateWorkerEnv,
   stageSpawnEnv,
@@ -279,7 +274,7 @@ describe('pregate hidden-content invocation', () => {
 
   it('prints the selected guard, broad and browser stages without starting any process', () => {
     prepareGuardFixture({ browser: true });
-    const result = run('--plan-only');
+    const result = run('--plan-only', '--full');
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('Planning against');
     expect(result.stdout).toContain('changed file');
@@ -295,7 +290,7 @@ describe('pregate hidden-content invocation', () => {
   // prerequisite probe, with the unfinished broad stages preserved in the receipt.
   it('refuses a missing helper catalog registration before broad tests or browser probes start', () => {
     prepareGuardFixture({ browser: true });
-    const result = run('--skip-lint');
+    const result = run('--skip-lint', '--full');
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('Missing helper barrel/catalog registration');
     const events = readFileSync(join(root, '.cache/events'), 'utf8');
@@ -318,7 +313,7 @@ describe('pregate hidden-content invocation', () => {
     write('server/lib/index.js', "export { helper } from './helper.js';\n");
     write('server/lib/README.md', '# Shared helpers\nhelper\n');
     if (changed) write('.cache/mutate', 'mutate during lint');
-    const result = run();
+    const result = run('--full');
     expect(result.status, result.stderr).toBe(0);
     const events = readFileSync(join(root, '.cache/events'), 'utf8').trim().split('\n');
     expect(events.filter(event => event === 'catalog')).toHaveLength(changed ? 2 : 1);
@@ -763,10 +758,14 @@ describe('pregate hidden-content invocation', () => {
     expect(snapshot()).toEqual(before);
   });
 
-  it('plans the portos_test stages for a DB-only suite in a scoped working-tree plan', () => {
+  it('leaves DB-only changes to hosted CI by default and plans portos_test only with explicit full validation', () => {
     mkdirSync(join(root, 'server/routes'), { recursive: true });
     write('server/routes/decks.db.test.js', "import { it } from 'vitest';\nit('db contract', () => {});\n");
-    const result = run('--plan-only');
+    const focused = run('--plan-only');
+    expect(focused.status, focused.stderr).toBe(0);
+    expect(focused.stdout).toContain('CI will also run: db');
+    expect(focused.stdout).not.toContain('• DB suite');
+    const result = run('--plan-only', '--full');
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('• DB provision (portos_test): npm run setup:db:test --prefix server');
     expect(result.stdout).toContain('• DB suite (portos_test): npm run test:db:ci --prefix server');
@@ -1214,8 +1213,8 @@ describe('uncoveredSuites', () => {
     const flagged = uncoveredSuites(selected, { options: { skipDb: true, skipBuild: true }, downgraded: true });
     expect(flagged.map(({ suite, reason }) => [suite, reason])).toEqual([
       ['build', 'skipped by --skip-build'],
-      ['smoke', 'full plan downgraded; pass --full to run it'],
-      ['browser', 'full plan downgraded; pass --full to run it'],
+      ['smoke', 'local focused mode; hosted CI runs it (opt in locally with --full)'],
+      ['browser', 'local focused mode; hosted CI runs it (opt in locally with --full)'],
       ['db', 'skipped by --skip-db'],
       ['windows', 'a Windows runner has no local equivalent'],
     ]);
@@ -1393,7 +1392,7 @@ describe('buildPregateReport', () => {
       startedAt: 's',
       finishedAt: 'f',
     });
-    expect(report.version).toBe(2);
+    expect(report.version).toBe(3);
     expect(report.plan.downgraded).toBe(false);
     expect(report.passed).toBe(false);
     expect(report.treeStable).toBe(false);
@@ -1463,5 +1462,16 @@ describe('validatedTreeHash', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('focused local policy', () => {
+  it('runs direct behavior owners and edited unit tests without transitive or resource suites', () => {
+    const tracked = ['server/lib/a.js', 'server/lib/a.test.js', 'server/lib/unrelated.test.js', 'server/lib/a.db.test.js', 'server/lib/a.browser.test.js', 'client/src/Card.jsx', 'client/src/Card.test.jsx', 'scripts/tool.test.js', 'server/services/htmlComposition/index.test.js'];
+    const changed = ['server/lib/a.js', 'client/src/Card.jsx', 'scripts/tool.test.js', 'server/lib/a.db.test.js', 'server/lib/a.browser.test.js', 'docs/README.md', 'server/services/htmlComposition/index.test.js'];
+    const local = focusedLocalPlan(planWith({ browser: { files: ['server/services/htmlComposition/index.test.js'] }, server: { mode: 'related', files: ['server/lib/unrelated.test.js'], sources: ['server/lib/a.js'] } }), tracked, changed);
+    expect(local.server).toEqual({ mode: 'files', files: ['server/lib/a.test.js', 'scripts/tool.test.js'], sources: [] });
+    expect(local.client.files).toContain('client/src/Card.test.jsx');
+    expect(resolvePlanStages(local, { skip: { db: true, browser: true, build: true, smoke: true } }).every(stage => !['db', 'browser', 'build', 'smoke'].includes(stage.suite))).toBe(true);
   });
 });
