@@ -229,7 +229,9 @@ async function verifyHeldArchive(repoPath, dir, release, work = archiveWork()) {
     header = buffer.subarray(0, bytesRead).toString('latin1').split('\n\n')[0];
     if (!buffer.subarray(0, bytesRead).includes(Buffer.from('\n\n')) || /^-/m.test(header)) throw new Error('archive-bundle-incomplete');
   } finally { await handle.close(); }
+  work.check();
   await git(['bundle', 'verify', bundle], repoPath);
+  work.check();
   const heads = new Set((await git(['bundle', 'list-heads', bundle], repoPath)).trim().split('\n').map(line => line.split(' ')[0]));
   if (!Array.isArray(captured.recoveryHeads) || !captured.recoveryHeads.includes(release.head)
     || captured.recoveryHeads.some(head => !heads.has(head))) throw new Error('archive-bundle-head-mismatch');
@@ -682,6 +684,7 @@ async function archiveSnapshots(tree, repoPath, missingRoot, work = archiveWork(
   work = work.metadataScope();
   if (!missingRoot) {
     const snapshots = await Promise.all([snapshotContent(tree.path, work), snapshotAdministration(tree.path, null, work)]);
+    work.check();
     checkArchiveBudget(...snapshots);
     return snapshots;
   }
@@ -764,7 +767,9 @@ async function recoveryObjectHeads(administration, { repoPath, tree, missingRoot
       const symbolic = /^ref: (\S+)$/.exec(lines[0]);
       if (symbolic) {
         const prefix = missingRoot ? ['--git-dir', missingRoot, '--work-tree', tree.path] : [];
+        work.check();
         await git([...prefix, 'check-ref-format', '--allow-onelevel', symbolic[1]], missingRoot ? repoPath : tree.path);
+        work.check();
         add((await git([...prefix, 'rev-parse', '--verify', '--end-of-options', symbolic[1]], missingRoot ? repoPath : tree.path)).trim());
       } else add(lines[0]);
       continue;
@@ -877,12 +882,14 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
       work.check();
       const type = (await git(['cat-file', '-t', head], repoPath)).trim();
       if (!['commit', 'tree', 'blob', 'tag'].includes(type)) throw new Error('private recovery object has an unsupported type');
+      work.check();
       const ref = `${namespace}/${head}`;
       await git(['update-ref', ref, head, ''], repoPath);
       recoveryRefs.push({ ref, head });
     }
     work.check();
     await git([...(missingRoot ? ['--git-dir', missingRoot, '--work-tree', tree.path] : []), 'bundle', 'create', bundle, 'HEAD', ...recoveryRefs.map(entry => entry.ref)], missingRoot ? repoPath : tree.path);
+    work.check();
     const [, heads] = await Promise.all([git(['bundle', 'verify', bundle], repoPath), git(['bundle', 'list-heads', bundle], repoPath)]);
     const bundled = new Set(heads.trim().split('\n').map(line => line.split(' ')[0]));
     if ([...recoveryHeads].some(head => !bundled.has(head))) throw new Error('bundle recovery head mismatch');
