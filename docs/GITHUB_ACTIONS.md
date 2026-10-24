@@ -244,7 +244,11 @@ pushed head, and the impact planner skips what it attests to:
   planner compares it with the head commit's tree on the PR. A SHA is never
   compared, for the same reason `scripts/verify-ci-status.js` compares trees:
   the content is what was tested. The commit must already be on the upstream
-  remote (the one `branch.<name>.remote` names); GitHub only accepts a status
+  remote (the one `branch.<name>.remote` names). Local tracking containment is
+  checked first; if stale after a URL/path push, exact advertised branch tips
+  are checked through that remote without fetching or changing the checkout.
+  Unreadable or malformed remote evidence refuses publication verification.
+  GitHub only accepts a status
   on a commit it has, which is why attesting is a step after `git push`, not a
   pregate flag.
 - **The merge ref is not the head tree.** The receipt vouches for the head
