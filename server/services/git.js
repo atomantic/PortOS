@@ -257,7 +257,8 @@ async function commitAdmitted(dir, message, { paths = [] } = {}) {
       commitOutcome, ...(result.terminated ? { name: 'AbortError', terminated: true, signal: result.signal } : {})
     });
   }
-  const hashMatch = result.stdout.match(/^\[[^\r\n]* ([a-f0-9]+)\]/m);
+  // Stop at the header's hash before bracketed hexadecimal text in the subject.
+  const hashMatch = result.stdout.match(/^\[[^\r\n]*? ([a-f0-9]+)\]/m);
   return {
     hash: hashMatch ? hashMatch[1] : null,
     message
