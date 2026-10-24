@@ -3,7 +3,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-vi.mock('../services/imageRenderUsage.js', () => ({ getImageRenderUsage: vi.fn(async () => ({ renderSessions: 2, savedOutputs: 3, imageCostUsd: null })) }));
+vi.mock('../services/imageRenderUsage.js', () => ({ getImageRenderUsage: vi.fn(async () => ({ renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null })) }));
 
 vi.mock('../services/usage.js', () => ({
   getUsageSummary: vi.fn(),
@@ -85,7 +85,7 @@ describe('usage routes', () => {
     const response = await request(buildApp()).get('/api/usage?from=2026-07-01&to=2026-07-31');
     expect(response.status).toBe(200);
     expect(getImageRenderUsage).toHaveBeenCalledWith({ from: '2026-07-01', to: '2026-07-31' });
-    expect(response.body.imageRenders).toEqual({ renderSessions: 2, savedOutputs: 3, imageCostUsd: null });
+    expect(response.body.imageRenders).toEqual({ renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null });
     expect(response.body.report.totals.estimatedCost).toBe(12);
   });
 
@@ -146,7 +146,7 @@ describe('usage routes', () => {
       providers: ['anthropic'],
       subscriptionSavings: { configured: false, families: [] },
       fleet: { instances: [], totals: null },
-      imageRenders: { renderSessions: 2, savedOutputs: 3, imageCostUsd: null },
+      imageRenders: { renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null },
       monthlyHistory: [],
       monthlySeries: [],
       monthlyInstanceCount: 1,

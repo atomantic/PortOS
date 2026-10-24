@@ -709,7 +709,7 @@ function InternalUsageMetrics() {
         <section className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-2" aria-label="Codex image usage">
           <h3 className="text-sm font-medium text-white">Codex image usage · this machine</h3>
           <p className="text-sm text-gray-300">
-            {formatCount(usage.imageRenders.renderSessions)} render sessions · {formatCount(usage.imageRenders.savedOutputs)} saved outputs in this period
+            {formatCount(usage.imageRenders.codexSessions)} Codex sessions · {formatCount(usage.imageRenders.savedOutputs)} saved outputs in this period
           </p>
           <p className="text-xs text-gray-400">
             Image tokens, image cost and subscription allowance attribution: unknown.
@@ -721,10 +721,10 @@ function InternalUsageMetrics() {
             {usage.imageRenders.driverTokens
               ? `${formatCount(usage.imageRenders.driverTokens.reportedTotal)} reported driver tokens across ${formatCount(usage.imageRenders.driverTokens.sessionsMeasured)} sessions; no input/output split or image attribution.`
               : 'Driver tokens: unknown.'}
-            {usage.imageRenders.driverTokens && ` Driver tokens are unknown for ${formatCount(usage.imageRenders.driverSessionsUnknown)} other sessions.`}
+            {usage.imageRenders.driverTokens && ` Driver tokens are unknown for ${formatCount(usage.imageRenders.driverSessionsUnknown)} other render groups.`}
           </p>
-          {usage.imageRenders.jobIdentitySessions > 0 && (
-            <p className="text-xs text-gray-400">{formatCount(usage.imageRenders.jobIdentitySessions)} sessions use a saved job identity because the provider session ID is unavailable.</p>
+          {usage.imageRenders.jobIdentityGroups > 0 && (
+            <p className="text-xs text-gray-400">{formatCount(usage.imageRenders.jobIdentityGroups)} additional render groups use saved job IDs; their Codex session IDs are unavailable.</p>
           )}
         </section>
       )}

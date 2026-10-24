@@ -124,7 +124,7 @@ export async function getImageRenderUsage({ from = null, to = null, directory } 
     if (session.driverTotal !== null) { driverSessionsMeasured++; driverReportedTotal += session.driverTotal; }
   }
   return {
-    scope: 'local-codex-saved-renders', renderSessions, savedOutputs, jobIdentitySessions,
+    scope: 'local-codex-saved-renders', renderGroups: renderSessions, codexSessions: renderSessions - jobIdentitySessions, savedOutputs, jobIdentityGroups: jobIdentitySessions,
     driverTokens: driverSessionsMeasured ? { reportedTotal: driverReportedTotal, sessionsMeasured: driverSessionsMeasured } : null,
     driverSessionsUnknown: renderSessions - driverSessionsMeasured,
     imageTokens: null, imageCostUsd: null, allowanceUnits: null,

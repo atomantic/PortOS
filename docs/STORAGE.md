@@ -1239,7 +1239,9 @@ FableLoom shot-planning run checkpoints live in machine-local `data/fableloom-sh
 `data/image-render-usage/<sha256>.json` is a machine-local `file-primary`
 accounting receipt ledger (`server/services/imageRenderUsage.js`). Each immutable
 receipt describes one saved original output; `renderKey` groups outputs from the
-same Codex session. The Usage page counts sessions separately from saved outputs.
+same Codex session. The Usage page counts real Codex session IDs separately from saved outputs and
+fallback PortOS job groups. A combined render-group total is never presented as
+a count of known Codex sessions.
 A missing provider session ID uses the original PortOS job identity and is
 reported as such. These are observed saved render sessions, not a count of every
 image-tool invocation, attempt or billable image.

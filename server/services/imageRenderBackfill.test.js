@@ -31,14 +31,14 @@ describe('saved Codex image usage recovery', () => {
     await sidecar('other-provider', { mode: 'agy' });
     await writeFile(join(root, 'media-jobs.json'), JSON.stringify({ jobs: [{ kind: 'image', status: 'completed', params: { mode: 'codex' }, result: { filename: 'original.png', generationId: id }, startedAt: '2026-07-01T12:00:00Z' }] }));
     const plan = await planImageRenderBackfill(root);
-    expect(plan.coverage).toMatchObject({ eligibleOutputs: 2, renderSessions: 1, duplicates: 1, derived: 2, unrecoverable: 1, queueOnly: 0 });
+    expect(plan.coverage).toMatchObject({ eligibleOutputs: 2, renderGroups: 1, duplicates: 1, derived: 2, unrecoverable: 1, queueOnly: 0 });
     expect(JSON.stringify(plan)).not.toContain('Private example prompt');
     expect(await readdir(root)).not.toContain('image-render-usage');
     const applied = await applyImageRenderBackfill(root, plan, join(root, 'journal.json'));
     expect(applied.inserted).toBe(2);
     expect((await applyImageRenderBackfill(root, plan, join(root, 'second-journal.json'))).inserted).toBe(0);
-    expect(await getImageRenderUsage({ directory, from: '2026-07-01', to: '2026-07-01' })).toMatchObject({ renderSessions: 1, savedOutputs: 2, imageTokens: null, imageCostUsd: null, allowanceUnits: null, driverTokens: null });
-    expect(await getImageRenderUsage({ directory, from: '2026-07-02' })).toMatchObject({ renderSessions: 0, savedOutputs: 0 });
+    expect(await getImageRenderUsage({ directory, from: '2026-07-01', to: '2026-07-01' })).toMatchObject({ renderGroups: 1, codexSessions: 1, jobIdentityGroups: 0, savedOutputs: 2, imageTokens: null, imageCostUsd: null, allowanceUnits: null, driverTokens: null });
+    expect(await getImageRenderUsage({ directory, from: '2026-07-02' })).toMatchObject({ renderGroups: 0, savedOutputs: 0 });
     expect(await readFile(join(root, 'usage.json'), 'utf8')).toBe('{"existing":"preserve exactly"}');
     const journal = JSON.parse(await readFile(join(root, 'journal.json'), 'utf8'));
     expect((await readRenderReceipts({ directory })).every(row => row.backfillBatch === journal.batch)).toBe(true);
@@ -51,8 +51,8 @@ describe('saved Codex image usage recovery', () => {
     await expect(applyImageRenderBackfill(root, oldPlan, join(root, 'journal.json'))).rejects.toThrow('inventory changed');
     const plan = await planImageRenderBackfill(root);
     await applyImageRenderBackfill(root, plan, join(root, 'journal.json'));
-    expect(await getImageRenderUsage({ directory, from: '2026-07-01', to: '2026-07-01' })).toMatchObject({ renderSessions: 1, savedOutputs: 2 });
-    expect(await getImageRenderUsage({ directory, from: '2026-07-02' })).toMatchObject({ renderSessions: 0, savedOutputs: 0 });
+    expect(await getImageRenderUsage({ directory, from: '2026-07-01', to: '2026-07-01' })).toMatchObject({ renderGroups: 1, savedOutputs: 2 });
+    expect(await getImageRenderUsage({ directory, from: '2026-07-02' })).toMatchObject({ renderGroups: 0, savedOutputs: 0 });
   });
 
   it('publishes complete receipts exactly once across simultaneous writers and does not replace a live receipt during backfill', async () => {

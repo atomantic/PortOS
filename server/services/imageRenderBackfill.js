@@ -56,7 +56,9 @@ export async function planImageRenderBackfill(dataDir) {
     version: 1, inventoryHash: hash(receipts), receipts,
     coverage: {
       ...coverage, eligibleOutputs: receipts.length,
-      renderSessions: new Set(receipts.map(row => row.renderKey)).size,
+      renderGroups: new Set(receipts.map(row => row.renderKey)).size,
+      codexSessions: new Set(receipts.filter(row => row.identitySource === 'codex-session').map(row => row.renderKey)).size,
+      jobIdentityGroups: new Set(receipts.filter(row => row.identitySource === 'portos-job').map(row => row.renderKey)).size,
       jobIdentityOutputs: receipts.filter(row => row.identitySource === 'portos-job').length,
       alreadyRecorded: receipts.length - pending.length, additiveOutputs: pending.length,
       earliest: receipts.map(row => row.occurredAt).sort()[0] || null,

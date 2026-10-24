@@ -479,7 +479,7 @@ describe('codex provider — image harvest', () => {
     expect(Buffer.compare(written, fakePngBytes)).toBe(0);
 
     const { getImageRenderUsage } = await import('../imageRenderUsage.js');
-    expect(await getImageRenderUsage()).toMatchObject({ renderSessions: 1, savedOutputs: 1, imageCostUsd: null, driverTokens: { reportedTotal: 1234, sessionsMeasured: 1 } });
+    expect(await getImageRenderUsage()).toMatchObject({ renderGroups: 1, savedOutputs: 1, imageCostUsd: null, driverTokens: { reportedTotal: 1234, sessionsMeasured: 1 } });
 
     // Sidecar metadata exists too.
     const sidecar = join(FAKE_IMAGES_DIR, `${job.generationId}.metadata.json`);
