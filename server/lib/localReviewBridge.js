@@ -14,11 +14,13 @@ import { PATHS } from './fileUtils.js';
  * moving or renaming the script cannot break one prompt while the other keeps
  * working. Each caller applies its own `shellQuote`.
  */
+export const LOCAL_REVIEW_ATTRIBUTION_GUIDE = join(PATHS.root, 'docs/PR_REVIEW_ATTRIBUTION.md');
+
 export const LOCAL_REVIEW_BRIDGE_SCRIPT = join(PATHS.root, 'server/scripts/run-local-code-review.mjs');
 
 /** Preserve a claim's enforced review policy at the bridge boundary. */
 export function localReviewBridgeRequest(request, cwd) {
-  const { timeoutMs, ...reviewRequest } = request;
+  const { timeoutMs, recordAttribution: _recordAttribution, ...reviewRequest } = request;
   if (Number.isFinite(timeoutMs) && timeoutMs > 0) reviewRequest.timeoutMs = timeoutMs;
   if (request.kind === 'claim-review') reviewRequest.toolFree = true;
   return { ...reviewRequest, cwd };

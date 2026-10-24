@@ -5,10 +5,13 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, chmod } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from '../lib/childProcess.js';
+import { promisify } from 'node:util';
+import { spawn, execFile } from '../lib/childProcess.js';
 
 it('runs a saved provider reviewer from the standalone claim bridge without bootstrapping PortOS', async () => {
   const root = await mkdtemp(join(tmpdir(), 'review-bridge-test-'));
+  await promisify(execFile)('git', ['init', '--quiet'], { cwd: root });
+  await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'reset'], { cwd: root });
   const bodies = [];
   const api = createServer((request, response) => {
     let body = '';
@@ -67,16 +70,21 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
       child.stderr.on('data', chunk => { stderr += chunk; });
       child.on('error', error => { clearTimeout(timeout); reject(error); });
       child.on('close', code => { clearTimeout(timeout); resolve({ code, stdout, stderr }); });
-      child.stdin.end(JSON.stringify(request));
+      child.stdin.end(JSON.stringify({ recordAttribution: true, ...request }));
     });
   };
   const results = await (async () => {
     const request = { backend: 'provider:example-gpu', diff: 'diff --git a/example.js b/example.js' };
+    expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('');
     const cliRequest = { backend: 'provider:example-cli', model: 'review-model', diff: request.diff };
-    return [await runReview(request), await runReview({ ...request, inheritDefaults: false }), await runReview(cliRequest),
+    const results = [await runReview(request), await runReview({ ...request, inheritDefaults: false }), await runReview(cliRequest),
       await runReview({ ...cliRequest, kind: 'claim-review' }),
       await runReview({ kind: 'claim-comments', backend: 'provider:example-cli', model: 'review-model', comments: [{ login: 'example-user', type: 'User', body: 'I will work on this' }] }),
       await runReview({ ...cliRequest, backend: 'provider:example-refusal', kind: 'claim-review', inheritDefaults: false })];
+    expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\ndefault-model\nreview-model\nreview-model\n');
+    const { stdout } = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'labels'], { cwd: root });
+    expect(JSON.parse(stdout).labels).toEqual(['reviewer:review-model', 'reviewer:default-model']);
+    return results;
   })().finally(async () => {
     await new Promise(resolve => api.close(resolve));
     await rm(root, { recursive: true, force: true });

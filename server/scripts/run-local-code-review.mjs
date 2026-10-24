@@ -6,6 +6,8 @@
  */
 import { getCodeReviewDefaults, pickAvailableReviewerGroups, reportReviewerFailure, reportReviewerSuccess, runLocalClaimCommentReview, runLocalCodeReview } from '../services/codeReview.js';
 
+import { recordLocalReviewAttribution } from '../lib/localReviewAttribution.js';
+
 import { Console } from 'node:console';
 import { isReviewerConfigFault, reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../lib/reviewerConfig.js';
 import { localReviewBridgeRequest } from '../lib/localReviewBridge.js';
@@ -97,6 +99,9 @@ try {
     ? runLocalClaimCommentReview
     : runLocalCodeReview;
   const result = await review({ ...localReviewBridgeRequest(request, process.cwd()), model, effort });
+  if (request.recordAttribution === true && request.kind !== 'claim-comments') {
+    await recordLocalReviewAttribution(process.cwd(), result);
+  }
   process.stdout.write(`${JSON.stringify(result)}\n`);
   const recordOutcome = result.ok
     ? reportReviewerSuccess(request.backend)
