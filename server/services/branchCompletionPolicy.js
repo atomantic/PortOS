@@ -136,10 +136,12 @@ const reviewTarget = policy => policy.agent.metadata?.reviewLoopMergeTarget;
 const retirementPr = policy => policy.prUrl || reviewTarget(policy)?.url;
 
 function continuedDelivery(policy, input) {
-  if (policy.agent.status !== 'completed' || policy.agent.result?.success !== true || policy.agent.result.validationPassed === false
+  if (policy.agent.status !== 'completed'
+    || (policy.agent.result?.success !== true && policy.agent.result?.executionSuccess !== true)
+    || policy.agent.result?.executionSuccess === false || policy.agent.result?.validationPassed === false
     || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE || input.verifiedPrHead !== input.tip) return null;
   return input.deliveryContinuations?.find(proof => proof.agentId === policy.agent.id
-    && proof.originalPrUrl === retirementPr(policy) && proof.originalPrUrl !== input.prUrl
+    && proof.originalPrUrl === (retirementPr(policy) ?? null)
     && proof.prUrl === input.prUrl && proof.tip === input.tip
     && (!policy.tip || [proof.originalPrHead, proof.capturedHead].includes(policy.tip))
     && policy.agent.metadata?.completedCheckouts?.some(row => completedCheckoutReceiptValid(policy.agent, row)
@@ -188,7 +190,8 @@ function reviewedIncarnation(input, policies) {
   if (!isAbsolute(input.checkoutPath || '') || samePath(input.checkoutPath, input.repoPath)
     || !input.prUrl || input.verifiedPrHead !== input.tip
     || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(input.tip || '')) return null;
-  const owners = policies.filter(policy => policy.agent.status === 'completed' && (policy.agent.result?.success === true || completedCleanupForRetirement(policy, input) || reviewedOrphanCheckout(policy, input))
+  const owners = policies.filter(policy => policy.agent.status === 'completed' && (policy.agent.result?.success === true
+    || completedCleanupForRetirement(policy, input) || reviewedOrphanCheckout(policy, input) || continuedDelivery(policy, input))
     && policy.completion === PR_COMPLETIONS.REVIEW_THEN_MERGE
     && (samePath(policy.agent.metadata?.workspacePath, input.checkoutPath) || completedCleanupForRetirement(policy, input)
       || reviewedOrphanCheckout(policy, input) || continuedDelivery(policy, input))
@@ -255,7 +258,8 @@ export function reviewedRetirementPolicy(input) {
   const incarnation = reviewedIncarnation(input, decision.policies || []);
   const policies = incarnation?.current || decision.policies || [];
   if (policies.some(p => p.completion === PR_COMPLETIONS.LEAVE_OPEN)) return { reason: held };
-  if (policies.some(p => p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input) && !reviewedOrphanCheckout(p, input) && !completedOrphanSibling(p, input))
+  if (policies.some(p => p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input)
+    && !reviewedOrphanCheckout(p, input) && !completedOrphanSibling(p, input) && !continuedDelivery(p, input))
     || p.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
     || (retirementPr(p) && !continuedDelivery(p, input)
       && ((!incarnation && !completedOrphanSibling(p, input)) || retirementPr(p) !== input.prUrl))
