@@ -185,6 +185,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     // Age and registry absence do not prove a manual claim finished.
     expect(result.cleaned, context).not.toContain('claim/issue-5');
     expect(reasonFor('claim/issue-5'), context).toBe('claim-completion-unverified');
+    expect(result.merged).toContainEqual(expect.objectContaining({ branch: 'claim/issue-5', state: 'MERGED' }));
     expect(existsSync(staleClaim)).toBe(true);
     expect(reasonFor('claim/issue-6'), context).toBe('worktree-locked');
     expect(existsSync(lockedClaim)).toBe(true);

@@ -1649,6 +1649,60 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(injected.fetches).toHaveLength(missingProof ? 1 : 0);
   });
 
+  it.each(['complete', 'owner-reacquired', 'identity-changed'])('recovers retained merged claims through persisted retirement: %s', async scenario => {
+    const c = await reviewedCheckout('retained-merged-claim', { normalMerge: true });
+    await execGit(['worktree', 'unlock', c.path], repo);
+    await execGit(['restore', 'initial.txt'], c.path);
+    await mkdir(join(c.admin, 'info'), { recursive: true });
+    await writeFile(join(c.admin, 'info', 'exclude'), 'private fixture exclusion note\n');
+    await writeFile(join(c.path, '.gitignore'), '/.gitignore\n/untracked.txt\n/ignored.txt\n/linked\n');
+    expect((await execGit(['status', '--porcelain'], c.path)).stdout).toBe('');
+    const release = { ...c.release, locked: false, lockReason: null,
+      checkoutIdentity: await readRetirementCheckoutIdentity(c.path) };
+    injected.policies[0].result = { success: false, executionSuccess: true,
+      taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
+    const remaining = [{ ...release, reason: 'claim-completion-unverified' }];
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining });
+    const { prepareReconcileRetirements } = await import('./branchReconcileRetirement.js');
+    const input = { wip: [], merged: [{ branch: release.branch, tip: release.head, worktreePath: release.path,
+      state: 'MERGED', isMerged: true }], skipped: remaining,
+      worktreeInventory: [{ ...release, managed: true }] };
+    const result = await prepareReconcileRetirements(injected.app, input, {
+      readPr: async () => c.forge.prUrl,
+      prepare: async request => {
+        const reviewed = await prepareInventoriedCheckoutRetirement(request, c.opts);
+        if (scenario === 'owner-reacquired') c.opts.readAgents = async () => [{ id: 'new-owner', status: 'running',
+          metadata: { sourceWorkspace: repo, workspacePath: c.path, worktreeBranch: release.branch } }];
+        if (scenario === 'identity-changed') {
+          const pointer = await readFile(join(c.path, '.git'));
+          await rename(join(c.path, '.git'), join(c.path, '.git.previous')); await writeFile(join(c.path, '.git'), pointer);
+        }
+        return reviewed;
+      },
+      // Model the daemon's admitted mutation callback; exercise the actual
+      // inventory, policy, owner, archive, removal and persisted-receipt gates.
+      retire: (request, options) => retireInventoriedCheckout(request, { ...c.opts, ...options, beforeMutation: async () => {} }),
+    });
+    const outcome = await getBranchReconcileOutcome('app-1');
+    if (scenario !== 'complete') {
+      expect(result).toMatchObject({ retired: [], held: [{ reason: scenario === 'owner-reacquired' ? 'claim-owner-active' : 'checkout-identity-changed' }] });
+      expect(await registered(c.path)).toBe(true);
+      expect(outcome.retired || []).toEqual([]);
+      return;
+    }
+    expect(result).toMatchObject({ candidates: [], held: [], retired: [expect.objectContaining({ checkoutIdentity: release.checkoutIdentity })] });
+    expect(await registered(c.path)).toBe(false);
+    const receipt = outcome.retired.find(row => row.branch === release.branch);
+    expect(receipt).toMatchObject({ head: release.head, branchDeleted: true, checkoutIdentity: release.checkoutIdentity });
+    expect(await readFile(join(receipt.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await readFile(join(receipt.archiveDir, 'files/untracked.txt'), 'utf8')).toBe('untracked work\n');
+    expect(await readFile(join(receipt.archiveDir, 'administration/gitdir/portos-review-status'), 'utf8')).toBe('private synthetic review marker');
+    const restored = join(scratch, 'standalone.git');
+    await execGit(['init', '--bare', restored], scratch);
+    await execGit(['bundle', 'unbundle', join(receipt.archiveDir, 'commits.bundle')], restored);
+    await execGit(['fsck', '--full', '--strict', '--no-reflogs', release.head], restored);
+  });
+
   it('settles a review obligation for unattended retirement only once every commit is on the default branch', async () => {
     const c = await reviewedCheckout('settled', { normalMerge: true, superseded: true });
     await execGit(['worktree', 'unlock', c.path], repo);
