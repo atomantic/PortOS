@@ -19,7 +19,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, BookOpenText, LayoutGrid, ListTree, PencilLine, Plus, Settings, Sparkles, Trash2, Waypoints, Workflow as WorkflowIcon, X } from 'lucide-react';
+import { ArrowLeft, Download, BookOpenText, LayoutGrid, ListTree, PencilLine, Plus, Settings, Sparkles, Trash2, Waypoints, Workflow as WorkflowIcon, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Drawer from '../components/Drawer';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -41,6 +41,7 @@ import LoomEpisodeFeedback from '../components/fableloom/LoomEpisodeFeedback';
 import LoomMediaJobWatchers from '../components/fableloom/LoomMediaJobWatchers';
 import LoomNodeEditor from '../components/fableloom/LoomNodeEditor';
 import LoomPlayPanel from '../components/fableloom/LoomPlayPanel';
+import LoomExportModal from '../components/fableloom/LoomExportModal';
 import LoomSettingsDrawer from '../components/fableloom/LoomSettingsDrawer';
 import LoomSeriesPlan from '../components/fableloom/LoomSeriesPlan';
 import LoomValidationPanel from '../components/fableloom/LoomValidationPanel';
@@ -89,6 +90,7 @@ export default function FableLoomStory({ view = 'graph' }) {
   const [notFound, setNotFound] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const playOpen = searchParams.get('play') === '1';
   useScrollLock(playOpen);
   const seriesPlanOpen = episodeId === 'plan';
@@ -468,6 +470,7 @@ export default function FableLoomStory({ view = 'graph' }) {
   // same actions inside the overflow menu on phones, where five buttons plus
   // the loom title ran off the right edge of the screen.
   const headerActions = [
+    { id: 'export', label: 'Export story', short: 'Export', icon: Download, onSelect: () => setExportOpen(true) },
     { id: 'settings', label: 'Story settings', short: 'Settings', icon: Settings, onSelect: () => setSettingsOpen(true) },
     ...(episode ? [
       { id: 'add-scene', label: 'Add scene', short: 'Scene', icon: Plus, onSelect: handleAddNode },
@@ -780,6 +783,8 @@ export default function FableLoomStory({ view = 'graph' }) {
           }}
         />
       )}
+
+      <LoomExportModal key={loom.id} loom={loom} open={exportOpen} onClose={() => setExportOpen(false)} />
 
       <LoomSettingsDrawer
         open={settingsOpen}

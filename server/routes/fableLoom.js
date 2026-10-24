@@ -131,6 +131,12 @@ router.get('/:id', asyncHandler(async (req, res) => {
   res.json(loom);
 }));
 
+router.post('/:id/export/preflight', asyncHandler(async (req, res) => {
+  const input = validateRequest(exportOptionsSchema, req.body ?? {});
+  const { preflightFableLoomExport } = await import('../services/fableLoom/exports.js');
+  res.json(await preflightFableLoomExport(req.params.id, input));
+}));
+
 router.post('/:id/export', asyncHandler(async (req, res) => {
   const input = validateRequest(exportOptionsSchema, req.body ?? {});
   const { startFableLoomExport } = await import('../services/fableLoom/exports.js');

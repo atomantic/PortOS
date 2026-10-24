@@ -933,6 +933,9 @@ function setupMediaGenEventForwarding() {
 }
 
 function setupFableLoomRunForwarding() {
+  fableLoomRunEvents.on('export', job => {
+    broadcastToSet(fableLoomSubscribers, 'fableloom:export:job', job);
+  });
   fableLoomRunEvents.on('editorial', run => {
     broadcastToSet(fableLoomSubscribers, 'fableloom:editorial:run', run);
   });

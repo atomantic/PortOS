@@ -663,6 +663,8 @@ describe('FableLoom mutation inventory (#10668)', () => {
   // Reviewed record mutations, deterministic checks/planning, cancellation,
   // session bookkeeping and fixed browser automation. New routes need review.
   const recordOrContained = [
+    // Reads deterministic package gates; no process, provider or artifact creation.
+    'POST /api/fableloom/:id/export/preflight',
     'POST /api/fableloom',
     'PATCH /api/fableloom/:id',
     'DELETE /api/fableloom/:id',

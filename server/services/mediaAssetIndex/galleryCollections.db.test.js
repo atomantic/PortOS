@@ -56,7 +56,7 @@ beforeAll(async () => {
 });
 beforeEach(() => drain());
 afterAll(async () => {
-  try { await drain(); await diagnostics?.drain(); }
+  try { await drain().finally(() => diagnostics?.drain()); }
   finally {
     try { await Promise.all([observer?.end(), client?.end()]); }
     finally { vi.unstubAllEnvs(); }
