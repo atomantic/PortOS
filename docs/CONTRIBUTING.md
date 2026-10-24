@@ -104,44 +104,11 @@ On POSIX, incomplete process inventories also retain stale roots; a dead runner
 does not prove its children exited. Pending identity checks apply to pool-close
 cleanup as well as later sweeps.
 
-Pregate proves only the stages it runs, and it says which it did not. A scoped
-plan runs every suite CI would run for it, in CI's dependency order and with
-CI's environment: the hidden-content scan, early structural guards, lint,
-server and client tests, the
-client build plus the API Explorer bundle pin, the boot smoke, the
-cross-workspace browser suites (smoke profile), and the serial `portos_test`
-DB suite last and alone — never concurrently with the other suites, and never
-against `portos` (both `PGDATABASE` and `PGTESTDATABASE` are pinned and
-`TEST_DB_OK` is removed from the stage's environment). A full-suite plan runs
-only the always-run guards unless `--full` is supplied, which runs everything
-above as well.
+`npm run pregate` is the lightweight local gate: lint/format checks, always-run and diff-selected structural guards, and directly owned unit tests. It selects edited test files and sibling tests for changed sources, including untracked new tests, without expanding through transitive imports. Browser, database, build and boot-smoke suites stay with hosted CI. Run a focused public-boundary regression for changed behavior that has no sibling test; automatic selection does not replace engineering judgment.
 
-A suite stays with CI, and is named as not run in the summary, when:
+`npm run pregate -- --full` explicitly runs the broad CI plan locally, including selected browser/DB/build/smoke stages when prerequisites are present. Missing prerequisites and `--skip-*` options remain explicit in the receipt. DB stages run last against `portos_test` only. Required hosted checks and configured reviews remain mandatory.
 
-- you pass `--skip-db`, `--skip-browser`, `--skip-build` or `--skip-smoke`;
-- a full plan was downgraded (no `--full`);
-- a prerequisite is missing — no Postgres answering at the resolved endpoint
-  (exported `PG*`, then the checkout's `.env`, then `localhost:5432`), or no
-  Chrome, ffmpeg or client bundler for the browser suites. The line names the
-  remedy; the run continues.
-
-The shipped prompt-history guard (CI's `prompt-history` job) runs locally
-when the planner selects it. The Windows job and the Linux worker-containment
-job (bubblewrap namespaces) are the two suites only CI can prove; both are
-named as not run. Every run writes a receipt to
-`.cache/pregate/report.json` (gitignored): the plan, each stage's outcome and
-duration, the suites not run and why, the base and HEAD SHAs, the Node
-version, platform and worker budget, and the hash of the exact working tree
-that was validated — untracked and uncommitted files included, so a later
-commit of that state yields the same `HEAD^{tree}`. A green summary never
-claims a suite it skipped; required CI checks still apply.
-
-Always-run and diff-selected structural guards run before broad test stages
-and browser/database prerequisite probes. Their successful results are reused
-only within that run while the working tree, index, HEAD and refs are unchanged;
-the receipt records guard outcomes and reuse proofs. This leaves the persistent
-test memo's stricter rules intact. `--guards-only` and downgraded full plans
-run that same guard selection once.
+The receipt at `.cache/pregate/report.json` records `validationMode` (`focused` or `ci`), exact tree/base/head, stage outcomes/durations and omitted suites. Focused mode marks server/client results as reduced coverage and cannot attest CI suites. Structural guard reuse remains confined to an unchanged snapshot within one invocation. `--guards-only --merged-with origin/<base>` retains the required current-base merge check, outside merge admission.
 
 Interrupting pregate (Ctrl-C or SIGTERM) does not leave tests running behind
 it: the running stage — including the test runner's npm and Vitest
@@ -159,7 +126,7 @@ pregate is still settling its stage. On Windows, where `cmd.exe` has no
 `exec`, the repository-root `exec.cmd` shim (found first in the working
 directory) runs the same command.
 
-After the push (and, when you open the pull request yourself, before
+The default focused receipt is local evidence only: do not invoke `pregate-attest.js` or rerun solely to attest it. After explicit `--full` validation, after the push (and, when you open the pull request yourself, before
 `gh pr create`), `node scripts/pregate-attest.js` posts that receipt as a
 `pregate` commit status on the pushed head, bound to the validated tree and
 naming the platform and Node it ran on, and the pull request's impact planner
@@ -317,7 +284,7 @@ npm test
 npm test --prefix server -- services/creativeDirector/videoAssembly.test.js
 ```
 
-`npm run pregate` runs the DB suite itself when the plan selects it, after
+`npm run pregate -- --full` runs the DB suite when the plan selects it, after
 every other stage, against `portos_test` only. For release validation by
 hand, run `npm run test:db` after the server and client
 suites finish rather than alongside them. A concurrent run is supported —

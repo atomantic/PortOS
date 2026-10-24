@@ -47,6 +47,8 @@ const ATTESTABLE = new Set(ATTESTABLE_STAGES);
  * @returns {string[]} in ATTESTABLE_STAGES order
  */
 export function attestedStagesFromReceipt(report) {
+  // Focused local checks are not CI suite proof, even if stage names coincide.
+  if (report?.validationMode === 'focused' || (report?.version >= 3 && report?.validationMode !== 'ci')) return [];
   const stages = Array.isArray(report?.stages) ? report.stages : [];
   const reduced = report?.plan?.downgraded === true ? new Set(['server', 'client']) : new Set();
   return ATTESTABLE_STAGES.filter((suite) => {

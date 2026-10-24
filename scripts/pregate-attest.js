@@ -113,6 +113,9 @@ export function planAttestation(report, { sha, treeOf, isPushed, remote, default
   if (typeof report.plan?.downgraded !== 'boolean') {
     throw refusal(`receipt at ${PREGATE_REPORT_PATH} predates attestation (no plan.downgraded); ${RERUN}`);
   }
+  if (report.validationMode === 'focused' || (report.version >= 3 && report.validationMode !== 'ci')) {
+    throw refusal('focused local validation does not attest CI suites; wait for required hosted CI. Do not rerun solely to attest.');
+  }
   if (report.passed !== true) throw refusal(`receipt at ${PREGATE_REPORT_PATH} did not pass; fix the failure and ${RERUN}`);
   if (report.treeStable !== true) {
     throw refusal(`the working tree changed while pregate ran (${String(report.tree).slice(0, 12)} → ${String(report.treeAfterRun).slice(0, 12)}); ${RERUN}`);
