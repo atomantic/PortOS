@@ -441,9 +441,11 @@ describe('socket.js — initSocket', () => {
     fableLoomRunEvents.emit('editorial', run);
     fableLoomRunEvents.emit('production', run);
     fableLoomRunEvents.emit('shots', run);
+    fableLoomRunEvents.emit('export', run);
     expect(viewer.emitted).toContainEqual(['fableloom:editorial:run', run]);
     expect(viewer.emitted).toContainEqual(['fableloom:production:run', run]);
     expect(viewer.emitted).toContainEqual(['fableloom:shots:run', run]);
+    expect(viewer.emitted).toContainEqual(['fableloom:export:job', run]);
     expect(peer.emitted.some(([name]) => name.startsWith('fableloom:'))).toBe(false);
     expect(io.emitted.some(([name]) => name.startsWith('fableloom:'))).toBe(false);
     viewer.handlers['fableloom:unsubscribe']();

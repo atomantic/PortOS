@@ -470,6 +470,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/eidoverse/world/presence', CONFIGURED_WORLD_SYNC],
   ['POST /api/eidoverse/world/project', CONFIGURED_WORLD_SYNC],
   // /api/fableloom
+  ['POST /api/fableloom/:id/export/preflight', 'Read-only deterministic package gates and approved voice reference validation; no process, provider call or artifact write.'],
   ['POST /api/fableloom', RECORDS],
   ['DELETE /api/fableloom/:id', REMOVES_RECORD],
   ['PATCH /api/fableloom/:id', RECORDS],

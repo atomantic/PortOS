@@ -150,3 +150,26 @@ blocker if it cannot be established. Do not edit the CoS state file, manufacture
 a running parent, or borrow another owner's token. After expiry, an old holder
 must reacquire and repeat final live checks; its old token cannot release a
 successor's lease.
+
+## FableLoom static export
+
+The authenticated CLI supports read-only preflight, build, explicit job status/watch,
+and protected binary download. Episode IDs retain their supplied package order.
+Omitting episode IDs exports all episodes in story order. Draft media is refused
+unless `--allow-draft true` is explicit; voice also requires `--characters true`.
+Preflight reports graph, outline, production, media and approval findings before a
+build. The build repeats validation and checks source bytes; preflight is not a
+finished-package certification.
+
+```sh
+node scripts/portos-api.js fableloom-export preflight LOOM --episodes EP1,EP2 --player true --profile web-720p
+node scripts/portos-api.js fableloom-export start LOOM --episodes EP1,EP2 --player true --profile web-720p
+node scripts/portos-api.js fableloom-export status LOOM JOB
+node scripts/portos-api.js fableloom-export watch LOOM JOB --timeout 1800
+node scripts/portos-api.js fableloom-export download LOOM JOB --output story.zip
+```
+
+`watch` prints findings, progress and final size and exits nonzero for a failed or
+cancelled job. Downloads use the same credential transport, write ZIP bytes to a
+new file with private permissions and refuse overwriting an existing file. The
+ZIP is a static managed artifact; these commands do not deploy or host PortOS.

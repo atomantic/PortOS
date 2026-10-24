@@ -28,3 +28,12 @@ node scripts/portos-api.js get /api/api-docs/catalog.json   # discover endpoints
 Details: [docs/AGENT_API_KEY.md](../../../docs/AGENT_API_KEY.md).
 
 For an outside terminal agent delivering a reviewed PR, use the supported [external merge-admission flow](../../../docs/AGENT_API_KEY.md#outside-agent-merge-admission). It binds a per-run secret and verified operator identity to the server-validated app, linked checkout and exact PR head/base; do not invent or borrow a CoS `agentId`.
+
+For FableLoom static package handoff, use `fableloom-export preflight|start LOOM`
+with `--episodes EP1,EP2`, `--player true`, `--characters true`, `--voice true`,
+`--allow-draft true`, `--profile source|web-720p|web-1080p`, and `--webm true`
+as needed. Flags are explicit values; voice requires character opt-in. Inspect
+preflight findings before `start`. Use `fableloom-export status|watch LOOM JOB`
+for findings/progress/size, then `fableloom-export download LOOM JOB --output
+story.zip` for its protected ZIP (refuses overwrite). This exports a static
+artifact and never deploys PortOS. See `docs/AGENT_API_KEY.md`.
