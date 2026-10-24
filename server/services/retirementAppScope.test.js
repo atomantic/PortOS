@@ -57,7 +57,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
   let repo;
   beforeEach(async () => {
     Object.assign(injected, { app: null, apps: null, schedule: { tasks: {}, executions: {} }, scheduleWrites: 0, failScheduleWrite: null, failOrphanInventory: false, failMergedInventory: false, inventoryFailureArmed: false, inventoryFailures: 0 });
-    scratch = realpathSync.native(await mkdtemp(join(tmpdir(), 'portos-cleanup-repo-')));
+    // Preserve the temp guard's Windows short-name spelling until materialization.
+    scratch = await mkdtemp(join(tmpdir(), 'portos-cleanup-repo-'));
     await mkdir(join(scratch, 'repo'));
     await materializeGitRepo(join(scratch, 'repo'), { identity: { email: 'test@example.com', name: 'Test' } });
     repo = (await execGit(['rev-parse', '--show-toplevel'], join(scratch, 'repo'))).stdout.trim();
