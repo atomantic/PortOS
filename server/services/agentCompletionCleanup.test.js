@@ -820,9 +820,7 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
     await complete({ appName: 'Example App' });
     expect(updateAgent).toHaveBeenCalledWith('a1', { result: { success: true, warnings } });
     expect(addNotification).not.toHaveBeenCalled();
-    expect(ensureTaskThread).toHaveBeenCalledWith(expect.objectContaining({
-      title: 'Agent cleanup issue: Example App', notes: warnings[0], priority: 'high',
-    }));
+    expect(ensureTaskThread).not.toHaveBeenCalled();
     expect(spawnMergeRecoveryTask).toHaveBeenCalledWith(warnings, 'a1', expect.objectContaining({ id: 't' }), 'Example App', '/example/repo');
   });
 
