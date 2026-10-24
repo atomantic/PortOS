@@ -14,7 +14,7 @@ import { videoGenEvents } from '../videoGen/events.js';
 import { renderComposition, cancel } from './index.js';
 import { installMotionKit } from './motionKit.js';
 import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome, _testChromeCaptureArgs } from './testBrowserCleanup.js';
-import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 vi.mock('./encode.js', async importOriginal => {
   const actual = await importOriginal();
@@ -68,7 +68,9 @@ async function composition(html = fixture(), directory = `compositions/${randomU
   return { directory, jobId: randomUUID() };
 }
 
-describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpeg', () => {
+const captureAvailable = browserSuiteCanRun('HTML composition capture', { Chrome: chrome, ffmpeg });
+
+describe.skipIf(!captureAvailable)('HTML composition with real Chrome and ffmpeg', () => {
   beforeAll(async () => {
     const profile = join(PATHS.data, 'chrome-test-profile');
     proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
