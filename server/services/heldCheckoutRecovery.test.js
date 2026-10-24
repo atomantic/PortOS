@@ -1650,22 +1650,31 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   });
 
   it.each(['complete', 'owner-reacquired', 'identity-changed'])('recovers retained merged claims through persisted retirement: %s', async scenario => {
-    const c = await reviewedCheckout('retained-merged-claim', { normalMerge: true });
+    external = join(repo, '.claude', 'worktrees');
+    await mkdir(external, { recursive: true });
+    const c = await reviewedCheckout('claim-issue-425', { normalMerge: true });
+    await execGit(['branch', '-m', c.release.branch, 'claim/issue-425'], repo);
     await execGit(['worktree', 'unlock', c.path], repo);
     await execGit(['restore', 'initial.txt'], c.path);
     await mkdir(join(c.admin, 'info'), { recursive: true });
     await writeFile(join(c.admin, 'info', 'exclude'), 'private fixture exclusion note\n');
     await writeFile(join(c.path, '.gitignore'), '/.gitignore\n/untracked.txt\n/ignored.txt\n/linked\n');
     expect((await execGit(['status', '--porcelain'], c.path)).stdout).toBe('');
-    const release = { ...c.release, locked: false, lockReason: null,
+    const release = { ...c.release, branch: 'claim/issue-425', locked: false, lockReason: null,
       checkoutIdentity: await readRetirementCheckoutIdentity(c.path) };
+    injected.policies[0].metadata.claimBranches = [release.branch];
     injected.policies[0].result = { success: false, executionSuccess: true,
       taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
+    const merged = { branch: release.branch, tip: release.head, worktreePath: release.path,
+      state: 'MERGED', isMerged: true, worktreeAgeMs: 0, worktreeLocked: false };
+    const { cleanupMerged } = await import('./branchReconcile.js');
+    const initial = await cleanupMerged(repo, 'main', [merged], { appId: 'app-1', activeAgentIds: new Set(),
+      claimOwners: { agents: [], readAgents: noOwners } });
+    expect(initial).toMatchObject({ cleaned: [], skipped: [{ branch: release.branch, reason: 'claim-completion-unverified' }] });
     const remaining = [{ ...release, reason: 'claim-completion-unverified' }];
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining });
     const { prepareReconcileRetirements } = await import('./branchReconcileRetirement.js');
-    const input = { wip: [], merged: [{ branch: release.branch, tip: release.head, worktreePath: release.path,
-      state: 'MERGED', isMerged: true }], skipped: remaining,
+    const input = { wip: [], merged: [merged], skipped: initial.skipped,
       worktreeInventory: [{ ...release, managed: true }] };
     const result = await prepareReconcileRetirements(injected.app, input, {
       readPr: async () => c.forge.prUrl,
