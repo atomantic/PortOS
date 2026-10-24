@@ -2345,30 +2345,21 @@ describe('pregate attestation', () => {
     expect(reasons).toHaveLength(8);
   });
 
-  it('waits up to 90 s for a status on a head younger than five minutes, and not on an older one', () => {
-    // The status is posted after the push that started this run, so a young
-    // head with no status yet is re-read at 10 s intervals.
+  it('reads an absent attestation once and immediately retains broad CI for focused pushes', () => {
     let reads = 0;
-    const lateStatuses = () => { reads += 1; return reads < 4 ? [] : [status()]; };
-    const calls = [];
-    const young = resolveCiAttestation({ env: prEnv, exec: fakeExec({ statuses: lateStatuses, committedAt: Math.floor(NOW / 1000) - 60, calls }), log: quiet, ...clock() });
-    expect(young).toMatchObject({ attested: true, waitedMs: 30_000 });
-    expect(reads).toBe(4);
-
-    reads = 0;
-    const lines = [];
-    const never = resolveCiAttestation({ env: prEnv, exec: fakeExec({ statuses: () => { reads += 1; return []; }, committedAt: Math.floor(NOW / 1000) - 60 }), log: (line) => lines.push(line), ...clock() });
-    expect(never.attested).toBe(false);
-    expect(reads).toBe(10);
-    expect(lines.some((line) => /^⏳ Waited 90s for a pregate status on the 60s-old head/.test(line))).toBe(true);
-
-    reads = 0;
-    expect(resolve({ statuses: () => { reads += 1; return []; } }).attested).toBe(false);
+    const sleeps = [];
+    let time = NOW;
+    const result = resolveCiAttestation({
+      env: prEnv,
+      exec: fakeExec({ statuses: () => { reads += 1; return []; }, committedAt: Math.floor(NOW / 1000) - 60 }),
+      log: quiet,
+      now: () => time,
+      sleep: ms => { sleeps.push(ms); time += ms; },
+    });
+    expect(result).toMatchObject({ attested: false, reason: 'no "pregate" status on the head' });
     expect(reads).toBe(1);
-    // A revocation or a mismatch is final: no waiting for it to change.
-    reads = 0;
-    expect(resolve({ statuses: () => { reads += 1; return [status({ state: 'failure' })]; }, committedAt: Math.floor(NOW / 1000) - 60 }).attested).toBe(false);
-    expect(reads).toBe(1);
+    expect(sleeps).toEqual([]);
+    expect(applyAttestation(fullPlan(), result)).toMatchObject({ full: true, attestedStages: [] });
   });
 
   it('refuses, per stage, the stages a base-side change could reach', () => {

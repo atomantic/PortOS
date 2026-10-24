@@ -1789,11 +1789,6 @@ const ATTESTATION_SKIPS = Object.freeze({
   'prompt-history': () => ({ promptHistory: false }),
 });
 
-/** How long after the head commit a just-posted status may still be on its way. */
-const ATTESTATION_YOUNG_HEAD_SECONDS = 300;
-const ATTESTATION_POLL_TOTAL_MS = 90_000;
-const ATTESTATION_POLL_INTERVAL_MS = 10_000;
-
 /**
  * Whether this run may honor an attestation at all, and the head it would
  * read it from. Reads only the `CI_*` inputs ci.yml passes to the plan step.
@@ -1883,17 +1878,16 @@ export function attestationDrift(plan, driftPaths) {
  * which `attestationDrift` weighs per stage in applyAttestation from the
  * `baseDrift` returned here.
  *
- * A status posted moments after the push can still be on its way when the
- * run starts, so a head younger than five minutes with no `pregate` status
- * is re-read for up to 90 seconds before "no attestation" is concluded.
+ * Focused local validation intentionally posts no attestation. Read once; a
+ * missing or late receipt leaves broad hosted checks enabled immediately.
  *
  * `log` defaults to stderr: the planner's stdout is the JSON plan pregate
  * and the tests parse, so every human-readable line here stays off it.
  *
- * @param {{env?: NodeJS.ProcessEnv, exec?: typeof execFileSync, cwd?: string, log?: (line: string) => void, now?: () => number, sleep?: (ms: number) => void}} [options]
+ * @param {{env?: NodeJS.ProcessEnv, exec?: typeof execFileSync, cwd?: string, log?: (line: string) => void}} [options]
  * @returns {{attested: boolean, reason: string, sha?: string, tree?: string, os?: string, node?: number, stages?: string[], creator?: string, createdAt?: string, baseDrift?: string[]|null, waitedMs?: number}}
  */
-export function resolveCiAttestation({ env = process.env, exec = execFileSync, cwd = process.cwd(), log = console.warn, now = Date.now, sleep = sleepMs } = {}) {
+export function resolveCiAttestation({ env = process.env, exec = execFileSync, cwd = process.cwd(), log = console.warn } = {}) {
   const none = (reason) => {
     log(`⏭️ Pregate attestation not honored: ${reason}.`);
     return { attested: false, reason };
@@ -1914,9 +1908,6 @@ export function resolveCiAttestation({ env = process.env, exec = execFileSync, c
   }
   const headTree = capture('git', ['rev-parse', '--verify', '--quiet', `${headSha}^{tree}`]);
   if (typeof headTree !== 'string') return none(`cannot resolve the tree of head ${headSha.slice(0, 9)}`);
-  const committed = capture('git', ['show', '-s', '--format=%ct', headSha]);
-  const headAgeSeconds = typeof committed === 'string' && /^\d+$/.test(committed) ? Math.floor(now() / 1000) - Number(committed) : null;
-
   const readStatuses = () => {
     const body = capture('gh', ['api', `repos/${repository}/commits/${headSha}/statuses?per_page=100`]);
     if (typeof body !== 'string') return { error: `statuses API failed: ${body.error}` };
@@ -1926,30 +1917,15 @@ export function resolveCiAttestation({ env = process.env, exec = execFileSync, c
       return { error: 'statuses API returned unreadable JSON' };
     }
   };
-  const started = now();
-  let waitedMs = 0;
-  let selected;
-  for (;;) {
-    const read = readStatuses();
-    if (read.error) return none(read.error);
-    selected = selectAttestation(read.statuses, { owner, headTree });
-    const missing = !selected.attestation && selected.reason.startsWith('no "');
-    const young = headAgeSeconds !== null && headAgeSeconds >= 0 && headAgeSeconds < ATTESTATION_YOUNG_HEAD_SECONDS;
-    if (!missing || !young || now() - started >= ATTESTATION_POLL_TOTAL_MS) break;
-    sleep(ATTESTATION_POLL_INTERVAL_MS);
-    waitedMs = now() - started;
-  }
-  if (waitedMs > 0) log(`⏳ Waited ${Math.round(waitedMs / 1000)}s for a pregate status on the ${headAgeSeconds}s-old head ${headSha.slice(0, 9)}.`);
+  const read = readStatuses();
+  if (read.error) return none(read.error);
+  const selected = selectAttestation(read.statuses, { owner, headTree });
   if (!selected.attestation) return none(selected.reason);
   const drift = capture('git', ['diff', '--name-only', 'HEAD^2', 'HEAD']);
   const baseDrift = typeof drift === 'string' ? drift.split('\n').filter(Boolean) : null;
   const { attestation, reason } = selected;
   log(`✅ Pregate attestation on ${headSha.slice(0, 9)} (tree ${attestation.tree.slice(0, 12)}): ${attestation.stages.join(', ')} — ${reason}; base moved by ${baseDrift ? `${baseDrift.length} file(s)` : 'an unreadable diff'}.`);
-  return { attested: true, reason, sha: headSha, ...attestation, baseDrift, waitedMs };
-}
-
-function sleepMs(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  return { attested: true, reason, sha: headSha, ...attestation, baseDrift, waitedMs: 0 };
 }
 
 /**
