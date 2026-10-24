@@ -291,6 +291,20 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   it('keeps a superseded checkout when its untracked backup cannot be copied', async () => {
     const { entry, release } = await supersededCheckout();
+    // Mode 000 does not deny the owner on Windows, so that simulation would
+    // copy the file and remove the checkout. A non-directory backup root
+    // fails the same gate.
+    if (process.platform === 'win32') {
+      await rm(cosDir, { recursive: true, force: true });
+      await writeFile(cosDir, 'not-a-directory');
+      const result = await reapSuperseded(entry);
+      expect(result.reaped).toEqual([]);
+      expect(result.skipped[0].reason).toMatch(/backup-failed/);
+      expect(existsSync(release.path)).toBe(true);
+      expect(await registered(release.path)).toBe(true);
+      expect(await archives()).toEqual([]);
+      return;
+    }
     await chmod(join(release.path, 'untracked.txt'), 0o000);
     try {
       const result = await reapSuperseded(entry);
@@ -300,7 +314,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       expect(await registered(release.path)).toBe(true);
       expect(await archives()).toEqual([]);
     } finally {
-      await chmod(join(release.path, 'untracked.txt'), 0o644);
+      await chmod(join(release.path, 'untracked.txt'), 0o644).catch(() => {});
     }
   });
 
