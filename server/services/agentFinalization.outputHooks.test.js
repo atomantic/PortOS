@@ -512,6 +512,19 @@ describe('recovery output-hook dispatch (#3182)', () => {
     } finally { forge.mockRestore(); gitRead.mockRestore(); }
   });
 
+  it('stops recovered runtime finalization when its conditional prerequisite write loses ownership', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    persistedAgent.taskId = TASK.id;
+    persistedAgent.metadata.taskOutcome = { status: 'blocked', reason: 'The running fix remains unverified.',
+      recovery: { mode: 'runtime', prUrl: 'https://github.com/example/PortOS/pull/123', requiredCommit: 'a'.repeat(40) } };
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    updateTask.mockResolvedValueOnce({ statusChanged: true });
+    await expect(retireDeadAgent({ agent: persistedAgent, task: { id: TASK.id, status: 'in_progress', metadata: {} },
+      success: true, exitCode: 0 })).rejects.toThrow('task ownership changed');
+    expect(completeAgent).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it.each(['worktree', 'pinned-claim'])('hands %s cleanup-only work to completion recovery without another agent or success claim', async mode => {
     const taskOutcome = { status: 'incomplete', reason: 'Verified delivery; owner still holds checkout.', recovery: { mode: 'cleanup' } };
     isProgrammaticIoTaskType.mockReturnValue(false);

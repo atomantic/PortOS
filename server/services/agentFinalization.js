@@ -1305,7 +1305,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     ? await resolveDeliveryRecoveryUpdate(task, recoveryOutcome, agent.id) : null;
   if (recoveryUpdate) {
     const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user', ...runtimeRecoveryFence(task, recoveryUpdate));
-    if (update?.error) throw new Error(`Could not persist recovered task outcome: ${update.error}`);
+    if (update?.error || update?.statusChanged) throw new Error(`Could not persist recovered task outcome: ${update.error || 'task ownership changed'}`);
   }
   await completeAgent(agent.id, {
     success: effectiveSuccess,
