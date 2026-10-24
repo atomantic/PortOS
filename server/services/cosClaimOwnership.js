@@ -116,7 +116,13 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
     return withCheckoutPublication(repoPath, async () => {
       const patch = action === 'bind' ? bindClaimBranch(agent, branch, Object.values(state.agents)) : releaseClaimBranch(agent, branch);
       if (patch.refused) return { [done]: false, reason: patch.refused };
-      state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, ...patch } };
+      const updated = { ...agent, metadata: { ...agent.metadata, ...patch } };
+      if (action === 'bind') {
+        const { captureCheckoutSeeds } = await import('./completedCheckoutEvidence.js');
+        try { updated.metadata.checkoutSeeds = await captureCheckoutSeeds(updated); }
+        catch { return { [done]: false, reason: 'checkout-seed-unavailable' }; }
+      }
+      state.agents[agentId] = updated;
       await save();
       cosEvents.emit('agent:updated', state.agents[agentId]);
       return { [done]: true, branch };

@@ -913,6 +913,25 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
+  it('refuses a lexically equal release when the filesystem resolver identifies a different checkout', async () => {
+    const c = await heldCheckout('physical-alias-mismatch', { branch: 'feature/physical-alias-mismatch' });
+    const release = { ...c.release, path: `${c.path}/.` };
+    const originalRealpath = realpathSync.native;
+    // Inject at the filesystem boundary: lexical '..' across a symlink can
+    // name a different physical directory. Windows and POSIX resolve that
+    // syntax differently, so pin the disagreement rather than OS parsing.
+    const resolver = vi.spyOn(realpathSync, 'native').mockImplementation((path, ...args) =>
+      originalRealpath(path === release.path ? external : path, ...args));
+    try {
+      expect(await retire(release)).toMatchObject({ ok: false, reason: 'checkout-identity-changed' });
+    } finally { resolver.mockRestore(); }
+    expect(await registered(c.path)).toBe(true);
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect((await execGit(['rev-parse', `refs/heads/${c.release.branch}`], repo)).stdout.trim()).toBe(c.release.head);
+    expect(await archives()).toEqual([]);
+  });
+
   it('keeps the checkout, its content and its original lock when an owner appears after the archive', async () => {
     const { path, release } = await heldCheckout('owner-arrives', { lockReason: 'handoff pending' });
     let reads = 0;
@@ -1605,6 +1624,45 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
       expect(await archives()).toEqual([]);
     });
+
+  it('preserves the checkout and inventory when private administration is recreated behind an unchanged Git pointer', async () => {
+    const c = await reviewedCheckout('replaced-administration');
+    const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+    const identity = await readCompletedCheckoutIdentity({ repoPath: repo, ...c.release, allowLocked: true });
+    expect(identity).not.toBeNull();
+    const checkoutIdentity = await readRetirementCheckoutIdentity(c.path);
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release,
+      checkoutIdentity, checkoutIncarnation: identity.incarnation, reason: 'retirement-review-pending' }] });
+    const before = await getBranchReconcileOutcome('app-1');
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true); // Tuple-only clients use the stored full identity.
+    const pointer = await readFile(join(c.path, '.git'));
+    const index = await readFile(join(c.admin, 'index'));
+    const tracked = await readFile(join(c.path, 'initial.txt'));
+    const preserved = join(scratch, 'preserved-administration');
+    await rename(c.admin, preserved);
+    await cp(preserved, c.admin, { recursive: true });
+    expect((await execGit(['worktree', 'list', '--porcelain'], repo)).stdout.split('\n')
+      .filter(line => line === `branch refs/heads/${c.release.branch}`)).toHaveLength(1);
+    expect(await readRetirementCheckoutIdentity(c.path)).toBe(checkoutIdentity);
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'checkout-identity-changed' });
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'checkout-identity-changed' });
+    expect(await readFile(join(c.path, '.git'))).toEqual(pointer);
+    expect(await readFile(join(c.admin, 'index'))).toEqual(index);
+    expect(await readFile(join(c.path, 'initial.txt'))).toEqual(tracked);
+    expect(await readFile(join(preserved, 'index'))).toEqual(index);
+    expect(await readFile(join(c.admin, 'portos-review-status'), 'utf8')).toBe('private synthetic review marker');
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await readFile(join(c.path, 'untracked.txt'), 'utf8')).toBe('untracked work\n');
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect((await execGit(['rev-parse', `refs/heads/${c.release.branch}`], repo)).stdout.trim()).toBe(c.release.head);
+    expect(await registered(c.path)).toBe(true);
+    expect(await archives()).toEqual([]);
+    const after = await getBranchReconcileOutcome('app-1');
+    expect(after.remaining).toEqual(before.remaining);
+    expect(after.retired).toEqual(before.retired);
+    expect(after.retirementObligations).toEqual(before.retirementObligations);
+  });
 
   it.each(['content', 'index', 'administration', 'default', 'pr-head', 'forge', 'policy', 'unreadable-policy', 'submodule', 'inventory'])('refuses changed %s evidence between review and confirmation', async change => {
     const c = await reviewedCheckout('changed-review', { gitlink: true });
