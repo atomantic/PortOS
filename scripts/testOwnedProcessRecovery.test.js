@@ -239,8 +239,11 @@ describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', (
     try {
       const dead = join(host, 'pvt-dead'); const live = join(host, 'pvt-live');
       mkdirSync(dead); mkdirSync(live); writeOwnerFile(live);
-      const owner = spawnSync(process.execPath, ['-e', ''], { stdio: 'ignore' });
-      writeFileSync(join(dead, '.owner.pid'), `${owner.pid} 0\n`);
+      const owner = spawnSync(process.execPath, ['--input-type=module', '-e', `
+        import { writeOwnerFile } from ${JSON.stringify(new URL('./lib/vitestStaleRunRoots.js', import.meta.url).href)};
+        writeOwnerFile(${JSON.stringify(dead)});
+      `], { stdio: 'ignore' });
+      expect(owner.status).toBe(0);
       const environmentOnly = await launch([process.execPath, '-e', code], { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: dead });
       const script = join(dead, 'fixture.sh'); writeFileSync(script, 'echo ready\nread answer\n');
       const argumentOnly = await launch(['/bin/sh', script]);
@@ -252,10 +255,13 @@ describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', (
       const inspected = readTestProcesses([environmentOnly.pid, argumentOnly.pid, unrelated.pid]);
       expect(inspected?.map(record => testProcessRoot(record, host, 'pvt-'))).toEqual([dead, dead, null]);
       sweepStaleRunRoots(host);
+      expect(existsSync(dead)).toBe(true); // signal scheduling is not settlement
       await vi.waitFor(() => {
         expect(isProcessAlive(environmentOnly.pid)).toBe(false);
         expect(isProcessAlive(argumentOnly.pid)).toBe(false);
       }, { timeout: 5000 });
+      sweepStaleRunRoots(host); // both individually verified descendants have settled
+      expect(existsSync(dead)).toBe(false);
       expect(isProcessAlive(unrelated.pid)).toBe(true);
       expect(isProcessAlive(ownedLive.pid)).toBe(true);
       const outcomes = [];

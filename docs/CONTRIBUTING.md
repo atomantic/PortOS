@@ -166,7 +166,11 @@ NUL-delimited arguments and selected test environment fields. No Python install
 is performed. If that optional reader is unavailable, macOS retains the legacy
 browser-profile cleanup only. Process identity, caller ancestry and run-owner
 liveness are rechecked before termination and escalation; unrelated process
-groups are never signalled. Unknown ownership is left alone.
+groups are never signalled. Unknown ownership is left alone. Owner stamps use
+OS-reported birth time rather than wall time minus uptime: a clock adjustment
+between process start and configuration must not make a live runner look like a
+reused PID. When birth time cannot be read, a signalable owner is retained; a
+proven dead owner still permits individually verified descendant cleanup.
 
 The npm Vite/Vitest commands, PM2's `portos-ui` launcher, and subprocess fixtures
 use `--configLoader runner` to load ESM configs without writing bundles into shared

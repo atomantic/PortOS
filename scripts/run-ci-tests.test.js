@@ -890,7 +890,7 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
     });
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.useFakeTimers();
-    vi.doMock('child_process', () => ({ spawn: () => child }));
+    vi.doMock('child_process', async importOriginal => ({ ...await importOriginal(), spawn: () => child }));
     vi.doMock('node:os', async importOriginal => ({ ...await importOriginal(), tmpdir: () => host }));
     vi.doMock('../server/lib/bufferedSpawn.js', async importOriginal => ({
       ...await importOriginal(), killProcessTree: vi.fn(),
