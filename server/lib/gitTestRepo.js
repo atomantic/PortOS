@@ -92,6 +92,9 @@ async function buildTemplate() {
   await execGit(['init', '-b', 'main', repo], scratch);
   await keepMaintenanceAttached(repo);
   await configureIdentity(repo);
+  // Copied fixtures must preserve exact text bytes regardless of host Git defaults.
+  await execGit(['config', 'core.autocrlf', 'false'], repo);
+  await execGit(['config', 'core.eol', 'lf'], repo);
   await writeFile(join(repo, 'initial.txt'), 'initial');
   await execGit(['add', '-A'], repo);
   await execGit(['commit', '-m', 'initial'], repo);
