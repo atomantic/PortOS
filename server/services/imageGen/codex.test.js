@@ -80,6 +80,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
   // a spread-only override would leave the original PATHS.images intact
   // for any function closing over the actual module's binding.
   actual.PATHS.images = FAKE_IMAGES_DIR;
+  actual.PATHS.data = join(TEST_HOME, 'data');
   // NOTE: do not invent PATHS keys here. An earlier revision set `PATHS.tmp`,
   // a key the real object has never had, so the suite exercised a property
   // that exists only under test while every production render threw
@@ -454,7 +455,7 @@ describe('codex provider — image harvest', () => {
     const child = spawnCalls[0].child;
 
     // Drive the session id banner on stderr (codex prints it there).
-    child.stderr.emit('data', Buffer.from(`session id: ${sessionId}\n`));
+    child.stderr.emit('data', Buffer.from(`session id: ${sessionId}\ntokens used\n1,234\n`));
     // Then close cleanly.
     child.exitCode = 0;
     const releaseCut = await acquireBackupSnapshotCut();
@@ -477,6 +478,9 @@ describe('codex provider — image harvest', () => {
     const written = await readFile(finalPath);
     expect(Buffer.compare(written, fakePngBytes)).toBe(0);
 
+    const { getImageRenderUsage } = await import('../imageRenderUsage.js');
+    expect(await getImageRenderUsage()).toMatchObject({ renderGroups: 1, savedOutputs: 1, imageCostUsd: null, driverTokens: { reportedTotal: 1234, sessionsMeasured: 1 } });
+
     // Sidecar metadata exists too.
     const sidecar = join(FAKE_IMAGES_DIR, `${job.generationId}.metadata.json`);
     expect(existsSync(sidecar)).toBe(true);
@@ -484,6 +488,29 @@ describe('codex provider — image harvest', () => {
       inputProvenance: 'provider-inputs',
       initImageFilename: 'source.png', referenceImageFilenames: ['reference.png'],
     });
+  });
+
+  it('preserves the completed image and sidecar when receipt persistence fails', async () => {
+    const sessionId = '44444444-4444-4444-8444-444444444444';
+    const codexDir = join(TEST_HOME, '.codex', 'generated_images', sessionId);
+    await mkdir(codexDir, { recursive: true });
+    await writeFile(join(codexDir, 'exec-output.png'), Buffer.from('fakepngbytes'));
+    await mkdir(PATHS.data, { recursive: true });
+    await writeFile(join(PATHS.data, 'image-render-usage'), 'blocked-directory');
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const completed = vi.fn();
+      imageGenEvents.on('completed', completed);
+      const job = await codex.generateImage({ prompt: 'a fox' });
+      const child = spawnCalls[0].child;
+      child.stderr.emit('data', Buffer.from(`session id: ${sessionId}\n`));
+      child.exitCode = 0;
+      child.emit('close', 0, null);
+      await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
+      expect(existsSync(join(FAKE_IMAGES_DIR, job.filename))).toBe(true);
+      expect(JSON.parse(await readFile(join(FAKE_IMAGES_DIR, `${job.generationId}.metadata.json`), 'utf8'))).toMatchObject({ codexSessionId: sessionId });
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining('Failed to record Codex image usage'));
+    } finally { logged.mockRestore(); }
   });
 
   it('crops an off-aspect frame to the requested ratio and records it in the sidecar', async () => {
