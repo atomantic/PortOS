@@ -1302,10 +1302,10 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     && (agent.metadata?.isWorktree === true || hasClaimCheckoutBindings(agent.metadata)));
   const recoveryOutcome = !cleanupAllowed && taskOutcome?.recovery?.mode === 'cleanup' ? { ...taskOutcome, recovery: undefined } : taskOutcome;
   const recoveryUpdate = deliveryHeld && !refused && !isPrivateSecurity && task?.id && task.status !== 'completed'
-    ? resolveUndeliveredTaskUpdate(task, recoveryOutcome, agent.id) : null;
+    ? await resolveDeliveryRecoveryUpdate(task, recoveryOutcome, agent.id) : null;
   if (recoveryUpdate) {
-    const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user');
-    if (update?.error) throw new Error(`Could not persist recovered task outcome: ${update.error}`);
+    const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user', ...runtimeRecoveryFence(recoveryUpdate));
+    if (update?.error || update?.statusChanged) throw new Error(`Could not persist recovered task outcome: ${update.error || 'task ownership changed'}`);
   }
   await completeAgent(agent.id, {
     success: effectiveSuccess,
@@ -1337,7 +1337,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     .catch(err => emitLog('warn', `Completion sentinel removal failed for ${agent.id}: ${err.message}`, { agentId: agent.id }));
 
   if (recoveryUpdate?.metadata?.retryPendingCleanup
-    || ['task-approval', 'task-recovery-exhausted'].includes(recoveryUpdate?.metadata?.blockedCategory)) {
+    || ['task-approval', 'task-recovery-exhausted', 'runtime-verification'].includes(recoveryUpdate?.metadata?.blockedCategory)) {
     const { releaseRetryHold } = await import('./agentWorktreeCleanup.js');
     await releaseRetryHold({ agentId: agent.id, task, success: false, agentMetadata: agent.metadata })
       .catch(err => emitLog('warn', `Recovered delivery retry deferred for ${agent.id}: ${err.message}`, { agentId: agent.id }));
@@ -1996,7 +1996,7 @@ export async function finalizeAgent({
     && !(verdict.source === 'reported' && verdict.errorAnalysis?.category === `task-${reportedTaskOutcome?.status}`);
   const taskUpdate = (deliveryHeld || (verdict.success && outcomeHeld)) && !terminatedByUser
     && !terminalFailure && !executionInterruption && !isPrivateSecurityTask(task) && hookResult?.outcome?.accepted !== false
-    ? resolveUndeliveredTaskUpdate(preHookTask, (!executionSuccess || !verdict.success || validationPassed === false || !cleanupEligible) && taskOutcome.recovery?.mode === 'cleanup'
+    ? await resolveDeliveryRecoveryUpdate(preHookTask, (!executionSuccess || !verdict.success || validationPassed === false || !cleanupEligible) && taskOutcome.recovery?.mode === 'cleanup'
       ? { ...taskOutcome, recovery: undefined } : taskOutcome, agentId)
     : await resolveFinalTaskUpdate({ task, preHookTask, hookMetadata, verdict, terminatedByUser, agentId });
   taskUpdate.metadata = { ...(taskUpdate.metadata || task.metadata), taskOutcome };
@@ -2029,13 +2029,18 @@ export async function finalizeAgent({
   if (cleanupEligible) await prepareCompletionTaskHandoff(await getAgentRecord(agentId),
     Object.fromEntries(Object.entries(taskUpdate.metadata || {}).filter(([key, value]) =>
       key !== 'privateSecurityScope' && JSON.stringify(value) !== JSON.stringify(preHookTask.metadata?.[key]))));
+  // Persist the prerequisite BEFORE retiring execution. A crash between the
+  // agent and task writes must never expose this dispatch to generic retry.
+  const runtimeTaskResult = taskUpdate.metadata?.blockedCategory === 'runtime-verification'
+    ? await updateTask(task.id, taskUpdate, taskType, ...runtimeRecoveryFence(taskUpdate)) : null;
+  if (runtimeTaskResult?.error || runtimeTaskResult?.statusChanged) throw new Error('Runtime verification task ownership changed before completion');
   const completedAgent = await completeAgent(agentId, { ...completionRecord({
     task, verdict: deliveryVerdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed,
   }), executionSuccess, taskOutcome,
     requireCheckoutSettlement: deliverySuccess && taskUpdate.status === 'completed' && cleanupEligible
       && resolvePrCompletion(task.metadata) === PR_COMPLETIONS.REVIEW_THEN_MERGE,
     ...(claimDisposition ? { claimDisposition } : {}),
-    ...(['task-approval', 'task-recovery-exhausted'].includes(taskUpdate.metadata?.blockedCategory)
+    ...(['task-approval', 'task-recovery-exhausted', 'runtime-verification'].includes(taskUpdate.metadata?.blockedCategory)
       || taskUpdate.metadata?.retryPendingCleanup === agentId || taskUpdate.metadata?.deliveryRecoveryAgentId === agentId
       ? { deliveryRecoveryOwned: true } : {}),
     ...(taskUpdate.metadata?.deliveryRecoveryAgentId === agentId ? { cleanupPending: true } : {}) });
@@ -2064,9 +2069,9 @@ export async function finalizeAgent({
     delete task.privateSecurityScope;
     if (taskUpdate.metadata) delete taskUpdate.metadata.privateSecurityScope;
   }
-  const taskResult = capturePending
+  const taskResult = runtimeTaskResult || (capturePending
     ? await recoverCompletionTaskHandoff(await getAgentRecord(agentId)) || { error: 'Completion cleanup task ownership changed' }
-    : await updateTask(task.id, taskUpdate, taskType);
+    : await updateTask(task.id, taskUpdate, taskType, ...runtimeRecoveryFence(taskUpdate)));
   if (taskResult?.error && !isExpectedUnpersistedMiss(task, taskResult.error)) {
     const label = terminatedByUser ? 'blocked' : verdict.success ? 'completed' : 'failed';
     emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, { taskId: task.id, agentId, error: taskResult.error });
@@ -2426,4 +2431,22 @@ async function persistCompletionSummary(agentId, { workspacePath, finalSummary =
     simplifySummary: null,
   } });
   return taskOutcome;
+}
+
+// Runtime evidence is server-owned and never inferred from completion prose.
+async function resolveDeliveryRecoveryUpdate(task, outcome, agentId) {
+  if (outcome?.recovery?.mode === 'runtime') {
+    const { resolveRuntimeVerificationUpdate } = await import('./runtimeVerification.js');
+    return resolveRuntimeVerificationUpdate(task, outcome, agentId);
+  }
+  return resolveUndeliveredTaskUpdate(task, outcome, agentId);
+}
+
+function runtimeRecoveryFence(update) {
+  if (update.metadata?.blockedCategory !== 'runtime-verification') return [];
+  const p = update.metadata.runtimeVerification;
+  return [{ expectedStatus: p.dispatchStatus, expectedMetadata: {
+    ...(p.dispatchStatus === 'blocked' ? { runtimeVerificationId: update.metadata.runtimeVerificationId } : {}),
+    ...Object.fromEntries(['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, p.dispatch?.[key]])),
+  } }];
 }

@@ -13,6 +13,13 @@ const matches = (metadata, expected) => expected.every(([key, value]) => key ===
   ? spawnCount(value) !== null && spawnCount(metadata?.[key]) === spawnCount(value)
   : (metadata?.[key] ?? null) === value);
 
+/** Match the server's dispatch binding, including metadata scalar round-trips. */
+export function matchesCompletionTaskDispatch(agent, task) {
+  const binding = agent?.metadata?.completionTaskDispatch;
+  return !!binding && binding.taskId === task?.id && binding.taskId === agent.taskId
+    && binding.taskType === (task.taskType || 'user') && matches(task.metadata, binding.expected);
+}
+
 /** Called by the trusted dispatcher after its task write, before provider launch. */
 export async function bindCompletionTaskDispatch(agentId, task) {
   if (task?.status !== 'in_progress' || !task.metadata?.lastSpawnedAt || !task.metadata?.claimedBy
