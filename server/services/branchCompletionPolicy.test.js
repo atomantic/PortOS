@@ -321,6 +321,10 @@ describe('reviewed reused-branch checkout incarnation', () => {
       taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
     const integrated = { ...input(), agents: [current], integratedCleanupHead: 'c'.repeat(40) };
     expect(reviewedRetirementPolicy(integrated).reason).toBeNull();
+    // Modern replay/seed failures cannot be reclassified as legacy evidence.
+    current.metadata.checkoutSeeds = [];
+    expect(reviewedRetirementPolicy(integrated).reason).toBeTruthy();
+    delete current.metadata.checkoutSeeds;
     for (const patch of [{ integratedCleanupHead: null }, { verifiedPrHead: 'b'.repeat(40) }]) {
       expect(reviewedRetirementPolicy({ ...integrated, ...patch }).reason).toBeTruthy();
     }
