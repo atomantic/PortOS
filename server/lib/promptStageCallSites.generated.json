@@ -56,6 +56,7 @@
     "server/services/fableLoom/shots.js"
   ],
   "fableloom-play-turn": [
+    "server/lib/fableLoomExport.js",
     "server/services/fableLoom/weave.js"
   ],
   "fableloom-reformat-scenes": [
