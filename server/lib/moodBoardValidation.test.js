@@ -74,6 +74,18 @@ describe('moodBoardItemCreateSchema', () => {
   it('accepts an image item with an app-path imageUrl', () => {
     expect(moodBoardItemCreateSchema.safeParse({ type: 'image', imageUrl: '/data/images/a.png' }).success).toBe(true);
   });
+  it('accepts an image item with a >2048-char data:image/*;base64 imageUrl', () => {
+    const dataUrl = `data:image/webp;base64,${'A'.repeat(4000)}`;
+    expect(moodBoardItemCreateSchema.safeParse({ type: 'image', imageUrl: dataUrl }).success).toBe(true);
+  });
+  it('still rejects an http(s) imageUrl longer than 2048 characters', () => {
+    const longHttpUrl = `https://example.com/${'a'.repeat(2040)}.png`;
+    expect(moodBoardItemCreateSchema.safeParse({ type: 'image', imageUrl: longHttpUrl }).success).toBe(false);
+  });
+  it('rejects non-raster or non-base64 data: URLs', () => {
+    expect(moodBoardItemCreateSchema.safeParse({ type: 'image', imageUrl: 'data:image/svg+xml;base64,PHN2Zz4=' }).success).toBe(false);
+    expect(moodBoardItemCreateSchema.safeParse({ type: 'image', imageUrl: 'data:text/html;base64,PGh0bWw+' }).success).toBe(false);
+  });
   it('accepts an image item with a mediaKey', () => {
     expect(moodBoardItemCreateSchema.safeParse({ type: 'image', mediaKey: 'image:a.png' }).success).toBe(true);
   });

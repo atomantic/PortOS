@@ -37,14 +37,27 @@ export function isVideoItemMediaKey(key) {
   return /\.[a-z0-9]{2,6}$/i.test(ref);
 }
 
-// External/pinned image URL. http(s) or a same-origin app path (e.g. a served
-// `/data/images/...` URL). Bounded; the UI renders it in an <img>, so no exotic
-// schemes. A protocol-relative `//host/...` is rejected: it starts with `/` but
-// resolves to an arbitrary external origin, which the leading-slash branch is
-// not meant to allow.
-const imageUrlSchema = z.string().trim().min(1).max(2048).refine(
-  (v) => /^https?:\/\//.test(v) || (v.startsWith('/') && !v.startsWith('//')),
-  'imageUrl must be an http(s) URL or an absolute app path',
+// External/pinned image URL: http(s), a same-origin app path (e.g. a served
+// `/data/images/...` URL), or a `data:image/<fmt>;base64,...` URI (which
+// `localizeImageUrl` decodes and saves into `/data/images/` before the board
+// row commits). Standard URLs stay bounded to 2048 chars; data URLs are bounded
+// to the 12MB raw-image ceiling (`MAX_IMAGE_DATA_URL_BYTES`). A protocol-relative
+// `//host/...` is rejected so the leading-slash branch never resolves off-origin.
+const MAX_HTTP_OR_APP_IMAGE_URL_LEN = 2048;
+export const MAX_IMAGE_DATA_URL_BYTES = 12 * 1024 * 1024;
+const MAX_IMAGE_DATA_URL_LEN = Math.ceil((MAX_IMAGE_DATA_URL_BYTES * 4) / 3) + 64;
+const DATA_IMAGE_URL_RE = /^data:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=\s]+$/i;
+
+function isDataImageUrl(value) {
+  return value.length <= MAX_IMAGE_DATA_URL_LEN && DATA_IMAGE_URL_RE.test(value);
+}
+
+const imageUrlSchema = z.string().trim().min(1).max(MAX_IMAGE_DATA_URL_LEN).refine(
+  (v) => (
+    v.length <= MAX_HTTP_OR_APP_IMAGE_URL_LEN
+    && (/^https?:\/\//.test(v) || (v.startsWith('/') && !v.startsWith('//')))
+  ) || isDataImageUrl(v),
+  'imageUrl must be an http(s) URL, a data:image/*;base64 URL, or an absolute app path',
 );
 
 const captionSchema = z.string().max(2000).nullable().optional();
