@@ -91,6 +91,9 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   args.push('-map', '0:v', '-vf', [motionBlurFilter, videoFilter, 'scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tag].filter(Boolean).join(','), ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS);
   if (exactAudio) args.push('-map', '1:a', ...AAC_ENCODE_ARGS);
   else if (musicPath) args.push('-map', '1:a', '-af', `${bedTrim}${mastering ? `,${mastering.filter}` : ''},afade=t=out:st=${durationSec - 0.5}:d=0.5`, ...AAC_ENCODE_ARGS);
+  // select drops subframes without changing the input's advertised rate.
+  // Pin the output cadence so ffmpeg cannot duplicate frames or shorten it.
+  if (sub > 1) args.push('-r', String(fps));
   args.push('-frames:v', String(numFrames), '-t', String(durationSec), '-movflags', '+faststart', '-y', outputPath);
   const proc = spawnProcess(ffmpeg, args, safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));
   let currentFrame = null;

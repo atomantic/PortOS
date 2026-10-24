@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useParams, useSearchParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { Trash2, Search, X, MessageSquare } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -195,6 +195,8 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
   // Running agents come from props (real-time via parent socket updates)
   const runningAgents = agents.filter(a => a.status === 'running' && !deletedIds.has(a.id));
   const pausedAgents = agents.filter(a => a.status === 'paused' && !deletedIds.has(a.id));
+  const finalizingAgents = useMemo(() => agents.filter(agent => agent.deliveryPending && !deletedIds.has(agent.id)), [agents, deletedIds]);
+  const finalizingIds = useMemo(() => new Set(finalizingAgents.map(agent => agent.id)), [finalizingAgents]);
   // Completed agents still in state (recently completed, not yet archived)
   const recentCompleted = agents.filter(a => a.status === 'completed');
   // Merge recent completed (from state) with loaded (from disk), deduplicate
@@ -202,7 +204,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
     const seen = new Set();
     const merged = [];
     const addAgent = (agent) => {
-      if (seen.has(agent.id) || deletedIds.has(agent.id)) return;
+      if (seen.has(agent.id) || deletedIds.has(agent.id) || finalizingIds.has(agent.id)) return;
       seen.add(agent.id);
       const feedback = feedbackUpdates[agent.id];
       merged.push(feedback ? { ...agent, feedback } : agent);
@@ -213,7 +215,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
     for (const agent of loadedAgents) addAgent(agent);
 
     return merged.sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0));
-  }, [recentCompleted, loadedAgents, feedbackUpdates, deletedIds]);
+  }, [recentCompleted, loadedAgents, feedbackUpdates, deletedIds, finalizingIds]);
 
   const totalCount = history.total ?? allCompleted.length;
 
@@ -255,7 +257,8 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
         {selectedAgent ? <AgentCard key={agentId} agent={selectedAgent}
           initiallyExpanded liveOutput={liveOutputs[agentId]} completed={selectedAgent.status === 'completed'}
           paused={selectedAgent.status === 'paused'} durations={durations} onFeedbackChange={handleFeedbackChange}
-          onPause={handlePause} onKill={handleKill} onResume={handleResumeClick} onDelete={handleDelete} onRelaunch={handleRelaunchClick} />
+          onPause={handlePause} onKill={handleKill} onResume={selectedAgent.deliveryPending ? undefined : handleResumeClick}
+          onDelete={selectedAgent.deliveryPending ? undefined : handleDelete} onRelaunch={handleRelaunchClick} />
           : <p role="status">{focusLoading ? 'Loading agent…' : 'Agent not found or unavailable.'}</p>}
       </section>}
       {/* Active Agents */}
@@ -275,7 +278,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
           </div>
         )}
         {!agentsLoaded && !agentsError && <div role="status">Loading active agents…</div>}
-        {runningAgents.length === 0 && agentsLoaded && !agentsError && (
+        {runningAgents.length === 0 && finalizingAgents.length === 0 && agentsLoaded && !agentsError && (
           <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             No active agents. Start CoS and add tasks to see agents working.
           </div>
@@ -296,6 +299,21 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
           </div>
         )}
       </div>
+
+      {finalizingAgents.length > 0 && (
+        <section aria-label="Finalizing delivery" className="space-y-2">
+          <h3 className="text-lg font-semibold text-white">Finalizing delivery</h3>
+          <p className="text-sm text-gray-400">Awaiting delivery verification and workspace cleanup.</p>
+          {finalizingAgents.map(agent => (
+            <div key={agent.id} className="space-y-1">
+              <Link to={`/cos/tasks?task=${encodeURIComponent(agent.taskId)}`} className="inline-block text-sm text-port-accent hover:underline [overflow-wrap:anywhere]">
+                View task {agent.taskId}
+              </Link>
+              <AgentCard agent={agent} completed durations={durations} onFeedbackChange={handleFeedbackChange} />
+            </div>
+          ))}
+        </section>
+      )}
 
       {/* Paused Agents */}
       {pausedAgents.length > 0 && (
@@ -331,7 +349,9 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
             </h3>
             <button
               onClick={() => setConfirmingClear(true)}
-              className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 text-sm text-gray-500 hover:text-port-error transition-colors sm:min-h-0 sm:min-w-0"
+              disabled={finalizingAgents.length > 0}
+              title={finalizingAgents.length > 0 ? 'Wait for delivery verification and cleanup to finish' : undefined}
+              className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 text-sm text-gray-500 hover:text-port-error transition-colors disabled:opacity-50 sm:min-h-0 sm:min-w-0"
               aria-label="Clear all completed agents"
             >
               <Trash2 size={14} aria-hidden="true" />

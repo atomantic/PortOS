@@ -29,12 +29,19 @@ vi.mock('./grokUsageBackfill.js', () => ({
   })),
 }));
 
+vi.mock('./agyUsageBackfill.js', () => ({
+  applyAgyUsageRepair: vi.fn(async () => ({
+    added: 0, images: 0, backedUp: false, note: null, backupDir: null,
+  })),
+}));
+
 const {
   __resetHistoricalUsageBackfillForTests,
   getHistoricalUsageBackfillStatus,
   startHistoricalUsageBackfill
 } = await import('./usageBackfill.js');
 const { applyGrokUsageRepair } = await import('./grokUsageBackfill.js');
+const { applyAgyUsageRepair } = await import('./agyUsageBackfill.js');
 
 class FakeWorker extends EventEmitter {
   static instances = [];
@@ -131,6 +138,7 @@ it('notifies clients when the worker fails', async () => {
   }));
   expect(updated).toHaveBeenCalledWith({});
   expect(applyGrokUsageRepair).toHaveBeenCalledTimes(1);
+  expect(applyAgyUsageRepair).toHaveBeenCalledTimes(1);
 });
 
 it('puts the Grok repair on the reconcile result and runs it once', async () => {
@@ -162,6 +170,7 @@ it('puts the Grok repair on the reconcile result and runs it once', async () => 
   }));
   expect(getHistoricalUsageBackfillStatus().grok.backupDir).toBeUndefined();
   expect(applyGrokUsageRepair).toHaveBeenCalledTimes(1);
+  expect(applyAgyUsageRepair).toHaveBeenCalledTimes(1);
 });
 
 it('keeps a transcript failure from dropping a Grok repair that already landed', async () => {

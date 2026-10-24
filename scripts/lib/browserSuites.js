@@ -7,7 +7,9 @@ export const BROWSER_SUITES = [
   'server/routes/musicVideoProductionReview.browser.test.js',
   'server/routes/musicVideoRichAuthoring.browser.test.js',
   'server/routes/musicVideoSongRevision.browser.test.js',
+  'server/services/fableLoom/static-player/player.browser.test.js',
   'server/services/federatedMedia/sourceAudio.browser.test.js',
+  'server/services/htmlComposition/index.test.js',
   'server/services/musicVideo/animaticCapture.browser.test.js',
   'server/services/musicVideo/documentRender.browser.test.js',
   'server/services/musicVideo/documentTemplates/layered/engine.overlay.browser.test.js',
@@ -15,5 +17,4 @@ export const BROWSER_SUITES = [
   'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js',
   'server/services/musicVideo/publish/linkedin.browser.test.js',
   'server/services/musicVideo/publish/sunoHook.browser.test.js',
-  'server/services/fableLoom/static-player/player.browser.test.js',
 ];

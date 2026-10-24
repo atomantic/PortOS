@@ -41,6 +41,15 @@ function grokRepairLine(grok) {
   return grok.note ? `${added} ${grok.note}` : added;
 }
 
+/** What Reconcile now added to the Antigravity ledger. Absent until that job finishes. */
+function agyRepairLine(agy) {
+  if (!agy) return '';
+  const parts = [];
+  if (agy.images) parts.push(`${formatCount(agy.images)} image${agy.images === 1 ? '' : 's'}`);
+  const added = parts.length ? `Added ${joinAnd(parts)}.` : 'Antigravity usage was already recorded.';
+  return agy.note ? `${added} ${agy.note}` : added;
+}
+
 // A subscription is one account across every federated instance, but each
 // instance can only read its own CLI's panel. When peers have contributed a
 // reading, say so on the card and name them — the meters are the freshest
@@ -710,7 +719,7 @@ function InternalUsageMetrics() {
             Reconcile historical usage
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Re-read saved transcripts and Grok sessions to replace older estimates and record Imagine and long-context charges. This changes recorded history but makes no provider calls.
+            Re-read saved transcripts, Grok sessions, and Antigravity media to replace older estimates and record media and long-context charges. This changes recorded history but makes no provider calls.
           </p>
           {backfill?.status === 'running' && (
             <p className="text-xs text-port-accent mt-1" role="status">
@@ -724,6 +733,9 @@ function InternalUsageMetrics() {
           )}
           {backfill?.grok && (backfill.status === 'complete' || backfill.status === 'error') && (
             <p className="text-xs text-port-success mt-1" role="status">{grokRepairLine(backfill.grok)}</p>
+          )}
+          {backfill?.agy && (backfill.status === 'complete' || backfill.status === 'error') && (
+            <p className="text-xs text-port-success mt-1" role="status">{agyRepairLine(backfill.agy)}</p>
           )}
           {backfill?.status === 'error' && (
             <p className="text-xs text-port-error mt-1" role="alert">{backfill.error}</p>

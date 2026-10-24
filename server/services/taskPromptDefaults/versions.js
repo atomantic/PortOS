@@ -115,8 +115,8 @@ export const PROMPT_VERSIONS = {
 // Epic decomposition reads only the owner's own comments, never the public
 // thread, resolving the account itself so a pinned epic still finds them.
 // A forge reviewer (`@login`) may be a person: wait up to 4 hours per round and iterate with them.
-PROMPT_VERSIONS['claim-issue'] = 47; // Fresh claims reject same-login assignment and PR body/commit evidence.
-PROMPT_VERSIONS['claim-issue-gitlab'] = 41; // Same-login assignment is not run ownership; inspect MR closing trailers.
+PROMPT_VERSIONS['claim-issue'] = 48; // Fresh claims reject same-login assignment and PR body/commit evidence.
+PROMPT_VERSIONS['claim-issue-gitlab'] = 42; // Same-login assignment is not run ownership; inspect MR closing trailers.
 // Accepted review findings require resolution regardless of severity.
 PROMPT_VERSIONS['claim-issue-jira'] = 27; // v25: API calls target {portosApiUrl}, expanded at spawn to the loopback origin (#12405).
 
@@ -136,4 +136,8 @@ PROMPT_VERSIONS['claim-issue-jira'] = 27; // v25: API calls target {portosApiUrl
 export const REFERENCE_WATCH_AUDITED_VERSION = 5;
 
 // Guard generated GitHub merges with fresh state/head/admission and confirmed readback (#12273).
-PROMPT_VERSIONS['plan-task'] = 24;
+PROMPT_VERSIONS['plan-task'] = 25;
+
+// A still-owned checkout hands off to exact, durable completion recovery.
+PROMPT_VERSIONS['plan-task-claim'] = 1;
+PROMPT_VERSIONS['branch-cleanup'] = 1;

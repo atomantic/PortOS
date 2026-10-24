@@ -75,6 +75,9 @@ export const GROK_LONG_CONTEXT_PROMPT_TOKENS = 200_000;
 export const GROK_IMAGINE_IMAGE_MODEL = 'grok-imagine-image-2.0';
 export const GROK_IMAGINE_VIDEO_MODEL = 'grok-imagine-video-1.5';
 
+/** Recommended Antigravity image model. */
+export const AGY_IMAGEN_IMAGE_MODEL = 'imagen-3.0-generate-002';
+
 /**
  * Headline / lowest-resolution Imagine rates (USD). Higher resolutions cost
  * more; PortOS does not request a resolution, so the estimate is this tier.
@@ -94,6 +97,41 @@ function grokImagineRate(model) {
   const id = String(model || '').trim().toLowerCase();
   if (!id.includes('grok-imagine-')) return null;
   return GROK_IMAGINE_RATES.find((row) => id === row.id || id.includes(row.id)) || null;
+}
+
+/**
+ * Google Imagen 3 rates (USD). Published rate: $0.030 per image.
+ * https://ai.google.dev/gemini-api/docs/pricing
+ */
+const AGY_IMAGEN_RATES = Object.freeze([
+  { id: 'imagen-3.0-generate-002', kind: 'image', perImage: 0.03, perInputImage: 0 },
+  { id: 'imagen-3.0-fast-generate-001', kind: 'image', perImage: 0.03, perInputImage: 0 },
+  { id: 'imagen-3.0-generate', kind: 'image', perImage: 0.03, perInputImage: 0 },
+  { id: 'imagen-3.0', kind: 'image', perImage: 0.03, perInputImage: 0 },
+  { id: 'imagen-3-fast', kind: 'image', perImage: 0.03, perInputImage: 0 },
+  { id: 'imagen-3', kind: 'image', perImage: 0.03, perInputImage: 0 },
+  { id: 'imagen-2', kind: 'image', perImage: 0.02, perInputImage: 0 },
+  { id: 'imagen', kind: 'image', perImage: 0.03, perInputImage: 0 },
+].sort((a, b) => b.id.length - a.id.length));
+
+/** The Imagen rate row a model id names, or null. */
+function agyImagenRate(model) {
+  const id = String(model || '').trim().toLowerCase();
+  if (!id.includes('imagen')) return null;
+  return AGY_IMAGEN_RATES.find((row) => id === row.id || id.includes(row.id)) || null;
+}
+
+/**
+ * USD for one Antigravity Imagen bucket. Token rates do not apply.
+ * @param {string|null|undefined} model
+ * @param {{ images?: number, inputImages?: number }} [units]
+ * @returns {number}
+ */
+export function estimateAgyImageCost(model, units = null) {
+  const rate = agyImagenRate(model);
+  if (!rate) return 0;
+  return (units?.images || 0) * (rate.perImage || 0)
+    + (units?.inputImages || 0) * (rate.perInputImage || 0);
 }
 
 /**
@@ -193,6 +231,8 @@ const EXACT_RATES = {
   // Introductory standard rate through 2026-11-30; doubles to $4/$20 on 2026-12-01.
   'gemini-4-argon': [2.0, 10.0],
   'gemini-3.1-pro-preview': [2.0, 12.0], // ≤200k-token tier
+  'gemini-3.8-flash': [1.5, 9.0],
+  'gemini-3.6-flash': [1.5, 9.0],
   'gemini-3.5-flash': [1.5, 9.0],
   'gemini-3.1-flash-lite': [0.25, 1.5],
   'gemini-2.5-pro': [1.25, 10.0],
@@ -369,6 +409,17 @@ export function resolveModelRates(providerId, model) {
       cacheReadPer1M: 0,
       cacheWritePer1M: 0,
       matched: id.toLowerCase() === imagine.id ? 'exact' : 'family',
+    };
+  }
+  const imagen = agyImagenRate(id);
+  if (imagen) {
+    return {
+      rateModel: imagen.id,
+      inputPer1M: 0,
+      outputPer1M: 0,
+      cacheReadPer1M: 0,
+      cacheWritePer1M: 0,
+      matched: id.toLowerCase() === imagen.id ? 'exact' : 'family',
     };
   }
   if (id && EXACT_RATES[id]) {

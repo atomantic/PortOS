@@ -108,3 +108,11 @@ export const sendStoryboardPanelToFableLoom = (id, panelId, options) =>
 // storyboard scenes the first time → { boardId, created }.
 export const openStoryboardForPipelineIssue = (issueId, options) =>
   request(`/storyboards/from-pipeline/${enc(issueId)}`, { method: 'POST', ...options });
+
+// The linked board's edits waiting for the issue's shots → { boardId, locked, changed: [{ sceneId, shotId, panelId, fields }] }.
+export const getPipelineStoryboardChanges = (issueId, options) =>
+  request(`/storyboards/pipeline/${enc(issueId)}/changes`, options);
+
+// Update: copy edited panels (all, or one shot's) to their shots → { updated, issue, boardId, locked, changed }.
+export const updatePipelineShotsFromBoard = (issueId, shotId, options) =>
+  request(`/storyboards/pipeline/${enc(issueId)}/update-from-board`, { ...json('POST', shotId ? { shotId } : {}), ...options });

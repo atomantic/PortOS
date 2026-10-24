@@ -68,6 +68,9 @@ vi.mock('../../lib/maintenanceAdmission.js', async importOriginal => ({
   maintenance: new Proxy({}, { get: (_target, property) => fixture.admission[property] }),
 }));
 
+const { recordAgyImageUsage } = vi.hoisted(() => ({ recordAgyImageUsage: vi.fn(async () => {}) }));
+vi.mock('../agyMediaUsage.js', () => ({ recordAgyImageUsage }));
+
 const agy = await import('./agy.js');
 const { AGY_IMAGEGEN_DEFAULT_MODEL } = await import('../../lib/imageGenCapabilities.js');
 const { imageGenEvents } = await import('../imageGenEvents.js');
@@ -318,6 +321,9 @@ describe('agy image provider', () => {
     expect(sidecar.initImageFilename).toBe('source.png');
     expect(sidecar.inputProvenance).toBe('provider-inputs');
     expect(sidecar.referenceImageFilenames).toEqual(['ref-a.png', 'ref-b.png']);
+    expect(recordAgyImageUsage).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: job.jobId, inputImages: 3,
+    }));
   });
 
   // agy is a coding agent: when generate_image is quota-exhausted it can still

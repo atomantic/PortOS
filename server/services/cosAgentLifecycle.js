@@ -11,7 +11,7 @@
  */
 
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
-import { readFile, rm, stat } from 'fs/promises';
+import { readFile, rm, stat, realpath } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { cosEvents } from './cosEvents.js';
@@ -22,6 +22,7 @@ import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir } from './cosAgentIndex.js';
+import { hasClaimCheckoutBindings } from './completedCheckoutEvidence.js';
 import { isAgentHandoff } from '../lib/agentOutcome.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
 
@@ -29,7 +30,7 @@ export async function registerAgent(agentId, taskId, metadata = {}) {
   return withStateLock(async () => {
     const state = await loadState();
 
-    state.agents[agentId] = {
+    const registered = {
       id: agentId,
       taskId,
       status: 'running',
@@ -37,6 +38,11 @@ export async function registerAgent(agentId, taskId, metadata = {}) {
       metadata,
       output: []
     };
+    if (metadata.isWorktree === true && metadata.worktreeBranch && metadata.sourceWorkspace) {
+      const { captureCheckoutSeeds } = await import('./completedCheckoutEvidence.js');
+      registered.metadata = { ...metadata, checkoutSeeds: await captureCheckoutSeeds(registered) };
+    }
+    state.agents[agentId] = registered;
 
     state.stats.agentsSpawned++;
     await saveState(state, { changedAgentIds: [agentId] });
@@ -229,7 +235,7 @@ async function updateCompletionReceipt(agentId, update) {
     }
     if (!agent || (agent.id || agent.agentId) !== agentId || agent.status !== 'completed') return false;
     const metadata = agent.metadata || {};
-    const nextMetadata = await update(metadata);
+    const nextMetadata = await update(metadata, agent);
     if (nextMetadata === metadata) return true;
     const updated = { ...agent, metadata: nextMetadata };
     // Never synthesize a bucket before archiveCompletedAgent moved the flat
@@ -241,6 +247,77 @@ async function updateCompletionReceipt(agentId, update) {
     if (state.agents[agentId]) { state.agents[agentId] = updated; await saveState(state, { changedAgentIds: [agentId] }); }
     return true;
   }));
+}
+
+/** A terminal run keeps independent post-ingestion obligations in its existing
+ * durable record, including after the record moved to its archive bucket.
+ */
+export async function recordCompletionCleanup(agentId, startedAt, patch) {
+  let matched = false;
+  const saved = await updateCompletionReceipt(agentId, (metadata, agent) => {
+    if (agent.startedAt !== startedAt) return metadata;
+    matched = true;
+    const prior = metadata.completionCleanup || { version: 1, stages: {} };
+    const completionCleanup = { ...prior, ...patch,
+      stages: { ...prior.stages, ...patch.stages }, updatedAt: new Date().toISOString() };
+    if (['completed', 'failed', 'abandoned'].includes(completionCleanup.status)) {
+      delete completionCleanup.context;
+      delete completionCleanup.replay;
+    }
+    return { ...metadata, completionCleanup };
+  });
+  return saved && matched;
+}
+
+/** Retry capture ONLY against preterminal snapshots. Unknown originals remain
+ * explicit holds; a completed record can never discover a replacement by name.
+ */
+export async function retryCompletionCheckoutCapture(agentId) {
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
+  const { claimCheckoutOwner } = await import('../lib/claimContinuation.js');
+  const { readCompletedCheckoutIdentity, captureSeededCompletionCheckouts } = await import('./completedCheckoutEvidence.js');
+  return withClaimOwnershipLock(async () => {
+    const agent = await getAgentRecord(agentId);
+    const pending = agent?.metadata?.checkoutCapture;
+    if (agent?.status !== 'completed' || pending?.status !== 'pending') return false;
+    const owners = await readClaimOwnershipAgents().catch(() => null);
+    const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+    const history = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
+    if (!Array.isArray(owners) || !Array.isArray(history)) return false;
+    const bound = hasClaimCheckoutBindings(agent.metadata) ? agent.metadata.claimBranches : [agent.metadata?.worktreeBranch];
+    const seeds = (agent.metadata?.checkoutSeeds || []).filter(seed => Array.isArray(bound) && bound.includes(seed.branch));
+    const targets = seeds.length ? seeds : pending.unknown === false ? pending.targets : null;
+    if (!targets?.length) return false;
+    for (const target of targets) {
+      if (target.agentId !== agentId || target.startedAt !== agent.startedAt
+        || claimCheckoutOwner({ branchName: target.branch, holderPath: target.path, sourceWorkspace: target.repoPath, agents: owners })) return false;
+      for (const other of history) {
+        if ((other.id || other.agentId) === agentId) continue;
+        const meta = other.metadata || {};
+        const branches = [meta.worktreeBranch, ...(meta.claimBranches || []), ...(meta.claimReleasedBranches || [])];
+        if (!branches.includes(target.branch)) continue;
+        const repository = await realpath(meta.sourceWorkspace || meta.workspacePath || '').catch(() => null);
+        if (repository !== target.repoPath) continue;
+        if (!Number.isFinite(Date.parse(other.startedAt)) || Date.parse(other.startedAt) >= Date.parse(agent.startedAt)) return false;
+      }
+      if (seeds.length) continue;
+      if (!Number.isFinite(Date.parse(target.capturedAt)) || Date.parse(target.capturedAt) < Date.parse(agent.startedAt)
+        || Date.parse(target.capturedAt) > Date.parse(agent.completedAt)) return false;
+      const current = await readCompletedCheckoutIdentity(target).catch(() => null);
+      const expected = { repoPath: target.repoPath, branch: target.branch, path: target.path, head: target.head, incarnation: target.incarnation };
+      if (!current || JSON.stringify(current) !== JSON.stringify(expected)) return false;
+    }
+    const captured = seeds.length ? await captureSeededCompletionCheckouts(agent).catch(() => null) : targets;
+    if (!captured?.length) return false;
+    let recorded = false;
+    const saved = await updateCompletionReceipt(agentId, (metadata, current) => {
+      if (current.startedAt !== agent.startedAt || JSON.stringify(metadata.checkoutCapture) !== JSON.stringify(pending)
+        || JSON.stringify(metadata.checkoutSeeds) !== JSON.stringify(agent.metadata.checkoutSeeds)) return metadata;
+      recorded = true;
+      return { ...metadata, checkoutCapture: { status: 'captured', retriedAt: new Date().toISOString() }, completedCheckouts: captured };
+    });
+    return saved && recorded;
+  });
 }
 
 export async function completeAgent(agentId, result = {}) {
@@ -286,26 +363,51 @@ export async function completeAgent(agentId, result = {}) {
     // A later audit must never turn an old branch name into checkout authority.
     const agent = state.agents[agentId];
     let completedCheckouts;
-    if (agent.metadata?.claimPicksOwnBranch || agent.metadata?.isWorktree) {
+    let checkoutCapture;
+    if (hasClaimCheckoutBindings(agent.metadata) || agent.metadata?.isWorktree) {
       completedCheckouts = [];
       if (result.success === true || result.cleanupPending === true) {
         const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
-        completedCheckouts = await captureCompletedCheckouts(agent, { success: true }).catch(() => []);
+        try { completedCheckouts = await captureCompletedCheckouts(agent, { success: true, strict: true }); }
+        catch (error) {
+          // Ingestion remains terminal. Retry only an originally captured exact
+          // generation, never finalize/output hooks or historical branch names.
+          checkoutCapture = { status: 'pending', reason: 'checkout-evidence-unavailable',
+            targets: error.checkoutCapture?.targets || [], unknown: error.checkoutCapture?.unknown !== false,
+            observedAt: new Date().toISOString() };
+          result = { ...result, success: false, executionSuccess: result.executionSuccess ?? result.success,
+            cleanupPending: true, deliveryRecoveryOwned: true,
+            taskOutcome: { status: 'incomplete', reason: 'Original checkout identity capture is pending; delivery and preservation remain unverified.',
+              recovery: { mode: 'cleanup' } } };
+        }
       }
     }
 
+    // The execution can end before repository preservation is complete. Keep
+    // the original task owned by deterministic recovery until exact receipts
+    // settle it; never turn a queued cleanup into delivery success.
+    if (result.requireCheckoutSettlement === true && completedCheckouts?.length && result.success === true) {
+      result = { ...result, success: false, executionSuccess: result.executionSuccess ?? true,
+        cleanupPending: true, deliveryRecoveryOwned: true,
+        taskOutcome: { status: 'incomplete', reason: 'Code delivery completed; exact checkout preservation and retirement are pending.',
+          recovery: { mode: 'cleanup' } } };
+    }
+    const { requireCheckoutSettlement: _requireCheckoutSettlement, ...persistedResult } = result;
+    result = persistedResult;
+
+    const cleanup = agent.metadata?.completionCleanup;
+    const cleanupContext = cleanup?.replay || cleanup?.context;
+    const metadata = { ...agent.metadata,
+      completionCleanup: { version: 1, stages: {}, ...cleanup, startedAt: agent.startedAt,
+        status: cleanupContext ? cleanup.status || 'pending' : 'abandoned',
+        ...(!cleanupContext && { reason: 'completion-context-unavailable' }) },
+      ...(completedCheckouts ? { checkoutCapture: checkoutCapture || { status: 'captured' } } : {}),
+      ...((result.success || result.cleanupPending === true) && (agent.metadata?.isWorktree || hasClaimCheckoutBindings(agent.metadata))
+        ? { repoStateVerification: { status: 'pending' } } : {}),
+    };
     state.agents[agentId] = {
-      ...state.agents[agentId],
-      status: 'completed',
-      completedAt: new Date().toISOString(),
-      // Success-criteria validation verdict (issue #2344): normalize to an
-      // explicit null sentinel when a completion path didn't declare/evaluate a
-      // machine-checkable criterion, so persisted telemetry never conflates
-      // "not declared" with "declared and failed" (false). Distinct from
-      // result.success (the runner's exit-code verdict).
-      result: { validationPassed: null, ...result },
-      ...((result.success || result.cleanupPending === true) && (state.agents[agentId].metadata?.isWorktree || state.agents[agentId].metadata?.claimPicksOwnBranch)
-        ? { metadata: { ...state.agents[agentId].metadata, repoStateVerification: { status: 'pending' } } } : {}),
+      ...agent, status: 'completed', completedAt: new Date().toISOString(),
+      result: { validationPassed: null, ...result }, metadata,
     };
     if (completedCheckouts) state.agents[agentId].metadata = { ...state.agents[agentId].metadata, completedCheckouts };
 

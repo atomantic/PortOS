@@ -3,6 +3,7 @@ import { Worker } from 'worker_threads';
 import { homedir } from 'os';
 import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { applyGrokUsageRepair } from './grokUsageBackfill.js';
+import { applyAgyUsageRepair } from './agyUsageBackfill.js';
 import {
   applyHistoricalUsageCorrections,
   getReconciledUsageRunIds,
@@ -18,6 +19,7 @@ const idleJob = () => ({
   found: 0,
   corrected: 0,
   grok: null,
+  agy: null,
   error: null,
   startedAt: null,
   completedAt: null
@@ -116,6 +118,35 @@ export async function startHistoricalUsageBackfill({
     return grokOnce;
   };
 
+  let agyOnce = null;
+  const repairAgy = () => {
+    agyOnce ??= applyAgyUsageRepair({ home, providers: providerList })
+      .then((result) => ({
+        agy: {
+          added: result.added || 0,
+          images: result.images || 0,
+          backedUp: Boolean(result.backedUp),
+          note: result.note || null,
+        },
+        agyError: null,
+      }))
+      .catch((error) => ({ agy: null, agyError: error.message }));
+    return agyOnce;
+  };
+
+  const repairMedia = async () => {
+    const [repairedGrok, repairedAgy] = await Promise.all([repairGrok(), repairAgy()]);
+    const errors = [
+      repairedGrok.grokError && `Grok usage repair failed: ${repairedGrok.grokError}`,
+      repairedAgy.agyError && `Antigravity usage repair failed: ${repairedAgy.agyError}`,
+    ].filter(Boolean);
+    return {
+      grok: repairedGrok.grok,
+      agy: repairedAgy.agy,
+      error: errors.length ? errors.join('. ') : null,
+    };
+  };
+
   const fail = (error) => {
     job = { ...job, status: 'error', error, completedAt: new Date().toISOString() };
     notifyUsageBackfillUpdated();
@@ -125,15 +156,15 @@ export async function startHistoricalUsageBackfill({
   worker.on('message', (message) => {
     messageTail = messageTail.then(async () => {
       if (message?.type === 'progress') {
-        job = { ...job, ...message.progress, grok: job.grok ?? null };
+        job = { ...job, ...message.progress, grok: job.grok ?? null, agy: job.agy ?? null };
         notifyUsageBackfillUpdated();
         return;
       }
       if (message?.type === 'error') {
-        const repaired = await repairGrok();
-        const error = [message.error || 'Backfill failed', repaired.grokError && `Grok usage repair failed: ${repaired.grokError}`]
+        const repaired = await repairMedia();
+        const error = [message.error || 'Backfill failed', repaired.error]
           .filter(Boolean).join('. ');
-        job = { ...job, status: 'error', error, grok: repaired.grok, completedAt: new Date().toISOString() };
+        job = { ...job, status: 'error', error, grok: repaired.grok, agy: repaired.agy, completedAt: new Date().toISOString() };
         notifyUsageBackfillUpdated();
         return;
       }
@@ -144,14 +175,15 @@ export async function startHistoricalUsageBackfill({
       const appliedCorrections = (result.corrections || [])
         .filter((correction) => applied.correctedRunIds.includes(correction.runId));
       await markRunMetadata(appliedCorrections);
-      const repaired = await repairGrok();
-      if (repaired.grokError) {
+      const repaired = await repairMedia();
+      if (repaired.error) {
         job = {
           ...job,
           status: 'error',
-          error: `Grok usage repair failed: ${repaired.grokError}`,
+          error: repaired.error,
           corrected: applied.corrected,
-          grok: null,
+          grok: repaired.grok,
+          agy: repaired.agy,
           completedAt: new Date().toISOString()
         };
         notifyUsageBackfillUpdated();
@@ -165,6 +197,7 @@ export async function startHistoricalUsageBackfill({
         found: result.corrections?.length || 0,
         corrected: applied.corrected,
         grok: repaired.grok,
+        agy: repaired.agy,
         completedAt: new Date().toISOString()
       };
       notifyUsageBackfillUpdated();
@@ -174,10 +207,10 @@ export async function startHistoricalUsageBackfill({
   });
   worker.on('error', (error) => {
     messageTail = messageTail.then(async () => {
-      const repaired = await repairGrok();
-      const message = [error.message, repaired.grokError && `Grok usage repair failed: ${repaired.grokError}`]
+      const repaired = await repairMedia();
+      const message = [error.message, repaired.error]
         .filter(Boolean).join('. ');
-      job = { ...job, status: 'error', error: message, grok: repaired.grok, completedAt: new Date().toISOString() };
+      job = { ...job, status: 'error', error: message, grok: repaired.grok, agy: repaired.agy, completedAt: new Date().toISOString() };
       notifyUsageBackfillUpdated();
     }).catch((err) => fail(err.message));
   });

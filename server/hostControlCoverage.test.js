@@ -1170,6 +1170,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/storyboards/from-pipeline/:issueId', RECORDS],
   ['POST /api/storyboards/music-video/:projectId/shots/:sceneId/panel-art', RECORDS],
   ['POST /api/storyboards/music-video/:projectId/shots/:sceneId/update-from-panel', RECORDS],
+  ['POST /api/storyboards/pipeline/:issueId/update-from-board', RECORDS],
   ['POST /api/storyboards/recipes', RECORDS],
   ['DELETE /api/storyboards/recipes/:recipeId', REMOVES_RECORD],
   // /api/sync

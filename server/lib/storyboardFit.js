@@ -58,7 +58,12 @@ function sectionAt(sections, at) {
 // What a shot drew from its panel; a later change to any of it marks the shot's panel changed.
 const PANEL_REV_FIELDS = ['action', 'dialogue', 'framing', 'camera', 'castIds', 'environmentIds', 'objectIds'];
 export function storyboardPanelRev(panel) {
-  const text = JSON.stringify(PANEL_REV_FIELDS.map((key) => panel[key] ?? null));
+  return storyboardRev(PANEL_REV_FIELDS.map((key) => panel[key] ?? null));
+}
+
+/** A short FNV-1a hash of JSON-able values, for telling whether copied fields changed. */
+export function storyboardRev(values) {
+  const text = JSON.stringify(values);
   let hash = 0x811c9dc5;
   for (let i = 0; i < text.length; i += 1) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
   return (hash >>> 0).toString(36);

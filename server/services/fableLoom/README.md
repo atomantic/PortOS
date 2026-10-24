@@ -22,6 +22,7 @@ intent to a transition and moves them through the graph until an ending.
 | `staticPlayerFiles.js` | Stable filenames copied into an export's `player/` directory when `includePlayer` is set. |
 | `static-player/` | Dependency-free reference player copied into an export when `includePlayer` is set. |
 | `exportMedia.js` | Root-confined bounded media reads, metadata-free PNG stills and H.264/AAC MP4 stream copies; no network or generation. |
+| `exportVoice.js` | Root-confined reads of one approved voice-reference basename from that profile's source directory. Transcripts, engines and local paths stay out of the package. |
 | `db.js` | PostgreSQL leaf I/O. |
 
 Pure graph analysis (validation, BFS layering, prompt rendering) lives in

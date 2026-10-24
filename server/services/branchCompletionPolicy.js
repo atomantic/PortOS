@@ -9,6 +9,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { PR_COMPLETIONS, explicitPrCompletion } from '../lib/prDisposition.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
+import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
 
 const samePath = (a, b) => typeof a === 'string' && typeof b === 'string'
   && (process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b));
@@ -176,7 +177,7 @@ function completedCleanupForRetirement(policy, input) {
   const result = agent.result;
   return result?.cleanupPending === true && (result.executionSuccess === true || result.cleanupDeliveryVerified === true) && result.validationPassed !== false
     && result.taskOutcome?.recovery?.mode === 'cleanup' && input.verifiedPrHead === input.tip && !!input.tip
-    && agent.metadata?.completedCheckouts?.some(row => row.version === 1 && row.agentId === agent.id
+    && agent.metadata?.completedCheckouts?.some(row => (row.version === 1 || (row.version === 2 && completedCheckoutReceiptValid(agent, row))) && row.agentId === agent.id
       && row.repoPath === input.repoPath && row.branch === input.branch && row.path === input.checkoutPath
       && row.head === input.tip && row.incarnation?.pointer && row.incarnation?.gitdir);
 }

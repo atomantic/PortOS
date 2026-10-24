@@ -27,6 +27,7 @@ import useAssignableInstances from '../../../hooks/useAssignableInstances';
 import { formatCount } from '../../../utils/formatters';
 import { runningAgentsByTaskId, isSpawningTask } from '../../../lib/cosSpawnWindow';
 import BrailleSpinner from '../../BrailleSpinner';
+import { isDeliveryCleanupHeld } from '../../../../../server/lib/taskRetryHold.js';
 
 // Maps a task-section status → micrographic glyph spec. Animation only on
 // states where motion communicates real work happening (running tasks).
@@ -115,6 +116,8 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
     (task) => isSpawningTask(task, runningAgentByTaskId),
     [runningAgentByTaskId]
   );
+  const isFinalizing = useCallback(task => task.status === 'in_progress'
+    && isDeliveryCleanupHeld(task.metadata) && !runningAgentByTaskId.has(task.id), [runningAgentByTaskId]);
 
   // Split tasks by status for system tasks
   const pendingSystemTasks = useMemo(() =>
@@ -122,9 +125,10 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
     [cosTasks, isSpawning]
   );
   const activeSystemTasks = useMemo(() =>
-    cosTasks.filter(t => t.status === 'in_progress' || isSpawning(t)),
-    [cosTasks, isSpawning]
+    cosTasks.filter(t => (t.status === 'in_progress' || isSpawning(t)) && !isFinalizing(t)),
+    [cosTasks, isSpawning, isFinalizing]
   );
+  const finalizingSystemTasks = useMemo(() => cosTasks.filter(isFinalizing), [cosTasks, isFinalizing]);
   const blockedSystemTasks = useMemo(() =>
     cosTasks.filter(t => t.status === 'blocked'),
     [cosTasks]
@@ -140,9 +144,10 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
     [userTasksLocal, isSpawning]
   );
   const activeUserTasksLocal = useMemo(() =>
-    userTasksLocal.filter(t => t.status === 'in_progress' || isSpawning(t)),
-    [userTasksLocal, isSpawning]
+    userTasksLocal.filter(t => (t.status === 'in_progress' || isSpawning(t)) && !isFinalizing(t)),
+    [userTasksLocal, isSpawning, isFinalizing]
   );
+  const finalizingUserTasksLocal = useMemo(() => userTasksLocal.filter(isFinalizing), [userTasksLocal, isFinalizing]);
   const blockedUserTasksLocal = useMemo(() =>
     userTasksLocal.filter(t => t.status === 'blocked'),
     [userTasksLocal]
@@ -241,6 +246,20 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
   const isUserLoading = tasks?.user == null;
   const isCosLoading = tasks?.cos == null;
   const isQueueLoading = isUserLoading || isCosLoading;
+  const renderFinalizingTasks = (rows, source) => rows.length > 0 && (
+    <section aria-label={`${source === 'internal' ? 'System' : 'User'} tasks finalizing delivery`} className="bg-port-card border border-port-border rounded-lg overflow-hidden">
+      <h3 className="px-3 py-2 text-sm font-medium text-gray-400 border-b border-port-border">
+        Finalizing delivery ({formatCount(rows.length)})
+      </h3>
+      <div className="p-2 space-y-1.5">
+        {rows.map(task => (
+          <TaskItem key={task.id} task={task} isSystem={source === 'internal'} selected={isTaskSelected(task, source)}
+            onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted}
+            providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+        ))}
+      </div>
+    </section>
+  );
 
   return (
     <div className="space-y-6">
@@ -257,6 +276,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
             <>
               {formatCount(pendingUserTasksLocal.length + pendingSystemTasks.length)} pending
               {' · '}{formatCount(activeUserTasksLocal.length + activeSystemTasks.length)} active
+              {' · '}{formatCount(finalizingUserTasksLocal.length + finalizingSystemTasks.length)} finalizing
               {' · '}{formatCount(blockedUserTasksLocal.length + blockedSystemTasks.length)} blocked
             </>
           )}
@@ -269,7 +289,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-400">
             <BrailleSpinner text="Loading task queue…" />
           </div>
-        ) : pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && (tasks.user?.completedCount ?? completedUserTasksLocal.length) === 0 ? (
+        ) : pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && finalizingUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && (tasks.user?.completedCount ?? completedUserTasksLocal.length) === 0 ? (
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             <SchematicLabel module="USER" status="EMPTY" glyph="bracket-pair" state="idle" variant="tab" />
             No user tasks. Add one above.
@@ -322,6 +342,8 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
                 </div>
               </div>
             )}
+
+            {renderFinalizingTasks(finalizingUserTasksLocal, 'user')}
 
             {/* Blocked Section */}
             {blockedUserTasksLocal.length > 0 && (
@@ -377,7 +399,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-400">
             <BrailleSpinner text="Loading system tasks…" />
           </div>
-        ) : pendingSystemTasks.length === 0 && activeSystemTasks.length === 0 && blockedSystemTasks.length === 0 && (tasks.cos?.completedCount ?? completedSystemTasks.length) === 0 ? (
+        ) : pendingSystemTasks.length === 0 && activeSystemTasks.length === 0 && finalizingSystemTasks.length === 0 && blockedSystemTasks.length === 0 && (tasks.cos?.completedCount ?? completedSystemTasks.length) === 0 ? (
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             <SchematicLabel module="COS" status="EMPTY" glyph="bracket-pair" state="idle" variant="tab" />
             No system tasks.
@@ -417,6 +439,8 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
                 </div>
               </div>
             )}
+
+            {renderFinalizingTasks(finalizingSystemTasks, 'internal')}
 
             {/* Blocked Section */}
             {blockedSystemTasks.length > 0 && (
