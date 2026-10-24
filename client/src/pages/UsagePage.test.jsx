@@ -657,3 +657,19 @@ describe('UsagePage report range freshness (#10687)', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
+
+
+describe('UsagePage image accounting', () => {
+  it('shows saved render activity separately from unknown image cost and allowance', async () => {
+    api.getUsage.mockResolvedValue({ ...usage, imageRenders: { renderSessions: 8, savedOutputs: 10, jobIdentitySessions: 2, imageCostUsd: null } });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    const card = await screen.findByRole('region', { name: 'Codex image usage' });
+    expect(within(card).getByText(/8 render sessions · 10 saved outputs/)).toBeInTheDocument();
+    expect(within(card).getByText(/Image tokens, image cost and subscription allowance attribution: unknown/)).toBeInTheDocument();
+    expect(within(card).queryByText(/\$0/)).not.toBeInTheDocument();
+    expect(within(card).getByText(/2 sessions use a saved job identity/)).toBeInTheDocument();
+    const reads = api.getUsage.mock.calls.length;
+    await act(async () => { socket.emit('image-gen:completed', { mode: 'codex' }); });
+    await waitFor(() => expect(api.getUsage.mock.calls.length).toBe(reads + 1));
+  });
+});

@@ -1233,3 +1233,58 @@ recovery evidence prevents an interrupted journal replay from becoming fresh
 retirement evidence after the display row has aged out. It has no TTL purge.
 
 FableLoom shot-planning run checkpoints live in machine-local `data/fableloom-shot-runs/` JSON journals (atomic writes, one latest run per story/episode). They preserve drafts, review verdicts and feedback across restarts; they do not federate. Reading an interrupted run marks it failed without starting a provider call. Explicit resume uses the saved provider/guidance and rejects changed source revisions. Story records remain PostgreSQL-primary.
+
+### Codex image render accounting
+
+`data/image-render-usage/<sha256>.json` is a machine-local `file-primary`
+accounting receipt ledger (`server/services/imageRenderUsage.js`). Each immutable
+receipt describes one saved original output; `renderKey` groups outputs from the
+same Codex session. The Usage page counts sessions separately from saved outputs.
+A missing provider session ID uses the original PortOS job identity and is
+reported as such. These are observed saved render sessions, not a count of every
+image-tool invocation, attempt or billable image.
+
+This is an accounting log alongside `usage.json`, with no relational queries,
+record editing or cross-domain joins. Receipts publish complete files with an
+exclusive hard link, so a live completion and an explicit backfill cannot replace
+one another or double-count an output across processes. Hidden temporary files
+are ignored after an interrupted write. A damaged receipt fails the read rather
+than reporting a trustworthy zero. Rsync backs up this directory by default; it
+is not a peer-usage digest or a media-library asset and does not federate.
+
+Receipts contain hashed identities, the original saved timestamp, driver model
+and accounting evidence only. They contain no prompts, image bytes, filenames or
+session contents. Codex's human-mode `tokens used` footer, when present, is stored
+as a reported driver total without an input/output breakdown. The summary counts
+it once per session and states measurement coverage. It is never added to the
+text-token ledger, which may already include the session. Image tokens, image
+cost and subscription allowance remain `null` (unknown); text API prices and
+average allowance comparisons are not image conversion rates. The API cost
+estimate excludes unknown image cost.
+
+Historical import is explicit and never runs at boot. From the repository root:
+
+```sh
+node scripts/backfill-codex-image-usage.js --data-dir <install>/data --report <private-plan.json>
+node scripts/backfill-codex-image-usage.js --data-dir <install>/data --apply <private-plan.json> --journal <private-journal.json>
+```
+
+Review the dry-run coverage before applying. The importer reads only PortOS
+image sidecars and completed queue metadata, excludes known derived copies,
+groups multiple outputs per session, and uses saved original timestamps rather
+than filesystem mtimes. It never reads provider sessions. Unattributed sidecars,
+unsaved/failed calls, unavailable token/cost/allowance data and historical
+execution-machine provenance remain unknown. A changed inventory requires a new
+dry run. The plan and journal must use new paths; existing files are never
+replaced. Neither operation mutates `usage.json`, sidecars or queue history.
+
+Before writing receipts, apply saves a journal with a unique batch ID. Every
+inserted receipt carries that `backfillBatch`; pre-existing/live receipts retain
+their original bytes. An interrupted batch can be rerun with a new journal path
+and the same plan when the source inventory is unchanged. For recovery, retain
+the journal and move only receipts whose `backfillBatch` matches that journal to
+a private archive outside the ledger, verifying preservation before removal.
+This also identifies additions made before a crash prevented the final journal
+update. Never restore an old `usage.json` over newer usage to undo this import.
+No migration or seed is required: this is a new optional ledger, absent until a
+live completion or an explicit import publishes its first receipt.
