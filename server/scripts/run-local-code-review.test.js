@@ -11,7 +11,6 @@ import { spawn, execFile } from '../lib/childProcess.js';
 it('runs a saved provider reviewer from the standalone claim bridge without bootstrapping PortOS', async () => {
   const root = await mkdtemp(join(tmpdir(), 'review-bridge-test-'));
   await promisify(execFile)('git', ['init', '--quiet'], { cwd: root });
-  await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'reset'], { cwd: root });
   const bodies = [];
   const api = createServer((request, response) => {
     let body = '';
@@ -53,6 +52,7 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
   } }));
   await writeFile(join(data, 'settings.json'), JSON.stringify({ codeReview: {
     reviewers: ['provider:example-gpu'], providerModels: { 'provider:example-gpu': 'review-model' },
+    reviewerHealth: { 'provider:example-gpu': { code: 'NO_MODEL', reason: 'configuration', lastFailureAt: 1000 } },
   } }));
   const runReview = request => {
     const env = { ...process.env, NODE_ENV: 'test', MEMORY_BACKEND: 'file', PORTOS_DATA_ROOT: root };
@@ -75,6 +75,18 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
   };
   const results = await (async () => {
     const request = { backend: 'provider:example-gpu', diff: 'diff --git a/example.js b/example.js' };
+    // A resumed claim can complete its review before attribution was initialized.
+    // Preserve the verdict and actual health outcome, while blocking publication.
+    const noState = await runReview(request);
+    expect(noState.code).toBe(1);
+    expect(JSON.parse(noState.stdout)).toMatchObject({ ok: true, model: 'review-model', verdict: 'clean', findings: 'NO FINDINGS', attributionError: 'REVIEW_ATTRIBUTION_FAILED' });
+    expect(noState.stderr).toContain('Publication is blocked');
+    expect(noState.stderr).not.toContain(root);
+    const healthy = JSON.parse(await readFile(join(data, 'settings.json'), 'utf8'));
+    expect(healthy.codeReview?.reviewerHealth?.['provider:example-gpu']).toBeUndefined();
+    expect(existsSync(join(root, '.git/portos-local-review-models'))).toBe(false);
+    expect(JSON.parse(bodies.shift())).toMatchObject({ model: 'review-model' });
+    await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'reset'], { cwd: root });
     expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('');
     const cliRequest = { backend: 'provider:example-cli', model: 'review-model', diff: request.diff };
     const results = [await runReview(request), await runReview({ ...request, inheritDefaults: false }), await runReview(cliRequest),

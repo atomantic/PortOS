@@ -8,7 +8,7 @@
 import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, isToolFreeReviewer } from '../lib/validation.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import { neutralizePromptTags } from '../lib/promptFencing.js';
-import { LOCAL_REVIEW_BRIDGE_SCRIPT } from '../lib/localReviewBridge.js';
+import { LOCAL_REVIEW_BRIDGE_SCRIPT, localReviewAttributionErrorGate } from '../lib/localReviewBridge.js';
 import { ZERO_REVIEWER_COVERAGE_NOTE, isProviderReviewer, LOCAL_LLM_REVIEWERS } from '../lib/reviewerConfig.js';
 import { buildCliReviewerOutcomeInstructions } from './promptSections/reviewerOutcome.js';
 
@@ -183,7 +183,7 @@ fi
       ...(enforceIsolation ? ['kind: "claim-review"', 'toolFree: true'] : []),
       'recordAttribution: true',
     ].join(', ');
-    return `### ${reviewer}\n\n\`\`\`bash\nREVIEW_DIFF=$(mktemp)\nREVIEW_RESPONSE=$(mktemp)\ntrap 'rm -f "$REVIEW_DIFF" "$REVIEW_RESPONSE" "\${REVIEW_RESPONSE}.findings"' EXIT\nif ! { ${diffCommand}; } > "$REVIEW_DIFF"; then\n  echo "Unable to resolve the current branch's review diff" >&2\n  exit 1\nfi\njq -Rs ${jqArgs} '{ ${jqObject}, diff: . }' < "$REVIEW_DIFF" | node ${reviewScript} > "$REVIEW_RESPONSE"\nif ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then\n  echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2\n  exit 1\nfi\ncat "\${REVIEW_RESPONSE}.findings"\n\`\`\``;
+    return `### ${reviewer}\n\n\`\`\`bash\nREVIEW_DIFF=$(mktemp)\nREVIEW_RESPONSE=$(mktemp)\ntrap 'rm -f "$REVIEW_DIFF" "$REVIEW_RESPONSE" "\${REVIEW_RESPONSE}.findings"' EXIT\nif ! { ${diffCommand}; } > "$REVIEW_DIFF"; then\n  echo "Unable to resolve the current branch's review diff" >&2\n  exit 1\nfi\njq -Rs ${jqArgs} '{ ${jqObject}, diff: . }' < "$REVIEW_DIFF" | node ${reviewScript} > "$REVIEW_RESPONSE"\n${localReviewAttributionErrorGate({ cleanupDiff: true })}\nif ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then\n  echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2\n  exit 1\nfi\ncat "\${REVIEW_RESPONSE}.findings"\n\`\`\``;
   }).join('\n\n');
 
   const accessPolicy = enforceIsolation

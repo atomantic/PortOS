@@ -63,3 +63,20 @@ local reviewer labels. An aggregate clean status also does not prove execution.
 On an existing PR preserve the original attribution; this procedure records
 pre-publication reviews only. Never publish provider IDs, private paths,
 prompts, credentials, or raw review output.
+
+## Recovering a receipt failure
+
+The bridge preserves the actual verdict, model and findings and reports reviewer
+health even when receipt persistence fails. Its single JSON response then adds
+`attributionError: "REVIEW_ATTRIBUTION_FAILED"`, logs a bounded message to stderr,
+and exits nonzero. This is a publication/state failure, never reviewer
+unavailability, an inconclusive review, or `review-blocked`.
+
+Both generated pre-PR procedures check `attributionError` before consuming the
+verdict. They retain the private response file and print its location; do not
+publish that path or raw response. Repair the filesystem/evidence initialization
+while preserving existing valid receipts. Then pipe that completed JSON response
+into `record-cli` and verify `labels` succeeds. Reuse its original review verdict;
+do not spend another provider call just to repair attribution. After verified
+repair, remove the retained response and findings temporary files. Publication
+stays blocked until this repair succeeds.

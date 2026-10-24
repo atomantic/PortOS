@@ -99,16 +99,23 @@ try {
     ? runLocalClaimCommentReview
     : runLocalCodeReview;
   const result = await review({ ...localReviewBridgeRequest(request, process.cwd()), model, effort });
-  if (request.recordAttribution === true && request.kind !== 'claim-comments') {
-    await recordLocalReviewAttribution(process.cwd(), result);
-  }
-  process.stdout.write(`${JSON.stringify(result)}\n`);
   const recordOutcome = result.ok
     ? reportReviewerSuccess(request.backend)
     : reportReviewerFailure(request.backend, result);
   await recordOutcome.catch((err) => {
     process.stderr.write(`Unable to persist reviewer health: ${err.message}\n`);
   });
+  // Attribution is publication bookkeeping, not a reviewer verdict or health
+  // failure. Retain the completed result so a receipt can be repaired without
+  // spending another provider call.
+  const attributionError = request.recordAttribution === true && request.kind !== 'claim-comments'
+    ? await recordLocalReviewAttribution(process.cwd(), result).then(() => null, () => 'REVIEW_ATTRIBUTION_FAILED')
+    : null;
+  process.stdout.write(`${JSON.stringify(attributionError ? { ...result, attributionError } : result)}\n`);
+  if (attributionError) {
+    process.stderr.write('Review completed, but model attribution could not be persisted. Publication is blocked until attribution is repaired; do not rerun the reviewer.\n');
+    process.exitCode = 1;
+  }
   if (!result.ok) {
     // A reviewer that CAN'T be satisfied reads identically to one that merely
     // timed out, and the claim procedure answers both with `review-blocked` —

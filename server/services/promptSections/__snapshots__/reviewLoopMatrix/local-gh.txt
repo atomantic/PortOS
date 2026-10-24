@@ -18,6 +18,12 @@ This runs as **step 3 of the Completion Workflow above**, against the committed 
 REVIEW_RESPONSE=$(mktemp)
 trap 'rm -f "$REVIEW_RESPONSE" "${REVIEW_RESPONSE}.findings"' EXIT
 git diff origin/main...HEAD | jq -Rs '{ backend: "ollama", timeoutMs: 1800000, recordAttribution: true, diff: . }' | node /portos/server/scripts/run-local-code-review.mjs > "$REVIEW_RESPONSE"
+if jq -e '.attributionError != null' "$REVIEW_RESPONSE" >/dev/null; then
+  trap 'rm -f "${REVIEW_RESPONSE}.findings"' EXIT
+  jq -r '.findings // empty' "$REVIEW_RESPONSE"
+  echo "Review completed; attribution persistence failed. Stop publication, not review-blocked. Repair attribution from the retained private response: $REVIEW_RESPONSE" >&2
+  exit 1
+fi
 if ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "${REVIEW_RESPONSE}.findings"; then
   echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2
   exit 1 # Never treat an absent or malformed response as clean.
