@@ -98,16 +98,20 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
     <div className="mx-4 mb-3 space-y-2 text-xs">
       {Object.entries(outcomes).map(([appId, outcome]) => {
         const remaining = Array.isArray(outcome.remaining) ? outcome.remaining.filter(entry => !retiredKeys.has(checkoutKey(appId, entry))) : null;
+        // Sweep interruptions and retirement can leave an incomplete outcome
+        // with no recorded work. This does not establish a newly drained scan.
+        const incompleteEmptyInventory = outcome.status === 'incomplete' && outcome.observedAt && remaining?.length === 0;
         return (
           <details key={appId} className="rounded border border-port-border p-2">
             <summary className="cursor-pointer text-gray-300">
               {apps?.find(app => app.id === appId)?.name || (appId === 'null' ? 'Repository' : appId)}
-              {' · '}{STATUS_LABELS[outcome.status] || 'Outcome unavailable'}
+              {' · '}{incompleteEmptyInventory ? 'No remaining recorded work' : STATUS_LABELS[outcome.status] || 'Outcome unavailable'}
               {remaining && ` · ${formatCount(remaining.length)} remaining`}
               {remaining?.some(entry => entry.checkoutMissing) && ' · missing checkout evidence'}
             </summary>
             <div className="mt-2 space-y-2 text-gray-400">
               <p>{outcome.observedAt ? `Last inventory: ${formatDateTime(outcome.observedAt)}` : 'No readable inventory yet.'}</p>
+              {incompleteEmptyInventory && <p>Last sweep: Incomplete</p>}
               {outcome.reason && <p className="break-words">Reason: {outcome.reason}</p>}
               {outcome.nextAction && <p>{outcome.nextAction}</p>}
               {!remaining && <p>Remaining work is unknown.</p>}

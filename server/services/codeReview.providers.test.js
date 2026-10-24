@@ -77,6 +77,27 @@ describe('configured provider reviewers', () => {
     expect(resolveReviewerConfig({ reviewerModels: {} }, defaults, defaults.reviewers).reviewerModels).toEqual({});
   });
 
+  it.each([false, true])('batches an exact candidate with one frozen provider configuration and shared budget (optional=%s)', async optional => {
+    const config = resolveReviewerConfig({}, pickCodeReviewDefaults({ codeReview: {
+      reviewers: [backend], optionalReviewers: optional ? [backend] : [], reviewerMaxRounds: { [backend]: 1 },
+    } }), [backend]);
+    const section = name => `diff --git a/${name} b/${name}\n+${'x'.repeat(700)}\n`;
+    const original = { ...provider, timeout: 456789 };
+    getProviderById.mockResolvedValueOnce(original).mockResolvedValue({ ...provider, defaultModel: 'replacement', endpoint: 'https://replacement.example' });
+    const result = await runLocalCodeReview({ backend, maxBatchBytes: 1024, diff: section('a.js') + section('b.js'), headSha: 'b'.repeat(40) });
+    expect(result).toMatchObject({ ok: true, model: 'default-coder', coverage: { headSha: 'b'.repeat(40), complete: true, calls: 2, budgetMs: 456789 } });
+    expect(getProviderById).toHaveBeenCalledTimes(1);
+    expect(callProviderAISimple).toHaveBeenCalledTimes(2);
+    for (const [usedProvider, model, , options] of callProviderAISimple.mock.calls) {
+      expect(usedProvider).toMatchObject({ endpoint: original.endpoint, fallbackProvider: null });
+      expect(usedProvider.timeout).toBeLessThanOrEqual(original.timeout);
+      expect(model).toBe('default-coder');
+      expect(options).toMatchObject({ allowModelRecovery: false });
+    }
+    expect(config.optionalReviewers).toEqual(optional ? [backend] : []);
+    expect(config.reviewerMaxRounds[backend]).toBe(1);
+  });
+
   it.each([false, true])('keeps malformed verdicts inconclusive for required/optional provider policy (optional=%s)', async optional => {
     const config = resolveReviewerConfig({}, pickCodeReviewDefaults({ codeReview: {
       reviewers: [backend], optionalReviewers: optional ? [backend] : [],
@@ -196,6 +217,44 @@ describe('configured provider reviewers', () => {
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false });
   });
 
+  it.each([true, false])('classifies Claude stream capacity refusals without leaking events or paths (partial=%s)', async partial => {
+    getProviderById.mockResolvedValue({ ...provider, type: 'tui', command: 'claude' });
+    runCliProviderPrompt.mockResolvedValue({ text: JSON.stringify({ type: 'result', is_error: true, result: 'Prompt is too long /private/example' }), partial, streamFormat: 'stream-json' });
+    const result = await runLocalCodeReview({ backend, diff: 'example diff' });
+    expect(result).toMatchObject({ ok: false, code: 'REVIEW_CONTEXT_CAPACITY', coverage: { complete: false, remainingFiles: [0] } });
+    expect(JSON.stringify(result)).not.toContain('/private/example');
+    expect(result).not.toHaveProperty('text');
+    expect(result).not.toHaveProperty('verdict');
+  });
+
+  it('retains prior findings and immutable coverage when the next provider batch rejects', async () => {
+    const section = name => `diff --git a/${name} b/${name}\n+${'x'.repeat(700)}\n`;
+    callProviderAISimple.mockResolvedValueOnce({ text: JSON.stringify({ verdict: 'findings', findings: [{ severity: 'blocking', location: 'a.js:1', outcome: 'Write loses data.', fix: 'Serialize writes.' }] }) }).mockRejectedValueOnce(new Error('/private/provider/setup'));
+    const result = await runLocalCodeReview({ backend, diff: section('a.js') + section('b.js'), maxBatchBytes: 1024 });
+    expect(result).toMatchObject({ ok: false, verdict: 'findings', coverage: { reviewedFiles: [0], remainingFiles: [1] } });
+    expect(result.findings).toContain('Write loses data.');
+    expect(JSON.stringify(result)).not.toContain('/private/provider/setup');
+  });
+
+  it('cancels pending reviewer preparation at the absolute deadline without accepting a late verdict', async () => {
+    vi.useFakeTimers();
+    try {
+      let entered;
+      const started = new Promise(resolve => { entered = resolve; });
+      let capturedSignal;
+      callProviderAISimple.mockImplementationOnce((_provider, _model, _prompt, options) => {
+        capturedSignal = options.signal;
+        entered();
+        return new Promise(() => {});
+      });
+      const pending = runLocalCodeReview({ backend, diff: 'example diff', timeoutMs: 100 });
+      await started;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(await pending).toMatchObject({ ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', coverage: { complete: false, calls: 1 } });
+      expect(capturedSignal.aborted).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('reports an oversized-input spawn failure as a specific non-verdict, not a credential fault (#10273)', async () => {
     getProviderById.mockResolvedValue({ ...provider, type: 'tui', command: 'claude' });
     runCliProviderPrompt.mockResolvedValue({ error: "Prompt is too large for agy's command-line transport (E2BIG); the run was not started. Reduce the input size.", code: 'E2BIG' });
@@ -212,7 +271,7 @@ describe('configured provider reviewers', () => {
     for (const failure of [{ error: `${diagnostic} Synthetic vendor advice follows.` }, { error: 'Synthetic log prelude'.repeat(30), stderr: diagnostic }, { stderr: diagnostic, text: '', partial: false }, { stderr: diagnostic, text: 'incomplete', partial: true }]) {
       runCliProviderPrompt.mockResolvedValue({ ...failure, stderr: `${diagnostic}\nsynthetic-private-path-or-credential` });
       const result = await runLocalCodeReview({ backend, diff: 'example diff' });
-      expect(result).toEqual({ ok: false, code: 'REVIEWER_COMMAND_PERMISSION_DENIED', error: expect.stringContaining('supported tool-free vendor configuration') });
+      expect(result).toMatchObject({ ok: false, code: 'REVIEWER_COMMAND_PERMISSION_DENIED', error: expect.stringContaining('supported tool-free vendor configuration') });
       expect(isReviewerConfigFault(result.code)).toBe(true);
       expect(JSON.stringify(result)).not.toContain('synthetic-private');
     }
@@ -230,6 +289,7 @@ describe('configured provider reviewers', () => {
     expect(result.error).toContain(error.includes('timed out') ? 'timed out after 1000ms' : error);
     expect(isReviewerConfigFault(result.code)).toBe(false);
     expect(result).not.toHaveProperty('findings');
+    expect(result.coverage).toMatchObject({ complete: false, remainingFiles: [0] });
   });
 
   // #7720: a bootstrap-credentialed harness has a maintained no-tool recipe and
@@ -346,6 +406,8 @@ describe('configured provider reviewers', () => {
   });
 
   it('gives a remote API reviewer its own timeout budget instead of the local diff-size formula', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(100);
+    try {
     const diff = 'x'.repeat(42 * 1024);
     const budgetOf = () => callProviderAISimple.mock.calls.at(-1)[0].timeout;
 
@@ -363,6 +425,7 @@ describe('configured provider reviewers', () => {
 
     await runLocalCodeReview({ backend, diff, timeoutMs: 5_000 });
     expect(budgetOf()).toBe(5_000);
+    } finally { clock.mockRestore(); }
   });
 
   it('names the effective remote budget and the diff size in a timeout failure', async () => {

@@ -1,3 +1,4 @@
+import { CODE_REVIEW_BATCH_BYTES, CODE_REVIEW_MAX_BATCHES } from '../lib/codeReviewBatches.js'
 import { Router } from 'express'
 import { z } from 'zod'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
@@ -32,6 +33,9 @@ const localReviewRequestSchema = z.object({
   toolFree: z.boolean().optional(),
   diff: z.string().min(1, 'diff must be non-empty'),
   timeoutMs: z.number().int().positive().max(600000).optional(),
+  headSha: z.string().regex(/^[a-f0-9]{40,64}$/).optional(),
+  maxBatchBytes: z.number().int().min(1024).max(CODE_REVIEW_BATCH_BYTES).optional(),
+  maxBatches: z.number().int().min(1).max(CODE_REVIEW_MAX_BATCHES).optional(),
 }).strict().superRefine((body, ctx) => {
   // Blank is "not pinned", not "invalid" — same fallback the sibling `model` field
   // gets from `body.model || configured` below, and what this route's header
@@ -118,6 +122,9 @@ router.post('/local', asyncHandler(async (req, res) => {
     cwd: body.cwd,
     toolFree: body.toolFree,
     timeoutMs: body.timeoutMs,
+    headSha: body.headSha,
+    maxBatchBytes: body.maxBatchBytes,
+    maxBatches: body.maxBatches,
   })
   if (!result.ok) {
     await reportReviewerFailure(body.backend, result)
@@ -128,7 +135,9 @@ router.post('/local', asyncHandler(async (req, res) => {
     throw new ServerError(result.error || 'Code review failed', {
       status: isReviewerConfigFault(result.code) ? 400 : 502,
       context: { backend: result.backend, model: result.model,
-        ...(result.code === 'MALFORMED_REVIEW' ? { code: result.code, diagnostics: result.diagnostics } : {}) }
+        ...(result.code === 'MALFORMED_REVIEW' ? { code: result.code, diagnostics: result.diagnostics } : {}),
+        ...(result.coverage ? { code: result.code, coverage: result.coverage,
+          ...(result.verdict === 'findings' ? { verdict: result.verdict, findings: result.findings } : {}) } : {}) }
     })
   }
   await reportReviewerSuccess(body.backend)

@@ -72,11 +72,30 @@ describe('AppTaskCard', () => {
     renderCard({ reconcileOutcomes: {
       example: { status: 'incomplete', remaining: null, observedAt: null },
       empty: { status: 'drained', remaining: [], observedAt: '2026-10-01T00:00:00Z' },
+      unobserved: { status: 'incomplete', remaining: [], observedAt: null },
+      running: { status: 'running', remaining: [], observedAt: '2026-10-01T00:00:00Z' },
     } }, {}, 'branch-reconcile');
     expect(screen.getByText(/example · Incomplete/)).toBeTruthy();
     expect(screen.getByText('Remaining work is unknown.')).toBeTruthy();
-    expect(screen.getByText('No readable inventory yet.')).toBeTruthy();
+    expect(screen.getAllByText('No readable inventory yet.')).toHaveLength(2);
     expect(screen.getByText(/empty · No remaining work in last scan · 0 remaining/)).toBeTruthy();
+    expect(screen.getByText(/unobserved · Incomplete · 0 remaining/)).toBeTruthy();
+    expect(screen.getByText(/running · Sweep running · 0 remaining/)).toBeTruthy();
+    expect(screen.queryByText(/No remaining recorded work/)).toBeNull();
+  });
+
+  it('shows empty recorded cleanup independently of stale or interrupted sweep status, retaining diagnostics', () => {
+    renderCard({ reconcileOutcomes: {
+      idle: { status: 'incomplete', reason: 'no-in-flight-branches', remaining: [], observedAt: '2026-10-01T00:00:00Z' },
+      interrupted: { status: 'incomplete', reason: 'agent-failed', remaining: [], observedAt: '2026-10-01T00:00:00Z', nextAction: 'Run branch reconciliation again.' },
+    } }, {}, 'branch-reconcile');
+    expect(screen.getByText('idle · No remaining recorded work · 0 remaining')).toBeVisible();
+    const interrupted = screen.getByText('interrupted · No remaining recorded work · 0 remaining');
+    fireEvent.click(interrupted);
+    const details = within(interrupted.closest('details'));
+    expect(details.getByText('Last sweep: Incomplete')).toBeVisible();
+    expect(details.getByText('Reason: agent-failed')).toBeVisible();
+    expect(details.getByText('Run branch reconciliation again.')).toBeVisible();
   });
 
   it('shows app coverage prominently', () => {

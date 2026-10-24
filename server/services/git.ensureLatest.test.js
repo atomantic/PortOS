@@ -1,16 +1,27 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it as vitestIt, expect, afterEach } from 'vitest';
 import { writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
 import { makeGitSandbox, destroyGitSandbox, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
+import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
 import { ensureLatest } from './git.js';
 
 // Real git: the regressions here are git's own on-disk rebase state
 // (`.git/rebase-merge`) and what `reset`/`rebase --abort` do to it.
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('ensureLatest on a diverged checkout', () => {
+  const owned = ownTestBodies(vitestIt);
+  const it = owned.it;
   let sandbox;
-  afterEach(async () => { if (sandbox) await destroyGitSandbox(sandbox.scratch); sandbox = null; });
+  afterEach(async () => {
+    // Fail-fast can finish Vitest's wrapper during allocation or a Git child.
+    try {
+      await owned.drain();
+    } finally {
+      if (sandbox) await destroyGitSandbox(sandbox.scratch);
+      sandbox = null;
+    }
+  });
 
   const commitFile = async (repo, file, body, msg) => {
     await writeFile(join(repo, file), body);

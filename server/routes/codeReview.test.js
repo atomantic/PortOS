@@ -299,6 +299,16 @@ describe('POST /api/code-review/local', () => {
     expect(codeReviewSvc.reportReviewerSuccess).not.toHaveBeenCalled()
   })
 
+  it('preserves incomplete coverage and actionable findings through the HTTP boundary', async () => {
+    const coverage = { headSha: 'a'.repeat(40), complete: false, reviewedFiles: [0], remainingFiles: [1] }
+    codeReviewSvc.runLocalCodeReview.mockResolvedValue({ ok: false, backend: 'ollama', model: 'm', code: 'REVIEW_CONTEXT_CAPACITY', coverage, verdict: 'findings', findings: 'Repair the persisted write.', error: 'Context capacity prevented complete coverage.' })
+    const res = await request(makeApp()).post('/api/code-review/local').send({ backend: 'ollama', model: 'm', diff: 'example', headSha: coverage.headSha, maxBatches: 2, maxBatchBytes: 1024 })
+    expect(res.status).toBe(502)
+    expect(res.body.context).toMatchObject({ code: 'REVIEW_CONTEXT_CAPACITY', coverage, verdict: 'findings', findings: 'Repair the persisted write.' })
+    expect(codeReviewSvc.runLocalCodeReview).toHaveBeenCalledWith(expect.objectContaining({ headSha: coverage.headSha, maxBatches: 2, maxBatchBytes: 1024 }))
+    expect(codeReviewSvc.reportReviewerSuccess).not.toHaveBeenCalled()
+  })
+
   it('returns 200 with findings on success', async () => {
     codeReviewSvc.runLocalCodeReview.mockResolvedValue({
       ok: true,
