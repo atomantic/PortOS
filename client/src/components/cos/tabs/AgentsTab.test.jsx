@@ -93,7 +93,14 @@ vi.mock('./RelaunchAgentModal', () => ({
     </button>
   ),
 }));
-vi.mock('../../ui/InlineConfirmRow', () => ({ default: ({ question }) => <p>{question}</p> }));
+vi.mock('../../ui/InlineConfirmRow', () => ({
+  default: ({ question, confirmText, onConfirm }) => (
+    <div>
+      <p>{question}</p>
+      {onConfirm && <button type="button" onClick={onConfirm}>{confirmText || 'Confirm'}</button>}
+    </div>
+  ),
+}));
 
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
@@ -487,6 +494,19 @@ it('makes the clear scope explicit when the feedback filter hides completed reco
   await userEvent.click(screen.getByRole('button', { name: 'Clear all completed agents' }));
   expect(screen.getByText(/including records outside the current filter and unloaded pages/)).toBeInTheDocument();
   expect(screen.queryByText(/removes 1 agent record/)).not.toBeInTheDocument();
+});
+
+it('explains retained active cleanup owners when clearing completed agents', async () => {
+  const user = userEvent.setup();
+  api.getCosCompletedAgents.mockResolvedValue({ items: [completedAgent('done', 'Completed work')], total: 2, nextCursor: null });
+  api.clearCompletedCosAgents.mockResolvedValue({ cleared: 1, retained: 1 });
+  const onRefresh = vi.fn();
+  renderTab([], onRefresh);
+  await screen.findByText('Completed work');
+  await user.click(screen.getByRole('button', { name: 'Clear all completed agents' }));
+  await user.click(screen.getByRole('button', { name: 'Clear all' }));
+  expect(toast.success).toHaveBeenCalledWith('Cleared 1 completed agent (1 active cleanup owner retained)');
+  expect(onRefresh).toHaveBeenCalled();
 });
 
 

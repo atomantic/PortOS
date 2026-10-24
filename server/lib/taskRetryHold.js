@@ -113,3 +113,31 @@ export function isStaleRetryHold(metadata, now = Date.now(), graceMs = RETRY_HOL
 /** Repository verification owns these tasks across completion and restarts. */
 export const isDeliveryCleanupHeld = metadata => metadata?.deliveryRecovery === 'cleanup'
   && typeof metadata.deliveryRecoveryAgentId === 'string' && metadata.deliveryRecoveryAgentId.length > 0;
+
+/**
+ * Extract the protected cleanup/retry owner ids from a list of tasks.
+ * Only active (`in_progress`) task metadata counts; historical flags on
+ * completed agent results do not establish current ownership.
+ * `hasUnattributedRetryHold` is true when any `in_progress` task carries a
+ * legacy boolean retry hold (`retryPendingCleanup: true`), which could belong
+ * to any completed run until the hold is resolved.
+ */
+export function collectProtectedCleanupOwners(tasks) {
+  const ownerIds = new Set();
+  let hasUnattributedRetryHold = false;
+  for (const task of tasks || []) {
+    if (task?.status !== 'in_progress') continue;
+    const meta = task.metadata;
+    if (isDeliveryCleanupHeld(meta)) ownerIds.add(meta.deliveryRecoveryAgentId);
+    if (isRetryHeld(meta)) {
+      const holder = meta[RETRY_HOLD_KEY];
+      if (isTruthyMeta(holder)) hasUnattributedRetryHold = true;
+      else if (typeof holder === 'string' && holder) ownerIds.add(holder);
+    }
+  }
+  return {
+    ownerIds,
+    hasUnattributedRetryHold,
+    isProtected: agentId => Boolean(agentId) && (hasUnattributedRetryHold || ownerIds.has(agentId)),
+  };
+}
