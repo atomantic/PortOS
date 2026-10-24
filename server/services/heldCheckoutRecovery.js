@@ -20,14 +20,14 @@ import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObserva
  */
 
 import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
-import { createWriteStream, realpathSync, constants } from 'node:fs';
+import { realpathSync, constants } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { lstat, stat, readlink, readdir, opendir, readFile, chmod, open, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve, relative, sep } from 'node:path';
 import { sameRetirementCheckout, unresolvedRetirements } from '../lib/reconcileRetirementEvidence.js';
-import { atomicWrite, ensureDir, PATHS, rmGuarded, writeFileGuarded } from '../lib/fileUtils.js';
+import { atomicWrite, createWriteStreamGuarded, ensureDir, PATHS, rmGuarded, writeFileGuarded } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
@@ -54,7 +54,7 @@ function checkArchiveBudget(content, administration) {
 // encoded bytes as it is collected, including zero-byte files and links.
 const ARCHIVE_WORK_MS = 10 * 60 * 1000;
 function archiveWork(signal, started = performance.now()) {
-  let metadataBytes = 0;
+  const usage = { metadata: 0, directory: 0 };
   const check = () => {
     if (signal?.aborted) throw new Error('retirement-archive-cancelled');
     const elapsed = Math.ceil(performance.now() - started);
@@ -62,11 +62,11 @@ function archiveWork(signal, started = performance.now()) {
       archiveLimit: { scope: 'verification', kind: 'time', limitMs: ARCHIVE_WORK_MS, observedMs: elapsed },
     });
   };
-  return { check, metadataScope: () => archiveWork(signal, started), add(value) {
+  return { check, metadataScope: () => archiveWork(signal, started), add(value, scope = 'metadata') {
     check();
-    metadataBytes += Buffer.byteLength(JSON.stringify(value));
-    if (metadataBytes > MAX_MANIFEST_BYTES) throw Object.assign(new Error('archive-manifest-budget-exceeded'), {
-      archiveLimit: { scope: 'metadata', kind: 'total', limitBytes: MAX_MANIFEST_BYTES, observedBytes: metadataBytes },
+    usage[scope] += Buffer.byteLength(JSON.stringify(value));
+    if (usage[scope] > MAX_MANIFEST_BYTES) throw Object.assign(new Error('archive-manifest-budget-exceeded'), {
+      archiveLimit: { scope, kind: 'total', limitBytes: MAX_MANIFEST_BYTES, observedBytes: usage[scope] },
     });
   } };
 }
@@ -97,8 +97,12 @@ async function archiveHash(path, work, limitBytes = MAX_FILE_BYTES) {
 
 async function archiveCopy(source, destination, expectedBytes, work) {
   let bytes = 0;
+  const input = await archiveSource(source);
+  let output;
+  try { output = await createWriteStreamGuarded(destination, { flags: 'wx', mode: 0o600 }); }
+  catch (error) { input.destroy(); throw error; }
   await pipeline(
-    await archiveSource(source),
+    input,
     async function* (chunks) {
       for await (const chunk of chunks) {
         work.check();
@@ -108,7 +112,7 @@ async function archiveCopy(source, destination, expectedBytes, work) {
       }
       if (bytes !== expectedBytes) throw new Error('checkout-content-changed');
     },
-    createWriteStream(destination, { flags: 'wx', mode: 0o600 }),
+    output,
   );
 }
 
@@ -409,7 +413,7 @@ async function snapshotAdministration(path, missingRoot = null, work = archiveWo
     if (info.isDirectory()) {
       const names = [];
       for await (const entry of await opendir(source)) {
-        work.add(entry.name);
+        work.add(entry.name, 'directory');
         names.push(entry.name);
       }
       for (const name of names.sort()) await visit(join(source, name), rel ? `${rel}/${name}` : name);

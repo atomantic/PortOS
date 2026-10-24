@@ -79,8 +79,9 @@ readers. A source growing during a copy aborts rather than expanding disk use.
 The existing limits remain 25 MiB per raw file, 250 MiB combined content and
 private administration, 16 MiB serialized manifest, and 64 MiB per Git command
 output. Metadata is charged incrementally against the same 16 MiB ceiling,
-including file entries, symlink targets, gitlinks and directory names; this also
-bounds zero-byte-file trees. These byte ceilings retain the prior safety envelope
+including file entries, symlink targets and gitlinks; this also bounds
+zero-byte-file trees. Transient sorted directory names have a separate 16 MiB
+scan budget, so directory traversal cannot allocate unbounded name lists. These byte ceilings retain the prior safety envelope
 instead of estimating work from a count. A snapshot, archive write (both source
 passes included), or independent verification has a ten-minute elapsed work
 budget. This is a conservative ceiling of twenty existing 30-second Git command
