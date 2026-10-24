@@ -68,6 +68,7 @@ import {
 
 vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn(async () => ({})),
+  getTaskById: vi.fn(async () => null),
   addTask: vi.fn(async () => ({ id: 'investigation-test' })),
 }));
 vi.mock('./investigationTaskProducer.js', () => ({
@@ -89,7 +90,7 @@ vi.mock('./taskSchedule.js', () => ({
   recordTaskTypeSuccess: vi.fn(async () => null),
   recordRecommendedAudits: vi.fn(async () => null),
 }));
-import { updateTask, addTask } from './cosTaskStore.js';
+import { updateTask, addTask, getTaskById } from './cosTaskStore.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { MAX_TASK_RETRIES, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
@@ -481,6 +482,9 @@ describe('recovery output-hook dispatch (#3182)', () => {
       isInvestigation: true, totalSpawnCount: 3, failureCount: 1, lastSpawnedAt: '2026-09-10T00:00:00Z',
     } };
     persistedAgent.taskId = task.id;
+    persistedAgent.metadata.completionTaskDispatch = { taskId: task.id, taskType: 'internal',
+      expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, task.metadata[key] ?? null]) };
+    getTaskById.mockResolvedValueOnce(task);
     mergedTarget.getOriginInfo.mockResolvedValue({ isGithub: true, host: 'github.com', fullName: 'example/PortOS' });
     const github = await import('./github.js');
     const git = await import('../lib/execGit.js');
@@ -496,10 +500,12 @@ describe('recovery output-hook dispatch (#3182)', () => {
       const order = [];
       updateTask.mockImplementationOnce(async () => { order.push('prerequisite'); return {}; });
       completeAgent.mockImplementationOnce(async () => { order.push('terminal'); return null; });
+      // The dispatcher increments counters after the agent receives this snapshot.
+      const staleTask = { ...task, status: 'pending', metadata: { ...task.metadata, totalSpawnCount: 2, lastSpawnedAt: undefined } };
       const result = mode === 'normal'
-        ? await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+        ? await finalizeAgent({ agentId: persistedAgent.id, task: staleTask, success: true, exitCode: 0,
           finalSummary: JSON.stringify({ summary: taskOutcome.reason, taskOutcome }) })
-        : await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0 });
+        : await retireDeadAgent({ agent: persistedAgent, task: staleTask, success: true, exitCode: 0 });
       expect(result).toMatchObject({ success: false, taskOutcome });
       expect(order).toEqual(['prerequisite', 'terminal']);
       expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked', metadata: expect.objectContaining({
@@ -514,12 +520,16 @@ describe('recovery output-hook dispatch (#3182)', () => {
 
   it('stops recovered runtime finalization when its conditional prerequisite write loses ownership', async () => {
     isProgrammaticIoTaskType.mockReturnValue(false);
-    persistedAgent.taskId = TASK.id;
+    const task = { id: TASK.id, taskType: 'internal', status: 'in_progress', metadata: { totalSpawnCount: 1 } };
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.completionTaskDispatch = { taskId: task.id, taskType: 'internal',
+      expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, task.metadata[key] ?? null]) };
+    getTaskById.mockResolvedValueOnce(task);
     persistedAgent.metadata.taskOutcome = { status: 'blocked', reason: 'The running fix remains unverified.',
       recovery: { mode: 'runtime', prUrl: 'https://github.com/example/PortOS/pull/123', requiredCommit: 'a'.repeat(40) } };
     persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
     updateTask.mockResolvedValueOnce({ statusChanged: true });
-    await expect(retireDeadAgent({ agent: persistedAgent, task: { id: TASK.id, status: 'in_progress', metadata: {} },
+    await expect(retireDeadAgent({ agent: persistedAgent, task,
       success: true, exitCode: 0 })).rejects.toThrow('task ownership changed');
     expect(completeAgent).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();

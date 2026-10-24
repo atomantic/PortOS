@@ -41,12 +41,18 @@ import { execGh } from './github.js';
 
 const outcome = () => normalizeTaskOutcome({ status: 'blocked', reason: 'The fix must be running before verification.',
   recovery: { mode: 'runtime', prUrl: 'https://github.com/example/PortOS/pull/123', requiredCommit: 'a'.repeat(40) } });
-async function park({ ready = true } = {}) {
+async function runningTask() {
   const task = await addTask({ id: 'sys-example', description: 'Verify merged fix', priority: 'MEDIUM', status: 'in_progress', metadata: {
     isInvestigation: true, lastSpawnedAt: '2026-01-01T00:00:00Z', totalSpawnCount: 4, failureCount: 2,
     orphanRetryCount: 1, existingBranch: 'claim/issue-123', resumeWorktreePath: '/example/worktree',
   } }, 'internal', { raw: true });
-  await updateTask(task.id, await resolveRuntimeVerificationUpdate(task, outcome(), 'agent-example'), 'internal');
+  facts.owner.metadata.completionTaskDispatch = { taskId: task.id, taskType: 'internal',
+    expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, task.metadata[key] ?? null]) };
+  return task;
+}
+async function park({ ready = true } = {}) {
+  const task = await runningTask();
+  await updateTask(task.id, await resolveRuntimeVerificationUpdate({ ...task, metadata: { totalSpawnCount: 0 } }, outcome(), 'agent-example'), 'internal');
   if (ready) await updateTask(task.id, { metadata: { runtimeVerificationReadyAgentId: 'agent-example' } }, 'internal');
   return getTaskById(task.id);
 }
@@ -107,9 +113,17 @@ describe('persisted runtime continuation', () => {
     if (kind === 'foreign-repository') request.recovery.prUrl = 'https://github.com/another/project/pull/123';
     if (kind === 'wrong-commit') request.recovery.requiredCommit = 'f'.repeat(40);
     if (kind === 'unmerged') execGh.mockResolvedValueOnce(JSON.stringify({ state: 'OPEN', mergeCommit: null }));
-    const update = await resolveRuntimeVerificationUpdate({ id: 'sys-example', metadata: {} }, request, 'agent-example');
+    const task = await runningTask();
+    const update = await resolveRuntimeVerificationUpdate(task, request, 'agent-example');
     expect(update).toMatchObject({ status: 'blocked', metadata: { blockedReason: expect.stringContaining('unreadable or invalid') } });
     expect(update.metadata.runtimeVerification.integratedCommit).toBeUndefined();
+  });
+
+  it('refuses a predecessor dispatch when a successor has already claimed the task', async () => {
+    const task = await runningTask();
+    await updateTask(task.id, { metadata: { totalSpawnCount: 5, lastSpawnedAt: '2026-01-02T00:00:00Z' } }, 'internal');
+    await expect(resolveRuntimeVerificationUpdate(task, outcome(), 'agent-example')).rejects.toThrow('dispatch ownership');
+    expect((await getTaskById(task.id)).status).toBe('in_progress');
   });
 
   it('retains unreadable integration as a prerequisite without spending another run, then verifies it afresh', async () => {

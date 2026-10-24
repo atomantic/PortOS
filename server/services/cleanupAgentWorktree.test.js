@@ -283,11 +283,15 @@ function mockWorktreeAgent(overrides = {}) {
 }
 
 describe('cleanupAgentWorktree - PR-creation path', () => {
-  it('preserves the runtime continuation checkout even with an old discard policy', async () => {
+  it.each([true, false])('preserves only an accepted runtime prerequisite when accepted=%s', async accepted => {
     getAgent.mockResolvedValue({ ...mockWorktreeAgent(), result: { success: false,
       taskOutcome: { status: 'blocked', recovery: { mode: 'runtime' } } } });
-    await cleanupAgentWorktree('agent-runtime', false, { originalTask: { metadata: { discardWorktree: true } } });
-    expect(removeWorktree).not.toHaveBeenCalled();
+    getTaskById.mockResolvedValue({ id: 'task-runtime', metadata: accepted ? {
+      runtimeVerificationId: 'task-runtime:agent-runtime', runtimeVerification: { agentId: 'agent-runtime' },
+    } : {} });
+    await cleanupAgentWorktree('agent-runtime', false, { originalTask: { id: 'task-runtime', metadata: { discardWorktree: true } } });
+    if (accepted) expect(removeWorktree).not.toHaveBeenCalled();
+    else expect(removeWorktree).toHaveBeenCalled();
     expect(git.push).not.toHaveBeenCalled();
   });
 

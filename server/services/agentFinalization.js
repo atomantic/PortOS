@@ -1304,7 +1304,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   const recoveryUpdate = deliveryHeld && !refused && !isPrivateSecurity && task?.id && task.status !== 'completed'
     ? await resolveDeliveryRecoveryUpdate(task, recoveryOutcome, agent.id) : null;
   if (recoveryUpdate) {
-    const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user', ...runtimeRecoveryFence(task, recoveryUpdate));
+    const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user', ...runtimeRecoveryFence(recoveryUpdate));
     if (update?.error || update?.statusChanged) throw new Error(`Could not persist recovered task outcome: ${update.error || 'task ownership changed'}`);
   }
   await completeAgent(agent.id, {
@@ -2032,7 +2032,7 @@ export async function finalizeAgent({
   // Persist the prerequisite BEFORE retiring execution. A crash between the
   // agent and task writes must never expose this dispatch to generic retry.
   const runtimeTaskResult = taskUpdate.metadata?.blockedCategory === 'runtime-verification'
-    ? await updateTask(task.id, taskUpdate, taskType, ...runtimeRecoveryFence(preHookTask, taskUpdate)) : null;
+    ? await updateTask(task.id, taskUpdate, taskType, ...runtimeRecoveryFence(taskUpdate)) : null;
   if (runtimeTaskResult?.error || runtimeTaskResult?.statusChanged) throw new Error('Runtime verification task ownership changed before completion');
   const completedAgent = await completeAgent(agentId, { ...completionRecord({
     task, verdict: deliveryVerdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed,
@@ -2071,7 +2071,7 @@ export async function finalizeAgent({
   }
   const taskResult = runtimeTaskResult || (capturePending
     ? await recoverCompletionTaskHandoff(await getAgentRecord(agentId)) || { error: 'Completion cleanup task ownership changed' }
-    : await updateTask(task.id, taskUpdate, taskType, ...runtimeRecoveryFence(preHookTask, taskUpdate)));
+    : await updateTask(task.id, taskUpdate, taskType, ...runtimeRecoveryFence(taskUpdate)));
   if (taskResult?.error && !isExpectedUnpersistedMiss(task, taskResult.error)) {
     const label = terminatedByUser ? 'blocked' : verdict.success ? 'completed' : 'failed';
     emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, { taskId: task.id, agentId, error: taskResult.error });
@@ -2442,11 +2442,11 @@ async function resolveDeliveryRecoveryUpdate(task, outcome, agentId) {
   return resolveUndeliveredTaskUpdate(task, outcome, agentId);
 }
 
-function runtimeRecoveryFence(task, update) {
-  return update.metadata?.blockedCategory === 'runtime-verification' ? [{
-    expectedStatus: task.status === 'blocked' ? 'blocked' : 'in_progress', expectedMetadata: {
-      ...(task.status === 'blocked' ? { runtimeVerificationId: task.metadata?.runtimeVerificationId } : {}),
-      lastSpawnedAt: task.metadata?.lastSpawnedAt,
-      totalSpawnCount: task.metadata?.totalSpawnCount, claimedBy: task.metadata?.claimedBy },
-  }] : [];
+function runtimeRecoveryFence(update) {
+  if (update.metadata?.blockedCategory !== 'runtime-verification') return [];
+  const p = update.metadata.runtimeVerification;
+  return [{ expectedStatus: p.dispatchStatus, expectedMetadata: {
+    ...(p.dispatchStatus === 'blocked' ? { runtimeVerificationId: update.metadata.runtimeVerificationId } : {}),
+    ...Object.fromEntries(['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, p.dispatch?.[key]])),
+  } }];
 }

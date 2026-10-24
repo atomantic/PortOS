@@ -10,7 +10,8 @@ import { execGit } from '../lib/execGit.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { getBootCommit } from './installState.js';
 import { getAgentRecord } from './cosAgentLifecycle.js';
-import { getAllTasks, updateTask } from './cosTaskStore.js';
+import { matchesCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
+import { getAllTasks, getTaskById, updateTask } from './cosTaskStore.js';
 
 const SHA = /^[a-f0-9]{40}$/;
 const CATEGORY = 'runtime-verification';
@@ -40,7 +41,7 @@ async function integrationEvidence(request) {
   }
   // A squash/rebase need not contain the old PR head. The forge's integration
   // commit is the runtime prerequisite; never replace it with disk HEAD.
-  await execGit(['fetch', 'origin', pr.baseRefName], PATHS.root);
+  await execGit(['fetch', '--', 'origin', pr.baseRefName], PATHS.root);
   const target = await execGit(['rev-parse', '--verify', `refs/remotes/origin/${pr.baseRefName}^{commit}`], PATHS.root);
   if (!await contains(pr.mergeCommit.oid, target.stdout.trim())) throw new Error('The merged fix is not integrated in the fetched default branch');
   return { prUrl: request.prUrl, requiredCommit: request.requiredCommit, integratedCommit: pr.mergeCommit.oid };
@@ -58,6 +59,13 @@ async function prerequisiteReason(prerequisite) {
 
 export async function resolveRuntimeVerificationUpdate(task, outcome, agentId) {
   const now = new Date().toISOString();
+  const owner = await getAgentRecord(agentId);
+  const live = await getTaskById(task.id);
+  const replay = live?.status === 'blocked' && live.metadata?.runtimeVerificationId === `${task.id}:${agentId}`
+    && live.metadata?.runtimeVerification?.agentId === agentId;
+  if (!live || owner?.taskId !== task.id || (!replay && (live.status !== 'in_progress'
+    || !matchesCompletionTaskDispatch(owner, live)))) throw new Error('Runtime verification dispatch ownership is unverified');
+  task = live;
   const prior = task.metadata?.runtimeVerification;
   // Replaying finalization retains the original dispatch identity and evidence.
   const same = prior?.agentId === agentId && task.metadata?.runtimeVerificationId === `${task.id}:${agentId}`;
@@ -66,8 +74,7 @@ export async function resolveRuntimeVerificationUpdate(task, outcome, agentId) {
     totalSpawnCount: String(task.metadata?.totalSpawnCount ?? ''), requestedAt: now,
     prUrl: outcome.recovery.prUrl, requiredCommit: outcome.recovery.requiredCommit };
   let reason;
-  const owner = await getAgentRecord(agentId);
-  if (owner?.taskId !== task.id || (task.metadata?.app && task.metadata.app !== PORTOS_APP_ID)) {
+  if (task.metadata?.app && task.metadata.app !== PORTOS_APP_ID) {
     reason = 'Runtime verification owner or PortOS task scope could not be verified';
   } else {
     const evidence = await integrationEvidence(prerequisite).catch(() => null);
@@ -77,7 +84,9 @@ export async function resolveRuntimeVerificationUpdate(task, outcome, agentId) {
     } else reason = 'Runtime prerequisite retained: merged-fix integration evidence is unreadable or invalid';
   }
   return { status: 'blocked', metadata: { ...task.metadata,
-    runtimeVerificationId: `${task.id}:${agentId}`, runtimeVerification: prerequisite,
+    runtimeVerificationId: `${task.id}:${agentId}`, runtimeVerification: { ...prerequisite, dispatchStatus: task.status,
+      dispatch: Object.fromEntries(['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount']
+        .filter(key => task.metadata?.[key] !== undefined).map(key => [key, task.metadata[key]])) },
     deliveryDecisionAgentId: agentId, blockedCategory: CATEGORY, blockedAt: same ? task.metadata.blockedAt : now,
     blockedReason: reason, taskOutcome: outcome,
     ...clearedRetryHoldMetadata(),

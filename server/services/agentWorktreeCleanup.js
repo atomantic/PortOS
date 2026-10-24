@@ -209,7 +209,8 @@ async function worktreeCleanupContext(agentId, options) {
     discardWorktree: isTruthyMeta(normalized.originalTask?.metadata?.discardWorktree),
     worktreePath: metadata.workspacePath || join(PATHS.worktrees, agentId),
     publicationValidation: publicationHolds.get(agentId) || metadata.publicationValidation,
-    runtimeVerificationHeld: agentState?.result?.taskOutcome?.recovery?.mode === 'runtime',
+    runtimeVerificationRequested: agentState?.result?.taskOutcome?.recovery?.mode === 'runtime',
+    taskId: agentState?.taskId || normalized.originalTask?.id,
     securityScan: metadata.securityScan,
     securityScanControl: metadata.securityScanControl,
     warnings: [],
@@ -239,7 +240,12 @@ async function probeWorktreePr(context, success) {
 
 async function runCleanupAgentWorktree(agentId, success, options = {}) {
   const context = await worktreeCleanupContext(agentId, options);
-  if (context.runtimeVerificationHeld) return []; // The same checkout resumes after verified boot ancestry.
+  if (context.runtimeVerificationRequested) {
+    const { getTaskById } = await import('./cosTaskStore.js');
+    const held = context.taskId ? await getTaskById(context.taskId) : null;
+    if (held?.metadata?.runtimeVerificationId === `${held.id}:${agentId}`
+      && held.metadata.runtimeVerification?.agentId === agentId) return [];
+  }
   if (['running', 'blocked'].includes(context.publicationValidation?.status)) {
     return [`Publication validation ${context.publicationValidation.status} for ${context.worktreeBranch}; worktree preserved at ${context.worktreePath}. Resume the task after resolving the validation outcome.`];
   }
