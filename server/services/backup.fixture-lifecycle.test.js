@@ -153,9 +153,11 @@ describe.skipIf(missingWindowsRsync)('backup authority fixture cancellation (#13
         throw error;
       } finally {
         controller.abort();
-        await running;
+        // A kill watchdog may settle the runner without proving child close.
+        // Keep that host for recovery instead of deleting beneath its workers.
+        const settled = await running?.catch(() => null);
         signal.removeEventListener('abort', abort);
-        rmSync(host, { recursive: true, force: true });
+        if (!running || settled?.closeConfirmed === true) rmSync(host, { recursive: true, force: true });
       }
     });
   }
