@@ -19,14 +19,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('rebase and push the default branch', ()
     await execGit(['commit', '-m', `Update ${file}`], repo);
   };
   const head = async repo => (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
+  // Git for Windows checks LF blobs out as CRLF when core.autocrlf is true.
+  // These assertions pin the bytes the test wrote, so the sandbox must not convert them.
+  const pinNewlines = repo => execGit(['config', 'core.autocrlf', 'false'], repo);
   const prepare = async ({ conflict = false } = {}) => {
     sandbox = await makeGitSandbox({ origin: true });
     const { repo, scratch, origin } = sandbox;
+    await pinNewlines(repo);
     const other = join(scratch, 'other');
     await execGit(['clone', origin, other], scratch);
     await execGit(['config', 'user.email', 'agent@example.com'], other);
     await execGit(['config', 'user.name', 'Example Agent'], other);
     await execGit(['config', 'commit.gpgsign', 'false'], other);
+    await pinNewlines(other);
     await commitFile(other, conflict ? 'initial.txt' : 'remote.txt', 'remote change\n');
     await execGit(['push', 'origin', 'HEAD:main'], other);
     await commitFile(repo, conflict ? 'initial.txt' : 'local.txt', 'local change\n');
@@ -48,6 +53,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('rebase and push the default branch', ()
 
   it('pushes an ahead-only default branch', async () => {
     sandbox = await makeGitSandbox({ origin: true });
+    await pinNewlines(sandbox.repo);
     await commitFile(sandbox.repo, 'local.txt', 'local change\n');
     expect(await rebaseAndPushDefaultBranch(sandbox.repo)).toMatchObject({ success: true, pushed: true });
     expect(await head(sandbox.origin)).toBe(await head(sandbox.repo));
