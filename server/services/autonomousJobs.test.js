@@ -42,6 +42,8 @@ vi.mock('fs', () => ({
   existsSync: vi.fn().mockReturnValue(false)
 }))
 
+vi.mock('./retirementAppScope.js', () => ({ resolveRetirementApp: vi.fn(async () => ({ app: { id: 'app-1', repoPath: '/mock/root' } })) }))
+
 vi.mock('./worktreeManager.js', () => ({
   reapMergedWorktrees: vi.fn().mockResolvedValue({ reaped: [] }),
   cleanupOrphanedWorktrees: vi.fn().mockResolvedValue(0)
@@ -1250,6 +1252,13 @@ describe('autonomousJobs', () => {
       const [, opts] = reapMergedWorktrees.mock.calls[0]
       expect(opts.activeAgentIds().has('paused-agent-1')).toBe(true)
       expect(opts.activeAgentIds().has('live-agent-99')).toBe(true)
+    })
+
+    it('does not fall through to orphan cleanup after a failed merged sweep', async () => {
+      reapMergedWorktrees.mockRejectedValueOnce(new Error('synthetic sweep failure'))
+      await expect(agentDataCleanup()).resolves.toMatchObject({ mergedReaped: 0, worktreesReaped: 0,
+        worktreeHolds: [{ reason: 'merged-worktree-reap-failed' }] })
+      expect(cleanupOrphanedWorktrees).not.toHaveBeenCalled()
     })
 
     it('skips every reap when the stored statuses cannot be read (a paused agent could look orphaned)', async () => {

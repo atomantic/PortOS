@@ -184,30 +184,41 @@ async function agentDataCleanup() {
     }
   }
 
+  const { resolveRetirementApp } = await import('../retirementAppScope.js')
+  const scope = await resolveRetirementApp(PATHS.root)
+  if (!scope.app) {
+    console.log(`🚫 Agent data cleanup: retaining worktrees (${scope.reason})`)
+    return { cleaned, sentinelsRemoved, mergedReaped: 0, worktreesReaped: 0, removalFailures: 0, worktreeHold: scope.reason }
+  }
+
   // First pass — SAFE reap: remove any worktree (CoS or `.claude/worktrees/`) whose
   // branch is fully merged into the default branch AND whose working tree is clean.
   // This is the bulk of the cleanup and cannot lose work (merged+clean ⇒ nothing
   // pending). It guards active agents and human `claim-*` worktrees.
-  const merged = await reapMergedWorktrees(PATHS.root, { activeAgentIds: getLiveProtectedIds }).catch((err) => {
+  const merged = await reapMergedWorktrees(scope.app.repoPath, { activeAgentIds: getLiveProtectedIds, appId: scope.app.id }).catch((err) => {
     console.warn(`⚠️ Merged-worktree reap failed: ${err.message}`)
-    return { reaped: [] }
+    return null
   })
 
   // Second pass — orphan integration: for inactive CoS worktrees that were NOT
   // merged (e.g. an agent died after committing but before its PR landed), attempt
   // to merge their commits back so the work isn't stranded. The helper guards
   // `claim-*` worktrees, so this can't touch a human's in-flight claim.
-  const worktreesReaped = await cleanupOrphanedWorktrees(PATHS.root, getLiveProtectedIds).catch((err) => {
+  // A failed preservation/receipt must not fall through to the older orphan
+  // remover. Only unmerged candidates belong to that second pass.
+  const retainedPaths = new Set((merged?.skipped || []).filter(row => row.reason !== 'unmerged').map(row => row.path))
+  const worktreesReaped = merged ? await cleanupOrphanedWorktrees(PATHS.root, getLiveProtectedIds, { retainedPaths }).catch((err) => {
     console.warn(`⚠️ Orphaned worktree cleanup failed: ${err.message}`)
     return 0
-  })
+  }) : 0
 
   const mergedCount = merged?.reaped?.length || 0
   // Reaps whose checkout survived removal: not counted above, surfaced here so a
   // retryable failure is visible in the job log instead of reading as a clean day.
   const removalFailures = merged?.skipped?.filter(s => s.reason === 'remove-failed').length || 0
+  const worktreeHolds = merged?.skipped || [{ reason: 'merged-worktree-reap-failed' }]
   console.log(`🧹 Agent data cleanup: removed ${cleaned} dir(s) older than 7 days, ${sentinelsRemoved} stale sentinel(s), reaped ${mergedCount} merged + ${worktreesReaped} orphaned worktree(s)${removalFailures ? `, ${removalFailures} worktree removal(s) failed (retry next run)` : ''}`)
-  return { cleaned, sentinelsRemoved, mergedReaped: mergedCount, worktreesReaped, removalFailures }
+  return { cleaned, sentinelsRemoved, mergedReaped: mergedCount, worktreesReaped, removalFailures, worktreeHolds }
 }
 
 /**

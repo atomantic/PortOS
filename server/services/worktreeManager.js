@@ -2060,8 +2060,9 @@ function activeIdsReader(activeIds) {
  * @param {object} [options]
  * @param {{agents?: object[]|null, readAgents?: () => Promise<object[]|null>}} [options.claimOwners] -
  *   agent registry override (tests); omitted reads state.json
+ * @param {Set<string>} [options.retainedPaths] - registered paths held by an earlier cleanup pass
  */
-export async function cleanupOrphanedWorktrees(sourceWorkspace, getActiveIds, { claimOwners } = {}) {
+export async function cleanupOrphanedWorktrees(sourceWorkspace, getActiveIds, { claimOwners, retainedPaths = new Set() } = {}) {
   if (!existsSync(WORKTREES_DIR)) return 0;
 
   const readActiveIds = activeIdsReader(getActiveIds);
@@ -2086,6 +2087,7 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, getActiveIds, { 
     if (initialReason === 'worktree-unmanaged-location') continue;
     const agentId = worktreeAgentId(wt.path);
     handledAgentIds.add(agentId);
+    if (retainedPaths.has(wt.path)) continue;
     if (initialReason) continue;
     // A detached HEAD has no branch to merge or measure; force-removing it would drop commits only its reflog holds.
     if (wt.detached || !wt.branch) continue;
