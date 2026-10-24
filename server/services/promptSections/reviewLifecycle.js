@@ -1095,7 +1095,7 @@ export const LEAVE_PR_OPEN_STEP = (step, jiraTracked = false) => `${step}. **Lea
  * numbers hold; it belongs between the push and the CI wait because the
  * status must exist before the impact job plans the run.
  */
-const PREGATE_ATTESTATION_STEP = '**Local validation and CI proof:** honor the repository local gate: lint/formatting, fast structural checks and focused changed-behavior tests. Do not expand a focused local policy into broad transitive/server/browser/DB/build/smoke validation on each push or review correction. Required hosted CI and configured reviews remain mandatory. If scripts/pregate-attest.js exists, read the receipt validationMode first: focused receipts are local evidence only and MUST NOT be attested. Only explicit full CI-mode or compatible legacy receipts may use the existing attestation procedure after pushing; never rerun solely to attest.';
+const PREGATE_ATTESTATION_STEP = '**Local validation:** Honor repo-focused lint/style, structural guards and changed-behavior tests; broad local suites are opt-in. Hosted CI and configured reviews remain mandatory. For repositories with `scripts/pregate-attest.js`, inspect receipt `validationMode`: `focused` never attests CI; only explicit `ci` or compatible legacy proof may attest after push. Report refusals; never rerun solely to attest.';
 
 export function buildCiMergeGateSteps(startStep, { prRef, mrRef = '<MR_NUMBER>', forge = 'github', alreadyMergedHint = ' (a saved `/do:pr` default can merge it for you)', localReviewers = [], localReviewRequired = false, reviewRecheckReviewers = [], mergeEquivalentLine = null, deleteBranch = true }) {
   const gh = forge !== 'gitlab';
