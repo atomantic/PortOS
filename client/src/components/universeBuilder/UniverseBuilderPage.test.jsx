@@ -326,6 +326,28 @@ describe('Reality starter restore', () => {
     expect(apiMocks.restoreUniverseStarter).not.toHaveBeenCalled();
   });
 
+  it.each(['expand', 'refine'])('blocks restore while %s is in flight, including an already-open confirmation', operation => {
+    const expansion = hookMocks.useUniverseExpand();
+    const view = mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore latest starter' }));
+    hookMocks.useUniverseExpand.mockReturnValue({
+      ...expansion,
+      expanding: operation === 'expand',
+      refine: { running: operation === 'refine' },
+    });
+    view.rerender(
+      <MemoryRouter initialEntries={['/universes/universe-reality']}>
+        <NavigationProbe />
+        <Routes><Route path="/universes/:universeId" element={<UniverseBuilderPage />} /></Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Restore starter' }));
+    expect(apiMocks.restoreUniverseStarter).not.toHaveBeenCalled();
+    expect(apiMocks.waitForUniverseWrites).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Restore latest starter' })).toBeDisabled();
+  });
+
   it('saves dirty edits before restoring and adopts the returned record', async () => {
     const state = hookMocks.useUniverseDraft({ selectedId: 'universe-reality' });
     hookMocks.useUniverseDraft.mockReturnValue(state);

@@ -293,7 +293,7 @@ export default function UniverseBuilder() {
   }, [draft.name, draftRef, exporting, flushDraftIfDirty, saving, selectedId]);
 
   const handleRestoreStarter = async () => {
-    if (restoreBusyRef.current || saving || importing || selectedId !== 'universe-reality') return;
+    if (restoreBusyRef.current || saving || importing || expanding || refine?.running || selectedId !== 'universe-reality') return;
     const isCurrent = () => mountedRef.current && selectedIdRef.current === selectedId
       && draftRef.current?.id === selectedId;
     if (!isCurrent()) return;
@@ -581,7 +581,7 @@ export default function UniverseBuilder() {
               ) : (
                 <button
                   onClick={() => setConfirmStarter(true)}
-                  disabled={saving || importing || exporting || loading || draft.id !== selectedId}
+                  disabled={saving || importing || exporting || loading || expanding || refine?.running || draft.id !== selectedId}
                   className="px-3 py-2 rounded min-h-[40px] border border-port-border hover:bg-port-card-hover disabled:opacity-50"
                 >Restore latest starter</button>
               ))}
