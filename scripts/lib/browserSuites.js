@@ -7,6 +7,7 @@ export const BROWSER_SUITES = [
   'server/routes/musicVideoProductionReview.browser.test.js',
   'server/routes/musicVideoRichAuthoring.browser.test.js',
   'server/routes/musicVideoSongRevision.browser.test.js',
+  'server/services/fableLoom/static-player/player.browser.test.js',
   'server/services/federatedMedia/sourceAudio.browser.test.js',
   'server/services/htmlComposition/index.test.js',
   'server/services/musicVideo/animaticCapture.browser.test.js',

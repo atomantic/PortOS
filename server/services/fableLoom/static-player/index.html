@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Story</title>
+  <link rel="stylesheet" href="player.css">
+</head>
+<body>
+  <main id="player">
+    <p id="failure" hidden></p>
+    <h1 id="title"></h1>
+    <p id="prose"></p>
+    <p id="narration" hidden></p>
+    <video id="stage" playsinline preload="metadata"></video>
+    <button id="play" type="button" hidden>Play</button>
+    <div id="choices" role="group" aria-label="Choices"></div>
+    <form id="composer" hidden>
+      <label for="message">Say something</label>
+      <input id="message" name="message" type="text" maxlength="1000" autocomplete="off">
+      <button type="submit">Send</button>
+    </form>
+    <p id="ending" hidden></p>
+    <p id="status" role="status"></p>
+  </main>
+  <script type="module" src="player.js"></script><!-- portos-allow-hidden-content -->
+</body>
+</html>

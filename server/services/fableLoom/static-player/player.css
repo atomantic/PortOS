@@ -1,0 +1,71 @@
+:root {
+  color-scheme: light;
+  background: #f6f3ec;
+  color: #1b1a17;
+  font: 18px/1.45 system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1.25rem;
+}
+
+h1 {
+  font-size: 1.6rem;
+  line-height: 1.25;
+}
+
+#prose,
+#narration,
+#ending,
+#failure {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+video {
+  width: 100%;
+  max-height: 50vh;
+  background: #d9d3c5;
+}
+
+button {
+  font: inherit;
+  min-height: 44px;
+  min-width: 44px;
+  background: #1b1a17;
+  color: #f6f3ec;
+  border: 0;
+  border-radius: 0.4rem;
+  padding: 0.4rem 0.8rem;
+}
+
+input {
+  font: inherit;
+  min-height: 44px;
+  flex: 1 1 12rem;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid #1d4e89;
+  outline-offset: 2px;
+}
+
+#choices,
+#composer:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.75rem 0;
+}
+
+#failure {
+  color: #8a1c1c;
+}
