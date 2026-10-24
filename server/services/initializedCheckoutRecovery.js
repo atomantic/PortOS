@@ -249,6 +249,8 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     assertReview(prepared.review, input.review);
     const { ctx } = prepared;
     if (prepared.review.comparison?.disposition !== 'integrated') return { ok: false, reason: 'not-merged-on-recheck' };
+    // Captured by makeReview before removal. A later lstat of a deleted .git is null.
+    const checkoutIdentity = prepared.review.checkoutIdentity || input.release.checkoutIdentity || null;
     const runGit = deps.execGit || execGit;
     const status = await runGit(['status', '--porcelain'], input.release.path, { ignoreExitCode: true }).catch(() => null);
     if (!status || status.exitCode !== 0) return { ok: false, reason: 'worktree-status-unavailable' };
@@ -262,12 +264,29 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       const { rm } = await import('node:fs/promises');
       if (resolve(toplevel) !== resolve(input.release.path)) return { ok: false, reason: 'checkout-not-removed' };
       await rm(input.release.path, { recursive: true, force: false });
+      await runGit(['worktree', 'prune'], ctx.repoPath, { ignoreExitCode: true }).catch(() => null);
     }
     let branchDeleted = false;
     if (input.release.branch) {
       const deleteRef = deps.deleteRef || (await import('./worktreeManager.js')).deleteCompletedLocalBranch;
       branchDeleted = await deleteRef(ctx.repoPath, input.release.branch, input.release.head, {}) === true;
     }
+    const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
+    let outcome = null;
+    try {
+      outcome = await record(input.appId, {
+        path: input.release.path, branch: input.release.branch ?? null, head: input.release.head, branchDeleted,
+        ...(checkoutIdentity && { checkoutIdentity }),
+      });
+    } catch {
+      return { ok: false, reason: 'retirement-receipt-unverified', branchDeleted };
+    }
+    const wantedBranch = input.release.branch ?? null;
+    const recorded = outcome?.retired?.some(row => (row.path || null) === (input.release.path || null)
+      && (row.branch ?? null) === wantedBranch && row.head === input.release.head
+      && row.branchDeleted === true && row.archiveDir == null
+      && (!checkoutIdentity || row.checkoutIdentity === checkoutIdentity)) === true;
+    if (!recorded) return { ok: false, reason: 'retirement-receipt-unverified', branchDeleted };
     return { ok: true, branchDeleted };
   }).catch(error => ({ ok: false, reason: error.message }));
 

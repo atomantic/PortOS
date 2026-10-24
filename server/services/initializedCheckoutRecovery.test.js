@@ -188,7 +188,9 @@ beforeEach(async () => {
     listWorktrees: async () => fixture.newHolder ? [{ path: '/fixture/new', branch: release.branch }] : [],
     execGit: vi.fn(async () => ({ exitCode: fixture.headExists ? 0 : 1, stdout: fixture.headExists ? release.head : '' })),
     deleteRef: vi.fn(async (_repo, _branch, _head, options) => { await options.beforeMutation(); fixture.headExists = false; return true; }),
-    recordRetirement: vi.fn(async () => {}),
+    recordRetirement: vi.fn(async (_appId, receipt) => ({
+      retired: [{ ...receipt, archiveDir: null, retiredAt: '2026-10-24T00:00:00.000Z' }],
+    })),
   };
   fixture.deps = deps; fixture.service = _createInitializedCheckoutRecovery(deps);
 });
@@ -232,6 +234,27 @@ describe('initialized checkout removal', () => {
     expect(fixture.deps.execGit).toHaveBeenCalledWith(
       ['worktree', 'remove', '--force', release.path], '/fixture/repo', { ignoreExitCode: true },
     );
+    expect(fixture.deps.recordRetirement).toHaveBeenCalledWith('app', {
+      path: release.path, branch: release.branch, head: release.head, branchDeleted: true,
+    });
+  });
+
+  it('stores the checkout identity read before the tree is removed', async () => {
+    cleanGit();
+    readRetirementCheckoutIdentity.mockResolvedValue('identity-1');
+    const result = await fixture.service.retire(await reviewed());
+    expect(result).toEqual({ ok: true, branchDeleted: true });
+    expect(fixture.deps.recordRetirement).toHaveBeenCalledWith('app', {
+      path: release.path, branch: release.branch, head: release.head, branchDeleted: true, checkoutIdentity: 'identity-1',
+    });
+  });
+
+  it('reports the removal unverified when the retirement receipt is not stored', async () => {
+    cleanGit();
+    fixture.deps.recordRetirement.mockResolvedValue({ retired: [] });
+    expect(await fixture.service.retire(await reviewed())).toEqual({
+      ok: false, reason: 'retirement-receipt-unverified', branchDeleted: true,
+    });
   });
 
   it('leaves a review-superseded checkout in place', async () => {
@@ -240,6 +263,7 @@ describe('initialized checkout removal', () => {
     expect(await fixture.service.retire(await reviewed())).toEqual({ ok: false, reason: 'not-merged-on-recheck' });
     expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
     expect(fixture.deps.execGit).not.toHaveBeenCalled();
+    expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
     expect(await readdir(root)).toEqual([]);
   });
 
