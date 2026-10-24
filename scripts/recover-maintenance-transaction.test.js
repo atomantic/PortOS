@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,6 +26,121 @@ const interrupt = directory => {
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
 describe('offline maintenance transaction recovery', () => {
+  it('serializes separate recovery processes and never archives a replacement runtime transaction', async () => {
+    const { data, directory } = fixture();
+    fs.mkdirSync(join(directory, 'transaction'));
+    fs.writeFileSync(join(directory, 'transaction', 'evidence'), 'original transaction');
+    const barrier = join(data, 'barrier');
+    fs.mkdirSync(barrier);
+    const module = new URL('./recover-maintenance-transaction.mjs', import.meta.url).href;
+    const source = `
+      import * as fs from 'node:fs';
+      import { join, basename } from 'node:path';
+      import { recoverMaintenanceTransaction } from ${JSON.stringify(module)};
+      const [id, data, barrier] = process.argv.slice(1);
+      const io = { ...fs, mkdirSync(path, options) {
+        if (basename(path).startsWith('recovered-')) {
+          fs.writeFileSync(join(barrier, id + '-ready'), '');
+          const until = Date.now() + 10000;
+          while (!fs.existsSync(join(barrier, id + '-release'))) {
+            if (Date.now() >= until) throw new Error('Recovery fixture barrier timed out');
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+          }
+        }
+        return fs.mkdirSync(path, options);
+      } };
+      try {
+        const result = await recoverMaintenanceTransaction('Concurrent recovery fixture', {
+          data, io, processes: async () => ['portos-server', 'portos-cos'].map(name => ({ name, status: 'stopped', pid: 0 })),
+        });
+        process.stdout.write(JSON.stringify(result));
+      } catch (error) { process.stdout.write(JSON.stringify({ error: error.message })); }
+    `;
+    const children = [];
+    const launch = id => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', source, id, data, barrier], { stdio: ['ignore', 'pipe', 'pipe'] });
+      children.push(child);
+      let output = '';
+      let errors = '';
+      const entry = { finished: false, result: null };
+      child.stdout.on('data', bytes => { output += bytes; });
+      child.stderr.on('data', bytes => { errors += bytes; });
+      entry.done = new Promise((resolve, reject) => {
+        child.once('error', reject);
+        child.once('close', code => {
+          entry.finished = true;
+          try { entry.result = JSON.parse(output); resolve(entry.result); }
+          catch { reject(new Error(`Recovery fixture exited ${code}: ${errors}`)); }
+        });
+      });
+      return entry;
+    };
+    try {
+      const first = launch('first');
+      await vi.waitFor(() => expect(fs.existsSync(join(barrier, 'first-ready'))).toBe(true), { timeout: 5000 });
+      const second = launch('second');
+      await vi.waitFor(() => expect(second.finished || fs.existsSync(join(barrier, 'second-ready'))).toBe(true), { timeout: 5000 });
+      fs.writeFileSync(join(barrier, 'first-release'), '');
+      const recovered = await first.done;
+      expect(recovered.error).toBeUndefined();
+      fs.mkdirSync(join(directory, 'transaction'));
+      fs.writeFileSync(join(directory, 'transaction', 'runtime'), 'new runtime evidence');
+      fs.writeFileSync(join(barrier, 'second-release'), '');
+      expect((await second.done).error).toMatch(/recovery.*(?:owned|progress)/i);
+      expect(JSON.parse(fs.readFileSync(join(directory, 'state.json'), 'utf8')).hold).toEqual(recovered.hold);
+      expect(fs.readFileSync(join(directory, 'transaction', 'runtime'), 'utf8')).toBe('new runtime evidence');
+    } finally {
+      for (const id of ['first', 'second']) fs.writeFileSync(join(barrier, `${id}-release`), '');
+      await Promise.all(children.map(child => new Promise(resolve => {
+        if (child.exitCode !== null || child.signalCode !== null) return resolve();
+        child.once('close', resolve);
+        child.kill('SIGKILL');
+      })));
+    }
+  });
+
+  it('reclaims only a proven dead recovery owner and preserves its fence evidence', async () => {
+    const { data, directory } = fixture();
+    fs.mkdirSync(join(directory, 'transaction'));
+    fs.writeFileSync(join(directory, 'transaction', 'original'), 'interrupted runtime evidence');
+    const module = new URL('./recover-maintenance-transaction.mjs', import.meta.url).href;
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import * as fs from 'node:fs';
+      import { basename } from 'node:path';
+      import { recoverMaintenanceTransaction } from ${JSON.stringify(module)};
+      const io = { ...fs, mkdirSync(path, options) {
+        if (basename(path).startsWith('recovered-')) process.kill(process.pid, 'SIGKILL');
+        return fs.mkdirSync(path, options);
+      } };
+      await recoverMaintenanceTransaction('Interrupted recovery fixture', {
+        data: process.argv[1], io, processes: async () => [],
+      });
+    `, data], { encoding: 'utf8', timeout: 5000 });
+    expect(child.error).toBeUndefined();
+    const owner = fs.readFileSync(join(directory, 'recovery', 'owner.json'));
+    const recovered = await recoverMaintenanceTransaction(reason, { data, processes: stopped });
+    const preserved = fs.readdirSync(directory).find(name => name.startsWith('recovery-interrupted-'));
+    expect(fs.readFileSync(join(directory, preserved, 'owner.json'))).toEqual(owner);
+    expect(fs.readFileSync(join(recovered.archiveDir, 'transaction', 'original'), 'utf8')).toBe('interrupted runtime evidence');
+    expect(createMaintenanceAdmission(data).status()).toMatchObject({ state: 'ready', hold: recovered.hold });
+  });
+
+  it('preserves unknown recovery ownership and refuses journal symlinks before any mutation', async () => {
+    const { data, directory } = fixture();
+    fs.mkdirSync(join(directory, 'recovery'));
+    await expect(recoverMaintenanceTransaction(reason, { data, processes: stopped })).rejects.toThrow(/ownership is unverified/);
+    expect(fs.readdirSync(directory)).toEqual(['recovery']);
+    fs.rmdirSync(join(directory, 'recovery'));
+    fs.rmdirSync(directory);
+    const target = join(data, 'outside');
+    fs.mkdirSync(target);
+    fs.writeFileSync(join(target, 'evidence'), 'untouched');
+    fs.symlinkSync(target, directory, process.platform === 'win32' ? 'junction' : 'dir');
+    await expect(recoverMaintenanceTransaction(reason, { data, processes: stopped })).rejects.toThrow(/real directory/);
+    expect(fs.readdirSync(target)).toEqual(['evidence']);
+    expect(fs.readFileSync(join(target, 'evidence'), 'utf8')).toBe('untouched');
+  });
+
   it('preserves interrupted bytes and the original state, then holds admission until deliberate resume', async () => {
     const { data, directory, admission } = fixture();
     // A previously published journal must be preserved byte-for-byte as evidence.
@@ -47,6 +163,24 @@ describe('offline maintenance transaction recovery', () => {
     expect(restarted.status()).toMatchObject({ state: 'ready', hold: result.hold });
     expect(restarted.tryAdmit('agent', 'new')).toBeNull();
     expect(restarted.resume({ id: result.hold.id, revision: result.hold.revision }).state).toBe('normal');
+  });
+
+  it('retains a transaction replaced after recovery publishes its hold', async () => {
+    const { data, directory } = fixture();
+    fs.mkdirSync(join(directory, 'transaction'));
+    fs.writeFileSync(join(directory, 'transaction', 'original'), 'original transaction evidence');
+    const io = { ...fs, renameSync(source, destination) {
+      fs.renameSync(source, destination);
+      if (destination === join(directory, 'state.json')) {
+        fs.renameSync(join(directory, 'transaction'), join(data, 'original-transaction'));
+        fs.mkdirSync(join(directory, 'transaction'));
+        fs.writeFileSync(join(directory, 'transaction', 'replacement'), 'new runtime evidence');
+      }
+    } };
+    await expect(recoverMaintenanceTransaction(reason, { data, io, processes: stopped })).rejects.toThrow(/transaction changed/);
+    expect(fs.readFileSync(join(directory, 'transaction', 'replacement'), 'utf8')).toBe('new runtime evidence');
+    expect(fs.readFileSync(join(data, 'original-transaction', 'original'), 'utf8')).toBe('original transaction evidence');
+    expect(createMaintenanceAdmission(data).status()).toMatchObject({ state: 'unavailable', cause: 'interrupted-transaction' });
   });
 
   it('recovers an absent state conservatively and preserves existing holds and unresolved operations', async () => {

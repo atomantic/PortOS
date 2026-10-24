@@ -99,8 +99,14 @@ state hash and retained hold under `data/workflow-maintenance/recovered-<timesta
 It publishes a **Transaction recovery** hold before moving the lock when no hold
 exists; an existing hold and every operation/exclusive owner remain intact.
 A failed repair retains admission fencing and evidence; after addressing its
-cause, repeat the confirmed command. There is no automatic expiry or PID-based
-lock removal. Starting both apps clears their in-memory uncertainty, but does
+cause, repeat the confirmed command. The runtime `transaction/` lock never expires
+or gets removed by PID. Recovery commands serialize through a separate `recovery/`
+fence with an atomically published owner. A proven dead recovery PID permits a
+retry to preserve that fence under `recovery-interrupted-<id>/` and continue.
+Unknown ownership or an interrupted `.transition` remains closed: keep both apps
+stopped, stop every recovery command, inspect and preserve the whole `recovery/`
+directory under a unique sibling name, then repeat the confirmed command. Never
+remove the runtime `transaction/` evidence. Starting both apps clears their in-memory uncertainty, but does
 not clear the hold or certify that unresolved work finished.
 
 After restarting, refresh maintenance status, inspect/reconcile any remaining
