@@ -40,6 +40,24 @@ function makeRepo() {
   return clone;
 }
 
+function makeStaleSubmodule() {
+  const dependency = makeRepo();
+  const repo = makeRepo();
+  const path = 'lib/dép with spaces';
+  git(repo, '-c', 'protocol.file.allow=always', 'submodule', 'add', dependency, path);
+  git(repo, 'commit', '-am', 'add dependency');
+  writeFileSync(join(dependency, 'README.md'), 'new dependency revision\n');
+  git(dependency, 'commit', '-am', 'advance dependency');
+  const pin = git(dependency, 'rev-parse', 'HEAD').trim();
+  const checkout = join(repo, path);
+  git(checkout, 'fetch', 'origin');
+  // Same state as pulling a parent gitlink bump without updating submodules.
+  git(repo, 'update-index', '--cacheinfo', `160000,${pin},${path}`);
+  git(repo, 'commit', '-m', 'pin new dependency');
+  git(repo, 'push', 'origin', 'main');
+  return { repo, checkout, pin, path };
+}
+
 beforeEach(() => vi.restoreAllMocks());
 // Fail-fast cancellation can finish Vitest's wrapper while its Git subprocess
 // still owns the checkout. Drain those bodies before deleting the fixtures.
@@ -50,6 +68,55 @@ afterAll(async () => {
 });
 
 describe('update repo readiness', () => {
+  it('repairs a clean stale submodule without an agent, even with quoted paths', async () => {
+    const { repo, checkout, pin, path } = makeStaleSubmodule();
+    const before = await checkUpdateRepoReadiness({ repoPath: repo });
+    expect(before).toMatchObject({ ready: false, needsAgent: false, reasons: [], repairable: ['update-submodules'], submodulePaths: [path] });
+    const { verdict, actions } = await prepareUpdateRepo({ repoPath: repo });
+    expect(verdict.ready).toBe(true);
+    expect(actions).toEqual(['updated submodules to their pinned commits']);
+    expect(git(checkout, 'rev-parse', 'HEAD').trim()).toBe(pin);
+  });
+
+  it('repairs a stale nested checkout without moving its already-pinned parent', async () => {
+    const { repo: dependency, checkout, pin, path } = makeStaleSubmodule();
+    const old = git(checkout, 'rev-parse', 'HEAD').trim();
+    const repo = makeRepo();
+    git(repo, '-c', 'protocol.file.allow=always', 'submodule', 'add', dependency, 'lib/outer');
+    git(repo, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive');
+    git(repo, 'commit', '-am', 'add nested dependency');
+    git(repo, 'push', 'origin', 'main');
+    const outer = join(repo, 'lib/outer');
+    const nested = join(outer, path);
+    const outerHead = git(outer, 'rev-parse', 'HEAD');
+    git(nested, 'checkout', old);
+    const { verdict } = await prepareUpdateRepo({ repoPath: repo });
+    expect(verdict).toMatchObject({ ready: true, needsAgent: false });
+    expect(git(nested, 'rev-parse', 'HEAD').trim()).toBe(pin);
+    expect(git(outer, 'rev-parse', 'HEAD')).toBe(outerHead);
+  });
+
+  for (const kind of ['edit', 'untracked', 'staged-pointer', 'local-commit']) it(`preserves submodule ${kind} as real work`, async () => {
+    const { repo, checkout, pin, path } = makeStaleSubmodule();
+    if (kind === 'edit') writeFileSync(join(checkout, 'README.md'), 'local edit\n');
+    if (kind === 'untracked') writeFileSync(join(checkout, 'local.txt'), 'local file\n');
+    if (kind === 'staged-pointer') git(repo, 'add', path);
+    if (kind === 'local-commit') {
+      git(checkout, 'checkout', pin);
+      git(checkout, 'config', 'user.email', 'test@example.com');
+      git(checkout, 'config', 'user.name', 'Example Tester');
+      writeFileSync(join(checkout, 'README.md'), 'local commit\n');
+      git(checkout, 'commit', '-am', 'unpublished dependency work');
+    }
+    const head = git(checkout, 'rev-parse', 'HEAD');
+    const status = git(repo, 'status', '--porcelain');
+    const { verdict, actions } = await prepareUpdateRepo({ repoPath: repo });
+    expect(verdict).toMatchObject({ ready: false, needsAgent: true, reasons: ['uncommitted-changes'] });
+    expect(actions).toEqual([]);
+    expect(git(checkout, 'rev-parse', 'HEAD')).toBe(head);
+    expect(git(repo, 'status', '--porcelain')).toBe(status);
+  });
+
   it('reports a clean checkout on the default branch as ready', async () => {
     const verdict = await checkUpdateRepoReadiness({ repoPath: makeRepo() });
     expect(verdict).toMatchObject({ ready: true, needsAgent: false, branch: 'main', defaultBranch: 'main', reasons: [], repairable: [] });

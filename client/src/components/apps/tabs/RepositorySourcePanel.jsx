@@ -106,7 +106,7 @@ function RepositoryCard({ source }) {
               {source.branch || 'detached'} @ {source.shortHead || 'unknown'}
             </code>
             <span className={source.clean === false ? 'text-port-warning' : 'text-gray-500'}>
-              {source.clean === true ? 'clean checkout' : source.clean === false ? 'local changes' : 'worktree unknown'}
+              {source.submodulesOnly ? 'submodules need updating' : source.clean === true ? 'clean checkout' : source.clean === false ? 'local changes' : 'worktree unknown'}
             </span>
           </div>
 
@@ -240,7 +240,8 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
     || (source.origin?.isFork && source.forkVsUpstream?.available === false)
   ));
   const canUpdate = sources.every((source) => source.present) && status?.updatePullsAll;
-  const needsRecovery = hasLocalChanges || sources.some(source => source.clean === false || source.localVsOrigin?.state === 'diverged');
+  const needsRecovery = (hasLocalChanges && !primary?.submodulesOnly)
+    || sources.some(source => (source.clean === false && !source.submodulesOnly) || source.localVsOrigin?.state === 'diverged');
   const shouldOfferUpdate = status?.updateAvailable || remoteUnknown;
   const primaryLabel = forkNeedsSync
     ? 'Sync fork & update app'
