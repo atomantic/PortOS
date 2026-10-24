@@ -65,7 +65,7 @@ import { getPendingTaskIds as readPendingTaskIds, getUserTasks, getCosTasks, get
 import { ensureInstanceId } from './instanceIdentity.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from './investigationRetry.js';
-import { notifyIfPrLeftOrphaned } from './orphanedPrNotifier.js';
+import { handBackBlockedPrRemediation } from './blockedPrRemediation.js';
 import { notifyCriticalHealth, clearCriticalHealthIfRecovered } from './healthCriticalNotifier.js';
 
 const RESUME_DEQUEUE_DELAY_MS = 500;
@@ -1608,15 +1608,11 @@ export async function init() {
     }
   });
 
-  // A task that was going to MERGE a pull request just got blocked — surface the
-  // current blocker and PR link. Registered separately from the dequeue listener
-  // above because it must fire on a transition that listener has no branch for
-  // (→ blocked), and it is not gated on `isDaemonRunning()`: even while stopped,
-  // the notification and Brain commitment preserve the next action. The
-  // development watchdog later retires the task if the PR is already terminal.
+  // Contributor remediation retains its forge hand-back when blocked. Ordinary
+  // merge follow-ups stay in automated recovery rather than the human inbox.
   cosEvents.on('tasks:changed', (data) => {
-    notifyIfPrLeftOrphaned(data)
-      .catch(err => console.error(`❌ Orphaned-PR check failed for task ${data?.task?.id}: ${err.message}`));
+    handBackBlockedPrRemediation(data)
+      .catch(err => console.error(`❌ Blocked PR remediation hand-back failed for task ${data?.task?.id}: ${err.message}`));
   });
 
   // A critical health transition reaches the bell even when no CoS view is open.
