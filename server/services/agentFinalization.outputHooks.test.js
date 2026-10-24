@@ -476,6 +476,17 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
+  it('persists the LI execution verdict in the same public completion task write', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { ...TASK, metadata: { ...TASK.metadata, liProposal: {
+      appId: 'app-example', slug: 'example-proposal', scope: 'repo',
+    } } };
+    await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0, outputBuffer: '' });
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({
+      liExecution: expect.objectContaining({ appId: 'app-example', slug: 'example-proposal', success: true }),
+    }) }), 'internal');
+  });
+
   it.each(['normal', 'recovered'])('parks a runtime prerequisite through %s public completion without a provider retry', async mode => {
     isProgrammaticIoTaskType.mockReturnValue(false);
     const task = { id: TASK.id, taskType: 'internal', status: 'in_progress', metadata: {

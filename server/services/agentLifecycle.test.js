@@ -481,17 +481,6 @@ describe('self-update spawn gate — funnel coverage (#4124)', () => {
     expect(reads).toHaveLength(1);
   });
 
-  it('finalizeAgent stamps the LI execution verdict into the completion task write (#2779)', () => {
-    const idx = AGENT_FINALIZATION_SRC.indexOf('export async function finalizeAgent');
-    expect(idx, 'finalizeAgent must exist').toBeGreaterThan(-1);
-    const updateIdx = AGENT_FINALIZATION_SRC.indexOf('await updateTask(task.id, taskUpdate, taskType)', idx);
-    expect(updateIdx, 'finalizeAgent must persist the task via updateTask').toBeGreaterThan(idx);
-    const body = AGENT_FINALIZATION_SRC.slice(idx, updateIdx);
-    // The verdict is stamped into taskUpdate via the shared helper BEFORE the updateTask
-    // call, so it federates in the same write that marks the task terminal.
-    expect(body).toMatch(/await stampLiExecutionVerdict\(taskUpdate, task, \{ success: deliverySuccess, validationPassed, errorAnalysis: deliveryVerdict\.errorAnalysis \}\)/);
-  });
-
   it('stampLiExecutionVerdict builds the verdict from the task liProposal marker via the shared builder (#2779)', () => {
     const idx = AGENT_FINALIZATION_SRC.indexOf('async function stampLiExecutionVerdict');
     expect(idx, 'stampLiExecutionVerdict must exist').toBeGreaterThan(-1);
