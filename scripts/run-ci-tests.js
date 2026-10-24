@@ -475,6 +475,7 @@ async function main() {
   // finish flushing. Setting exitCode lets Node drain normally once main()
   // returns.
   const memoDir = resolveMemoDir();
+  const readOnlyMemo = process.env.GITHUB_EVENT_NAME === 'pull_request';
   if (mode === 'full' && !memoDir && !shard && !guardProof) {
     process.exitCode = await spawnNpm(workspace, script, [], label, { name: scope });
     return;
@@ -511,7 +512,7 @@ async function main() {
   }
   const selection = writeSelectionFile({ scope, include: plan.run, exclude: [] });
   process.env.PORTOS_CI_TEST_SELECTION = selection.path;
-  const extraArgs = memoDir ? ['--experimental.recordDependencies'] : [];
+  const extraArgs = memoDir && !readOnlyMemo ? ['--experimental.recordDependencies'] : [];
   const passed = [];
   try {
     process.exitCode = await spawnNpm(workspace, script, extraArgs, label, {
@@ -524,6 +525,13 @@ async function main() {
     rmSync(selection.dir, { recursive: true, force: true });
   }
   if (!memoDir || passed.length === 0) return;
+  // PR jobs restore trusted memos, but ci.yml never saves their new entries.
+  // Avoid expensive post-success closure hashing/writes that cannot be reused
+  // and can consume the Windows step deadline after every test already passed.
+  if (readOnlyMemo) {
+    console.log('🧠 Test memo: read-only for pull requests; no cache publication.');
+    return;
+  }
   const written = recordTestMemo({
     scope, repoRoot, memoDir, plan, passed: [...new Set(passed)],
     dependencies: readVitestDependencies(findVitestDependenciesFile(repoRoot, scope), scope),

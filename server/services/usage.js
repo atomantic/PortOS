@@ -1,6 +1,6 @@
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
-import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, PRICING_AS_OF } from '../lib/modelPricing.js';
+import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost, PRICING_AS_OF } from '../lib/modelPricing.js';
 import { familyForProvider } from '../lib/providerFamilies.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { POLLUTING_KEYS } from '../lib/objects.js';
@@ -80,6 +80,9 @@ function getEmptyUsage() {
     // Usage page's free-tier section reads as an estimated-quota signal.
     // Additive: absent on installs that predate it, seeded on load.
     blockEvents: [],
+    // Ids of Grok repairs and live media/long-context records already added.
+    // Local bookkeeping, like reconciledRuns: not part of the peer digest.
+    grokRepairIds: [],
     lastUpdated: null
   };
 }
@@ -203,6 +206,9 @@ export async function loadUsage() {
     usageData.blockEvents = [];
     normalizedBlocks = true;
   }
+  // In memory only until the next real save. Forcing a write here would
+  // rewrite every install's usage.json just to add an empty id list.
+  if (!Array.isArray(usageData.grokRepairIds)) usageData.grokRepairIds = [];
   if (rolledUp || normalizedProviders || earliestChanged || normalizedBlocks) {
     if (normalizedProviders) console.log('📊 Normalized undefined usage providers to unknown');
     if (rolledUp) console.log(`📊 Rolled up old daily usage into ${Object.keys(usageData.monthlyActivity).length} monthly buckets`);
@@ -290,20 +296,41 @@ function modelDayBucket(providerDay, model) {
   return providerDay.byModel[model];
 }
 
-const countFields = ['messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
+// `long*` is a subset of the base token fields (already included there), priced
+// a second time by the report. `images` / `videoSeconds` / `inputImages` are
+// Imagine units, priced by estimateGrokImagineCost rather than as tokens.
+const countFields = [
+  'messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens',
+  'longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens',
+  'images', 'videoSeconds', 'inputImages',
+];
+
+const zeroCounts = () => Object.fromEntries(countFields.map((field) => [field, 0]));
 
 const recordTotals = (records) => (Array.isArray(records) ? records : [records]).reduce((total, record) => {
   for (const field of countFields) total[field] += Math.max(0, record?.[field] || 0);
   return total;
-}, { messages: 0, tokensIn: 0, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+}, zeroCounts());
 
 const adjustCounts = (bucket, counts, direction) => {
   if (!bucket) return;
   for (const field of countFields) {
-    const next = (bucket[field] || 0) + direction * Math.max(0, counts?.[field] || 0);
-    bucket[field] = Math.max(0, next);
+    const delta = direction * Math.max(0, counts?.[field] || 0);
+    // A zero delta must not stamp a new key onto a pre-existing bucket.
+    if (!delta && bucket[field] == null) continue;
+    bucket[field] = Math.max(0, (bucket[field] || 0) + delta);
   }
 };
+
+function rememberRepairIds(ids) {
+  if (!Array.isArray(ids) || !usageData) return;
+  usageData.grokRepairIds ??= [];
+  for (const id of ids) {
+    if (typeof id !== 'string' || id.length === 0 || id.length > 400) continue;
+    if (usageData.grokRepairIds.includes(id)) continue;
+    usageData.grokRepairIds.push(id);
+  }
+}
 
 const hasUsageCounts = (bucket) => countFields.some((field) => (bucket?.[field] || 0) > 0);
 const BACKFILL_YIELD_INTERVAL = 25;
@@ -392,6 +419,43 @@ export async function markUsageRunReconciled(runId, { siblings = false } = {}) {
  * Flat day totals are rebuilt from the provider split so report residual
  * reconciliation cannot resurrect the removed estimate as a synthetic legacy row.
  */
+
+/**
+ * Add one usage record to its own provider's day bucket and the all-time
+ * rollups. `long*` and Imagine units ride the same count fields as tokens.
+ * Long-context tokens are NOT added to totalTokens: they are a subset of
+ * tokens that were, or will be, counted in the base fields.
+ */
+function addUsageRecord(day, record) {
+  if (!record?.providerId || !isUsageKey(record.providerId)) return;
+  const bucket = providerDayBucket(day, record.providerId, record.providerName);
+  const hadProviderCounts = hasUsageCounts(bucket);
+  adjustCounts(bucket, record, 1);
+  bucket.source = hadProviderCounts
+    ? mergeSource(bucket.source, record.source || 'measured')
+    : (record.source || 'measured');
+  if (record.model && usageModelKey(record.model)) {
+    const target = modelDayBucket(bucket, record.model);
+    const hadCounts = hasUsageCounts(target);
+    adjustCounts(target, record, 1);
+    target.source = hadCounts
+      ? mergeSource(target.source, record.source || 'measured')
+      : (record.source || 'measured');
+  }
+  usageData.totalMessages = Math.max(0, (usageData.totalMessages || 0) + (record.messages || 0));
+  usageData.totalTokens.input = Math.max(0, (usageData.totalTokens.input || 0)
+    + (record.tokensIn || 0) + (record.cacheReadTokens || 0) + (record.cacheWriteTokens || 0));
+  usageData.totalTokens.output = Math.max(0, (usageData.totalTokens.output || 0) + (record.tokensOut || 0));
+  usageData.byProvider[record.providerId] ??= { name: bucket.name, sessions: 0, messages: 0, tokens: 0 };
+  usageData.byProvider[record.providerId].messages += record.messages || 0;
+  usageData.byProvider[record.providerId].tokens += record.tokensOut || 0;
+  if (record.model && usageModelKey(record.model)) {
+    usageData.byModel[record.model] ??= { sessions: 0, messages: 0, tokens: 0 };
+    usageData.byModel[record.model].messages += record.messages || 0;
+    usageData.byModel[record.model].tokens += record.tokensOut || 0;
+  }
+}
+
 export async function applyHistoricalUsageCorrections(corrections = []) {
   if (!usageData) await loadUsage();
   usageData.reconciledRuns ??= {};
@@ -438,37 +502,7 @@ export async function applyHistoricalUsageCorrections(corrections = []) {
     }
   }
 
-  // Add one usage record to its OWN provider's day bucket and to the flat
-  // all-time rollups. Shared by the parent swap and the sibling add — the only
-  // difference between them is which bucket `record.providerId` names.
-  const addRecord = (day, record) => {
-    const bucket = providerDayBucket(day, record.providerId);
-    const hadProviderCounts = hasUsageCounts(bucket);
-    adjustCounts(bucket, record, 1);
-    bucket.source = hadProviderCounts
-      ? mergeSource(bucket.source, record.source || 'measured')
-      : (record.source || 'measured');
-    if (record?.model) {
-      const target = modelDayBucket(bucket, record.model);
-      const hadCounts = hasUsageCounts(target);
-      adjustCounts(target, record, 1);
-      target.source = hadCounts
-        ? mergeSource(target.source, record.source || 'measured')
-        : (record.source || 'measured');
-    }
-    usageData.totalMessages = Math.max(0, (usageData.totalMessages || 0) + (record.messages || 0));
-    usageData.totalTokens.input = Math.max(0, (usageData.totalTokens.input || 0)
-      + (record.tokensIn || 0) + (record.cacheReadTokens || 0) + (record.cacheWriteTokens || 0));
-    usageData.totalTokens.output = Math.max(0, (usageData.totalTokens.output || 0) + (record.tokensOut || 0));
-    usageData.byProvider[record.providerId] ??= { name: bucket.name, sessions: 0, messages: 0, tokens: 0 };
-    usageData.byProvider[record.providerId].messages += record.messages || 0;
-    usageData.byProvider[record.providerId].tokens += record.tokensOut || 0;
-    if (record?.model) {
-      usageData.byModel[record.model] ??= { sessions: 0, messages: 0, tokens: 0 };
-      usageData.byModel[record.model].messages += record.messages || 0;
-      usageData.byModel[record.model].tokens += record.tokensOut || 0;
-    }
-  };
+  const addRecord = (day, record) => addUsageRecord(day, record);
 
   for (const [index, correction] of eligible.entries()) {
     if (index > 0 && index % BACKFILL_YIELD_INTERVAL === 0) await yieldToEventLoop();
@@ -540,8 +574,12 @@ export async function applyHistoricalUsageCorrections(corrections = []) {
       for (const record of correction.siblings) {
         if (!record?.providerId) continue;
         addRecord(day, record);
+        rememberRepairIds(record.repairIds);
       }
     }
+    // Same save as the counts. A later Grok repair skips any id recorded here,
+    // so a turn billed with its long-context subset is not billed again.
+    rememberRepairIds(correction.repairIds);
     // Marked whenever this run's sibling pass actually ran — including a run
     // whose only correction was the parent swap — so a second backfill can't
     // add the same nested session twice.
@@ -649,6 +687,10 @@ function applyMessageUsage(providerId, rawModel, messageCount, outputTokens = 0,
   const model = usageModelKey(rawModel);
   const cacheReadTokens = Math.max(0, extra?.cacheReadTokens || 0);
   const cacheWriteTokens = Math.max(0, extra?.cacheWriteTokens || 0);
+  const longTokensIn = Math.max(0, extra?.longTokensIn || 0);
+  const longTokensOut = Math.max(0, extra?.longTokensOut || 0);
+  const longCacheReadTokens = Math.max(0, extra?.longCacheReadTokens || 0);
+  const longCacheWriteTokens = Math.max(0, extra?.longCacheWriteTokens || 0);
   const source = extra?.source === 'measured' ? 'measured' : 'estimate';
 
   usageData.totalMessages += messageCount;
@@ -688,6 +730,12 @@ function applyMessageUsage(providerId, rawModel, messageCount, outputTokens = 0,
     // pass over its whole history.
     bucket.cacheReadTokens = (bucket.cacheReadTokens ?? 0) + cacheReadTokens;
     bucket.cacheWriteTokens = (bucket.cacheWriteTokens ?? 0) + cacheWriteTokens;
+    // Long-context counts are a subset. Write them only when this call has
+    // some, so a short turn does not stamp zeros onto an older bucket.
+    if (longTokensIn || bucket.longTokensIn != null) bucket.longTokensIn = (bucket.longTokensIn ?? 0) + longTokensIn;
+    if (longTokensOut || bucket.longTokensOut != null) bucket.longTokensOut = (bucket.longTokensOut ?? 0) + longTokensOut;
+    if (longCacheReadTokens || bucket.longCacheReadTokens != null) bucket.longCacheReadTokens = (bucket.longCacheReadTokens ?? 0) + longCacheReadTokens;
+    if (longCacheWriteTokens || bucket.longCacheWriteTokens != null) bucket.longCacheWriteTokens = (bucket.longCacheWriteTokens ?? 0) + longCacheWriteTokens;
     bucket.source = mergeSource(bucket.source, source);
   };
   const day = todayBucket();
@@ -743,15 +791,53 @@ export async function recordRunUsage(record) {
       tokensOut = 0,
       cacheReadTokens = 0,
       cacheWriteTokens = 0,
-      source = 'estimate'
+      longTokensIn = 0,
+      longTokensOut = 0,
+      longCacheReadTokens = 0,
+      longCacheWriteTokens = 0,
+      source = 'estimate',
+      repairIds = null,
     } = entry || {};
+    if (Array.isArray(repairIds)) rememberRepairIds(repairIds);
     applyMessageUsage(providerId, model, messages, tokensOut, tokensIn, {
       cacheReadTokens,
       cacheWriteTokens,
+      longTokensIn,
+      longTokensOut,
+      longCacheReadTokens,
+      longCacheWriteTokens,
       source
     });
   }
 
+  await saveUsage();
+}
+
+/**
+ * Add counts on a specific UTC day, optionally guarded by a repair id so the
+ * same image, video, or long-context turn cannot be added twice. `flush: false`
+ * leaves the write to {@link flushUsageLedger} so a backfill is one save.
+ * @returns {Promise<boolean>} false when the id was already recorded or the day is unusable.
+ */
+export async function addDatedUsage(dayKey, record, { repairId = null, flush = true } = {}) {
+  if (!DAY_KEY_RE.test(dayKey || '') || !record) return false;
+  if (!usageData) await loadUsage();
+  usageData.grokRepairIds ??= [];
+  if (repairId && usageData.grokRepairIds.includes(repairId)) return false;
+  if (!usageData.dailyActivity[dayKey]) {
+    usageData.dailyActivity[dayKey] = { sessions: 0, messages: 0, tokens: 0, byProvider: {} };
+    cacheActivityDay(dayKey);
+  }
+  addUsageRecord(usageData.dailyActivity[dayKey], record);
+  rebuildDayTotals(usageData.dailyActivity[dayKey]);
+  if (repairId) rememberRepairIds([repairId]);
+  if (flush) await saveUsage();
+  return true;
+}
+
+/** Persist the in-memory ledger. One call after a batch of `addDatedUsage(..., { flush: false })`. */
+export async function flushUsageLedger() {
+  if (!usageData) return;
   await saveUsage();
 }
 
@@ -883,6 +969,21 @@ export function providerVolumeSinceBlock(dailyActivity, monthlyActivity, provide
  * per-1M tiers) and a `source` of `measured` | `estimate` | `mixed` — buckets
  * written before #3124 report `estimate`, since that is what their counts are.
  */
+/**
+ * Base token cost, plus one extra base-rate charge for the long-context
+ * subset, plus Imagine unit cost. The subset is already inside the base
+ * counts, so this is 2× for those tokens and 1× for everything else.
+ */
+function usageRowCost(modelId, counts, rates, free) {
+  if (free) return 0;
+  const tokens = rates ? estimateCostUsd(counts?.tokensIn, counts?.tokensOut, rates, counts) : 0;
+  const premium = rates ? estimateCostUsd(counts?.longTokensIn, counts?.longTokensOut, rates, {
+    cacheReadTokens: counts?.longCacheReadTokens,
+    cacheWriteTokens: counts?.longCacheWriteTokens,
+  }) : 0;
+  return tokens + premium + estimateGrokImagineCost(modelId, counts);
+}
+
 export function buildUsageReport(dailyActivity, { from = null, to = null, providers = [], monthlyActivity = null, totalTokens = null } = {}) {
   const configById = new Map((providers || []).map((p) => [p.id, p]));
   const agg = new Map(); // providerId -> { name, sessions, messages, tokensIn, tokensOut, byModel: Map }
@@ -898,6 +999,13 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
         tokensOut: 0,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
+        longTokensIn: 0,
+        longTokensOut: 0,
+        longCacheReadTokens: 0,
+        longCacheWriteTokens: 0,
+        images: 0,
+        videoSeconds: 0,
+        inputImages: 0,
         source: null,
         byModel: new Map()
       });
@@ -922,10 +1030,17 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
       p.tokensOut += pDay.tokensOut || 0;
       p.cacheReadTokens += pDay.cacheReadTokens || 0;
       p.cacheWriteTokens += pDay.cacheWriteTokens || 0;
+      p.longTokensIn += pDay.longTokensIn || 0;
+      p.longTokensOut += pDay.longTokensOut || 0;
+      p.longCacheReadTokens += pDay.longCacheReadTokens || 0;
+      p.longCacheWriteTokens += pDay.longCacheWriteTokens || 0;
+      p.images += pDay.images || 0;
+      p.videoSeconds += pDay.videoSeconds || 0;
+      p.inputImages += pDay.inputImages || 0;
       // A bucket with counts but no `source` predates the field — those counts
       // are estimates, so fold it in as such rather than leaving the row
       // unlabeled and letting the UI imply it was measured.
-      if ((pDay.tokensIn || pDay.tokensOut || pDay.cacheReadTokens || pDay.cacheWriteTokens || pDay.messages) && !pDay.source) {
+      if (hasUsageCounts(pDay) && !pDay.source) {
         p.source = mergeSource(p.source, 'estimate');
       } else {
         p.source = mergeSource(p.source, pDay.source);
@@ -943,6 +1058,13 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
             tokensOut: 0,
             cacheReadTokens: 0,
             cacheWriteTokens: 0,
+            longTokensIn: 0,
+            longTokensOut: 0,
+            longCacheReadTokens: 0,
+            longCacheWriteTokens: 0,
+            images: 0,
+            videoSeconds: 0,
+            inputImages: 0,
             source: null
           });
         }
@@ -953,7 +1075,14 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
         m.tokensOut += mDay.tokensOut || 0;
         m.cacheReadTokens += mDay.cacheReadTokens || 0;
         m.cacheWriteTokens += mDay.cacheWriteTokens || 0;
-        m.source = mergeSource(m.source, mDay.source || (mDay.tokensIn || mDay.tokensOut || mDay.messages ? 'estimate' : null));
+        m.longTokensIn += mDay.longTokensIn || 0;
+        m.longTokensOut += mDay.longTokensOut || 0;
+        m.longCacheReadTokens += mDay.longCacheReadTokens || 0;
+        m.longCacheWriteTokens += mDay.longCacheWriteTokens || 0;
+        m.images += mDay.images || 0;
+        m.videoSeconds += mDay.videoSeconds || 0;
+        m.inputImages += mDay.inputImages || 0;
+        m.source = mergeSource(m.source, mDay.source || (hasUsageCounts(mDay) ? 'estimate' : null));
       }
     }
     const residualSessions = Math.max(0, (bucket.sessions || 0) - representedSessions);
@@ -1023,6 +1152,13 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
     tokensOut: 0,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
+    longTokensIn: 0,
+    longTokensOut: 0,
+    longCacheReadTokens: 0,
+    longCacheWriteTokens: 0,
+    images: 0,
+    videoSeconds: 0,
+    inputImages: 0,
     estimatedCost: 0
   };
   const providerRows = [];
@@ -1043,7 +1179,10 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
       // measured at $131 for one day of it.
       const freeModel = free || isFreeModelId(model);
       const rates = freeModel ? null : resolveModelRates(pid, model);
-      const cost = freeModel ? 0 : estimateCostUsd(m.tokensIn, m.tokensOut, rates, m);
+      // The long-context subset is already inside the base counts. One extra
+      // pass at the same short rates is the missing half of xAI's 2× bill.
+      // Imagine units are not tokens; they price off the model id.
+      const cost = usageRowCost(model, m, rates, freeModel);
       providerCost += cost;
       models.push({
         model,
@@ -1053,6 +1192,13 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
         tokensOut: m.tokensOut,
         cacheReadTokens: m.cacheReadTokens,
         cacheWriteTokens: m.cacheWriteTokens,
+        longTokensIn: m.longTokensIn,
+        longTokensOut: m.longTokensOut,
+        longCacheReadTokens: m.longCacheReadTokens,
+        longCacheWriteTokens: m.longCacheWriteTokens,
+        images: m.images,
+        videoSeconds: m.videoSeconds,
+        inputImages: m.inputImages,
         source: m.source || 'estimate',
         estimatedCost: roundCents(cost),
         rateModel: rates?.rateModel ?? null,
@@ -1075,11 +1221,23 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
     const unattributedOut = Math.max(0, p.tokensOut - modelTokensOut);
     const unattributedCacheRead = Math.max(0, p.cacheReadTokens - modelCacheRead);
     const unattributedCacheWrite = Math.max(0, p.cacheWriteTokens - modelCacheWrite);
-    if (!free && (unattributedIn > 0 || unattributedOut > 0 || unattributedCacheRead > 0 || unattributedCacheWrite > 0)) {
-      providerCost += estimateCostUsd(unattributedIn, unattributedOut, providerRates, {
+    const modelLongIn = models.reduce((s, row) => s + row.longTokensIn, 0);
+    const modelLongOut = models.reduce((s, row) => s + row.longTokensOut, 0);
+    const modelLongCacheRead = models.reduce((s, row) => s + row.longCacheReadTokens, 0);
+    const modelLongCacheWrite = models.reduce((s, row) => s + row.longCacheWriteTokens, 0);
+    if (!free && (unattributedIn > 0 || unattributedOut > 0 || unattributedCacheRead > 0 || unattributedCacheWrite > 0
+      || p.longTokensIn > modelLongIn || p.longTokensOut > modelLongOut
+      || p.longCacheReadTokens > modelLongCacheRead || p.longCacheWriteTokens > modelLongCacheWrite)) {
+      providerCost += usageRowCost(null, {
+        tokensIn: unattributedIn,
+        tokensOut: unattributedOut,
         cacheReadTokens: unattributedCacheRead,
-        cacheWriteTokens: unattributedCacheWrite
-      });
+        cacheWriteTokens: unattributedCacheWrite,
+        longTokensIn: Math.max(0, p.longTokensIn - modelLongIn),
+        longTokensOut: Math.max(0, p.longTokensOut - modelLongOut),
+        longCacheReadTokens: Math.max(0, p.longCacheReadTokens - modelLongCacheRead),
+        longCacheWriteTokens: Math.max(0, p.longCacheWriteTokens - modelLongCacheWrite),
+      }, providerRates, false);
     }
 
     totals.sessions += p.sessions;
@@ -1088,6 +1246,13 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
     totals.tokensOut += p.tokensOut;
     totals.cacheReadTokens += p.cacheReadTokens;
     totals.cacheWriteTokens += p.cacheWriteTokens;
+    totals.longTokensIn += p.longTokensIn;
+    totals.longTokensOut += p.longTokensOut;
+    totals.longCacheReadTokens += p.longCacheReadTokens;
+    totals.longCacheWriteTokens += p.longCacheWriteTokens;
+    totals.images += p.images;
+    totals.videoSeconds += p.videoSeconds;
+    totals.inputImages += p.inputImages;
     totals.estimatedCost += providerCost;
 
     providerRows.push({
@@ -1105,6 +1270,13 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
       tokensOut: p.tokensOut,
       cacheReadTokens: p.cacheReadTokens,
       cacheWriteTokens: p.cacheWriteTokens,
+      longTokensIn: p.longTokensIn,
+      longTokensOut: p.longTokensOut,
+      longCacheReadTokens: p.longCacheReadTokens,
+      longCacheWriteTokens: p.longCacheWriteTokens,
+      images: p.images,
+      videoSeconds: p.videoSeconds,
+      inputImages: p.inputImages,
       source: p.source || 'estimate',
       estimatedCost: roundCents(providerCost),
       rateMatch: pid === LEGACY_PROVIDER_ID

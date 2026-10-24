@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt, Layers, Pencil, LayoutPanelLeft } from 'lucide-react';
 import socket from '../../../services/socket';
 import toast from '../../ui/Toast';
@@ -34,6 +34,8 @@ import {
   extractPipelineStoryboardScenes,
   createBlankSketch,
   openStoryboardForPipelineIssue,
+  getPipelineStoryboardChanges,
+  updatePipelineShotsFromBoard,
 } from '../../../services/api';
 import useUniverse from '../../../hooks/useUniverse';
 import { matchCharactersInText } from '../../../lib/scenePrompt';
@@ -133,6 +135,34 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     const res = await openStoryboardForPipelineIssue(issue.id).catch(() => null);
     setOpeningBoard(false);
     if (res?.boardId) navigate(`/storyboards/${encodeURIComponent(res.boardId)}`);
+  };
+
+  // The linked board is a copy: panels edited there wait here, per shot, until Update.
+  const [boardChanges, setBoardChanges] = useState(null);
+  const [updatingFromBoard, setUpdatingFromBoard] = useState(null);
+  useEffect(() => {
+    let live = true;
+    getPipelineStoryboardChanges(issue.id, { silent: true })
+      .then((res) => { if (live) setBoardChanges(res); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [issue.id, issue.updatedAt]);
+  const changedShots = useMemo(() => new Map((boardChanges?.changed || []).map((c) => [c.shotId, c])), [boardChanges]);
+  const boardLocked = stage.locked === true;
+  const updateFromBoard = async (shotId = null) => {
+    setUpdatingFromBoard(shotId || 'all');
+    const res = await updatePipelineShotsFromBoard(issue.id, shotId).catch(() => null);
+    setUpdatingFromBoard(null);
+    if (!res) return;
+    const { updated, issue: saved, ...changes } = res;
+    setBoardChanges(changes);
+    if (saved?.stages?.storyboards) {
+      const next = saved.stages.storyboards;
+      setScenes(next.scenes || []);
+      scenesRef.current = next.scenes || [];
+      onStageUpdate?.('storyboards', next, saved);
+    }
+    toast.success(`${updated} shot${updated === 1 ? '' : 's'} updated from the storyboard`);
   };
 
   const addScene = () => persist([...scenes, { slugline: '', description: '', imageJobId: null }]);
@@ -511,6 +541,25 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
         </div>
       </div>
 
+      {changedShots.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-port-warning/40 bg-port-warning/5 px-3 py-2 text-sm text-port-warning">
+          <LayoutPanelLeft size={14} />
+          <span className="flex-1 min-w-0">
+            Storyboard changed: {changedShots.size} shot{changedShots.size === 1 ? '' : 's'}{boardLocked ? ' (unlock the stage to update)' : ''}
+          </span>
+          <Link to={`/storyboards/${encodeURIComponent(boardChanges.boardId)}`} className="text-xs underline hover:text-white">Open board</Link>
+          <button
+            type="button"
+            onClick={() => updateFromBoard()}
+            disabled={boardLocked || !!updatingFromBoard}
+            className="inline-flex items-center gap-1 min-h-[36px] px-3 py-1 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-40"
+          >
+            {updatingFromBoard === 'all' ? <Loader2 size={12} className="animate-spin" /> : null}
+            Update all
+          </button>
+        </div>
+      )}
+
       {confirmingFrom && (
         <InlineConfirmRow
           tone="warning"
@@ -670,6 +719,10 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                 onSetShotGrammar={(j, patch) => setShotGrammar(i, j, patch)}
                 onBlurShot={() => persist(scenes)}
                 onRenderShot={(j) => handleRenderShot(i, j)}
+                changedShots={changedShots}
+                boardLocked={boardLocked}
+                updatingFromBoard={updatingFromBoard}
+                onUpdateFromBoard={updateFromBoard}
               />
             </li>
           ))}
@@ -679,9 +732,12 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   );
 }
 
+const CHANGED_FIELD_LABELS = { description: 'action', shotType: 'framing', durationSeconds: 'length' };
+
 function ShotList({
   sceneIdx, shots, renderingShots, actionsGated,
   onAddShot, onRemoveShot, onUpdateShot, onSetShotGrammar, onBlurShot, onRenderShot,
+  changedShots, boardLocked, updatingFromBoard, onUpdateFromBoard,
 }) {
   const hasShots = shots.length > 0;
   // Inline pre-render continuity warnings (#1468): the same hazards the server
@@ -718,6 +774,7 @@ function ShotList({
         <ul className="space-y-2">
           {shots.map((shot, j) => {
             const isRendering = renderingShots.has(`${sceneIdx}:${j}`);
+            const change = shot.id ? changedShots?.get(shot.id) : null;
             return (
               <li key={shot.id || j} className="flex items-start gap-2 p-2 bg-port-bg/40 border border-port-border/60 rounded">
                 <span className="text-[10px] text-gray-500 font-mono pt-1.5 w-6">{j + 1}</span>
@@ -732,6 +789,21 @@ function ShotList({
                     className="px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
                     maxLength={4000}
                   />
+                  {change ? (
+                    <div className="flex items-center gap-2 text-[11px] text-port-warning">
+                      <span className="flex-1 min-w-0">Storyboard changed: {change.fields.map((f) => CHANGED_FIELD_LABELS[f] || f).join(', ')}</span>
+                      <button
+                        type="button"
+                        onClick={() => onUpdateFromBoard(shot.id)}
+                        disabled={boardLocked || !!updatingFromBoard}
+                        title={boardLocked ? 'Unlock the stage to update' : 'Copy the edited panel to this shot'}
+                        className="inline-flex items-center gap-1 min-h-[32px] px-2 py-1 rounded bg-port-card border border-port-border text-white hover:border-port-accent/50 disabled:opacity-40"
+                      >
+                        {updatingFromBoard === shot.id ? <Loader2 size={11} className="animate-spin" /> : null}
+                        Update
+                      </button>
+                    </div>
+                  ) : null}
                   {/* Shot-grammar editor (#1468): set/correct the film-grammar
                       fields the visual.shot-continuity check reads. Discrete
                       picks persist immediately and skip the description-driven

@@ -84,6 +84,37 @@ describe('storyboard from a pipeline issue', () => {
     expect((await request(app).post(`/api/storyboards/${board.id}/panels/${board.beats[1].panels[0].id}/scene-art`)).body.code).toBe('NO_IMAGE');
   });
 
+  it('lists only panels edited on the board and copies them to their shots on Update', async () => {
+    seed('iss-2', {
+      scenes: [{ id: 'scene-01', slugline: 'INT. LAB — NIGHT', shots: [
+        { id: 'shot-01', description: 'Wide of the lab', shotType: 'wide', durationSeconds: 5 },
+        { id: 'shot-02', description: 'Close on the dial', shotType: 'close', durationSeconds: 3 },
+      ] }],
+    });
+    const { boardId } = (await request(app).post('/api/storyboards/from-pipeline/iss-2')).body;
+    const changes = async () => (await request(app).get('/api/storyboards/pipeline/iss-2/changes')).body;
+    expect(await changes()).toEqual({ boardId, locked: false, changed: [] });
+
+    // An edit made on the stage is not a storyboard change.
+    const shots = () => issues.get('iss-2').stages.storyboards.scenes[0].shots;
+    shots()[0].description = 'Wide of the lab, lights off';
+    expect((await changes()).changed).toEqual([]);
+
+    const board = (await request(app).get(`/api/storyboards/${boardId}`)).body;
+    const panelId = board.beats[0].panels[1].id;
+    await request(app).patch(`/api/storyboards/${boardId}/panels/${panelId}`).send({ action: 'Close on the cracked dial', seconds: 4.4 });
+    expect((await changes()).changed).toEqual([{ sceneId: 'scene-01', shotId: 'shot-02', panelId, fields: ['description', 'durationSeconds'] }]);
+
+    issues.get('iss-2').stages.storyboards.locked = true;
+    const refused = await request(app).post('/api/storyboards/pipeline/iss-2/update-from-board').send({ shotId: 'shot-02' });
+    expect([refused.status, refused.body.code]).toEqual([400, 'PIPELINE_STAGE_LOCKED']);
+    issues.get('iss-2').stages.storyboards.locked = false;
+
+    const updated = await request(app).post('/api/storyboards/pipeline/iss-2/update-from-board').send({ shotId: 'shot-02' });
+    expect(updated.body).toMatchObject({ updated: 1, changed: [] });
+    expect(shots().map((s) => [s.description, s.durationSeconds])).toEqual([['Wide of the lab, lights off', 5], ['Close on the cracked dial', 4]]);
+  });
+
   it('refuses an issue with no storyboard scenes', async () => {
     seed('iss-empty', { scenes: [] });
     const res = await request(app).post('/api/storyboards/from-pipeline/iss-empty');

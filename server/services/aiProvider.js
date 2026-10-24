@@ -5,6 +5,7 @@ import { awaitWithAbort } from '../lib/abortTimeout.js';
  */
 
 import { normalizeReviewFinishReason } from '../lib/reviewerHealth.js';
+import { normalizeChatCompletionUsage } from '../lib/chatCompletionUsage.js';
 import { getAllProviders } from './providers.js';
 import { startAIOp } from './aiStatusEvents.js';
 // localModelHealing is lazy-imported at its (rare, error-recovery) call site
@@ -259,16 +260,38 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
     // OpenAI-compatible bodies report token counts under `usage`; surface the completion
     // token count so the AI Core landmark can size its activity beam by output volume
     // (tokens/sec). Absent on some providers — callers treat a missing count as "unknown".
-    const completionTokens = Number.isFinite(data.usage?.completion_tokens) ? data.usage.completion_tokens : NaN;
-    const promptTokens = Number.isFinite(data.usage?.prompt_tokens) ? data.usage.prompt_tokens : NaN;
+    const normalized = normalizeChatCompletionUsage(data.usage, { model, endpoint: provider.endpoint });
+    if (normalized && (normalized.inputTokens || normalized.outputTokens || normalized.cacheReadTokens)) {
+      // Ledger failure must not fail the completion. Codex subscription turns
+      // never reach this HTTP path; their transcript reconciler owns that bill.
+      void import('./usage.js').then(({ recordRunUsage }) => recordRunUsage({
+        providerId: provider.id,
+        model,
+        messages: 1,
+        tokensIn: normalized.inputTokens,
+        tokensOut: normalized.outputTokens,
+        cacheReadTokens: normalized.cacheReadTokens,
+        cacheWriteTokens: normalized.cacheWriteTokens,
+        ...(normalized.longContext ? {
+          longTokensIn: normalized.inputTokens,
+          longTokensOut: normalized.outputTokens,
+          longCacheReadTokens: normalized.cacheReadTokens,
+          longCacheWriteTokens: normalized.cacheWriteTokens,
+        } : {}),
+        source: 'measured',
+      })).catch((err) => console.error(`❌ Failed to record chat usage: ${err.message}`));
+    }
+    const completionTokens = normalized ? normalized.outputTokens : (Number.isFinite(data.usage?.completion_tokens) ? data.usage.completion_tokens : NaN);
     return {
       text: content,
       finishReason: normalizeReviewFinishReason(data?.choices?.[0]?.finish_reason),
       tokens: Number.isFinite(completionTokens) ? completionTokens : undefined,
-      ...(Number.isFinite(promptTokens) || Number.isFinite(completionTokens)
+      ...(normalized
         ? { usage: {
-          ...(Number.isFinite(promptTokens) ? { inputTokens: promptTokens } : {}),
-          ...(Number.isFinite(completionTokens) ? { outputTokens: completionTokens } : {}),
+          inputTokens: normalized.inputTokens,
+          outputTokens: normalized.outputTokens,
+          cacheReadTokens: normalized.cacheReadTokens,
+          source: normalized.source,
         } }
         : {}),
     };

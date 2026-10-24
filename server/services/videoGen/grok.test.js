@@ -87,6 +87,9 @@ vi.mock('../../lib/ffmpeg.js', async () => {
   };
 });
 
+const { recordGrokVideoUsage } = vi.hoisted(() => ({ recordGrokVideoUsage: vi.fn(async () => {}) }));
+vi.mock('../grokMediaUsage.js', () => ({ recordGrokVideoUsage }));
+
 const grok = await import('./grok.js');
 const { videoGenEvents } = await import('./events.js');
 const { loadHistory } = await import('./history.js');
@@ -228,6 +231,9 @@ describe('videoGen/grok — harvest and finalize', () => {
     expect(existsSync(scratchDirFor(job.jobId))).toBe(false);
     const history = await loadHistory();
     expect(history[0]).toEqual(expect.objectContaining({ id: job.jobId, modelId: 'grok', mode: 'text', duration: 6 }));
+    expect(recordGrokVideoUsage).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: job.jobId, videoSeconds: 6, images: 1, inputImages: 1,
+    }));
   });
 
   it('records the delivered length and warns when a 15 s request comes back short', async () => {
