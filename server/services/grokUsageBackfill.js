@@ -165,7 +165,9 @@ async function collectVideos(dataDir) {
 
 async function providerIdFromFile(dataDir) {
   const stored = await readJson(join(dataDir, 'providers.json'), null, { label: 'providers.json' });
-  const list = Array.isArray(stored) ? stored : (stored?.providers || []);
+  const list = Array.isArray(stored)
+    ? stored
+    : (Array.isArray(stored?.providers) ? stored.providers : Object.values(stored?.providers || {}));
   const grok = list.filter((provider) => provider && familyForProvider(provider) === 'grok');
   return grokUsageProviderIdFromList(grok.length ? list : []);
 }

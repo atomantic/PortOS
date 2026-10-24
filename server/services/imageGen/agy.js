@@ -500,6 +500,18 @@ function runAgy(job, jobId, bin, args, {
           sidecarPath: sidecar,
           mode: IMAGE_GEN_MODE.AGY,
         });
+        try {
+          const inputImageCount = (meta.initImageFilename ? 1 : 0) + (Array.isArray(meta.referenceImageFilenames) ? meta.referenceImageFilenames.length : 0);
+          const { recordAgyImageUsage } = await import('../agyMediaUsage.js');
+          await recordAgyImageUsage({
+            jobId,
+            createdAt: meta.createdAt,
+            inputImages: inputImageCount,
+            model: meta.imageModel || AGY_IMAGEGEN_IMAGE_MODEL,
+          });
+        } catch (usageErr) {
+          console.error(`❌ Failed to record Antigravity image usage [${jobId.slice(0, 8)}]: ${usageErr.message}`);
+        }
         job.status = 'complete';
         if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
         activeJobs.delete(jobId);
