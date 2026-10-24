@@ -253,7 +253,10 @@ async function verifyHeldArchive(repoPath, dir, release, work = archiveWork()) {
     await prove(['init', '--bare', `--object-format=${release.head.length === 64 ? 'sha256' : 'sha1'}`, '.']);
     await prove(['bundle', 'unbundle', bundle]);
     await prove(['fsck', '--full', '--strict', '--no-reflogs', '--no-dangling', ...captured.recoveryHeads]);
-  } catch { throw new Error('archive-bundle-object-proof-failed'); }
+  } catch (error) {
+    if (archiveLimitRefusal(error)) throw error;
+    throw new Error('archive-bundle-object-proof-failed');
+  }
   finally { await rmGuarded(scratch, { recursive: true, force: true }); }
   work.check();
   if ((await archiveManifest(dir, work)).digest !== digest) throw new Error('archive-manifest-changed');
@@ -1090,7 +1093,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     ]);
     if (fresh && (!fresh.ok || fresh.review.digest !== review.digest)) return fresh.reason || 'retirement-review-changed';
     // The byte comparisons stay last so nothing else ages between them and removal.
-    const [administration, current] = await Promise.all([snapshotAdministration(tree.path), snapshotContent(tree.path)])
+    const [current, administration] = await archiveSnapshots(tree, repoPath, null, archiveWork(opts.signal))
       .catch(error => { capacityRefusal = archiveLimitRefusal(error); return []; });
     if (!administration || !current) return capacityRefusal?.reason || 'checkout-content-changed';
     if (administration.fingerprint !== archive.administrationFingerprint) return 'checkout-administration-changed';

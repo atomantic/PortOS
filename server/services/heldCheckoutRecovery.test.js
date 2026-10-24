@@ -22,7 +22,7 @@ afterAll(cleanupTempDataRoots);
 
 const SYMLINKS = process.platform !== 'win32';
 const retirementFaults = vi.hoisted(() => ({ onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null }));
-const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, proofFailures: [] }));
+const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [] }));
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
@@ -39,6 +39,7 @@ vi.mock('../lib/execGit.js', async importOriginal => {
     try {
       const result = await actual.execGit(args, cwd, options);
       if (injected.onArchiveRef && args[0] === 'update-ref' && args[1]?.startsWith('refs/portos/archive/')) await injected.onArchiveRef();
+      if (injected.onProof && args.includes('--bare') && options?.env?.GIT_NO_REPLACE_OBJECTS === '1') await injected.onProof();
       return result;
     }
     catch (error) {
@@ -87,7 +88,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   beforeEach(async () => {
     Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
-    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, proofFailures: [] });
+    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [] });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -385,6 +386,26 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const recreated = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', retirementObligations: [{ ...release, reason: 'retirement-review-pending' }] });
     expect(recreated.retirementObligations).toHaveLength(1);
     expect(recreated.retirementObligations[0].preservationEvidence.archives).toContainEqual({ archiveDir: saved.archiveDir, reason: 'archive-generation-mismatch' });
+  });
+
+  it.each(['cancel', 'time'])('retains the %s diagnosis when isolated Git proof is interrupted without settling preservation', async mode => {
+    const { saved } = await historicalArchive();
+    const outcome = await getBranchReconcileOutcome('app-1');
+    const controller = new AbortController();
+    let clock;
+    injected.onProof = () => {
+      if (mode === 'cancel') controller.abort();
+      else clock = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 11 * 60 * 1000);
+    };
+    try {
+      const result = await recoverMissingCheckoutPreservations({ appId: 'app-1', repoPath: repo, outcome }, { signal: controller.signal });
+      expect(result.recoveredPreservations || []).toEqual([]);
+      expect(result.retirementObligations).toHaveLength(1);
+      expect(result.retirementObligations[0].preservationEvidence.archives).toContainEqual({ archiveDir: saved.archiveDir,
+        reason: mode === 'cancel' ? 'retirement-archive-cancelled' : 'retirement-archive-work-limit-exceeded' });
+      expect(result.retired).toBeUndefined();
+      expect(existsSync(saved.archiveDir)).toBe(true);
+    } finally { clock?.mockRestore(); }
   });
 
   it('recognizes an absent completion archive without a schedule obligation and rejects changed or older evidence', async () => {
