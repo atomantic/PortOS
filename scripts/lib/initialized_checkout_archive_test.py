@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -120,6 +121,71 @@ class NativeArchive(unittest.TestCase):
         proof = archive.preserve(self.request)
         self.request['manifestSha256'] = proof['manifestSha256']
         return proof
+
+    def registered_alternate(self):
+        admin = archive.read_pointer(self.work / 'sub/.git', 'gitdir:')
+        store = self.repo / '.git/modules/sub/objects'
+        # Fixture clone packs contain the shared base; private staged/recovery
+        # objects remain loose and must also survive independent restoration.
+        for path in (admin / 'objects/pack').iterdir():
+            path.unlink()
+        pointer = admin / 'objects/info/alternates'
+        pointer.parent.mkdir(exist_ok=True)
+        pointer.write_text(str(store) + '\n')
+        self.git(self.work / 'sub', 'fsck', '--full', '--strict')
+        return admin, store, pointer
+
+    def test_registered_dependency_is_copied_exactly_and_restores_without_any_live_store(self):
+        admin, store, pointer = self.registered_alternate()
+        original_pointer = pointer.read_bytes()
+        self.preserve()
+        saved = json.loads((self.txn / 'manifest.json').read_text())
+        self.assertEqual(saved['version'], 4)
+        key = next(iter(saved['facts']['dependencies']))
+        self.assertEqual((self.txn / 'archive/administration/modules/sub/objects/info/alternates').read_bytes(), original_pointer)
+        relocated = self.txn / 'restore/administration/modules/sub/objects/info/alternates'
+        self.assertEqual(relocated.read_text().strip(), str(self.txn / 'restore/dependencies' / key))
+        self.repo.rename(self.scratch / 'repo-offline')
+        self.work.rename(self.scratch / 'work-offline')
+        self.module.rename(self.scratch / 'module-offline')
+        self.assertTrue(archive.verify({**self.request, 'mode': 'standalone'})['standalone'])
+        row = next(r for r in saved['facts']['sources']['dependencies'][key] if r['kind'] == 'file')
+        target = self.txn / 'archive/dependencies' / key / row['path']
+        original_mode = stat.S_IMODE(target.stat().st_mode)
+        target.chmod(0o600)
+        target.write_bytes(b'tampered dependency')
+        target.chmod(original_mode)
+        with self.assertRaisesRegex(RuntimeError, 'dependency-archive-changed'):
+            archive.verify({**self.request, 'mode': 'standalone'})
+
+    def test_registered_dependency_rollback_refuses_lost_live_objects_and_keeps_quarantine(self):
+        admin, store, pointer = self.registered_alternate()
+        self.preserve()
+        for part in ['working', 'administration']:
+            archive.move({**self.request, 'part': part, 'direction': 'quarantine'})
+        self.assertTrue(archive.verify({**self.request, 'mode': 'standalone'})['standalone'])
+        # Only the disposable live dependency loses its base objects. Archived
+        # evidence remains sufficient for offline recovery, never false rollback.
+        for path in (store / 'pack').iterdir():
+            path.unlink()
+        with self.assertRaisesRegex(RuntimeError, 'command-failed:git:|missing-or-invalid-index-object'):
+            archive.verify({**self.request, 'mode': 'restore'})
+        self.assertFalse(self.work.exists())
+        self.assertTrue((self.txn / 'quarantine/working').exists())
+        self.assertTrue(archive.verify({**self.request, 'mode': 'standalone'})['standalone'])
+
+    def test_unregistered_relative_and_chained_dependencies_remain_held_before_copying(self):
+        admin, store, pointer = self.registered_alternate()
+        for invalid in [str(self.module / '.git/objects'), os.path.relpath(store, admin / 'objects')]:
+            pointer.write_text(invalid + '\n')
+            with self.assertRaisesRegex(RuntimeError, 'external-object-dependency'):
+                archive.inspect(self.request)
+        pointer.write_text(str(store) + '\n')
+        (store / 'info').mkdir(exist_ok=True)
+        (store / 'info/alternates').write_text(str(self.module / '.git/objects') + '\n')
+        with self.assertRaisesRegex(RuntimeError, 'external-object-dependency'):
+            archive.inspect(self.request)
+        self.assertEqual(list(self.txn.iterdir()), [])
 
     def test_whole_checkout_preserves_uninitialized_gitlink_bytes_and_restores_offline(self):
         module_admin = archive.read_pointer(self.work / 'sub/.git', 'gitdir:')

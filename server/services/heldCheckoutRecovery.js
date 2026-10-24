@@ -155,6 +155,7 @@ async function archiveBytes(path, work, limitBytes, reason = 'retirement-archive
   const { stream } = await archiveSource(path);
   for await (const chunk of stream) {
     work.check();
+    work.read?.(chunk.length);
     if ((size += chunk.length) > limitBytes) throw Object.assign(new Error(reason), {
       archiveLimit: { scope: 'metadata-read', kind: 'file', limitBytes, observedBytes: size },
     });
@@ -337,6 +338,66 @@ export async function findMissingCheckoutPreservation({ repoPath, release }, opt
   return { ...proof, recheck: async () => await absent() && await proof.recheck() };
 }
 
+const RECOVERY_DETAIL_LIMIT = 20;
+const DISCOVERY_BYTE_LIMIT = 64 * 1024 * 1024;
+const archiveIdentityKey = row => row && [row.repoPath, row.path, row.head].every(value => typeof value === 'string')
+  && (typeof row.branch === 'string' || row.branch === null)
+  ? JSON.stringify([row.repoPath, row.branch, row.path, row.head]) : null;
+
+/** Metadata only selects work; every selected archive is independently verified. */
+async function discoverRecoveryArchives(cosDir, signal) {
+  const roots = [heldCheckoutArchiveRoot(cosDir), join(cosDir || PATHS.cos, 'initialized-checkout-retirements')];
+  const index = new Map();
+  const byDirectory = new Map();
+  const coverage = { entriesRead: 0, candidates: 0, indexed: 0, metadataBytes: 0, missingRoots: 0,
+    errors: 0, details: [], detailsOmitted: 0, complete: true, truncated: false };
+  const diagnose = (archiveDir, error) => {
+    coverage.complete = false;
+    coverage.errors++;
+    const refusal = archiveLimitRefusal(error);
+    const detail = { archiveDir, ...(refusal || { reason: /^[a-z][a-z-]+$/.test(error.message) ? error.message : 'archive-discovery-unavailable' }) };
+    if (coverage.details.length < RECOVERY_DETAIL_LIMIT) coverage.details.push(detail);
+    else coverage.detailsOmitted++;
+  };
+  const work = { ...archiveWork(signal), read: bytes => {
+    // Account before parsing, including partial, malformed and oversized reads.
+    coverage.metadataBytes += bytes;
+    if (coverage.metadataBytes > DISCOVERY_BYTE_LIMIT) throw new Error('archive-discovery-budget-exceeded');
+  } };
+  for (const root of roots) {
+    try {
+      const info = await lstat(root).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      if (!info) { coverage.missingRoots++; continue; }
+      if (!info.isDirectory()) throw new Error('archive-directory-invalid');
+      const directory = await opendir(root);
+      for await (const entry of directory) {
+        if (coverage.entriesRead >= 1000 || coverage.metadataBytes >= DISCOVERY_BYTE_LIMIT) {
+          coverage.truncated = true;
+          diagnose(root, new Error('archive-discovery-budget-exceeded'));
+          break;
+        }
+        coverage.entriesRead++;
+        if (!entry.isDirectory()) continue;
+        const candidate = { dir: join(root, entry.name), kind: root === roots[0] ? 'held' : 'initialized' };
+        coverage.candidates++;
+        byDirectory.set(candidate.dir, candidate);
+        try {
+          const { manifest } = await archiveManifest(candidate.dir, work);
+          const identity = candidate.kind === 'held' ? manifest : { repoPath: manifest.facts?.repoPath, ...manifest.facts?.release };
+          const key = archiveIdentityKey(identity);
+          if (!key) throw new Error('archive-identity-unreadable');
+          if (!index.has(key)) index.set(key, []);
+          index.get(key).push(candidate);
+          coverage.indexed++;
+        } catch (error) {
+          diagnose(candidate.dir, error);
+        }
+      }
+    } catch (error) { diagnose(root, error); }
+  }
+  return { index, byDirectory, coverage };
+}
+
 /** Read existing archives only. Verification stays outside both writer locks;
  * the final ownership/absence recheck and schedule compare-and-set are fenced.
  */
@@ -346,45 +407,46 @@ export async function recoverMissingCheckoutPreservations({ appId, repoPath, out
   if (!obligations.length) return outcome;
   const trees = await listWorktrees(repoPath).catch(() => null);
   if (!trees?.length) return outcome;
-  const roots = [heldCheckoutArchiveRoot(opts.cosDir), join(opts.cosDir || PATHS.cos, 'initialized-checkout-retirements')];
-  const candidates = [];
-  let discoveryReason = null;
-  for (const root of roots) {
-    try {
-      const info = await lstat(root).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-      if (!info) continue;
-      if (!info.isDirectory()) throw new Error('archive-directory-invalid');
-      const names = await readdir(root, { withFileTypes: true });
-      if (names.length + candidates.length > 1000) throw new Error('archive-discovery-budget-exceeded');
-      for (const name of names) if (name.isDirectory()) candidates.push({ dir: join(root, name.name), kind: root === roots[0] ? 'held' : 'initialized' });
-    } catch { discoveryReason = 'archive-discovery-unavailable'; }
-  }
+  const { index, byDirectory, coverage } = await discoverRecoveryArchives(opts.cosDir, opts.signal);
   const observations = [];
   const evidenceFences = [];
+  let details = 0;
+  const addEvidence = (row, detail) => {
+    if (details < RECOVERY_DETAIL_LIMIT) { row.evidence.push(detail); details++; }
+    else row.coverage.detailsOmitted++;
+  };
   try {
     for (const release of obligations) {
       if (!await historicalCheckoutAbsent(release, trees).catch(() => false)) continue;
-      const evidence = [];
       let proof = null;
+      let verified = 0;
+      const matching = index.get(archiveIdentityKey({ ...release, repoPath })) || [];
       const scopedCandidates = Object.hasOwn(release, 'preservationReceipt')
-        ? candidates.filter(candidate => release.preservationReceipt?.status === 'preserved'
+        ? [byDirectory.get(release.preservationReceipt?.archiveDir)].filter(candidate => candidate && release.preservationReceipt?.status === 'preserved'
           && JSON.stringify(release.preservationReceipt.incarnation) === JSON.stringify(release.checkoutIncarnation)
-          && candidate.dir === release.preservationReceipt.archiveDir) : candidates;
+          && candidate.dir === release.preservationReceipt.archiveDir) : matching;
+      const row = { release, proof: null, evidence: [], coverage: { matching: scopedCandidates.length,
+        unrelated: coverage.indexed - matching.length, attempted: 0, detailsOmitted: 0 },
+        reason: !coverage.complete ? 'archive-discovery-incomplete' : coverage.candidates ? 'archive-evidence-unverified' : 'archive-evidence-missing', nextAction: historicalNextAction };
       for (const candidate of scopedCandidates) {
+        row.coverage.attempted++;
         try {
-          proof = candidate.kind === 'held' ? await verifyHeldArchive(repoPath, candidate.dir, release, archiveWork(opts.signal))
+          const verifiedProof = candidate.kind === 'held' ? await verifyHeldArchive(repoPath, candidate.dir, release, archiveWork(opts.signal))
             : await (await import('./initializedCheckoutRecovery.js')).verifyMissingInitializedCheckoutPreservation({ appId, repoPath, release, archiveDir: candidate.dir });
-          if (proof.releaseFence) evidenceFences.push(proof.releaseFence);
-          evidence.push({ archiveDir: candidate.dir, reason: 'preservation-verified' });
-          break;
+          if (verifiedProof.releaseFence) evidenceFences.push(verifiedProof.releaseFence);
+          verified++;
+          proof = verifiedProof;
+          addEvidence(row, { archiveDir: candidate.dir, reason: 'preservation-verified' });
         } catch (error) {
           const refusal = archiveLimitRefusal(error);
-          evidence.push({ archiveDir: candidate.dir, ...(refusal ? { reason: refusal.reason,
+          addEvidence(row, { archiveDir: candidate.dir, ...(refusal ? { reason: refusal.reason,
             ...(refusal.archiveLimit && { archiveLimit: refusal.archiveLimit }), nextAction: refusal.nextAction,
           } : { reason: /^[a-z][a-z-]+$/.test(error.message) ? error.message : 'archive-unverifiable' }) });
         }
       }
-      observations.push({ release, proof, evidence, reason: discoveryReason || (candidates.length ? 'archive-evidence-unverified' : 'archive-evidence-missing'), nextAction: historicalNextAction });
+      row.proof = verified === 1 && (coverage.complete || Object.hasOwn(release, 'preservationReceipt')) ? proof : null;
+      if (verified > 1) row.reason = 'archive-preservation-ambiguous';
+      observations.push(row);
     }
     if (!observations.length) return outcome;
     const { recordRecoveredCheckoutPreservations } = await import('./taskSchedule.js');
@@ -395,13 +457,13 @@ export async function recoverMissingCheckoutPreservations({ appId, repoPath, out
       for (const row of observations) {
         if (!await historicalCheckoutAbsent(row.release, currentTrees)) return false;
         if (row.proof?.recheck && !await row.proof.recheck().catch(() => false)) {
-          row.evidence.push({ archiveDir: row.proof.archiveDir, reason: 'archive-changed-during-verification' });
+          addEvidence(row, { archiveDir: row.proof.archiveDir, reason: 'archive-changed-during-verification' });
           row.proof = null;
           row.reason = 'archive-changed-during-verification';
         }
       }
       return true;
-    }));
+    }, coverage));
   } finally {
     for (const releaseFence of evidenceFences) await releaseFence();
   }
