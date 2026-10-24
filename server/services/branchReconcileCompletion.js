@@ -78,10 +78,6 @@ export async function settleBranchReconcileRun(agent) {
   emitLog(uncertain ? 'warn' : 'info',
     `Branch reconciliation completion: cleaned ${result.cleaned.length}, superseded ${result.reapedSuperseded?.length || 0}, remaining ${remaining}${uncertain ? '; scan incomplete' : ''}`,
     { appId: app.id, analysisType: type, counts: holds.counts, skipCauses: holds.skipCauses });
-  const { settleAndPruneBranchReconcileArchives } = await import('./branchReconcileRefresh.js');
-  await settleAndPruneBranchReconcileArchives(app.id, app.repoPath, {
-    defaultBranch: result.defaultBranch, worktreeInventory: result.worktreeInventory,
-  }).catch(() => null);
   return result;
 }
 

@@ -558,7 +558,6 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     result.skipped = result.skipped.filter(row => !retiredNames.has(row.branch));
     result.worktreeInventory = result.worktreeInventory.filter(row => !retiredNames.has(row.branch));
     result.cleaned.push(...retiredNames);
-    latestAbsentObligations = latestAbsentObligations.filter(release => !retiredNames.has(release.branch));
   }
   // CI waiting and an open PR alone do not require a provider. Existing local
   // receipts were nudged above; only current exact-head code repair is cognitive.
@@ -617,10 +616,6 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     nextAction: 'Continue the bounded sweep and rescan after the final batch.',
   });
   if (allActionable.length === 0) {
-    const { settleAndPruneBranchReconcileArchives } = await import('./branchReconcileRefresh.js');
-    await settleAndPruneBranchReconcileArchives(app.id, app.repoPath, {
-      defaultBranch: result.defaultBranch, worktreeInventory: result.worktreeInventory,
-    }).catch(() => null);
     // Definitive idle: nothing in-flight to drive. Park on the recheck cadence,
     // clearing the progress signature so a fresh set later dispatches and zeroing the
     // dispatch budget — this drain converged, so the next one gets a full one.
@@ -705,7 +700,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   metadata.perpetual = true;
   metadata.reconcileRetirements = actionable.filter(branch => branch.retirement).map(branch => ({
     ...branch.retirement,
-    createdAt: dispatchedOutcome.retirementObligations?.find(row => sameRetirementObservation(row, branch.retirement.release) || sameRetirementCheckout(row, branch.retirement.release))?.createdAt,
+    createdAt: dispatchedOutcome.retirementObligations?.find(row => sameRetirementObservation(row, branch.retirement.release))?.createdAt,
   }));
   const supersededBlock = formatSupersededForPrompt(result.superseded || []);
   const block = [

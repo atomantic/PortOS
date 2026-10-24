@@ -884,13 +884,17 @@ async function archiveSnapshots(tree, repoPath, missingRoot, work = archiveWork(
  */
 export async function preserveMergedCheckout(repoPath, tree, defaultBranch, { cosDir, signal } = {}) {
   if (!tree?.head || (!tree.branch && tree.detached !== true) || tree.locked) throw new Error('checkout-identity-unavailable');
+  const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
   const branch = shortBranch(tree.branch);
   const missingRoot = await missingCheckoutAdministration(repoPath, tree.path);
   const archive = await archiveCheckout({ repoPath, tree, branch, defaultBranch, cosDir, missingRoot, work: archiveWork(signal) });
   return {
     archiveDir: archive.dir,
+    checkoutIdentity,
     async verify(holder) {
       if (!holder || holder.head !== tree.head || holder.branch !== tree.branch || Boolean(holder.detached) !== Boolean(tree.detached)) return 'worktree-holder-changed';
+      // Missing-root recovery archives Git administration without a live pointer.
+      if (checkoutIdentity && await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return 'checkout-identity-changed';
       const [content, administration] = await archiveSnapshots(tree, repoPath, missingRoot, archiveWork(signal));
       return content.fingerprint === archive.fingerprint && administration.fingerprint === archive.administrationFingerprint
         ? null : 'checkout-content-changed';
@@ -1413,7 +1417,7 @@ export async function retirePendingMergeCheckout({ repoPath, release, prUrl, exp
     await recordWorkspaceCheckoutRetirement(repoPath, {
       path: release.path, branch: release.branch ?? null, head: release.head,
       branchDeleted: result.branchDeleted, archiveDir: result.archiveDir, checkoutIdentity: result.checkoutIdentity,
-    }).catch(() => null);
+    });
   }
   return result;
 }

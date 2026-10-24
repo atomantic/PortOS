@@ -1005,9 +1005,7 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
       remaining: Array.isArray(outcome.remaining)
         ? outcome.remaining.filter(entry => retirementObligations.some(row => sameRetirementObservation(row, entry))
           || !(sameRetirementObservation(entry, receipt)
-            || (!entry.checkoutIdentity && sameRetirementCheckout(entry, receipt))
-            || (!isObligationRow(entry) && ((path && entry.path === path)
-              || (branchDeleted && branch && entry.branch === branch && (!entry.path || !path || entry.path === path))))))
+            || (!entry.checkoutIdentity && sameRetirementCheckout(entry, receipt))))
         : outcome.remaining ?? null,
       retired,
     };
@@ -1016,12 +1014,12 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
 }
 
 /**
- * Record a checkout retirement across any matching app for a workspace path or branch.
+ * Record a checkout retirement across apps observing the exact checkout tuple.
  * Settles stale inventory rows left behind when an active run finishes and removes its worktree.
  */
 export async function recordWorkspaceCheckoutRetirement(repoPath, receipt) {
   if (!repoPath || (!receipt?.path && !receipt?.branch)) return null;
-  const schedule = await loadSchedule().catch(() => null);
+  const schedule = await loadSchedule();
   const perApp = schedule?.executions?.['task:branch-reconcile']?.perApp;
   if (!perApp || typeof perApp !== 'object') return null;
   let updated = null;
@@ -1029,7 +1027,7 @@ export async function recordWorkspaceCheckoutRetirement(repoPath, receipt) {
     const outcome = record?.branchReconcileOutcome;
     if (!outcome) continue;
     const rows = [...(outcome.remaining || []), ...(outcome.retirementObligations || [])];
-    if (!rows.some(row => (receipt.path && row.path === receipt.path) || (receipt.branch && row.branch === receipt.branch))) continue;
+    if (!rows.some(row => sameRetirementCheckout(row, receipt))) continue;
     const app = await getAppById(appId).catch(() => null);
     if (app?.repoPath !== repoPath) continue;
     updated = await recordHeldCheckoutRetirement(appId, receipt);
