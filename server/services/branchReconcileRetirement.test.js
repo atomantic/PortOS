@@ -12,6 +12,8 @@ const branch = { branch: 'claim/issue-42', tip: head, worktreePath: '/example/ch
   rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' };
 const tree = { branch: branch.branch, path: branch.worktreePath, head, managed: true, locked: false, lockReason: null };
 const scan = (b = {}, t = {}) => ({ wip: [{ ...branch, ...b }], worktreeInventory: [{ ...tree, ...t }] });
+const retainedMerged = () => ({ wip: [], merged: [{ ...branch, state: 'MERGED', rule: 'merged', isMerged: true }],
+  skipped: [{ branch: branch.branch, reason: 'claim-completion-unverified' }], worktreeInventory: [tree] });
 const setup = () => ({
   readPr: vi.fn(async () => 'https://github.com/example/repo/pull/42'),
   prepare: vi.fn(async () => ({ ok: true, review: { digest: 'd'.repeat(64), policy: { policies: [{ id: 'old-owner', status: 'completed', success: true }] }, comparison: { disposition: 'review-supersession', localPatch: '+old', difference: '+new' }, forge: { prHead: head } } })),
@@ -19,6 +21,41 @@ const setup = () => ({
 
 describe('historical completed-checkout review obligations', () => {
   beforeEach(() => forge.read.mockReset());
+  it('routes a retained merged claim through its known completed-owner policy before full archival retirement', async () => {
+    const deps = setup();
+    deps.prepare.mockResolvedValue({ ok: true, review: { digest: 'd'.repeat(64), forge: { prHead: head },
+      policy: { integratedCleanupHead: 'c'.repeat(40), policies: [{ id: 'known-owner', status: 'completed', success: false }] },
+      comparison: { disposition: 'integrated', localPatch: '+original', difference: '' } } });
+    deps.retire = vi.fn(async () => ({ ok: true, branchDeleted: true, archiveDir: '/private/verified-archive' }));
+    expect(await prepareReconcileRetirements(app, retainedMerged(), deps)).toMatchObject({ candidates: [], held: [],
+      retired: [expect.objectContaining({ branch: branch.branch, head })] });
+    expect(deps.prepare).toHaveBeenCalledOnce();
+    expect(deps.retire).toHaveBeenCalledWith({ appId: app.id, release: expect.objectContaining({ head }),
+      review: { prUrl: 'https://github.com/example/repo/pull/42', digest: 'd'.repeat(64), acceptSuperseded: false } },
+    { beforeMutation: expect.any(Function) });
+    deps.retire.mockClear();
+    deps.prepare.mockResolvedValue({ ok: true, review: { digest: 'e'.repeat(64), forge: { prHead: head },
+      policy: { integratedCleanupHead: 'c'.repeat(40), policies: [{ id: 'known-owner', status: 'completed', success: false }] },
+      comparison: { disposition: 'review-supersession', localPatch: '+original', difference: '+replacement' } } });
+    expect(await prepareReconcileRetirements(app, retainedMerged(), deps)).toMatchObject({ candidates: [{ state: 'REVIEW_RETIREMENT' }], retired: [] });
+    expect(deps.retire).not.toHaveBeenCalled();
+  });
+
+  it('does not turn registry silence or another merged-cleanup refusal into a completed-owner release', async () => {
+    const deps = setup();
+    deps.retire = vi.fn();
+    deps.prepare.mockResolvedValue({ ok: true, review: { forge: { prHead: head }, policy: { policies: [] } } });
+    expect(await prepareReconcileRetirements(app, retainedMerged(), deps)).toMatchObject({
+      retired: [], held: [{ reason: 'retirement-policy-changed' }],
+    });
+    deps.prepare.mockClear();
+    for (const reason of ['claim-owner-active', 'pr-completion-human-handoff', 'archive-failed', 'worktree-unmanaged-location']) {
+      const result = retainedMerged(); result.skipped[0].reason = reason;
+      expect(await prepareReconcileRetirements(app, result, deps)).toEqual({ candidates: [], held: [], retired: [] });
+    }
+    expect(deps.prepare).not.toHaveBeenCalled();
+    expect(deps.retire).not.toHaveBeenCalled();
+  });
   it('archives and retires a checkout whose commits are all on the default branch without a PR read or dispatch', async () => {
     const deps = setup();
     deps.retire = vi.fn(async () => ({ ok: true, branchDeleted: true, archiveDir: '/private/verified-archive' }));

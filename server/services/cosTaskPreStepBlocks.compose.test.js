@@ -260,18 +260,22 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     ]) }));
   });
 
-  it('a normal user reconcile drains machine-proven retirement without generating an agent', async () => {
+  it.each(['completion-policy', 'merged-claim'])('a normal user reconcile drains %s retirement without generating an agent', async kind => {
     const release = { branch: 'claim/issue-1', path: '/example/checkouts/1', head: 'a'.repeat(40), managed: true, locked: false };
-    reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: [{ branch: release.branch, worktreePath: release.path, tip: release.head,
-      rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' }], worktreeInventory: [release] }));
+    const branch = { branch: release.branch, worktreePath: release.path, tip: release.head,
+      rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' };
+    reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: kind === 'completion-policy' ? [branch] : [],
+      merged: kind === 'merged-claim' ? [{ ...branch, state: 'MERGED', isMerged: true }] : [],
+      skipped: kind === 'merged-claim' ? [{ ...release, reason: 'claim-completion-unverified' }] : [], worktreeInventory: [release] }));
     mergedPrRead.mockResolvedValue('https://github.com/example/repo/pull/1');
-    prepareRetirement.mockResolvedValue({ ok: true, review: { digest: 'd'.repeat(64), policy: { policies: [{ id: 'completed-owner' }] },
+    prepareRetirement.mockResolvedValue({ ok: true, review: { digest: 'd'.repeat(64), policy: { integratedCleanupHead: 'c'.repeat(40), policies: [{ id: 'completed-owner' }] },
       forge: { prHead: release.head }, comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
     expect(await generate({ onDemand: true })).toBeNull();
     expect(retireCheckout).toHaveBeenCalledOnce();
     expect(retireCheckout.mock.calls[0][0].review.acceptSuperseded).toBe(false);
     expect(reserveReview).not.toHaveBeenCalled();
     expect(recordPerpetualDispatch).not.toHaveBeenCalled();
+    expect(recordBranchReconcileOutcome.mock.calls.at(-1)[1].remaining).toEqual([]);
   });
 
   it('keeps an unresolved retirement visible after the checkout disappears on a later refill', async () => {
