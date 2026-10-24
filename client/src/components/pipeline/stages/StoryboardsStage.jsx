@@ -38,10 +38,13 @@ import {
   updatePipelineShotsFromBoard,
 } from '../../../services/api';
 import useUniverse from '../../../hooks/useUniverse';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import { matchCharactersInText } from '../../../lib/scenePrompt';
 import MediaJobThumb from '../MediaJobThumb';
 import ImagePromptCandidates, { PromptCountInput } from '../ImagePromptCandidates';
 import { genConfigToImageOptions, genConfigToRefineOptions, IMAGE_PROMPT_COUNT_DEFAULT } from './VisualGenSettings';
+
+const STORYBOARD_CHANGE_EVENTS = ['storyboard:changed'];
 
 export default function StoryboardsStage({ issue, series, onStageUpdate, actionsGated = false }) {
   const navigate = useNavigate();
@@ -138,15 +141,15 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   };
 
   // The linked board is a copy: panels edited there wait here, per shot, until Update.
-  const [boardChanges, setBoardChanges] = useState(null);
+  const { data: boardChanges, updateData: setBoardChanges } = useSocketResource(
+    ({ signal }) => getPipelineStoryboardChanges(issue.id, { silent: true, signal }),
+    {
+      events: STORYBOARD_CHANGE_EVENTS,
+      resourceKey: JSON.stringify([issue.id, issue.updatedAt]),
+      matchesEvent: event => !boardChanges?.boardId || event?.id === boardChanges.boardId,
+    },
+  );
   const [updatingFromBoard, setUpdatingFromBoard] = useState(null);
-  useEffect(() => {
-    let live = true;
-    getPipelineStoryboardChanges(issue.id, { silent: true })
-      .then((res) => { if (live) setBoardChanges(res); })
-      .catch(() => {});
-    return () => { live = false; };
-  }, [issue.id, issue.updatedAt]);
   const changedShots = useMemo(() => new Map((boardChanges?.changed || []).map((c) => [c.shotId, c])), [boardChanges]);
   const boardLocked = stage.locked === true;
   const updateFromBoard = async (shotId = null) => {

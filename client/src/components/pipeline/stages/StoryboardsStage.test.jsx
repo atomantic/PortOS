@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -13,7 +13,18 @@ vi.mock('../../../services/api', () => {
     'extractPipelineStoryboardScenes', 'createBlankSketch'];
   return { ...api, ...Object.fromEntries(rest.map((name) => [name, vi.fn()])) };
 });
-vi.mock('../../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
+const socket = vi.hoisted(() => {
+  const handlers = new Map();
+  return {
+    emit: (event, payload) => { for (const handler of handlers.get(event) || []) handler(payload); },
+    on: vi.fn((event, handler) => {
+      if (!handlers.has(event)) handlers.set(event, new Set());
+      handlers.get(event).add(handler);
+    }),
+    off: vi.fn((event, handler) => handlers.get(event)?.delete(handler)),
+  };
+});
+vi.mock('../../../services/socket', () => ({ default: socket }));
 vi.mock('../../../hooks/useUniverse', () => ({ default: () => [null] }));
 vi.mock('../MediaJobThumb', () => ({ default: () => null }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
@@ -58,5 +69,26 @@ describe('StoryboardsStage', () => {
     expect(await screen.findByDisplayValue('Wide of the dark lab')).toBeInTheDocument();
     expect(screen.queryByText(/Storyboard changed/)).not.toBeInTheDocument();
     expect(onStageUpdate).toHaveBeenCalledWith('storyboards', saved.stages.storyboards, saved);
+  });
+
+  it('shows edits from the linked storyboard while the pipeline stays open, then applies the update response', async () => {
+    const withShot = { ...issue, stages: { storyboards: { status: 'edited', scenes: [{ ...issue.stages.storyboards.scenes[0], shots: [{ id: 'shot-01', description: 'Wide of the lab', durationSeconds: 5 }] }] } } };
+    const unchanged = { boardId: 'sb-1', locked: false, changed: [] };
+    api.getPipelineStoryboardChanges.mockResolvedValueOnce(unchanged).mockResolvedValueOnce({
+      ...unchanged, changed: [{ sceneId: 'scene-01', shotId: 'shot-01', panelId: 'panel-1', fields: ['description'] }],
+    });
+    const saved = { ...withShot, stages: { storyboards: { ...withShot.stages.storyboards, scenes: [{ ...withShot.stages.storyboards.scenes[0], shots: [{ id: 'shot-01', description: 'Edited in another tab', durationSeconds: 5 }] }] } } };
+    api.updatePipelineShotsFromBoard.mockResolvedValue({ updated: 1, issue: saved, ...unchanged });
+    render(<MemoryRouter><StoryboardsStage issue={withShot} series={null} onStageUpdate={vi.fn()} /></MemoryRouter>);
+    await waitFor(() => expect(api.getPipelineStoryboardChanges).toHaveBeenCalledTimes(1));
+    await act(async () => { socket.emit('storyboard:changed', { id: 'sb-other' }); });
+    expect(api.getPipelineStoryboardChanges).toHaveBeenCalledTimes(1);
+    await act(async () => { socket.emit('storyboard:changed', { id: 'sb-1' }); });
+
+    expect(await screen.findByText('Storyboard changed: action')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    expect(await screen.findByDisplayValue('Edited in another tab')).toBeInTheDocument();
+    expect(screen.queryByText(/Storyboard changed/)).not.toBeInTheDocument();
+    expect(api.getPipelineStoryboardChanges).toHaveBeenCalledTimes(2);
   });
 });
