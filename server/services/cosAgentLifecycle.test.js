@@ -625,11 +625,30 @@ describe('completeAgent idempotence (#3384)', () => {
       metadata: { claimPicksOwnBranch: true, completedCheckouts: [{ stale: true }] }, output: [] };
     const failed = await completeAgent('claim-failed', { success: false });
     expect(failed.metadata.completedCheckouts).toEqual([]);
-    expect(captureCompletedCheckouts).toHaveBeenCalledTimes(1);
+    expect(captureCompletedCheckouts).toHaveBeenCalledTimes(2);
   });
 
-  it.each(['unchanged', 'physical-generation', 'new-owner'])('retries the first completion Git-read failure from the early registered physical seed after restart, scenario=%s', async scenario => {
-    const changed = scenario !== 'unchanged';
+  it('archives owned checkout identity on execution failure without claiming delivery success', async () => {
+    const id = 'failed-owned-checkout';
+    const evidence = { version: 1, agentId: id, branch: 'feature/failed-owned' };
+    mockCosState.state.agents[id] = { id, status: 'running', startedAt: '2026-01-01T00:00:00Z', output: [],
+      metadata: { isWorktree: true, worktreeBranch: evidence.branch } };
+    captureCompletedCheckouts.mockImplementationOnce(async agent => {
+      expect(agent.status).toBe('running');
+      return [evidence];
+    });
+    const failed = await completeAgent(id, { success: false, executionSuccess: false, orphaned: true });
+    expect(failed.result).toMatchObject({ success: false, executionSuccess: false, orphaned: true });
+    expect(failed.result.cleanupPending).not.toBe(true);
+    expect(failed.metadata).toMatchObject({ completedCheckouts: [evidence], checkoutCapture: { status: 'captured' } });
+    const persisted = JSON.parse(await readFile(join(mockCosState.agentsDir, failed.completedAt.slice(0, 10), id, 'metadata.json'), 'utf8'));
+    expect(persisted.result).toEqual(failed.result);
+    expect(persisted.metadata.completedCheckouts).toEqual([evidence]);
+  });
+
+  it.each(['unchanged', 'physical-generation', 'new-owner', 'orphan-empty', 'orphan-physical-generation', 'orphan-new-owner'])('recovers only the original completion physical seed after restart, scenario=%s', async scenario => {
+    const orphan = scenario.startsWith('orphan-');
+    const changed = !['unchanged', 'orphan-empty'].includes(scenario);
     const scratch = await mkdtemp(join(tmpdir(), 'portos-completion-capture-seed-'));
     let failFirstRead;
     try {
@@ -649,31 +668,36 @@ describe('completeAgent idempotence (#3384)', () => {
       await execGit(['add', 'delivery.txt'], checkout);
       await execGit(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'final delivered head'], checkout);
       const head = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
-      failFirstRead = vi.spyOn(await import('./worktreeManager.js'), 'listWorktrees').mockRejectedValueOnce(new Error('first completion Git read unavailable'));
-      const completed = await completeAgent(agentId, { success: true });
-      expect(completed).toMatchObject({ status: 'completed', result: { cleanupPending: true, executionSuccess: true },
+      if (orphan) captureCompletedCheckouts.mockReset().mockResolvedValueOnce([]); // Historical failed-run empty capture.
+      else failFirstRead = vi.spyOn(await import('./worktreeManager.js'), 'listWorktrees').mockRejectedValueOnce(new Error('first completion Git read unavailable'));
+      const completed = await completeAgent(agentId, orphan ? { success: false, executionSuccess: false, orphaned: true } : { success: true });
+      if (orphan) expect(completed).toMatchObject({ result: { success: false, executionSuccess: false, orphaned: true },
+        metadata: { completedCheckouts: [], checkoutCapture: { status: 'captured' } } });
+      else expect(completed).toMatchObject({ status: 'completed', result: { cleanupPending: true, executionSuccess: true },
         metadata: { checkoutCapture: { status: 'pending', unknown: true } } });
       expect(cosEvents.listenerCount('agent:completed')).toBeGreaterThan(0);
       delete mockCosState.state.agents[agentId]; // Restart: only the real archived metadata remains.
-      if (scenario === 'new-owner') {
+      if (scenario.endsWith('new-owner')) {
         mockCosState.state.agents['new-owner'] = { id: 'new-owner', status: 'completed', startedAt: new Date().toISOString(),
           metadata: { sourceWorkspace: repo, workspacePath: checkout, worktreeBranch: 'feature/seeded' } };
       }
-      if (scenario === 'physical-generation') {
+      if (scenario.endsWith('physical-generation')) {
         const pointer = join(checkout, '.git');
         const bytes = await readFile(pointer);
         await rename(pointer, join(scratch, 'original-git-pointer'));
         await writeFile(pointer, bytes);
       }
-      expect(await retryCompletionCheckoutCapture(agentId)).toBe(!changed);
+      const options = orphan ? { retirement: { repoPath: repo, branch: 'feature/seeded', path: checkout, head } } : {};
+      expect(await retryCompletionCheckoutCapture(agentId, options)).toBe(!changed);
       const recovered = await getAgent(agentId);
-      if (changed) expect(recovered.metadata.checkoutCapture.status).toBe('pending');
+      if (changed) expect(recovered.metadata.checkoutCapture.status).toBe(orphan ? 'captured' : 'pending');
       else {
         const receipt = recovered.metadata.completedCheckouts[0];
         expect(receipt).toMatchObject({ version: 2, head, seededAt: seed.seededAt });
         expect(Date.parse(receipt.capturedAt)).toBeGreaterThanOrEqual(Date.parse(completed.completedAt));
         expect(completedCheckoutReceiptValid(recovered, receipt)).toBe(true);
       }
+      if (orphan) expect(recovered.result).toEqual(completed.result);
       expect(await readFile(join(checkout, 'delivery.txt'), 'utf8')).toBe('wanted original work');
       expect((await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim()).toBe(head);
       expect(emittedCompletions).toHaveLength(1);

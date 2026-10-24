@@ -321,14 +321,23 @@ export async function recordCompletionCleanup(agentId, startedAt, patch) {
 /** Retry capture ONLY against preterminal snapshots. Unknown originals remain
  * explicit holds; a completed record can never discover a replacement by name.
  */
-export async function retryCompletionCheckoutCapture(agentId) {
+export async function retryCompletionCheckoutCapture(agentId, { retirement } = {}) {
   const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
   const { claimCheckoutOwner } = await import('../lib/claimContinuation.js');
   const { readCompletedCheckoutIdentity, captureSeededCompletionCheckouts } = await import('./completedCheckoutEvidence.js');
   return withClaimOwnershipLock(async () => {
+    if (retirement) {
+      const [repoPath, path] = await Promise.all([realpath(retirement.repoPath).catch(() => null), realpath(retirement.path).catch(() => null)]);
+      if (!repoPath || !path || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(retirement.head || '')) return false;
+      retirement = { ...retirement, repoPath, path };
+    }
     const agent = await getAgentRecord(agentId);
     const pending = agent?.metadata?.checkoutCapture;
-    if (agent?.status !== 'completed' || pending?.status !== 'pending') return false;
+    const seededOrphan = retirement && agent?.result?.orphaned === true && agent.result.validationPassed !== false
+      && pending?.status === 'captured' && agent.metadata.completedCheckouts?.length === 0
+      && agent.metadata.checkoutSeeds?.some(seed => seed.repoPath === retirement.repoPath
+        && seed.branch === retirement.branch && seed.path === retirement.path);
+    if (agent?.status !== 'completed' || (pending?.status !== 'pending' && !seededOrphan)) return false;
     const owners = await readClaimOwnershipAgents().catch(() => null);
     const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
     const history = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
@@ -358,6 +367,8 @@ export async function retryCompletionCheckoutCapture(agentId) {
     }
     const captured = seeds.length ? await captureSeededCompletionCheckouts(agent).catch(() => null) : targets;
     if (!captured?.length) return false;
+    if (retirement && !captured.some(row => row.repoPath === retirement.repoPath && row.branch === retirement.branch
+      && row.path === retirement.path && row.head === retirement.head)) return false;
     let recorded = false;
     const saved = await updateCompletionReceipt(agentId, (metadata, current) => {
       if (current.startedAt !== agent.startedAt || JSON.stringify(metadata.checkoutCapture) !== JSON.stringify(pending)
@@ -415,15 +426,17 @@ export async function completeAgent(agentId, result = {}) {
     let checkoutCapture;
     if (hasClaimCheckoutBindings(agent.metadata) || agent.metadata?.isWorktree) {
       completedCheckouts = [];
-      if (result.success === true || result.cleanupPending === true) {
-        const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
-        try { completedCheckouts = await captureCompletedCheckouts(agent, { success: true, strict: true }); }
-        catch (error) {
-          // Ingestion remains terminal. Retry only an originally captured exact
-          // generation, never finalize/output hooks or historical branch names.
-          checkoutCapture = { status: 'pending', reason: 'checkout-evidence-unavailable',
-            targets: error.checkoutCapture?.targets || [], unknown: error.checkoutCapture?.unknown !== false,
-            observedAt: new Date().toISOString() };
+      // Identity capture describes the owned physical checkout, not a passing
+      // execution verdict. Failed/orphaned runs may already have delivered code.
+      const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
+      try { completedCheckouts = await captureCompletedCheckouts(agent, { success: true, strict: true }); }
+      catch (error) {
+        // Ingestion remains terminal. Retry only an originally captured exact
+        // generation, never finalize/output hooks or historical branch names.
+        checkoutCapture = { status: 'pending', reason: 'checkout-evidence-unavailable',
+          targets: error.checkoutCapture?.targets || [], unknown: error.checkoutCapture?.unknown !== false,
+          observedAt: new Date().toISOString() };
+        if (result.success === true || result.cleanupPending === true) {
           result = { ...result, success: false, executionSuccess: result.executionSuccess ?? result.success,
             cleanupPending: true, deliveryRecoveryOwned: true,
             taskOutcome: { status: 'incomplete', reason: 'Original checkout identity capture is pending; delivery and preservation remain unverified.',
@@ -451,7 +464,7 @@ export async function completeAgent(agentId, result = {}) {
         status: cleanupContext ? cleanup.status || 'pending' : 'abandoned',
         ...(!cleanupContext && { reason: 'completion-context-unavailable' }) },
       ...(completedCheckouts ? { checkoutCapture: checkoutCapture || { status: 'captured' } } : {}),
-      ...((result.success || result.cleanupPending === true) && (agent.metadata?.isWorktree || hasClaimCheckoutBindings(agent.metadata))
+      ...((result.success || result.cleanupPending === true || checkoutCapture?.status === 'pending') && (agent.metadata?.isWorktree || hasClaimCheckoutBindings(agent.metadata))
         ? { repoStateVerification: { status: 'pending' } } : {}),
     };
     state.agents[agentId] = {

@@ -1555,6 +1555,68 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
   });
 
+  it.each(['original', 'recreated-pointer', 'active-owner', 'different-pr-head', 'failed-validation'])('recovers a merged orphan only from its exact early generation: %s', async scenario => {
+    const c = await reviewedCheckout(`orphan-${scenario}`);
+    await execGit(['worktree', 'unlock', c.path], repo);
+    Object.assign(c.release, { locked: false, lockReason: null });
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
+    const evidence = await import('./completedCheckoutEvidence.js');
+    const agent = { id: 'original-orphan', status: 'running', startedAt: new Date(Date.now() - 60_000).toISOString(),
+      result: { success: false, executionSuccess: false, orphaned: true, validationPassed: null },
+      metadata: { isWorktree: true, sourceWorkspace: repo, workspacePath: c.path, worktreeBranch: c.release.branch,
+        prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { url: c.forge.prUrl, branch: c.release.branch } } };
+    agent.metadata.checkoutSeeds = await evidence.captureCheckoutSeeds(agent);
+    agent.status = 'completed';
+    agent.completedAt = new Date().toISOString();
+    agent.metadata.completedCheckouts = [];
+    agent.metadata.checkoutCapture = { status: 'captured' };
+    if (scenario === 'failed-validation') agent.result.validationPassed = false;
+    injected.policies = [agent];
+    const originalResult = structuredClone(agent.result);
+    let recoveries = 0;
+    c.opts.recoverCheckoutCapture = async (id, { retirement }) => {
+      expect(id).toBe(agent.id);
+      expect(retirement).toMatchObject({ repoPath: repo, ...c.release });
+      const captured = await evidence.captureSeededCompletionCheckouts(agent);
+      if (!captured) return false;
+      agent.metadata.completedCheckouts = captured;
+      recoveries++;
+      return true;
+    };
+    if (scenario === 'recreated-pointer') {
+      const bytes = await readFile(join(c.path, '.git'));
+      await rename(join(c.path, '.git'), join(scratch, 'original-pointer'));
+      await writeFile(join(c.path, '.git'), bytes);
+    }
+    if (scenario === 'active-owner') c.opts.readAgents = async () => [{ id: 'other', status: 'running', workspacePath: c.path }];
+    if (scenario === 'different-pr-head') c.forge.prHead = 'b'.repeat(40);
+    const prepared = await c.prepare();
+    expect(agent.result).toEqual(originalResult);
+    if (scenario !== 'original') {
+      expect(prepared.ok).toBe(false);
+      expect(await registered(c.path)).toBe(true);
+      expect(await archives()).toEqual([]);
+      expect(recoveries).toBe(0);
+      return;
+    }
+    expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, orphanedExecution: true }] } } });
+    const receipt = agent.metadata.completedCheckouts[0];
+    expect(receipt).toMatchObject({ version: 2, head: c.release.head });
+    expect(evidence.completedCheckoutReceiptValid(agent, receipt)).toBe(true);
+    const retired = await c.confirm(prepared.review);
+    expect(retired).toMatchObject({ ok: true, branchDeleted: true });
+    expect(await readFile(join(retired.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    const restored = join(scratch, 'independent-orphan.git');
+    await execGit(['init', '--bare', restored], scratch);
+    await execGit(['bundle', 'unbundle', join(retired.archiveDir, 'commits.bundle')], restored);
+    await execGit(['fsck', '--full', '--strict', '--no-reflogs', c.release.head], restored);
+    expect(await registered(c.path)).toBe(false);
+    expect((await c.prepare()).ok).toBe(false);
+    expect(await archives()).toHaveLength(1);
+    expect(recoveries).toBe(1);
+    expect(agent.result).toEqual(originalResult);
+  });
+
   it('requires supersession acceptance after an ancestral merged tip is later changed', async () => {
     const c = await reviewedCheckout('ancestral', { normalMerge: true, superseded: true });
     const prepared = await c.prepare();
