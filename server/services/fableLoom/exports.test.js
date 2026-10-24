@@ -250,7 +250,16 @@ describe('portable FableLoom export boundary', () => {
   });
 
   videoIt('preserves silent soundtracks and clips without audio in web profiles', async () => {
-    const silent = await archive(await begin({ episodeIds: ['episode-one'], mediaProfile: 'web-720p' }));
+    const outcomes = [];
+    const realRun = ffmpeg.runFfmpegProcess;
+    vi.spyOn(ffmpeg, 'runFfmpegProcess').mockImplementation(async options => {
+      const result = await realRun(options);
+      outcomes.push({ ok: result.ok, reason: result.reason });
+      return result;
+    });
+    const silentId = await begin({ episodeIds: ['episode-one'], mediaProfile: 'web-720p' });
+    expect((await terminal(silentId)).status, JSON.stringify(outcomes)).toBe('completed');
+    const silent = await archive(silentId);
     const silentAssets = JSON.parse(silent.files.get('manifest.json')).loom.episodes[0].nodes[0].playbackAssets;
     const output = join(PATHS.videos, 'without-audio.mp4');
     expect(await runFfmpegProcess({ bin, timeoutMs: 10_000, args: ['-nostdin', '-y', '-v', 'error',

@@ -94,8 +94,8 @@ const loudness = profile => `loudnorm=I=${profile.integratedLufs}:TP=${profile.t
 async function audioFilter(bin, inputArgs, profile, signal) {
   const stderr = await encode(bin, ['-v', 'info', ...inputArgs, '-vn', '-af', `${loudness(profile)}:print_format=json`, '-f', 'null', '-'], signal, true);
   const measurement = JSON.parse(stderr.slice(stderr.lastIndexOf('{'), stderr.lastIndexOf('}') + 1));
-  // Silence has no finite integrated loudness; preserve silence through the same filter.
-  if (!Number.isFinite(Number(measurement.input_i))) return loudness(profile);
+  // Applying loudnorm to digital silence can emit non-finite samples into AAC.
+  if (measurement.input_i === '-inf' && measurement.input_tp === '-inf') return null;
   const values = ['input_i', 'input_tp', 'input_lra', 'input_thresh', 'target_offset'].map(k => Number(measurement[k]));
   if (!values.every(Number.isFinite)) throw refusal('EXPORT_MEDIA_INVALID', 'Audio loudness could not be measured.');
   return `${loudness(profile)}:measured_I=${values[0]}:measured_TP=${values[1]}:measured_LRA=${values[2]}:measured_thresh=${values[3]}:offset=${values[4]}:linear=true`;
