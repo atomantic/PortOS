@@ -1816,29 +1816,39 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(after.retirementObligations).toEqual(before.retirementObligations);
   });
 
-  it.each(['content', 'index', 'administration', 'default', 'pr-head', 'forge', 'policy', 'unreadable-policy', 'submodule', 'inventory'])('refuses changed %s evidence between review and confirmation', async change => {
-    const c = await reviewedCheckout('changed-review', { gitlink: true });
-    const prepared = await c.prepare();
-    expect(prepared.ok).toBe(true);
-    if (change === 'content') await writeFile(join(c.path, 'ignored.txt'), 'new evidence');
-    if (change === 'index') { await writeFile(join(c.path, 'staged.txt'), 'new index'); await execGit(['add', 'staged.txt'], c.path); }
-    if (change === 'administration') await writeFile(join(c.admin, 'portos-review-status'), 'new review');
-    if (change === 'default') {
-      await writeFile(join(repo, 'later.txt'), 'later default');
-      await execGit(['add', 'later.txt'], repo); await execGit(['commit', '-m', 'later default'], repo);
-      c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
-    }
-    if (change === 'pr-head') c.forge.prHead = c.forge.defaultHead;
-    if (change === 'unreadable-policy') injected.policies = null;
-    if (change === 'forge') c.forge.remoteHead = c.release.head;
-    if (change === 'policy') injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
-    if (change === 'submodule') await writeFile(join(c.path, 'vendor', 'unique.txt'), 'submodule work');
-    if (change === 'inventory') injected.schedule.executions = {};
-    const result = await c.confirm(prepared.review);
-    expect(result.ok).toBe(false);
-    expect(await registered(c.release.path)).toBe(true);
-    expect(await lockText(c.release.path)).toBe(c.release.lockReason);
-    expect(await archives()).toEqual([]);
+  describe.each(['content', 'index', 'administration', 'default', 'pr-head', 'forge', 'policy', 'unreadable-policy', 'submodule', 'inventory'])('changed %s evidence between review and confirmation', change => {
+    let c;
+    let prepared;
+    // Fixture construction, preview and confirmation are distinct real-Git
+    // workflows; each retains the existing 30-second phase budget.
+    beforeEach(async () => {
+      c = await reviewedCheckout('changed-review', { gitlink: true });
+    });
+    beforeEach(async () => {
+      prepared = await c.prepare();
+      expect(prepared.ok).toBe(true);
+    });
+    it('refuses confirmation and retains the checkout, lock and archive state', async () => {
+      if (change === 'content') await writeFile(join(c.path, 'ignored.txt'), 'new evidence');
+      if (change === 'index') { await writeFile(join(c.path, 'staged.txt'), 'new index'); await execGit(['add', 'staged.txt'], c.path); }
+      if (change === 'administration') await writeFile(join(c.admin, 'portos-review-status'), 'new review');
+      if (change === 'default') {
+        await writeFile(join(repo, 'later.txt'), 'later default');
+        await execGit(['add', 'later.txt'], repo); await execGit(['commit', '-m', 'later default'], repo);
+        c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
+      }
+      if (change === 'pr-head') c.forge.prHead = c.forge.defaultHead;
+      if (change === 'unreadable-policy') injected.policies = null;
+      if (change === 'forge') c.forge.remoteHead = c.release.head;
+      if (change === 'policy') injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
+      if (change === 'submodule') await writeFile(join(c.path, 'vendor', 'unique.txt'), 'submodule work');
+      if (change === 'inventory') injected.schedule.executions = {};
+      const result = await c.confirm(prepared.review);
+      expect(result.ok).toBe(false);
+      expect(await registered(c.release.path)).toBe(true);
+      expect(await lockText(c.release.path)).toBe(c.release.lockReason);
+      expect(await archives()).toEqual([]);
+    });
   });
 
   it.each(['running', 'paused'])('refuses a %s owner that arrives after preparation', async status => {
