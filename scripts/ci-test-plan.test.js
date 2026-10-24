@@ -396,7 +396,7 @@ it('projects test-only shared re-exports and retains unresolved consumers withou
     write(unused, 'export const unused = 1;\n');
     write('scripts/lib/cleanupBridge.js', "export { value } from './cleanupLeaf.js';\n");
     write('client/src/test/fixture.js', "export { value } from '../../../scripts/lib/cleanupBridge.js';\n");
-    write(consumer, "import './fixture.js';\n");
+    write(consumer, "const fixture = await import('./fixture.js');\n");
     write(unrelated, 'export const unrelated = 1;\n');
     git('add', '--all');
 
@@ -405,6 +405,10 @@ it('projects test-only shared re-exports and retains unresolved consumers withou
     expect(plan(unused)).toMatchObject({ full: false, build: false, client_mode: 'skip' });
 
     write('client/src/test/fixture.js', "export { value } from './missing.js';\n");
+    expect(plan(leaf)).toMatchObject({ full: false, build: false,
+      client_mode: 'files', client_files: JSON.stringify([consumer]) });
+
+    write(consumer, "const fixture = await import(globalThis.fixturePath);\n");
     expect(plan(leaf)).toMatchObject({ full: false, build: false,
       client_mode: 'files', client_files: JSON.stringify([consumer]) });
   } finally {

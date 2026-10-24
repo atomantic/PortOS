@@ -1081,7 +1081,7 @@ function buildSuitePlan(changedFiles, {
   // Repository-derived browser dependencies; null means discovery failed and
   // a shared-source change must retain conservative full coverage.
   clientDependencies = [],
-  // Client test → static shared dependencies; null conservatively retains that test.
+  // Client test → shared dependencies; null conservatively retains that test.
   // Kept separate from production dependencies so fixtures never force a build.
   clientTestDependencies = {},
   // Includes literal deferred imports; null means discovery was inconclusive.
@@ -1703,14 +1703,14 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     ? collectClientDependencies(dependencyFiles, snapshot)
     : [];
 
-  // Static imports and re-exports include test fixtures, unlike the production
-  // projection. Keep uncertainty per test so one unresolved fixture cannot
-  // widen every resolved consumer, and reuse this collection's source snapshot.
+  // Include test fixtures and literal deferred imports, unlike the production
+  // projection. Keep uncertainty per test so one unresolved/computed fixture
+  // retains its consumer without widening every resolved test.
   const clientTestDependencies = collectedChangedFiles.some((path) => isSharedClientDependency(path)
     && isExecutable(path) && !isTestFile(path))
     ? Object.fromEntries(dependencyFiles.filter((path) => path.startsWith('client/src/')
       && isTestFile(path)).map((test) => [test,
-      collectTestDependencies([test], snapshot.staticDependencies)?.filter(isSharedClientDependency) ?? null]))
+      collectTestDependencies([test], snapshot.testDependencies)?.filter(isSharedClientDependency) ?? null]))
     : {};
 
   const hasRelatedServerSource = collectedChangedFiles.some((path) => isServerRunnerFile(path)
