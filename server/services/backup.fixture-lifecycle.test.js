@@ -28,6 +28,8 @@ function instrumentSuite(root, tracked, phase) {
     export const pending = new Set();
     export const failures = [];
     export let earlyCleanup = false;
+    const bodies = new Map();
+    export const startHeldBody = (name, context) => bodies.get(name)(context);
     rawAfterAll(async () => {
       while (pending.size) await Promise.allSettled([...pending]);
       writeFileSync(process.env.BACKUP_FIXTURE_RESULT, JSON.stringify({
@@ -35,12 +37,19 @@ function instrumentSuite(root, tracked, phase) {
         installExists: existsSync(globalThis.__backupInstallRoot),
       }));
     });
-    const wrap = register => (name, body, ...rest) => register(name, (...args) => {
-      const run = Promise.resolve().then(() => body(...args));
-      pending.add(run);
-      run.then(() => pending.delete(run), error => { pending.delete(run); failures.push(error.message); });
-      return run;
-    }, ...rest);
+    const wrap = register => (name, body, ...rest) => {
+      let run;
+      const start = (...args) => {
+        if (!run) {
+          run = Promise.resolve().then(() => body(...args));
+          pending.add(run);
+          run.then(() => pending.delete(run), error => { pending.delete(run); failures.push(error.message); });
+        }
+        return run;
+      };
+      bodies.set(name, start);
+      return register(name, (...args) => start(...args), ...rest);
+    };
     export const it = Object.assign(wrap(rawIt), {
       each: rows => wrap(rawIt.each(rows)), for: rows => wrap(rawIt.for(rows)),
     });
@@ -63,21 +72,38 @@ function instrumentSuite(root, tracked, phase) {
     if (specifier === 'vitest') return `${prefix}${JSON.stringify(shim)}`;
     return specifier.startsWith('.') ? `${prefix}${JSON.stringify(new URL(specifier, suiteUrl).href)}` : statement;
   });
-  // The case writes this authority source itself, then previews and restores
-  // it twice. Hold the first source write OR the first real rsync child.
-  if (phase.startsWith('source')) {
+  // Parent fixture hooks run first. Start the actual selected body in this
+  // last preparation hook and wait for its held phase before Vitest arms the
+  // native test timeout; the test callback returns that exact same promise.
+  source = source.replace("describe('machine-local database authority (#10064)', () => {", `describe('machine-local database authority (#10064)', () => {
+    observeBeforeEach(async ({ task, signal, skip }) => {
+      const body = startHeldBody(task.name, { signal, skip });
+      await Promise.race([
+        waitForFixtureReady(process.env.BACKUP_FIXTURE_READY, { signal }),
+        body.then(() => { throw new Error('Authority body completed before its held checkpoint'); }),
+      ]);
+    });`);
+  // Hold the case's own seed writes, not a cache's incidental recreation of
+  // the install root during restore. Both roots then have the same direct
+  // writer on case-sensitive and case-insensitive filesystems.
+  if (phase === 'fixture-write') {
+    source = source.replace('const localPath = joinPath(PATHS.data, path);', `const localPath = joinPath(PATHS.data, path);
+      writeFileSync(process.env.BACKUP_FIXTURE_READY, 'fixture writes admitted');
+      await waitForFixtureReady(process.env.BACKUP_FIXTURE_RELEASE);`);
+  } else if (phase === 'source-failure') {
     source = source.replace('async function writeSnapshotFile(relativePath, content) {', `async function writeSnapshotFile(relativePath, content) {
       if (relativePath === 'Backup-Admission/publications/owner.json' && !globalThis.__backupHeld) {
         globalThis.__backupHeld = true;
         writeFileSync(process.env.BACKUP_FIXTURE_READY, 'source write admitted');
         await waitForFixtureReady(process.env.BACKUP_FIXTURE_RELEASE);
-        ${phase === 'source-failure' ? "throw new Error('controlled late source failure');" : ''}
+        throw new Error('controlled late source failure');
       }`);
   } else {
     source = source.replaceAll('spawnChild(...args)', 'spawnChild(process.execPath, [process.env.BACKUP_FIXTURE_CHILD, ...args[1]], args[2])');
   }
   return `
     import { vi, beforeEach as observeBeforeEach } from 'vitest';
+    import { startHeldBody } from ${JSON.stringify(shim)};
     import { waitForFixtureReady } from ${JSON.stringify(fixtureUrl)};
     observeBeforeEach(({ signal }) => {
       signal.addEventListener('abort', () => writeFileSync(process.env.BACKUP_FIXTURE_CANCELLED, 'cancelled'), { once: true });
@@ -93,8 +119,9 @@ const missingWindowsRsync = process.platform === 'win32' && spawnSync('rsync', [
 describe.skipIf(missingWindowsRsync)('backup authority fixture cancellation (#13450)', () => {
   // Unique regression: a cancelled REAL matrix body still owns its next
   // source write and rsync child, not just the current restore promise. The
-  // nested 1s timeout is fault injection; production/test budgets stay intact.
-  for (const [tracked, phase] of [[false, 'source-write'], [true, 'source-write'], [true, 'rsync'], [true, 'source-failure']]) {
+  // native 1s fault timeout starts only after its real held phase is ready;
+  // ordinary test/hook and production budgets stay intact.
+  for (const [tracked, phase] of [[false, 'fixture-write'], [true, 'fixture-write'], [true, 'rsync'], [true, 'source-failure']]) {
     it(`settles ${phase} before removing fixtures (owned=${tracked})`, async ({ signal }) => {
       const host = mkdtempSync(join(tmpdir(), 'backup-lifecycle-'));
       const controller = new AbortController();
@@ -128,6 +155,7 @@ describe.skipIf(missingWindowsRsync)('backup authority fixture cancellation (#13
         fixture.args.push('--testTimeout=1000', '--testNamePattern', selectedCase);
         running = runFixtureToCompletion(fixture, undefined, { signal: controller.signal });
         void running.then(() => controller.abort(new Error('nested fixture ended')));
+        await waitForFixtureReady(ready, { signal: controller.signal });
         await waitForFixtureReady(cancelled, { signal: controller.signal });
         await waitForFixtureReady(cleanup, { signal: controller.signal });
         if (!tracked) await waitForFixtureReady(removed, { signal: controller.signal });
@@ -138,9 +166,10 @@ describe.skipIf(missingWindowsRsync)('backup authority fixture cancellation (#13
         expect(result.status, output).toBe(1);
         expect(output).toContain('Test timed out in 1000ms');
         const observation = JSON.parse(readFileSync(resultFile, 'utf8'));
-        expect(observation.earlyCleanup, output).toBe(!tracked);
-        expect(observation.snapshotExists, output).toBe(!tracked);
-        expect(observation.installExists, output).toBe(!tracked);
+        const evidence = `${output}\nFixture observation: ${JSON.stringify(observation)}`;
+        expect(observation.earlyCleanup, evidence).toBe(!tracked);
+        expect(observation.snapshotExists, evidence).toBe(!tracked);
+        expect(observation.installExists, evidence).toBe(!tracked);
         if (tracked) {
           expect(observation.failures, output).toEqual(phase === 'source-failure' ? ['controlled late source failure'] : []);
           if (phase === 'source-failure') expect(output).toContain('controlled late source failure');
