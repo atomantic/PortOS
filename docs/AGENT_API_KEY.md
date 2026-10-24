@@ -151,24 +151,25 @@ a running parent, or borrow another owner's token. After expiry, an old holder
 must reacquire and repeat final live checks; its old token cannot release a
 successor's lease.
 
-## Whole-checkout preservation
+## FableLoom static export
 
-For a reviewed checkout that exceeds the ordinary archive byte bounds, the
-explicit `POST /api/cos/schedule/branch-reconcile/whole-checkouts/review` and
-`whole-checkouts/retire` endpoints use the initialized-checkout transaction
-backend without requiring an initialized submodule. They accept the same exact
-inventory tuple, PR URL and review confirmation as the initialized endpoints.
-Their reviews are distinct: a digest from another preservation mode is refused.
+The authenticated CLI supports read-only preflight, build, explicit job status/watch,
+and protected binary download. Episode IDs retain their supplied package order.
+Omitting episode IDs exports all episodes in story order. Draft media is refused
+unless `--allow-draft true` is explicit; voice also requires `--characters true`.
+Preflight reports graph, outline, production, media and approval findings before a
+build. The build repeats validation and checks source bytes; preflight is not a
+finished-package certification.
 
-This path retains the backend's source-byte and writable-capacity bounds,
-ownership checks, complete metadata capture, standalone object proof, quarantine
-and branch-retirement receipt. Uninitialized gitlink paths may be absent or
-contain ordinary files; all present files are preserved. Actual embedded Git
-stores and external object dependencies retain their existing refusal rules.
-The ordinary archive limits and initialized-only endpoint remain unchanged.
+```sh
+node scripts/portos-api.js fableloom-export preflight LOOM --episodes EP1,EP2 --player true --profile web-720p
+node scripts/portos-api.js fableloom-export start LOOM --episodes EP1,EP2 --player true --profile web-720p
+node scripts/portos-api.js fableloom-export status LOOM JOB
+node scripts/portos-api.js fableloom-export watch LOOM JOB --timeout 1800
+node scripts/portos-api.js fableloom-export download LOOM JOB --output story.zip
+```
 
-Status, rollback, independent archive verification and later branch retirement
-use the existing `initialized-checkouts` transaction endpoints with the returned
-transaction ID and a fresh journal digest. A failed preservation attempt is
-unverified and retains its originals and partial evidence; it is not successful
-cleanup. No archive deletion or retention policy is added by these endpoints.
+`watch` prints findings, progress and final size and exits nonzero for a failed or
+cancelled job. Downloads use the same credential transport, write ZIP bytes to a
+new file with private permissions and refuse overwriting an existing file. The
+ZIP is a static managed artifact; these commands do not deploy or host PortOS.

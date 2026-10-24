@@ -456,3 +456,25 @@ archive identity and timestamp so a newer checkout obligation cannot be satisfie
 by replaying an older retirement. Interrupted transactions outside the machine-verified continuation above
 require explicit status and recovery; ambiguous identities remain held. The
 private journal and all copies remain available after success or recovery.
+
+## Whole-checkout preservation
+
+For a reviewed checkout that exceeds the ordinary archive byte bounds, the
+explicit `POST /api/cos/schedule/branch-reconcile/whole-checkouts/review` and
+`whole-checkouts/retire` endpoints use the initialized-checkout transaction
+backend without requiring an initialized submodule. They accept the same exact
+inventory tuple, PR URL and review confirmation as the initialized endpoints.
+Their reviews are distinct: a digest from another preservation mode is refused.
+
+This path retains the backend's source-byte and writable-capacity bounds,
+ownership checks, complete metadata capture, standalone object proof, quarantine
+and branch-retirement receipt. Uninitialized gitlink paths may be absent or
+contain ordinary files; all present files are preserved. Actual embedded Git
+stores and external object dependencies retain their existing refusal rules.
+The ordinary archive limits and initialized-only endpoint remain unchanged.
+
+Status, rollback, independent archive verification and later branch retirement
+use the existing `initialized-checkouts` transaction endpoints with the returned
+transaction ID and a fresh journal digest. A failed preservation attempt is
+unverified and retains its originals and partial evidence; it is not successful
+cleanup. No archive deletion or retention policy is added by these endpoints.
