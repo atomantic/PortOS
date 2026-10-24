@@ -27,7 +27,7 @@ const plan = { full: false, reason: 'scoped', server: { mode: 'files', files: []
 
 /** A receipt as pregate writes it, with the given stage outcomes. */
 const receipt = ({ stages, tree = TREE, treeAfterRun = tree, downgraded = false, skipped = [], base = { ref: 'origin/main', sha: BASE } }) => buildPregateReport({
-  plan, options: { base: base.ref }, base, head: { sha: SHA }, tree, treeAfterRun, stages, skipped,
+  plan, options: { base: base.ref, full: true }, base, head: { sha: SHA }, tree, treeAfterRun, stages, skipped,
   runtime: { node: 'v26.10.0', platform: OS }, startedAt: 's', finishedAt: 'f', downgraded,
 });
 
@@ -331,5 +331,15 @@ describe('runAttest', () => {
     const { err, log, error } = io();
     expect(run({ argv: ['--nope'], exec: fakeExec([]), log, error })).toBe(2);
     expect(err[0]).toContain(USAGE);
+  });
+});
+
+describe('focused receipt boundary', () => {
+  it('refuses focused or unspecified v3 proof while preserving legacy stage evidence', () => {
+    const report = { version: 3, validationMode: 'focused', plan: { downgraded: false }, stages: [{ suite: 'server', status: 'passed' }] };
+    expect(attestedStagesFromReceipt(report)).toEqual([]);
+    expect(() => planAttestation(report, {})).toThrow(/focused local validation/);
+    expect(attestedStagesFromReceipt({ ...report, validationMode: undefined })).toEqual([]);
+    expect(attestedStagesFromReceipt({ ...report, version: 2, validationMode: undefined })).toEqual(['server']);
   });
 });
