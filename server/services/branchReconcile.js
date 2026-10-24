@@ -1,3 +1,4 @@
+import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 /**
  * Branch & PR Reconciler — deterministic core (Tier 1).
@@ -1097,6 +1098,8 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
       ...((entry.path || entry.worktreePath) && { path: entry.path || entry.worktreePath }),
       ...(entry.issue && { issue: entry.issue }),
       ...(entry.head && { head: entry.head }),
+      ...(entry.observedAt && { observedAt: entry.observedAt }),
+      ...(entry.checkoutIdentity && { checkoutIdentity: entry.checkoutIdentity }),
       ...(entry.locked !== undefined && { locked: entry.locked, lockReason: entry.lockReason ?? null }),
       ...(entry.detached && { detached: true }),
       ...(entry.managed !== undefined && { managed: entry.managed }),
@@ -1618,10 +1621,12 @@ const isCommitOnBranch = (repoPath, sha, branch) =>
 async function gatherRecoveryWorktrees(repoPath, preloadedTrees = null) {
   const trees = preloadedTrees || await listWorktrees(repoPath).catch(() => null);
   if (!trees?.length) return null;
-  return trees.slice(1).filter(tree => !tree.bare).map(tree => {
+  return Promise.all(trees.slice(1).filter(tree => !tree.bare).map(async tree => {
     const managed = worktreeOwnershipReason({ path: tree.path, roots: reconcileWorktreeRoots(repoPath), allowLiveClaim: true }) !== 'worktree-unmanaged-location';
     return {
       path: tree.path,
+      observedAt: new Date().toISOString(),
+      checkoutIdentity: await readRetirementCheckoutIdentity(tree.path),
       ...(tree.branch && { branch: tree.branch.replace(/^refs\/heads\//, '') }),
       head: tree.head ?? null,
       detached: !tree.branch,
@@ -1631,7 +1636,7 @@ async function gatherRecoveryWorktrees(repoPath, preloadedTrees = null) {
       reason: tree.prunable ? 'worktree-prunable' : tree.locked ? 'worktree-locked'
         : !managed ? 'worktree-unmanaged-location' : 'checkout-retained',
     };
-  });
+  }));
 }
 
 const isStillDetachedOnMerged = async (repoPath, treePath, defaultBranch) => {

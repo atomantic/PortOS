@@ -47,8 +47,9 @@ describe('CoS Schedule Routes', () => {
     vi.clearAllMocks();
   });
 
-  it('validates and forwards separate retirement review evidence without including it in checkout identity', async () => {
+  it.each([false, true])('validates retirement review evidence with optional observation identity: %s', async withObservation => {
     const tuple = { path: '/synthetic/checkout', head: 'a'.repeat(40), branch: 'claim/42', locked: false, lockReason: null };
+    if (withObservation) Object.assign(tuple, { checkoutIdentity: 'c'.repeat(64), observedAt: '2026-10-23T00:00:00Z' });
     const prUrl = 'https://github.com/example/repo/pull/42';
     recovery.prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { digest: 'b'.repeat(64) } });
     const prepared = await request(app).post('/api/cos/schedule/branch-reconcile/checkouts/review').send({ appId: 'app-1', ...tuple, prUrl });

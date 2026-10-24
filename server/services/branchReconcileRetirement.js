@@ -25,7 +25,7 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
     if (!tree || tree.managed !== true || tree.locked !== false || tree.head !== branch.tip) continue;
     // The open PR ships from another checkout; this one has idled behind it.
     if (branch.openPr && !(await isIdleCheckout(tree.path, deps))) continue;
-    const release = { branch: tree.branch, path: tree.path, head: tree.head, locked: false, lockReason: tree.lockReason ?? null };
+    const release = { ...(tree.observedAt && { observedAt: tree.observedAt }), ...(tree.checkoutIdentity && { checkoutIdentity: tree.checkoutIdentity }), branch: tree.branch, path: tree.path, head: tree.head, locked: false, lockReason: tree.lockReason ?? null };
     // Every commit is already on the default branch, so no PR identity or owner
     // history is needed to prove nothing is lost: archive and retire it. The
     // service re-proves merge evidence and ownership under its fence.

@@ -22,10 +22,11 @@ describe('historical completed-checkout review obligations', () => {
   it('archives and retires a checkout whose commits are all on the default branch without a PR read or dispatch', async () => {
     const deps = setup();
     deps.retire = vi.fn(async () => ({ ok: true, branchDeleted: true, archiveDir: '/private/verified-archive' }));
-    const result = await prepareReconcileRetirements(app, scan({ isMerged: true }), deps);
+    const observation = { observedAt: '2026-10-23T00:00:00Z', checkoutIdentity: 'original-checkout' };
+    const result = await prepareReconcileRetirements(app, scan({ isMerged: true }, observation), deps);
     expect(result).toMatchObject({ candidates: [], held: [], retired: [expect.objectContaining({ branch: branch.branch, head })] });
     expect(deps.readPr).not.toHaveBeenCalled();
-    expect(deps.retire).toHaveBeenCalledWith({ appId: app.id, release: { branch: tree.branch, path: tree.path, head, locked: false, lockReason: null } },
+    expect(deps.retire).toHaveBeenCalledWith({ appId: app.id, release: { ...observation, branch: tree.branch, path: tree.path, head, locked: false, lockReason: null } },
       { beforeMutation: expect.any(Function), settleMergedReviewObligation: true });
   });
 
