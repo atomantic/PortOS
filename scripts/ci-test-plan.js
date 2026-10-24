@@ -3,8 +3,9 @@
 import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join, posix, relative } from 'path';
-import { staticImportClosure, staticImportSpecifiersFromSource, toModuleKey } from '../server/lib/staticImportGraph.js';
+import { staticImportClosure, toModuleKey } from '../server/lib/staticImportGraph.js';
 import { escapeRegExp } from '../server/lib/textUtils.js';
+import { moduleImports } from './lib/sourceTokens.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
@@ -1542,6 +1543,7 @@ export function forceFullReasonFor({ forceFull, baseRef }) {
 function createDependencySnapshot(files, cwd) {
   const known = new Set(files);
   const sources = new Map();
+  const imports = new Map();
   const staticEdges = new Map();
   const testEdges = new Map();
   const extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts', '.json'];
@@ -1571,22 +1573,19 @@ function createDependencySnapshot(files, cwd) {
     }
     return { dependencies, inconclusive };
   };
+  const importsFor = (file) => {
+    if (!imports.has(file)) imports.set(file, moduleImports(readText(file)));
+    return imports.get(file);
+  };
   const staticDependencies = (file) => {
     if (!staticEdges.has(file)) {
-      staticEdges.set(file, resolve(file, staticImportSpecifiersFromSource(readText(file))));
+      staticEdges.set(file, resolve(file, importsFor(file).statics));
     }
     return staticEdges.get(file);
   };
   const testDependencies = (file) => {
     if (!testEdges.has(file)) {
-      const deferred = [];
-      let computed = false;
-      // Nonliterals and extra matches in comments widen prerequisites safely.
-      for (const match of readText(file).matchAll(/\bimport\s*\(\s*([^)]*)\)/g)) {
-        const literal = match[1].trim().match(/^(['"`])([^'"`]*?)\1\s*(?:,.*)?$/s);
-        if (!literal || literal[2].includes('${')) computed = true;
-        else deferred.push(literal[2]);
-      }
+      const { deferred, computed } = importsFor(file);
       const statics = staticDependencies(file);
       const dynamic = resolve(file, deferred);
       testEdges.set(file, {

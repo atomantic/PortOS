@@ -397,7 +397,11 @@ it('projects test-only shared re-exports and retains unresolved consumers withou
     write('scripts/lib/cleanupBridge.js', "export { value } from './cleanupLeaf.js';\n");
     write('client/src/test/fixture.js', "export { value } from '../../../scripts/lib/cleanupBridge.js';\n");
     write(consumer, "const fixture = await import('./fixture.js');\n");
-    write(unrelated, 'export const unrelated = 1;\n');
+    write(unrelated, [
+      '// import (#2895)',
+      'const fixture = `import value from "./ProbeGood"; import(unknown)`;',
+      'export const unrelated = 1;',
+    ].join('\n'));
     git('add', '--all');
 
     expect(plan(leaf)).toMatchObject({ full: false, build: false,
@@ -566,7 +570,11 @@ it('follows DB-only deferred dependencies through the pre-install CLI and preser
   try {
     git('init', '-q');
     write(leaf, 'export const value = 1;\n');
-    write('server/services/bridge.js', "export const load = () => import('./example/leaf.js');\n");
+    write('server/services/bridge.js', [
+      '// import (#1945)',
+      'const fixture = `import value from "./ProbeGood"; import(unknown)`;',
+      "export const load = () => import('./example/leaf.js');",
+    ].join('\n'));
     write(contract, "import '../services/bridge.js';\n");
     write('server/services/unrelated.js', 'export const value = 2;\n');
     git('add', '--all');
@@ -1902,7 +1910,11 @@ it('projects transitive browser consumers through the planner CLI without replac
     write('server/services/bridge.js', "export { value } from './example/leaf';\n");
     write(staticSuite, "import '../services/bridge.js';\n");
     write(deferredSuite, "export const load = () => import('../services/bridge.js');\n");
-    write(independentSuite, 'export const value = 3;\n');
+    write(independentSuite, [
+      '// import (#2120)',
+      'const fixture = `export * from "./ProbeBarrel"; import(unknown)`;',
+      'export const value = 3;',
+    ].join('\n'));
     git('add', '--all');
 
     // Neither browser suite shares leaf's feature or names its basename. Only

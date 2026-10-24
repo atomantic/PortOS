@@ -149,6 +149,35 @@ it('hands the real client fixture consumers to Vitest for a shared browser clean
   }
 }, 150_000);
 
+it('skips client execution for a real helper without consumers despite import-looking API prose (#13454)', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'portos-client-unconsumed-selection-'));
+  try {
+    installFakeNpm(fixture, REPORTING_NPM);
+    const source = 'scripts/lib/setupDbChoice.js';
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd: join(import.meta.dirname, '..') });
+    const plan = buildCiTestPlan(inputs.changedFiles, inputs);
+    // These comment-heavy chains previously retained hundreds of unrelated tests.
+    for (const test of ['client/src/services/apiSprites.test.js', 'client/src/a11yConventions.test.js']) {
+      expect(inputs.clientTestDependencies[test], test).toEqual(expect.any(Array));
+      expect(plan.client.files, test).not.toContain(test);
+    }
+    expect(plan).toMatchObject({ full: false, build: false, client: { mode: 'skip', files: [] } });
+    const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'client'], {
+      encoding: 'utf8', timeout: 120000,
+      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
+        CI_TEST_MODE: plan.client.mode, CI_SHARD: '', PORTOS_TEST_MEMO: 'off',
+        CI_TEST_SOURCES: JSON.stringify(plan.client.sources), CI_TEST_FILES: JSON.stringify(plan.client.files),
+        PORTOS_PREGATE_GUARDS: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain('{"args"');
+    expect(result.stdout).toContain('No client tests selected');
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+}, 150_000);
+
 it('runs the db scope through the server workspace\'s test:db:ci script with the same selection file', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'portos-db-scope-'));
   try {
