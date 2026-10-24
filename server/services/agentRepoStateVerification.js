@@ -503,7 +503,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
     : null;
   if (app === UNREADABLE) return skipped(REPO_STATE_SKIPS.GATE_UNREADABLE);
 
-  const worktreePath = hasClaimCheckoutBindings(metadata) ? metadata.workspacePath : metadata.workspacePath || join(PATHS.worktrees, agentId);
+  const worktreePath = isTruthyMeta(metadata.claimPicksOwnBranch) ? metadata.workspacePath : metadata.workspacePath || join(PATHS.worktrees, agentId);
   const { record, blockWith } = branchLedger(agentId, { branch: branchName, path: worktreePath });
   const enabled = repoStateVerificationEnabled(app);
   const owned = enabled ? await branchHasPendingOwner(branchName, app, agentState?.result?.cleanupPending === true ? { taskId: task.id, agentId } : null).catch(() => null) : false;
@@ -698,7 +698,7 @@ async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWo
   emitLog('info', `🔎 Repo state diverged after ${agentId}: ${issues.map(i => i.code).join(', ')}`, { agentId, branchName, taskId: task?.id });
 
   const recoveryTaskId = await fileRepoStateRecoveryTask({
-    agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, retirement, claimRun: hasClaimCheckoutBindings(metadata),
+    agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, retirement, claimRun: isTruthyMeta(metadata.claimPicksOwnBranch),
   }).catch(err => {
     emitLog('warn', `Failed to file repo-state recovery task for ${agentId}: ${err.message}`, { agentId, branchName });
     return null;
