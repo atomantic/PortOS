@@ -23,11 +23,16 @@
  *   guard, and the error path that must release the lock and record the failure.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, it as vitestIt, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join as joinPath } from 'path';
-import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { makePathsProxy, ownTestBodies } from '../lib/mockPathsDataRoot.js';
+
+// Fail-fast/timeout settles Vitest's wrapper before its async body. These
+// real-rsync cases also seed the source between restores; own the whole body
+// so neither source nor install cleanup can run underneath that continuation.
+const authorityBodies = ownTestBodies(vitestIt);
 
 // runBackup persists state to PATHS.data/backup/state.json. Re-root PATHS at
 // a temp tree so the suite can never write into the live install's data dir.
@@ -51,8 +56,9 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   } });
 });
 
-afterAll(() => {
-  if (TEST_DATA_ROOT) rmSync(dirname(TEST_DATA_ROOT), { recursive: true, force: true });
+afterAll(async () => {
+  try { await authorityBodies.drain(); }
+  finally { if (TEST_DATA_ROOT) rmSync(dirname(TEST_DATA_ROOT), { recursive: true, force: true }); }
 });
 
 
@@ -195,6 +201,7 @@ import { EXCLUDE_PATTERN_MAX_LENGTH, anchorUserExclude, anchorUserExcludes, isSa
 // resets call history but NOT implementations, so a single test's
 // mockResolvedValue would otherwise make every later test see a marker and 409.
 beforeEach(async () => {
+  await authorityBodies.drain();
   const actual = await vi.importActual('fs/promises');
   fs.readdir.mockImplementation(actual.readdir);
   fs.access.mockImplementation(actual.access);
@@ -2284,9 +2291,12 @@ describe('restoreSnapshot manifest verification', () => {
   });
 
   afterEach(async () => {
-    await realFs?.rm(tmpRoot, { recursive: true, force: true });
-    await realFs?.rm(joinPath(PATHS.data, 'restore-integrity'), { recursive: true, force: true });
-    await realFs?.rm(joinPath(PATHS.data, 'database-authority.json'), { force: true });
+    try { await authorityBodies.drain(); }
+    finally {
+      await realFs?.rm(tmpRoot, { recursive: true, force: true });
+      await realFs?.rm(joinPath(PATHS.data, 'restore-integrity'), { recursive: true, force: true });
+      await realFs?.rm(joinPath(PATHS.data, 'database-authority.json'), { force: true });
+    }
   });
 
   async function writeSnapshotFile(relativePath, content) {
@@ -3008,6 +3018,7 @@ describe('restoreSnapshot manifest verification', () => {
   // as DATABASE_RETIRED_BACKEND, including across restarts. Real rsync + the real
   // authority adapter, because a mocked transfer cannot show the fence.
   describe('machine-local database authority (#10064)', () => {
+    const it = authorityBodies.it;
     const native = { mode: 'native', host: '127.0.0.1', port: 5432, database: 'example_db', user: 'example_user' };
     const docker = { mode: 'docker', host: '127.0.0.1', port: 5561, database: 'example_db', user: 'example_user' };
     const authorityDoc = (operationId, source, target) => JSON.stringify({
@@ -3043,33 +3054,35 @@ describe('restoreSnapshot manifest verification', () => {
       }
     }
 
-    it.for([
+    for (const { name, live } of [
       { name: 'a never-federated install', live: null },
       { name: 'this machine\'s own older snapshot', live: '{"self":{"instanceId":"00000000-0000-4000-8000-000000000001"},"peers":[{"id":"newer-peer"}]}' },
-    ])('installs instance identity bytes for $name, invalidating execution grants first', async ({ live }, context) => {
-      await withRealRsync(context, async () => {
-        const { createPeerExecutionAuthority } = await import('../lib/peerExecutionAuthority.js');
-        const path = joinPath(PATHS.data, 'peer-execution-authority.json');
-        const identityPath = joinPath(PATHS.data, 'instances.json');
-        await realFs.rm(path, { force: true });
-        await realFs.rm(identityPath, { force: true });
-        if (live) await realFs.writeFile(identityPath, live);
-        try {
-          const authority = createPeerExecutionAuthority(PATHS.data);
-          const before = authority.initialize();
-          const identity = '{"self":{"instanceId":"00000000-0000-4000-8000-000000000001"},"peers":[]}';
-          const hash = await writeSnapshotFile('instances.json', identity);
-          await writeManifest({ 'instances.json': hash });
-          const result = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: 'instances.json' });
-          expect(result).not.toHaveProperty('identityPreserved');
-          expect(authority.read().epoch).not.toBe(before.epoch);
-          expect(await realFs.readFile(identityPath, 'utf8')).toBe(identity);
-        } finally {
+    ]) {
+      it(`installs instance identity bytes for ${name}, invalidating execution grants first`, async context => {
+        await withRealRsync(context, async () => {
+          const { createPeerExecutionAuthority } = await import('../lib/peerExecutionAuthority.js');
+          const path = joinPath(PATHS.data, 'peer-execution-authority.json');
+          const identityPath = joinPath(PATHS.data, 'instances.json');
           await realFs.rm(path, { force: true });
           await realFs.rm(identityPath, { force: true });
-        }
+          if (live) await realFs.writeFile(identityPath, live);
+          try {
+            const authority = createPeerExecutionAuthority(PATHS.data);
+            const before = authority.initialize();
+            const identity = '{"self":{"instanceId":"00000000-0000-4000-8000-000000000001"},"peers":[]}';
+            const hash = await writeSnapshotFile('instances.json', identity);
+            await writeManifest({ 'instances.json': hash });
+            const result = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: 'instances.json' });
+            expect(result).not.toHaveProperty('identityPreserved');
+            expect(authority.read().epoch).not.toBe(before.epoch);
+            expect(await realFs.readFile(identityPath, 'utf8')).toBe(identity);
+          } finally {
+            await realFs.rm(path, { force: true });
+            await realFs.rm(identityPath, { force: true });
+          }
+        });
       });
-    });
+    }
 
     // #12596: a shared destination lists every machine's snapshots. Installing
     // another machine's instances.json would give two live installs one
@@ -3092,33 +3105,38 @@ describe('restoreSnapshot manifest verification', () => {
       }
 
       afterEach(async () => {
-        await realFs.rm(identityPath(), { force: true });
-        await realFs.rm(joinPath(PATHS.data, 'peer-execution-authority.json'), { force: true });
-        const { resetInstanceIdCache } = await import('./instanceIdentity.js');
-        resetInstanceIdCache();
+        try { await authorityBodies.drain(); }
+        finally {
+          await realFs.rm(identityPath(), { force: true });
+          await realFs.rm(joinPath(PATHS.data, 'peer-execution-authority.json'), { force: true });
+          const { resetInstanceIdCache } = await import('./instanceIdentity.js');
+          resetInstanceIdCache();
+        }
       });
 
-      it.for([
+      for (const { name, options } of [
         { name: 'full restore', options: {} },
         { name: 'folder restore of instances.json', options: { subdirFilter: 'instances.json' } },
-      ])('a $name keeps a different live identity byte-for-byte and reports it in preview and execution', async ({ options }, context) => {
-        await withRealRsync(context, async () => {
-          await seedOtherMachine();
-          const { getInstanceId } = await import('./instanceIdentity.js');
-          expect(await getInstanceId()).toBe(LIVE_ID);
-          const identityPreserved = { liveInstanceId: LIVE_ID, snapshotInstanceId: OTHER_ID };
+      ]) {
+        it(`a ${name} keeps a different live identity byte-for-byte and reports it in preview and execution`, async context => {
+          await withRealRsync(context, async () => {
+            await seedOtherMachine();
+            const { getInstanceId } = await import('./instanceIdentity.js');
+            expect(await getInstanceId()).toBe(LIVE_ID);
+            const identityPreserved = { liveInstanceId: LIVE_ID, snapshotInstanceId: OTHER_ID };
 
-          const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, ...options });
-          expect(preview).toMatchObject({ identityPreserved, verification: { status: 'verified' } });
-          expect(preview.changedFiles.some(line => line.includes('instances.json'))).toBe(false);
+            const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, ...options });
+            expect(preview).toMatchObject({ identityPreserved, verification: { status: 'verified' } });
+            expect(preview.changedFiles.some(line => line.includes('instances.json'))).toBe(false);
 
-          const result = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, ...options });
-          expect(result).toMatchObject({ identityPreserved });
-          expect(await realFs.readFile(identityPath(), 'utf8')).toBe(LIVE_IDENTITY);
-          expect(await getInstanceId()).toBe(LIVE_ID);
-          expect(existsSync(joinPath(PATHS.data, RECORD))).toBe(!options.subdirFilter);
+            const result = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, ...options });
+            expect(result).toMatchObject({ identityPreserved });
+            expect(await realFs.readFile(identityPath(), 'utf8')).toBe(LIVE_IDENTITY);
+            expect(await getInstanceId()).toBe(LIVE_ID);
+            expect(existsSync(joinPath(PATHS.data, RECORD))).toBe(!options.subdirFilter);
+          });
         });
-      });
+      }
 
       it('keeps an unreadable live identity rather than guessing whose it was', async context => {
         await withRealRsync(context, async () => {
@@ -3190,47 +3208,50 @@ describe('restoreSnapshot manifest verification', () => {
       });
     });
 
-    it.for(['peer-execution-grants.json', 'peer-execution-catalog.json', 'peer-execution/fixture-operation/evidence.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance/state.json', 'workflow-maintenance/recovered-fixture/receipt.json', 'Workflow-Maintenance/state.json', 'backup-admission/cut/owner.json', 'Backup-Admission/publications/owner.json'])
-    ('preserves non-rewound execution authority and ownership at %s (#10127)', async (path, context) => {
-      await withRealRsync(context, async () => {
-        const localPath = joinPath(PATHS.data, path);
-        await realFs.mkdir(dirname(localPath), { recursive: true });
-        await realFs.writeFile(localPath, 'current receiver authority');
-        for (const withManifest of [true, false]) {
-          await realFs.rm(joinPath(snapshotDir, 'manifest.json'), { force: true });
-          const hash = await writeSnapshotFile(path, 'obsolete snapshot authority');
-          const neighbor = await writeSnapshotFile(RECORD, '{"value":"snapshot"}');
-          if (withManifest) await writeManifest({ [path]: hash, [RECORD]: neighbor });
-          const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
-          expect(preview.changedFiles.some(line => line.includes(path))).toBe(false);
-          await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
-          expect(await realFs.readFile(localPath, 'utf8')).toBe('current receiver authority');
-        }
+    for (const path of ['peer-execution-grants.json', 'peer-execution-catalog.json', 'peer-execution/fixture-operation/evidence.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance/state.json', 'workflow-maintenance/recovered-fixture/receipt.json', 'Workflow-Maintenance/state.json', 'backup-admission/cut/owner.json', 'Backup-Admission/publications/owner.json']) {
+      it(`preserves non-rewound execution authority and ownership at ${path} (#10127)`, async context => {
+        await withRealRsync(context, async () => {
+          const localPath = joinPath(PATHS.data, path);
+          await realFs.mkdir(dirname(localPath), { recursive: true });
+          await realFs.writeFile(localPath, 'current receiver authority');
+          for (const withManifest of [true, false]) {
+            await realFs.rm(joinPath(snapshotDir, 'manifest.json'), { force: true });
+            const hash = await writeSnapshotFile(path, 'obsolete snapshot authority');
+            const neighbor = await writeSnapshotFile(RECORD, '{"value":"snapshot"}');
+            if (withManifest) await writeManifest({ [path]: hash, [RECORD]: neighbor });
+            const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+            expect(preview.changedFiles.some(line => line.includes(path))).toBe(false);
+            await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+            expect(await realFs.readFile(localPath, 'utf8')).toBe('current receiver authority');
+          }
+        });
       });
-    });
+    }
 
-    it.for([
+    for (const { name, options } of [
       { name: 'full restore', options: {} },
       { name: 'brain-scoped restore', options: { subdirFilter: 'brain' } },
-    ])('a $name keeps an absent destination authority absent, so a healthy native backend is still admitted', async ({ options }, context) => {
-      await withRealRsync(context, async () => {
-        for (const manifest of [true, false]) {
-          await realFs.rm(joinPath(snapshotDir, 'manifest.json'), { force: true });
-          await seedSnapshot({ withManifest: manifest });
-          await realFs.rm(authorityPath(), { force: true });
-          await realFs.rm(joinPath(PATHS.data, RECORD), { force: true });
+    ]) {
+      it(`a ${name} keeps an absent destination authority absent, so a healthy native backend is still admitted`, async context => {
+        await withRealRsync(context, async () => {
+          for (const manifest of [true, false]) {
+            await realFs.rm(joinPath(snapshotDir, 'manifest.json'), { force: true });
+            await seedSnapshot({ withManifest: manifest });
+            await realFs.rm(authorityPath(), { force: true });
+            await realFs.rm(joinPath(PATHS.data, RECORD), { force: true });
 
-          const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, ...options });
-          expect(preview.changedFiles.some(line => line.includes('database-authority.json'))).toBe(false);
-          expect(preview.changedFiles.some(line => line.includes(RECORD))).toBe(true);
+            const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, ...options });
+            expect(preview.changedFiles.some(line => line.includes('database-authority.json'))).toBe(false);
+            expect(preview.changedFiles.some(line => line.includes(RECORD))).toBe(true);
 
-          await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, ...options });
-          expect(existsSync(authorityPath())).toBe(false);
-          expect(await realFs.readFile(joinPath(PATHS.data, RECORD), 'utf8')).toBe('{"value":"snapshot"}');
-          expect(createDatabaseAuthority(PATHS.data).assertPool(poolFor(native))).toBeNull();
-        }
+            await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, ...options });
+            expect(existsSync(authorityPath())).toBe(false);
+            expect(await realFs.readFile(joinPath(PATHS.data, RECORD), 'utf8')).toBe('{"value":"snapshot"}');
+            expect(createDatabaseAuthority(PATHS.data).assertPool(poolFor(native))).toBeNull();
+          }
+        });
       });
-    });
+    }
 
     it('keeps a newer reverse-cutover authority over an older snapshot\'s, and still refuses the genuinely retired backend', async context => {
       await withRealRsync(context, async () => {
@@ -3285,17 +3306,16 @@ describe('restoreSnapshot manifest verification', () => {
       await expect(pending).resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
     });
 
-    it.each(['database-authority.json', './database-authority.json', 'database-authority.json/', 'Database-Authority.json'])(
-      'refuses an explicit %s selection before verification or transfer, for preview and execution alike',
-      async subdirFilter => {
+    for (const subdirFilter of ['database-authority.json', './database-authority.json', 'database-authority.json/', 'Database-Authority.json']) {
+      it(`refuses an explicit ${subdirFilter} selection before verification or transfer, for preview and execution alike`, async () => {
         await seedSnapshot();
         for (const dryRun of [true, false]) {
           await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun, subdirFilter }))
             .rejects.toMatchObject({ status: 400, code: 'BACKUP_RESTORE_MACHINE_LOCAL', message: expect.stringMatching(/machine-local/) });
         }
         expect(spawn).not.toHaveBeenCalled();
-      },
-    );
+      });
+    }
   });
 
   // #7299: `--checksum` makes rsync digest BOTH copies of every file in scope,
