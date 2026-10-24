@@ -55,7 +55,10 @@ router.get('/', asyncHandler(async (req, res) => {
     getApiBilledInstanceIds().then((apiBilledInstanceIds) =>
       getFleetUsage({ from, to, providers, apiBilledInstanceIds })),
     getFleetMonthlyUsage({ providers }),
-    getImageRenderUsage({ from, to }),
+    getImageRenderUsage({ from, to }).catch(err => {
+      console.error(`❌ Failed to read image render usage: ${err.message}`);
+      return { error: 'Image render usage is unavailable.' };
+    }),
   ]);
   res.json({
     ...summary, subscriptionSavings, fleet, imageRenders,

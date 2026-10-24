@@ -708,6 +708,10 @@ function InternalUsageMetrics() {
       {usage.imageRenders && (
         <section className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-2" aria-label="Codex image usage">
           <h3 className="text-sm font-medium text-white">Codex image usage · this machine</h3>
+          {usage.imageRenders.error ? (
+            <p className="text-sm text-gray-400" role="status">Image render usage is unavailable. Text usage remains available.</p>
+          ) : (
+            <>
           <p className="text-sm text-gray-300">
             {formatCount(usage.imageRenders.codexSessions)} Codex sessions · {formatCount(usage.imageRenders.savedOutputs)} saved outputs in this period
           </p>
@@ -725,6 +729,8 @@ function InternalUsageMetrics() {
           </p>
           {usage.imageRenders.jobIdentityGroups > 0 && (
             <p className="text-xs text-gray-400">{formatCount(usage.imageRenders.jobIdentityGroups)} additional render groups use saved job IDs; their Codex session IDs are unavailable.</p>
+          )}
+            </>
           )}
         </section>
       )}

@@ -26,7 +26,7 @@ export function codexRenderReceipt(meta) {
   if (!occurredAt) return null;
   const renderKey = digest(`codex:${session || job}`);
   // Without a job id, a recovered tool call supplies a stable output identity.
-  const outputKey = digest(`${renderKey}:${job || meta.codexCallId || 'saved-output'}`);
+  const outputKey = digest(job ? `codex-job:${job.toLowerCase()}` : `${renderKey}:${meta.codexCallId || 'saved-output'}`);
   return {
     version: 1, id: outputKey, renderKey, occurredAt,
     timestampSource: timestamp(meta.renderStartedAt) ? 'renderStartedAt' : 'createdAt',
@@ -91,7 +91,7 @@ export async function recordRenderReceipt(receipt, { directory = ledgerDir() } =
     if (await publishAccountingFile(path, receipt)) return true;
     existing = JSON.parse(await readFile(path, 'utf8'));
   }
-  if (existing?.id !== receipt.id || existing.renderKey !== receipt.renderKey || existing.version !== 1) throw new Error('Conflicting image render receipt');
+  if (existing?.id !== receipt.id || !/^[a-f0-9]{64}$/.test(existing.renderKey) || existing.version !== 1) throw new Error('Conflicting image render receipt');
   return false;
 }
 

@@ -67,6 +67,17 @@ describe('saved Codex image usage recovery', () => {
     expect(codexDriverReportedTokens('no footer')).toBeNull();
   });
 
+  it('does not count a live receipt again when only completed queue metadata remains', async () => {
+    await recordRenderReceipt(codexRenderReceipt(meta()), { directory });
+    await writeFile(join(root, 'media-jobs.json'), JSON.stringify({ jobs: [
+      { kind: 'image', status: 'completed', params: { mode: 'codex' }, result: { filename: 'deleted.png', generationId: id }, startedAt: '2026-07-01T12:00:00Z' },
+    ] }));
+    const plan = await planImageRenderBackfill(root);
+    expect(plan.coverage).toMatchObject({ alreadyRecorded: 1, additiveOutputs: 0, queueOnly: 1 });
+    expect((await applyImageRenderBackfill(root, plan, join(root, 'journal.json'))).inserted).toBe(0);
+    expect(await getImageRenderUsage({ directory })).toMatchObject({ savedOutputs: 1, codexSessions: 1, jobIdentityGroups: 0 });
+  });
+
   it('uses completed queue evidence for deleted sidecars and keeps missing identities or timestamps unrecoverable', async () => {
     await writeFile(join(root, 'media-jobs.json'), JSON.stringify({ jobs: [
       { kind: 'image', status: 'completed', params: { mode: 'codex' }, result: { filename: 'deleted.png', generationId: id }, startedAt: '2026-06-01T01:02:03Z' },

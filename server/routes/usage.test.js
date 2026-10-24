@@ -89,6 +89,19 @@ describe('usage routes', () => {
     expect(response.body.report.totals.estimatedCost).toBe(12);
   });
 
+  it('keeps text reporting available when the optional image ledger is damaged', async () => {
+    usage.getUsageSummary.mockReturnValue({ report: { totals: { estimatedCost: 12 } } });
+    getImageRenderUsage.mockRejectedValueOnce(new Error('Invalid image render usage receipt'));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await request(buildApp()).get('/api/usage');
+      expect(response.status).toBe(200);
+      expect(response.body.report.totals.estimatedCost).toBe(12);
+      expect(response.body.imageRenders).toEqual({ error: 'Image render usage is unavailable.' });
+      expect(logged).toHaveBeenCalled();
+    } finally { logged.mockRestore(); }
+  });
+
   it('GET /api/usage/hourly projects only counters and bypasses all reporting work', async () => {
     const hourlyActivity = Array.from({ length: 24 }, (_, hour) => hour);
     // Synthetic extra records must never escape in the hourly payload. Reporting

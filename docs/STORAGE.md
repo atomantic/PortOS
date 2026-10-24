@@ -1239,7 +1239,9 @@ FableLoom shot-planning run checkpoints live in machine-local `data/fableloom-sh
 `data/image-render-usage/<sha256>.json` is a machine-local `file-primary`
 accounting receipt ledger (`server/services/imageRenderUsage.js`). Each immutable
 receipt describes one saved original output; `renderKey` groups outputs from the
-same Codex session. The Usage page counts real Codex session IDs separately from saved outputs and
+same Codex session. Output identity uses the PortOS job ID when available,
+independently of session attribution, so queue-only recovery cannot add a
+previously recorded live output again. The Usage page counts real Codex session IDs separately from saved outputs and
 fallback PortOS job groups. A combined render-group total is never presented as
 a count of known Codex sessions.
 A missing provider session ID uses the original PortOS job identity and is
@@ -1251,7 +1253,8 @@ record editing or cross-domain joins. Receipts publish complete files with an
 exclusive hard link, so a live completion and an explicit backfill cannot replace
 one another or double-count an output across processes. Hidden temporary files
 are ignored after an interrupted write. A damaged receipt fails the read rather
-than reporting a trustworthy zero. Rsync backs up this directory by default; it
+than reporting a trustworthy zero. The Usage endpoint contains that failure to
+the image card, which reports unavailable while text accounting remains visible. Rsync backs up this directory by default; it
 is not a peer-usage digest or a media-library asset and does not federate.
 
 Receipts contain hashed identities, the original saved timestamp, driver model
