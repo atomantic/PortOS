@@ -19,4 +19,3 @@ export async function readReviewEvidence(workspace) {
     head: heads.length === 1 ? heads[0].toLowerCase() : null,
   };
 }
-
