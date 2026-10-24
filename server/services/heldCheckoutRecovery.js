@@ -20,13 +20,14 @@ import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObserva
  */
 
 import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
-import { createReadStream, realpathSync } from 'node:fs';
-import { lstat, stat, readlink, readdir, readFile, chmod, open, mkdtemp } from 'node:fs/promises';
+import { createWriteStream, realpathSync, constants } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import { lstat, stat, readlink, readdir, opendir, readFile, chmod, open, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve, relative, sep } from 'node:path';
 import { sameRetirementCheckout, unresolvedRetirements } from '../lib/reconcileRetirementEvidence.js';
-import { atomicWrite, copyFileGuarded, ensureDir, PATHS, rmGuarded, sha256File, writeFileGuarded } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, rmGuarded, writeFileGuarded } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
@@ -38,15 +39,91 @@ import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArc
 export const heldCheckoutArchiveRoot = (cosDir = PATHS.cos) => join(cosDir, 'held-checkout-archives');
 
 const evidenceHash = value => createHash('sha256').update(value).digest('hex');
-const MAX_ARCHIVE_FILES = 1000;
 const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
 
 function checkArchiveBudget(content, administration) {
-  if (content.files.length + administration.files.length > MAX_ARCHIVE_FILES) throw new Error('archive-file-budget-exceeded');
   // Creation and recovery share one byte budget across both snapshots.
-  const total = [...content.files, ...administration.files].reduce((bytes, file) => bytes + file.bytes, 0);
+  let total = 0;
+  for (const snapshot of [content, administration]) for (const file of snapshot.files) {
+    if (!Number.isSafeInteger(file.bytes) || file.bytes < 0) throw new Error('archive-file-proof-invalid');
+    checkArchiveSize('combined', file.bytes, total += file.bytes);
+  }
   checkArchiveSize('combined', 0, total);
 }
+// Metadata is retained for exact fingerprints and final rechecks. Bound its
+// encoded bytes as it is collected, including zero-byte files and links.
+const ARCHIVE_WORK_MS = 10 * 60 * 1000;
+function archiveWork(signal, started = performance.now()) {
+  let metadataBytes = 0;
+  const check = () => {
+    if (signal?.aborted) throw new Error('retirement-archive-cancelled');
+    const elapsed = Math.ceil(performance.now() - started);
+    if (elapsed > ARCHIVE_WORK_MS) throw Object.assign(new Error('retirement-archive-work-limit-exceeded'), {
+      archiveLimit: { scope: 'verification', kind: 'time', limitMs: ARCHIVE_WORK_MS, observedMs: elapsed },
+    });
+  };
+  return { check, metadataScope: () => archiveWork(signal, started), add(value) {
+    check();
+    metadataBytes += Buffer.byteLength(JSON.stringify(value));
+    if (metadataBytes > MAX_MANIFEST_BYTES) throw Object.assign(new Error('archive-manifest-budget-exceeded'), {
+      archiveLimit: { scope: 'metadata', kind: 'total', limitBytes: MAX_MANIFEST_BYTES, observedBytes: metadataBytes },
+    });
+  } };
+}
+
+async function archiveSource(path) {
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
+  try {
+    if (!(await handle.stat()).isFile()) throw new Error('archive-file-invalid');
+    return handle.createReadStream({ highWaterMark: 64 * 1024 });
+  } catch (error) { await handle.close(); throw error; }
+}
+
+async function archiveHash(path, work, limitBytes = MAX_FILE_BYTES) {
+  work.check();
+  let bytes = 0;
+  const hash = createHash('sha256');
+  for await (const chunk of await archiveSource(path)) {
+    work.check();
+    bytes += chunk.length;
+    if (bytes > limitBytes) throw Object.assign(new Error('retirement-archive-limit-exceeded'), {
+      archiveLimit: { scope: 'file-read', kind: 'file', limitBytes, observedBytes: bytes },
+    });
+    hash.update(chunk);
+  }
+  work.check();
+  return hash.digest('hex');
+}
+
+async function archiveCopy(source, destination, expectedBytes, work) {
+  let bytes = 0;
+  await pipeline(
+    await archiveSource(source),
+    async function* (chunks) {
+      for await (const chunk of chunks) {
+        work.check();
+        checkArchiveSize('file-copy', bytes += chunk.length, 0);
+        if (bytes > expectedBytes) throw new Error('checkout-content-changed');
+        yield chunk;
+      }
+      if (bytes !== expectedBytes) throw new Error('checkout-content-changed');
+    },
+    createWriteStream(destination, { flags: 'wx', mode: 0o600 }),
+  );
+}
+
+function validateArchiveEntries(snapshot, work) {
+  const paths = new Set();
+  for (const entries of [snapshot.files, snapshot.symlinks, snapshot.gitlinks || []]) for (const entry of entries) {
+    work.add(entry);
+    if (typeof entry.path !== 'string' || !entry.path || (sep === '\\' && entry.path.includes('\\')) || isAbsolute(entry.path)
+      || entry.path.split('/').some(part => !part || part === '.' || part === '..') || paths.has(entry.path)) {
+      throw new Error('archive-file-proof-invalid');
+    }
+    paths.add(entry.path);
+  }
+}
+
 const historicalNextAction = 'Locate a complete archive for this exact historical checkout and retry branch reconciliation; if none exists, recover the original data from backup. Checkout or ref absence is not preservation evidence.';
 
 /** Never follow an archive link, including an intermediate directory link. */
@@ -66,25 +143,34 @@ async function archiveFile(root, path) {
 
 async function archiveManifest(dir) {
   const path = await archiveFile(dir, join(dir, 'manifest.json'));
-  if ((await lstat(path)).size > MAX_MANIFEST_BYTES) throw new Error('archive-manifest-budget-exceeded');
-  const bytes = await readFile(path);
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of await archiveSource(path)) {
+    if ((size += chunk.length) > MAX_MANIFEST_BYTES) throw new Error('archive-manifest-budget-exceeded');
+    chunks.push(chunk);
+  }
+  const bytes = Buffer.concat(chunks);
   return { manifest: JSON.parse(bytes), digest: evidenceHash(bytes) };
 }
 
 /** Reuses the archive's recorded byte hashes and administration fingerprint.
  * Older dirty archives lack patch hashes and cannot prove completeness later.
  */
-async function verifyHeldArchive(repoPath, dir, release) {
+async function verifyHeldArchive(repoPath, dir, release, work = archiveWork()) {
+  work.check();
   const { manifest: saved, digest } = await archiveManifest(dir);
   if (saved.repoPath !== repoPath || !sameRetirementCheckout(saved, release)
     || (saved.release ? !sameRelease(saved.release, release) : release.locked !== false || release.lockReason !== null)) throw new Error('archive-identity-mismatch');
   if (!(Date.parse(saved.archivedAt) >= Date.parse(release.createdAt)) || Date.parse(saved.archivedAt) > Date.now()) throw new Error('archive-generation-mismatch');
+  if (saved.resourceContract !== undefined && saved.resourceContract !== 1) throw new Error('archive-contract-unsupported');
   const captured = saved.captured;
   if (captured?.commitBundle !== true || captured.missingCheckout || !Array.isArray(captured.files)
     || !Array.isArray(captured.symlinks) || !Array.isArray(captured.gitlinks)
     || !Array.isArray(saved.administration?.files) || !Array.isArray(saved.administration?.symlinks)
     || !saved.administration.files.some(file => file.path === 'gitdir/HEAD')
     || !saved.administration.files.some(file => file.path === 'git-indirection')) throw new Error('archive-preservation-incomplete');
+  validateArchiveEntries(captured, work);
+  validateArchiveEntries(saved.administration, work);
   checkArchiveBudget(captured, saved.administration);
   const stamps = [];
   const stamp = async path => {
@@ -94,15 +180,17 @@ async function verifyHeldArchive(repoPath, dir, release) {
   };
   const remember = async path => { stamps.push([path, await stamp(path)]); };
   await remember(join(dir, 'manifest.json'));
+  work.check();
   let total = 0;
   for (const [prefix, files] of [['files', captured.files], ['administration', saved.administration.files]]) {
     for (const file of files) {
+      work.check();
       if (typeof file.path !== 'string' || !/^[a-f0-9]{64}$/.test(file.sha256 || '')) throw new Error('archive-file-proof-invalid');
       const path = await archiveFile(dir, join(dir, prefix, file.path));
       await remember(path);
       const info = await lstat(path);
       if (info.size !== file.bytes || info.size > MAX_FILE_BYTES || (total += info.size) > MAX_TOTAL_BYTES
-        || await sha256File(path) !== file.sha256) throw new Error('archive-file-changed');
+        || await archiveHash(path, work) !== file.sha256) throw new Error('archive-file-changed');
     }
   }
   const administrationFingerprint = evidenceHash(JSON.stringify({
@@ -116,7 +204,7 @@ async function verifyHeldArchive(repoPath, dir, release) {
     if (!/^[a-f0-9]{64}$/.test(expected || '')) throw new Error('archive-patch-proof-unavailable');
     const path = await archiveFile(dir, join(dir, `${name}.diff`));
     await remember(path);
-    if (await sha256File(path) !== expected) throw new Error('archive-patch-changed');
+    if (await archiveHash(path, work, GIT_OUTPUT_BYTES) !== expected) throw new Error('archive-patch-changed');
   }
   const bundle = await archiveFile(dir, join(dir, 'commits.bundle'));
   await remember(bundle);
@@ -134,7 +222,7 @@ async function verifyHeldArchive(repoPath, dir, release) {
   const heads = new Set((await git(['bundle', 'list-heads', bundle], repoPath)).trim().split('\n').map(line => line.split(' ')[0]));
   if (!Array.isArray(captured.recoveryHeads) || !captured.recoveryHeads.includes(release.head)
     || captured.recoveryHeads.some(head => !heads.has(head))) throw new Error('archive-bundle-head-mismatch');
-  const bundleHash = await sha256File(bundle);
+  const bundleHash = await archiveHash(bundle, work, Infinity);
   if (saved.bundleSha256 && bundleHash !== saved.bundleSha256) throw new Error('archive-bundle-changed');
   // Bundle verify/list-heads validate headers, not packed object integrity. Prove
   // the complete closure without borrowing any object from the live repository.
@@ -143,17 +231,23 @@ async function verifyHeldArchive(repoPath, dir, release) {
   // (\\.\nul) is not the Git configuration-file contract.
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_'))),
     GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' };
-  const prove = args => execGit(['--no-optional-locks', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], scratch,
-    { env, maxBuffer: GIT_OUTPUT_BYTES });
+  const prove = args => {
+    work.check();
+    return execGit(['--no-optional-locks', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], scratch,
+      { env, maxBuffer: GIT_OUTPUT_BYTES });
+  };
   try {
     await prove(['init', '--bare', `--object-format=${release.head.length === 64 ? 'sha256' : 'sha1'}`, '.']);
     await prove(['bundle', 'unbundle', bundle]);
     await prove(['fsck', '--full', '--strict', '--no-reflogs', '--no-dangling', ...captured.recoveryHeads]);
   } catch { throw new Error('archive-bundle-object-proof-failed'); }
   finally { await rmGuarded(scratch, { recursive: true, force: true }); }
+  work.check();
   if ((await archiveManifest(dir)).digest !== digest) throw new Error('archive-manifest-changed');
   const recheck = async () => {
+    const recheckWork = archiveWork();
     for (const [path, original] of stamps) {
+      recheckWork.check();
       if (await stamp(await archiveFile(dir, path)) !== original) return false;
     }
     return true;
@@ -188,7 +282,7 @@ export async function findMissingCheckoutPreservation({ repoPath, release }, opt
   let selected = null;
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const proof = await verifyHeldArchive(repoPath, join(root, entry.name), release).catch(() => null);
+    const proof = await verifyHeldArchive(repoPath, join(root, entry.name), release, archiveWork(opts.signal)).catch(() => null);
     if (!proof) continue;
     // Multiple valid snapshots cannot identify the original private contents.
     if (selected) return null;
@@ -234,7 +328,7 @@ export async function recoverMissingCheckoutPreservations({ appId, repoPath, out
           && candidate.dir === release.preservationReceipt.archiveDir) : candidates;
       for (const candidate of scopedCandidates) {
         try {
-          proof = candidate.kind === 'held' ? await verifyHeldArchive(repoPath, candidate.dir, release)
+          proof = candidate.kind === 'held' ? await verifyHeldArchive(repoPath, candidate.dir, release, archiveWork(opts.signal))
             : await (await import('./initializedCheckoutRecovery.js')).verifyMissingInitializedCheckoutPreservation({ appId, repoPath, release, archiveDir: candidate.dir });
           if (proof.releaseFence) evidenceFences.push(proof.releaseFence);
           evidence.push({ archiveDir: candidate.dir, reason: 'preservation-verified' });
@@ -283,12 +377,13 @@ function checkArchiveSize(scope, fileBytes, totalBytes) {
   } });
 }
 
-const archiveLimitRefusal = error => error.message === 'archive-manifest-budget-exceeded'
-  ? { ok: false, reason: 'retirement-archive-manifest-limit-exceeded' }
-  : error.message === 'archive-file-budget-exceeded'
-  ? { ok: false, reason: 'retirement-archive-file-limit-exceeded' }
-  : error.message === 'retirement-archive-limit-exceeded'
-    ? { ok: false, reason: error.message, archiveLimit: error.archiveLimit } : null;
+const archiveRecoveryAction = 'Keep the checkout and ref; free resources or preserve large outputs separately, then retry this exact checkout with fresh evidence.';
+const archiveLimitRefusal = error => {
+  const reason = error.message === 'archive-manifest-budget-exceeded' ? 'retirement-archive-manifest-limit-exceeded'
+    : ['retirement-archive-cancelled', 'retirement-archive-work-limit-exceeded', 'retirement-archive-limit-exceeded'].includes(error.message)
+      ? error.message : null;
+  return reason ? { ok: false, reason, ...(error.archiveLimit && { archiveLimit: error.archiveLimit }), nextAction: archiveRecoveryAction } : null;
+};
 
 const shortBranch = (ref) => (ref ? String(ref).replace(/^refs\/heads\//, '') : null);
 const zLines = (stdout) => (stdout || '').split('\0').filter(Boolean);
@@ -297,22 +392,35 @@ const git = (args, cwd) => execGit(args, cwd, { maxBuffer: GIT_OUTPUT_BYTES }).t
 /** Preserve worktree-private Git evidence, never follow its links into the
  * common repository. The lock is archived but matched separately by release.
  */
-async function snapshotAdministration(path, missingRoot = null) {
+async function snapshotAdministration(path, missingRoot = null, work = archiveWork()) {
   const root = missingRoot || (await git(['rev-parse', '--absolute-git-dir'], path)).trim();
   const files = [];
   const symlinks = [];
   let bytes = 0;
   const visit = async (source, rel) => {
+    work.check();
     const info = await lstat(source);
-    if (info.isSymbolicLink()) { symlinks.push({ path: rel, target: await readlink(source) }); return; }
+    if (info.isSymbolicLink()) {
+      const link = { path: rel, target: await readlink(source) };
+      work.add(link);
+      symlinks.push(link);
+      return;
+    }
     if (info.isDirectory()) {
-      for (const name of (await readdir(source)).sort()) await visit(join(source, name), rel ? `${rel}/${name}` : name);
+      const names = [];
+      for await (const entry of await opendir(source)) {
+        work.add(entry.name);
+        names.push(entry.name);
+      }
+      for (const name of names.sort()) await visit(join(source, name), rel ? `${rel}/${name}` : name);
       return;
     }
     if (!info.isFile()) throw new Error('administration cannot be archived');
     bytes += info.size;
     checkArchiveSize('administration', info.size, bytes);
-    files.push({ path: rel, source, bytes: info.size, sha256: await sha256File(source) });
+    const file = { path: rel, bytes: info.size, sha256: await archiveHash(source, work) };
+    work.add(file);
+    files.push({ ...file, source });
   };
   await visit(root, 'gitdir');
   const pointer = join(path, '.git');
@@ -375,7 +483,7 @@ async function reviewCurrentCheckout({ repoPath, release, prUrl, unlocked = fals
   if (forge?.error) return { ok: false, reason: /^retirement-[a-z-]+$/.test(forge.error.message) ? forge.error.message : 'retirement-forge-unavailable' };
   const policy = await retirementPolicy(repoPath, release.branch, opts, policyReviewIdentity(release, prUrl, forge));
   if (policy.reason) return { ok: false, reason: policy.reason };
-  return archiveSnapshots(matched.tree, repoPath)
+  return archiveSnapshots(matched.tree, repoPath, null, archiveWork(opts.signal))
     .then(([content, administration]) => buildCheckoutRetirementReview({ repoPath, release, prUrl,
       contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge }))
     .then(review => ({ ok: true, review }), error => archiveLimitRefusal(error) || ({ ok: false,
@@ -404,9 +512,16 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
 }
 
 /** Git's object id for raw bytes, with no clean filter or line-ending conversion. */
-async function rawBlobId(source, size, format) {
+async function rawBlobId(source, size, format, work) {
   const hash = createHash(format).update(`blob ${size}\0`);
-  for await (const chunk of createReadStream(source)) hash.update(chunk);
+  let bytes = 0;
+  for await (const chunk of await archiveSource(source)) {
+    work.check();
+    // Clean tracked files are not raw archive inputs; a growing read still
+    // cannot consume unbounded work before the next metadata check.
+    if ((bytes += chunk.length) > size) throw new Error('checkout-content-changed');
+    hash.update(chunk);
+  }
   return hash.digest('hex');
 }
 
@@ -419,7 +534,8 @@ async function rawBlobId(source, size, format) {
  * on anything that cannot be archived faithfully, before any copy is made.
  * The fingerprint is compared again immediately before removal.
  */
-async function snapshotContent(path) {
+async function snapshotContent(path, work = archiveWork()) {
+  work.check();
   // These reads are independent and each Git spawn is mostly launch latency, so
   // they run together; every destructive boundary re-reads this snapshot anyway.
   const [unmerged, stageOut, tagged, indexDiff, worktreeDiff, objectFormat, others] = await Promise.all([
@@ -444,7 +560,9 @@ async function snapshotContent(path) {
     const rel = line.slice(tab + 1);
     const info = await lstat(join(path, rel)).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
     if (info && (!info.isDirectory() || (await readdir(join(path, rel))).length)) throw new Error('retirement-submodule-not-uninitialized');
-    gitlinks.push({ path: rel, commit: header.split(' ')[1], state: info ? 'empty' : 'missing' });
+    const link = { path: rel, commit: header.split(' ')[1], state: info ? 'empty' : 'missing' };
+    work.add(link);
+    gitlinks.push(link);
   }
   // Assume-unchanged (lowercase tag) and skip-worktree (S) entries hide edits from diff.
   const hidden = zLines(tagged).find(line => /^[a-zS]/.test(line));
@@ -455,10 +573,13 @@ async function snapshotContent(path) {
   const addFile = async (rel, info, extra = {}) => {
     total += info.size;
     checkArchiveSize('content', info.size, total);
-    files.push({ path: rel, bytes: info.size, sha256: await sha256File(join(path, rel)), ...extra });
+    const file = { path: rel, bytes: info.size, sha256: await archiveHash(join(path, rel), work), ...extra };
+    work.add(file);
+    files.push(file);
   };
   const format = objectFormat.trim() || 'sha1';
   for (const line of stage) {
+    work.check();
     const tab = line.indexOf('\t');
     const [mode, blob] = line.slice(0, tab).split(' ');
     const rel = line.slice(tab + 1);
@@ -466,14 +587,19 @@ async function snapshotContent(path) {
     if (mode !== '100644' && mode !== '100755') continue;
     const info = await lstat(join(path, rel)).catch(err => (err.code === 'ENOENT' ? null : Promise.reject(err)));
     if (!info?.isFile()) continue;
-    if (await rawBlobId(join(path, rel), info.size, format) !== blob) await addFile(rel, info, { tracked: true });
+    if (await rawBlobId(join(path, rel), info.size, format, work) !== blob) await addFile(rel, info, { tracked: true });
   }
   const symlinks = [];
   for (const rel of zLines(others)) {
+    work.check();
     // `ls-files --others` names a nested repository as `dir/` without its files.
     if (rel.endsWith('/')) throw new Error(`nested repository at ${rel} cannot be archived`);
     const info = await lstat(join(path, rel));
-    if (info.isSymbolicLink()) symlinks.push({ path: rel, target: await readlink(join(path, rel)) });
+    if (info.isSymbolicLink()) {
+      const link = { path: rel, target: await readlink(join(path, rel)) };
+      work.add(link);
+      symlinks.push(link);
+    }
     else if (info.isFile()) await addFile(rel, info);
     else throw new Error(`${rel} is not a regular file`);
   }
@@ -541,9 +667,10 @@ async function missingCheckoutAdministration(repoPath, path) {
   return roots[0];
 }
 
-async function archiveSnapshots(tree, repoPath, missingRoot) {
+async function archiveSnapshots(tree, repoPath, missingRoot, work = archiveWork()) {
+  work = work.metadataScope();
   if (!missingRoot) {
-    const snapshots = await Promise.all([snapshotContent(tree.path), snapshotAdministration(tree.path)]);
+    const snapshots = await Promise.all([snapshotContent(tree.path, work), snapshotAdministration(tree.path, null, work)]);
     checkArchiveBudget(...snapshots);
     return snapshots;
   }
@@ -554,7 +681,7 @@ async function archiveSnapshots(tree, repoPath, missingRoot) {
   const indexDiff = await git([...prefix, 'diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], repoPath);
   const content = { indexDiff, worktreeDiff: '', files: [], symlinks: [], gitlinks: [], missingCheckout: true,
     fingerprint: createHash('sha256').update('missing-checkout\0').update(indexDiff).digest('hex') };
-  const administration = await snapshotAdministration(tree.path, missingRoot);
+  const administration = await snapshotAdministration(tree.path, missingRoot, work);
   checkArchiveBudget(content, administration);
   return [content, administration];
 }
@@ -563,16 +690,16 @@ async function archiveSnapshots(tree, repoPath, missingRoot) {
  * is removed. The caller owns the live ownership fence and merge proof; this
  * guard verifies that every preserved byte still matches immediately at removal.
  */
-export async function preserveMergedCheckout(repoPath, tree, defaultBranch, { cosDir } = {}) {
+export async function preserveMergedCheckout(repoPath, tree, defaultBranch, { cosDir, signal } = {}) {
   if (!tree?.head || (!tree.branch && tree.detached !== true) || tree.locked) throw new Error('checkout-identity-unavailable');
   const branch = shortBranch(tree.branch);
   const missingRoot = await missingCheckoutAdministration(repoPath, tree.path);
-  const archive = await archiveCheckout({ repoPath, tree, branch, defaultBranch, cosDir, missingRoot });
+  const archive = await archiveCheckout({ repoPath, tree, branch, defaultBranch, cosDir, missingRoot, work: archiveWork(signal) });
   return {
     archiveDir: archive.dir,
     async verify(holder) {
       if (!holder || holder.head !== tree.head || holder.branch !== tree.branch || Boolean(holder.detached) !== Boolean(tree.detached)) return 'worktree-holder-changed';
-      const [content, administration] = await archiveSnapshots(tree, repoPath, missingRoot);
+      const [content, administration] = await archiveSnapshots(tree, repoPath, missingRoot, archiveWork(signal));
       return content.fingerprint === archive.fingerprint && administration.fingerprint === archive.administrationFingerprint
         ? null : 'checkout-content-changed';
     },
@@ -715,8 +842,9 @@ export async function preserveSupersededCheckout({ appId, repoPath, tree, defaul
   };
 }
 
-async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, release, review, missingRoot = null }) {
-  const [snapshot, administration] = await archiveSnapshots(tree, repoPath, missingRoot);
+async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, release, review, missingRoot = null, work = archiveWork() }) {
+  work.check();
+  const [snapshot, administration] = await archiveSnapshots(tree, repoPath, missingRoot, work);
   const recoveryHeads = await recoveryObjectHeads(administration, { repoPath, tree, missingRoot });
   await ensureDir(dir);
   await chmod(dir, 0o700);
@@ -749,31 +877,34 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
   }
   await chmod(bundle, 0o600);
   for (const file of administration.files) {
+    work.check();
     const destination = join(dir, 'administration', file.path);
     await ensureDir(dirname(destination));
-    await copyFileGuarded(file.source, destination);
+    await archiveCopy(file.source, destination, file.bytes, work);
     await chmod(destination, 0o600);
-    if (await sha256File(destination) !== file.sha256) throw new Error('administration archive mismatch');
+    if (await archiveHash(destination, work) !== file.sha256) throw new Error('administration archive mismatch');
   }
   if (snapshot.indexDiff) await writeFileGuarded(join(dir, 'index.diff'), snapshot.indexDiff);
   if (snapshot.worktreeDiff) await writeFileGuarded(join(dir, 'worktree.diff'), snapshot.worktreeDiff);
 
   const { files, symlinks } = snapshot;
   for (const file of files) {
+    work.check();
     const destination = join(dir, 'files', file.path);
     await ensureDir(dirname(destination));
-    await copyFileGuarded(join(tree.path, file.path), destination);
-    if (await sha256File(destination) !== file.sha256) throw new Error(`archived copy of ${file.path} does not match`);
+    await archiveCopy(join(tree.path, file.path), destination, file.bytes, work);
+    if (await archiveHash(destination, work) !== file.sha256) throw new Error(`archived copy of ${file.path} does not match`);
   }
   // Re-read after every copy so the check covers the whole archive window.
-  const [after, administrationAfter] = await archiveSnapshots(tree, repoPath, missingRoot);
+  const [after, administrationAfter] = await archiveSnapshots(tree, repoPath, missingRoot, work);
   if (administrationAfter.fingerprint !== administration.fingerprint) throw new Error('administration changed while archiving');
   if (after.fingerprint !== snapshot.fingerprint) throw new Error('checkout content changed while archiving');
 
   const manifest = {
+    resourceContract: 1,
     repoPath, defaultBranch, path: tree.path, head: tree.head, branch,
     release, review, administration: { ...administration, files: administration.files.map(({ source: _source, ...file }) => file) }, archivedAt: new Date().toISOString(),
-    bundleSha256: await sha256File(bundle),
+    bundleSha256: await archiveHash(bundle, work, Infinity),
     patchHashes: { index: evidenceHash(snapshot.indexDiff), worktree: evidenceHash(snapshot.worktreeDiff) },
     captured: { commitBundle: true, recoveryHeads: [...recoveryHeads], ...(snapshot.missingCheckout ? { missingCheckout: true } : {}), gitlinks: snapshot.gitlinks, indexDiff: Boolean(snapshot.indexDiff), worktreeDiff: Boolean(snapshot.worktreeDiff), files, symlinks },
     restore: [
@@ -790,7 +921,11 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
   // Check the exact payload atomicWrite receives: escaped review text can make
   // the manifest larger than its individually bounded Git diff inputs.
   const serialized = JSON.stringify(manifest, null, 2);
-  if (Buffer.byteLength(serialized) > MAX_MANIFEST_BYTES) throw new Error('archive-manifest-budget-exceeded');
+  const manifestBytes = Buffer.byteLength(serialized);
+  if (manifestBytes > MAX_MANIFEST_BYTES) throw Object.assign(new Error('archive-manifest-budget-exceeded'), {
+    archiveLimit: { scope: 'manifest', kind: 'total', limitBytes: MAX_MANIFEST_BYTES, observedBytes: manifestBytes },
+  });
+  work.check();
   await atomicWrite(join(dir, 'manifest.json'), serialized);
   await chmod(join(dir, 'manifest.json'), 0o600);
   return { dir, fingerprint: snapshot.fingerprint, administrationFingerprint: administration.fingerprint };
@@ -869,7 +1004,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
 
   // Every ownership check queues behind the claim-ownership lock with a short
   // budget, so the archive runs between two critical sections (#12682).
-  const refuse = (reason, archiveLimit) => ({ result: { ok: false, reason, ...(archiveLimit && { archiveLimit }) } });
+  const refuse = (reason, archiveLimit, nextAction) => ({ result: { ok: false, reason, ...(archiveLimit && { archiveLimit }), ...(nextAction && { nextAction }) } });
   return retireWithUnlockedArchive({
     busy: () => ({ ok: false, reason: 'checkout-retirement-reserved' }),
     admit: async () => {
@@ -885,14 +1020,14 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
         : await isAncestor(repoPath, tree.head, defaultBranch);
       if (!merged && !review) return refuse('not-merged-on-recheck');
       const reviewed = review ? await reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl }, opts) : null;
-      if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed', reviewed.archiveLimit);
+      if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed', reviewed.archiveLimit, reviewed.nextAction);
       if (reviewed?.review.comparison.disposition === 'review-supersession' && review.acceptSuperseded !== true) return refuse('retirement-supersession-not-accepted');
       const owner = await ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled });
       if (owner) return refuse(owner);
       return { fence: { repoPath, path: tree.path, branch }, tree, reviewed, checkoutIdentity };
     },
     archive: async ({ tree, reviewed }) => {
-      const archive = await archiveCheckout({ repoPath, tree, branch, defaultBranch, release, cosDir, review: reviewed?.review })
+      const archive = await archiveCheckout({ repoPath, tree, branch, defaultBranch, release, cosDir, review: reviewed?.review, work: archiveWork(opts.signal) })
         .catch(error => ({ error }));
       if (!archive.error) return { archive };
       const capacityRefusal = archiveLimitRefusal(archive.error);
@@ -911,6 +1046,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
 async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, archive, checkoutIdentity, mergedObligationSettled = false }, opts) {
   const { readAgents = readClaimOwnershipAgents } = opts;
   // Archiving takes time; never unlock a lock that changed hands meanwhile.
+  if (opts.signal?.aborted) return { ok: false, reason: 'retirement-archive-cancelled', archiveDir: archive.dir };
   const second = await matchRelease(repoPath, release);
   if (!second.tree) return { ok: false, reason: second.reason, archiveDir: archive.dir };
   if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return { ok: false, reason: 'checkout-identity-changed', archiveDir: archive.dir };
@@ -919,7 +1055,9 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     const unlocked = await execGit(['worktree', 'unlock', tree.path], repoPath).then(() => true, () => false);
     if (!unlocked) return { ok: false, reason: 'worktree-unlock-failed', archiveDir: archive.dir };
   }
+  let capacityRefusal;
   const verifyRemoval = async (holder) => {
+    if (opts.signal?.aborted) return 'retirement-archive-cancelled';
     if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
     if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return 'checkout-identity-changed';
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
@@ -929,9 +1067,12 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     ]);
     if (fresh && (!fresh.ok || fresh.review.digest !== review.digest)) return fresh.reason || 'retirement-review-changed';
     // The byte comparisons stay last so nothing else ages between them and removal.
-    const [administration, current] = await Promise.all([snapshotAdministration(tree.path), snapshotContent(tree.path).catch(() => null)]);
+    const [administration, current] = await Promise.all([snapshotAdministration(tree.path), snapshotContent(tree.path)])
+      .catch(error => { capacityRefusal = archiveLimitRefusal(error); return []; });
+    if (!administration || !current) return capacityRefusal?.reason || 'checkout-content-changed';
     if (administration.fingerprint !== archive.administrationFingerprint) return 'checkout-administration-changed';
     if (reason) return reason;
+    if (opts.signal?.aborted) return 'retirement-archive-cancelled';
     return current?.fingerprint === archive.fingerprint ? null : 'checkout-content-changed';
   };
   const removal = await forceRemoveWorktreeDir(repoPath, tree.path, {
@@ -944,7 +1085,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
       const args = ['worktree', 'lock', ...(release.lockReason != null ? ['--reason', release.lockReason] : []), tree.path];
       await execGit(args, repoPath).catch(err => console.warn(`⚠️ held-checkout recovery: could not restore lock on ${tree.path}: ${err.message}`));
     }
-    return { ok: false, reason: removal.reason || 'worktree-remove-failed', archiveDir: archive.dir };
+    return { ...(capacityRefusal || { ok: false, reason: removal.reason || 'worktree-remove-failed' }), archiveDir: archive.dir };
   }
   console.log(`🧹 held-checkout recovery: retired ${tree.path} (archive: ${archive.dir})`);
   if (!branch) return { ok: true, archiveDir: archive.dir, branchDeleted: false };

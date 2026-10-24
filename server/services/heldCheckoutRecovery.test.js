@@ -1031,7 +1031,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(Buffer.byteLength(prepared.review.comparison.difference)).toBeLessThan(4 * 1024 * 1024);
     const before = await getBranchReconcileOutcome('app-1');
     const original = await sha256File(join(c.path, 'tabs.txt'));
-    expect(await c.confirm(prepared.review)).toEqual({ ok: false, reason: 'retirement-archive-manifest-limit-exceeded' });
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'retirement-archive-manifest-limit-exceeded',
+      archiveLimit: { scope: 'manifest', limitBytes: 16 * 1024 * 1024, observedBytes: expect.any(Number) } });
     expect(await sha256File(join(c.path, 'tabs.txt'))).toBe(original);
     expect(await registered(c.path)).toBe(true);
     expect(await lockText(c.path)).toBe(c.release.lockReason);
@@ -1040,30 +1041,37 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
-  it('refuses file-count overflow before preview, reviewed retirement or unattended archive publication', async () => {
-    const c = await reviewedCheckout('file-count-overflow', { normalMerge: true });
+  it.each(['cancel', 'time'])('preserves originals and can restart after %s interrupts archive work', async mode => {
+    const c = await reviewedCheckout('bounded-interruption', { normalMerge: true });
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
-    await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\n');
-    const directory = join(c.path, 'private-files');
-    await mkdir(directory);
-    // Content alone stays below 1000; its private Git administration crosses the shared limit.
-    const files = Array.from({ length: 995 }, (_, i) => join(directory, `item-${i}`));
-    await Promise.all(files.map(file => writeFile(file, 'preserve every tiny file\n')));
-    const hashes = await Promise.all(files.map(sha256File));
     const before = await getBranchReconcileOutcome('app-1');
-    const refusal = { ok: false, reason: 'retirement-archive-file-limit-exceeded' };
-    expect(await c.prepare()).toEqual(refusal);
-    expect(await c.confirm(prepared.review)).toEqual(refusal);
-    expect(await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, {
-      ...c.opts, settleMergedReviewObligation: true,
-    })).toEqual(refusal);
-    expect(await Promise.all(files.map(sha256File))).toEqual(hashes);
+    const controller = new AbortController();
+    let clock;
+    injected.onBundle = () => {
+      if (mode === 'cancel') controller.abort();
+      else clock = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 11 * 60 * 1000);
+    };
+    try {
+      const result = await c.confirm(prepared.review, { signal: controller.signal });
+      expect(result).toMatchObject({ ok: false, reason: mode === 'cancel'
+        ? 'retirement-archive-cancelled' : 'retirement-archive-work-limit-exceeded' });
+      if (mode === 'time') expect(result.archiveLimit).toMatchObject({ kind: 'time', limitMs: 600000,
+        observedMs: expect.any(Number) });
+    } finally { clock?.mockRestore(); }
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
     expect(await registered(c.path)).toBe(true);
     expect(await lockText(c.path)).toBe(c.release.lockReason);
     expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+    expect((await execGit(['for-each-ref', '--format=%(refname)', 'refs/portos/archive/'], repo)).stdout.trim()).toBe('');
     expect(await archives()).toEqual([]);
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
+    // A new attempt takes fresh snapshots; no partial checkpoint grants removal.
+    injected.onBundle = null;
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
+    const repeated = await c.confirm(prepared.review);
+    expect(repeated.ok).toBe(false);
+    expect((await archives()).length).toBe(1);
   });
 
   it('refuses combined content and administration bytes before preview or teardown while each snapshot fits', async () => {
@@ -1085,7 +1093,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     }
     const hashes = await Promise.all(files.map(sha256File));
     const before = await getBranchReconcileOutcome('app-1');
-    const refusal = { ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit: {
+    const refusal = { ok: false, reason: 'retirement-archive-limit-exceeded', nextAction: expect.any(String), archiveLimit: {
       scope: 'combined', kind: 'total', limitBytes: 250 * 1024 * 1024, observedBytes: expect.any(Number),
     } };
     const preview = await c.prepare();
@@ -1104,12 +1112,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
-  it('admits a near-boundary file-count archive that the missing-checkout verifier can independently recover', async () => {
+  it('retires and independently restores more than 1000 content and private Git files under the resource contract', async () => {
     const c = await reviewedCheckout('file-count-admitted', { normalMerge: true });
     await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\n');
     const directory = join(c.path, 'private-files');
     await mkdir(directory);
-    await Promise.all(Array.from({ length: 980 }, (_, i) => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')));
+    await Promise.all(Array.from({ length: 1050 }, (_, i) => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')));
+    const privateDir = join(c.admin, 'private-files');
+    await mkdir(privateDir);
+    await Promise.all(Array.from({ length: 60 }, (_, i) => writeFile(join(privateDir, `item-${i}`), 'private recovery bytes\n')));
     const createdAt = new Date().toISOString();
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
@@ -1117,13 +1128,46 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(retired).toMatchObject({ ok: true, branchDeleted: true });
     const manifest = JSON.parse(await readFile(join(retired.archiveDir, 'manifest.json'), 'utf8'));
     const capturedCount = manifest.captured.files.length + manifest.administration.files.length;
-    expect(capturedCount).toBeGreaterThanOrEqual(990);
-    expect(capturedCount).toBeLessThanOrEqual(1000);
+    expect(capturedCount).toBeGreaterThan(1100);
+    expect(manifest.resourceContract).toBe(1);
+    expect(await readFile(join(retired.archiveDir, 'files/private-files/item-1049'), 'utf8')).toBe('retained ignored bytes\n');
+    expect(await readFile(join(retired.archiveDir, 'administration/gitdir/private-files/item-59'), 'utf8')).toBe('private recovery bytes\n');
     const before = await getBranchReconcileOutcome('app-1');
     const proof = await findMissingCheckoutPreservation({ repoPath: repo, release: { ...c.release, createdAt } }, { cosDir });
     expect(proof, `Standalone archive proof failures: ${JSON.stringify(injected.proofFailures)}`)
       .toMatchObject({ archiveDir: retired.archiveDir, evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
     expect(await proof.recheck()).toBe(true);
+    expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
+    const restore = join(scratch, 'independent-restore');
+    await mkdir(restore);
+    await execGit(['init'], restore);
+    await execGit(['fetch', join(retired.archiveDir, 'commits.bundle'), 'HEAD'], restore);
+    await execGit(['checkout', '--detach', 'FETCH_HEAD'], restore);
+    await cp(join(retired.archiveDir, 'files'), restore, { recursive: true });
+    expect(await readFile(join(restore, 'private-files/item-1049'), 'utf8')).toBe('retained ignored bytes\n');
+    const manifestPath = join(retired.archiveDir, 'manifest.json');
+    const original = await readFile(manifestPath, 'utf8');
+    const find = () => findMissingCheckoutPreservation({ repoPath: repo, release: { ...c.release, createdAt } }, { cosDir });
+    // Historical unversioned archives use the same full proof, never a count exemption.
+    delete manifest.resourceContract;
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    expect(await find()).toMatchObject({ archiveDir: retired.archiveDir });
+    for (const mutate of [
+      saved => { saved.resourceContract = 999; },
+      saved => { saved.captured.files[0].bytes = -1; },
+      saved => { saved.captured.files.push(saved.captured.files[0]); },
+      saved => { saved.captured.files[0].path = '../administration/gitdir/HEAD'; },
+      saved => { saved.captured.files[0].path = 'x'.repeat(16 * 1024 * 1024); },
+    ]) {
+      const altered = JSON.parse(original);
+      mutate(altered);
+      await writeFile(manifestPath, JSON.stringify(altered));
+      expect(await find()).toBe(null);
+    }
+    await writeFile(manifestPath, original);
+    expect(await find()).toMatchObject({ archiveDir: retired.archiveDir });
+    await writeFile(join(retired.archiveDir, 'administration/gitdir/private-files/item-59'), 'changed private bytes');
+    expect(await find()).toBe(null);
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
@@ -1145,7 +1189,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const hashes = await Promise.all(files.map(sha256File));
     const before = await getBranchReconcileOutcome('app-1');
     const result = await c.prepare();
-    expect(result).toEqual({ ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit: {
+    expect(result).toEqual({ ok: false, reason: 'retirement-archive-limit-exceeded', nextAction: expect.any(String), archiveLimit: {
       scope, kind, limitBytes: (kind === 'file' ? 25 : 250) * 1024 * 1024, observedBytes: expect.any(Number),
     } });
     expect(Number.isSafeInteger(result.archiveLimit.observedBytes)).toBe(true);
@@ -1181,7 +1225,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const before = await getBranchReconcileOutcome('app-1');
     const result = mode === 'reviewed' ? await c.confirm(prepared.review)
       : await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, { ...c.opts, settleMergedReviewObligation: true });
-    expect(result).toEqual({ ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit: {
+    expect(result).toEqual({ ok: false, reason: 'retirement-archive-limit-exceeded', nextAction: expect.any(String), archiveLimit: {
       scope: 'content', kind: 'file', limitBytes: bytes - 1, observedBytes: bytes,
     } });
     expect(await sha256File(file)).toBe(hash);

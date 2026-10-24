@@ -68,6 +68,43 @@ immediately before removal; if that recheck refuses, the original lock is
 restored. A retired row leaves the inventory and appears under *Recently
 retired* with its archive path; only the next sweep can report convergence.
 
+### Held archive work budgets
+
+Held archives use resource contract `1`, recorded as `resourceContract` in the
+manifest. File count is not admission policy: every ignored/untracked content
+file and worktree-private Git file remains included. Hashing and copying use
+64 KiB chunks, with one copy at a time and at most two concurrent snapshot
+readers. A source growing during a copy aborts rather than expanding disk use.
+
+The existing limits remain 25 MiB per raw file, 250 MiB combined content and
+private administration, 16 MiB serialized manifest, and 64 MiB per Git command
+output. Metadata is charged incrementally against the same 16 MiB ceiling,
+including file entries, symlink targets, gitlinks and directory names; this also
+bounds zero-byte-file trees. These byte ceilings retain the prior safety envelope
+instead of estimating work from a count. A snapshot, archive write (both source
+passes included), or independent verification has a ten-minute elapsed work
+budget. This is a conservative ceiling of twenty existing 30-second Git command
+timeouts; it allows ordinary many-small-file archives while bounding repeated
+filesystem work. Checks run between filesystem operations and 64 KiB chunks;
+a running Git command retains its existing 30-second timeout. Kernel I/O may
+finish before cancellation is observed. No new global setting is written.
+
+Internal callers may pass an `AbortSignal` as `opts.signal`. Cancellation or a
+resource refusal keeps the original checkout, ref and outstanding obligations;
+partial archives and temporary bundle refs are cleaned up. A new attempt starts
+from fresh snapshots rather than treating partial work as preservation evidence.
+After a process crash, an archive without a complete manifest cannot prove
+preservation; an existing completed archive still needs the full independent
+hash and isolated Git object proof. No historical receipt is synthesized.
+
+Capacity responses include measured bytes or elapsed milliseconds. Recover by
+freeing resources or preserving large outputs separately, then retrying the exact
+checkout with fresh evidence; do not remove it or raise global limits to clear a
+refusal. Existing unversioned archives follow an explicit compatibility path
+through the same bounded verification and complete content/private-Git proof.
+Unknown contract versions fail closed. This does not change initialized-checkout
+archives or their separate operational budgets.
+
 ## Explicit initialized-checkout preservation
 
 Automatic cleanup continues to retain initialized submodules. The separate
