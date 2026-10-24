@@ -1233,25 +1233,33 @@ async function syncBranchAdmitted(dir, branch = null) {
   if (branch) assertSafeRef(branch);
   const refused = error => ({ success: false, pulled: false, pushed: false, error });
   const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], dir)).stdout.trim();
-  if ([...SEQUENCER_STATE.map(([marker]) => marker), 'MERGE_HEAD', 'sequencer']
-    .some(marker => existsSync(join(gitDir, marker)))) {
+  const operationInProgress = () => [...SEQUENCER_STATE.map(([marker]) => marker), 'MERGE_HEAD', 'sequencer']
+    .some(marker => existsSync(join(gitDir, marker)));
+  if (operationInProgress()) {
     return refused('Finish the Git operation already in progress before syncing.');
   }
   const currentBranch = branch || await getBranch(dir);
   const pullResult = await execGit(['pull', '--rebase', '--autostash', 'origin', currentBranch], dir, { ignoreExitCode: true });
   if (pullResult.exitCode !== 0 || pullResult.terminated) {
-    // Only a settled command can own recovery. An interrupted Git process may
-    // still have hooks/helpers running; leave its state for explicit recovery.
+    // The API lane does not exclude Git CLI actors. Even a request-specific
+    // reflog proves only who started a rebase, not who now owns its edits. Git
+    // has no generation-conditioned abort, so a check followed by --abort can
+    // still discard another actor's work. Preserve shared-checkout recovery.
     const settled = Number.isInteger(pullResult.exitCode) && !pullResult.terminated;
-    const clearedLock = settled && clearStaleGitLock(pullResult.stderr);
-    const aborted = settled && await rebaseInProgress(dir)
-      ? await execGit(['rebase', '--abort'], dir, { ignoreExitCode: true }) : null;
-    const recovery = aborted && aborted.exitCode !== 0
-      ? ` Rebase abort failed: ${gitResultError(aborted, 'Inspect the checkout before retrying.')}` : '';
+    const activeOperation = operationInProgress();
+    const clearedLock = settled && !activeOperation && clearStaleGitLock(pullResult.stderr);
+    const recovery = activeOperation
+      ? ' Git operation state and any autostash were preserved. Inspect git status and save any conflict-resolution edits before explicitly continuing or aborting the operation; nothing was pushed.' : '';
     const error = clearedLock
       ? `Cleared an abandoned git lock (${clearedLock}) left by a killed git process. The pull did not complete — inspect the checkout before retrying the sync.`
       : gitResultError(pullResult, 'Pull failed; nothing was pushed.');
     return refused(`${error}${recovery}`);
+  }
+
+  // A separate actor can start an operation during pull, including one with
+  // staged resolutions that lets pull exit zero. It still must not be pushed.
+  if (operationInProgress()) {
+    return refused('A Git operation is in progress after pulling. Its state and edits were preserved; inspect git status and finish that operation before syncing again. Nothing was pushed.');
   }
 
   // Autostash reapplication can conflict after Git has exited successfully.
