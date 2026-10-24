@@ -831,7 +831,8 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
       statusText = statusText.split('\n').filter(line => line && !drop.has(porcelainPath(line))).join('\n');
     };
     rm.mockImplementation(async (target) => {
-      const hit = statusText.split('\n').map(porcelainPath).filter(path => path && (target === path || String(target).endsWith(`/${path}`)));
+      const normalized = String(target).replaceAll('\\', '/');
+      const hit = statusText.split('\n').map(porcelainPath).filter(path => path && (normalized === path || normalized.endsWith(`/${path}`)));
       if (hit.length) dropPaths(hit);
     });
     execGitMock.mockImplementation((args, cwd) => {
