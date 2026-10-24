@@ -67,7 +67,9 @@ const PREFIXED_LABEL_RE = new RegExp(`^(${LABEL_KEY})::?(.+)$`);
 export function forgeLabelName(name, { cli = 'gh' } = {}) {
   if (typeof name !== 'string') return name;
   const parts = PREFIXED_LABEL_RE.exec(name);
-  return parts ? `${parts[1]}${labelSeparator(cli)}${parts[2]}` : name;
+  // Multiple completed reviewers must coexist: GitLab scoped labels replace
+  // other values on the same axis, so review attribution stays unscoped.
+  return parts ? `${parts[1]}${parts[1] === 'reviewer' ? ':' : labelSeparator(cli)}${parts[2]}` : name;
 }
 
 export const DISPATCH_LABEL_COLORS = Object.freeze({
@@ -270,6 +272,15 @@ function implementerLabelSpec(name) {
     color: '0075CA',
     description: `PR opened by the ${id} model`,
   } : null;
+}
+
+/** Completed local review models, independent of requested forge reviewers. */
+function reviewerLabelSpec(name) {
+  if (typeof name !== 'string') return null;
+  const canonical = forgeLabelName(name);
+  if (!canonical.startsWith('reviewer:')) return null;
+  const id = normalizePlannerId(canonical.slice('reviewer:'.length));
+  return id ? { name: `reviewer:${id}`, color: '6F42C1', description: `Locally reviewed by the ${id} model` } : null;
 }
 
 /**
@@ -574,7 +585,7 @@ export function dispatchLabelSpec(name, { cli = 'gh' } = {}) {
     }
   }
   // Attribution axes are open-ended and must not shadow fixed labels.
-  const attribution = plannerLabelSpec(name) || implementerLabelSpec(name);
+  const attribution = plannerLabelSpec(name) || implementerLabelSpec(name) || reviewerLabelSpec(name);
   return attribution ? { ...attribution, name: forgeLabelName(attribution.name, { cli }) } : null;
 }
 
