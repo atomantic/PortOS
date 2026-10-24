@@ -567,6 +567,10 @@ async function reviewCurrentCheckout({ repoPath, release, prUrl, kind, unlocked 
   if (namedOwner) return { ok: false, reason: namedOwner };
   const identity = await integratedPolicyReviewIdentity(repoPath, release, prUrl, forge);
   if (!identity) return { ok: false, reason: 'retirement-local-objects-missing' };
+  if (!release.branch) {
+    identity.detachedCheckoutIdentity = await readRetirementCheckoutIdentity(release.path);
+    if (!identity.detachedCheckoutIdentity) return { ok: false, reason: 'checkout-identity-changed' };
+  }
   const policy = await retirementPolicy(repoPath, policyBranch, opts, identity);
   if (policy.reason) return { ok: false, reason: policy.reason };
   return archiveSnapshots(matched.tree, repoPath, null, archiveWork(opts.signal))
