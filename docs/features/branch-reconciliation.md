@@ -103,15 +103,16 @@ After a process crash, an archive without a complete manifest cannot prove
 preservation; an existing completed archive still needs the full independent
 hash and isolated Git object proof. No historical receipt is synthesized.
 
-Capacity responses include measured bytes or elapsed milliseconds. Recover by
+Capacity responses include measured bytes, Git output code units, or elapsed
+milliseconds. Recover by
 freeing resources or preserving large outputs separately, then retrying the exact
 checkout with fresh evidence; do not remove it or raise global limits to clear a
 refusal. Existing unversioned archives follow an explicit compatibility path
 through the same bounded verification and complete content/private-Git proof.
-Unknown contract versions fail closed. The real-Git regression measured 26–36
-seconds for cancellation/cleanup/retry and 56 seconds for the 1,100-plus-file
-restore on a shared runner; those integration cases have explicit two-minute
-test budgets. Existing tests retain their default timeout. This does not change
+Unknown contract versions fail closed. The real-Git regression measured
+16.9–20.9 seconds for cancellation/cleanup/retry and 20.2 seconds for the
+1,100-plus-file restore; those integration cases have explicit 30-second test
+budgets. Existing tests retain their default timeout. This does not change
 initialized-checkout archives or their separate operational budgets.
 
 ## Explicit initialized-checkout preservation

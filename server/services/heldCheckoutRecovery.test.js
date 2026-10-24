@@ -1099,7 +1099,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   });
 
   // Each case includes a failed archive, cleanup, complete retry and repeat request.
-  // Measured 26–36 seconds on a shared runner; the many-file restore took 56 seconds.
+  // Measured 16.9–20.9 seconds; the many-file restore took 20.2 seconds.
   it.each([
     { mode: 'cancel', phase: 'recovery refs' }, { mode: 'time', phase: 'recovery refs' },
     { mode: 'cancel', phase: 'bundle' }, { mode: 'time', phase: 'bundle' },
