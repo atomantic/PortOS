@@ -496,7 +496,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
     const workspacePath = await mkdtemp(join(tmpdir(), 'cleanup-restart-'));
     isProgrammaticIoTaskType.mockReturnValue(false);
     const taskOutcome = { status: 'incomplete', reason: 'Only preservation remains.', recovery: { mode: 'cleanup' } };
-    const task = { ...TASK, metadata: { ...TASK.metadata, ...(mode === 'saved'
+    const task = { ...TASK, status: 'in_progress', description: 'Preserve the delivered checkout.', priority: 'MEDIUM', metadata: { ...TASK.metadata, ...(mode === 'saved'
       ? { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' } : {}) } };
     persistedAgent.metadata = { workspacePath, ...(mode === 'saved' ? { isWorktree: true }
       : { isWorktree: false, claimPicksOwnBranch: false, claimBranch: 'claim/issue-42', claimBranches: ['claim/issue-42'] }) };
@@ -504,7 +504,11 @@ describe('recovery output-hook dispatch (#3182)', () => {
       await writeFile(join(workspacePath, '.agent-done-agent-example'), JSON.stringify({ taskOutcome }));
       await retireDeadAgent({ agent: persistedAgent, task, success: mode === 'pinned-claim', exitCode: mode === 'pinned-claim' ? 0 : 1, duration: 1000 });
       expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'in_progress',
-        metadata: expect.objectContaining({ deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' }) }), TASK.taskType);
+        metadata: expect.objectContaining({ deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' }) }), TASK.taskType, {
+        expectedStatus: 'in_progress',
+        expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+        recoveryOwner: { id: 'agent-example', startedAt: '2026-09-10T00:00:00Z' },
+      });
       expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: false, cleanupPending: true }));
     } finally {
       isProgrammaticIoTaskType.mockReturnValue(true);
