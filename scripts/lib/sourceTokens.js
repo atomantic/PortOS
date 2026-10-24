@@ -20,7 +20,8 @@ function regexAllowed(tokens) {
       if (tokens[i].t !== 'p') continue;
       if (tokens[i].v === ')') depth += 1;
       if (tokens[i].v === '(' && --depth === 0) {
-        return tokens[i - 1]?.t === 'id' && ['if', 'while', 'for', 'with', 'switch', 'catch'].includes(tokens[i - 1].v);
+        return tokens[i - 1]?.t === 'id' && ['if', 'while', 'for', 'with', 'switch', 'catch'].includes(tokens[i - 1].v)
+          && !(tokens[i - 2]?.t === 'p' && ['.', '?.'].includes(tokens[i - 2].v));
       }
     }
     return false;
@@ -66,7 +67,7 @@ function readRegex(src, start) {
 }
 
 /**
- * Tokens of `src`: `{ t: 'id'|'p'|'s'|'n'|'re'|'tpl', v, i }`. Strings decode
+ * Tokens of `src`: `{ t: 'id'|'p'|'s'|'n'|'re'|'tpl'|'jsx', v, i }`. Strings decode
  * common escapes; a template literal keeps `quasis` and the recursively
  * tokenized `exprs` of its `${}` holes. Comments vanish. A quote with no
  * partner on its line is JSX prose, and a `/` with no closing partner on its
@@ -78,6 +79,51 @@ export function tokenize(src, proseBackticks = new Set()) {
   const out = [];
   let pos = 0;
   const n = src.length;
+  // JSX prose has its own lexical context: quotes there cannot start JS
+  // strings, but attribute/child expression holes still execute JavaScript.
+  // Ambiguous or malformed JSX throws so dependency callers fail closed.
+  const scanJsx = (tokens) => {
+    const expression = () => {
+      tokens.push({ t: 'p', v: '{', i: pos });
+      pos += 1;
+      scan(tokens, true);
+      tokens.push({ t: 'p', v: '}', i: pos - 1 });
+    };
+    const element = () => {
+      const opening = src.slice(pos).match(/^<(?:([A-Za-z][\w:.-]*)|(?=>))/);
+      if (!opening) throw new Error('unrecognized JSX opening');
+      const name = opening[1] ?? '';
+      pos += opening[0].length;
+      let opened = false;
+      while (pos < n) {
+        if (src[pos] === '"' || src[pos] === "'") {
+          const quote = src[pos++];
+          const end = src.indexOf(quote, pos);
+          if (end < 0) throw new Error('unterminated JSX attribute');
+          pos = end + 1;
+        } else if (src[pos] === '{') expression();
+        else if (src.startsWith('/>', pos)) { pos += 2; return; }
+        else if (src[pos] === '>') { pos += 1; opened = true; break; }
+        else pos += 1;
+      }
+      if (!opened) throw new Error('unterminated JSX tag');
+      while (pos < n) {
+        if (src.startsWith('</', pos)) {
+          const closing = src.slice(pos).match(/^<\/([A-Za-z][\w:.-]*)?\s*>/);
+          if (!closing || (closing[1] ?? '') !== name) throw new Error('unmatched JSX closing');
+          pos += closing[0].length;
+          return;
+        }
+        if (src[pos] === '<') element();
+        else if (src[pos] === '{') expression();
+        else pos += 1;
+      }
+      throw new Error('unterminated JSX element');
+    };
+    const start = pos;
+    element();
+    tokens.push({ t: 'jsx', i: start });
+  };
   const scan = (tokens, stopAtBrace) => {
     let depth = 0;
     while (pos < n) {
@@ -93,6 +139,11 @@ export function tokenize(src, proseBackticks = new Set()) {
         // No partner anywhere: JSX prose such as `/sdapi/v1/*`, not a comment.
         if (end === -1) { tokens.push({ t: 'p', v: c, i: pos }); pos += 1; continue; }
         pos = end + 2;
+        continue;
+      }
+      if (c === '<' && /^<(?:[A-Za-z]|>)/.test(src.slice(pos))
+        && (regexAllowed(tokens) || tokens.at(-1)?.v === 'default')) {
+        scanJsx(tokens);
         continue;
       }
       if (c === '\'' || c === '"') {

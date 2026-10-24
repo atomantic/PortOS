@@ -37,8 +37,18 @@ describe('no-install module import extraction', () => {
     expect(moduleImports(source).computed).toBe(true);
   });
 
+  it('keeps executable JSX expressions outside quoted child prose and attribute strings', () => {
+    const source = `<div title="import(unknown)">"{load(import('./child.js'))}"<span>{import('./nested.js')}</span>{
+      <Other value={import('./attribute.js')} />
+    }</div>`;
+    expect(moduleImports(source)).toEqual({ statics: [],
+      deferred: ['./child.js', './nested.js', './attribute.js'], computed: false });
+    expect(moduleImports('const view = <>"{import(modulePath)}"</>').computed).toBe(true);
+    expect(() => moduleImports('const view = <Unknown>')).toThrow(/JSX/);
+  });
+
   it('does not treat division as a regex and hide an executable import', () => {
-    for (const value of ['value', 'value++', 'value--', 'call()']) {
+    for (const value of ['value', 'value++', 'value--', 'call()', 'value.catch()', 'value?.catch()', 'value.with()', 'value.if()']) {
       expect(moduleImports(`const ratio = ${value} / import("./real.js") / divisor;`).deferred).toEqual(['./real.js']);
     }
   });
