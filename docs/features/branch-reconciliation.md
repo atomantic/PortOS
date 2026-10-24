@@ -195,6 +195,14 @@ when the OS replaces it twice. These retained original bytes are recovery
 evidence; the backend never installs them onto the copy. Missing attributes,
 changes to any other attribute, and unrecorded additions still refuse preservation.
 No provenance or quarantine attribute is removed or rewritten by this backend.
+Ownership is checked during preview and again before copying. New copies retain
+permitted UID/GID values without changing source metadata or caller credentials.
+On Darwin, a uniform directory tree may retain a nonmember group through a
+private empty directory created in a same-volume temporary parent with that
+inherited group, then exclusively moved into the archive before copying.
+Mixed unsupported ownership fails with `ownership-preservation-unavailable`
+before creating an archive; use an executor already authorized to represent the
+original ownership, never normalize the source to make verification pass.
 Normal retirement and rollback require exact original and quarantined metadata. Every later
 archive verification or move is bound to the exact manifest hash journaled after
 preservation. If that journal write is interrupted before any move, status
