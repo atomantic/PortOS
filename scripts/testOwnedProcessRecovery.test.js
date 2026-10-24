@@ -4,7 +4,7 @@ import { existsSync, lstatSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, uti
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
+import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepStaleRunRoots, verifyPendingTestProcesses, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { observeTestProcesses } from './lib/testProcessAttribution.js';
 import { processAncestors, readTestProcesses, testProcessRoot } from './lib/testOwnedProcesses.js';
 import { isProcessAlive } from '../server/test/processAlive.js';
@@ -252,20 +252,27 @@ describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', (
       let ownedLive;
       try { ownedLive = await launch([process.execPath, '-e', code], { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: live }); }
       finally { dispose(); }
-      const inspected = readTestProcesses([environmentOnly.pid, argumentOnly.pid, unrelated.pid]);
+      // Inspect every process launched by this fixture plus caller ancestry,
+      // using real OS metadata. Ambient unreadable host rows correctly retain
+      // roots; that separate refusal contract is covered above.
+      const fixturePids = [process.pid, process.ppid, ...children.map(child => child.pid)];
+      const read = pids => readTestProcesses(pids ?? fixturePids);
+      const inspected = read([environmentOnly.pid, argumentOnly.pid, unrelated.pid]);
       expect(inspected?.map(record => testProcessRoot(record, host, 'pvt-'))).toEqual([dead, dead, null]);
-      sweepStaleRunRoots(host);
+      sweepStaleRunRoots(host, { read });
       expect(existsSync(dead)).toBe(true); // signal scheduling is not settlement
       await vi.waitFor(() => {
         expect(isProcessAlive(environmentOnly.pid)).toBe(false);
         expect(isProcessAlive(argumentOnly.pid)).toBe(false);
       }, { timeout: 5000 });
-      sweepStaleRunRoots(host); // both individually verified descendants have settled
+      expect(verifyPendingTestProcesses(dead, { read })).toBe(true);
+      sweepStaleRunRoots(host, { read }); // both individually verified descendants have settled
       expect(existsSync(dead)).toBe(false);
+      expect(existsSync(live)).toBe(true);
       expect(isProcessAlive(unrelated.pid)).toBe(true);
       expect(isProcessAlive(ownedLive.pid)).toBe(true);
       const outcomes = [];
-      expect(killTestProcessesUnder(live, { onOutcome: outcome => outcomes.push(outcome) })).toBe(1);
+      expect(killTestProcessesUnder(live, { read, onOutcome: outcome => outcomes.push(outcome) })).toBe(1);
       expect(outcomes).toEqual([expect.objectContaining({ suite: 'scripts/testOwnedProcessRecovery.test.js', phase: 'suite-ended', lifecycle: 'spawned', settlement: 'terminated' })]);
       await vi.waitFor(() => expect(isProcessAlive(ownedLive.pid)).toBe(false));
     } finally {
