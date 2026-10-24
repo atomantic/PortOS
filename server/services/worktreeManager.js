@@ -271,9 +271,10 @@ async function queueWorktreeCreate(repo, fn) {
  * transaction also compares the old object id. The local absolute destination
  * cannot resolve through an origin push URL. Existing hooks and denyDeletes
  * policy still apply. Share the creation lane so managed attachments cannot
- * enter between the receiver's holder check and ref transaction.
+ * enter between the receiver's holder check and ref transaction. `onRetired`
+ * receives the verified branch archive only after deletion and config retirement.
  */
-export function deleteCompletedLocalBranch(repoPath, branch, expectedHead, { beforeMutation = async () => {} } = {}) {
+export function deleteCompletedLocalBranch(repoPath, branch, expectedHead, { beforeMutation = async () => {}, onRetired = async () => {} } = {}) {
   let callbackError;
   return queueWorktreeCreate(repoPath, async (commonDir) => {
     if (PROTECTED_BRANCHES.includes(branch)) return false;
@@ -289,12 +290,14 @@ export function deleteCompletedLocalBranch(repoPath, branch, expectedHead, { bef
     const preservation = await preserveBranchRetirement(repoPath, common, branch, expectedHead);
     if (!await preservation.verify()) return false;
     await Promise.resolve().then(beforeMutation).catch(error => { callbackError = error; throw error; });
-    return preservation.retire(async () => {
+    const retired = await preservation.retire(async () => {
       const result = await execGit(['push',
         '--receive-pack=git -c receive.denyCurrentBranch=refuse -c receive.denyDeleteCurrent=refuse -c receive.autogc=false receive-pack',
         `--force-with-lease=${ref}:${expectedHead}`, '--', common, `:${ref}`], repoPath, { ignoreExitCode: true });
       return result.exitCode === 0;
     });
+    if (retired) await Promise.resolve().then(() => onRetired(preservation)).catch(error => { callbackError = error; throw error; });
+    return retired;
   }).catch(error => { if (error === callbackError) throw error; return false; });
 }
 
@@ -2157,7 +2160,8 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, getActiveIds, { 
 export async function reapMergedWorktrees(sourceWorkspace, {
   activeAgentIds = new Set(),
   claimOwners,
-  includeClaudeTrees = true
+  includeClaudeTrees = true,
+  appId = null
 } = {}) {
   const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
   const { readClaimOwnershipAgents, retireWithUnlockedArchive } = await import('./cosClaimOwnershipState.js');
@@ -2251,8 +2255,11 @@ export async function reapMergedWorktrees(sourceWorkspace, {
         return { fence: { repoPath: sourceWorkspace, path: wt.path, branch: branchName } };
       },
       archive: async () => {
-        const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
-        return preserveMergedCheckout(sourceWorkspace, wt, target).then(archive => ({ archive }), (error) => {
+        const { preserveMergedCheckout, preserveSupersededCheckout } = await import('./heldCheckoutRecovery.js');
+        const preserve = appId
+          ? preserveSupersededCheckout({ appId, repoPath: sourceWorkspace, tree: wt, defaultBranch: target })
+          : preserveMergedCheckout(sourceWorkspace, wt, target);
+        return preserve.then(archive => ({ archive }), (error) => {
           skipped.push({ path: wt.path, branch: branchName, reason: 'archive-failed', detail: error.message });
           return {};
         });
@@ -2269,6 +2276,10 @@ export async function reapMergedWorktrees(sourceWorkspace, {
         const holders = removal.entries || await listWorktrees(sourceWorkspace).catch(() => null);
         const branchDeleted = holders && !holders.some(holder => holder.branch === wt.branch)
           && await deleteCompletedLocalBranch(sourceWorkspace, branchName, wt.head);
+        if (branchDeleted && preservation.recordRetirement) {
+          const recorded = await preservation.recordRetirement().then(() => true, () => false);
+          if (!recorded) { hold('retirement-receipt-unverified'); return; }
+        }
         reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted: Boolean(branchDeleted), archiveDir: preservation.archiveDir });
         if (!branchDeleted) hold('branch-ref-changed-or-new-holder');
       },
