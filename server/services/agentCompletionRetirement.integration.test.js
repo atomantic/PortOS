@@ -6,7 +6,12 @@ import { tmpdir } from 'node:os';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+import { storedForm } from '../lib/cosTaskRows.js';
 const fixture = vi.hoisted(() => ({ root: null, app: null, forge: null, task: null, agents: {}, schedule: null, raceTaskEdit: false, inventoryAlias: false }));
+async function persistTask() {
+  fixture.task = { ...storedForm(fixture.task, 'user'), taskType: 'user' };
+  await writeFile(join(fixture.root, 'task.json'), JSON.stringify(fixture.task));
+}
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-completion-retirement-state-') }));
 // Keep real Git and teardown; vary only the lexical spelling returned by its
 // inventory adapter, like Git-forward versus native Windows separators.
@@ -38,7 +43,7 @@ vi.mock('./cosTaskStore.js', () => ({
       || Object.entries(expectedMetadata || {}).some(([key, value]) => current.metadata?.[key] !== value)) return { statusChanged: true, task: current };
     fixture.task = current;
     fixture.task = { ...fixture.task, ...patch, metadata: { ...fixture.task.metadata, ...patch.metadata } };
-    await writeFile(join(fixture.root, 'task.json'), JSON.stringify(fixture.task)); return fixture.task;
+    await persistTask(); return fixture.task;
   }, addTask: async () => { throw new Error('unexpected cognitive recovery'); },
 }));
 vi.mock('./cosState.js', async () => ({
@@ -112,14 +117,25 @@ describe('completion to archive retirement (real Git and persisted service state
     fixture.forge = { repository: 'github.com/example/repo', prUrl: 'https://github.com/example/repo/pull/42', prHead: head, changeBase: (await execGit(['rev-parse', `${head}^`], repo)).stdout.trim(), firstCommit: head,
       mergeCommit: defaultHead, defaultBranch: 'main', defaultHead, remoteHead: null, changedPaths: ['feature.txt'] };
     fixture.app = { id: 'app-completion', repoPath: repo }; fixture.schedule = { tasks: {}, executions: {} };
-    fixture.task = { id: running.taskId, taskType: 'user', status: 'in_progress', metadata: { app: fixture.app.id, openPR: true,
+    fixture.task = { id: running.taskId, taskType: 'user', status: 'in_progress', priority: 'MEDIUM', description: 'Complete example delivery', metadata: { app: fixture.app.id, openPR: true,
       prCompletion: 'review-then-merge', claimedBy: 'fixture-instance', claimedAt: startedAt, totalSpawnCount: 1,
       lastSpawnedAt: startedAt, updatedAt: startedAt } };
-    await writeFile(join(fixture.root, 'task.json'), JSON.stringify(fixture.task));
     fixture.agents = { [running.id]: running };
     activeAgents.set(running.id, { task: fixture.task });
+    if (scenario === 'lexical-workspace') await persistTask();
     expect(await bindCompletionTaskDispatch(running.id, fixture.task)).toBe(true);
+    // The dispatcher binds the numeric write result, but completion reads the
+    // persisted scalar text. Losing this handoff misclassifies a clean run as
+    // an orphan and exhausts its retry budget after successful retirement.
+    await persistTask();
+    expect(fixture.task.metadata.totalSpawnCount).toBe('1');
     expect(await prepareCompletionTaskHandoff(await getAgentRecord(running.id), { hookDelivery: { selectedPaths: ['feature.txt'] } })).toBe(true);
+    if (scenario === 'unchanged') {
+      // Receipts from a numeric task snapshot must replay against stored text,
+      // while the final compare-and-swap still uses the exact current values.
+      const intent = fixture.agents[running.id].metadata.completionCleanup.taskHandoff;
+      intent.expected = intent.expected.map(([key, value]) => [key, key === 'totalSpawnCount' ? Number(value) : value]);
+    }
     const agent = await completeAgent(running.id, { success: true, executionSuccess: true, requireCheckoutSettlement: true });
     expect(agent.result).toMatchObject({ success: false, cleanupPending: true, executionSuccess: true });
     expect(agent.metadata.completedCheckouts).toHaveLength(1);
