@@ -153,6 +153,7 @@ export function createSession(manifest, options = {}) {
   let narration = '';
   let status = '';
   let clipGeneration = 0;
+  let consumedClip = null;
 
   function notify() {
     if (typeof options.onChange === 'function') options.onChange(snapshot());
@@ -191,6 +192,12 @@ export function createSession(manifest, options = {}) {
   }
   function settleTurnPhase(node) {
     turnPhase = phase === 'hold' && liveInputAllowed(node, phase, currentAsset()).allowed ? 'listening' : 'idle';
+  }
+  function staleClip(generation) {
+    return typeof generation === 'number' && (generation !== clipGeneration || consumedClip === generation);
+  }
+  function consumeClip(generation) {
+    if (typeof generation === 'number') consumedClip = generation;
   }
   function enterNode(id) {
     invalidate();
@@ -311,6 +318,61 @@ export function createSession(manifest, options = {}) {
     return { accepted: moved.action !== 'stay', ...moved, speech: outcome.status };
   }
 
+  function onMediaEnded(generation) {
+    if (staleClip(generation)) return { action: 'ignore', reason: 'STALE_CLIP' };
+    const node = currentNode();
+    if (!node || turnPhase === 'thinking' || turnPhase === 'speaking') return { action: 'ignore', reason: 'HALF_DUPLEX' };
+    consumeClip(generation);
+    if (phase === 'exit') {
+      const chosen = edgeTarget(node, pendingTransitionId);
+      if (!chosen) {
+        phase = 'ended';
+        turnPhase = 'idle';
+        status = 'That path is not on this scene.';
+        notify();
+        return { action: 'stay', reason: 'ABSENT_TRANSITION' };
+      }
+      enterNode(chosen.target.id);
+      notify();
+      return { action: 'move', transitionId: chosen.edge.id, nodeId: chosen.target.id };
+    }
+    if (phase === 'entry') {
+      if (node.isEnding || !(node.transitions || []).length) {
+        phase = 'ended';
+        turnPhase = 'idle';
+        notify();
+        return { action: 'ended' };
+      }
+      if (node.playbackMode === 'cut') {
+        const first = edgeTarget(node, node.transitions[0]?.id);
+        const result = first ? beginTransition(node, first.edge) : { action: 'stay', reason: 'ABSENT_TRANSITION' };
+        if (!first) {
+          phase = 'ended';
+          turnPhase = 'idle';
+          status = 'That path is not on this scene.';
+        }
+        notify();
+        return result;
+      }
+      phase = 'hold';
+      clipGeneration += 1;
+      settleTurnPhase(node);
+      notify();
+      return { action: 'hold' };
+    }
+    if (phase === 'hold') {
+      const holds = (node.playbackAssets?.holds || []).filter(assetFile);
+      if (holds.length > 1) {
+        holdIteration += 1;
+        clipGeneration += 1;
+      }
+      settleTurnPhase(node);
+      notify();
+      return { action: 'loop' };
+    }
+    return { action: 'ignore' };
+  }
+
   const initial = nodes.get(episodes.get(episodeId).startNodeId);
   enterNode(initial ? initial.id : '');
 
@@ -325,62 +387,23 @@ export function createSession(manifest, options = {}) {
       notify();
       return { ok: true, ...snapshot() };
     },
-    noteMediaFailure() {
-      status = 'This clip could not be played.';
-      notify();
+    noteMediaFailure(generation) {
+      if (staleClip(generation)) return { action: 'ignore', reason: 'STALE_CLIP' };
+      if (phase !== 'entry' && phase !== 'exit') {
+        status = 'This clip could not be played.';
+        notify();
+        return { action: 'status' };
+      }
+      const beforeNode = nodeId;
+      const beforePhase = phase;
+      const moved = onMediaEnded(generation);
+      if (nodeId === beforeNode && phase === beforePhase) {
+        status = 'This clip could not be played.';
+        notify();
+      }
+      return moved;
     },
-    onMediaEnded() {
-      const node = currentNode();
-      if (!node || turnPhase === 'thinking' || turnPhase === 'speaking') return { action: 'ignore', reason: 'HALF_DUPLEX' };
-      if (phase === 'exit') {
-        const chosen = edgeTarget(node, pendingTransitionId);
-        if (!chosen) {
-          phase = 'ended';
-          turnPhase = 'idle';
-          status = 'That path is not on this scene.';
-          notify();
-          return { action: 'stay', reason: 'ABSENT_TRANSITION' };
-        }
-        enterNode(chosen.target.id);
-        notify();
-        return { action: 'move', transitionId: chosen.edge.id, nodeId: chosen.target.id };
-      }
-      if (phase === 'entry') {
-        if (node.isEnding || !(node.transitions || []).length) {
-          phase = 'ended';
-          turnPhase = 'idle';
-          notify();
-          return { action: 'ended' };
-        }
-        if (node.playbackMode === 'cut') {
-          const first = edgeTarget(node, node.transitions[0]?.id);
-          const result = first ? beginTransition(node, first.edge) : { action: 'stay', reason: 'ABSENT_TRANSITION' };
-          if (!first) {
-            phase = 'ended';
-            turnPhase = 'idle';
-            status = 'That path is not on this scene.';
-          }
-          notify();
-          return result;
-        }
-        phase = 'hold';
-        clipGeneration += 1;
-        settleTurnPhase(node);
-        notify();
-        return { action: 'hold' };
-      }
-      if (phase === 'hold') {
-        const holds = (node.playbackAssets?.holds || []).filter(assetFile);
-        if (holds.length > 1) {
-          holdIteration += 1;
-          clipGeneration += 1;
-        }
-        settleTurnPhase(node);
-        notify();
-        return { action: 'loop' };
-      }
-      return { action: 'ignore' };
-    },
+    onMediaEnded,
     async choose(transitionId) {
       const node = currentNode();
       if (turnPhase === 'thinking' || turnPhase === 'speaking') return { accepted: false, reason: 'HALF_DUPLEX' };

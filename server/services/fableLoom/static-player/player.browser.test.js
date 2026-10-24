@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { createServer, request as httpRequest } from 'node:http';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -104,6 +106,18 @@ async function stage(dir, manifest) {
   await writeFile(join(dir, 'manifest.json'), JSON.stringify(manifest));
 }
 
+function writeClip(dir) {
+  const media = join(dir, 'media');
+  mkdirSync(media, { recursive: true });
+  // A missing file fires error, and a failed entry now leaves that scene.
+  // The manual ended path needs a clip that loads and does not finish itself.
+  execFileSync('ffmpeg', [
+    '-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=16x16:d=1:r=1',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an',
+    join(media, `${HASH}.mp4`),
+  ], { stdio: 'ignore' });
+}
+
 async function ended(page) {
   await page.locator('#stage').evaluate((video) => video.dispatchEvent(new Event('ended')));
 }
@@ -118,6 +132,9 @@ describe.skipIf(!canRun)('static reference player in a generic file server', () 
     root = await mkdtemp(join(tmpdir(), 'fableloom-player-'));
     await stage(join(root, 'good'), graph());
     await stage(join(root, 'bad'), graph('2.0.0'));
+    await stage(join(root, 'bare'), graph());
+    writeClip(join(root, 'good'));
+    writeClip(join(root, 'bad'));
     server = await startPackageServer(root);
     origin = server.origin;
     const escaped = await new Promise((resolve, reject) => {
@@ -146,6 +163,9 @@ describe.skipIf(!canRun)('static reference player in a generic file server', () 
     page.on('request', (request) => requests.push(request.url()));
     page.on('dialog', (dialog) => { dialogs.push(dialog.message()); void dialog.dismiss().catch(() => {}); });
     page.on('pageerror', (error) => errors.push(error.message));
+    await page.addInitScript(() => {
+      HTMLMediaElement.prototype.play = () => Promise.resolve();
+    });
     if (init) await page.addInitScript(init);
     await page.goto(`${origin}${path}`);
     return { page, requests, dialogs, errors };
@@ -244,6 +264,17 @@ describe.skipIf(!canRun)('static reference player in a generic file server', () 
       await page.waitForSelector('[data-node="other-start"]');
       await page.evaluate(() => globalThis.__finish());
       expect(await page.locator('#player').getAttribute('data-node')).toBe('other-start');
+      expect(errors).toEqual([]);
+    } finally { await page.close(); }
+  });
+
+  it('leaves a cut when its clip cannot be loaded and keeps the next hold', async () => {
+    const { page, errors } = await open('/bare/player/index.html');
+    try {
+      await page.waitForSelector('[data-node="decision-gate"][data-phase="hold"]');
+      await page.waitForFunction(() => document.querySelector('#status').textContent.includes('could not be played'));
+      expect(await page.locator('#player').getAttribute('data-node')).toBe('decision-gate');
+      expect(await page.locator('#choices button').count()).toBe(2);
       expect(errors).toEqual([]);
     } finally { await page.close(); }
   });

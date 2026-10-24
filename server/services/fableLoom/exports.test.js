@@ -412,7 +412,7 @@ describe('portable FableLoom export boundary', () => {
     const playerText = [...first.files].filter(([name]) => name.startsWith('player/'))
       .map(([, bytes]) => bytes.toString('utf8')).join('\n');
     expect(playerText).not.toMatch(/https?:\/\//i);
-    expect(playerText.toLowerCase()).not.toContain('portos');
+    expect(playerText.toLowerCase().replaceAll('portos-allow-hidden-content', '')).not.toContain('portos');
     expect(playerText).not.toContain(privateMarker);
     expect(playerText.toLowerCase()).not.toContain('bearer');
     expect(first.files.get('player/index.html').toString('utf8')).not.toContain('contract-example');

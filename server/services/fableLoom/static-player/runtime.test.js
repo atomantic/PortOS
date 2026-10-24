@@ -327,13 +327,49 @@ describe('static reference player runtime', () => {
     expect(session.snapshot()).toMatchObject({ nodeId: 'decision-gate', turnPhase: 'listening' });
   });
 
+  it('advances a failed entry or exit once and leaves a failed hold in place', async () => {
+    const opening = createSession(story());
+    const generation = opening.snapshot().media.generation;
+    expect(opening.noteMediaFailure(generation)).toMatchObject({ action: 'move', nodeId: 'decision-gate' });
+    expect(opening.snapshot()).toMatchObject({ nodeId: 'decision-gate', phase: 'hold', status: '' });
+    expect(opening.noteMediaFailure(generation)).toMatchObject({ reason: 'STALE_CLIP' });
+    expect(opening.onMediaEnded(generation)).toMatchObject({ reason: 'STALE_CLIP' });
+    expect(opening.snapshot().nodeId).toBe('decision-gate');
+
+    const held = opening.snapshot();
+    expect(opening.noteMediaFailure(held.media.generation)).toMatchObject({ action: 'status' });
+    expect(opening.snapshot()).toMatchObject({
+      nodeId: 'decision-gate',
+      phase: 'hold',
+      status: 'This clip could not be played.',
+      media: { generation: held.media.generation },
+    });
+
+    const missing = story();
+    missing.loom.episodes[0].nodes[0].transitions[0].targetNodeId = 'missing-node';
+    const stuck = createSession(missing);
+    const stuckGeneration = stuck.snapshot().media.generation;
+    expect(stuck.noteMediaFailure(stuckGeneration)).toMatchObject({ reason: 'ABSENT_TRANSITION' });
+    expect(stuck.snapshot()).toMatchObject({ nodeId: 'cut-open', phase: 'ended' });
+    expect(stuck.onMediaEnded(stuckGeneration)).toMatchObject({ reason: 'STALE_CLIP' });
+
+    const exiting = story();
+    gateOf(exiting).playbackAssets.exits = { open: clip('e') };
+    const gate = atGate(exiting, { onSpeak: echo('empty') });
+    expect(await gate.choose('open')).toMatchObject({ action: 'exit' });
+    const exitGeneration = gate.snapshot().media.generation;
+    expect(gate.noteMediaFailure(exitGeneration)).toMatchObject({ action: 'move', nodeId: 'ending-home' });
+    expect(gate.snapshot()).toMatchObject({ nodeId: 'ending-home', status: '' });
+    expect(gate.onMediaEnded(exitGeneration)).toMatchObject({ reason: 'STALE_CLIP' });
+  });
+
   it('ships only the dependency-free player templates', async () => {
     const names = await readdir(new URL('.', import.meta.url));
     const extras = names.filter((name) => !FABLELOOM_STATIC_PLAYER_FILES.includes(name));
     expect(extras.every((name) => name.endsWith('.test.js'))).toBe(true);
     const banned = /https?:\/\/|localhost|127\.0\.0\.1|api\/fableloom|bearer|ngrok|tailscale|cloudflare|password|api key|secret|\bportos\b/i;
     for (const name of FABLELOOM_STATIC_PLAYER_FILES) {
-      const text = await readFile(new URL(name, import.meta.url), 'utf8');
+      const text = (await readFile(new URL(name, import.meta.url), 'utf8')).replaceAll('portos-allow-hidden-content', '');
       expect(text, name).not.toMatch(banned);
       if (name !== 'contract-example.js' && name !== 'player.js') expect(text).not.toMatch(/\bfetch\s*\(/);
     }
@@ -341,7 +377,8 @@ describe('static reference player runtime', () => {
     const player = await readFile(new URL('player.js', import.meta.url), 'utf8');
     const contract = await readFile(new URL('contract-example.js', import.meta.url), 'utf8');
     expect(html.match(/<script/g)).toHaveLength(1);
-    expect(html).toContain('src="player.js"');
+    expect(html).toContain('<script type="module" src="player.js"></script><!-- portos-allow-hidden-content -->');
+    expect(html.match(/portos-allow-hidden-content/g)).toHaveLength(1);
     expect(html).not.toContain('contract-example');
     expect(player.match(/\bfetch\s*\(/g)).toHaveLength(1);
     expect(player).not.toContain('innerHTML');

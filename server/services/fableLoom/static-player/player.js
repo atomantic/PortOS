@@ -42,16 +42,35 @@ function speak(turn, hooks) {
   const Utterance = globalThis.SpeechSynthesisUtterance;
   if (!synth || typeof Utterance !== 'function') return Promise.resolve(outcome(turn, 'unavailable'));
   return new Promise((resolve) => {
-    const utter = new Utterance(turn.text);
-    utter.onend = () => resolve(outcome(turn, 'completed'));
-    utter.onerror = () => resolve(outcome(turn, 'failed'));
-    synth.cancel();
-    synth.speak(utter);
+    let settled = false;
+    let timer = 0;
+    const finish = (speechStatus) => {
+      if (settled) return;
+      settled = true;
+      globalThis.clearTimeout(timer);
+      resolve(outcome(turn, speechStatus));
+    };
+    try {
+      const utter = new Utterance(turn.text);
+      utter.onend = () => finish('completed');
+      utter.onerror = () => finish('failed');
+      // Some browsers never fire onend or onerror. A bounded failure leaves the scene in place.
+      const limit = Math.min(60000, 5000 + turn.text.length * 100);
+      timer = globalThis.setTimeout(() => {
+        try { synth.cancel(); } catch { /* a stalled voice may already be gone */ }
+        finish('failed');
+      }, limit);
+      synth.cancel();
+      synth.speak(utter);
+    } catch {
+      finish('failed');
+    }
   });
 }
 
 function bind(session) {
   let shown = null;
+  let detachLoad = () => {};
   function paint() {
     const snap = session.snapshot();
     if (root) {
@@ -84,34 +103,51 @@ function bind(session) {
     }));
     if (!snap.media || !mediaUrl(snap.media.url.replace(/^\.\.\//, ''))) {
       shown = null;
+      detachLoad();
+      detachLoad = () => {};
       if (video) {
         video.hidden = true;
         video.removeAttribute('src');
+        delete video.dataset.clip;
       }
       if (play) play.hidden = true;
     } else if (video && shown !== snap.media.generation) {
       shown = snap.media.generation;
+      detachLoad();
+      const generation = snap.media.generation;
+      const looping = snap.media.loop === true;
+      const onEnded = () => {
+        if (looping) return;
+        detachLoad();
+        detachLoad = () => {};
+        session.onMediaEnded(generation);
+        paint();
+      };
+      const onError = () => {
+        if (!video.getAttribute('src')) return;
+        detachLoad();
+        detachLoad = () => {};
+        session.noteMediaFailure(generation);
+        paint();
+      };
+      detachLoad = () => {
+        video.removeEventListener('ended', onEnded);
+        video.removeEventListener('error', onError);
+      };
+      video.addEventListener('ended', onEnded);
+      video.addEventListener('error', onError);
       video.hidden = snap.phase === 'ended';
+      video.dataset.clip = String(generation);
       video.src = snap.media.url;
-      video.loop = snap.media.loop === true;
+      video.loop = looping;
       if (play) play.hidden = true;
       video.play().then(() => {
         if (play) play.hidden = true;
       }).catch(() => {
-        if (shown === snap.media.generation && play) play.hidden = false;
+        if (shown === generation && play) play.hidden = false;
       });
     }
   }
-  video?.addEventListener('ended', () => {
-    if (video.loop) return;
-    session.onMediaEnded();
-    paint();
-  });
-  video?.addEventListener('error', () => {
-    if (!video.getAttribute('src')) return;
-    session.noteMediaFailure();
-    paint();
-  });
   play?.addEventListener('click', () => {
     video?.play().then(() => {
       play.hidden = true;
