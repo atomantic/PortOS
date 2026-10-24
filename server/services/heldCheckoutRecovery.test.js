@@ -1162,27 +1162,37 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
-  it('admits a near-boundary file-count archive that the missing-checkout verifier can independently recover', async () => {
-    const c = await reviewedCheckout('file-count-admitted', { normalMerge: true });
-    await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\n');
-    const directory = join(c.path, 'private-files');
-    await mkdir(directory);
-    await Promise.all(Array.from({ length: 980 }, (_, i) => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')));
-    const createdAt = new Date().toISOString();
-    const prepared = await c.prepare();
-    expect(prepared.ok).toBe(true);
-    const retired = await c.confirm(prepared.review);
-    expect(retired).toMatchObject({ ok: true, branchDeleted: true });
-    const manifest = JSON.parse(await readFile(join(retired.archiveDir, 'manifest.json'), 'utf8'));
-    const capturedCount = manifest.captured.files.length + manifest.administration.files.length;
-    expect(capturedCount).toBeGreaterThanOrEqual(990);
-    expect(capturedCount).toBeLessThanOrEqual(1000);
-    const before = await getBranchReconcileOutcome('app-1');
-    const proof = await findMissingCheckoutPreservation({ repoPath: repo, release: { ...c.release, createdAt } }, { cosDir });
-    expect(proof, `Standalone archive proof failures: ${JSON.stringify(injected.proofFailures)}`)
-      .toMatchObject({ archiveDir: retired.archiveDir, evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
-    expect(await proof.recheck()).toBe(true);
-    expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
+  describe('near-boundary file-count preservation', () => {
+    let c;
+    let createdAt;
+    let prepared;
+    // Fixture construction and preview have their own 30-second hook budget;
+    // retirement plus independent reconstruction retain the test's 30 seconds.
+    beforeEach(async () => {
+      c = await reviewedCheckout('file-count-admitted', { normalMerge: true });
+      await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\n');
+      const directory = join(c.path, 'private-files');
+      await mkdir(directory);
+      await Promise.all(Array.from({ length: 980 }, (_, i) => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')));
+      createdAt = new Date().toISOString();
+      prepared = await c.prepare();
+      expect(prepared.ok).toBe(true);
+    });
+
+    it('admits an archive that the missing-checkout verifier can independently recover', async () => {
+      const retired = await c.confirm(prepared.review);
+      expect(retired).toMatchObject({ ok: true, branchDeleted: true });
+      const manifest = JSON.parse(await readFile(join(retired.archiveDir, 'manifest.json'), 'utf8'));
+      const capturedCount = manifest.captured.files.length + manifest.administration.files.length;
+      expect(capturedCount).toBeGreaterThanOrEqual(990);
+      expect(capturedCount).toBeLessThanOrEqual(1000);
+      const before = await getBranchReconcileOutcome('app-1');
+      const proof = await findMissingCheckoutPreservation({ repoPath: repo, release: { ...c.release, createdAt } }, { cosDir });
+      expect(proof, `Standalone archive proof failures: ${JSON.stringify(injected.proofFailures)}`)
+        .toMatchObject({ archiveDir: retired.archiveDir, evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
+      expect(await proof.recheck()).toBe(true);
+      expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
+    });
   });
 
   it.each([
