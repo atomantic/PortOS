@@ -550,11 +550,11 @@ describe('completeAgent idempotence (#3384)', () => {
     cosEvents.removeAllListeners('agent:completed');
   });
 
-  it.each([true, false])('archives checkout evidence before releasing a delivered or cleanup-pending claim (success=%s)', async success => {
+  it.each([{ success: true, pinned: false }, { success: false, pinned: false }, { success: true, pinned: true }, { success: false, pinned: true }])('archives checkout evidence before releasing a delivered or cleanup-pending claim ($success, pinned=$pinned)', async ({ success, pinned }) => {
     const agentId = 'claim-completion';
     const receipt = { version: 1, agentId, branch: 'claim/issue-1' };
     mockCosState.state.agents[agentId] = { id: agentId, status: 'running', startedAt: '2026-01-01T00:00:00Z',
-      metadata: { claimPicksOwnBranch: true, claimBranches: [receipt.branch] }, output: [] };
+      metadata: { claimPicksOwnBranch: !pinned, ...(pinned ? { claimBranch: receipt.branch } : {}), claimBranches: [receipt.branch] }, output: [] };
     captureCompletedCheckouts.mockImplementationOnce(async agent => {
       expect(agent.status).toBe('running');
       expect(mockCosState.state.agents[agentId].status).toBe('running');

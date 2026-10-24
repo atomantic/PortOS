@@ -1459,6 +1459,32 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(injected.policies[0].metadata.branchCompletionPolicy).toBeUndefined();
   });
 
+  it('reviews and retires a legacy pinned cleanup handoff against fresh default proof while local main lags', async () => {
+    const c = await reviewedCheckout('pinned-cleanup', { normalMerge: true });
+    injected.policies[0].result = { success: false, executionSuccess: true,
+      taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
+    const shippedDefault = c.forge.defaultHead;
+    await execGit(['reset', '--hard', 'HEAD^'], repo);
+    const localMain = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
+    c.forge.defaultHead = localMain;
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-policy-not-legacy-completed' });
+    c.forge.defaultHead = shippedDefault;
+    injected.policies[0].result.validationPassed = false;
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-policy-not-legacy-completed' });
+    injected.policies[0].result.validationPassed = null;
+    const prepared = await c.prepare();
+    expect(prepared).toMatchObject({ ok: true, review: { comparison: { disposition: 'integrated', difference: '' },
+      policy: { integratedCleanupHead: shippedDefault } } });
+    const result = await c.confirm(prepared.review);
+    expect(result).toMatchObject({ ok: true, archiveDir: expect.any(String), branchDeleted: true });
+    expect(await registered(c.path)).toBe(false);
+    expect((await execGit(['rev-parse', 'main'], repo)).stdout.trim()).toBe(localMain);
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
+      branch: c.release.branch, head: c.release.head, archiveDir: result.archiveDir, branchDeleted: true,
+    }));
+  });
+
   it('settles a review obligation for unattended retirement only once every commit is on the default branch', async () => {
     const c = await reviewedCheckout('settled', { normalMerge: true, superseded: true });
     await execGit(['worktree', 'unlock', c.path], repo);
