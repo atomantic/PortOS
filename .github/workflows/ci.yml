@@ -34,8 +34,6 @@ jobs:
     name: Plan test impact
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      PORTOS_CI_IMPACT_DIAGNOSTICS: ${{ runner.temp }}/portos-ci-impact
     # Still live despite the removed push trigger: a called workflow inherits
     # the caller's event, and release.yml calls this one from a push.
     if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]')

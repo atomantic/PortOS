@@ -10,6 +10,8 @@ import { writeStepSummary } from './lib/githubOutput.js';
 
 export const IMPACT_STAGES = ['admission', 'base', 'hidden-content', 'import-case', 'plan', 'node-minimum', 'summary', 'autofixer-install', 'syntax'];
 const OWNER_KEY = 'PORTOS_CI_IMPACT_OWNER';
+const diagnosticRoot = () => process.env.PORTOS_CI_IMPACT_DIAGNOSTICS
+  || (process.env.RUNNER_TEMP ? join(process.env.RUNNER_TEMP, 'portos-ci-impact') : undefined);
 const validToken = value => typeof value === 'string' && /^[\da-f-]{36}$/.test(value);
 const codeValue = value => Number.isInteger(value) && value >= 0 && value <= 255 ? value : null;
 const signalValue = value => /^SIG[A-Z0-9]{1,12}$/.test(value ?? '') ? value : null;
@@ -70,7 +72,7 @@ function evidence(stage, boundary, values, log = console.log) {
 // Child output and GitHub command files pass through unchanged. These records
 // observe the direct command's events; they do not claim runner/job completion.
 export async function observeImpactStage(stage, command, args, {
-  root = process.env.PORTOS_CI_IMPACT_DIAGNOSTICS, env = process.env,
+  root = diagnosticRoot(), env = process.env,
   scan = scanImpactOwners, log = console.log,
 } = {}) {
   if (!IMPACT_STAGES.includes(stage) || !command) throw Error('Invalid impact stage invocation.');
@@ -135,7 +137,7 @@ export function reportImpactSettlement(root, { scan = scanImpactOwners, log = co
 async function main() {
   const [stage, separator, command, ...args] = process.argv.slice(2);
   if (stage === 'settlement' && separator === undefined) {
-    reportImpactSettlement(process.env.PORTOS_CI_IMPACT_DIAGNOSTICS);
+    reportImpactSettlement(diagnosticRoot());
     return;
   }
   if (separator !== '--') throw Error('Invalid impact stage invocation.');

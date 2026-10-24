@@ -24,12 +24,12 @@ it('preserves command output, failure status, and GitHub command files through t
   const result = spawnSync(process.execPath, [launcher, 'plan', '--', process.execPath, '-e', `
     require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'server_files=["example.test.js"]\\n');
     console.log('original-output'); process.exitCode = 17;
-  `], { encoding: 'utf8', timeout: 10_000, env: { ...process.env, PORTOS_CI_IMPACT_DIAGNOSTICS: dir, GITHUB_OUTPUT: output } });
+  `], { encoding: 'utf8', timeout: 10_000, env: { ...process.env, PORTOS_CI_IMPACT_DIAGNOSTICS: '', RUNNER_TEMP: dir, GITHUB_OUTPUT: output } });
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(17);
   expect(result.stdout).toContain('original-output');
   expect(readFileSync(output, 'utf8')).toBe('server_files=["example.test.js"]\n');
-  const record = JSON.parse(readFileSync(join(dir, 'plan.json'), 'utf8'));
+  const record = JSON.parse(readFileSync(join(dir, 'portos-ci-impact', 'plan.json'), 'utf8'));
   expect(record).toMatchObject({ stage: 'plan', exit: { code: 17 }, close: { code: 17 } });
   expect(record.exit.elapsedMs).toBeLessThanOrEqual(record.close.elapsedMs);
   expect(result.stdout).not.toContain(record.token);
@@ -140,6 +140,7 @@ it('observes every repository stage before runner finalization while retaining t
   const jobs = workflowJobs(readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
   for (const stage of IMPACT_STAGES) expect(jobs.impact).toContain(`node scripts/ci-impact-diagnostics.js ${stage} -- `);
   expect(jobs.impact).toMatch(/timeout-minutes: 10\n/);
+  expect(jobs.impact).not.toContain('${{ runner.temp }}');
   expect(jobs.impact).toContain('if: always()\n        run: node scripts/ci-impact-diagnostics.js settlement');
   expect(jobs.impact).not.toMatch(/continue-on-error/);
   expect(jobs.gate).toContain('CI_GATE_RESULT_IMPACT: ${{ needs.impact.result }}');
