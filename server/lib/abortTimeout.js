@@ -22,3 +22,22 @@ export async function withAbortTimeout(timeoutMs, fn) {
     clearTimeout(timer);
   }
 }
+
+/** Cancel waiting without cancelling work shared by other callers. The original
+ * promise remains rejection-owned; its eventual completion cannot resume this caller.
+ */
+export function awaitWithAbort(promise, signal) {
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason || new DOMException('Operation aborted', 'AbortError'));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(promise).then(value => {
+      signal.removeEventListener('abort', onAbort);
+      resolve(value);
+    }, error => {
+      signal.removeEventListener('abort', onAbort);
+      reject(error);
+    });
+  });
+}

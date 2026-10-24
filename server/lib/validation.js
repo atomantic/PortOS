@@ -3018,6 +3018,8 @@ export const cosTaskReorderBodySchema = z.object({ taskIds: z.array(nonEmptyStri
 export const cosScheduleTargetBodySchema = z.object({ taskType: nonEmptyString, appId: nullishString });
 // A scoped release names the exact inventory row the operator saw (#12002).
 export const heldCheckoutRetireBodySchema = z.object({
+  checkoutIdentity: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  observedAt: z.string().datetime({ offset: true }).optional(),
   appId: nonEmptyString,
   path: nonEmptyString,
   head: z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/),

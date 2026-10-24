@@ -22,10 +22,11 @@ describe('historical completed-checkout review obligations', () => {
   it('archives and retires a checkout whose commits are all on the default branch without a PR read or dispatch', async () => {
     const deps = setup();
     deps.retire = vi.fn(async () => ({ ok: true, branchDeleted: true, archiveDir: '/private/verified-archive' }));
-    const result = await prepareReconcileRetirements(app, scan({ isMerged: true }), deps);
+    const observation = { observedAt: '2026-10-23T00:00:00Z', checkoutIdentity: 'original-checkout' };
+    const result = await prepareReconcileRetirements(app, scan({ isMerged: true }, observation), deps);
     expect(result).toMatchObject({ candidates: [], held: [], retired: [expect.objectContaining({ branch: branch.branch, head })] });
     expect(deps.readPr).not.toHaveBeenCalled();
-    expect(deps.retire).toHaveBeenCalledWith({ appId: app.id, release: { branch: tree.branch, path: tree.path, head, locked: false, lockReason: null } },
+    expect(deps.retire).toHaveBeenCalledWith({ appId: app.id, release: { ...observation, branch: tree.branch, path: tree.path, head, locked: false, lockReason: null } },
       { beforeMutation: expect.any(Function), settleMergedReviewObligation: true });
   });
 
@@ -146,6 +147,24 @@ describe('historical completed-checkout review obligations', () => {
   it.each(['claim-owner-active', 'retirement-local-objects-missing', 'retirement-submodule-not-uninitialized', 'retirement-policy-not-legacy-completed'])('keeps a fresh preview refusal visible: %s', async reason => {
     const deps = setup(); deps.prepare.mockResolvedValue({ ok: false, reason });
     expect(await prepareReconcileRetirements(app, scan(), deps)).toMatchObject({ candidates: [], held: [{ branch: branch.branch, reason }] });
+  });
+
+  it.each(['preview', 'merged-retirement', 'reviewed-retirement'])('keeps archive capacity diagnostics in held status after %s', async phase => {
+    const deps = setup();
+    const refusal = { ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit: {
+      scope: 'content', kind: 'total', limitBytes: 250 * 1024 * 1024, observedBytes: 264 * 1024 * 1024,
+    } };
+    if (phase === 'preview') deps.prepare.mockResolvedValue(refusal);
+    if (phase === 'reviewed-retirement') {
+      const prepared = await deps.prepare();
+      prepared.review.comparison = { disposition: 'integrated', localPatch: '', difference: '' };
+      deps.prepare.mockResolvedValue(prepared);
+    }
+    deps.retire = vi.fn(async () => refusal);
+    expect(await prepareReconcileRetirements(app, scan({ isMerged: phase === 'merged-retirement' }), deps)).toEqual({ candidates: [], retired: [], held: [{ branch: tree.branch, path: tree.path, head, locked: false, lockReason: null,
+      reason: refusal.reason, archiveLimit: refusal.archiveLimit,
+    }] });
+    if (phase === 'preview') expect(deps.retire).not.toHaveBeenCalled();
   });
 
   it('does not invent approval after forge failure or vanished historical policy', async () => {

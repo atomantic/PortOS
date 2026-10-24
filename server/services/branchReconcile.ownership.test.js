@@ -17,6 +17,7 @@ import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { captureCompletedCheckouts } from './completedCheckoutEvidence.js';
+import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 
 // Retirement now preserves private Git and ignored evidence. Exercise the
 // real archive against a test-owned data root, never the install's data tree.
@@ -139,13 +140,21 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     await writeFile(join(path, 'ignored.txt'), 'unique ignored work\n');
     await execGit(['worktree', 'lock', '--reason', 'explicit owner handoff required', path], repo);
 
+    const checkoutIdentity = await readRetirementCheckoutIdentity(path);
+    expect(checkoutIdentity).toMatch(/^[a-f0-9]{64}$/);
+    const observationStartedAt = Date.now();
     const result = await reconcile(repo, { activeAgentIds: new Set() });
+    const observationFinishedAt = Date.now();
     expect(result.detachedWorktrees).toEqual([]); // old merged-only projection cannot see it
     const report = describeIdleReconcilePark(result.skipped, [], { worktreeInventory: result.worktreeInventory });
     expect(report.remaining).toEqual([{
       path: await gitCheckoutPath(path), head, detached: true, locked: true, lockReason: 'explicit owner handoff required',
-      managed: false, reason: 'worktree-locked',
+      managed: false, reason: 'worktree-locked', checkoutIdentity, observedAt: expect.any(String),
     }]);
+    const observedAt = Date.parse(report.remaining[0].observedAt);
+    expect(observedAt).toBeGreaterThanOrEqual(observationStartedAt);
+    expect(observedAt).toBeLessThanOrEqual(observationFinishedAt);
+    expect(report.remaining[0].observedAt).toBe(new Date(observedAt).toISOString());
     for (const name of ['tracked.txt', 'untracked.txt', 'ignored.txt']) expect(existsSync(join(path, name))).toBe(true);
     expect((await execGit(['rev-parse', 'HEAD'], path)).stdout.trim()).toBe(head);
   });

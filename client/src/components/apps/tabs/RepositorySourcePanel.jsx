@@ -194,20 +194,30 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
     operationType,
     error: operationError,
     errorCode: operationErrorCode,
+    errorContext: operationErrorContext,
     completed: operationCompleted,
     restarting,
     startUpdate,
   } = useAppOperation({ appId, onComplete: handleOperationComplete });
+  useEffect(() => {
+    setUpdateRequested(false);
+    setScopeFailure(null);
+  }, [appId]);
+
+  useEffect(() => {
+    const failure = forgeScopeFailureFrom({ code: operationErrorCode, context: operationErrorContext, message: operationError });
+    if (!failure) return;
+    setScopeFailure(failure);
+    // Fork sync refused before the checkout update began; an explicit retry is safe.
+    setUpdateRequested(false);
+  }, [operationErrorCode, operationErrorContext, operationError]);
+
   const updating = isOperating && operationType === 'update';
   const operationBusy = isOperating || restarting;
 
   useEffect(() => {
     if (updating) setUpdateRequested(true);
   }, [updating]);
-
-  useEffect(() => {
-    setUpdateRequested(false);
-  }, [appId]);
 
   useEffect(() => {
     load({ initial: true });
@@ -266,6 +276,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
     }
     const intent = updateIntent;
     setUpdateIntent(null);
+    setScopeFailure(null);
     setUpdateRequested(true);
     startUpdate(appId, appName, { syncFork: intent?.syncFork === true });
   };
@@ -310,7 +321,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
             onDismiss={() => setScopeFailure(null)}
             onRefreshed={() => {
               setScopeFailure(null);
-              toast('Token updated — sync the fork again');
+              toast('Token updated — retry the original action');
             }}
           />
         </div>

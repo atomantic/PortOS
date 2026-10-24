@@ -1131,11 +1131,10 @@ jobs:
         id: windows-tests
         # A step timeout FAILS the step (log kept, `if: failure()` reporting
         # runs); the job-level timeout would cancel the job and lose the log
-        # (#10415). Full Windows shards now approach/exceed 15 minutes: one
-        # completed 19,911 tests in 877.6s before post-test timeout; another
-        # reached 1,091/1,100 modules at the deadline (2026-10-24, #13402).
-        # Keep headroom within the unchanged 40-minute job and two-worker cap.
-        timeout-minutes: 20
+        # (#10415). Scoped runs finish in a few minutes. A full shard has been
+        # observed still passing tests at 15 minutes, so keep headroom under
+        # the 40-minute job budget.
+        timeout-minutes: 25
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           # Outside the launcher's disposable temp root; recoverable after exit.

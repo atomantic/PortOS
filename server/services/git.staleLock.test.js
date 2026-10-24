@@ -78,6 +78,31 @@ describe('syncBranch', () => {
     );
   });
 
+  it.each([
+    fail('error: could not apply example'),
+    { ...fail(), stdout: 'pull hook declined' },
+    { stdout: '', stderr: '', exitCode: null, signal: 'SIGTERM', terminated: true }
+  ])('stops before push for an unsuccessful pull result: %j', async pullResult => {
+    execGitMock.mockImplementation(async args => args[0] === 'pull' ? pullResult : ok());
+    expect(await syncBranch('/repo', 'feature/work')).toMatchObject({ success: false, pulled: false, pushed: false });
+    expect(commands().some(command => /^(push|rebase --abort)/.test(command))).toBe(false);
+  });
+
+  it.each([
+    fail('error: pre-push hook declined'),
+    { ...fail(), stdout: 'push hook declined' },
+    { stdout: '', stderr: '', exitCode: null, signal: 'SIGTERM', terminated: true }
+  ])('reports an unsuccessful push result: %j', async pushResult => {
+    execGitMock.mockImplementation(async args => args[0] === 'push' ? pushResult : ok());
+    expect(await syncBranch('/repo', 'feature/work')).toMatchObject({ success: false, pulled: true, pushed: false, error: expect.any(String) });
+  });
+
+  it('does not push when the post-pull conflict check fails', async () => {
+    execGitMock.mockImplementation(async args => args[0] === 'diff' ? fail('error: index unavailable') : ok());
+    expect(await syncBranch('/repo', 'feature/work')).toMatchObject({ success: false, pulled: false, pushed: false, error: 'error: index unavailable' });
+    expect(commands()).not.toContain('push origin feature/work');
+  });
+
   it('clears an abandoned pull lock without retrying, and does not push', async () => {
     execGitMock.mockImplementation((args) => {
       if (args[0] === 'pull') return Promise.resolve(fail("fatal: Unable to create '/repo/.git/index.lock': File exists"));

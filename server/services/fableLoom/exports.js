@@ -19,11 +19,14 @@ import {
 import { getUniverse } from '../universeBuilder.js';
 import { loadHistory } from '../videoGen/history.js';
 import { getLoom } from './records.js';
-import { prepareFableLoomExportMedia, readFableLoomExportSource } from './exportMedia.js';
+import { checkExportCancelled, readFableLoomExportSource } from './exportMedia.js';
+import { createFableLoomMediaCache } from './exportMediaCache.js';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const active = new Map();
 const downloads = new Map();
+const controllers = new Map();
+const completions = new Map();
 let admissionTail = Promise.resolve();
 let workerTail = Promise.resolve();
 const root = () => join(PATHS.data, 'cache', 'fableloom-exports');
@@ -162,7 +165,7 @@ function createMediaStore(maxBytes = FABLELOOM_EXPORT_LIMITS.maxPackageBytes) {
         files.set(file, bytes);
         byteLength += bytes.length;
       }
-      return { file, sha256, durationMs };
+      return { file, sha256, durationMs, bytes: bytes.length };
     },
     entries: () => files.entries(),
     get byteLength() { return byteLength; },
@@ -186,14 +189,17 @@ Occupancy intervals are milliseconds relative to that packaged clip.
 provenance.json records each media use, provider/model, parameter hash, approval
 state and draftFlags. An allowDraft export does not certify production approval.
 
-The source media profile strips metadata, encodes stills as PNG and stream-copies
-H.264 yuv420p / optional AAC into MP4. It does not resize, normalize loudness or
-transcode unsupported codecs. The player, character and voice opt-ins are not
+The source profile remuxes H.264/AAC. Web profiles resize without upscaling,
+encode H.264/AAC with bitrate caps, normalize the authored audio mix and include
+poster PNGs. Explicitly requested WebM alternatives use VP9/Opus. Encoding
+profiles, encoder identities and byte counts are recorded in provenance.json.
+The player, character and voice opt-ins are not
 available in this package version. Your host owns free-text resolution, TTS and
 transport, following runtime-v1.md; no PortOS URL or credential is needed.
 `;
 
-async function build(job, snapshot, episodes, history, universe) {
+async function build(job, snapshot, episodes, history, universe, signal) {
+  checkExportCancelled(signal);
   job.status = 'validating';
   job.findings = inspectFableLoomExport(snapshot, episodes, universe);
   if (job.findings.some(f => f.severity === 'error')) {
@@ -227,17 +233,22 @@ async function build(job, snapshot, episodes, history, universe) {
   const directory = join(jobDirectory(job.jobId), 'work');
   await ensureDir(directory);
   const cache = new Map();
+  const prepare = await createFableLoomMediaCache(join(root(), 'media-cache'), job.options, signal);
   const media = createMediaStore();
   const nodeAssets = new Map();
   const provenance = [];
   for (const request of requests) {
+    checkExportCancelled(signal);
     const key = `${request.kind}:${request.sourceId}`;
     let prepared = cache.get(key);
     if (!prepared) {
       const filename = request.kind === 'image' ? request.sourceId : history.find(h => h.id === request.sourceId)?.filename;
       if (!filename) throw error('EXPORT_MEDIA_MISSING', 'A referenced video history item is missing.');
       const bytes = await readFableLoomExportSource(request.kind === 'image' ? PATHS.images : PATHS.videos, filename);
-      prepared = media.add(await prepareFableLoomExportMedia(bytes, request.kind, directory));
+      const result = await prepare(bytes, request.kind, directory);
+      prepared = { ...media.add(result), encoding: result.encoding,
+        ...(result.poster ? { poster: media.add(result.poster) } : {}),
+        ...(result.webm ? { webm: media.add(result.webm) } : {}) };
       cache.set(key, prepared);
     }
     const occupancy = request.kind === 'video' ? fableLoomExportOccupancy(request.node, request.sourceId) : null;
@@ -252,7 +263,9 @@ async function build(job, snapshot, episodes, history, universe) {
     const binding = {
       ...request,
       playback: { file: prepared.file, sha256: prepared.sha256, durationMs: prepared.durationMs,
-        loopable: request.role === 'hold', ...(occupancy ? { audioOccupancy: occupancy } : {}) },
+        loopable: request.role === 'hold', ...(occupancy ? { audioOccupancy: occupancy } : {}),
+        ...(prepared.poster ? { poster: prepared.poster } : {}),
+        ...(prepared.webm ? { alternatives: [{ ...prepared.webm, type: 'video/webm' }] } : {}) },
     };
     const nodeKey = `${request.episode.id}:${request.node.id}`;
     if (!nodeAssets.has(nodeKey)) nodeAssets.set(nodeKey, []);
@@ -261,7 +274,9 @@ async function build(job, snapshot, episodes, history, universe) {
       episodeId: request.episode.id, nodeId: request.node.id, role: request.role,
       ...(request.transitionId ? { transitionId: request.transitionId } : {}),
       ...(request.index !== undefined ? { index: request.index } : {}),
-      file: prepared.file, sha256: prepared.sha256, ...assetProvenance(snapshot, request.node, request),
+      file: prepared.file, sha256: prepared.sha256, bytes: prepared.bytes, encoding: prepared.encoding,
+      ...(prepared.poster ? { poster: prepared.poster } : {}),
+      ...(prepared.webm ? { webm: prepared.webm } : {}), ...assetProvenance(snapshot, request.node, request),
     });
     job.progress.completed++;
     await save(job);
@@ -287,7 +302,9 @@ async function build(job, snapshot, episodes, history, universe) {
   if (archive.length > FABLELOOM_EXPORT_LIMITS.maxPackageBytes) {
     throw error('EXPORT_PACKAGE_SIZE', 'ZIP exceeds the 256 MiB limit. Export fewer episodes.');
   }
+  checkExportCancelled(signal);
   await atomicWrite(join(jobDirectory(job.jobId), 'package.zip'), archive);
+  checkExportCancelled(signal);
   job.filename = `fableloom-${hash(json(manifest)).slice(0, 16)}-v1.zip`;
   job.sizeReport = { mediaBytes: media.byteLength, totalBytes, archiveBytes: archive.length, mediaFiles: media.size };
   job.status = 'completed';
@@ -297,18 +314,21 @@ async function run(job, context, permit) {
   let settled = false;
   try {
     try {
-      await build(job, context.snapshot, context.episodes, context.history, context.universe);
+      await build(job, context.snapshot, context.episodes, context.history, context.universe, controllers.get(job.jobId).signal);
     } catch (failure) {
       job.status = 'failed';
       job.error = failure.code?.startsWith('EXPORT_')
         ? { code: failure.code, message: failure.message }
         : { code: 'EXPORT_MEDIA_INVALID', message: 'A source media file is missing, unreadable or invalid. Check its attached media and start a new export.' };
     }
+    if (job.status === 'failed') await rmGuarded(join(jobDirectory(job.jobId), 'package.zip'), { force: true });
     await rmGuarded(join(jobDirectory(job.jobId), 'work'), { recursive: true, force: true });
     await save(job);
     settled = true;
   } finally {
     active.delete(job.jobId);
+    controllers.delete(job.jobId);
+    completions.delete(job.jobId);
     if (settled) await permit.finish();
     else permit.markUnsettled();
   }
@@ -316,8 +336,8 @@ async function run(job, context, permit) {
 
 export async function startFableLoomExport(loomId, input = {}) {
   const options = exportOptionsSchema.parse(input);
-  if (options.includePlayer || options.includeCharacters || options.includeVoice || options.mediaProfile !== 'source') {
-    throw error('EXPORT_OPTION_UNSUPPORTED', 'This exporter supports the source profile without player, character or voice packages.', 400);
+  if (options.includePlayer || options.includeCharacters || options.includeVoice || (options.mediaProfile === 'source' && options.includeWebm)) {
+    throw error('EXPORT_OPTION_UNSUPPORTED', 'Player, character and voice packages are unavailable. WebM requires a web media profile.', 400);
   }
   const jobId = randomUUID();
   const permit = maintenance.admit('media', jobId);
@@ -342,15 +362,25 @@ export async function startFableLoomExport(loomId, input = {}) {
         progress: { completed: 0, total: 0 }, findings: [] };
       await save(job);
       active.set(jobId, job);
+      controllers.set(jobId, new AbortController());
       return { job, snapshot, episodes, history, universe };
     });
     const pending = workerTail.then(() => permit.run(() => run(context.job, context, permit)));
+    completions.set(jobId, pending);
     workerTail = pending.catch(() => { console.error('❌ FableLoom export persistence failed; maintenance ownership is retained.'); });
     return { jobId };
   } catch (failure) {
     await permit.finish();
     throw failure;
   }
+}
+
+/** Wait for the worker and its children before reporting cancellation as settled. */
+export async function cancelFableLoomExport(loomId, jobId) {
+  await getFableLoomExport(loomId, jobId);
+  controllers.get(jobId)?.abort();
+  await completions.get(jobId);
+  return getFableLoomExport(loomId, jobId);
 }
 
 export async function getFableLoomExport(loomId, jobId) {

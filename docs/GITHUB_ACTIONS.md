@@ -757,7 +757,7 @@ related-test plans: a single shared source can select most of the server graph
 and exceed the bounded test-step budget on one Windows runner. Full Windows
 shards reached 19,911 passing tests in 877.6 seconds before post-test timeout,
 and another reached 1,091/1,100 modules at the 15-minute deadline (2026-10-24,
-#13402). The test step now has 20 minutes within its unchanged 40-minute job;
+#13402). The test step now has 25 minutes within its unchanged 40-minute job (#13301);
 the two-worker cap, matrix size and all tests remain unchanged. Matrices are
 sized by `FULL_SUITE_SHARDS` in
 `scripts/ci-test-plan.js` (client 3, Windows 3, server 2) — and each job builds

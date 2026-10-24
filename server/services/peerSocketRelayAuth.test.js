@@ -61,6 +61,42 @@ let httpServer;
 let ioServer;
 let port;
 let clients = [];
+const ATTEMPT_HEADER = 'x-portos-test-handshake';
+const attempts = new Map();
+const clientAttempts = new WeakMap();
+
+// Never stringify transport errors directly: their request/socket objects can
+// contain credentials, URLs and circular references. Keep a bounded projection
+// of error evidence, not headers, payloads, stack traces or socket identities.
+const errorEvidence = (error, depth = 0) => {
+  if (error == null) return undefined;
+  if (typeof error === 'string') return error.replace(/https?:\/\/\S+/g, '[url]').slice(0, 240);
+  if (typeof error !== 'object' || depth > 2) return undefined;
+  const result = {};
+  for (const key of ['name', 'message', 'type', 'code', 'status', 'statusText']) {
+    if (typeof error[key] === 'string') result[key] = errorEvidence(error[key], depth + 1);
+    else if (typeof error[key] === 'number') result[key] = error[key];
+  }
+  for (const key of ['data', 'description', 'context', 'cause', 'error']) {
+    const value = errorEvidence(error[key], depth + 1);
+    if (value !== undefined && (typeof value === 'string' || Object.keys(value).length)) result[key] = value;
+  }
+  return result;
+};
+
+const handshakeEvidence = (client, error) => ({
+  error: errorEvidence(error),
+  ...clientAttempts.get(client),
+  client: {
+    managerState: client.io._readyState,
+    engineState: client.io.engine?.readyState,
+    transport: client.io.engine?.transport?.name,
+  },
+});
+
+const expectAuthenticationRequired = (client, error) => {
+  expect(error.data?.code, `handshake evidence: ${JSON.stringify(handshakeEvidence(client, error))}`).toBe('AUTH_REQUIRED');
+};
 // Host-control handlers the stand-ins below actually reached (#8708).
 let reached = [];
 
@@ -80,12 +116,30 @@ const setInstancePassword = async () => {
   return auth;
 };
 
-const startServer = async () => {
+const startServer = async (engineOptions = {}) => {
   const { socketAuthGate } = await stage('import authGate.js', import('./authGate.js'));
   const { __testing } = await stage('import socket.js', import('./socket.js'));
   httpServer = createServer();
-  ioServer = new Server(httpServer);
-  ioServer.use(socketAuthGate);
+  ioServer = new Server(httpServer, engineOptions);
+  ioServer.engine.on('connection_error', (error) => {
+    const attempt = attempts.get(error.req?.headers[ATTEMPT_HEADER]);
+    if (attempt) attempt.engineError = errorEvidence(error);
+  });
+  ioServer.engine.on('connection', (socket) => {
+    const attempt = attempts.get(socket.request.headers[ATTEMPT_HEADER]);
+    if (attempt) attempt.engineConnected = true;
+  });
+  ioServer.use((socket, next) => {
+    const attempt = attempts.get(socket.handshake.headers[ATTEMPT_HEADER]);
+    if (attempt) attempt.authEntered = true;
+    return socketAuthGate(socket, (error) => {
+      if (attempt) {
+        attempt.authCompleted = true;
+        attempt.authError = errorEvidence(error);
+      }
+      next(error);
+    });
+  });
   ioServer.on('connection', (socket) => {
     __testing.registerAuthHandlers(socket, ioServer);
     __testing.registerSubscriptionHandlers(socket, ioServer);
@@ -120,15 +174,20 @@ const stopServer = async () => {
   if (httpServer) await new Promise((resolve) => httpServer.close(resolve));
   ioServer = undefined;
   httpServer = undefined;
+  attempts.clear();
 };
 
 const connectClient = (extraHeaders) => {
+  const attemptId = String(attempts.size + 1);
+  const attempt = { engineConnected: false, authEntered: false, authCompleted: false };
+  attempts.set(attemptId, attempt);
   const client = ioClient(`http://127.0.0.1:${port}`, {
     reconnection: false,
     timeout: 2000,
     transports: ['websocket'],
-    extraHeaders,
+    extraHeaders: { ...extraHeaders, [ATTEMPT_HEADER]: attemptId },
   });
+  clientAttempts.set(client, attempt);
   clients.push(client);
   return client;
 };
@@ -148,7 +207,7 @@ const waitFor = (emitter, event) => new Promise((resolve, reject) => {
     emitter.off('disconnect', onDisconnect);
   };
   const onEvent = (value) => { cleanup(); resolve(value); };
-  const onConnectError = (err) => { cleanup(); reject(new Error(`awaiting "${event}": connect_error ${err?.data?.code || err?.message}`)); };
+  const onConnectError = (err) => { cleanup(); reject(new Error(`awaiting "${event}": handshake evidence: ${JSON.stringify(handshakeEvidence(emitter, err))}`)); };
   const onDisconnect = (reason) => { cleanup(); reject(new Error(`awaiting "${event}": socket disconnected (${reason})`)); };
   emitter.on(event, onEvent);
   if (event !== 'connect_error') emitter.on('connect_error', onConnectError);
@@ -246,7 +305,32 @@ describe('peer socket relay stays connected through cos:subscribe on a password-
     await startServer();
     const client = connectClient({});
     const err = await waitFor(client, 'connect_error');
-    expect(err.data?.code).toBe('AUTH_REQUIRED');
+    expectAuthenticationRequired(client, err);
+    expect(handshakeEvidence(client, err)).toMatchObject({
+      engineConnected: true,
+      authEntered: true,
+      authCompleted: true,
+      authError: { data: { code: 'AUTH_REQUIRED' } },
+    });
+  });
+
+  it('reports a real transport refusal separately from an authentication rejection (#13370)', async () => {
+    await setInstancePassword();
+    // Controlled Engine.IO refusal, not a reproduction of the original
+    // load-sensitive incident. It proves a transport failure cannot satisfy
+    // the auth assertion and preserves evidence of the boundary it reached.
+    await startServer({ allowRequest: (_request, callback) => callback(null, false) });
+    const client = connectClient({ Authorization: 'Bearer synthetic-diagnostic-secret' });
+    const error = await waitFor(client, 'connect_error');
+    expect(handshakeEvidence(client, error)).toMatchObject({
+      error: { message: 'websocket error', description: { message: 'Unexpected server response: 400' } },
+      engineConnected: false,
+      authEntered: false,
+      authCompleted: false,
+      engineError: { code: 4, message: 'Forbidden' },
+    });
+    expect(() => expectAuthenticationRequired(client, error)).toThrow(/handshake evidence:.*Unexpected server response: 400.*"authEntered":false/);
+    expect(JSON.stringify(handshakeEvidence(client, error))).not.toContain('synthetic-diagnostic-secret');
   });
 });
 
@@ -308,11 +392,17 @@ describe('host-control socket events need operator authority (#8708)', () => {
     expect(reached).toEqual([['shell:start', 'echo example'], ['shell:start', 'echo example']]);
   });
 
-  it('auth on: a session socket keeps the shell; a remote connection does not change that', async () => {
+  it.each(['session', 'delegated agent'])('auth on: a %s socket keeps the shell; a remote connection does not change that', async (authority) => {
     const auth = await stage('import auth.js', import('./auth.js'));
     const { token } = await stage('set instance password', auth.setPassword({ newPassword: 'instance-secret' }));
+    let headers = { cookie: `portos_auth=${token}` };
+    if (authority === 'delegated agent') {
+      const { resolveAgentApiEnv } = await stage('import agentApiAuth.js', import('./agentApiAuth.js'));
+      const { PORTOS_API_TOKEN } = await stage('resolve delegated agent token', resolveAgentApiEnv());
+      headers = { Authorization: `Bearer ${PORTOS_API_TOKEN}` };
+    }
     await startServer();
-    const client = connectClient({ cookie: `portos_auth=${token}`, ...REMOTE_VIA_DEV_PROXY });
+    const client = connectClient({ ...headers, ...REMOTE_VIA_DEV_PROXY });
     await waitFor(client, 'connect');
     const started = waitFor(client, 'shell:started');
     client.emit('shell:start', {});

@@ -25,7 +25,7 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
     if (!tree || tree.managed !== true || tree.locked !== false || tree.head !== branch.tip) continue;
     // The open PR ships from another checkout; this one has idled behind it.
     if (branch.openPr && !(await isIdleCheckout(tree.path, deps))) continue;
-    const release = { branch: tree.branch, path: tree.path, head: tree.head, locked: false, lockReason: tree.lockReason ?? null };
+    const release = { ...(tree.observedAt && { observedAt: tree.observedAt }), ...(tree.checkoutIdentity && { checkoutIdentity: tree.checkoutIdentity }), branch: tree.branch, path: tree.path, head: tree.head, locked: false, lockReason: tree.lockReason ?? null };
     // Every commit is already on the default branch, so no PR identity or owner
     // history is needed to prove nothing is lost: archive and retire it. The
     // service re-proves merge evidence and ownership under its fence.
@@ -35,7 +35,7 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
         { beforeMutation: assertAutomaticRetirementAllowed, settleMergedReviewObligation: true })
         .catch(error => ({ ok: false, reason: ['daemon-stopped', 'automatic-retirement-disabled'].includes(error.message) ? error.message : 'retirement-receipt-unverified' }));
       if (outcome.ok && outcome.archiveDir && outcome.branchDeleted === true) retired.push(release);
-      else held.push({ ...release, reason: outcome.reason || outcome.branchRetainedReason || 'retirement-receipt-unverified' });
+      else held.push({ ...release, reason: outcome.reason || outcome.branchRetainedReason || 'retirement-receipt-unverified', ...(outcome.archiveLimit && { archiveLimit: outcome.archiveLimit }) });
       continue;
     }
     let failureReason = 'retirement-pr-lookup-unavailable';
@@ -43,7 +43,7 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
       const prUrl = await readPr(app, branch.branch, release.head);
       failureReason = 'retirement-review-unavailable';
       const prepared = await prepare({ appId: app.id, release, prUrl });
-      if (!prepared.ok) { held.push({ ...release, reason: prepared.reason }); continue; }
+      if (!prepared.ok) { held.push({ ...release, reason: prepared.reason, ...(prepared.archiveLimit && { archiveLimit: prepared.archiveLimit }) }); continue; }
       // The preview's policy gate requires completed successful legacy review
       // owners. An empty policy set after a concurrent change is not that proof.
       if (!prepared.review?.policy?.policies?.length) { held.push({ ...release, reason: 'retirement-policy-changed' }); continue; }
@@ -63,7 +63,7 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
         const result = await retire({ appId: app.id, release,
           review: { prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, { beforeMutation: assertAutomaticRetirementAllowed });
         if (result.ok && result.archiveDir && result.branchDeleted === true) retired.push(release);
-        else held.push({ ...release, reason: result.reason || 'retirement-receipt-unverified' });
+        else held.push({ ...release, reason: result.reason || 'retirement-receipt-unverified', ...(result.archiveLimit && { archiveLimit: result.archiveLimit }) });
         continue;
       }
       candidates.push({ ...branch, state: 'REVIEW_RETIREMENT', retirement: { release, prUrl, digest: prepared.review.digest,

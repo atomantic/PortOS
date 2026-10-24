@@ -89,6 +89,21 @@ See [VERSIONING.md](./VERSIONING.md) for full details.
 
 Pregate first checks installed package versions against all four workspace lockfiles without modifying dependency trees. Stale, missing, or unreadable evidence stops lint/tests with a reconciliation diagnostic. Pregate requires development dependencies (`npm ci --include=dev` in an owning workspace); a production-only installation cannot run its checks. Ordinary worktree links must be repaired only in their owning source checkout; a separate clone with its own locked installs is also suitable for validation. `--plan-only` prints the plan without checking installed dependencies.
 
+Test process containment keeps signal delivery separate from verified termination.
+After worker-pool closure, any discovered owned child gets a bounded report in
+`.cache/test-process-diagnostics/`; the CI launcher also retains `processes.json`
+in its attempt diagnostics. Reports contain repository-relative suite names,
+bounded worker IDs and fixed lifecycle/settlement categories, never raw process
+arguments, environments, PIDs or private paths. Suite attribution is captured at
+child construction and matched by a hash of the PID and birth identity. Children
+that bypass the observer (including grandchildren whose parent already exited)
+remain explicitly unattributed. Unknown/unconfirmed settlement retains the run
+root and fails the run; a successful signal alone does not authorize removal.
+Interrupted-run sweeps retain roots while their deferred escalation is pending.
+On POSIX, incomplete process inventories also retain stale roots; a dead runner
+does not prove its children exited. Pending identity checks apply to pool-close
+cleanup as well as later sweeps.
+
 Pregate proves only the stages it runs, and it says which it did not. A scoped
 plan runs every suite CI would run for it, in CI's dependency order and with
 CI's environment: the hidden-content scan, early structural guards, lint,
@@ -310,6 +325,19 @@ the database restore suite drains a timed-out case before the next one touches
 `portos_test` — but its per-case budgets assume an
 unloaded machine, so a concurrent run can time out cases a sequential run
 passes.
+
+For the intermittent synthetic gallery-page timeout investigation (#13369),
+`PORTOS_DB_PHASE_DIAGNOSTICS=1 npm run pregate` adds wall/CPU timings for fixture
+construction, seeding, public calls, EXPLAINs and result serialization. To obtain
+the complete serial DB workload regardless of test-memo reuse, run
+`PORTOS_DB_PHASE_DIAGNOSTICS=1 npm run test:db` after the earlier validation
+stages finish. The observer reads only `portos_test` session state, waits,
+transaction ages and run-lock ownership: no query text, network addresses or
+record contents. It samples at most three times per phase, caps each snapshot
+at 16 sessions, and uses a separate connection with a 500 ms statement timeout.
+Opt-in diagnostics add observation work; original test deadlines stay intact.
+Failure messages retain bounded phase evidence even with quiet reporting.
+A passing run without a reproduced slow phase does not resolve the timeout.
 
 For server watch mode, run this alternative from the repository root:
 

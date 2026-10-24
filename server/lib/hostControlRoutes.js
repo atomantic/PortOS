@@ -495,6 +495,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'PUT /api/tools/:id',
   'PUT /api/cos/schedule/task/:taskType',
   'POST /api/cos/schedule/trigger',
+  'POST /api/cos/schedule/branch-reconcile/refresh',
   // Archives and removes a checkout and its merged branch under a scoped release.
   'POST /api/cos/schedule/branch-reconcile/checkouts/retire',
   'POST /api/cos/schedule/branch-reconcile/checkouts/review',
@@ -1017,6 +1018,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Export preparation decodes authored media; download releases the resulting
   // private package. Both preserve authenticated delegated agent authority.
   'POST /api/fableloom/:id/export',
+  'DELETE /api/fableloom/:id/export/:jobId',
   'GET /api/fableloom/:id/export/:jobId/download',
   'POST /api/image-video/models/support-request',
 

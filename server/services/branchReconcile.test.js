@@ -67,6 +67,7 @@ vi.mock('./worktreeManager.js', async () => {
 // don't care about age behave as before; set worktreeMtimeMs to pin a specific age.
 let worktreeMtimeMs = 0;
 vi.mock('node:fs/promises', () => ({
+  lstat: vi.fn(async () => ({ isFile: () => true, dev: 1n, ino: 2n, birthtimeNs: 3n })),
   stat: vi.fn(async () => ({ mtimeMs: worktreeMtimeMs })),
 }));
 const ensureForgeReachableMock = vi.fn(async () => ({ ok: true, status: 'ok', detail: null, remedy: null }));
@@ -2974,6 +2975,13 @@ describe('describeIdleReconcilePark', () => {
       { branch: 'c', reason: 'delete-failed: boom' }
     ], []);
     expect(out).toEqual({ reason: 'branches-blocked', heldBackMerged: [], counts: { heldBranches: 3, heldDetached: 0 }, skipCauses: { 'cleanup-disabled': 1, 'not-merged-on-recheck': 1, 'branch-delete-failed': 1 }, remaining: [{ branch: 'a', reason: 'cleanup-disabled' }, { branch: 'b', reason: 'not-merged-on-recheck' }, { branch: 'c', reason: 'branch-delete-failed' }], notLaterThan: null });
+  });
+
+  it('includes bounded archive capacity evidence in the remaining checkout status', () => {
+    const archiveLimit = { scope: 'content', kind: 'total', limitBytes: 250 * 1024 * 1024, observedBytes: 264 * 1024 * 1024 };
+    const out = describeIdleReconcilePark([{ branch: 'feature/example', reason: 'retirement-archive-limit-exceeded', archiveLimit }]);
+    expect(out.skipCauses).toEqual({ 'retirement-archive-limit-exceeded': 1 });
+    expect(out.remaining).toEqual([{ branch: 'feature/example', reason: 'retirement-archive-limit-exceeded', archiveLimit }]);
   });
 
   it('ignores an unreadable retryAt rather than parking on NaN', () => {

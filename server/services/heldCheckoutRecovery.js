@@ -1,3 +1,4 @@
+import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 /**
  * Operator-scoped retirement of a merged checkout that branch reconciliation
  * reported but cannot retire on its own (#12002): one outside the managed
@@ -37,6 +38,15 @@ import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArc
 export const heldCheckoutArchiveRoot = (cosDir = PATHS.cos) => join(cosDir, 'held-checkout-archives');
 
 const evidenceHash = value => createHash('sha256').update(value).digest('hex');
+const MAX_ARCHIVE_FILES = 1000;
+const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
+
+function checkArchiveBudget(content, administration) {
+  if (content.files.length + administration.files.length > MAX_ARCHIVE_FILES) throw new Error('archive-file-budget-exceeded');
+  // Creation and recovery share one byte budget across both snapshots.
+  const total = [...content.files, ...administration.files].reduce((bytes, file) => bytes + file.bytes, 0);
+  checkArchiveSize('combined', 0, total);
+}
 const historicalNextAction = 'Locate a complete archive for this exact historical checkout and retry branch reconciliation; if none exists, recover the original data from backup. Checkout or ref absence is not preservation evidence.';
 
 /** Never follow an archive link, including an intermediate directory link. */
@@ -56,7 +66,7 @@ async function archiveFile(root, path) {
 
 async function archiveManifest(dir) {
   const path = await archiveFile(dir, join(dir, 'manifest.json'));
-  if ((await lstat(path)).size > 16 * 1024 * 1024) throw new Error('archive-manifest-budget-exceeded');
+  if ((await lstat(path)).size > MAX_MANIFEST_BYTES) throw new Error('archive-manifest-budget-exceeded');
   const bytes = await readFile(path);
   return { manifest: JSON.parse(bytes), digest: evidenceHash(bytes) };
 }
@@ -75,7 +85,7 @@ async function verifyHeldArchive(repoPath, dir, release) {
     || !Array.isArray(saved.administration?.files) || !Array.isArray(saved.administration?.symlinks)
     || !saved.administration.files.some(file => file.path === 'gitdir/HEAD')
     || !saved.administration.files.some(file => file.path === 'git-indirection')) throw new Error('archive-preservation-incomplete');
-  if (captured.files.length + saved.administration.files.length > 1000) throw new Error('archive-file-budget-exceeded');
+  checkArchiveBudget(captured, saved.administration);
   const stamps = [];
   const stamp = async path => {
     const info = await lstat(path, { bigint: true });
@@ -264,6 +274,22 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 250 * 1024 * 1024;
 const GIT_OUTPUT_BYTES = 64 * 1024 * 1024;
 
+function checkArchiveSize(scope, fileBytes, totalBytes) {
+  if (fileBytes <= MAX_FILE_BYTES && totalBytes <= MAX_TOTAL_BYTES) return;
+  const kind = fileBytes > MAX_FILE_BYTES ? 'file' : 'total';
+  throw Object.assign(new Error('retirement-archive-limit-exceeded'), { archiveLimit: {
+    scope, kind, limitBytes: kind === 'file' ? MAX_FILE_BYTES : MAX_TOTAL_BYTES,
+    observedBytes: Math.min(kind === 'file' ? fileBytes : totalBytes, Number.MAX_SAFE_INTEGER),
+  } });
+}
+
+const archiveLimitRefusal = error => error.message === 'archive-manifest-budget-exceeded'
+  ? { ok: false, reason: 'retirement-archive-manifest-limit-exceeded' }
+  : error.message === 'archive-file-budget-exceeded'
+  ? { ok: false, reason: 'retirement-archive-file-limit-exceeded' }
+  : error.message === 'retirement-archive-limit-exceeded'
+    ? { ok: false, reason: error.message, archiveLimit: error.archiveLimit } : null;
+
 const shortBranch = (ref) => (ref ? String(ref).replace(/^refs\/heads\//, '') : null);
 const zLines = (stdout) => (stdout || '').split('\0').filter(Boolean);
 const git = (args, cwd) => execGit(args, cwd, { maxBuffer: GIT_OUTPUT_BYTES }).then(r => r.stdout || '');
@@ -283,7 +309,9 @@ async function snapshotAdministration(path, missingRoot = null) {
       for (const name of (await readdir(source)).sort()) await visit(join(source, name), rel ? `${rel}/${name}` : name);
       return;
     }
-    if (!info.isFile() || info.size > MAX_FILE_BYTES || (bytes += info.size) > MAX_TOTAL_BYTES) throw new Error('administration cannot be archived');
+    if (!info.isFile()) throw new Error('administration cannot be archived');
+    bytes += info.size;
+    checkArchiveSize('administration', info.size, bytes);
     files.push({ path: rel, source, bytes: info.size, sha256: await sha256File(source) });
   };
   await visit(root, 'gitdir');
@@ -347,10 +375,10 @@ async function reviewCurrentCheckout({ repoPath, release, prUrl, unlocked = fals
   if (forge?.error) return { ok: false, reason: /^retirement-[a-z-]+$/.test(forge.error.message) ? forge.error.message : 'retirement-forge-unavailable' };
   const policy = await retirementPolicy(repoPath, release.branch, opts, policyReviewIdentity(release, prUrl, forge));
   if (policy.reason) return { ok: false, reason: policy.reason };
-  return Promise.all([snapshotContent(release.path), snapshotAdministration(release.path)])
+  return archiveSnapshots(matched.tree, repoPath)
     .then(([content, administration]) => buildCheckoutRetirementReview({ repoPath, release, prUrl,
       contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge }))
-    .then(review => ({ ok: true, review }), error => ({ ok: false,
+    .then(review => ({ ok: true, review }), error => archiveLimitRefusal(error) || ({ ok: false,
       reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-local-evidence-unavailable' }));
 }
 
@@ -360,7 +388,8 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
   const app = await getAppById(appId);
   if (!app?.repoPath) return { ok: false, reason: 'app-not-found' };
   const outcome = await getBranchReconcileOutcome(appId);
-  if (!outcome?.remaining?.some(entry => sameRelease(entry, release))) return { ok: false, reason: 'release-not-in-inventory' };
+  release = bindInventoriedRelease(outcome, release);
+  if (!release) return { ok: false, reason: 'release-not-in-inventory' };
   const reviewOptions = { ...opts, forgeAccount: app.forgeAccount ?? null };
   const review = () => withClaimOwnershipLock(() => reviewCurrentCheckout({ repoPath: app.repoPath, release, prUrl }, reviewOptions));
   let prepared = await review();
@@ -425,7 +454,7 @@ async function snapshotContent(path) {
   let total = 0;
   const addFile = async (rel, info, extra = {}) => {
     total += info.size;
-    if (info.size > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES) throw new Error(`${rel} exceeds the archive size limit`);
+    checkArchiveSize('content', info.size, total);
     files.push({ path: rel, bytes: info.size, sha256: await sha256File(join(path, rel)), ...extra });
   };
   const format = objectFormat.trim() || 'sha1';
@@ -513,7 +542,11 @@ async function missingCheckoutAdministration(repoPath, path) {
 }
 
 async function archiveSnapshots(tree, repoPath, missingRoot) {
-  if (!missingRoot) return Promise.all([snapshotContent(tree.path), snapshotAdministration(tree.path)]);
+  if (!missingRoot) {
+    const snapshots = await Promise.all([snapshotContent(tree.path), snapshotAdministration(tree.path)]);
+    checkArchiveBudget(...snapshots);
+    return snapshots;
+  }
   const present = await lstat(tree.path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
   if (present) throw new Error('missing-checkout-reappeared');
   const prefix = ['--git-dir', missingRoot, '--work-tree', tree.path];
@@ -521,7 +554,9 @@ async function archiveSnapshots(tree, repoPath, missingRoot) {
   const indexDiff = await git([...prefix, 'diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], repoPath);
   const content = { indexDiff, worktreeDiff: '', files: [], symlinks: [], gitlinks: [], missingCheckout: true,
     fingerprint: createHash('sha256').update('missing-checkout\0').update(indexDiff).digest('hex') };
-  return [content, await snapshotAdministration(tree.path, missingRoot)];
+  const administration = await snapshotAdministration(tree.path, missingRoot);
+  checkArchiveBudget(content, administration);
+  return [content, administration];
 }
 
 /** Preserve ignored content and recovery evidence before a clean merged tree
@@ -616,7 +651,7 @@ async function recoveryObjectHeads(administration, { repoPath, tree, missingRoot
   return heads;
 }
 
-/** Supersession is a content verdict, never a substitute for full preservation.
+/** Shared app-scoped preservation for merged and superseded checkouts.
  * Persist the original generation before archiving, then its exact preservation
  * receipt before the caller can remove anything under the retirement fence.
  */
@@ -630,11 +665,18 @@ export async function preserveSupersededCheckout({ appId, repoPath, tree, defaul
   const target = { repoPath, branch: release.branch, path: release.path, head: release.head };
   const identity = await readCompletedCheckoutIdentity(target);
   if (!identity) throw new Error('checkout-incarnation-unavailable');
+  const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
+  if (!checkoutIdentity) throw new Error('checkout-incarnation-unavailable');
+  const previous = await schedule.getBranchReconcileOutcome(appId);
+  if (unresolvedRetirements(previous).some(row => sameRelease(row, release)
+    && JSON.stringify(row.checkoutIncarnation) !== JSON.stringify(identity.incarnation))) {
+    throw new Error('retirement-checkout-generation-unverified');
+  }
   const identityCurrent = async () => JSON.stringify(await readCompletedCheckoutIdentity(target)) === JSON.stringify(identity);
   const pending = await schedule.recordBranchReconcileOutcome(appId, {
     status: 'incomplete', reason: 'retirement-receipt-unverified',
-    retirementObligations: [{ ...release, checkoutIncarnation: identity.incarnation, reason: 'retirement-review-pending' }],
-    nextAction: 'Require complete preservation and an exact retirement receipt for the superseded checkout.',
+    retirementObligations: [{ ...release, checkoutIdentity, checkoutIncarnation: identity.incarnation, reason: 'retirement-review-pending' }],
+    nextAction: 'Require complete preservation and an exact retirement receipt for the checkout.',
   });
   const obligation = pending?.retirementObligations?.find(row => sameRelease(row, release));
   if (!Number.isFinite(Date.parse(obligation?.createdAt))) throw new Error('retirement-obligation-unavailable');
@@ -664,7 +706,7 @@ export async function preserveSupersededCheckout({ appId, repoPath, tree, defaul
       if (!await receiptCurrent()) throw new Error('retirement-preservation-receipt-changed');
       const ref = await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repoPath, { ignoreExitCode: true });
       if (ref.exitCode !== 1 || !await historicalCheckoutAbsent(release, await listWorktrees(repoPath))) throw new Error('retirement-checkout-recreated');
-      const outcome = await schedule.recordHeldCheckoutRetirement(appId, { ...release, branchDeleted: true, archiveDir: archive.archiveDir });
+      const outcome = await schedule.recordHeldCheckoutRetirement(appId, { ...release, checkoutIdentity, branchDeleted: true, archiveDir: archive.archiveDir });
       if (!outcome?.retired?.some(row => sameRelease(row, release) && row.branchDeleted === true
         && row.archiveDir === archive.archiveDir && Date.parse(row.retiredAt) >= Date.parse(obligation.createdAt))) {
         throw new Error('retirement-receipt-unverified');
@@ -728,7 +770,7 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
   if (administrationAfter.fingerprint !== administration.fingerprint) throw new Error('administration changed while archiving');
   if (after.fingerprint !== snapshot.fingerprint) throw new Error('checkout content changed while archiving');
 
-  await atomicWrite(join(dir, 'manifest.json'), {
+  const manifest = {
     repoPath, defaultBranch, path: tree.path, head: tree.head, branch,
     release, review, administration: { ...administration, files: administration.files.map(({ source: _source, ...file }) => file) }, archivedAt: new Date().toISOString(),
     bundleSha256: await sha256File(bundle),
@@ -744,7 +786,12 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
       files.length ? 'cp -R files/. <checkout>/' : null,
       symlinks.length ? 'recreate manifest.captured.symlinks with ln -s' : null,
     ].filter(Boolean),
-  });
+  };
+  // Check the exact payload atomicWrite receives: escaped review text can make
+  // the manifest larger than its individually bounded Git diff inputs.
+  const serialized = JSON.stringify(manifest, null, 2);
+  if (Buffer.byteLength(serialized) > MAX_MANIFEST_BYTES) throw new Error('archive-manifest-budget-exceeded');
+  await atomicWrite(join(dir, 'manifest.json'), serialized);
   await chmod(join(dir, 'manifest.json'), 0o600);
   return { dir, fingerprint: snapshot.fingerprint, administrationFingerprint: administration.fingerprint };
 }
@@ -822,7 +869,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
 
   // Every ownership check queues behind the claim-ownership lock with a short
   // budget, so the archive runs between two critical sections (#12682).
-  const refuse = reason => ({ result: { ok: false, reason } });
+  const refuse = (reason, archiveLimit) => ({ result: { ok: false, reason, ...(archiveLimit && { archiveLimit }) } });
   return retireWithUnlockedArchive({
     busy: () => ({ ok: false, reason: 'checkout-retirement-reserved' }),
     admit: async () => {
@@ -831,34 +878,42 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
       const first = await matchRelease(repoPath, release);
       if (!first.tree) return refuse(first.reason);
       const { tree } = first;
+      const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
+      if (!checkoutIdentity || (release.checkoutIdentity && release.checkoutIdentity !== checkoutIdentity)) return refuse('checkout-identity-changed');
       const merged = branch
         ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
         : await isAncestor(repoPath, tree.head, defaultBranch);
       if (!merged && !review) return refuse('not-merged-on-recheck');
       const reviewed = review ? await reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl }, opts) : null;
-      if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed');
+      if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed', reviewed.archiveLimit);
       if (reviewed?.review.comparison.disposition === 'review-supersession' && review.acceptSuperseded !== true) return refuse('retirement-supersession-not-accepted');
       const owner = await ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled });
       if (owner) return refuse(owner);
-      return { fence: { repoPath, path: tree.path, branch }, tree, reviewed };
+      return { fence: { repoPath, path: tree.path, branch }, tree, reviewed, checkoutIdentity };
     },
     archive: async ({ tree, reviewed }) => {
       const archive = await archiveCheckout({ repoPath, tree, branch, defaultBranch, release, cosDir, review: reviewed?.review })
         .catch(error => ({ error }));
       if (!archive.error) return { archive };
+      const capacityRefusal = archiveLimitRefusal(archive.error);
+      if (capacityRefusal) return { result: capacityRefusal };
       console.error(`❌ held-checkout recovery: archive failed for ${tree.path}, checkout kept: ${archive.error.message}`);
       return { result: { ok: false, reason: 'archive-failed', detail: archive.error.message } };
     },
-    finish: ({ tree, reviewed }, archive) => finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, archive, mergedObligationSettled }, opts),
+    finish: async ({ tree, reviewed, checkoutIdentity }, archive) => {
+      const result = await finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, archive, checkoutIdentity, mergedObligationSettled }, opts);
+      return result.ok ? { ...result, checkoutIdentity } : result;
+    },
   });
 }
 
 /** The second critical section: re-prove the release, ownership and archived bytes, then remove. */
-async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, archive, mergedObligationSettled = false }, opts) {
+async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, archive, checkoutIdentity, mergedObligationSettled = false }, opts) {
   const { readAgents = readClaimOwnershipAgents } = opts;
   // Archiving takes time; never unlock a lock that changed hands meanwhile.
   const second = await matchRelease(repoPath, release);
   if (!second.tree) return { ok: false, reason: second.reason, archiveDir: archive.dir };
+  if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return { ok: false, reason: 'checkout-identity-changed', archiveDir: archive.dir };
   await opts.beforeMutation?.();
   if (release.locked) {
     const unlocked = await execGit(['worktree', 'unlock', tree.path], repoPath).then(() => true, () => false);
@@ -866,6 +921,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   }
   const verifyRemoval = async (holder) => {
     if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
+    if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return 'checkout-identity-changed';
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
     const [reason, fresh] = await Promise.all([
       ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled }),
@@ -913,7 +969,19 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
 
 const sameRelease = (entry, release) => entry.path === release.path && entry.head === release.head
   && (entry.branch ?? null) === (release.branch ?? null) && Boolean(entry.locked) === release.locked
-  && (entry.lockReason ?? null) === (release.lockReason ?? null);
+  && (entry.lockReason ?? null) === (release.lockReason ?? null)
+  && (!release.checkoutIdentity || entry.checkoutIdentity === release.checkoutIdentity);
+
+/** Tuple-only clients remain compatible; only persisted observation identity
+ * enters the review digest. Scan times are not incarnation identity.
+ */
+function bindInventoriedRelease(outcome, release) {
+  const entry = outcome?.remaining?.find(row => sameRelease(row, release));
+  if (!entry) return null;
+  return { path: release.path, head: release.head, branch: release.branch ?? null,
+    locked: release.locked, lockReason: release.lockReason ?? null,
+    ...(entry.checkoutIdentity && { checkoutIdentity: entry.checkoutIdentity }) };
+}
 
 // Preview and receipt paths may acquire exact server-verified proof commits
 // into the object store, never a branch, index or implicit approval.
@@ -984,7 +1052,8 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   const app = await getAppById(appId);
   if (!app?.repoPath) return { ok: false, reason: 'app-not-found' };
   const outcome = await taskSchedule.getBranchReconcileOutcome(appId);
-  if (!outcome?.remaining?.some?.(entry => sameRelease(entry, release))) return { ok: false, reason: 'release-not-in-inventory' };
+  release = bindInventoriedRelease(outcome, release);
+  if (!release) return { ok: false, reason: 'release-not-in-inventory' };
   const inventoryCurrent = async () => (await taskSchedule.getBranchReconcileOutcome(appId))?.remaining?.some(entry => sameRelease(entry, release)) === true;
   const result = await retireHeldCheckout({ repoPath: app.repoPath, release, review }, { ...opts, inventoryCurrent, forgeAccount: app.forgeAccount ?? null });
   // A missing original cannot be archived retroactively. Retain its exact
@@ -998,7 +1067,7 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   }
   if (result.ok) {
     await taskSchedule.recordHeldCheckoutRetirement(appId, {
-      path: release.path, branch: release.branch ?? null, head: release.head, branchDeleted: result.branchDeleted, archiveDir: result.archiveDir,
+      path: release.path, branch: release.branch ?? null, head: release.head, branchDeleted: result.branchDeleted, archiveDir: result.archiveDir, checkoutIdentity: result.checkoutIdentity,
     });
   }
   return result;
