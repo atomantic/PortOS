@@ -1,4 +1,6 @@
 
+**Already merged on entry:** Verify the assigned PR/MR state before reviewing. If it is MERGED, this follow-up is a successful `no-action-needed` result: skip reviews, fixes, validation and publication. Preserve local corrections and name their existing follow-up issue; do not reopen this task for separate delivery or unavailable retirement inventory. Request safe reconciliation for retained checkouts, then write the completion sentinel.
+
 ## Review-Loop Follow-up (PRIMARY OBJECTIVE)
 A previous agent finished implementing the work for source task **task-example** and opened **PR https://github.com/example-org/example-repo/pull/42** on branch `feature/example`. Copilot is configured after another reviewer, so the system did NOT pre-request it — request the Copilot review yourself when you reach its turn (after the earlier reviewers’ fixes are pushed), and invoke the other reviewers yourself. **Your job is to drive the review-and-fix loop to completion and merge the PR.**
 
