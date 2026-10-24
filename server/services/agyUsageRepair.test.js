@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   galleryAgyImageUsageEvent,
-  imagineEventsFromAgyTranscript,
   planAgyUsageRepair,
   summarizeAgyRepairAdditions,
 } from './agyUsageRepair.js';
@@ -33,65 +32,6 @@ describe('galleryAgyImageUsageEvent', () => {
     expect(galleryAgyImageUsageEvent({ id: 'job-1', mode: 'grok', createdAt: '2026-10-10T00:00:00.000Z' })).toBeNull();
     expect(galleryAgyImageUsageEvent({ mode: 'agy', createdAt: '2026-10-10T00:00:00.000Z' })).toBeNull();
     expect(galleryAgyImageUsageEvent({ id: 'job-1', mode: 'agy', createdAt: 'invalid-date' })).toBeNull();
-  });
-});
-
-describe('imagineEventsFromAgyTranscript', () => {
-  it('ignores tool calls when running in a portos-agy-scratch directory', () => {
-    const transcriptText = JSON.stringify({
-      type: 'PLANNER_RESPONSE',
-      created_at: '2026-10-10T12:00:00.000Z',
-      tool_calls: [{ name: 'generate_image', args: { prompt: 'a cute cat' } }],
-    });
-
-    const events = imagineEventsFromAgyTranscript({
-      transcriptText,
-      sessionId: 'sess-1',
-      cwd: '/tmp/portos-agy-scratch-xyz',
-    });
-    expect(events).toEqual([]);
-  });
-
-  it('extracts generate_image tool calls from outside scratch directories', () => {
-    const transcriptText = [
-      JSON.stringify({
-        type: 'PLANNER_RESPONSE',
-        created_at: '2026-10-10T12:00:00.000Z',
-        tool_calls: [
-          { name: 'generate_image', args: { prompt: 'a dog', imagePaths: ['img1.png', 'img2.png'] } },
-          { name: 'other_tool', args: {} },
-        ],
-      }),
-      JSON.stringify({
-        type: 'PLANNER_RESPONSE',
-        created_at: '2026-10-10T12:05:00.000Z',
-        tool_calls: [
-          { name: 'generate_image', args: { prompt: 'another dog' } },
-        ],
-      }),
-    ].join('\n');
-
-    const events = imagineEventsFromAgyTranscript({
-      transcriptText,
-      sessionId: 'sess-2',
-      cwd: '/Users/test/projects/my-app',
-    });
-
-    expect(events).toHaveLength(2);
-    expect(events[0]).toMatchObject({
-      id: 'session-image:sess-2:0',
-      day: '2026-10-10',
-      images: 1,
-      inputImages: 2,
-      source: 'measured',
-    });
-    expect(events[1]).toMatchObject({
-      id: 'session-image:sess-2:1',
-      day: '2026-10-10',
-      images: 1,
-      inputImages: 0,
-      source: 'measured',
-    });
   });
 });
 
