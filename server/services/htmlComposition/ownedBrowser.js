@@ -10,7 +10,7 @@ import { browserExecutablePath } from '../../lib/browserConfig.js';
 import { isVitestRunner } from '../../lib/runtimeEnv.js';
 import { PREVIEW_HOST_RESOLVER_SOCKETS, previewIsolationPlan } from '../../lib/generatedPreviewSandbox.js';
 import { createCdpPipeTransport } from './cdpPipe.js';
-import { drainBrowserProcessGroup, signalBrowserProcessGroup } from './browserProcessGroup.js';
+import { drainBrowserProcessGroup, observeBrowserProcessGroup, signalBrowserProcessGroup } from './browserProcessGroup.js';
 
 // Chrome refuses to run as root with its sandbox on. Only a Vitest worker
 // running as root (a root dev/CI container) drops it, matching the test-owned
@@ -113,6 +113,18 @@ export async function launchCompositionBrowser({
   const observed = { spawnMs: null, exitMs: null, closeMs: null, termMs: null, killMs: null };
   const observedMs = () => Math.round(performance.now() - observedSince);
   const groupTermination = { term: 'not-attempted', kill: 'not-attempted', error: 'none', failedSignal: 'none', failedPhase: 'none' };
+  const groupObservations = { signal: 'not-requested', deadline: 'not-requested' };
+  const observationBudgetMs = Math.min(500, Math.max(1, Math.floor(shutdownMs / 4)));
+  const sampleGroup = slot => {
+    if (!ownsProcessGroup || !proc?.pid || groupObservations[slot] !== 'not-requested') return;
+    const startMs = observedMs();
+    groupObservations[slot] = 'pending';
+    // Never await a diagnostic at the shutdown boundary or allow its eventual
+    // result to replace the original close verdict. At most two bounded reads.
+    observeBrowserProcessGroup(proc.pid, observationBudgetMs)
+      .then(facts => { groupObservations[slot] = `startMs:${startMs}|endMs:${observedMs()}|${facts}`; })
+      .catch(() => { groupObservations[slot] = 'unavailable'; });
+  };
   const termination = { term: 'not-attempted', kill: 'not-attempted', error: 'none' };
   // Never interpolate arbitrary child properties: only allowlisted status values.
   const childStatus = () => ({
@@ -174,6 +186,7 @@ export async function launchCompositionBrowser({
     // so a helper cannot keep the profile open after close.
     if (ownsProcessGroup && proc?.pid) {
       signalBrowserProcessGroup(proc.pid, name, groupTermination, 'shutdown');
+      if (groupTermination.error !== 'none') sampleGroup('signal');
     }
     return proc.kill(name);
   };
@@ -181,6 +194,7 @@ export async function launchCompositionBrowser({
     signal?.removeEventListener('abort', abort);
     let escalation;
     let deadline;
+    let observationTimer;
     try {
       transport?.terminate();
       transport?.removeListener('error', onPipeError);
@@ -209,6 +223,12 @@ export async function launchCompositionBrowser({
           label: 'Composition browser', delayMs: Math.min(1000, shutdownMs / 2),
           stillRunning: () => !exited,
         });
+        if (ownsProcessGroup) {
+          observationTimer = setTimeout(() => {
+            if (!closed) sampleGroup('deadline');
+          }, Math.max(0, shutdownMs - observationBudgetMs));
+          observationTimer.unref?.();
+        }
         await Promise.race([childClosed, new Promise((_, reject) => {
           deadline = setTimeout(() => {
             closeDeadlineExpired = true;
@@ -221,6 +241,7 @@ export async function launchCompositionBrowser({
               term: termination.term, kill: termination.kill, signalError: termination.error,
               groupTerm: groupTermination.term, groupKill: groupTermination.kill, groupSignalError: groupTermination.error,
               groupFailedSignal: groupTermination.failedSignal, groupFailedPhase: groupTermination.failedPhase,
+              groupSignalObservation: groupObservations.signal, groupDeadlineObservation: groupObservations.deadline,
               elapsedMs: Math.round(performance.now() - terminationStarted),
               spawned, closed, exitCode, signalCode,
               exitListener: proc.listeners('exit').includes(onExit),
@@ -235,6 +256,7 @@ export async function launchCompositionBrowser({
     } finally {
       clearTimeout(escalation);
       clearTimeout(deadline);
+      clearTimeout(observationTimer);
       // Wait for the process and our pipe to close before removing its profile.
       if (!proc || closed) {
         await cleanupProfile();

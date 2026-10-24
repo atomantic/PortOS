@@ -16,6 +16,7 @@
 // brain and digital-twin) can be disambiguated as `brainValidation.X` /
 // `digitalTwinValidation.X`. The catch-all `validation.js` stays flat — its
 // names are the canonical PortOS-wide schemas.
+export * from './appOperationErrorContext.js';
 export * from './appPromptPlaceholders.js';
 export * from './appDeployFlags.js';
 export * from './apiContractSchemas.js';
@@ -130,7 +131,10 @@ export * from './creativeLatitude.js';
 // discovery surface reaches EDITORIAL_CHECKS + the lookup helpers.
 export * as editorial from './editorial/index.js';
 export * from './familySettingsMap.js';
+export * from './fableLoomBoard.js';
 export * from './fableLoomGraph.js';
+export * from './fableLoomExport.js';
+export * from './fableLoomMediaProfiles.js';
 export * from './cameraMovements.js';
 export * from './fableLoomCameraMovements.js';
 export * from './fableLoomPlayback.js';
@@ -205,7 +209,9 @@ export * from './callerModePolicy.js';
 export * from './cliChildEnv.js';
 export * from './agentExecutionProfiles.js';
 export * from './agentApiToken.js';
+export * from './localReviewAttribution.js';
 export * from './localReviewBridge.js';
+export * from './localReviewLifecycle.js';
 export * from './agentCompletionMode.js';
 export * from './localEndpoint.js';
 export * from './localLlmConcurrency.js';
@@ -448,6 +454,7 @@ export * from './gitRemote.js';
 export * from './gitStaleLock.js';
 export * from './githubNotificationAudit.js';
 export * from './githubNotificationParse.js';
+export * from './githubNotificationPullRequest.js';
 export * from './githubNotificationTriage.js';
 export * from './repoUrl.js';
 export * from './glabArgs.js';
@@ -597,6 +604,7 @@ export * from './migrationMarker.js';
 export * from './modelPinMembership.js';
 export * from './modelPinReconcile.js';
 export * from './modelPricing.js';
+export * from './chatCompletionUsage.js';
 export * from './navManifest.js';
 export * from './noChangeCompletion.js';
 export * from './noReplaceMove.js';
@@ -951,6 +959,7 @@ export * from './brainLinkLocalFields.js';
 
 export * from './branchRetirementArchive.js';
 export * from './reconcileRetirementEvidence.js';
+export * from './retirementCheckoutObservation.js';
 
 export * from './checkoutRetirementAdmission.js';
 export * from './moltworldExplore.js';
@@ -961,3 +970,8 @@ export * from './manuscriptLocate.js';
 export * from './runwayCatalogSnapshot.js';
 
 export * from './runwaySpecialVideoModels.js';
+export * from './issueClaimEvidence.js';
+
+export * from './codeReviewBatches.js';
+export * from './realityStarterV1.js';
+export * from './universeStarters.js';

@@ -128,6 +128,71 @@ class NativeArchive(unittest.TestCase):
         (admission / 'writer.lock').write_text('owned service bookkeeping')
         self.assertEqual(archive.inspect(self.request), before)
 
+    def test_preservation_retains_permitted_nondefault_group_and_rejects_tampering(self):
+        groups = set(os.getgroups()) - {os.getegid()}
+        if not groups:
+            self.skipTest('A permitted nondefault group is required')
+        gid = min(groups)
+        (self.work / 'group-directory').mkdir()
+        (self.work / 'group-directory' / 'file').write_text('preserve group bytes\n')
+        (self.work / 'group-link').symlink_to('group-directory/file')
+        paths = [self.work, self.work / 'group-directory', self.work / 'group-directory' / 'file', self.work / 'group-link']
+        for path in paths:
+            os.chown(path, -1, gid, follow_symlinks=False)
+        self.preserve()
+        saved = json.loads((self.txn / 'source.json').read_text())
+        for prefix in ('archive', 'restore'):
+            for original in paths:
+                copied = self.txn / prefix / 'working' / original.relative_to(self.work)
+                self.assertEqual(copied.lstat().st_gid, gid)
+                self.assertEqual(copied.lstat().st_uid, original.lstat().st_uid)
+        self.assertEqual(archive.manifest(self.work), saved['sources']['working'])
+        archive.verify({**self.request, 'mode': 'standalone'})
+        os.chown(self.txn / 'archive' / 'working' / 'group-directory' / 'file', -1, os.getegid())
+        with self.assertRaises(RuntimeError):
+            archive.verify({**self.request, 'mode': 'standalone'})
+
+    def test_unrepresentable_ownership_refuses_review_and_copy_before_archive_creation(self):
+        before = archive.inspect(self.request)
+        self.request['expected'] = before
+        with patch.object(archive.os, 'getgroups', return_value=[]), patch.object(archive.os, 'getegid', return_value=-1):
+            with self.assertRaisesRegex(RuntimeError, 'ownership-preservation-unavailable'):
+                archive.inspect({**self.request, 'requireOwnership': True})
+            with self.assertRaisesRegex(RuntimeError, 'ownership-preservation-unavailable'):
+                archive.preserve(self.request)
+        self.assertEqual(archive.inspect(self.request), before)
+        for name in ('archive', 'restore', 'quarantine', 'source.json', 'manifest.json'):
+            self.assertFalse((self.txn / name).exists())
+
+    def test_uniform_inherited_group_preserves_without_membership_or_chown_authority(self):
+        group = Path('/private/tmp').stat().st_gid
+        if group in {os.getegid(), *os.getgroups()} or os.geteuid() == 0:
+            self.skipTest('Requires the Darwin inherited temporary group outside the caller groups')
+        work = Path(tempfile.mkdtemp(prefix='initialized-inherited-group-', dir='/private/tmp'))
+        try:
+            work.chmod(0o755)
+            self.git(self.repo, 'worktree', 'add', '-b', 'feature/inherited', str(work))
+            self.git(work, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init')
+            (work / 'ignored-evidence').write_text('recoverable bytes\n')
+            (work / 'link').symlink_to('ignored-evidence')
+            os.link(work / 'ignored-evidence', work / 'hardlink')
+            self.request['release'] = {'path': str(work), 'head': self.git(work, 'rev-parse', 'HEAD'),
+                                       'branch': 'feature/inherited', 'locked': False, 'lockReason': None}
+            before = archive.manifest(work)
+            self.assertTrue(all(row['gid'] == group for row in before))
+            # Any attempt to repair this unsupported group with chown fails;
+            # preservation must instead keep ordinary inherited ownership.
+            with patch.object(archive.os, 'chown', side_effect=PermissionError('not authorized')):
+                self.preserve()
+            for prefix in ('archive', 'restore'):
+                copied = archive.manifest(self.txn / prefix / 'working')
+                self.assertTrue(all(row['gid'] == group for row in copied))
+                self.assertEqual((self.txn / prefix / 'working').stat().st_mode & 0o7777, 0o755)
+            self.assertEqual(archive.manifest(work), before)
+            self.assertTrue(archive.verify({**self.request, 'mode': 'standalone'})['standalone'])
+        finally:
+            shutil.rmtree(work)
+
     def test_unbound_cancellation_accepts_shared_updates_without_touching_originals_or_evidence(self):
         before = archive.inspect(self.request, full=True)
         self.request['expected'] = {k: v for k, v in before.items() if k != 'sources'}

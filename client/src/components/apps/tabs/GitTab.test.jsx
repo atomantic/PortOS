@@ -14,6 +14,7 @@ vi.mock('../../../services/api', () => ({
   getRemoteBranches: vi.fn(),
   updateBranches: vi.fn(),
   pushAllBranches: vi.fn(),
+  rebaseAndPushDefaultBranch: vi.fn(),
   getGitDiff: vi.fn(),
   cleanupMergedBranches: vi.fn(),
   resetToDefaultBranch: vi.fn(),
@@ -62,6 +63,40 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+describe('GitTab rebase and push', () => {
+  const aheadDefault = {
+    ...GIT_INFO, branch: 'main', status: { clean: true, files: [] }, originComparison: { ahead: 1, behind: 11 },
+  };
+
+  it('rebases and pushes a clean diverged default branch and refreshes the source counts', async () => {
+    api.getGitInfo.mockResolvedValue(aheadDefault);
+    let finish;
+    api.rebaseAndPushDefaultBranch.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    render(<GitTab appId="app-example" appName="Example App" repoPath="/repo" />);
+    const button = await screen.findByRole('button', { name: 'Rebase & push' });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+    expect(await screen.findByRole('button', { name: 'Rebasing & pushing...' })).toBeDisabled();
+    expect(api.rebaseAndPushDefaultBranch).toHaveBeenCalledWith('/repo', { silent: true });
+    api.getGitInfo.mockResolvedValue({ ...aheadDefault, originComparison: { ahead: 0, behind: 0 } });
+    await act(async () => finish({ success: true, branch: 'main' }));
+    await waitFor(() => expect(screen.getByTestId('repository-source-panel')).toHaveAttribute('data-refresh-key', '1'));
+    expect(screen.getByRole('button', { name: 'Rebase & push' })).toBeDisabled();
+  });
+
+  it.each([
+    { branch: 'feature/work' },
+    { status: { clean: false, files: [{ path: 'a.js', status: 'M' }] } },
+    { originComparison: { ahead: 0, behind: 3 } },
+    { originComparison: null },
+  ])('does not enable recovery outside a clean ahead default branch: %j', async (override) => {
+    api.getGitInfo.mockResolvedValue({ ...aheadDefault, ...override });
+    render(<GitTab appId="app-example" appName="Example App" repoPath="/repo" />);
+    await screen.findByText('View Diff');
+    expect(screen.getByRole('button', { name: 'Rebase & push' })).toBeDisabled();
+  });
 });
 
 describe('GitTab managed repository sources', () => {

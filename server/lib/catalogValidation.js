@@ -435,6 +435,15 @@ export const catalogSheetRenderSchema = z.object({
   overridePrompt: z.string().max(8000).optional(),
   overrideNegativePrompt: z.string().max(2000).optional(),
   modelId: z.string().trim().max(64).optional(),
+  universeId: z.string().max(128).optional(),
+  // Absent follows the selected universe's linked board; '' explicitly opts out.
+  moodBoardId: z.string().max(128).optional(),
+  visualDirection: z.object({
+    style: z.string().max(1200).optional(),
+    camera: z.string().max(1200).optional(),
+    lighting: z.string().max(1200).optional(),
+    environment: z.string().max(1200).optional(),
+  }).strict().optional(),
 }).strict().superRefine((body, ctx) => {
   const isLook = body.variant === CATALOG_LOOK_VARIANT_ID;
   if (isLook && !body.wardrobeId) {
@@ -444,6 +453,12 @@ export const catalogSheetRenderSchema = z.object({
   }
   if (isLook && body.formId) {
     ctx.addIssue({ code: 'custom', path: ['formId'], message: 'formId is not accepted for a look render' });
+  }
+  if (!isLook && ['universeId', 'moodBoardId', 'visualDirection'].some((key) => body[key] !== undefined)) {
+    ctx.addIssue({ code: 'custom', message: 'Visual direction options are only accepted for a look render' });
+  }
+  if (isLook && body.overridePrompt !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['overridePrompt'], message: 'Use visualDirection for a look so its world and photography direction remain in the sent prompt' });
   }
 });
 
@@ -645,8 +660,8 @@ export const catalogExportQuerySchema = z.object({
   format: z.enum(['json', 'markdown', 'yaml']).optional(),
 }).strict();
 
-// Sync envelope shape — used by POST /api/catalog/sync/apply when a peer
-// forwards changes pulled from another instance. Each kind is optional so
+// Catalog sync envelope shape. Receivers apply pulled changes in-process
+// via catalogSync.applyRemoteChanges. Each kind is optional so
 // callers can apply a partial envelope (e.g. ingredients-only).
 //
 // Read-path caps MIRROR the create-path caps above: rawText 2MB, payload

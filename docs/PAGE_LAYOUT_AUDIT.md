@@ -71,7 +71,7 @@ Grouped by rendered component, including param/deep-link routes. “Retained” 
 | `/eidoverse/guest` | Intentional layout | Guest admission/world surface, outside the operator shell. |
 | `/fableloom` | Retained, flush | Existing full-width title/navigation shell and internal content scrolling; no outer-gutter mismatch found. |
 | `/fableloom/join` | Intentional layout | Hosted join flow, outside the operator shell. |
-| `/fableloom/:loomId`, `/fableloom/:loomId/:episodeId/outline`, `/fableloom/:loomId/:episodeId`, `/fableloom/:loomId/:episodeId/:nodeId` | Intentional layout | Story/episode editor; data-driven episode picker intentionally retained. |
+| `/fableloom/:loomId`, `/fableloom/:loomId/:episodeId/outline`, `/fableloom/:loomId/:episodeId/board`, `/fableloom/:loomId/:episodeId`, `/fableloom/:loomId/:episodeId/:nodeId` | Intentional layout | Story/episode editor; data-driven episode picker intentionally retained. |
 | `/feature-agents/create`, `/feature-agents/:id/:tab` | Fixed | Moved record tabs out of the padded header into TabPills; kept record identity/back navigation. |
 | `/feature-agents` | Retained, flush | Existing full-width title/navigation shell and internal content scrolling; no outer-gutter mismatch found. |
 | `/devtools/flows` | Retained, flush | Existing full-width title/navigation shell and internal content scrolling; no outer-gutter mismatch found. |

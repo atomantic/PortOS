@@ -12,6 +12,8 @@
  * has to fit inside the agent's `curl` step.
  */
 
+import { CODE_REVIEW_BATCH_BYTES, CODE_REVIEW_MAX_BATCHES, runCodeReviewBatches, takeCodeReviewCallBudget, isReviewContextCapacityFailure, reviewContextCapacityFailure } from '../lib/codeReviewBatches.js'
+import { withAbortTimeout, awaitWithAbort } from '../lib/abortTimeout.js'
 import { effortLevelsForProvider } from '../lib/providerModels.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
@@ -102,6 +104,10 @@ export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
   const isMalformed = explicitReason === 'malformed' || code === 'MALFORMED_REVIEW'
   const isQuota = explicitReason === 'quota' || (!isTimeoutFailure(message) && isReviewerQuotaFailure(result))
   const isExplicitUnavailable = explicitReason === 'unavailable'
+
+  // Input limits are not provider health, quota, or configuration failures.
+  if (['REVIEW_CONTEXT_CAPACITY', 'REVIEW_BUDGET_EXHAUSTED', 'REVIEW_INCOMPLETE', 'REVIEW_BATCH_FAILED'].includes(code)
+      && !isQuota && !isConfigFault && !isExplicitUnavailable) return false
 
   const isProvider = isProviderReviewer(reviewer)
 
@@ -838,12 +844,17 @@ export function __resetThinkingUnsupportedCache() { thinkingUnsupportedModels.cl
  * fall through to the request (and its 400-retry) rather than silently
  * dropping a level the model does in fact accept.
  */
-async function modelRejectsThinking(backend, model) {
+async function modelRejectsThinking(backend, model, reviewBudget = null) {
   const cacheKey = thinkingCacheKey(backend, model)
   if (thinkingUnsupportedModels.get(cacheKey) === true) return true
   if (backend !== 'ollama') return false
   const capabilities = await import('./ollamaManager.js')
-    .then(({ getModelCapabilities }) => getModelCapabilities(model))
+    .then(({ getModelCapabilities }) => {
+      if (!reviewBudget) return getModelCapabilities(model)
+      const remainingMs = reviewBudget.deadline - Date.now()
+      if (remainingMs <= 0) return null
+      return withAbortTimeout(remainingMs, signal => awaitWithAbort(getModelCapabilities(model, { signal, timeout: remainingMs }), signal))
+    })
     .catch(() => null)
   if (!Array.isArray(capabilities) || capabilities.length === 0) return false
   if (capabilities.includes('thinking')) return false
@@ -896,11 +907,11 @@ const SERVED_MODEL_PROBE_TIMEOUT_MS = 5_000
  *
  * @returns {Promise<{model: string|null, reason: string|null}>}
  */
-async function resolveServedModel(backend, baseUrl) {
+async function resolveServedModel(backend, baseUrl, timeoutMs = SERVED_MODEL_PROBE_TIMEOUT_MS) {
   // Back to the `/v1` root the probe wants, through the shared normalizer rather
   // than a re-typed suffix — the caller collapsed it to the host root for the
   // chat-completions path.
-  const probe = await probeOpenAiModels(normalizeOpenAiBaseUrl(baseUrl), { timeoutMs: SERVED_MODEL_PROBE_TIMEOUT_MS })
+  const probe = await probeOpenAiModels(normalizeOpenAiBaseUrl(baseUrl), { timeoutMs })
     .catch((err) => ({ reachable: false, models: null, error: err.message }))
   if (!probe.reachable) return { model: null, reason: `${backend} is not reachable (${probe.error || 'no response'})` }
   if (!Array.isArray(probe.models)) return { model: null, reason: `${backend} did not report which models it is serving` }
@@ -958,20 +969,24 @@ function reviewMessages({ messages, userMessage, systemPromptFor }, workspace) {
     : messages
 }
 
-// Resolve the exact record the user selected. Never fall back to the active
-// provider, another account, or a replacement model for a pinned reviewer.
-async function runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit = true, cwd: reviewCwd, isolateFromCheckout = false, allowUnconfined = false }) {
+async function loadReviewProvider(backend) {
   const { getProviderById } = await import('./providers.js')
   const { getAIToolkitInstance } = await import('../lib/aiToolkitState.js')
   const providerId = backend.slice('provider:'.length)
   // The auth-independent claim bridge has no server bootstrap. Use the same
   // provider-store reader there without starting a server or creating runners.
-  let provider = getAIToolkitInstance()
+  return getAIToolkitInstance()
     ? await getProviderById(providerId)
     : await import('../lib/aiToolkit/providers.js').then(async ({ createProviderService }) => {
       const { PATHS } = await import('../lib/paths.js')
       return createProviderService({ dataDir: PATHS.data }).getProviderById(providerId)
     })
+}
+
+// Resolve the exact record the user selected. Never fall back to the active
+// provider, another account, or a replacement model for a pinned reviewer.
+async function runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit = true, cwd: reviewCwd, isolateFromCheckout = false, allowUnconfined = false, providerSnapshot = null, reviewBudget = null }) {
+  let provider = providerSnapshot || await loadReviewProvider(backend)
   const transport = await resolveProviderReviewTransport(provider, { allowUnconfined })
   // A missing/disabled record is refused here, but an unsupported HARNESS is
   // refused at the branch below instead — a pinned effort the provider's model
@@ -991,8 +1006,11 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
     if (!timeoutExplicit) budgetMs = getRemoteCodeReviewTimeoutMs(provider)
     if (!model) return { ok: false, code: 'NO_MODEL', error: 'Select a model for the reviewer provider.' }
     const { callProviderAISimple } = await import('./aiProvider.js')
-    result = await callProviderAISimple({ ...provider, apiKey: provider.apiKey, timeout: budgetMs, fallbackProvider: null }, model,
-      prompt, { max_tokens: 8192, allowModelRecovery: false })
+    budgetMs = takeCodeReviewCallBudget(reviewBudget, budgetMs)
+    if (budgetMs === null) return { ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', error: 'The configured review budget is exhausted.' }
+    result = await withAbortTimeout(budgetMs, signal => awaitWithAbort(callProviderAISimple({ ...provider, apiKey: provider.apiKey, timeout: budgetMs, fallbackProvider: null }, model,
+      prompt, { max_tokens: 8192, allowModelRecovery: false, signal, deadlineMs: reviewBudget?.deadline }), signal))
+      .catch(() => ({ error: 'Reviewer preparation or execution failed within its shared budget.', code: reviewBudget && Date.now() >= reviewBudget.deadline ? 'REVIEW_BUDGET_EXHAUSTED' : 'REVIEW_BATCH_FAILED' }))
   } else {
     if (!transport.transport) return { ok: false, code: transport.code, error: transport.error }
     const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js')
@@ -1011,10 +1029,14 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
     const cwd = isolatedCwd || reviewCwd
     result = await Promise.resolve().then(async () => {
       const { resolveBootstrapEnv } = await import('../lib/credentialBootstrap.js')
-      const bootstrapEnv = await resolveBootstrapEnv(provider, { safetyProfile })
-      return runCliProviderPrompt({ provider, model, prompt, cwd, timeoutMs, bootstrapEnv, exactPins: true,
+      const preparationMs = reviewBudget ? reviewBudget.deadline - Date.now() : timeoutMs
+      if (preparationMs <= 0) return { error: 'The configured review budget is exhausted.', code: 'REVIEW_BUDGET_EXHAUSTED' }
+      const bootstrapEnv = await withAbortTimeout(preparationMs, signal => awaitWithAbort(resolveBootstrapEnv(provider, { safetyProfile, signal, timeoutMs: preparationMs }), signal))
+      const remainingMs = takeCodeReviewCallBudget(reviewBudget, timeoutMs)
+      if (remainingMs === null) return { error: 'The configured review budget is exhausted.', code: 'REVIEW_BUDGET_EXHAUSTED' }
+      return runCliProviderPrompt({ provider, model, prompt, cwd, timeoutMs: remainingMs, bootstrapEnv, exactPins: true,
         safetyProfile, codeReview: true })
-    }).catch(() => ({ error: 'Reviewer credential setup or execution failed.' }))
+    }).catch(() => ({ error: 'Reviewer credential setup or execution failed.', code: reviewBudget && Date.now() >= reviewBudget.deadline ? 'REVIEW_BUDGET_EXHAUSTED' : 'REVIEW_BATCH_FAILED' }))
       .finally(() => isolatedCwd && rm(isolatedCwd, { recursive: true, force: true }))
     // A failed headless command request is a configuration fault, not a verdict.
     // Replace vendor prose with a bounded remedy before health or bridge output.
@@ -1028,6 +1050,7 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
         error: 'The headless reviewer required command permission. Use a compatible non-interactive review transport or supported tool-free vendor configuration.',
       }
     }
+    if (isReviewContextCapacityFailure(result)) return { ...reviewContextCapacityFailure(), backend, model, effort }
     if (result.partial) {
       const errorMsg = result.stderr?.trim() || result.text?.trim() || 'Reviewer exited before completing its response.'
       return {
@@ -1051,6 +1074,7 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
       }
     }
   }
+  if (isReviewContextCapacityFailure(result)) return { ...reviewContextCapacityFailure(), backend, model, effort }
   if (result.error || !result.text?.trim()) {
     const errorText = result.error || result.stderr || result.text || 'Reviewer returned no content.'
     return {
@@ -1069,13 +1093,13 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
   return { ok: true, backend, model, effort: effort || provider.effort || null, content: result.text.trim(), finishReason: normalizeReviewFinishReason(result.finishReason), responseLengthChars: result.text.length }
 }
 
-async function runReviewerCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit = true, baseUrl: requestedBaseUrl = null, cwd, isolateFromCheckout = false, allowUnconfined = false, diffSizeBytes = null }) {
+async function runReviewerCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit = true, baseUrl: requestedBaseUrl = null, cwd, isolateFromCheckout = false, allowUnconfined = false, diffSizeBytes = null, providerSnapshot = null, reviewBudget = null }) {
   if (isProviderReviewer(backend)) {
-    const result = await runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit, cwd, isolateFromCheckout, allowUnconfined })
+    const result = await runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit, cwd, isolateFromCheckout, allowUnconfined, providerSnapshot, reviewBudget })
     if (result.ok || !Number.isFinite(diffSizeBytes) || !isTimeoutFailure(result.error)) return result
     return {
       ...result,
-      error: localCodeReviewTimeoutError({ backend, timeoutMs: result.timeoutMs ?? timeoutMs, diffSizeBytes, phase: result.stallPhase || 'reviewer-process' }),
+      error: localCodeReviewTimeoutError({ backend, timeoutMs: reviewBudget?.budgetMs ?? result.timeoutMs ?? timeoutMs, diffSizeBytes, phase: result.stallPhase || 'reviewer-process' }),
     }
   }
   if (!isLocalLlmReviewer(backend)) {
@@ -1095,7 +1119,9 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, us
   // by `backend:model`.
   let model = pinnedModel
   if (!model || typeof model !== 'string') {
-    const served = await resolveServedModel(backend, baseUrl)
+    const probeTimeoutMs = reviewBudget ? Math.min(SERVED_MODEL_PROBE_TIMEOUT_MS, reviewBudget.deadline - Date.now()) : SERVED_MODEL_PROBE_TIMEOUT_MS
+    if (probeTimeoutMs <= 0) return { ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', error: 'The configured review budget is exhausted.' }
+    const served = await resolveServedModel(backend, baseUrl, probeTimeoutMs)
     if (!served.model) {
       // `code` so a caller can tell a config gap from a reviewer that ran and
       // failed (a 4xx vs the 502 bucket) without matching on the message text.
@@ -1108,17 +1134,21 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, us
   // Probe only when there is actually a level to drop — an unpinned effort
   // sends no field either way, so a capability round-trip would buy nothing.
   const requestedEffort = normalizeReviewerEffort(effort, backend) || null
-  let effortUnsupported = requestedEffort ? await modelRejectsThinking(backend, model) : false
+  let effortUnsupported = requestedEffort ? await modelRejectsThinking(backend, model, reviewBudget) : false
   let resolvedEffort = effortUnsupported ? null : requestedEffort
 
-  let attempt = await sendChatCompletion(baseUrl, { model, messages, timeoutMs }, resolvedEffort)
+  let remainingMs = takeCodeReviewCallBudget(reviewBudget, timeoutMs)
+  if (remainingMs === null) return { ok: false, backend, model, code: 'REVIEW_BUDGET_EXHAUSTED', error: 'The configured review budget is exhausted.' }
+  let attempt = await sendChatCompletion(baseUrl, { model, messages, timeoutMs: remainingMs }, resolvedEffort)
 
   if (!attempt.ok && attempt.status === 400 && resolvedEffort && /does not support thinking/i.test(attempt.text || '')) {
     console.log(`⏭️ ${backend} model ${model} ignores reasoning_effort — retried without it`)
     thinkingUnsupportedModels.set(thinkingCacheKey(backend, model), true)
     resolvedEffort = null
     effortUnsupported = true
-    attempt = await sendChatCompletion(baseUrl, { model, messages, timeoutMs }, null)
+    remainingMs = takeCodeReviewCallBudget(reviewBudget, timeoutMs)
+    if (remainingMs === null) return { ok: false, backend, model, code: 'REVIEW_BUDGET_EXHAUSTED', error: 'The configured review budget is exhausted.' }
+    attempt = await sendChatCompletion(baseUrl, { model, messages, timeoutMs: remainingMs }, null)
   }
 
   if (!attempt.ok) {
@@ -1128,7 +1158,7 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, us
         backend,
         model,
         error: Number.isFinite(diffSizeBytes) && isTimeoutFailure(attempt.error)
-          ? localCodeReviewTimeoutError({ backend, timeoutMs, diffSizeBytes, phase: 'no-response' })
+          ? localCodeReviewTimeoutError({ backend, timeoutMs: reviewBudget?.budgetMs ?? timeoutMs, diffSizeBytes, phase: 'no-response' })
           : `${backend} ${attempt.error}`,
       }
     }
@@ -1144,7 +1174,7 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, us
       backend,
       model,
       error: Number.isFinite(diffSizeBytes) && isTimeoutFailure(err)
-        ? localCodeReviewTimeoutError({ backend, timeoutMs, diffSizeBytes, phase: 'response-body' })
+        ? localCodeReviewTimeoutError({ backend, timeoutMs: reviewBudget?.budgetMs ?? timeoutMs, diffSizeBytes, phase: 'response-body' })
         : `${backend} response failed: ${err.message}`,
     }
   }
@@ -1199,18 +1229,49 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, us
  *   no such mode never receives it: it runs in a scratch directory instead.
  * @param {boolean} [opts.toolFree] - Run a CLI reviewer in a scratch cwd
  *   instead of `opts.cwd`, whatever its mode.
+ * @param {string} [opts.headSha] - Caller-supplied exact candidate SHA. Coverage
+ *   always includes the immutable diff SHA-256, even for legacy callers without a SHA.
+ * @param {number} [opts.maxBatchBytes] - Whole-file input bound, at most 128 KiB.
+ * @param {number} [opts.maxBatches] - Provider-call budget within this one review
+ *   round, at most 64. All batches share timeoutMs; reviewer rounds and optional
+ *   policy are still enforced by the review-loop caller.
  * @param {string} [opts.kind] - `claim-review` always uses a scratch cwd;
  *   enforced vendor isolation is preferred but is not a transport requirement.
  */
-export async function runLocalCodeReview({ backend, model, diff, effort = null, timeoutMs = undefined, baseUrl = null, cwd = null, toolFree = false, kind = null } = {}) {
+export async function runLocalCodeReview(options = {}) {
+  const { backend, model, diff, effort, timeoutMs, headSha = null, maxBatchBytes = CODE_REVIEW_BATCH_BYTES, maxBatches = CODE_REVIEW_MAX_BATCHES } = options
+  if (!Number.isSafeInteger(maxBatchBytes) || maxBatchBytes < 1024 || maxBatchBytes > CODE_REVIEW_BATCH_BYTES
+      || !Number.isSafeInteger(maxBatches) || maxBatches < 1 || maxBatches > CODE_REVIEW_MAX_BATCHES
+      || (headSha !== null && !/^[a-f0-9]{40,64}$/.test(headSha))) {
+    return { ok: false, error: 'Invalid review batching limits or candidate revision.' }
+  }
+  if (typeof diff !== 'string' || !diff.trim() || !isToolFreeReviewer(backend)) return runSingleCodeReview(options)
+  const startedAt = Date.now()
+  const providerSnapshot = isProviderReviewer(backend) ? await loadReviewProvider(backend) : null
+  let selectedModel = model || providerSnapshot?.defaultModel
+  const selectedEffort = effort ?? providerSnapshot?.effort ?? null
+  const budgetMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs
+    : providerSnapshot && (await resolveProviderReviewTransport(providerSnapshot, { allowUnconfined: true })).transport === 'api' ? getRemoteCodeReviewTimeoutMs(providerSnapshot) : getLocalCodeReviewTimeoutMs(diff)
+  const result = await runCodeReviewBatches({ diff, headSha, budgetMs, maxBatchBytes, maxBatches, startedAt,
+    runBatch: async (batch, remainingMs, reviewBudget) => {
+      const result = await runSingleCodeReview({ ...options, model: selectedModel, effort: selectedEffort, diff: batch,
+        timeoutMs: remainingMs, toolFree: batch !== diff || Buffer.byteLength(diff) > maxBatchBytes || options.toolFree, providerSnapshot, reviewBudget })
+      selectedModel ||= result.model
+      return result
+    },
+  })
+  return { backend, model: selectedModel, effort: selectedEffort, ...result }
+}
+
+async function runSingleCodeReview({ backend, model, diff, effort = null, timeoutMs = undefined, baseUrl = null, cwd = null, toolFree = false, kind = null, providerSnapshot = null, reviewBudget = null } = {}) {
   if (!isToolFreeReviewer(backend)) {
     return { ok: false, error: `Unsupported reviewer backend: ${backend}` }
   }
   // No model pre-check here: an unpinned model is resolved from what the backend
   // is serving inside `runReviewerCompletion`, and a second copy of the
   // guard would reject the recoverable case before that ever ran.
-  const trimmedDiff = typeof diff === 'string' ? diff.trim() : ''
-  if (!trimmedDiff) {
+  const trimmedDiff = typeof diff === 'string' ? diff : ''
+  if (!trimmedDiff.trim()) {
     return { ok: false, error: 'Empty diff — nothing to review.' }
   }
 
@@ -1235,9 +1296,13 @@ export async function runLocalCodeReview({ backend, model, diff, effort = null, 
     cwd,
     isolateFromCheckout: kind === 'claim-review' || toolFree,
     allowUnconfined: true,
+    providerSnapshot,
+    reviewBudget,
     systemPromptFor: buildCodeReviewSystemPrompt,
     userMessage: { role: 'user', content: `Review this PR diff:\n\n${fence}diff\n${trimmedDiff}\n${fence}` },
   })
+  if (isReviewContextCapacityFailure(result)) return { ...reviewContextCapacityFailure(), backend, model: result.model || model, effort }
+  if (result.code === 'REVIEW_BUDGET_EXHAUSTED') return { ...result, error: localCodeReviewTimeoutError({ backend, timeoutMs: reviewBudget?.budgetMs ?? reviewTimeoutMs, diffSizeBytes, phase: 'reviewer-process' }) }
   if (!result.ok) return result
   const { verdict, reason } = normalizeCodeReviewVerdict(result.content)
   if (!verdict) return {

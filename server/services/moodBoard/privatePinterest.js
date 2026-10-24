@@ -1,5 +1,5 @@
 /**
- * One-shot import for Pinterest boards that are visible only to the signed-in
+ * One-shot import for Pinterest Pins and boards visible to the signed-in
  * PortOS browser profile. The page read is pinned through the browser service's
  * CDP SSRF guard; only Pinterest pin permalinks and i.pinimg.com image URLs
  * leave the page, and the images are re-hosted into the normal mood-board asset
@@ -10,19 +10,50 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir } from '../../lib/fileUtils.js';
 import { isBlockedIngestHost } from '../../lib/catalogValidation.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { normalizePinterestFeedUrl } from '../../lib/pinterestFeed.js';
 import { getHealthStatus, navigateToUrlPinned } from '../browserService.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { MAX_ITEMS_PER_BOARD } from './logic.js';
 import * as store from './db.js';
 import { downloadPinImage } from './pinterest.js';
-import { resolvePinterestBoardUrl } from './pinterestUrl.js';
+import { resolvePinterestImportUrl } from './pinterestUrl.js';
 
 const PINTEREST_PAGE_SETTLE_MS = 2500;
 // The pinned DOM scan can take up to roughly 58 seconds: a 32 × 250 ms
 // board-title wait, one 300 ms reset, then 140 × 350 ms scroll/load steps.
 const PINTEREST_PAGE_READ_TIMEOUT_MS = 70000;
 const DOWNLOAD_CONCURRENCY = 3;
+
+// Read only the requested Pin's closeup or page metadata, never the related-pin
+// grid. The server independently validates the landed URL and every image URL.
+function pinSnapshotExpression(pinUrl) {
+  return `(() => new Promise(async (resolve) => {
+    const source = ${JSON.stringify(pinUrl)};
+    const read = () => {
+      const loginRequired = /^\\/(?:login|session\\/login)(?:\\/|$)/i.test(location.pathname)
+        || Boolean(document.querySelector('input[type="password"]'));
+      const closeup = document.querySelector('[data-test-id="pin-closeup-image"]');
+      const img = closeup?.matches('img') ? closeup : closeup?.querySelector('img');
+      const candidates = [
+        ...(img?.getAttribute('srcset') || '').split(',').map((entry) => entry.trim().split(/\\s+/)[0]).reverse(),
+        img?.currentSrc, img?.src,
+        document.querySelector('meta[property="og:image"]')?.content,
+      ];
+      const imageUrl = candidates.find((raw) => {
+        try {
+          const url = new URL(raw);
+          return url.protocol === 'https:' && url.hostname === 'i.pinimg.com' && !url.username && !url.password && !url.port;
+        } catch { return false; }
+      });
+      return { loginRequired, expectedCount: 1, pins: imageUrl ? [{ source, imageUrl }] : [] };
+    };
+    let snapshot = read();
+    for (let i = 0; i < 32 && !snapshot.loginRequired && !snapshot.pins.length; i++) {
+      await new Promise((done) => setTimeout(done, 250));
+      snapshot = read();
+    }
+    resolve(snapshot);
+  }))()`;
+}
 
 // Runs only on the user-triggered import path. The page is opened in a fresh
 // tab in the PortOS browser's existing profile, and the bounded scroll loop
@@ -131,15 +162,22 @@ function sameBoardPath(left, right) {
   return leftPath === rightPath;
 }
 
+function isPinterestImageUrl(raw) {
+  if (typeof raw !== 'string' || !URL.canParse(raw)) return false;
+  const image = new URL(raw);
+  return image.protocol === 'https:' && image.hostname === 'i.pinimg.com' && !image.username && !image.password && !image.port;
+}
+
 /**
- * Import the visible pins from a private Pinterest board using the signed-in
+ * Import a single Pin or the visible pins from a Pinterest board using the signed-in
  * PortOS CDP browser. Images download outside the mood-board row lock, then the
  * store performs a locked, source-deduplicated append.
  *
  * @returns {Promise<{ board: object, added: number, found: number, skipped: number }>}
  */
 export async function importPrivatePinterestBoard(boardId, { url }) {
-  const { boardUrl } = await resolvePinterestBoardUrl(url);
+  const { boardUrl, pinUrl } = await resolvePinterestImportUrl(url);
+  const targetUrl = pinUrl || boardUrl;
   const board = await store.getBoard(boardId);
   if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
 
@@ -148,13 +186,13 @@ export async function importPrivatePinterestBoard(boardId, { url }) {
     throw new ServerError('The PortOS browser is not running', { status: 503, code: 'BROWSER_UNAVAILABLE' });
   }
 
-  const page = await navigateToUrlPinned(boardUrl, {
+  const page = await navigateToUrlPinned(targetUrl, {
     verifyRemoteIp: (ip) => !isBlockedIngestHost(ip),
     settleMs: PINTEREST_PAGE_SETTLE_MS,
-    evaluateExpression: PINTEREST_BOARD_SNAPSHOT_EXPRESSION,
+    evaluateExpression: pinUrl ? pinSnapshotExpression(pinUrl) : PINTEREST_BOARD_SNAPSHOT_EXPRESSION,
     evaluateTimeoutMs: PINTEREST_PAGE_READ_TIMEOUT_MS,
   }).catch(() => {
-    throw new ServerError('Could not read the Pinterest board in the PortOS browser', {
+    throw new ServerError('Could not read Pinterest in the PortOS browser', {
       status: 502,
       code: 'PINTEREST_BROWSER_READ_FAILED',
     });
@@ -170,22 +208,27 @@ export async function importPrivatePinterestBoard(boardId, { url }) {
       code: 'PINTEREST_LOGIN_REQUIRED',
     });
   }
-  if (!snapshot.boardTitle) {
+  if (!pinUrl && !snapshot.boardTitle) {
     throw new ServerError('Pinterest did not show this board in the PortOS browser', {
       status: 403,
       code: 'PINTEREST_BOARD_UNAVAILABLE',
     });
   }
 
-  const landedBoardUrl = normalizePinterestFeedUrl(page.url).boardUrl;
-  if (!sameBoardPath(landedBoardUrl, boardUrl)) {
-    throw new ServerError('Pinterest opened a different board than the one requested', {
+  const landed = await resolvePinterestImportUrl(page.url);
+  if (pinUrl ? landed.pinUrl !== pinUrl : !landed.boardUrl || !sameBoardPath(landed.boardUrl, boardUrl)) {
+    throw new ServerError('Pinterest opened a different Pin or board than the one requested', {
       status: 502,
       code: 'PINTEREST_BOARD_REDIRECTED',
     });
   }
 
   const pins = Array.isArray(snapshot.pins) ? snapshot.pins : [];
+  if (pinUrl && (pins.length !== 1 || pins[0]?.source !== pinUrl || !isPinterestImageUrl(pins[0]?.imageUrl))) {
+    throw new ServerError('Pinterest did not show an image for this Pin', {
+      status: 502, code: 'PINTEREST_PIN_UNAVAILABLE',
+    });
+  }
   const expectedCount = Number.isInteger(snapshot.expectedCount) && snapshot.expectedCount >= 0
     ? snapshot.expectedCount
     : null;
@@ -207,7 +250,9 @@ export async function importPrivatePinterestBoard(boardId, { url }) {
   const items = Array.isArray(board.items) ? board.items : [];
   const seen = new Set(items.map((item) => item?.source).filter(Boolean));
   const capacity = Math.max(0, MAX_ITEMS_PER_BOARD - items.length);
-  const candidates = pins.filter((pin) => pin?.source && pin?.imageUrl && !seen.has(pin.source)).slice(0, capacity);
+  const candidates = pins.filter((pin) => /^https:\/\/www\.pinterest\.com\/pin\/\d+\/$/.test(pin?.source)
+    && isPinterestImageUrl(pin?.imageUrl) && !seen.has(pin.source)
+    && (!pin.imageUrlOriginal || isPinterestImageUrl(pin.imageUrlOriginal))).slice(0, capacity);
   if (!candidates.length) return { board, added: 0, found, skipped: found };
 
   await ensureDir(PATHS.images);

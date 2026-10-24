@@ -17,8 +17,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router';
-import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt, Layers, Pencil } from 'lucide-react';
+import { Link, useNavigate } from 'react-router';
+import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt, Layers, Pencil, LayoutPanelLeft } from 'lucide-react';
 import socket from '../../../services/socket';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
@@ -33,15 +33,32 @@ import {
   updatePipelineIssue,
   extractPipelineStoryboardScenes,
   createBlankSketch,
+  openStoryboardForPipelineIssue,
+  getPipelineStoryboardChanges,
+  updatePipelineShotsFromBoard,
 } from '../../../services/api';
 import useUniverse from '../../../hooks/useUniverse';
+import { useSocketResource } from '../../../hooks/useSocketResource';
+import useMounted from '../../../hooks/useMounted';
 import { matchCharactersInText } from '../../../lib/scenePrompt';
 import MediaJobThumb from '../MediaJobThumb';
 import ImagePromptCandidates, { PromptCountInput } from '../ImagePromptCandidates';
 import { genConfigToImageOptions, genConfigToRefineOptions, IMAGE_PROMPT_COUNT_DEFAULT } from './VisualGenSettings';
 
+const STORYBOARD_CHANGE_EVENTS = ['storyboard:changed'];
+
 export default function StoryboardsStage({ issue, series, onStageUpdate, actionsGated = false }) {
   const navigate = useNavigate();
+  const mounted = useMounted();
+  // A new scope also invalidates requests when leaving and returning to the same issue.
+  const requestScope = useRef({ issueId: issue.id });
+  if (requestScope.current.issueId !== issue.id) requestScope.current = { issueId: issue.id };
+  const boardOpenRef = useRef(null);
+  const boardUpdateRef = useRef(null);
+  const [boardOpen, setBoardOpen] = useState(null);
+  const [boardUpdate, setBoardUpdate] = useState(null);
+  const openingBoard = boardOpen?.scope === requestScope.current;
+  const updatingFromBoard = boardUpdate?.scope === requestScope.current ? boardUpdate.shotId : null;
   const stage = issue.stages?.storyboards || { status: 'empty', scenes: [] };
   const [scenes, setScenes] = useState(stage.scenes || []);
   // Scene index currently minting a blank sketch (so its button shows a spinner
@@ -108,6 +125,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   const extractInFlight = !!extractingFrom;
 
   const persist = async (nextScenes) => {
+    if (boardUpdateRef.current?.scope === requestScope.current) return false;
     setScenes(nextScenes);
     // Keep the ref coherent for every write path (not just the ones that set it
     // explicitly), so a discrete pick fired between a persist and the next
@@ -122,6 +140,52 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     });
     if (updated) onStageUpdate?.('storyboards', updated.stages.storyboards, updated);
     return !!updated;
+  };
+
+  // Open in storyboard editor: the issue's linked board in Create › Storyboards
+  // (made from these scenes the first time), where recipes make panel art.
+  const openBoard = async () => {
+    if (boardOpenRef.current?.scope === requestScope.current) return;
+    const request = { scope: requestScope.current };
+    boardOpenRef.current = request;
+    setBoardOpen(request);
+    const res = await openStoryboardForPipelineIssue(issue.id).catch(() => null);
+    if (!mounted.current || requestScope.current !== request.scope || boardOpenRef.current !== request) return;
+    boardOpenRef.current = null;
+    setBoardOpen(null);
+    if (res?.boardId) navigate(`/storyboards/${encodeURIComponent(res.boardId)}`);
+  };
+
+  // The linked board is a copy: panels edited there wait here, per shot, until Update.
+  const { data: boardChanges, updateData: setBoardChanges } = useSocketResource(
+    ({ signal }) => getPipelineStoryboardChanges(issue.id, { silent: true, signal }),
+    {
+      events: STORYBOARD_CHANGE_EVENTS,
+      resourceKey: JSON.stringify([issue.id, issue.updatedAt]),
+      matchesEvent: event => !boardChanges?.boardId || event?.id === boardChanges.boardId,
+    },
+  );
+  const changedShots = useMemo(() => new Map((boardChanges?.changed || []).map((c) => [c.shotId, c])), [boardChanges]);
+  const boardLocked = stage.locked === true;
+  const updateFromBoard = async (shotId = null) => {
+    if (boardUpdateRef.current?.scope === requestScope.current) return;
+    const request = { scope: requestScope.current, shotId: shotId || 'all' };
+    boardUpdateRef.current = request;
+    setBoardUpdate(request);
+    const res = await updatePipelineShotsFromBoard(issue.id, shotId).catch(() => null);
+    if (!mounted.current || requestScope.current !== request.scope || boardUpdateRef.current !== request) return;
+    boardUpdateRef.current = null;
+    setBoardUpdate(null);
+    if (!res) return;
+    const { updated, issue: saved, ...changes } = res;
+    setBoardChanges(changes);
+    if (saved?.stages?.storyboards) {
+      const next = saved.stages.storyboards;
+      setScenes(next.scenes || []);
+      scenesRef.current = next.scenes || [];
+      onStageUpdate?.('storyboards', next, saved);
+    }
+    toast.success(`${updated} shot${updated === 1 ? '' : 's'} updated from the storyboard`);
   };
 
   const addScene = () => persist([...scenes, { slugline: '', description: '', imageJobId: null }]);
@@ -446,7 +510,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   };
 
   return (
-    <div className="space-y-4">
+    <fieldset disabled={!!updatingFromBoard} className="min-w-0 space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-lg font-semibold text-white">Storyboards</h2>
@@ -479,6 +543,16 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
               : <Wand2 size={14} />}
             From prose
           </button>
+          <button
+            type="button"
+            onClick={openBoard}
+            disabled={openingBoard || !scenes.length}
+            title={scenes.length ? 'Open these scenes in the shared storyboard editor' : 'Add or extract scenes first'}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {openingBoard ? <Loader2 size={14} className="animate-spin" /> : <LayoutPanelLeft size={14} />}
+            Open in storyboard editor
+          </button>
           <PromptCountInput id="storyboard-prompt-count" value={promptCount} onChange={setPromptCount} />
           <button
             type="button"
@@ -489,6 +563,25 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
           </button>
         </div>
       </div>
+
+      {changedShots.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-port-warning/40 bg-port-warning/5 px-3 py-2 text-sm text-port-warning">
+          <LayoutPanelLeft size={14} />
+          <span className="flex-1 min-w-0">
+            Storyboard changed: {changedShots.size} shot{changedShots.size === 1 ? '' : 's'}{boardLocked ? ' (unlock the stage to update)' : ''}
+          </span>
+          <Link to={`/storyboards/${encodeURIComponent(boardChanges.boardId)}`} className="text-xs underline hover:text-white">Open board</Link>
+          <button
+            type="button"
+            onClick={() => updateFromBoard()}
+            disabled={boardLocked || !!updatingFromBoard}
+            className="inline-flex items-center gap-1 min-h-[36px] px-3 py-1 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-40"
+          >
+            {updatingFromBoard === 'all' ? <Loader2 size={12} className="animate-spin" /> : null}
+            Update all
+          </button>
+        </div>
+      )}
 
       {confirmingFrom && (
         <InlineConfirmRow
@@ -649,18 +742,25 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                 onSetShotGrammar={(j, patch) => setShotGrammar(i, j, patch)}
                 onBlurShot={() => persist(scenes)}
                 onRenderShot={(j) => handleRenderShot(i, j)}
+                changedShots={changedShots}
+                boardLocked={boardLocked}
+                updatingFromBoard={updatingFromBoard}
+                onUpdateFromBoard={updateFromBoard}
               />
             </li>
           ))}
         </ul>
       )}
-    </div>
+    </fieldset>
   );
 }
+
+const CHANGED_FIELD_LABELS = { description: 'action', shotType: 'framing', durationSeconds: 'length' };
 
 function ShotList({
   sceneIdx, shots, renderingShots, actionsGated,
   onAddShot, onRemoveShot, onUpdateShot, onSetShotGrammar, onBlurShot, onRenderShot,
+  changedShots, boardLocked, updatingFromBoard, onUpdateFromBoard,
 }) {
   const hasShots = shots.length > 0;
   // Inline pre-render continuity warnings (#1468): the same hazards the server
@@ -697,6 +797,7 @@ function ShotList({
         <ul className="space-y-2">
           {shots.map((shot, j) => {
             const isRendering = renderingShots.has(`${sceneIdx}:${j}`);
+            const change = shot.id ? changedShots?.get(shot.id) : null;
             return (
               <li key={shot.id || j} className="flex items-start gap-2 p-2 bg-port-bg/40 border border-port-border/60 rounded">
                 <span className="text-[10px] text-gray-500 font-mono pt-1.5 w-6">{j + 1}</span>
@@ -711,6 +812,21 @@ function ShotList({
                     className="px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
                     maxLength={4000}
                   />
+                  {change ? (
+                    <div className="flex items-center gap-2 text-[11px] text-port-warning">
+                      <span className="flex-1 min-w-0">Storyboard changed: {change.fields.map((f) => CHANGED_FIELD_LABELS[f] || f).join(', ')}</span>
+                      <button
+                        type="button"
+                        onClick={() => onUpdateFromBoard(shot.id)}
+                        disabled={boardLocked || !!updatingFromBoard}
+                        title={boardLocked ? 'Unlock the stage to update' : 'Copy the edited panel to this shot'}
+                        className="inline-flex items-center gap-1 min-h-[32px] px-2 py-1 rounded bg-port-card border border-port-border text-white hover:border-port-accent/50 disabled:opacity-40"
+                      >
+                        {updatingFromBoard === shot.id ? <Loader2 size={11} className="animate-spin" /> : null}
+                        Update
+                      </button>
+                    </div>
+                  ) : null}
                   {/* Shot-grammar editor (#1468): set/correct the film-grammar
                       fields the visual.shot-continuity check reads. Discrete
                       picks persist immediately and skip the description-driven

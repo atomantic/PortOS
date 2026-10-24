@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { publishBrowserFidelity } from './browser-fidelity.js';
 import { BROWSER_FIDELITY_TESTS, BROWSER_FIDELITY_FILES } from './lib/browserTestProfiles.js';
+import * as ownedProcesses from './lib/testOwnedProcesses.js';
 
 const head = 'a'.repeat(40), base = 'b'.repeat(40), merge = 'c'.repeat(40), tree = 'd'.repeat(40);
 const roots = [];
@@ -88,7 +89,13 @@ describe('local fidelity publication through the existing runner and status boun
     expect(existsSync(join(dirname(failed.seen.diagnostics), '.owner.pid'))).toBe(true);
     // Simulate the owning process having exited.
     writeFileSync(join(dirname(failed.seen.diagnostics), '.owner.pid'), '2147483646 0\n');
-    await publishBrowserFidelity(fixture().options);
+    // Reclamation also requires a complete inventory; unrelated host processes
+    // may have unreadable ownership metadata on the machine running this test.
+    const inventory = vi.spyOn(ownedProcesses, 'readTestProcesses').mockReturnValue([
+      { pid: process.pid, ppid: process.ppid, args: [], env: {} },
+    ]);
+    try { await publishBrowserFidelity(fixture().options); }
+    finally { inventory.mockRestore(); }
     expect(existsSync(dirname(failed.seen.diagnostics))).toBe(false);
   });
 

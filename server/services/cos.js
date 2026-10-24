@@ -23,14 +23,15 @@ import { join } from 'path';
 import { getActiveProvider } from './providers.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { unclaimedTaskIds, runningAgentsByTaskId, spawningAgentForTask, spawnClaimAgeMs } from '../lib/cosSpawnWindow.js';
-import { isRetryHeld, isStaleRetryHold } from '../lib/taskRetryHold.js';
+import { isRetryHeld, isStaleRetryHold, isDeliveryCleanupHeld } from '../lib/taskRetryHold.js';
 import { clearStaleActiveAgents } from './appActivity.js';
 // The single Priority-0 on-demand loop body, shared with the evaluateTasks
 // engine in cosTaskGenerator.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
 import { logCosScheduleUpdate } from './userActionScheduleLog.js';
 import { getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
-import { schedule as scheduleEvent, cancel as cancelEvent } from './eventScheduler.js';
+import { schedule as scheduleEvent, cancel as cancelEvent, getEvent } from './eventScheduler.js';
+import { COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
 import { recordJobExecution } from './autonomousJobs.js';
 import { safeJSONParse, sleep, isTopLevelEntryName } from '../lib/fileUtils.js';
 import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
@@ -65,7 +66,7 @@ import { getPendingTaskIds as readPendingTaskIds, getUserTasks, getCosTasks, get
 import { ensureInstanceId } from './instanceIdentity.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from './investigationRetry.js';
-import { notifyIfPrLeftOrphaned } from './orphanedPrNotifier.js';
+import { handBackBlockedPrRemediation } from './blockedPrRemediation.js';
 import { notifyCriticalHealth, clearCriticalHealthIfRecovered } from './healthCriticalNotifier.js';
 
 const RESUME_DEQUEUE_DELAY_MS = 500;
@@ -158,6 +159,10 @@ export async function getStatus() {
   const stateCompletedIds = Object.keys(state.agents).filter(id => state.agents[id].status === 'completed');
   const stateOnlyCompleted = stateCompletedIds.filter(id => !idx.has(id)).length;
   const tasksCompleted = Math.max(state.stats.tasksCompleted, idx.size + stateOnlyCompleted);
+  const recoveryEvent = getEvent('cos-pending-merge-sweep');
+  const recoveryBlocked = !isDaemonRunning() ? 'CoS is stopped' : state.paused ? 'CoS is paused'
+    : getDomainMode(state.config, 'cos') !== 'execute' ? 'CoS auto-run must be in Execute mode'
+      : !recoveryEvent?.active ? 'Completion recovery is not scheduled' : null;
 
   return {
     running: isDaemonRunning(),
@@ -169,6 +174,12 @@ export async function getStatus() {
     activeAgents,
     pendingTasks: unclaimedTaskIds(await readPendingTaskIds(), runningAgentsByTaskId(Object.values(state.agents))).length,
     pausedAgents,
+    completionRecovery: {
+      blockedReason: recoveryBlocked,
+      nextRunAt: recoveryBlocked ? null : recoveryEvent.nextRunAt,
+      intervalMs: recoveryEvent?.intervalMs || null,
+      batchSize: COMPLETION_RECOVERY_BATCH_SIZE,
+    },
     provider: provider ? { id: provider.id, name: provider.name } : null
   };
 }
@@ -883,6 +894,7 @@ export async function resetOrphanedTasks({ bootRecovery = false } = {}) {
       // bypasses: the hold is armed AFTER `completeAgent`, so a crash-restart
       // inside that 60s window would otherwise skip the very task the boot pass
       // exists to recover and strand it until the 15-minute periodic sweep.
+      if (isDeliveryCleanupHeld(task.metadata)) continue;
       const held = isRetryHeld(task.metadata);
       const recoverHold = held && (bootRecovery || isStaleRetryHold(task.metadata));
       if (held && !recoverHold) {
@@ -1607,15 +1619,11 @@ export async function init() {
     }
   });
 
-  // A task that was going to MERGE a pull request just got blocked — surface the
-  // current blocker and PR link. Registered separately from the dequeue listener
-  // above because it must fire on a transition that listener has no branch for
-  // (→ blocked), and it is not gated on `isDaemonRunning()`: even while stopped,
-  // the notification and Brain commitment preserve the next action. The
-  // development watchdog later retires the task if the PR is already terminal.
+  // Contributor remediation retains its forge hand-back when blocked. Ordinary
+  // merge follow-ups stay in automated recovery rather than the human inbox.
   cosEvents.on('tasks:changed', (data) => {
-    notifyIfPrLeftOrphaned(data)
-      .catch(err => console.error(`❌ Orphaned-PR check failed for task ${data?.task?.id}: ${err.message}`));
+    handBackBlockedPrRemediation(data)
+      .catch(err => console.error(`❌ Blocked PR remediation hand-back failed for task ${data?.task?.id}: ${err.message}`));
   });
 
   // A critical health transition reaches the bell even when no CoS view is open.

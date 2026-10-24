@@ -314,6 +314,8 @@ describe('socket.js — initSocket', () => {
     dashboardEvents.emit('cos:day:changed');
     expect(subscriber.emitted).toContainEqual(['cos:day:changed', {}]);
     expect(other.emitted.some(([event]) => event === 'cos:day:changed')).toBe(false);
+    queueListeners.cos.find(([event]) => event === 'scheduler:ran')[1]({ id: 'cos-pending-merge-sweep', privateContent: 'Example private record' });
+    expect(subscriber.emitted).toContainEqual(['cos:scheduler:changed', { id: 'cos-pending-merge-sweep' }]);
     dashboardEvents.emit('cos:decisions:changed');
     expect(subscriber.emitted).toContainEqual(['cos:decisions:changed', {}]);
     expect(other.emitted.some(([event]) => event === 'cos:decisions:changed')).toBe(false);
@@ -415,11 +417,14 @@ describe('socket.js — initSocket', () => {
     initSocket(io);
   });
 
-  it('forwards bounded project and commission invalidations from structural and local-only writes', () => {
+  it('forwards bounded project, commission and storyboard invalidations from structural and local-only writes', () => {
     emitRecordUpdated('creativeDirectorProject', 'cd-example');
     emitRecordDeleted('creativeDirectorProject', 'cd-example');
     emitRecordInvalidated('creativeDirectorProject', 'cd-example');
     emitRecordInvalidated('creativeCommission', 'cc-example');
+    emitRecordUpdated('storyboard', 'sb-example');
+    emitRecordDeleted('storyboard', 'sb-example');
+    emitRecordInvalidated('storyboard', 'sb-example');
     emitRecordUpdated('unrelated', 'example');
     expect(io.emitted.filter(([name]) => name === 'creative-director:project:changed')).toEqual(
       Array.from({ length: 3 }, () => ['creative-director:project:changed', { id: 'cd-example' }]),
@@ -427,6 +432,9 @@ describe('socket.js — initSocket', () => {
     expect(io.emitted.filter(([name]) => name === 'commission:changed')).toEqual([
       ['commission:changed', { id: 'cc-example' }],
     ]);
+    expect(io.emitted.filter(([name]) => name === 'storyboard:changed')).toEqual(
+      Array.from({ length: 3 }, () => ['storyboard:changed', { id: 'sb-example' }]),
+    );
   });
 
   it('delivers FableLoom snapshots only to subscribed operator views', () => {

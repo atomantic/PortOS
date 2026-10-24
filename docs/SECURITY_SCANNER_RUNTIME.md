@@ -7,6 +7,29 @@ base paths. The runner resolves paths inside the assigned workspace and launches
 an already installed `@openai/codex-security` CLI. It never installs a package or
 selects another provider after a failure.
 
+CLI discovery checks the project dependency first, then global npm executables
+on the runner's absolute `PATH` entries, then existing npm execution-cache
+installs. A PATH executable must resolve to the declared bin of an
+`@openai/codex-security` package; arbitrary launchers are not executed to probe
+availability. This supports global installations without downloading anything
+or running `npm`/`npx` during an audit.
+
+Dispatch directs the outer Codex agent to read instructions and threat-model
+documents, establish scope, then call the scanner **before vulnerability
+discovery or active testing**. Repository-wide audits use `paths: ["."]`;
+explicitly scoped audits retain their requested boundary. The scanner performs
+the initial investigation, and the outer agent validates its evidence and
+handles the task's tracker/remediation delivery afterwards.
+
+Installing the CLI or plugin does not change the outer agent's cyber access.
+Provider safety refusals remain terminal in both phases. Broader approved access
+requires [Trusted Access/Daybreak](https://learn.chatgpt.com/docs/cyber-safety)
+for the actual account, model and surface; selecting a scanner or changing a
+local permission setting does not grant that access. Suspected false positives
+can be reported through Codex `/feedback`. See the
+[official scan guidance](https://learn.chatgpt.com/docs/security/plugin/scans)
+for threat-model context and coverage interpretation.
+
 Before execution, missing, malformed or out-of-workspace context paths produce
 `invalid-input` evidence. This records a rejection count and the last field,
 zero-based item index and bounded error code, without publishing paths or raw

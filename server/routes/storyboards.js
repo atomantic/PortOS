@@ -10,7 +10,7 @@ import { validateRequest } from '../lib/validation.js';
 import {
   storyboardBeatCreateSchema, storyboardBeatUpdateSchema, storyboardCreateSchema, storyboardMoveSchema,
   storyboardPanelCreateSchema, storyboardPanelMoveSchema, storyboardPanelNodeUpdateSchema, storyboardPanelUpdateSchema,
-  storyboardBeatsAddSchema, storyboardFitSchema, storyboardVideoStartSchema, storyboardPlotExtractSchema, storyboardRecipeSchema, storyboardSavedRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
+  storyboardBeatsAddSchema, storyboardFitSchema, storyboardFromFableLoomSchema, storyboardPipelineUpdateSchema, storyboardVideoStartSchema, storyboardPlotExtractSchema, storyboardRecipeSchema, storyboardSavedRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
 } from '../lib/storyboardValidation.js';
 import {
   addBeat, addPanel, addPanelTake, createStoryboard, deleteBeat, deletePanel, deleteStoryboard, getStoryboard,
@@ -22,6 +22,9 @@ import {
 } from '../services/storyboards/make.js';
 import { fitMusicVideoToStoryboard, updateShotFromPanel, sendShotStillToPanel } from '../services/storyboards/fitMusicVideo.js';
 import { makeStoryboardFromMusicVideo } from '../services/storyboards/fromMusicVideo.js';
+import { makeStoryboardFromFableLoom } from '../services/storyboards/fromFableLoom.js';
+import { openStoryboardForPipelineIssue, pipelineStoryboardChanges, updatePipelineShotsFromBoard } from '../services/storyboards/fromPipeline.js';
+import { sendPanelArtToSource } from '../services/storyboards/sourceArt.js';
 import { startVideoFromStoryboard } from '../services/storyboards/toVideo.js';
 import { addBeats, extractBeats } from '../services/storyboards/plot.js';
 import { deleteSavedRecipe, listSavedRecipes, saveRecipe } from '../services/storyboards/recipeLibrary.js';
@@ -39,6 +42,26 @@ router.post('/', asyncHandler(async (req, res) => {
 // Make storyboard from this video: a board from the project's shots, linked to it.
 router.post('/from-music-video/:projectId', asyncHandler(async (req, res) => {
   res.status(201).json(await makeStoryboardFromMusicVideo(req.params.projectId));
+}));
+
+// Make storyboard from this FableLoom path; the scene-art panel route sends art back to its source scene.
+router.post('/from-fableloom/:loomId/:episodeId', asyncHandler(async (req, res) => {
+  const { via } = validateRequest(storyboardFromFableLoomSchema, req.body ?? {});
+  res.status(201).json(await makeStoryboardFromFableLoom(req.params.loomId, req.params.episodeId, { via }));
+}));
+
+// Open in storyboard editor (Series Pipeline): the issue's linked board, made from its scenes the first time.
+router.post('/from-pipeline/:issueId', asyncHandler(async (req, res) => {
+  const result = await openStoryboardForPipelineIssue(req.params.issueId);
+  res.status(result.created ? 201 : 200).json(result);
+}));
+
+// The linked board's edits waiting for the pipeline stage, and Update that copies them to the shots.
+router.get('/pipeline/:issueId/changes', asyncHandler(async (req, res) => {
+  res.json(await pipelineStoryboardChanges(req.params.issueId));
+}));
+router.post('/pipeline/:issueId/update-from-board', asyncHandler(async (req, res) => {
+  res.json(await updatePipelineShotsFromBoard(req.params.issueId, validateRequest(storyboardPipelineUpdateSchema, req.body ?? {})));
 }));
 
 // Fit to song: write the video's shots from its linked board, as previewed.
@@ -116,6 +139,10 @@ router.delete('/:id/panels/:panelId', asyncHandler(async (req, res) => {
 
 router.post('/:id/panels/:panelId/move', asyncHandler(async (req, res) => {
   res.json(await movePanel(req.params.id, req.params.panelId, validateRequest(storyboardPanelMoveSchema, req.body ?? {})));
+}));
+
+router.post('/:id/panels/:panelId/scene-art', asyncHandler(async (req, res) => {
+  res.json(await sendPanelArtToSource(req.params.id, req.params.panelId));
 }));
 
 router.post('/:id/panels/:panelId/takes', asyncHandler(async (req, res) => {

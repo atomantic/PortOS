@@ -8,6 +8,7 @@ import { MemoryRouter, Routes, Route, useNavigate } from 'react-router';
 vi.mock('../hooks/useAssignableInstances', () => ({ default: () => ({ instances: [], isFederated: false }) }));
 const api = vi.hoisted(() => ({
   getCosStatus: vi.fn(),
+  getInstanceFeatures: vi.fn(),
   getCosTasks: vi.fn(),
   getCosTask: vi.fn(),
   getCosAgents: vi.fn(),
@@ -113,6 +114,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   socketStub.resetListeners();
   api.getCosStatus.mockResolvedValue({ running: false, config, stats: {} });
+  api.getInstanceFeatures.mockResolvedValue({ features: [] });
   api.getCosTasks.mockResolvedValue({ user: null, cos: null });
   api.getCosAgents.mockResolvedValue([]);
   api.getCosHealth.mockResolvedValue({ issues: [] });
@@ -1356,6 +1358,57 @@ describe('ChiefOfStaff route-scoped data', () => {
 describe('ChiefOfStaff active-agent snapshot readiness', () => {
   const agent = { id: 'agent-example', taskId: 'task-example', status: 'running', startedAt: '2026-01-01T00:00:00.000Z', metadata: { taskDescription: 'Example active work' } };
   const socketHandler = event => socketStub.on.mock.calls.filter(([name]) => name === event).at(-1)[1];
+
+  it('shows completed system cleanup owners until task events confirm delivery is finished', async () => {
+    withFakeTimers();
+    const finalizing = { ...agent, id: 'agent-system-example', taskId: 'sys-rl-example', status: 'completed', deliveryPending: true,
+      completedAt: '2026-01-01T00:10:00.000Z', metadata: { taskType: 'internal', taskDescription: 'Example system delivery' } };
+    const { deliveryPending: _deliveryPending, ...archived } = finalizing;
+    api.getCosAgents.mockResolvedValue([finalizing]);
+    api.getCosCompletedAgents.mockResolvedValue({ items: [archived], total: 1, nextCursor: null });
+    await renderSettledAt('agents');
+
+    const section = screen.getByRole('region', { name: 'Finalizing delivery' });
+    expect(within(section).getByText('Example system delivery')).toBeInTheDocument();
+    expect(within(section).getByRole('link', { name: /sys-rl-example/ })).toHaveAttribute('href', '/cos/tasks?task=sys-rl-example');
+    expect(screen.getAllByText('Example system delivery')).toHaveLength(1);
+    expect(screen.queryByText(/No active agents/)).toBeNull();
+    expect(within(section).queryByRole('button', { name: /Resume|Remove agent/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Clear all completed agents' })).toBeDisabled();
+
+    await act(async () => socketHandler('cos:agent:updated')(archived));
+    expect(screen.getByRole('region', { name: 'Finalizing delivery' })).toBeInTheDocument();
+
+    await act(async () => socketHandler('cos:agent:updated')({ id: finalizing.id,
+      metadata: { ...finalizing.metadata, cleanupOutcome: { status: 'blocked', reason: 'preservation-unverified' } } }));
+    expect(within(section).getByText('Last check: preservation unverified.')).toBeInTheDocument();
+    await act(async () => socketHandler('cos:agent:updated')({ id: finalizing.id,
+      deliveryActivity: { label: 'Checking delivery preservation' } }));
+    expect(within(section).getByText('Checking delivery preservation')).toBeInTheDocument();
+    await act(async () => socketHandler('cos:agent:updated')({ id: finalizing.id, deliveryActivity: null }));
+    expect(within(section).getByText(/agent is not running/)).toBeInTheDocument();
+
+    const statusReads = api.getCosStatus.mock.calls.length;
+    await act(async () => {
+      socketHandler('cos:scheduler:changed')({ id: 'unrelated-job' });
+      await vi.advanceTimersByTimeAsync(450);
+    });
+    expect(api.getCosStatus).toHaveBeenCalledTimes(statusReads);
+    await act(async () => {
+      socketHandler('cos:scheduler:changed')({ id: 'cos-pending-merge-sweep' });
+      await vi.advanceTimersByTimeAsync(450);
+    });
+    expect(api.getCosStatus).toHaveBeenCalledTimes(statusReads + 1);
+
+    api.getCosAgents.mockResolvedValue([]);
+    await act(async () => {
+      socketHandler('cos:tasks:changed')({ task: { id: finalizing.taskId, status: 'completed' } });
+      await vi.advanceTimersByTimeAsync(450);
+    });
+    expect(screen.queryByRole('region', { name: 'Finalizing delivery' })).toBeNull();
+    expect(screen.getByText('Example system delivery')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear all completed agents' })).toBeEnabled();
+  });
 
   it.each([true, false])('keeps unknown CoS status out of the loaded Agents UI until running=%s arrives', async (running) => {
     let resolveStatus;

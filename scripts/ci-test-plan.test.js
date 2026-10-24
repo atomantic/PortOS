@@ -92,7 +92,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
   const shared = [
     '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
     'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
-    'scripts/lib/vitestWatch.js',
+    'scripts/lib/vitestWatch.js', 'scripts/lib/testProcessAttribution.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
     'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
     'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
     'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
@@ -105,7 +105,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
   const client = [
     'ecosystem.config.cjs', 'client/package.json', 'client/package-lock.json',
     'client/vite.config.js', 'client/vite.buildEnv.js', 'client/vite.chunkGroups.js',
-    'client/vitest.config.js', 'client/src/test/timeouts.js',
+    'client/vitest.config.js', 'client/src/test/timeouts.js', 'scripts/vitestProcessEnvironment.js',
     'scripts/dev-start.js', 'scripts/publish-client-build.js',
     'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs',
     'lib/portosAuthCore.js', 'server/lib/eidoverseProxyRoutes.js',
@@ -373,6 +373,49 @@ it('carries transitive browser re-exports through the planner CLI and fails clos
   }
 });
 
+it('projects test-only shared re-exports and retains unresolved consumers without selecting a build', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-client-test-deps-'));
+  const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, source) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), source);
+  };
+  const leaf = 'scripts/lib/cleanupLeaf.js';
+  const unused = 'scripts/lib/unconsumed.js';
+  const consumer = 'client/src/test/lifecycle.test.js';
+  const unrelated = 'client/src/test/unrelated.test.js';
+  const plan = (source) => JSON.parse(execFileSync(process.execPath, [planner], {
+    cwd: root, encoding: 'utf8',
+    env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: 'false',
+      CI_CHANGED_FILES: JSON.stringify([source]), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
+  }));
+  try {
+    git('init', '-q');
+    write(leaf, 'export const value = 1;\n');
+    write(unused, 'export const unused = 1;\n');
+    write('scripts/lib/cleanupBridge.js', "export { value } from './cleanupLeaf.js';\n");
+    write('client/src/test/fixture.js', "export { value } from '../../../scripts/lib/cleanupBridge.js';\n");
+    write(consumer, "const fixture = await import('./fixture.js');\n");
+    write(unrelated, 'export const unrelated = 1;\n');
+    git('add', '--all');
+
+    expect(plan(leaf)).toMatchObject({ full: false, build: false,
+      client_mode: 'files', client_files: JSON.stringify([consumer]) });
+    expect(plan(unused)).toMatchObject({ full: false, build: false, client_mode: 'skip' });
+
+    write('client/src/test/fixture.js', "export { value } from './missing.js';\n");
+    expect(plan(leaf)).toMatchObject({ full: false, build: false,
+      client_mode: 'files', client_files: JSON.stringify([consumer]) });
+
+    write(consumer, "const fixture = await import(globalThis.fixturePath);\n");
+    expect(plan(leaf)).toMatchObject({ full: false, build: false,
+      client_mode: 'files', client_files: JSON.stringify([consumer]) });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it('resolves local client imports of present untracked modules and still fails closed on missing ones', () => {
   const root = mkdtempSync(join(tmpdir(), 'portos-ci-untracked-deps-'));
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
@@ -405,6 +448,78 @@ it('resolves local client imports of present untracked modules and still fails c
     const missing = inspect();
     expect(missing.full).toBe(true);
     expect(missing.reason).toBe('client dependency discovery unresolved');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('shares source reads within one collection and observes edits and unreadable sources in the next', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-snapshot-'));
+  const planner = new URL('./ci-test-plan.js', import.meta.url).href;
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, body) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), body);
+  };
+  const leaf = 'server/lib/first.js';
+  const second = 'server/lib/second.js';
+  const bridge = 'server/lib/bridge.js';
+  const browser = BROWSER_SUITES[0];
+  const db = 'server/routes/decks.db.test.js';
+  try {
+    git('init', '-q');
+    write(leaf, 'export const value = 1;\n');
+    write(second, 'export const value = 2;\n');
+    write(bridge, "export { value } from './first.js';\n");
+    for (const entry of ['client/src/consumer.js', browser, db, 'server/lib/consumer.test.js']) {
+      const relative = posix.relative(posix.dirname(entry), bridge);
+      write(entry, `import '${relative.startsWith('.') ? relative : `./${relative}`}';\n`);
+    }
+    git('add', '--all');
+
+    // A subprocess observes actual disk reads without changing Vitest's own fs.
+    // This catches repeated reads across client, DB, browser and reach scans,
+    // while the same process also proves no snapshot survives the next call.
+    const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { join } from 'node:path';
+      const original = fs.readFileSync;
+      const reads = new Map();
+      fs.readFileSync = function(path, ...args) {
+        reads.set(String(path), (reads.get(String(path)) ?? 0) + 1);
+        return original.call(this, path, ...args);
+      };
+      syncBuiltinESMExports();
+      const fixtureRoot = ${JSON.stringify(root)};
+      const { collectPlanInputs } = await import(${JSON.stringify(planner)});
+      const collect = () => collectPlanInputs({ baseSha: 'HEAD', changedFiles: [${JSON.stringify(leaf)}], cwd: fixtureRoot });
+      const first = collect();
+      const bridgeReads = reads.get(join(fixtureRoot, ${JSON.stringify(bridge)}));
+      fs.writeFileSync(${JSON.stringify(bridge)}, "export { value } from './second.js';\\n");
+      const edited = collect();
+      fs.unlinkSync(${JSON.stringify(bridge)});
+      fs.mkdirSync(${JSON.stringify(bridge)});
+      const warn = console.warn;
+      console.warn = () => {};
+      const unreadable = collect();
+      console.warn = warn;
+      console.log(JSON.stringify({ first, edited, unreadable, bridgeReads }));
+    `], { cwd: root, encoding: 'utf8' }));
+    expect(result.bridgeReads).toBe(1);
+    for (const [inputs, present, absent] of [[result.first, leaf, second], [result.edited, second, leaf]]) {
+      expect(inputs.clientDependencies).toContain(present);
+      expect(inputs.clientDependencies).not.toContain(absent);
+      expect(inputs.dbDependencies).toContain(present);
+      expect(inputs.dbDependencies).not.toContain(absent);
+      expect(inputs.browserDependencies[browser]).toContain(present);
+      expect(inputs.browserDependencies[browser]).not.toContain(absent);
+    }
+    expect(result.first.serverReach.selected).toBeGreaterThan(0);
+    expect(result.edited.serverReach.selected).toBe(0);
+    expect(result.unreadable.clientDependencies).toBeNull();
+    expect(result.unreadable.dbDependencies).toBeNull();
+    expect(result.unreadable.browserDependencies[browser]).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1673,6 +1788,9 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'scripts/launch.cmd',
       'scripts/fix-windows-console.js',
       'scripts/ps1-bom.test.js',
+      'server/lib/nativeTrash.js',
+      'server/lib/nativeTrash.test.js',
+      'server/lib/nativeTrash.smoke.test.js',
       'server/lib/bufferedSpawn.js',
       'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/pathSafety.js',
@@ -1720,6 +1838,26 @@ describe('Windows escalation on a full plan (#7440)', () => {
       // `windows: true` here is a direct consequence of WINDOWS_RISK_RULES.
       expect(plan(['server/services/auth.js']).windows).toBe(false);
       expect(plan(['server/lib/bufferedSpawn.js']).windows).toBe(true);
+    });
+
+    it('routes native recycling source and both tests to real Windows coverage (#13251)', () => {
+      const source = 'server/lib/nativeTrash.js';
+      const tests = ['server/lib/nativeTrash.test.js', 'server/lib/nativeTrash.smoke.test.js'];
+      const unrelated = 'server/lib/nativeTrashXdg.test.js';
+      const trackedFiles = [...TRACKED, ...WINDOWS_CONTRACT_TESTS, source, ...tests, unrelated];
+      for (const changedFiles of [[source], ...tests.map(path => [path]), [source, ...tests]]) {
+        const selected = buildCiTestPlan(changedFiles, { trackedFiles, clientDependencies: [] });
+        expect(selected.full).toBe(false);
+        expect(selected.windows).toBe(true);
+        expect(selected.windowsMode).toBe(changedFiles.includes(source) ? 'related' : 'files');
+        expect(selected.windowsSources).toEqual(changedFiles.includes(source) ? [source] : []);
+        expect(selected.windowsFiles).toEqual([...new Set([
+          ...WINDOWS_CONTRACT_TESTS, ...changedFiles.filter(path => tests.includes(path)),
+        ])].sort());
+        expect(selected.windowsFiles).not.toContain(unrelated);
+      }
+      // The Linux XDG implementation does not broaden this Windows-only rule.
+      expect(buildCiTestPlan([unrelated], { trackedFiles }).windows).toBe(false);
     });
 
     it('selects the changed cancellation fixtures explicitly on Windows without widening unrelated tests (#11641)', () => {
@@ -1825,7 +1963,9 @@ describe('cross-workspace browser suites (#10312)', () => {
 
     // Server-only media suites do not mount the changed client component.
     const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js', 'server/lib/musicVideoTitleCard.browser.test.js',
-      'server/services/federatedMedia/sourceAudio.browser.test.js'];
+      'server/services/federatedMedia/sourceAudio.browser.test.js',
+      'server/services/fableLoom/static-player/player.browser.test.js',
+      'server/services/htmlComposition/index.test.js'];
     expect(plan.full).toBe(false);
     expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => !runtimeOnly.includes(suite))));
     for (const suite of runtimeOnly) expect(plan.browserFiles).not.toContain(suite);
@@ -2185,14 +2325,12 @@ describe('pregate attestation', () => {
   const status = (overrides = {}) => ({
     context: 'pregate', state: 'success', creator: { login: 'acme' }, created_at: '2026-10-18T10:00:00Z', description: encode(ALL), ...overrides,
   });
-  const NOW = 1_800_000_000_000;
   /** An execFileSync double: git answers from the options, gh from `statuses`; a thrown entry throws. */
-  const fakeExec = ({ mergeHead = HEAD, headTree = TREE, statuses = [status()], apiError = null, drift = [], committedAt = Math.floor(NOW / 1000) - 3600, calls = [] } = {}) => (command, args) => {
+  const fakeExec = ({ mergeHead = HEAD, headTree = TREE, statuses = [status()], apiError = null, drift = [], calls = [] } = {}) => (command, args) => {
     const key = `${command} ${args.join(' ')}`;
     calls.push(key);
     if (key === 'git rev-parse --verify --quiet HEAD^2') return `${mergeHead}\n`;
     if (key === `git rev-parse --verify --quiet ${HEAD}^{tree}`) return `${headTree}\n`;
-    if (key === `git show -s --format=%ct ${HEAD}`) return `${committedAt}\n`;
     if (key === 'git diff --name-only HEAD^2 HEAD') {
       if (drift === null) throw new Error('diff failed');
       return `${drift.join('\n')}\n`;
@@ -2206,8 +2344,7 @@ describe('pregate attestation', () => {
     throw new Error(`unexpected ${key}`);
   };
   const quiet = () => {};
-  const clock = () => { let t = NOW; return { now: () => t, sleep: (ms) => { t += ms; } }; };
-  const resolve = (options = {}, env = prEnv, extra = {}) => resolveCiAttestation({ env, exec: fakeExec(options), log: quiet, ...clock(), ...extra });
+  const resolve = (options = {}, env = prEnv, extra = {}) => resolveCiAttestation({ env, exec: fakeExec(options), log: quiet, ...extra });
   const fullPlan = () => buildCiTestPlan(['server/index.js'], { trackedFiles: TRACKED, forceFull: true, forceFullReason: 'full CI requested' });
 
   it('is eligible only for a same-repository, non-bot pull request into a non-release base', () => {
@@ -2233,7 +2370,7 @@ describe('pregate attestation', () => {
     const reasons = [];
     const log = (line) => reasons.push(line);
     const refused = (options, env = prEnv) => {
-      const result = resolveCiAttestation({ env, exec: fakeExec(options), log, ...clock() });
+      const result = resolveCiAttestation({ env, exec: fakeExec(options), log });
       expect(result.attested).toBe(false);
       return result.reason;
     };
@@ -2250,30 +2387,16 @@ describe('pregate attestation', () => {
     expect(reasons).toHaveLength(8);
   });
 
-  it('waits up to 90 s for a status on a head younger than five minutes, and not on an older one', () => {
-    // The status is posted after the push that started this run, so a young
-    // head with no status yet is re-read at 10 s intervals.
+  it('reads an absent attestation once and immediately retains broad CI for focused pushes', () => {
     let reads = 0;
-    const lateStatuses = () => { reads += 1; return reads < 4 ? [] : [status()]; };
-    const calls = [];
-    const young = resolveCiAttestation({ env: prEnv, exec: fakeExec({ statuses: lateStatuses, committedAt: Math.floor(NOW / 1000) - 60, calls }), log: quiet, ...clock() });
-    expect(young).toMatchObject({ attested: true, waitedMs: 30_000 });
-    expect(reads).toBe(4);
-
-    reads = 0;
-    const lines = [];
-    const never = resolveCiAttestation({ env: prEnv, exec: fakeExec({ statuses: () => { reads += 1; return []; }, committedAt: Math.floor(NOW / 1000) - 60 }), log: (line) => lines.push(line), ...clock() });
-    expect(never.attested).toBe(false);
-    expect(reads).toBe(10);
-    expect(lines.some((line) => /^⏳ Waited 90s for a pregate status on the 60s-old head/.test(line))).toBe(true);
-
-    reads = 0;
-    expect(resolve({ statuses: () => { reads += 1; return []; } }).attested).toBe(false);
+    const result = resolveCiAttestation({
+      env: prEnv,
+      exec: fakeExec({ statuses: () => { reads += 1; return []; } }),
+      log: quiet,
+    });
+    expect(result).toMatchObject({ attested: false, reason: 'no "pregate" status on the head' });
     expect(reads).toBe(1);
-    // A revocation or a mismatch is final: no waiting for it to change.
-    reads = 0;
-    expect(resolve({ statuses: () => { reads += 1; return [status({ state: 'failure' })]; }, committedAt: Math.floor(NOW / 1000) - 60 }).attested).toBe(false);
-    expect(reads).toBe(1);
+    expect(applyAttestation(fullPlan(), result)).toMatchObject({ full: true, attestedStages: [] });
   });
 
   it('refuses, per stage, the stages a base-side change could reach', () => {

@@ -83,6 +83,9 @@ vi.mock('../../lib/maintenanceAdmission.js', async importOriginal => ({
   maintenance: new Proxy({}, { get: (_target, property) => fixture.admission[property] }),
 }));
 
+const { recordGrokImageUsage } = vi.hoisted(() => ({ recordGrokImageUsage: vi.fn(async () => {}) }));
+vi.mock('../grokMediaUsage.js', () => ({ recordGrokImageUsage }));
+
 const grok = await import('./grok.js');
 const { imageGenEvents } = await import('../imageGenEvents.js');
 const { spawn } = await import('../../lib/childProcess.js');
@@ -343,6 +346,9 @@ describe('grok provider — directed-path harvest', () => {
     expect(meta.referenceImageFilenames).toEqual(['ref-a.png', 'ref-b.png']);
     expect(Date.parse(meta.renderStartedAt)).toBeLessThanOrEqual(Date.parse(meta.renderCompletedAt));
     expect(Date.parse(meta.renderCompletedAt) - Date.parse(meta.renderStartedAt)).toBe(meta.renderMs);
+    expect(recordGrokImageUsage).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: job.jobId, inputImages: 3,
+    }));
   });
 
   it('transcodes a staged JPEG to PNG instead of shipping mislabeled bytes', async () => {

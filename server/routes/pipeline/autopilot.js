@@ -280,7 +280,7 @@ router.get('/series/:id/autopilot/model-metrics', asyncHandler(async (req, res) 
 router.post('/series/:id/autopilot/model-outcomes', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const body = validateRequest(modelOutcomeSchema, req.body ?? {});
-  const recorded = await recordModelOutcome(body.runId, body);
+  const recorded = await recordModelOutcome(body.runId, body, req.params.id);
   if (!recorded) throw new ServerError('AI run not found', { status: 404, code: 'RUN_NOT_FOUND' });
   res.json({ success: true, runId: body.runId });
 }));

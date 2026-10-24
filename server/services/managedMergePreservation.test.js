@@ -114,7 +114,8 @@ it('the shared cleanup contract requires API review and receipts rather than an 
   expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('review:{prUrl,digest:<fresh review.digest>,acceptSuperseded:<reviewed boolean>}');
   expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('private Git state, refs, reflogs and recoverable objects');
   expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('an uncertain response needs receipt/inventory readback before retry');
-  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('including a branch-only remnant');
+  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('If a supported retirement endpoint is unavailable or a separate branch-only remnant remains, retain it with the precise blocker for branch reconciliation.');
+  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('Do not enqueue another cleanup coordinator against your own active checkout.');
   expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).not.toMatch(/`git |git worktree remove|git branch -[dD]/);
 });
 

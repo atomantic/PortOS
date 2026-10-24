@@ -69,12 +69,139 @@ retires that exact owner under one lock. Missing ownership can only replay the
 existing receipt, never create an owner. This does not certify a complete
 transcript, clear transcript warnings, or change the original task outcome.
 
+### Interrupted maintenance transactions
+
+An interrupted journal write stays fail-closed across restarts. Settings → General
+→ Graceful maintenance reports `interrupted-transaction` and the lock time,
+`unreadable-journal` for damaged/incompatible state, or `process-uncertain` when
+this process could not confirm a write. The first transaction failure logs its
+original error code and message; repeated refusals do not flood that diagnostic.
+
+Inspect the logs and resolve disk-space or I/O problems first. From the install
+directory, stop both PM2 apps and any standalone processes using this journal:
+
+```bash
+pm2 stop portos-server portos-cos
+node scripts/recover-maintenance-transaction.mjs --confirm "Inspected interrupted transaction and resolved disk problem"
+pm2 start portos-server portos-cos
+```
+
+Use your actual recovery reason. From a reviewed isolated checkout, set
+`PORTOS_DATA_ROOT` to the install root (the parent of `data/`). The command refuses
+live/transitioning PM2 ownership, an unreadable PM2 inventory, an invalid/future
+`state.json`, or linked/non-regular journal evidence. Restore compatible code or
+recover damaged journal data separately before retrying; never delete valid
+operations or replace damaged state with an empty journal to bypass this check.
+
+Recovery preserves the original state, `transaction/`, every `pending-*.json`,
+and a receipt recording the operator reason, lock mtime, pending sizes, original
+state hash and retained hold under `data/workflow-maintenance/recovered-<timestamp>-<id>/`.
+It publishes a **Transaction recovery** hold before moving the lock when no hold
+exists; an existing hold and every operation/exclusive owner remain intact.
+A failed repair retains admission fencing and evidence; after addressing its
+cause, repeat the confirmed command. The runtime `transaction/` lock never expires
+or gets removed by PID. Recovery commands serialize through a separate `recovery/`
+fence with an atomically published owner. A proven dead recovery PID permits a
+retry to preserve that fence under `recovery-interrupted-<id>/` and continue.
+Unknown ownership or an interrupted `.transition` remains closed: keep both apps
+stopped, stop every recovery command, inspect and preserve the whole `recovery/`
+directory under a unique sibling name, then repeat the confirmed command. Never
+remove the runtime `transaction/` evidence. Starting both apps clears their in-memory uncertainty, but does
+not clear the hold or certify that unresolved work finished.
+
+After restarting, refresh maintenance status, inspect/reconcile any remaining
+blockers through their owning workflows, and choose **Resume previous policies**
+deliberately. With no unresolved operations the status is Ready; otherwise it is
+Draining. Recovery archives stay in the same backed-up, machine-local subtree:
+snapshots retain them as evidence and restores preserve the current subtree
+byte-for-byte, including archives, rather than installing a snapshot's authority.
+
+### Unsettled generic output publications
+
+Use the local operator command below after journal transaction recovery, with a
+normal maintenance hold in place. It never steals an interrupted transaction lock,
+resumes a hold, or settles an exclusive maintenance owner. Run from the install
+checkout. From a reviewed isolated checkout, append
+`--install-root <absolute-install-root>` (the parent of `data/`) to each command.
+This explicit target does not depend on the inherited `PORTOS_DATA_ROOT` pin,
+which worktree code deliberately ignores.
+
+```bash
+# Read-only inventory, including unrelated owners and the exact selected operation.
+node scripts/reconcile-output-publication.mjs diagnose
+node scripts/reconcile-output-publication.mjs diagnose <operation-id>
+
+# Read-only inspection: fingerprint the explicit evidence specification below.
+# Save these private JSON files outside the source tree; do not publish them.
+node scripts/reconcile-output-publication.mjs inspect <operation-id> evidence-spec.json > inspected-request.json
+
+# Review the request, then explicitly acknowledge uncertainty for that owner only.
+node scripts/reconcile-output-publication.mjs reconcile inspected-request.json --confirm-disposition
+```
+
+Generic reservations contain no parent, destination, run, or batch identity. The
+operator must trace the owning workflow and explain how its records relate to
+the **selected** reservation; never assign evidence merely by PID or age. Diagnose
+lists admitted owner IDs and their source modules from `backupAssetOwners.js`.
+Relevant examples:
+
+| Owner | Evidence to inspect |
+|---|---|
+| `toolkit-recording-publication`, `runtime-recording-publication-tails`, `agent-run-recording-publication` | Matching run metadata, output, retained agent spools (`output.txt` / `raw.txt`), and durable failure/warning records. Trace recording creation, spool writes and finalization; terminal metadata alone does not prove a complete transcript. |
+| `cos-agent-archive-and-index-publication` | Agent/archive identity, archive/index records, retained output and the publication failure. |
+| `media-job-completion`, `image-generation-completion-tails`, `generated-video-shared-finalizer` | Exact job/run identity, sidecars/history or inspected database-record evidence, and output integrity or the durable publication failure. A provider completion alone does not prove local publication. |
+
+Other admitted owners require the same record-plus-output/failure inspection of
+their listed source modules. If the relationship cannot be established, keep the
+reservation and recover through its owning service. For DB-primary records, save
+a bounded, private inspection artifact with exact record identity under `data/`;
+do not copy credentials or a whole database into an evidence file. Preserve large
+media separately and use its owning service's integrity/failure evidence here.
+
+Example `evidence-spec.json` (invented paths; replace every explanation after
+actually inspecting the records):
+
+```json
+{
+  "ownerId": "toolkit-recording-publication",
+  "binding": "Describe the exact run identity and evidence linking its interrupted publication to the selected reservation.",
+  "reason": "Explain the inspected failure and why this specific uncertainty is being acknowledged.",
+  "files": [
+    { "path": "runs/example-run/metadata.json", "role": "record", "note": "Describe the inspected run identity and unchanged outcome." },
+    { "path": "runs/example-run/publication-failure.txt", "role": "failure", "note": "Describe the inspected publication failure and retained output limitations." }
+  ]
+}
+```
+
+Evidence uses distinct ordinary data-relative files, without symlinks or journal
+files: a nonempty owner `record` plus nonempty `output` or `failure`, at most
+16 files / 16 MiB total. The request binds SHA-256 hashes and lengths, inspection
+notes, owner, relationship, reason, exact hold, original operation and uncertainty
+stamp. Preserve both evidence files and the inspected request. Empty output,
+process exit and elapsed time never establish saving. A live or unproved admitting
+process refuses disposition; process exit is only a prerequisite, never evidence
+of completeness.
+
+Reconciliation rechecks evidence under the journal transaction lock, fsyncs a
+no-replace `data/workflow-maintenance/publication-<operation-id>-<stamp>.json`
+receipt, then retires only that exact owner. Repeating the **same** request reuses
+the matching receipt, including a receipt-first interruption after normal journal
+recovery. A missing owner cannot mint a receipt. Stale holds/operations/stamps,
+missing/changed evidence, incompatible receipts, exclusive ownership, and failed
+receipt persistence retain ownership. Refusals name the next inspection/recovery
+step; never edit the request's hashes to bypass them. The hold and every other
+operation remain; run/task outcomes and transcript warnings stay unchanged.
+`acknowledged-uncertainty` with `outputCompleteness: "unknown"` records an operator
+disposition, **not** successful saving. These machine-local receipts share the
+backup/restore exclusions described below for abandoned-agent receipts; they
+have no seed, migration, federation or automatic expiry.
+
 ### Explicitly abandoned duplicate agents
 
 A local operator may reconcile a user-killed duplicate that saved no output with
 `node scripts/reconcile-abandoned-agent.mjs <agent-id> <run-id> --confirm-abandoned <reason>`.
-Begin a normal maintenance hold first. When using a reviewed isolated checkout,
-`PORTOS_DATA_ROOT` names the install root (the parent of `data/`). This is an
+Begin a normal maintenance hold first and run from the install checkout;
+worktree code deliberately ignores the `PORTOS_DATA_ROOT` pin. This is an
 explicit abandonment decision, never automatic expiry or a successful-run verdict.
 The command refuses present agent/runner ownership, live recorded PIDs, retained
 agent output (including archives), worktrees/branches, nonempty run output,
@@ -329,6 +456,16 @@ goal data together; interrupted intents remain retryable after restore.
 ---
 
 ## `ephemeral-file` — queues / uploads / transient state
+
+- FableLoom portable exports — `data/cache/fableloom-exports/<jobId>/` holds
+  atomic job status, temporary media snapshots and the derived ZIP. The authored
+  loom remains db-primary; these jobs are regenerable, keyed downloads with no
+  search, sync cursor or relational authority. Jobs expire after 24 hours, retain
+  at most four artifacts (256 MiB per ZIP, 64 MiB per source/prepared asset), and
+  prepare one package at a time. A restart makes interrupted jobs visibly failed;
+  it never resumes generation or publishes partial work. They never federate,
+  need no seed/migration, and the existing anchored `/cache/` backup exclusion
+  applies. See [FableLoom export v1](./features/fableloom-export-v1.md).
 
 **Definition.** Regenerable, short-lived runtime state. Losing it costs at most an in-flight job or a cache rebuild — never durable user data. It should never be the only home for anything the user expects to persist.
 
@@ -1102,3 +1239,63 @@ recovery evidence prevents an interrupted journal replay from becoming fresh
 retirement evidence after the display row has aged out. It has no TTL purge.
 
 FableLoom shot-planning run checkpoints live in machine-local `data/fableloom-shot-runs/` JSON journals (atomic writes, one latest run per story/episode). They preserve drafts, review verdicts and feedback across restarts; they do not federate. Reading an interrupted run marks it failed without starting a provider call. Explicit resume uses the saved provider/guidance and rejects changed source revisions. Story records remain PostgreSQL-primary.
+
+### Codex image render accounting
+
+`data/image-render-usage/<sha256>.json` is a machine-local `file-primary`
+accounting receipt ledger (`server/services/imageRenderUsage.js`). Each immutable
+receipt describes one saved original output; `renderKey` groups outputs from the
+same Codex session. Output identity uses the PortOS job ID when available,
+independently of session attribution, so queue-only recovery cannot add a
+previously recorded live output again. The Usage page counts real Codex session IDs separately from saved outputs and
+fallback PortOS job groups. A combined render-group total is never presented as
+a count of known Codex sessions.
+A missing provider session ID uses the original PortOS job identity and is
+reported as such. These are observed saved render sessions, not a count of every
+image-tool invocation, attempt or billable image.
+
+This is an accounting log alongside `usage.json`, with no relational queries,
+record editing or cross-domain joins. Receipts publish complete files with an
+exclusive hard link, so a live completion and an explicit backfill cannot replace
+one another or double-count an output across processes. Hidden temporary files
+are ignored after an interrupted write. A damaged receipt fails the read rather
+than reporting a trustworthy zero. The Usage endpoint contains that failure to
+the image card, which reports unavailable while text accounting remains visible. Rsync backs up this directory by default; it
+is not a peer-usage digest or a media-library asset and does not federate.
+
+Receipts contain hashed identities, the original saved timestamp, driver model
+and accounting evidence only. They contain no prompts, image bytes, filenames or
+session contents. Codex's human-mode `tokens used` footer, when present, is stored
+as a reported driver total without an input/output breakdown. The summary counts
+it once per session and states measurement coverage. It is never added to the
+text-token ledger, which may already include the session. Image tokens, image
+cost and subscription allowance remain `null` (unknown); text API prices and
+average allowance comparisons are not image conversion rates. The API cost
+estimate excludes unknown image cost.
+
+Historical import is explicit and never runs at boot. From the repository root:
+
+```sh
+node scripts/backfill-codex-image-usage.js --data-dir <install>/data --report <private-plan.json>
+node scripts/backfill-codex-image-usage.js --data-dir <install>/data --apply <private-plan.json> --journal <private-journal.json>
+```
+
+Review the dry-run coverage before applying. The importer reads only PortOS
+image sidecars and completed queue metadata, excludes known derived copies,
+groups multiple outputs per session, and uses saved original timestamps rather
+than filesystem mtimes. It never reads provider sessions. Unattributed sidecars,
+unsaved/failed calls, unavailable token/cost/allowance data and historical
+execution-machine provenance remain unknown. A changed inventory requires a new
+dry run. The plan and journal must use new paths; existing files are never
+replaced. Neither operation mutates `usage.json`, sidecars or queue history.
+
+Before writing receipts, apply saves a journal with a unique batch ID. Every
+inserted receipt carries that `backfillBatch`; pre-existing/live receipts retain
+their original bytes. An interrupted batch can be rerun with a new journal path
+and the same plan when the source inventory is unchanged. For recovery, retain
+the journal and move only receipts whose `backfillBatch` matches that journal to
+a private archive outside the ledger, verifying preservation before removal.
+This also identifies additions made before a crash prevented the final journal
+update. Never restore an old `usage.json` over newer usage to undo this import.
+No migration or seed is required: this is a new optional ledger, absent until a
+live completion or an explicit import publishes its first receipt.

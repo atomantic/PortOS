@@ -31,7 +31,18 @@ describe('review-enabled completion merge gate', () => {
     expect(section).toContain('mergeHandoffMinQueuedRuns');
     expect(section).toContain('Unknown backlog, refused handoff');
     expect(section).not.toContain('--auto --merge');
-    expect(section).toContain('8. Write a short markdown summary');
+    expect(section).toContain('8. Write the structured completion JSON envelope');
+  });
+
+  it('keeps local review completed across CI fixes while hosted review stays current-head', () => {
+    const section = render('gh', ['codex', 'copilot']);
+    expect(section).toContain('feedback or CI commits do not restart a completed local phase');
+    expect(section).toContain('repeat the configured review loop for `copilot` against the new HEAD');
+    expect(section).not.toContain('repeat the pre-PR local review phase');
+    expect(section).toContain('local-review-lifecycle.mjs');
+    const claim = buildClaimFlowCompletionSection({ reviewersCsv: 'codex', agentId: 'parent' });
+    expect(claim).toContain('One-time local review lifecycle');
+    expect(claim).toContain('Keep each successful reviewer');
   });
 
   it('retains immediate merging for a registered claim requiring local admission', () => {
@@ -52,7 +63,7 @@ describe('review-enabled completion merge gate', () => {
     const section = render('gh', ['codex']);
 
     expect(section).toContain('**Required local-review merge gate:**');
-    expect(section).toContain('If `LOCAL_OVERALL_STATUS=review-blocked`, do NOT run this merge path');
+    expect(section).toContain('A recorded `LOCAL_OVERALL_STATUS=review-blocked` or unresolved accepted finding still blocks merge');
   });
 });
 
@@ -63,6 +74,8 @@ describe('claim ownership binding instructions (#10089)', () => {
       const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example', prStaysOpen });
       expect(prompt).toContain('"agentId":"parent-example","action":"bind","branch":"BRANCH"');
       expect(prompt).toContain('a tracking epic');
+      expect(prompt).toContain('Immediately after creating that worktree, repeat the same bind command');
+      expect(prompt).toContain('BEFORE editing or running work there');
       expect(prompt).toContain('do not create or enter that worktree');
       expect(prompt).toContain('"action":"release"');
     }
@@ -71,6 +84,14 @@ describe('claim ownership binding instructions (#10089)', () => {
 });
 
 describe('claim parent merge admission instructions', () => {
+  it('does not impose PortOS scripts on a different managed repository', () => {
+    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example', portosMergedTreeGuards: false });
+    expect(prompt).not.toContain('scripts/pregate.js');
+    expect(prompt).toContain('target repository’s documented validation and merge gates');
+    expect(prompt).toContain('"action":"acquire"');
+    expect(prompt).toContain('--match-head-commit');
+  });
+
   it('acquires only after green CI, merges a CLEAN head pinned and resyncs outside the lease', () => {
     const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
     expect(prompt).toContain('"agentId":"parent-example","action":"acquire"');
@@ -85,6 +106,7 @@ describe('claim parent merge admission instructions', () => {
     expect(positions).toEqual([...positions].sort((x, y) => x - y));
     expect(prompt).toContain('does NOT require a resync or fresh CI');
     expect(prompt).toContain('node scripts/pregate.js --guards-only --merged-with origin/<default>');
+    expect(prompt).toContain('A missing PortOS guard is a validation defect to repair');
     expect(prompt).toContain('single-issue claims and each swarm Phase C merge');
     expect(prompt).toContain('if either differs from the guard inputs');
     expect(prompt).toContain('release with outcome resync');

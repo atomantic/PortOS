@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import {
-  ChevronLeft, ChevronRight, Clapperboard, Drama, ImagePlus, Loader2, Mountain, Package, Palette, PenLine, Plus,
+  ChevronLeft, ChevronRight, Clapperboard, Drama, ImagePlus, ImageUp, Loader2, Mountain, Package, Palette, PenLine, Plus,
   StickyNote, Trash2, Users, Wand2, X,
 } from 'lucide-react';
 import Drawer from '../Drawer';
@@ -35,8 +35,9 @@ const actionButton = 'min-h-[44px] inline-flex items-center justify-center gap-1
 const iconButton = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-30 disabled:pointer-events-none';
 const labelClass = 'block text-[11px] text-gray-500 mb-0.5';
 
-function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddTake, onSelectTake, onRemoveTake, onSketch }) {
+function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddTake, onSelectTake, onRemoveTake, onSketch, onSendToScene, sendLabel }) {
   const [galleryOpen, setGalleryOpen] = useState(false);
+  const [sending, setSending] = useState(false);
   const [pinsOpen, setPinsOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const take = selectedTake(panel);
@@ -85,6 +86,12 @@ function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddT
             <Palette size={16} aria-hidden="true" /> Mood board
           </button>
         ) : null}
+        {onSendToScene && take?.image ? (
+          <button type="button" className={actionButton} disabled={sending}
+            onClick={async () => { setSending(true); await onSendToScene(); setSending(false); }}>
+            {sending ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <ImageUp size={16} aria-hidden="true" />} {sendLabel}
+          </button>
+        ) : null}
         {take ? (
           <button type="button" className={`${actionButton} ml-auto hover:text-port-error`} onClick={() => setConfirmRemove(true)}>
             <Trash2 size={16} aria-hidden="true" /> Take
@@ -110,6 +117,9 @@ function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddT
 function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers }) {
   const { panel, beat, beatIndex, index } = found;
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // A panel made from a production's scene or shot can send its art back there.
+  const sendLabel = board.source?.kind === 'fableloom' && panel.sourceSceneId ? 'Use as scene art'
+    : board.source?.kind === 'pipeline' && panel.sourceShotId ? 'Use as shot art' : null;
   const fieldId = (name) => `panel-${panel.id}-${name}`;
   const [secondsDraft, setSecondsDraft] = useState(panel.seconds ?? '');
   useEffect(() => { setSecondsDraft(panel.seconds ?? ''); }, [panel.seconds]);
@@ -136,6 +146,8 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers }) {
         onSelectTake={handlers.onSelectTake}
         onRemoveTake={handlers.onRemoveTake}
         onSketch={handlers.onSketch}
+        onSendToScene={sendLabel ? handlers.onSendToScene : null}
+        sendLabel={sendLabel}
       />
       <div>
         <label htmlFor={fieldId('action')} className={labelClass}>Action</label>

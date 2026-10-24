@@ -1442,6 +1442,12 @@ export const API_ACCESS_ERROR_CATEGORIES = new Set([
 ]);
 
 export async function maybeCreateInvestigationTask(agentId, task, analysis) {
+  // The original cleanup receipt and bounded review task already own this
+  // failure. Investigation would allocate another task and fresh spawn budget.
+  if (task?.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup') {
+    emitLog('info', 'Cleanup recovery failure retained by its existing owner', { agentId, taskId: task.id, category: analysis?.category });
+    return;
+  }
   if (resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN) {
     emitLog('warn', `Review-only task ${task.id} needs attention; automatic investigation suppressed`, { agentId, taskId: task.id });
     return;
@@ -1567,6 +1573,30 @@ export function resolveFailedTaskDecision(task, errorAnalysis, { agentId = null,
       ...(compaction && { compaction })
     }
   };
+}
+
+/** An unfinished deliverable is recoverable work, not a permanent process failure.
+ * Reuse the existing bounded retry/cleanup fence, without spawning investigations
+ * about an agent's prose. Cleanup-only handoffs are settled by repository proofs.
+ */
+export function resolveUndeliveredTaskUpdate(task, outcome, agentId, now = Date.now()) {
+  const approval = outcome.recovery?.mode === 'approval';
+  const decision = resolveFailedTaskDecision(task, { category: `task-${outcome.status}`, message: outcome.reason }, { agentId, now });
+  if (!approval && outcome.recovery?.mode === 'cleanup') {
+    return { status: 'in_progress', metadata: { ...task.metadata,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agentId, taskOutcome: outcome } };
+  }
+  if (!approval && decision.status !== 'blocked') return { status: decision.status,
+    metadata: { ...task.metadata, ...decision.metadataUpdates, deliveryDecisionAgentId: undefined, blockedReason: undefined, blockedCategory: undefined, blockedAt: undefined, deliveryRecovery: undefined, deliveryRecoveryAgentId: undefined, taskOutcome: outcome } };
+  const options = approval ? outcome.recovery.options : [
+    'Fix the reported cause and retry the retained work with a fresh retry budget.',
+    'Keep the task stopped and preserve its work; do not spend more agent runs.',
+  ];
+  return { status: 'blocked', metadata: { ...task.metadata, ...decision.metadataUpdates,
+    taskOutcome: outcome, deliveryDecisionAgentId: agentId, blockedCategory: approval ? 'task-approval' : 'task-recovery-exhausted',
+    blockedAt: new Date(now).toISOString(),
+    blockedReason: `${outcome.reason}\n${approval ? 'Approval required before proceeding.' : 'Automatic recovery stopped at the retry/spawn safety limit.'}\nOptions:\n${options.map((option, index) => `${index + 1}. ${option}`).join('\n')}`,
+  } };
 }
 
 /**

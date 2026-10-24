@@ -5,6 +5,7 @@ import express from 'express';
 import { rmSync } from 'node:fs';
 import { request } from '../lib/testHelper.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { withDeliveryActivity } from '../services/agentDeliveryActivity.js';
 
 // The CoS task routes write operator-action rows (#5594) through the ledger's
 // file backend, which resolves under PATHS.data — re-root it so this suite can
@@ -43,6 +44,7 @@ vi.mock('../services/cosState.js', () => ({
 }));
 vi.mock('../services/cosTaskStore.js', () => ({
   getAllTasks: vi.fn(),
+  getTaskView: vi.fn(),
   getUserTasks: vi.fn(),
   getCosTasks: vi.fn(),
   reorderTasks: vi.fn(),
@@ -64,6 +66,7 @@ vi.mock('../services/cosAgentLifecycle.js', () => ({
   cleanupZombieAgents: vi.fn(),
   getAgents: vi.fn(),
   getAgent: vi.fn(),
+  getAgentRecord: vi.fn(),
   deleteAgent: vi.fn(),
   sendBtwToAgent: vi.fn()
 }));
@@ -156,8 +159,8 @@ vi.mock('../services/codeReview.js', () => ({
 }));
 
 // Import mocked modules
-import { addTask, approveTask, deleteTask, reorderTasks, updateTask } from '../services/cosTaskStore.js';
-import { cleanupZombieAgents, deleteAgent, getAgent, getAgents, sendBtwToAgent } from '../services/cosAgentLifecycle.js';
+import { addTask, approveTask, deleteTask, getTaskView, reorderTasks, updateTask } from '../services/cosTaskStore.js';
+import { cleanupZombieAgents, deleteAgent, getAgent, getAgentRecord, getAgents, sendBtwToAgent } from '../services/cosAgentLifecycle.js';
 import { clearCompletedAgents } from '../services/cosAgentArchive.js';
 import { evaluateTasks } from '../services/cosTaskGenerator.js';
 import { generateReport, getBriefing, getLatestBriefing, getReport, getTodayActivity, getTodayReport, getWhileAwayActivity, listBriefings, listReports } from '../services/cosReports.js';
@@ -188,6 +191,9 @@ describe('CoS Routes', () => {
     vi.clearAllMocks();
     // GET /tasks settles its payload against the live agent list (#spawn window).
     getAgents.mockResolvedValue([]);
+    cleanupZombieAgents.mockResolvedValue({ cleaned: [], count: 0 });
+    getTaskView.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
+    getAgentRecord.mockResolvedValue(null);
   });
 
   describe('GET /api/cos', () => {
@@ -822,6 +828,18 @@ describe('CoS Routes', () => {
       const response = await request(app).delete('/api/cos/agents/agent-999');
 
       expect(response.status).toBe(404);
+    });
+
+    it('should return 409 when agent is still owned by an active task cleanup hold', async () => {
+      deleteAgent.mockRejectedValue(new ServerError(
+        'Agent agent-001 is still owned by an active task delivery or retry cleanup hold and cannot be deleted until cleanup finishes',
+        { status: 409, code: 'AGENT_CLEANUP_OWNED' },
+      ));
+
+      const response = await request(app).delete('/api/cos/agents/agent-001');
+
+      expect(response.status).toBe(409);
+      expect(response.body.code).toBe('AGENT_CLEANUP_OWNED');
     });
   });
 
@@ -1858,6 +1876,75 @@ describe('CoS Routes', () => {
     });
   });
 describe('CoS scoped collections', () => {
+  it('keeps the exact delivery cleanup owners visible, including archived system runs', async () => {
+    const user = { id: 'agent-user', taskId: 'task-example', status: 'completed', output: ['transcript'] };
+    const system = { id: 'agent-system', taskId: 'sys-rl-example', status: 'completed', metadata: { taskDescription: 'Finish example delivery' } };
+    getAgents.mockResolvedValue([
+      { id: 'agent-running', taskId: 'task-running', status: 'running' },
+      { id: 'agent-paused', status: 'paused' },
+      { id: 'agent-old', taskId: user.taskId, status: 'completed' },
+      user,
+    ]);
+    const cleanupTask = agent => ({ id: agent.taskId, status: 'in_progress', metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agent.id } });
+    getTaskView.mockResolvedValue({ user: { tasks: [cleanupTask(user)] }, cos: { tasks: [cleanupTask(system)] } });
+    getAgentRecord.mockResolvedValue(system);
+
+    const response = await request(app).get('/api/cos/agents?active=1');
+
+    expect(response.status).toBe(200);
+    expect(response.body.map(agent => agent.id)).toEqual(['agent-running', 'agent-paused', user.id, system.id]);
+    expect(response.body.slice(2)).toEqual([
+      { id: user.id, taskId: user.taskId, status: 'completed', deliveryPending: true },
+      { ...system, deliveryPending: true },
+    ]);
+    expect(user).not.toHaveProperty('deliveryPending');
+    expect(getAgentRecord).toHaveBeenCalledExactlyOnceWith(system.id);
+    expect(getAgent).not.toHaveBeenCalled();
+
+    getTaskView.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
+    expect((await request(app).get('/api/cos/agents?active=1')).body.map(agent => agent.id))
+      .toEqual(['agent-running', 'agent-paused']);
+  });
+
+  it('does not revive finished, missing, mismatched or superseded cleanup owners', async () => {
+    getAgents.mockResolvedValue([{ id: 'agent-running', taskId: 'task-running', status: 'running' }]);
+    const task = (id, owner, status = 'in_progress') => ({ id, status, metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: owner } });
+    getTaskView.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [
+      task('task-done', 'agent-done', 'completed'),
+      task('task-running', 'agent-older'),
+      task('task-missing', 'agent-missing'),
+      task('task-mismatch', 'agent-mismatch'),
+    ] } });
+    getAgentRecord.mockImplementation(async id => id === 'agent-mismatch'
+      ? { id, taskId: 'other-task', status: 'completed' } : null);
+
+    const response = await request(app).get('/api/cos/agents?active=1');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([{ id: 'agent-running', taskId: 'task-running', status: 'running' }]);
+    expect(getAgentRecord.mock.calls.map(([id]) => id).sort()).toEqual(['agent-mismatch', 'agent-missing']);
+  });
+
+  it('reports only live in-process delivery activity and clears it when recovery fails', async () => {
+    const owner = { id: 'agent-cleanup-owner', taskId: 'task-held', status: 'completed' };
+    getAgents.mockResolvedValue([owner]);
+    getTaskView.mockResolvedValue({ user: { tasks: [{ id: owner.taskId, status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: owner.id } }] }, cos: { tasks: [] } });
+    let reject;
+    const recovery = withDeliveryActivity(owner.id, 'Checking preservation', () => new Promise((_, fail) => { reject = fail; }));
+    const outcome = recovery.catch(error => error.message);
+    try {
+      const active = await request(app).get('/api/cos/agents?active=1');
+      expect(active.body[0]).toMatchObject({ status: 'completed', deliveryPending: true,
+        deliveryActivity: { label: 'Checking preservation', startedAt: expect.any(String) } });
+    } finally {
+      reject(new Error('verification-unavailable'));
+      expect(await outcome).toBe('verification-unavailable');
+    }
+    const waiting = await request(app).get('/api/cos/agents?active=1');
+    expect(waiting.body).toEqual([{ ...owner, deliveryPending: true }]);
+  });
+
   it('scopes live agents and validates completed page bounds without changing legacy lists', async () => {
     getAgents.mockResolvedValue([{ id: 'running', status: 'running' }, { id: 'done', status: 'completed' }]);
     expect((await request(app).get('/api/cos/agents?active=1')).body.map(agent => agent.id)).toEqual(['running']);

@@ -7,7 +7,8 @@ import { dirname, join } from 'path';
 // Stub every git operation; lifecycle tests exercise the real service without
 // creating, changing or removing a live repository.
 const preserveCheckoutMock = vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null }));
-const preserveBranchMock = vi.fn(async () => ({ archiveDir: '/branch-archive', verify: async () => true }));
+const preservedBranch = () => ({ archiveDir: '/branch-archive', verify: async () => true, retire: work => work() });
+const preserveBranchMock = vi.fn(async () => preservedBranch());
 vi.mock('../lib/branchRetirementArchive.js', () => ({ preserveBranchRetirement: (...args) => preserveBranchMock(...args) }));
 vi.mock('./heldCheckoutRecovery.js', () => ({ preserveMergedCheckout: (...args) => preserveCheckoutMock(...args) }));
 const completionOwnersMock = vi.fn(async () => []);
@@ -85,10 +86,10 @@ describe('completed branch archival boundary', () => {
       stdout: args.includes('--git-common-dir') ? '/repo/.git' : '', exitCode: 0,
     }));
     getDefaultBranchMock.mockResolvedValue('main');
-    preserveBranchMock.mockReset().mockResolvedValue({ archiveDir: '/branch-archive', verify: async () => true });
+    preserveBranchMock.mockReset().mockResolvedValue(preservedBranch());
   });
   afterEach(() => {
-    preserveBranchMock.mockReset().mockResolvedValue({ archiveDir: '/branch-archive', verify: async () => true });
+    preserveBranchMock.mockReset().mockResolvedValue(preservedBranch());
   });
   it('runs the trusted receiver guard after archival verification and preserves its refusal reason without pushing', async () => {
     let ready = false;

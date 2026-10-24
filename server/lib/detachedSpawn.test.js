@@ -13,6 +13,7 @@ import * as childProcess from './childProcess.js';
 import { promisify } from 'util';
 import { pathToFileURL } from 'url';
 import { pinPlatform } from './testHelper.js';
+import { quoteForShell } from './shellCd.js';
 import { killProcessTree } from './bufferedSpawn.js';
 import { spawnDetached, reapDetached, reapAndCleanDetachedDirs, reattachDetached, isReattachable, isDetachedRunning, __detachedSpawnTesting } from './detachedSpawn.js';
 import { isProcessAlive } from '../test/processAlive.js';
@@ -249,6 +250,140 @@ describe('spawnDetached', () => {
       restorePlatform();
     }
   });
+
+  it('observes a failed Windows launcher before the asynchronous launch helper returns', async () => {
+    const controlDir = await tmpControlDir();
+    const restorePlatform = pinPlatform('win32');
+    const launcher = new EventEmitter();
+    launcher.unref = () => {};
+    // A fallback listener keeps a broken implementation from crashing Vitest;
+    // the caller must still receive this error without waiting for a PID.
+    launcher.on('error', () => {});
+    const spawnMock = vi.spyOn(childProcess, 'spawn').mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        launcher.emit('error', Object.assign(new Error('private spawn details'), { code: 'EACCES' }));
+        launcher.emit('close', -13, null);
+      });
+      return launcher;
+    });
+    try {
+      const handle = await spawnDetached('example-command', [], { controlDir, pidTimeoutMs: 0 });
+      const error = await onClose(handle).catch((err) => err);
+      expect(error.message).toContain('launcher=EACCES');
+      expect(error.message).toMatch(/launcher-lifecycle=spawn-returned@\d+ms>spawn-error@\d+ms>closed@\d+ms/);
+      expect(error.message).toContain('cleanup=not-started');
+      expect(error.message).not.toContain('private');
+    } finally {
+      spawnMock.mockRestore();
+      restorePlatform();
+    }
+  });
+
+  it('retains cancellation and owns late events when the Windows launcher is pending at the PID deadline', async () => {
+    const controlDir = await tmpControlDir();
+    const restorePlatform = pinPlatform('win32');
+    const launcher = new EventEmitter();
+    launcher.pid = 12345;
+    launcher.unref = () => {};
+    const spawnMock = vi.spyOn(childProcess, 'spawn').mockReturnValueOnce(launcher);
+    try {
+      // A zero deadline deterministically expires before bootstrap; no sleep or
+      // host load is needed to leave the launcher pending.
+      const handle = await spawnDetached('example-command', [], { controlDir, cleanup: true, pidTimeoutMs: 0 });
+      const error = await onClose(handle).catch((err) => err);
+      expect(error.message).toContain('launcher=pending');
+      expect(error.message).toMatch(/launcher-lifecycle=spawn-returned@\d+ms>pid-timeout@\d+ms;/);
+      expect(error.message).toContain('launcher-stage=unavailable');
+      expect(error.message).toContain('cancellation=written; cleanup=unconfirmed');
+      expect(await readFile(join(controlDir, 'launch-cancelled'), 'utf8')).toBe('1');
+      // A late native error remains owned after the caller has received failure.
+      expect(() => launcher.emit('error', new Error('late private details'))).not.toThrow();
+      launcher.emit('close', 1, null);
+      expect(await stat(controlDir)).toBeTruthy();
+    } finally {
+      spawnMock.mockRestore();
+      restorePlatform();
+    }
+  });
+
+  it.skipIf(IS_POSIX)('refuses a real Windows launcher released after the PID deadline', async () => {
+    const controlDir = await tmpControlDir();
+    // This fixture owns removal: an unconfirmed native close must retain its
+    // cancellation evidence instead of falling through the generic afterEach.
+    dirs.splice(dirs.indexOf(controlDir), 1);
+    const nativeSpawn = childProcess.spawn;
+    const releaseFile = join(controlDir, 'release-launcher');
+    let launcher;
+    let launcherClosed;
+    let closed = false;
+    const spawnMock = vi.spyOn(childProcess, 'spawn').mockImplementationOnce((bin, args, options) => {
+      const delayedArgs = [...args];
+      delayedArgs[delayedArgs.length - 1] = `while (!(Test-Path -LiteralPath ${quoteForShell(releaseFile, 'powershell')})) { Start-Sleep -Milliseconds 20 }; ${args.at(-1)}`;
+      launcher = nativeSpawn(bin, delayedArgs, options);
+      launcherClosed = new Promise((resolve) => launcher.once('close', (code, signal) => {
+        closed = true;
+        resolve({ code, signal });
+      }));
+      return launcher;
+    });
+    const waitForClose = async (timeoutMs) => {
+      let watchdog;
+      try {
+        return await Promise.race([
+          launcherClosed,
+          new Promise((_, reject) => {
+            watchdog = setTimeout(() => reject(new Error('Cancelled Windows launcher close is unconfirmed')), timeoutMs);
+          }),
+        ]);
+      } finally {
+        clearTimeout(watchdog);
+      }
+    };
+    let firstFailure;
+    try {
+      // Hold PowerShell before its first production bootstrap statement until
+      // the failed handoff has durably published cancellation.
+      const handle = await spawnDetached(process.execPath, ['-e', 'process.stdout.write("unexpected-job");'], {
+        controlDir, cleanup: true, pidTimeoutMs: 0,
+      });
+      const error = await onClose(handle).catch((err) => err);
+      expect(handle.pid).toBeNull();
+      expect(error.message).toContain('failed to acquire PID');
+      expect(error.message).toContain('cleanup=unconfirmed');
+      expect(await readFile(join(controlDir, 'launch-cancelled'), 'utf8')).toBe('1');
+      await writeFile(releaseFile, '1');
+      const result = await waitForClose(WINDOWS_WARMUP_PID_TIMEOUT_MS);
+      expect(result.code).toBe(1);
+      expect(await __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'launcher-bootstrap.log')).toMatch(/^cancelled /);
+      // Cancellation before supervisor creation has no supervisor exit sentinel.
+      // Native launcher close plus the cancelled stage proves terminal refusal;
+      // absent job files alone would not prove that a pending launcher stopped.
+      expect(await stat(join(controlDir, 'supervisor-bootstrap.log')).catch(() => null)).toBeNull();
+      expect(await stat(join(controlDir, 'exit')).catch(() => null)).toBeNull();
+      expect(await stat(join(controlDir, 'pid')).catch(() => null)).toBeNull();
+      expect(await readStdoutLog(controlDir)).toBe('');
+    } catch (error) {
+      firstFailure = error;
+    }
+    let cleanupFailure;
+    try {
+      if (launcher && !closed) {
+        // ChildProcess.kill holds a native handle, never a recycled PID. Confirm
+        // its close before removing the control files, even after a failed test.
+        launcher.kill();
+        await waitForClose(5000);
+      }
+      // A failed assertion may mean a supervisor escaped the expected refusal;
+      // preserve cancellation and diagnostics even when the launcher is closed.
+      if (!firstFailure) await rm(controlDir, { recursive: true, force: true });
+    } catch (error) {
+      cleanupFailure = error;
+    } finally {
+      spawnMock.mockRestore();
+    }
+    if (firstFailure && cleanupFailure) throw new AggregateError([firstFailure, cleanupFailure], 'Windows launcher assertion and cleanup failed');
+    if (firstFailure || cleanupFailure) throw firstFailure || cleanupFailure;
+  }, WINDOWS_WARMUP_HOOK_TIMEOUT_MS);
 
   it('propagates a non-zero exit code', async () => {
     const controlDir = await tmpControlDir();
@@ -552,20 +687,6 @@ describe('spawnDetached', () => {
     expect(diagnostic).toMatch(/^failed hresult=-?\d+ elapsed-ms=\d+; timeline=reading-job@\d+ms>starting-job@\d+ms>failed@\d+ms$/);
     process.stdout.write(`🪟 Windows detached expected refusal ${launch}: ${diagnostic}\n`);
   }, 45_000);
-
-  it.runIf(!IS_POSIX)('cancels a cold supervisor after PID acquisition times out', async () => {
-    const controlDir = await tmpControlDir();
-    const handle = await spawnDetached(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
-      controlDir, pidTimeoutMs: 0,
-    });
-    await expect(onClose(handle)).rejects.toThrow(/failed to acquire PID/);
-    // Wait for the actual supervisor acknowledgement, not a guessed sleep.
-    expect(await waitUntil(async () => (
-      await readFile(join(controlDir, 'exit'), 'utf8').catch(() => '')
-    ).length > 0, { timeoutMs: 30000 })).toBe(true);
-    const pid = Number.parseInt(await readFile(join(controlDir, 'pid'), 'utf8').catch(() => ''), 10);
-    expect(Number.isFinite(pid) && isAliveForTest(pid)).toBe(false);
-  }, 45000);
 
   // The whole POINT of the Windows launcher: pm2 kills on Windows with
   // `taskkill /pid <app> /T /F`, which walks the parent tree, so a job spawned

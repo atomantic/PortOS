@@ -1,3 +1,5 @@
+import { PULL_REQUEST_ACTION_LABELS, PULL_REQUEST_RULE_KINDS } from '../../../../lib/pullRequestActions.js';
+
 // Display labels for the GitHub inbox's triage (server/lib/githubNotificationTriage.js).
 // `needs-you` has no chip: it is the inbox's default state.
 export const DECISION_VIEW = {
@@ -87,6 +89,8 @@ export const AGENT_RULE_KINDS = [
   { value: 'issue-activity', label: 'Issue activity', hint: 'Outside activity on an issue in one of your apps goes to its issue watcher.' },
   { value: 'ci-activity', label: 'CI activity', hint: 'A workflow run or check suite notice. By default Autopilot and Assist mark these done. An agent looks into a failure only in a repo of yours.' },
   { value: 'own-pr', label: 'Your pull requests', hint: 'Activity on a pull request you opened. An agent takes it only when everyone in the thread is you or trusted.' },
+  { value: 'dependabot-pr', label: 'Dependabot pull requests', hint: 'Verified Dependabot pull requests. Merge when checks pass rechecks the current head, CI and review requirements every scheduled run, then merges directly without an AI call.' },
+  { value: 'pull-request', label: 'Other pull requests', hint: 'Subscribed pull-request activity. Run Do:Review or the screened Untrusted:Review task used by your apps.' },
   { value: 'mention', label: 'Mentions', hint: 'You or your team were mentioned. An agent takes it only when everyone in the thread is you or trusted.' },
   { value: 'release', label: 'Releases', hint: 'A new release in a repo you watch.' },
   { value: 'other', label: 'Everything else', hint: 'Any other notification: comments, discussions, commits and subscriptions. An agent takes it only when everyone in the thread is you or trusted.' },
@@ -95,13 +99,18 @@ export const AGENT_RULE_KINDS = [
 // What an automation rule does (GITHUB_AGENT_RULE_ACTIONS on the server).
 export const RULE_ACTIONS = [
   { value: 'agent', label: 'Start a CoS agent' },
+  ...Object.entries(PULL_REQUEST_ACTION_LABELS).map(([value, label]) => ({ value, label: value === 'merge' ? 'Merge when checks pass' : label })),
   { value: 'done', label: 'Mark done' },
   { value: 'mute', label: 'Mute the thread' },
   { value: 'leave', label: 'Leave in the inbox' },
 ];
 
 // Security alerts are never marked done or muted by a rule.
-export const actionsForKind = (kind) => (kind === 'security-alert' ? RULE_ACTIONS.filter((option) => option.value === 'agent' || option.value === 'leave') : RULE_ACTIONS);
+export const actionsForKind = kind => RULE_ACTIONS.filter(({ value }) => {
+  if (kind === 'security-alert') return value === 'agent' || value === 'leave';
+  if (value === 'merge') return kind === 'dependabot-pr';
+  return !['do-review', 'untrusted-review'].includes(value) || PULL_REQUEST_RULE_KINDS.includes(kind);
+});
 
 // A rule's action; a legacy `agent` boolean reads as agent / leave.
 export const ruleActionOf = (rule) => rule?.action || (rule?.agent === true ? 'agent' : 'leave');
@@ -140,3 +149,59 @@ export const SIGNAL_LABELS = {
   'mass-mention': 'The latest comment mentions many people',
   'unrelated-repo': 'First notification from a repo you have no tie to',
 };
+
+// Why you are on a thread, as a sentence plus the color that marks how it asks
+// for action: red needs a fix or a decision now, amber wants a reply, blue wants
+// a review, green is your own work, gray is background.
+export const REASON_WHY = {
+  approval_requested: { tone: 'error', text: 'A deployment is waiting for your approval' },
+  assign: { tone: 'warning', text: 'Assigned to you' },
+  author: { tone: 'success', text: 'You opened this and it has new activity' },
+  ci_activity: { tone: 'error', text: 'A CI run or check finished' },
+  comment: { tone: 'warning', text: 'Someone commented on a thread you follow' },
+  invitation: { tone: 'warning', text: 'You were invited to a repository' },
+  manual: { tone: 'muted', text: 'You subscribed to this thread' },
+  mention: { tone: 'warning', text: 'You were mentioned' },
+  review_requested: { tone: 'accent', text: 'Your review was requested' },
+  security_alert: { tone: 'error', text: 'A security alert on your dependencies' },
+  state_change: { tone: 'muted', text: 'It was opened, closed or merged' },
+  subscribed: { tone: 'muted', text: 'You are watching this repository' },
+  team_mention: { tone: 'warning', text: 'Your team was mentioned' },
+};
+
+// The row's left accent edge per tone.
+export const TONE_EDGE = {
+  error: 'border-l-port-error',
+  warning: 'border-l-port-warning',
+  accent: 'border-l-port-accent',
+  success: 'border-l-port-success',
+  muted: 'border-l-port-border',
+};
+
+// GitHub's mergeable_state for an open PR, as what it means for you.
+export const MERGE_STATE_VIEW = {
+  clean: { tone: 'success', label: 'Ready to merge' },
+  has_hooks: { tone: 'success', label: 'Ready to merge' },
+  unstable: { tone: 'warning', label: 'Checks failing' },
+  blocked: { tone: 'error', label: 'Blocked: needs review or checks' },
+  behind: { tone: 'warning', label: 'Behind base branch' },
+  dirty: { tone: 'error', label: 'Merge conflicts' },
+  draft: { tone: 'muted', label: 'Draft' },
+};
+
+/**
+ * The state chip for a thread's issue or pull request, or null when the forge
+ * did not report one (CI, releases, invitations).
+ */
+export function subjectStatusChip(subjectType, status) {
+  if (!status?.state) return null;
+  if (status.state === 'merged') return { tone: 'accent', label: 'Merged', key: 'merged' };
+  // A closed issue is resolved work (the row icon is purple); only an unmerged closed PR reads as a failure.
+  if (status.state === 'closed') return { tone: subjectType === 'PullRequest' ? 'error' : 'muted', label: 'Closed', key: 'closed' };
+  if (subjectType === 'PullRequest' && status.draft) return { tone: 'muted', label: 'Draft', key: 'draft' };
+  if (subjectType === 'PullRequest') {
+    const merge = MERGE_STATE_VIEW[status.mergeState];
+    return merge ? { ...merge, key: status.mergeState } : { tone: 'success', label: 'Open', key: 'open' };
+  }
+  return status.state === 'open' ? { tone: 'success', label: 'Open', key: 'open' } : null;
+}

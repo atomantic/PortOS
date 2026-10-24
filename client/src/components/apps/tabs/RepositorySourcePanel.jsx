@@ -106,7 +106,7 @@ function RepositoryCard({ source }) {
               {source.branch || 'detached'} @ {source.shortHead || 'unknown'}
             </code>
             <span className={source.clean === false ? 'text-port-warning' : 'text-gray-500'}>
-              {source.clean === true ? 'clean checkout' : source.clean === false ? 'local changes' : 'worktree unknown'}
+              {source.submodulesOnly ? 'submodules need updating' : source.clean === true ? 'clean checkout' : source.clean === false ? 'local changes' : 'worktree unknown'}
             </span>
           </div>
 
@@ -194,20 +194,30 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
     operationType,
     error: operationError,
     errorCode: operationErrorCode,
+    errorContext: operationErrorContext,
     completed: operationCompleted,
     restarting,
     startUpdate,
   } = useAppOperation({ appId, onComplete: handleOperationComplete });
+  useEffect(() => {
+    setUpdateRequested(false);
+    setScopeFailure(null);
+  }, [appId]);
+
+  useEffect(() => {
+    const failure = forgeScopeFailureFrom({ code: operationErrorCode, context: operationErrorContext, message: operationError });
+    if (!failure) return;
+    setScopeFailure(failure);
+    // Fork sync refused before the checkout update began; an explicit retry is safe.
+    setUpdateRequested(false);
+  }, [operationErrorCode, operationErrorContext, operationError]);
+
   const updating = isOperating && operationType === 'update';
   const operationBusy = isOperating || restarting;
 
   useEffect(() => {
     if (updating) setUpdateRequested(true);
   }, [updating]);
-
-  useEffect(() => {
-    setUpdateRequested(false);
-  }, [appId]);
 
   useEffect(() => {
     load({ initial: true });
@@ -230,7 +240,8 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
     || (source.origin?.isFork && source.forkVsUpstream?.available === false)
   ));
   const canUpdate = sources.every((source) => source.present) && status?.updatePullsAll;
-  const needsRecovery = hasLocalChanges || sources.some(source => source.clean === false || source.localVsOrigin?.state === 'diverged');
+  const needsRecovery = (hasLocalChanges && !primary?.submodulesOnly)
+    || sources.some(source => (source.clean === false && !source.submodulesOnly) || source.localVsOrigin?.state === 'diverged');
   const shouldOfferUpdate = status?.updateAvailable || remoteUnknown;
   const primaryLabel = forkNeedsSync
     ? 'Sync fork & update app'
@@ -266,6 +277,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
     }
     const intent = updateIntent;
     setUpdateIntent(null);
+    setScopeFailure(null);
     setUpdateRequested(true);
     startUpdate(appId, appName, { syncFork: intent?.syncFork === true });
   };
@@ -310,7 +322,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
             onDismiss={() => setScopeFailure(null)}
             onRefreshed={() => {
               setScopeFailure(null);
-              toast('Token updated — sync the fork again');
+              toast('Token updated — retry the original action');
             }}
           />
         </div>

@@ -159,6 +159,27 @@ describe('checkPrimaryCheckoutDrift', () => {
 });
 
 describe('finalizeAgent — a worktree run that mutated the primary is not a success', () => {
+  it('keeps an actionable primary drift verdict when the agent reports cleanup-only work', async () => {
+    detectPrimaryCheckoutDriftMock.mockResolvedValue(DRIFT);
+    await finalize({ finalSummary: JSON.stringify({ summary: 'Cleanup remains.', taskOutcome: {
+      status: 'incomplete', reason: 'The checkout still exists.', recovery: { mode: 'cleanup' },
+    } }) });
+    expect(resolveFailedTaskUpdateMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      category: PRIMARY_CHECKOUT_MUTATED_CATEGORY, actionable: true,
+    }), 'agent-1');
+    expect(completeAgentMock).toHaveBeenCalledWith('agent-1', expect.objectContaining({
+      success: false, errorAnalysis: expect.objectContaining({ category: PRIMARY_CHECKOUT_MUTATED_CATEGORY }),
+    }));
+  });
+
+  it('preserves an existing permanent execution failure ahead of a reported blocked outcome', async () => {
+    const analysis = { category: 'execution-policy', permanent: true, message: 'Explicit execution policy requires intervention.' };
+    await finalize({ success: false, errorAnalysis: analysis, finalSummary: JSON.stringify({ taskOutcome: {
+      status: 'blocked', reason: 'Unfinished delivery.',
+    } }) });
+    expect(resolveFailedTaskUpdateMock).toHaveBeenCalledWith(expect.anything(), analysis, 'agent-1');
+  });
+
   it('records the drifted run as a FAILURE naming branch, count and recovery', async () => {
     detectPrimaryCheckoutDriftMock.mockResolvedValue(DRIFT);
     await finalize();
@@ -178,14 +199,14 @@ describe('finalizeAgent — a worktree run that mutated the primary is not a suc
   it('marks the RUN record failed too, even though the process exited 0', async () => {
     detectPrimaryCheckoutDriftMock.mockResolvedValue(DRIFT);
     await finalize({ runId: 'run-1' });
-    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, expect.anything(), false);
+    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, expect.anything(), false, expect.objectContaining({ executionSuccess: true }));
   });
 
   it('leaves an undrifted run completely unaffected', async () => {
     await finalize({ runId: 'run-1' });
     expect(completeAgentMock).toHaveBeenCalledWith('agent-1', expect.objectContaining({ success: true }));
     expect(updateTaskMock).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'internal');
-    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, null, null);
+    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, null, null, expect.objectContaining({ executionSuccess: true }));
   });
 
   it('does not overwrite the diagnosis of a run that already failed', async () => {
@@ -224,7 +245,7 @@ describe('finalizeAgent — a worktree run that mutated the primary is not a suc
     expect(completeAgentMock).toHaveBeenCalledWith('agent-1', expect.objectContaining({ success: true }));
     expect(updateTaskMock).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'internal');
     // The run record is a clean success — no error analysis, not force-failed.
-    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, null, null);
+    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, null, null, expect.objectContaining({ executionSuccess: true }));
     // ...but the unreviewed commits are still surfaced.
     expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('not attributable to agent-1'), expect.anything());
   });

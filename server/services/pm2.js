@@ -1,4 +1,3 @@
-import pm2 from 'pm2';
 import { spawn } from '../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { writeFile, unlink } from 'fs/promises';
@@ -281,7 +280,10 @@ async function spawnPm2Cli(action, name, pm2Home) {
 }
 
 /** Each operation owns its native client, including deadline teardown. */
-function connectAndRun(action, timeoutMs = COMMAND_TIMEOUT_MS) {
+async function connectAndRun(action, timeoutMs = COMMAND_TIMEOUT_MS) {
+  // Importing PM2 constructs its singleton and probes the interactor socket.
+  // Merely loading a reconciliation/peer-sync dependency must not contact it.
+  const { default: pm2 } = await import('pm2');
   return new Promise((resolve, reject) => {
     const client = new pm2.custom();
     let settled = false;

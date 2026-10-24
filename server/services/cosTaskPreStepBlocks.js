@@ -1,4 +1,4 @@
-import { unresolvedRetirements, sameRetirementCheckout } from '../lib/reconcileRetirementEvidence.js';
+import { unresolvedRetirements, sameRetirementCheckout, sameRetirementObservation } from '../lib/reconcileRetirementEvidence.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { FORGE_MAINTENANCE_VERSION } from '../lib/forgeMaintenanceTasks.js';
 /**
@@ -466,6 +466,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     finishAbandoned: metadata.finishAbandoned
   };
   const result = await reconcile(app.repoPath, {
+    appId: app.id,
     cleanup: actions.cleanupMerged !== false,
     // A fresh SUPERSEDED verdict is terminal: nothing else retires the branch,
     // so holding it only re-reports it. Backup-first, behind the same owner gates.
@@ -533,7 +534,9 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const unresolved = unresolvedRetirements(previousOutcome);
   const absentObligations = unresolved.filter(release => !result.worktreeInventory?.some(tree => sameRetirementCheckout(tree, release)));
   let retirementReviews = { candidates: [], held: [] };
-  if (actions.cleanupMerged !== false && result.wip?.some(branch => branch.rule === 'completion-policy' && branch.completionPolicyReason === 'pr-completion-review-required')) {
+  const { prepareReconcileRetirements, retainedMergedClaims } = await import('./branchReconcileRetirement.js');
+  if (actions.cleanupMerged !== false && (result.wip?.some(branch => branch.rule === 'completion-policy' && branch.completionPolicyReason === 'pr-completion-review-required')
+    || retainedMergedClaims(result).length)) {
     const inventory = describeIdleReconcilePark(result.skipped || [], heldLive, {
       wip: result.wip, worktreeInventory: result.worktreeInventory,
       detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
@@ -542,12 +545,13 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
       status: 'running', reason: 'preparing-retirement-reviews', remaining: [...inventory.remaining, ...absentObligations],
       nextAction: 'Review completed local work before verified archival retirement.',
     });
-    const { prepareReconcileRetirements } = await import('./branchReconcileRetirement.js');
     retirementReviews = await prepareReconcileRetirements(app, result);
   }
   const retiredNames = new Set((retirementReviews.retired || []).map(row => row.branch));
   if (retiredNames.size) {
     result.wip = result.wip.filter(row => !retiredNames.has(row.branch));
+    result.merged = result.merged?.filter(row => !retiredNames.has(row.branch));
+    result.skipped = result.skipped.filter(row => !retiredNames.has(row.branch));
     result.worktreeInventory = result.worktreeInventory.filter(row => !retiredNames.has(row.branch));
     result.cleaned.push(...retiredNames);
   }
@@ -592,11 +596,14 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // the repository contains only its default branch. Keep known holds visible.
   const dispatchedOutcome = await taskSchedule.recordBranchReconcileOutcome(app.id, {
     status: 'running', reason: 'batch-pending',
+    // Shared-origin branches without a local ref/checkout may belong to another
+    // install. Keep their report visible without making local completion wait
+    // for that machine's work. Unknown remote state still fails closed below.
+    remoteInventory: result.orphanRemotes ?? { reaped: [], reported: [] },
     remaining: [
       ...idlePark.remaining,
       ...allActionable.map(b => ({ ...(b.retirement?.release || { branch: b.branch }), reason: b.retirement ? 'retirement-review-pending' : 'actionable' })),
       ...(result.orphanRemotes?.remoteUnavailable ? [{ reason: 'remote-state-unavailable' }] : []),
-      ...(result.orphanRemotes?.reported || []).map(b => ({ branch: typeof b === 'string' ? b : b.branch, reason: 'remote-branch-held' })),
     ],
     nextAction: 'Continue the bounded sweep and rescan after the final batch.',
   });
@@ -618,7 +625,8 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     // the abandoned-worktree case).
     const gatedSuffix = countSuffix(cognitiveInFlight.filter(branch => !allActionable.includes(branch)), 'in-flight branch(es) skipped by disabled action toggles', (b) => b.state);
     const deliverySuffix = countSuffix(routineDeliveryHolds, 'delivery branch(es) awaiting completion', branch => branch.reason);
-    emitLog('info', `🔀 branch-reconcile parked for ${app.name}: nothing actionable (cleaned ${result.cleaned.length}${heldSuffix}${gatedSuffix}${deliverySuffix}${heldLiveSuffix}${supersededSuffix}${detachedSuffix})`, { appId: app.id });
+    const disposition = dispatchedOutcome.remaining?.length ? 'no coordinator task eligible; unresolved holds retained' : 'no remaining branch work';
+    emitLog('info', `🔀 branch-reconcile parked for ${app.name}: ${disposition} (cleaned ${result.cleaned.length}${heldSuffix}${gatedSuffix}${deliverySuffix}${heldLiveSuffix}${supersededSuffix}${detachedSuffix})`, { appId: app.id });
     return { skip: true };
   }
   // Retain attempted revisions across caps/manual retries. A blocked prefix must
@@ -670,10 +678,21 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     emitLog('info', `🔀 branch-reconcile parked for ${app.name}: all ${allActionable.length} branch(es) were attempted without further progress`, { appId: app.id });
     return { skip: true };
   }
+  // Only this deterministic scan writes the assignment. Schedule/run overrides
+  // cannot supply it; registration snapshots it before any coordinator executes.
+  const { getOriginInfo } = await import('../lib/gitRemote.js');
+  const origin = await getOriginInfo(app.repoPath).catch(() => null);
+  metadata.reconcileAssignment = origin ? {
+    appId: app.id, repoPath: app.repoPath,
+    origin: { host: origin.host, fullName: origin.fullName },
+    targets: actionable.map(branch => ({ branch: branch.branch, workspacePath: branch.worktreePath || null,
+      merge: actions.autoMerge !== false && !branch.retirement
+        && ['NEEDS_PR', 'IN_REVIEW', 'CONFLICTED', 'ABANDONED_WIP'].includes(branch.state) })),
+  } : null;
   metadata.perpetual = true;
   metadata.reconcileRetirements = actionable.filter(branch => branch.retirement).map(branch => ({
     ...branch.retirement,
-    createdAt: dispatchedOutcome.retirementObligations.find(row => sameRetirementCheckout(row, branch.retirement.release))?.createdAt,
+    createdAt: dispatchedOutcome.retirementObligations.find(row => sameRetirementObservation(row, branch.retirement.release))?.createdAt,
   }));
   const supersededBlock = formatSupersededForPrompt(result.superseded || []);
   const block = [

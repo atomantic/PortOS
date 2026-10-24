@@ -63,6 +63,10 @@ npm run pregate
 git push
 ```
 
+The default pregate is lint/formatting, structural guards and focused tests.
+Hosted CI owns broad validation; use `npm run pregate -- --full` only when
+explicitly needed locally. Focused receipts never attest unrun CI suites.
+
 A conflict-free feature branch may merge behind `main` once its current-head
 required checks and configured reviews pass. Do not restart validation solely
 because another agent merged; follow [the merge policy](../AGENTS.md#git-workflow).

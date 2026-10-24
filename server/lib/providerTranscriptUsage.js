@@ -28,6 +28,8 @@
  * written), and ignore unknown fields so a CLI update can't break them.
  */
 
+import { GROK_LONG_CONTEXT_PROMPT_TOKENS } from './modelPricing.js';
+
 /**
  * Slugify a working directory the way Claude Code names its project folder:
  * every `/` and `.` becomes `-`. An absolute POSIX path therefore keeps its
@@ -474,17 +476,43 @@ function grokEventMs(line) {
   return ts < 1e11 ? Math.round(ts * 1000) : ts;
 }
 
-/** The four billable buckets of one grok `usage` block, cache tiers split out. */
-const grokBuckets = (usage) => ({
-  messages: 1,
-  // `inputTokens` includes the cached read — split so each tier prices at its
-  // own rate instead of billing cache reads as fresh input.
-  tokensIn: Math.max(0, num(usage?.inputTokens) - num(usage?.cachedReadTokens)),
-  // `reasoningTokens` is a SUBSET of `outputTokens`, not an addition.
-  tokensOut: num(usage?.outputTokens),
-  cacheReadTokens: num(usage?.cachedReadTokens),
-  cacheWriteTokens: num(usage?.cacheCreationTokens)
+const grokTotals = () => ({
+  ...emptyTotals(),
+  longTokensIn: 0,
+  longTokensOut: 0,
+  longCacheReadTokens: 0,
+  longCacheWriteTokens: 0,
 });
+
+/**
+ * The billable buckets of one grok `usage` block, cache tiers split out.
+ * `long*` is a subset of those buckets, set only when this request's own
+ * prompt (`inputTokens`, which already includes the cache read) reaches
+ * xAI's 200k doubling threshold. It is not a second copy of the tokens.
+ */
+const grokBuckets = (usage) => {
+  const buckets = {
+    messages: 1,
+    // `inputTokens` includes the cached read — split so each tier prices at its
+    // own rate instead of billing cache reads as fresh input.
+    tokensIn: Math.max(0, num(usage?.inputTokens) - num(usage?.cachedReadTokens)),
+    // `reasoningTokens` is a SUBSET of `outputTokens`, not an addition.
+    tokensOut: num(usage?.outputTokens),
+    cacheReadTokens: num(usage?.cachedReadTokens),
+    cacheWriteTokens: num(usage?.cacheCreationTokens),
+    longTokensIn: 0,
+    longTokensOut: 0,
+    longCacheReadTokens: 0,
+    longCacheWriteTokens: 0,
+  };
+  if (num(usage?.inputTokens) >= GROK_LONG_CONTEXT_PROMPT_TOKENS) {
+    buckets.longTokensIn = buckets.tokensIn;
+    buckets.longTokensOut = buckets.tokensOut;
+    buckets.longCacheReadTokens = buckets.cacheReadTokens;
+    buckets.longCacheWriteTokens = buckets.cacheWriteTokens;
+  }
+  return buckets;
+};
 
 /**
  * True when every consecutive pair of turns is non-decreasing in all three
@@ -519,9 +547,10 @@ function looksCumulative(usages) {
  *   share of it is legitimately zero".
  */
 export function parseGrokTurns(jsonlText, { from = null, to = null, exclude = null } = {}) {
-  const totals = emptyTotals();
+  const totals = grokTotals();
   const byModel = new Map();
   const counted = [];
+  const longTurns = [];
   let sessionId = null;
 
   // Every turn_completed in file order — the whole sequence is needed before
@@ -567,7 +596,6 @@ export function parseGrokTurns(jsonlText, { from = null, to = null, exclude = nu
     const buckets = grokBuckets(usage);
     if (totalTranscriptTokens(buckets) === 0) continue;
     counted.push(turn.key);
-    for (const field of Object.keys(totals)) totals[field] += buckets[field];
 
     // `modelUsage` names the model(s) the turn actually called. In cumulative
     // mode its per-model figures are cumulative too, so bucket the DELTA'd
@@ -576,9 +604,23 @@ export function parseGrokTurns(jsonlText, { from = null, to = null, exclude = nu
     // one turn as a unit, and splitting the delta across models would need
     // per-model deltas the cumulative shape doesn't reliably provide.
     const bucketKey = Object.keys(turn.usage.modelUsage || {})[0] ?? UNKNOWN_MODEL;
-    if (!byModel.has(bucketKey)) byModel.set(bucketKey, emptyTotals());
+    if (!byModel.has(bucketKey)) byModel.set(bucketKey, grokTotals());
     const bucket = byModel.get(bucketKey);
-    for (const field of Object.keys(bucket)) bucket[field] += buckets[field];
+    for (const field of Object.keys(bucket)) bucket[field] += buckets[field] || 0;
+    for (const field of Object.keys(totals)) totals[field] += buckets[field] || 0;
+    if (buckets.longTokensIn || buckets.longTokensOut || buckets.longCacheReadTokens || buckets.longCacheWriteTokens) {
+      longTurns.push({
+        key: turn.key,
+        ms: turn.ms,
+        sessionId,
+        model: bucketKey,
+        promptTokens: num(usage.inputTokens),
+        tokensIn: buckets.tokensIn,
+        tokensOut: buckets.tokensOut,
+        cacheReadTokens: buckets.cacheReadTokens,
+        cacheWriteTokens: buckets.cacheWriteTokens,
+      });
+    }
   }
 
   const models = [...byModel.keys()].filter((model) => model !== UNKNOWN_MODEL);
@@ -589,7 +631,8 @@ export function parseGrokTurns(jsonlText, { from = null, to = null, exclude = nu
     byModel: Object.fromEntries(byModel),
     ...totals,
     countedKeys: counted,
-    turns: turns.length
+    turns: turns.length,
+    longTurns,
   };
 }
 
@@ -704,6 +747,10 @@ export function parseAgyTranscript(jsonlText, { from = null, to = null, exclude 
   const counted = [];
   // Chars of every step so far (windowed or not): the prompt the NEXT model call replays.
   let runningContext = 0;
+  let tokensIn = 0;
+  let tokensOut = 0;
+  let cacheReadTokens = 0;
+  let hasMeasuredTokens = false;
 
   for (const [index, entry] of parseJsonLines(jsonlText).entries()) {
     if (typeof entry.type !== 'string') continue;
@@ -721,13 +768,31 @@ export function parseAgyTranscript(jsonlText, { from = null, to = null, exclude 
       charsOut += stepChars;
       contextChars += replayed;
       messages += 1;
+      if (typeof entry.input_tokens === 'number' || typeof entry.output_tokens === 'number') {
+        hasMeasuredTokens = true;
+        tokensIn += num(entry.input_tokens);
+        tokensOut += num(entry.output_tokens);
+        cacheReadTokens += num(entry.cache_read_tokens);
+      }
     } else {
       charsIn += stepChars;
     }
     counted.push(key);
   }
 
-  return { charsIn, charsOut, contextChars, messages, countedKeys: counted, steps };
+  return {
+    charsIn,
+    charsOut,
+    contextChars,
+    messages,
+    countedKeys: counted,
+    steps,
+    tokensIn,
+    tokensOut,
+    cacheReadTokens,
+    cacheWriteTokens: 0,
+    measured: hasMeasuredTokens,
+  };
 }
 
 /**

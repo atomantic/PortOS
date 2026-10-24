@@ -95,3 +95,24 @@ export const sendShotStillToStoryboardPanel = (projectId, sceneId, options) =>
 // panels as previewed (lib/storyboardVideo.js) → { project }. 409 when the board changed since.
 export const startVideoFromStoryboard = (id, input, options) =>
   request(`/storyboards/${enc(id)}/video`, { ...json('POST', input), ...options });
+
+// A new board from one FableLoom episode path (`via`: the transition ids picked at forks) → board.
+// Use as scene / shot art: the panel's selected image goes back to its FableLoom scene or
+// pipeline shot → { board, target }.
+export const makeStoryboardFromFableLoom = (loomId, episodeId, via, options) =>
+  request(`/storyboards/from-fableloom/${enc(loomId)}/${enc(episodeId)}`, { ...json('POST', { via }), ...options });
+export const sendStoryboardPanelToFableLoom = (id, panelId, options) =>
+  request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/scene-art`, { method: 'POST', ...options });
+
+// Open in storyboard editor (Series Pipeline): the issue's linked board, made from its
+// storyboard scenes the first time → { boardId, created }.
+export const openStoryboardForPipelineIssue = (issueId, options) =>
+  request(`/storyboards/from-pipeline/${enc(issueId)}`, { method: 'POST', ...options });
+
+// The linked board's edits waiting for the issue's shots → { boardId, locked, changed: [{ sceneId, shotId, panelId, fields }] }.
+export const getPipelineStoryboardChanges = (issueId, options) =>
+  request(`/storyboards/pipeline/${enc(issueId)}/changes`, options);
+
+// Update: copy edited panels (all, or one shot's) to their shots → { updated, issue, boardId, locked, changed }.
+export const updatePipelineShotsFromBoard = (issueId, shotId, options) =>
+  request(`/storyboards/pipeline/${enc(issueId)}/update-from-board`, { ...json('POST', shotId ? { shotId } : {}), ...options });

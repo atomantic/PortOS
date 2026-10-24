@@ -441,8 +441,6 @@ async function checkAndFixProcesses() {
     return;
   }
 
-  console.log(`📋 [Autofixer] Monitoring ${monitoredProcesses.length} process(es): ${monitoredProcesses.join(', ')}`);
-
   // `listProcessesStrict()` returns `null` when the read itself FAILED (vs `[]`
   // for a successful read with no processes) — the absent-vs-empty contract
   // from issue #968, now shared with `server/services/pm2.js` (#8164). A

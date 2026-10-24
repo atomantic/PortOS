@@ -55,6 +55,30 @@ The PR page follows the saved stage providers by default. Its **Also run Untrust
 
 After an approval, the deterministic coordinator merges a green, mergeable PR or requests GitHub auto-merge while CI is pending. The enable-only GraphQL mutation names the reviewed head SHA, so it cannot authorize a different commit or immediately bypass pending checks on an unprotected repository. A rejected auto-merge request raises a notification and retains the approval for the existing bounded merge poller.
 
+## GitHub inbox PR actions
+
+Pull-request notifications offer the same **Merge**, **Do:Review** and
+**Untrusted:Review** controls as the app PR list, where eligible. Merge uses
+the shared method and branch-deletion form and runs no model. It re-reads the
+PR, requires passing checks and merge readiness, pins the merge to that head,
+and records success only after GitHub confirms it merged. Review history keeps
+the controls available; the existing review tasks own duplicate detection.
+
+In **GitHub > Automations**, add a **Dependabot pull requests** rule, choose
+**Merge when checks pass**, and select a merge method and whether to delete
+the source branch. Enable **Autopilot** for the account. A pending PR stays
+open for another scheduled check even if no new notification arrives. Each
+attempt verifies GitHub's current Dependabot bot identity, draft/review state,
+CI and head SHA. Missing checks, failures and unknown readiness never merge.
+No automatic merge rule is enabled by default.
+
+PR rules may also select **Do:Review** or **Untrusted:Review**. These dispatch
+the app actions' existing review services, with the account/rule provider pin;
+private-account agent consent and the screened lane's app eligibility still
+apply. Do:Review carries a non-secret account selector into dispatch and
+resolves fresh credentials for that account, including Enterprise hosts.
+Tokens are never persisted in task metadata or provider settings.
+
 ## Configure an install
 
 Open **Models > LLMs > Abuse Guard** (`/models/llms/abuse`). Install the classifier explicitly, then choose an enabled text API provider and model for shared analysis. Use a local API endpoint for private messages. The page exposes shared policy defaults and source overrides; a failed or incomplete installation offers a repair path. Opening the page and reading status never runs inference or downloads a model.

@@ -101,25 +101,30 @@ function defaultRender(run) {
   return { success: true };
 }
 
-const waitUntil = async (predicate) => {
-  for (let i = 0; i < 400 && !predicate(); i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
-  if (!predicate()) throw new Error('condition never became true');
-};
+const waitUntil = predicate => vi.waitFor(() => expect(predicate()).toBe(true), { timeout: 4000 });
 
 describe('contained SuperCollider renders', () => {
   let dataDir;
   let jobSeq = 0;
+  let pendingRenders;
+  const trackRender = pending => {
+    pendingRenders.push(pending);
+    // Teardown owns settlement even when a test assertion fails first.
+    void pending.catch(() => {});
+    return pending;
+  };
   const jobsDir = () => join(dataDir, 'supercollider', 'jobs');
   const leftoverScratch = () => (existsSync(jobsDir()) ? readdirSync(jobsDir()) : []);
   const ready = async (docker) => {
     expect((await setupSuperColliderRuntime({ docker, dataDir })).outcome).toBe('ready');
     return docker;
   };
-  const render = (docker, overrides = {}) => renderSuperColliderSource({
+  const render = (docker, overrides = {}) => trackRender(renderSuperColliderSource({
     jobId: `job-${(jobSeq += 1)}`, source: STOCK_SOURCE, durationSec: 4, seed: 42, docker, dataDir, ...overrides,
-  });
+  }));
 
   beforeEach(() => {
+    pendingRenders = [];
     dataDir = mkdtempSync(join(tmpdir(), 'portos-sc-render-'));
     fixture.dataDir = dataDir;
     fixture.docker = null;
@@ -127,7 +132,11 @@ describe('contained SuperCollider renders', () => {
     fixture.admission = createMaintenanceAdmission(dataDir);
     fixture.failedCleanupPath = null;
   });
-  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  afterEach(async () => {
+    await Promise.allSettled(pendingRenders);
+    rmSync(dataDir, { recursive: true, force: true });
+    expect(existsSync(dataDir)).toBe(false);
+  });
 
   it('renders frozen source through the contained wrapper into a validated preview and leaves no scratch', async () => {
     const docker = await ready(fakeDocker());
@@ -216,9 +225,14 @@ describe('contained SuperCollider renders', () => {
     } }));
     const controller = new AbortController();
     const pending = render(docker, { jobId: 'job-cancel', signal: controller.signal });
-    await waitUntil(() => docker.calls.runs.length === 1);
-    controller.abort();
-    await expect(pending).rejects.toMatchObject({ code: 'SUPERCOLLIDER_CANCELED' });
+    try {
+      await waitUntil(() => docker.calls.runs.length === 1);
+      controller.abort();
+      await expect(pending).rejects.toMatchObject({ code: 'SUPERCOLLIDER_CANCELED' });
+    } finally {
+      controller.abort();
+      await pending.catch(() => {});
+    }
     expect(docker.calls.removed).toContain(docker.calls.runs[0].name);
     expect(await readSuperColliderPreview('job-cancel', { dataDir })).toBeNull();
     expect(leftoverScratch()).toEqual([]);
@@ -258,7 +272,7 @@ describe('contained SuperCollider renders', () => {
       settlement = permit.finish();
     });
     audioGenEvents.on('failed', failed);
-    const pending = permit.run(() => renderSuperCollider({ jobId, source: STOCK_SOURCE, durationSec: 4, seed: 42 }));
+    const pending = trackRender(permit.run(() => renderSuperCollider({ jobId, source: STOCK_SOURCE, durationSec: 4, seed: 42 })));
     // Attach rejection handling immediately while teardown is deliberately held.
     const rejected = expect(pending).rejects.toMatchObject(removalOutcome === 'rejected'
       ? { message: 'Container removal unavailable' } : { code: 'SUPERCOLLIDER_CANCELED' });
@@ -333,8 +347,11 @@ describe('contained SuperCollider renders', () => {
     } }));
     const first = render(docker, { jobId: 'job-a', source: `${STOCK_SOURCE} // a`, durationSec: 4 });
     const second = render(docker, { jobId: 'job-b', source: `${STOCK_SOURCE} // b`, durationSec: 6 });
-    await waitUntil(() => docker.calls.runs.length === 2);
-    release();
+    try {
+      await waitUntil(() => docker.calls.runs.length === 2);
+    } finally {
+      release();
+    }
     const [a, b] = await Promise.all([first, second]);
 
     const [runA, runB] = docker.calls.runs.sort((x, y) => x.source.localeCompare(y.source));

@@ -28,6 +28,7 @@ const inbox = vi.hoisted(() => ({
   getNotification: vi.fn(async () => ({})),
   applyNotificationAction: vi.fn(async () => ({ state: 'done' })),
   resolveWithAgent: vi.fn(async () => ({})),
+  actOnPullRequest: vi.fn(async () => ({})),
   getAutomationsOverview: vi.fn(async () => ({})),
   setNotificationCadence: vi.fn(async (cadence) => ({ cadence })),
   listAutomationActivity: vi.fn(async () => []),
@@ -64,6 +65,7 @@ const { default: githubRoutes } = await import('./github.js');
 const writes = [
   ['post', '/api/github/notifications/example-account/123', { action: 'unsubscribe' }, inbox.applyNotificationAction],
   ['post', '/api/github/notifications/example-account/123/agent', { provider: 'example-provider', effort: 'high' }, inbox.resolveWithAgent],
+  ['post', '/api/github/notifications/example-account/123/pull-request', { action: 'merge', method: 'squash' }, inbox.actOnPullRequest],
   ['post', '/api/github/audit/example-account/apply', { suggestionId: 'unwatch:example/repo' }, audit.applyAuditSuggestion],
   ['post', '/api/github/audit-changes/7/undo', {}, audit.undoAuditChange],
   ['post', '/api/github/automations/activity/7/undo', {}, inbox.undoAutomationAction],
@@ -161,5 +163,18 @@ describe('Resolve with agent run choice (#13191)', () => {
     expect(inbox.resolveWithAgent).toHaveBeenLastCalledWith('example-account', '123', undefined);
     await send(app, ['post', path, { provider: null, model: '', effort: 'high' }]);
     expect(inbox.resolveWithAgent).toHaveBeenLastCalledWith('example-account', '123', { provider: null, model: null, effort: 'high' });
+  });
+});
+
+describe('GitHub notification PR actions', () => {
+  it('validates action and merge choices before reaching the service', async () => {
+    const app = appFor('127.0.0.1');
+    const path = '/api/github/notifications/example-account/123/pull-request';
+    for (const body of [{ action: 'shell' }, { action: 'merge', method: 'force' }, { action: 'merge', deleteBranch: 'yes' }, { action: 'do-review', url: 'https://outside.example/pull/1' }]) {
+      expect((await send(app, ['post', path, body])).status).toBe(400);
+    }
+    expect(inbox.actOnPullRequest).not.toHaveBeenCalled();
+    await send(app, ['post', path, { action: 'merge', method: 'squash', deleteBranch: false }]);
+    expect(inbox.actOnPullRequest).toHaveBeenLastCalledWith('example-account', '123', { action: 'merge', method: 'squash', deleteBranch: false });
   });
 });

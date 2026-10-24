@@ -17,8 +17,10 @@ vi.mock('../../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
 }));
 
-vi.mock('../../../hooks', () => ({
+vi.mock('../../../hooks/useLocalStorageBool.js', () => ({
   useLocalStorageBool: () => [false, vi.fn()],
+}));
+vi.mock('../../../hooks/useRepoIntake.js', () => ({
   useRepoIntake: () => ({
     repo: null,
     options: { malwareScan: false, learn: false },

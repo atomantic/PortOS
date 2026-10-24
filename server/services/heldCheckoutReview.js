@@ -25,8 +25,18 @@ export async function findMergedPullRequest(repoPath, branch, tip, { forgeAccoun
   if (!oid(tip)) throw new Error('retirement-pr-ambiguous');
   // Query the exact commit, not an unbounded reused-branch history. A capped
   // association result cannot establish uniqueness and stays held.
-  const rows = JSON.parse(await execGh(['api', '--hostname', origin.host,
-    `repos/${origin.fullName}/commits/${tip}/pulls?per_page=100`], undefined, options));
+  const association = await execGh(['api', '--hostname', origin.host,
+    `repos/${origin.fullName}/commits/${tip}/pulls?per_page=100`], undefined, options)
+    .catch(error => {
+      // An unpublished/rebased local tip may not exist on the forge. That
+      // endpoint's missing-commit response does not establish empty history: permit only the
+      // bounded historical lookup below, which must independently succeed.
+      const detail = error.ghStderr || '';
+      if (/\(HTTP 404\)/.test(detail)
+        || (detail.includes(`No commit found for SHA: ${tip}`) && /\(HTTP 422\)/.test(detail))) return null;
+      throw new Error('retirement-forge-unavailable');
+    });
+  const rows = association === null ? [] : JSON.parse(association);
   if (!Array.isArray(rows) || rows.length >= 100
     || new Set(rows.map(row => row?.html_url)).size !== rows.length
     || rows.some(row => {
@@ -41,13 +51,15 @@ export async function findMergedPullRequest(repoPath, branch, tip, { forgeAccoun
   if (matches.length === 1) return { url: matches[0].html_url, mergedAt: matches[0].merged_at };
   // Preserve historical review of an older local tip only when branch history
   // itself has exactly one candidate. Never choose among mismatching heads.
-  const historical = JSON.parse(await execGh(['pr', 'list', '--repo', spec, '--head', branch, '--state', 'merged',
-    '--limit', '2', '--json', 'url'], undefined, options));
-  if (!Array.isArray(historical) || historical.length !== 1 || typeof historical[0]?.url !== 'string') throw new Error('retirement-pr-ambiguous');
+  const historical = await execGh(['pr', 'list', '--repo', spec, '--head', branch, '--state', 'merged',
+    '--limit', '2', '--json', 'url'], undefined, options).then(JSON.parse)
+    .catch(() => { throw new Error('retirement-forge-unavailable'); });
+  const selected = Array.isArray(historical) && historical.length === 1 && parsePullRequestUrl(historical[0]?.url);
+  if (!selected || selected.host !== origin.host || `${selected.owner}/${selected.repo}` !== origin.fullName) throw new Error('retirement-pr-ambiguous');
   return { url: historical[0].url, mergedAt: null };
 }
 
-export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { forgeAccount = null, exactAliasHead = null } = {}) {
+export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { forgeAccount = null, exactAliasHead = null, sourceSupersessionHead = null } = {}) {
   const origin = await getOriginInfo(repoPath);
   const parsed = parsePullRequestUrl(prUrl);
   if (!origin || !parsed || parsed.host !== origin.host || `${parsed.owner}/${parsed.repo}` !== origin.fullName) {
@@ -60,12 +72,20 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
   const remote = await read(['pr', 'view', prUrl, '--json', 'url,state,headRefName,headRefOid,isCrossRepository,mergeCommit,baseRefName']);
   const repository = await api(`repos/${origin.fullName}`);
   const defaultBranch = repository.default_branch;
+  const supersession = typeof branch === 'string' && oid(sourceSupersessionHead);
   // Explicit whole-checkout review may name a local repair alias, but only
   // when its exact tip is the merged PR head. Similar names are never evidence.
   const alias = remote.headRefName !== branch && oid(exactAliasHead) && exactAliasHead === remote.headRefOid;
-  if (remote.url !== prUrl || remote.state !== 'MERGED' || (remote.headRefName !== branch && !alias)
+  if (remote.url !== prUrl || remote.state !== 'MERGED' || (remote.headRefName !== branch && !alias && !supersession)
     || remote.isCrossRepository !== false || remote.baseRefName !== defaultBranch || !oid(remote.headRefOid) || !oid(remote.mergeCommit?.oid)) {
     throw new Error('retirement-pr-not-matching-merged');
+  }
+  if (supersession) {
+    // A replacement delivery never authorizes abandoning an open delivery of
+    // the original local branch. Unavailable/uncertain forge reads retain it.
+    const open = await api(`repos/${origin.fullName}/pulls?state=open&head=${encodeURIComponent(`${origin.fullName.split('/')[0]}:${branch}`)}&per_page=100`);
+    if (!Array.isArray(open)) throw new Error('retirement-forge-unavailable');
+    if (open.length) throw new Error('retirement-source-delivery-open');
   }
   // A current-main merge base loses the original scope after a normal merge.
   // Use complete original PR metadata, and refuse API caps or ambiguous roots.
@@ -97,21 +117,22 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
   const target = await api(`repos/${origin.fullName}/git/ref/heads/${encodeURIComponent(defaultBranch)}`);
   if (!oid(target.object?.sha)) throw new Error('retirement-default-unreadable');
   // ls-remote returns an empty successful result only for actual ref absence.
-  const remoteHead = (await git(['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], repoPath)
-    .catch(() => { throw new Error('retirement-remote-ref-unreadable'); })).trim();
-  if (remoteHead && remoteHead !== `${remote.headRefOid}\trefs/heads/${branch}`) throw new Error('retirement-remote-head-changed');
-  const publishedRemoteHead = alias ? (await git(['ls-remote', '--heads', 'origin', `refs/heads/${remote.headRefName}`], repoPath)
+  const remoteHead = branch ? (await git(['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], repoPath)
+    .catch(() => { throw new Error('retirement-remote-ref-unreadable'); })).trim() : '';
+  if (remoteHead && remoteHead !== `${supersession ? sourceSupersessionHead : remote.headRefOid}\trefs/heads/${branch}`) throw new Error('retirement-remote-head-changed');
+  const publishedRemoteHead = alias || supersession ? (await git(['ls-remote', '--heads', 'origin', `refs/heads/${remote.headRefName}`], repoPath)
     .catch(() => { throw new Error('retirement-remote-ref-unreadable'); })).trim() : null;
   if (publishedRemoteHead && publishedRemoteHead !== `${remote.headRefOid}\trefs/heads/${remote.headRefName}`) throw new Error('retirement-remote-head-changed');
   return { repository: `${origin.host}/${origin.fullName}`, prUrl, prHead: remote.headRefOid,
     mergeCommit: remote.mergeCommit.oid, changedPaths, changeBase, firstCommit, defaultBranch, defaultHead: target.object.sha, remoteHead: remoteHead || null,
-    ...(alias ? { exactAliasHead, publishedBranch: remote.headRefName, publishedRemoteHead: publishedRemoteHead || null } : {}) };
+    ...(alias || supersession ? { ...(alias && { exactAliasHead }), ...(supersession && { sourceSupersessionHead }),
+      publishedBranch: remote.headRefName, publishedRemoteHead: publishedRemoteHead || null } : {}) };
 }
 
 /** Returned differences are review material, not executable instructions or an
  * automated supersession verdict. Every byte and identity participates in digest.
  */
-export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, contentFingerprint, administrationFingerprint, policy }, {
+export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, kind, contentFingerprint, administrationFingerprint, policy }, {
   readForge = readRetirementForgeEvidence, forgeAccount = null,
 } = {}) {
   const forge = await readForge(repoPath, release.branch, prUrl, { forgeAccount });
@@ -133,8 +154,8 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
   const parent = parents.value.trim().split(/\s+/);
   if (parent.length !== 2 || parent[1] !== forge.changeBase) throw new Error('retirement-original-scope-unavailable');
   if (inPr.status === 'rejected') throw new Error('retirement-original-scope-unavailable');
-  const base = (await git(['merge-base', release.head, forge.changeBase], repoPath)).trim();
-  if (base === release.head) throw new Error('retirement-original-scope-unavailable');
+  const base = (await git(['merge-base', release.head, kind ? forge.defaultHead : forge.changeBase], repoPath)).trim();
+  if (base === release.head && !kind) throw new Error('retirement-original-scope-unavailable');
   const [localPathsOut, localPatch] = await Promise.all([
     git(['diff', '--name-only', '-z', base, release.head], repoPath),
     git(['diff', '--binary', '--no-ext-diff', '--no-textconv', base, release.head], repoPath),
@@ -146,8 +167,9 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
   // code still implements the original work (it may have been strengthened or
   // reverted). Exact affected-file equality is the mechanical case; differences
   // require the operator's explicit supersession judgment on the displayed diff.
-  const mechanicallyEquivalent = difference === '';
+  const mechanicallyEquivalent = difference === '' && kind !== 'source-supersession';
   const evidence = { repoPath, release, forge, contentFingerprint, administrationFingerprint, policy,
+    ...(kind && { kind }),
     comparison: { base, paths, localPatch, difference, disposition: mechanicallyEquivalent ? 'integrated' : 'review-supersession' } };
   return { digest: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'), ...evidence };
 }

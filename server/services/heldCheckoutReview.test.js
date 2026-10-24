@@ -13,8 +13,10 @@ describe('retirement forge verification', () => {
   let detail;
   let files;
   let commits;
+  let open;
   beforeEach(() => {
     vi.clearAllMocks();
+    open = [];
     pr = { url: prUrl, state: 'MERGED', headRefName: 'claim/42', headRefOid: 'a'.repeat(40),
       mergeCommit: { oid: 'b'.repeat(40) }, isCrossRepository: false, baseRefName: 'main' };
     detail = { merged: true, head: { sha: 'a'.repeat(40) }, base: { ref: 'main' }, changed_files: 1, commits: 1 };
@@ -24,7 +26,7 @@ describe('retirement forge verification', () => {
     mock.git.mockResolvedValue({ stdout: '', exitCode: 0 });
     mock.gh.mockImplementation(async args => JSON.stringify(args[0] === 'pr' ? pr
       : args.at(-1).includes('/files?') ? files : args.at(-1).includes('/commits?') ? commits
-        : args.at(-1).includes('/pulls/') ? detail
+        : args.at(-1).includes('/pulls?') ? open : args.at(-1).includes('/pulls/') ? detail
         : args.at(-1).includes('/git/ref/') ? { object: { sha: 'c'.repeat(40) } } : { default_branch: 'main' }));
   });
 
@@ -61,6 +63,26 @@ describe('retirement forge verification', () => {
     const result = await readRetirementForgeEvidence('/synthetic/repo', 'claim/42', prUrl);
     expect(result.changedPaths).toEqual([':(exclude)*', 'new.txt', 'old.txt']);
     expect(mock.gh).toHaveBeenCalledWith(expect.arrayContaining(['--paginate', '--slurp']), undefined, expect.any(Object));
+  });
+
+  it('binds detached evidence to the exact published PR head without querying a null branch', async () => {
+    expect(await readRetirementForgeEvidence('/synthetic/repo', null, prUrl, { exactAliasHead: pr.headRefOid }))
+      .toMatchObject({ exactAliasHead: pr.headRefOid, publishedBranch: 'claim/42' });
+    expect(mock.git.mock.calls.every(([args]) => args.at(-1) === 'refs/heads/claim/42')).toBe(true);
+    await expect(readRetirementForgeEvidence('/synthetic/repo', null, prUrl, { exactAliasHead: 'e'.repeat(40) }))
+      .rejects.toThrow('retirement-pr-not-matching-merged');
+  });
+
+  it.each(['closed-original', 'open-original', 'unreadable', 'advanced-original'])('reviews a replacement PR without abandoning a %s source delivery', async state => {
+    const source = 'e'.repeat(40);
+    if (state === 'open-original') open = [{ head: { sha: source } }];
+    if (state === 'unreadable') open = null;
+    if (state === 'advanced-original') mock.git.mockResolvedValueOnce({ stdout: `${'f'.repeat(40)}\trefs/heads/original\n` });
+    const review = readRetirementForgeEvidence('/synthetic/repo', 'original', prUrl, { sourceSupersessionHead: source });
+    if (state === 'closed-original') {
+      expect(await review).toMatchObject({ sourceSupersessionHead: source, prHead: pr.headRefOid, publishedBranch: 'claim/42' });
+    } else await expect(review).rejects.toThrow(state === 'open-original' ? 'retirement-source-delivery-open'
+      : state === 'unreadable' ? 'retirement-forge-unavailable' : 'retirement-remote-head-changed');
   });
 
   it.each(['file-count', 'commit-count', 'duplicate', 'missing-previous', 'ambiguous-base', 'wrong-tip', 'cap', 'bad-path', 'unpaginated'])('refuses incomplete or ambiguous original scope: %s', async change => {

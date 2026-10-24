@@ -16,9 +16,47 @@ const gate = () => {
   roots.push(root);
   return { root, admission: createMaintenanceAdmission(root) };
 };
-afterEach(() => { vi.useRealTimers(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe('durable graceful maintenance', () => {
+  it('names an interrupted transaction and its lock time without modifying evidence', () => {
+    const { root, admission } = gate();
+    const hold = admission.begin({ reason: 'Drain', owner: 'Operator' }).hold;
+    const lock = join(admission.directory, 'transaction');
+    mkdirSync(lock);
+    const since = fs.lstatSync(lock).mtime.toISOString();
+    expect(createMaintenanceAdmission(root).status()).toMatchObject({ state: 'unavailable', cause: 'interrupted-transaction', since });
+    expect(fs.lstatSync(lock).mtime.toISOString()).toBe(since);
+    rmSync(lock, { recursive: true });
+    expect(admission.status()).toMatchObject({ state: 'ready', hold });
+  });
+
+  it('logs a failed ENOSPC publication once and remains uncertain even after lock removal', () => {
+    const { root } = gate();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const admission = createMaintenanceAdmission(root, { io: { ...fs, writeFileSync: () => {
+      throw Object.assign(new Error('fixture disk full'), { code: 'ENOSPC' });
+    } } });
+    expect(() => admission.admit('agent', 'fixture')).toThrow(/needs recovery/);
+    expect(admission.status()).toMatchObject({ state: 'unavailable', cause: 'interrupted-transaction' });
+    expect(admission.tryAdmit('agent', 'again')).toBeNull();
+    expect(log).toHaveBeenCalledExactlyOnceWith('❌ Maintenance transaction failed (ENOSPC): fixture disk full');
+    rmSync(join(admission.directory, 'transaction'), { recursive: true });
+    expect(admission.status()).toMatchObject({ state: 'unavailable', cause: 'process-uncertain' });
+    expect(admission.tryAdmit('agent', 'still held')).toBeNull();
+  });
+
+  it('logs the original lock acquisition failure once', () => {
+    const { root } = gate();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const admission = createMaintenanceAdmission(root, { io: { ...fs, mkdirSync: () => {
+      throw Object.assign(new Error('fixture denied'), { code: 'EACCES' });
+    } } });
+    expect(admission.tryAdmit('agent', 'fixture')).toBeNull();
+    expect(admission.tryAdmit('agent', 'again')).toBeNull();
+    expect(log).toHaveBeenCalledExactlyOnceWith('❌ Maintenance transaction failed (EACCES): fixture denied');
+  });
+
   it('binds operator publication reconciliation to the exact hold and owner and publishes before retirement', async () => {
     const { root, admission } = gate();
     const owner = admission.admit('settlement', 'Output publication');
@@ -156,7 +194,7 @@ describe('durable graceful maintenance', () => {
     fs.mkdirSync(join(admission.directory, 'transaction'));
     expect(() => legacyOperation.parse(JSON.parse(before).operations[0])).toThrow();
     const restarted = createMaintenanceAdmission(root);
-    expect(restarted.status().state).toBe('unavailable');
+    expect(restarted.status()).toMatchObject({ state: 'unavailable', cause: 'interrupted-transaction' });
     expect(restarted.tryAdmit('media', 'new')).toBeNull();
     expect(() => recovered.completeRecovery()).toThrow(/needs recovery/);
     expect(fs.existsSync(join(admission.directory, 'transaction'))).toBe(true);
@@ -316,7 +354,7 @@ describe('durable graceful maintenance', () => {
     expect(admission.status()).toMatchObject({ state: 'draining', blockers: [{ unsettled: true }] });
     writeFileSync(join(admission.directory, 'state.json'), '{"version":999}');
     const restarted = createMaintenanceAdmission(root);
-    expect(restarted.status().state).toBe('unavailable');
+    expect(restarted.status()).toMatchObject({ state: 'unavailable', cause: 'unreadable-journal' });
     expect(restarted.tryAdmit('agent', 'new')).toBeNull();
     expect(() => restarted.resume({ id: '00000000-0000-4000-8000-000000000000', revision: 1 })).toThrow();
   });

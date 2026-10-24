@@ -520,6 +520,8 @@ describe('parseGrokTurns', () => {
     // `reasoningTokens` is a SUBSET of `outputTokens`, never an addition.
     expect(parsed.tokensOut).toBe(1_800);
     expect(parsed.cacheWriteTokens).toBe(0);
+    expect(parsed.longTokensIn).toBe(0);
+    expect(parsed.longTurns).toEqual([]);
     expect(parsed.byModel[GROK_MODEL].tokensOut).toBe(1_800);
     expect(parsed.model).toBe(GROK_MODEL);
     expect(parsed.sessionId).toBe('session-aaaa');
@@ -531,6 +533,24 @@ describe('parseGrokTurns', () => {
     // Sentinel: no turn was recorded at all, so the caller falls back to chat
     // history rather than reporting a measured zero.
     expect(parsed.turns).toBe(0);
+  });
+
+  it('marks only a turn whose own prompt reaches 200k as the long-context subset', () => {
+    const text = [
+      grokTurn({ promptId: 'short', input: 15_000, cachedRead: 11_000, output: 100 }),
+      grokTurn({ promptId: 'long', input: 250_000, cachedRead: 50_000, output: 2_000, reasoning: 500 }),
+    ].join('\n');
+    const parsed = parseGrokTurns(text);
+    expect(parsed.tokensIn).toBe(4_000 + 200_000);
+    expect(parsed.tokensOut).toBe(2_100);
+    expect(parsed.longTokensIn).toBe(200_000);
+    expect(parsed.longTokensOut).toBe(2_000);
+    expect(parsed.longCacheReadTokens).toBe(50_000);
+    expect(parsed.longTurns).toEqual([expect.objectContaining({
+      key: 'long', promptTokens: 250_000, tokensIn: 200_000, cacheReadTokens: 50_000,
+    })]);
+    // Reasoning stays inside output. 500 of the 2,000 are not added again.
+    expect(parsed.tokensOut).toBe(2_100);
   });
 
   it('sums per-prompt turns without treating them as cumulative', () => {
@@ -625,7 +645,7 @@ describe('decodeGrokSessionDir', () => {
 // Antigravity — ~/.gemini/antigravity-cli/
 // ---------------------------------------------------------------------------
 
-const agyStep = ({ index = 0, type = 'GENERIC', createdAt = '2026-07-01T10:00:00Z', content = '', thinking = null, toolCalls = null }) => JSON.stringify({
+const agyStep = ({ index = 0, type = 'GENERIC', createdAt = '2026-07-01T10:00:00Z', content = '', thinking = null, toolCalls = null, inputTokens = null, outputTokens = null, cacheReadTokens = null }) => JSON.stringify({
   step_index: index,
   source: type === 'USER_INPUT' ? 'USER_EXPLICIT' : 'MODEL',
   type,
@@ -633,7 +653,10 @@ const agyStep = ({ index = 0, type = 'GENERIC', createdAt = '2026-07-01T10:00:00
   created_at: createdAt,
   ...(content ? { content } : {}),
   ...(thinking ? { thinking } : {}),
-  ...(toolCalls ? { tool_calls: toolCalls } : {})
+  ...(toolCalls ? { tool_calls: toolCalls } : {}),
+  ...(typeof inputTokens === 'number' ? { input_tokens: inputTokens } : {}),
+  ...(typeof outputTokens === 'number' ? { output_tokens: outputTokens } : {}),
+  ...(typeof cacheReadTokens === 'number' ? { cache_read_tokens: cacheReadTokens } : {})
 });
 
 describe('parseAgyTranscript', () => {
@@ -690,6 +713,20 @@ describe('parseAgyTranscript', () => {
       agyStep({ index: 1, content: 'b'.repeat(40) })
     ].join('\n');
     expect(parseAgyTranscript(text, { exclude: new Set(['step-0']) }).charsIn).toBe(40);
+  });
+
+  it('parses measured token counts when PLANNER_RESPONSE carries them', () => {
+    const text = [
+      agyStep({ index: 0, type: 'USER_INPUT', content: 'hello' }),
+      agyStep({ index: 1, type: 'PLANNER_RESPONSE', content: 'world', inputTokens: 500, outputTokens: 100, cacheReadTokens: 250 }),
+      agyStep({ index: 2, type: 'PLANNER_RESPONSE', content: 'again', inputTokens: 300, outputTokens: 80, cacheReadTokens: 600 }),
+    ].join('\n');
+    const parsed = parseAgyTranscript(text);
+    expect(parsed.measured).toBe(true);
+    expect(parsed.tokensIn).toBe(800);
+    expect(parsed.tokensOut).toBe(180);
+    expect(parsed.cacheReadTokens).toBe(850);
+    expect(parsed.messages).toBe(2);
   });
 });
 

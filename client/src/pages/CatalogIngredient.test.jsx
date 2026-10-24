@@ -94,7 +94,12 @@ vi.mock('../services/apiCatalogTypes', () => ({
 // The editable-prompt panel lazily fetches the linked universe to layer its
 // style preset onto the composed prompt; default to "no universe" so the seed
 // renders bare unless a test overrides it.
-vi.mock('../services/apiUniverseBuilder', () => ({ getUniverse: vi.fn(async () => null) }));
+vi.mock('../services/apiUniverseBuilder', () => ({
+  getUniverse: vi.fn(async () => null),
+  listUniverseNames: vi.fn(async () => [{ id: 'u-1', name: 'Example World' }]),
+  listUniverseStyles: vi.fn(async () => [{ id: 'u-1', influences: { embrace: ['Analog photography'] } }]),
+}));
+vi.mock('../services/apiMoodBoard', () => ({ listMoodBoardNames: vi.fn(async () => [{ id: 'mb-1', name: 'Example Board' }]) }));
 // Stand-in for the live image-gen thumb: fire onFilename as soon as a jobId is
 // handed in, simulating a completed render without the socket/job machinery.
 vi.mock('../components/pipeline/MediaJobThumb', async () => {
@@ -985,12 +990,19 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     const api = await import('../services/apiCatalog');
     getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf(HERO), media: MEDIA }));
     api.listCatalogSheetVariants.mockImplementation(async () => ({ variants: SHEET_VARIANTS }));
-    api.previewCatalogSheet.mockImplementation(async (_id, body) => ({
-      preview: {
+    api.previewCatalogSheet.mockImplementation(async (_id, body) => {
+      const missing = ['camera', 'lighting', 'environment'].filter((key) => !body.visualDirection?.[key]?.trim());
+      if (!body.universeId && !body.moodBoardId && !body.visualDirection?.style?.trim()) missing.unshift('Overall style / medium');
+      return { preview: {
         sentPrompt: `Example style. ${body.variant} sheet of Example Hero`,
         promptAdditions: [{ id: 'universe-style', label: 'Universe style', text: 'Example style.' }],
-      },
-    }));
+        ...(body.variant === 'look' ? { visualDirection: {
+          ready: missing.length === 0,
+          missing,
+          universe: { id: 'u-1', name: 'Example World' }, moodBoard: null,
+        } } : {}),
+      } };
+    });
     api.renderCatalogSheet.mockReset();
     api.attachCatalogIngredientMedia.mockReset();
     socketHandlers.clear();
@@ -1036,6 +1048,31 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     await renderPage('/casting/cat-chr-hero/references');
     expect(screen.getByAltText('Example Hero canon reference')).toHaveAttribute('src', '/data/image-thumbnails/primary.webp');
     expect(screen.getAllByRole('img').filter((image) => image.getAttribute('src') === '/data/image-thumbnails/chosen.webp')).toHaveLength(1);
+  });
+
+  it('filters the unified character gallery without leaving a second unfiltered image list', async () => {
+    getCatalogIngredientDetails.mockResolvedValue({
+      ...detailsOf({ ...HERO, payload: {} }),
+      media: [
+        { kind: 'portrait', mediaKey: 'studio.png', caption: 'Studio portrait', library: { guide: true, variant: { age: 27 } } },
+        { kind: 'reference', mediaKey: 'winter.png', caption: 'Winter reference', library: { variant: { age: 7 } } },
+        { kind: 'reference', mediaKey: 'sheet.png', role: 'sheet:front', caption: 'Sheet in its own tab', library: { guide: true } },
+      ],
+    });
+    await renderPage('/casting/cat-chr-hero/references');
+    const library = screen.getByRole('region', { name: 'Reference library' });
+    expect(within(library).getAllByTestId('library-row')).toHaveLength(2);
+    expect(within(library).getByTestId('guide-count')).toHaveTextContent('2/4');
+    const winter = within(library).getByText('Winter reference').closest('li');
+    expect(within(winter).getByRole('img')).toHaveAttribute('src', '/data/image-thumbnails/winter.webp');
+    fireEvent.change(within(library).getByLabelText('Filter by age'), { target: { value: '27' } });
+    expect(screen.queryByAltText('Winter reference')).not.toBeInTheDocument();
+    expect(screen.getByAltText('Studio portrait')).toBeInTheDocument();
+    expect(screen.queryByAltText('Sheet in its own tab')).not.toBeInTheDocument();
+    fireEvent.change(within(library).getByLabelText('Filter by age'), { target: { value: '' } });
+    fireEvent.change(within(library).getByLabelText('Media scope'), { target: { value: 'all' } });
+    expect(screen.getByAltText('Sheet in its own tab')).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'reference details for sheet.png' })).getByRole('button', { name: 'Guide' })).toBeEnabled();
   });
 
   it('keeps archive-only reference media visible on References without using it as a profile cover', async () => {
@@ -1265,16 +1302,52 @@ describe('CatalogIngredient — tabbed library record pages', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
       expect(await screen.findByRole('button', { name: '+ Universe style' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Render look/ })).toBeDisabled();
+      fireEvent.change(screen.getByLabelText('Camera'), { target: { value: '50mm film photography' } });
+      fireEvent.change(screen.getByLabelText('Lighting'), { target: { value: 'Window light' } });
+      fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Timber room' } });
+      await waitFor(() => expect(screen.getByRole('button', { name: /Render look/ })).toBeEnabled());
+      const expectedBody = { variant: 'look', wardrobeId: 'wardrobe-1', universeId: 'u-example',
+        visualDirection: { style: '', camera: '50mm film photography', lighting: 'Window light', environment: 'Timber room' } };
       expect(api.previewCatalogSheet).toHaveBeenLastCalledWith(
-        'cat-chr-hero', { variant: 'look', wardrobeId: 'wardrobe-1' }, { silent: true },
+        'cat-chr-hero', expectedBody, { silent: true },
       );
       fireEvent.click(screen.getByRole('button', { name: /Render look/ }));
       await waitFor(() => expect(api.renderCatalogSheet).toHaveBeenCalledWith(
-        'cat-chr-hero', { variant: 'look', wardrobeId: 'wardrobe-1' }, { silent: true },
+        'cat-chr-hero', expectedBody, { silent: true },
       ));
       await waitFor(() => expect(api.attachCatalogIngredientMedia).toHaveBeenCalledWith(
         'cat-chr-hero', { mediaKey: 'look-job.png', kind: 'reference', role: 'look:wardrobe-1' }, { silent: true },
       ));
+    });
+
+    it('invalidates render readiness immediately when direction changes and keeps rendering blocked after a preview failure', async () => {
+      const api = await import('../services/apiCatalog');
+      await renderPage('/casting/cat-chr-hero/looks');
+      fireEvent.click(await screen.findByRole('button', { name: /^Generate$/ }));
+      for (const label of ['Camera', 'Lighting', 'Environment']) fireEvent.change(screen.getByLabelText(label), { target: { value: `Example ${label}` } });
+      await waitFor(() => expect(screen.getByRole('button', { name: /Render look/ })).toBeEnabled());
+      api.previewCatalogSheet.mockRejectedValueOnce(new Error('Style source unavailable'));
+      fireEvent.change(screen.getByLabelText('Lighting'), { target: { value: 'Different lighting' } });
+      expect(screen.getByRole('button', { name: /Render look/ })).toBeDisabled();
+      await screen.findAllByText('Style source unavailable');
+      expect(screen.getByRole('button', { name: /Render look/ })).toBeDisabled();
+      expect(api.renderCatalogSheet).not.toHaveBeenCalled();
+    });
+
+    it('shows an unlinked character’s missing style and lets a mood board supply it without attaching a universe', async () => {
+      const api = await import('../services/apiCatalog');
+      getCatalogIngredientDetails.mockResolvedValue({ ...detailsOf({ ...HERO, refs: [] }), media: MEDIA });
+      await renderPage('/casting/cat-chr-hero/looks');
+      fireEvent.click(await screen.findByRole('button', { name: /^Generate$/ }));
+      expect(screen.getByText(/No universe selected/)).toBeTruthy();
+      for (const label of ['Camera', 'Lighting', 'Environment']) fireEvent.change(screen.getByLabelText(label), { target: { value: `Example ${label}` } });
+      await screen.findByText('Define before rendering: Overall style / medium');
+      expect(screen.getByRole('button', { name: /Render look/ })).toBeDisabled();
+      await screen.findByRole('option', { name: 'Example Board' });
+      fireEvent.change(screen.getByLabelText('Mood board'), { target: { value: 'mb-1' } });
+      await waitFor(() => expect(screen.getByRole('button', { name: /Render look/ })).toBeEnabled());
+      expect(api.previewCatalogSheet).toHaveBeenLastCalledWith('cat-chr-hero', expect.objectContaining({ universeId: '', moodBoardId: 'mb-1' }), { silent: true });
     });
 
     // Catches a look save dropping the rest of the saved payload, reusing or

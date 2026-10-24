@@ -30,7 +30,9 @@ describe('queueNotificationResolveTask', () => {
     expect(type).toBe('user');
     expect(task).toMatchObject({
       provider: 'p1', model: 'm1', effort: 'high', useWorktree: false, openPR: false,
+      noCodeOutput: false,
       metadata: {
+        externalRepositoryOutput: true,
         githubNotificationAccount: { accountId: 'acct-1', host: 'github.com', login: 'octocat' },
         githubNotificationResolve: { accountId: 'acct-1', threadId: '4242', host: 'github.com', repo: 'acme/app', subjectType: 'PullRequest', reason: 'author' },
       },
@@ -72,8 +74,10 @@ describe('queueNotificationResolveTask', () => {
   it('retains the selected account identity for a security-fix launch', async () => {
     expect(await queueSecurityFixTask({ account, repo: 'octocat/app' })).toEqual({ taskId: 'task-1' });
     expect(addTask.mock.calls[0][0].metadata).toMatchObject({
+      externalRepositoryOutput: true,
       githubNotificationAccount: { accountId: 'acct-1', host: 'github.com', login: 'octocat' },
       githubSecurityFix: { repo: 'octocat/app' },
     });
+    expect(addTask.mock.calls[0][0]).not.toHaveProperty('noCodeOutput');
   });
 });

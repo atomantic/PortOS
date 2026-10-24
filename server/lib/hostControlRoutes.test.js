@@ -75,6 +75,8 @@ describe('Universe Builder mutation inventory (#10669)', () => {
     'DELETE /api/universe-builder/:id',
     'PATCH /api/universe-builder/:id/variations/lock-all',
     'POST /api/universe-builder/:id/import/markdown',
+    // Copies bundled text only; no provider, process or caller-selected file access.
+    'POST /api/universe-builder/:id/restore-starter',
     'POST /api/universe-builder/:id/style-references',
     'POST /api/universe-builder/:id/adopt-style',
     'DELETE /api/universe-builder/:id/style-references/:referenceId',

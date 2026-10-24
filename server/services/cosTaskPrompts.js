@@ -8,7 +8,7 @@
 import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, isToolFreeReviewer } from '../lib/validation.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import { neutralizePromptTags } from '../lib/promptFencing.js';
-import { LOCAL_REVIEW_BRIDGE_SCRIPT } from '../lib/localReviewBridge.js';
+import { LOCAL_REVIEW_BRIDGE_SCRIPT, localReviewAttributionErrorGate } from '../lib/localReviewBridge.js';
 import { ZERO_REVIEWER_COVERAGE_NOTE, isProviderReviewer, LOCAL_LLM_REVIEWERS } from '../lib/reviewerConfig.js';
 import { buildCliReviewerOutcomeInstructions } from './promptSections/reviewerOutcome.js';
 
@@ -23,9 +23,12 @@ export function normalizeWorkItemRef(ref) {
 
 const forgeIssueConstraint = (forge, claimantGuard = () => '') => (ref, excludeLabelsBlock) => {
   const labels = excludeLabelsBlock || '`in-progress`, `blocked`, `needs-input`';
+  const changeEvidence = forge === 'GitHub'
+    ? 'an open PR whose body closes/fixes the issue or whose head commits reference it'
+    : 'an open MR on its claim branch or with a closing trailer';
   return `## Target Issue Constraint
 
-The user explicitly selected ${forge} issue #${ref}. Override Phase 1 ("Pick the target issue"): do NOT pick a different issue and do NOT scan for the next eligible one — claim exactly #${ref}, ignore the author filter above, and ignore its current assignee (an explicit selection overrides both filters).${claimantGuard(ref)} Still honor the safety checks: if #${ref} is already closed, already carries any of ${labels}, is already on a \`claim/issue-${ref}\` (or \`cos/.../issue-${ref}/...\`) branch, or is stale (Phase 3), exit cleanly rather than forcing it. **If #${ref} is a tracking epic, do NOT exit** — run Phase 1b against it: claim the next eligible issue already linked from it, or, when it has none, decompose it into per-slice issues first and then claim the first slice. That is the one case where this run legitimately ships an issue other than #${ref}. Otherwise run Phases 2–7 against #${ref}.`;
+The user explicitly selected ${forge} issue #${ref}. Override Phase 1 ("Pick the target issue"): do NOT pick a different issue and do NOT scan for the next eligible one — claim exactly #${ref}, ignore the author filter above. An explicit selection does not override existing claim ownership: any assignee (including this login), an in-progress marker, or ${changeEvidence} means another run is in flight unless this run proves it created the matching claim branch.${claimantGuard(ref)} Still honor the safety checks: if #${ref} is already closed, already carries any of ${labels}, is already on a \`claim/issue-${ref}\` (or \`cos/.../issue-${ref}/...\`) branch, or is stale (Phase 3), exit cleanly rather than forcing it. A continuation of this same run may resume its own recorded branch and PR after verifying the run ownership; matching the forge login or merely finding a branch is never proof. **If #${ref} is a tracking epic, do NOT exit** — run Phase 1b against it: claim the next eligible issue already linked from it, or, when it has none, decompose it into per-slice issues first and then claim the first slice. That is the one case where this run legitimately ships an issue other than #${ref}. Otherwise run Phases 2–7 against #${ref}.`;
 };
 
 const githubClaimantGuard = (ref) => ` **It does not override a contributor's clear claim comment:** before any worktree or marker, first resolve \`REPO\` and \`GH_HOST\` exactly as Phase 1 steps 1–2 do, set \`CANDIDATE="${ref}"\`, and then run Phase 1 step 5's untrusted-comment check. When it finds a clear active claimant, assign that contributor, verify the readback, and exit without claiming the issue yourself. If the comment lookup or claimant handoff still fails after step 5's prescribed retry, exit without autonomous work; because this target is pinned, do not scan for a different candidate.`;
@@ -178,8 +181,9 @@ fi
       ...Object.keys(pinned).map((key) => `${key}: $${key}`),
       ...(isProviderReviewer(reviewer) ? ['inheritDefaults: false'] : []),
       ...(enforceIsolation ? ['kind: "claim-review"', 'toolFree: true'] : []),
+      'recordAttribution: true',
     ].join(', ');
-    return `### ${reviewer}\n\n\`\`\`bash\nREVIEW_DIFF=$(mktemp)\nREVIEW_RESPONSE=$(mktemp)\ntrap 'rm -f "$REVIEW_DIFF" "$REVIEW_RESPONSE" "\${REVIEW_RESPONSE}.findings"' EXIT\nif ! { ${diffCommand}; } > "$REVIEW_DIFF"; then\n  echo "Unable to resolve the current branch's review diff" >&2\n  exit 1\nfi\njq -Rs ${jqArgs} '{ ${jqObject}, diff: . }' < "$REVIEW_DIFF" | node ${reviewScript} > "$REVIEW_RESPONSE"\nif ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then\n  echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2\n  exit 1\nfi\ncat "\${REVIEW_RESPONSE}.findings"\n\`\`\``;
+    return `### ${reviewer}\n\n\`\`\`bash\nREVIEW_DIFF=$(mktemp)\nREVIEW_RESPONSE=$(mktemp)\ntrap 'rm -f "$REVIEW_DIFF" "$REVIEW_RESPONSE" "\${REVIEW_RESPONSE}.findings"' EXIT\nif ! { ${diffCommand}; } > "$REVIEW_DIFF"; then\n  echo "Unable to resolve the current branch's review diff" >&2\n  exit 1\nfi\njq -Rs ${jqArgs} '{ ${jqObject}, diff: . }' < "$REVIEW_DIFF" | node ${reviewScript} > "$REVIEW_RESPONSE"\n${localReviewAttributionErrorGate({ cleanupDiff: true })}\nif ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then\n  echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2\n  exit 1\nfi\ncat "\${REVIEW_RESPONSE}.findings"\n\`\`\``;
   }).join('\n\n');
 
   const accessPolicy = enforceIsolation

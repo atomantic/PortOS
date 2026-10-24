@@ -36,7 +36,7 @@ import { activeAgents, runnerAgents, completingAgents, spawningTasks, userTermin
 // for handleOrphanedTask. Importing them from their own leaf modules is what
 // lets that edge be a plain static import instead of a dynamic-import dodge.
 import { cleanupAgentWorktree, resolveTaskResumePatch } from './agentWorktreeCleanup.js';
-import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
+import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld, clearedRetryHoldMetadata, isDeliveryCleanupHeld } from '../lib/taskRetryHold.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { REQUEUED_AT_KEY, LAST_SPAWNED_AT_KEY } from '../lib/taskRequeue.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
@@ -1337,7 +1337,7 @@ async function runCleanupOrphanedAgents() {
       // completion, in that order. A hard kill (`pm2 restart`, reboot) lands here,
       // so this is the path that leaves dirt in a managed app repo if any of it
       // is skipped.
-      await retireDeadAgent({
+      const retirement = await retireDeadAgent({
         agent,
         task,
         success: false,
@@ -1356,7 +1356,7 @@ async function runCleanupOrphanedAgents() {
       cleanedCount++;
       retiredAgentIds.push(agent.id);
 
-      if (agent.taskId) {
+      if (agent.taskId && !retirement.deliveryHeld) {
         // Carry the agent's metadata forward rather than re-reading the record
         // later: `getAgent` on a completed agent still hits the disk to hydrate
         // its output.txt tail (capped since #3498, but not free), and the
@@ -1490,6 +1490,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
     return;
   }
 
+  if (isDeliveryCleanupHeld(task.metadata)) return;
   const ctx = { taskId, agentId, task, agentMetadata, agentStartedAt };
   const guard = classifyOrphanGuard(task, agentMetadata);
   if (guard) return ORPHAN_GUARD_HANDLERS[guard](ctx);

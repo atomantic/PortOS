@@ -7,7 +7,6 @@ import {
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
 import CollapsibleSection from '../../ui/CollapsibleSection';
-import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import Pill from '../../ui/Pill';
 import toast from '../../ui/Toast';
 import ProviderModelSelector from '../../ProviderModelSelector';
@@ -24,25 +23,11 @@ import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../.
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
 import RunActionButton from './RunActionButton';
+import { DEFAULT_MERGE_METHOD, MergeAction, PullRequestReviewButton, ACTION_STATUS_LABEL, actionStatusForTask } from './PullRequestActionControls';
 
 const FORGE_LABEL = { github: 'GitHub', gitlab: 'GitLab' };
 
 const ACTION_STATUS_RANK = { queuing: 0, queued: 1, active: 2, completed: 3, blocked: 3, failed: 3 };
-const ACTION_STATUS_LABEL = {
-  queued: 'Queued — view',
-  active: 'Active — view',
-  completed: 'Completed — view',
-  blocked: 'Blocked — view',
-};
-
-const actionStatusForTask = status => ({
-  pending: 'queued',
-  in_progress: 'active',
-  completed: 'completed',
-  blocked: 'blocked',
-  failed: 'failed',
-}[status] || null);
-
 // The three per-row agent actions. They share every piece of state machinery —
 // only the CoS task that backs each one differs, so the kind is data rather
 // than a duplicated block of hooks.
@@ -197,68 +182,6 @@ function ReviewerOverride(props) {
   );
 }
 
-// The direct merge's methods, in the order the forges list them.
-const MERGE_METHOD_LABELS = { merge: 'Merge commit', squash: 'Squash', rebase: 'Rebase' };
-const DEFAULT_MERGE_METHOD = 'merge';
-
-/**
- * The one row action that runs no agent. Armed into an inline confirm rather
- * than merging on the first click: the forge merge is irreversible, and the
- * method and branch deletion are choices the user should see before it happens.
- */
-function MergeAction({
-  pullRequest, idPrefix, title, armed, merging, method, onMethodChange,
-  deleteBranch, onDeleteBranchChange, onArm, onCancel, onConfirm,
-}) {
-  if (!armed) {
-    return (
-      <button
-        type="button"
-        onClick={onArm}
-        title={title}
-        className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white border border-port-border rounded-lg text-xs flex items-center gap-1.5 whitespace-nowrap transition-colors"
-      >
-        <GitMerge size={14} /> Merge
-      </button>
-    );
-  }
-  return (
-    <div className="flex flex-wrap items-center gap-2 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg">
-      <label htmlFor={`${idPrefix}-method-${pullRequest.number}`} className="sr-only">
-        Merge method for #{pullRequest.number}
-      </label>
-      <select
-        id={`${idPrefix}-method-${pullRequest.number}`}
-        value={method}
-        onChange={event => onMethodChange(event.target.value)}
-        className="px-2 py-1 bg-port-card border border-port-border rounded-lg text-white text-xs focus:border-port-accent focus:outline-hidden"
-      >
-        {Object.entries(MERGE_METHOD_LABELS).map(([value, methodLabel]) => (
-          <option key={value} value={value}>{methodLabel}</option>
-        ))}
-      </select>
-      <input
-        id={`${idPrefix}-delete-${pullRequest.number}`}
-        type="checkbox"
-        checked={deleteBranch}
-        onChange={event => onDeleteBranchChange(event.target.checked)}
-      />
-      <label htmlFor={`${idPrefix}-delete-${pullRequest.number}`} className="text-xs text-gray-400">
-        Delete branch
-      </label>
-      <ConfirmButtonPair
-        tone="success"
-        confirmText={`Merge #${pullRequest.number}`}
-        confirmIcon={GitMerge}
-        busy={merging}
-        busyText="Merging…"
-        ariaLabel={`Confirm merging #${pullRequest.number}`}
-        onConfirm={onConfirm}
-        onCancel={onCancel}
-      />
-    </div>
-  );
-}
 
 const actionRecord = (kind, result) =>
   (ACTION_KINDS[kind].queued || (r => r[ACTION_KINDS[kind].field]))(result);
@@ -858,8 +781,10 @@ export default function PullRequestsTab({ appId, appName }) {
                       // shown — the old link went unconditionally to the Agents
                       // page, so "Queued — view" landed on a page with nothing on
                       // it until an agent actually spawned.
+                      // Do:Review queues user tasks; the scheduled review and
+                      // merge follow-up are system tasks.
                       const taskHref = action?.taskId
-                        ? `/cos/tasks?task=${encodeURIComponent(action.taskId)}&source=internal`
+                        ? `/cos/tasks?task=${encodeURIComponent(action.taskId)}&source=${kind === 'doReview' ? 'user' : 'internal'}`
                         : null;
                       if (actionStatus === 'failed') {
                         return (
@@ -885,6 +810,15 @@ export default function PullRequestsTab({ appId, appName }) {
                           </Link>
                         );
                       }
+                      if (kind === 'doReview' || kind === 'review') return (
+                        <PullRequestReviewButton
+                          key={kind}
+                          action={kind === 'doReview' ? 'do-review' : 'untrusted-review'}
+                          onClick={() => queueAction(kind, pullRequest)}
+                          busy={actionStatus === 'queuing'}
+                          title={title(forgeLabel, pullRequest.number, appName)}
+                        />
+                      );
                       return (
                         <RunActionButton
                           key={kind}

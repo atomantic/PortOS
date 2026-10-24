@@ -7,6 +7,7 @@ import { execGitSafe, fetchOrigin, isFetchFresh, resolveForgeForRepo } from './g
 import { execGh } from './github.js';
 import { forgeMissingScopesOf } from '../lib/forgeAccessErrors.js';
 import { forgeScopeMissingError } from './forgeScopeRefresh.js';
+import { inspectPinnedSubmoduleDrift } from './gitPinnedSubmodules.js';
 
 const GH_TIMEOUT_MS = 60_000;
 
@@ -174,6 +175,8 @@ async function inspectCheckout({ id, label, repoPath }) {
   const branch = branchName && branchName !== 'HEAD' ? branchName : null;
   const head = headResult.exitCode === 0 ? headResult.stdout.trim() : null;
   const clean = worktreeResult.exitCode === 0 ? worktreeResult.stdout.trim().length === 0 : null;
+  const submodulesOnly = clean === false
+    && (await inspectPinnedSubmoduleDrift(repoPath)).onlyRepairable;
   // Skip the network hop when this checkout's remote refs were already
   // refreshed inside the freshness window — the refs really are current, so
   // `fresh: true` stays truthful. This read used to be reachable only from the
@@ -205,6 +208,7 @@ async function inspectCheckout({ id, label, repoPath }) {
     head,
     shortHead: head?.slice(0, 7) || null,
     clean,
+    submodulesOnly,
     origin: {
       ...topology.origin,
       url: topology.origin.originUrl,
@@ -287,7 +291,7 @@ export async function getManagedAppRepositorySources(app) {
     // its own origin, plus a fork behind upstream that PortOS is allowed to
     // fast-forward. A fork PortOS can only read stays visible on the Git tab
     // but never claims an update is available.
-    updateAvailable: sources.some((source) => source.localVsOrigin?.behind > 0
+    updateAvailable: sources.some((source) => source.submodulesOnly || source.localVsOrigin?.behind > 0
       || (source.forkSyncable && (source.forkVsUpstream?.behind || 0) > 0)),
     updatePullsAll: true,
     updateRestartsApp: Array.isArray(app?.pm2ProcessNames) && app.pm2ProcessNames.length > 0,

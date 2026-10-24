@@ -38,6 +38,7 @@ import CollapsibleText from '../components/ui/CollapsibleText';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
 import Drawer from '../components/Drawer';
 import AgentCard from '../components/cos/tabs/AgentCard';
+import GitHubNotificationCard from '../components/github/GitHubNotificationCard';
 import TabPills from '../components/ui/TabPills';
 import useUrlParams from '../hooks/useUrlParams';
 import useAsyncAction from '../hooks/useAsyncAction';
@@ -300,6 +301,14 @@ export default function Review() {
     navigate(`/review/${encodeURIComponent(item.id)}?view=${actionView}`);
   };
 
+  const handleGitHubUpdated = (item, notification) => {
+    if (notification.state !== 'open' || !notification.unread || notification.readOnGithub) {
+      handleQueueDismiss(item);
+      if (actionId === item.id) navigate(`/review?view=${actionView}`, { replace: true });
+    }
+    void fetchQueue();
+  };
+
   const handleQueueResolve = async (item, operation, input = {}) => {
     if (resolvingQueueIds.has(item.id)) return;
     setResolvingQueueIds(prev => new Set(prev).add(item.id));
@@ -502,11 +511,11 @@ export default function Review() {
         {!showLegacyReviewSurface && historyDisclosure}
 
         {/* Canonical Actions queue — live-pulled from Brain commitments, manual
-            todos, Ask, CoS, Messages, Health, and Backups. Shown whenever there
+            todos, Ask, CoS, GitHub, Messages, Health, and Backups. Shown whenever there
             are items OR a source failed to load (so the degraded-source notice
             isn't hidden behind an otherwise-empty queue). */}
         {(queueItems.length > 0 || queueSourceErrors.length > 0 || queue?.partial) && (
-          <section className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+          <section className="@container/page bg-port-card border border-port-border rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-white flex items-center gap-2">
                 <Inbox size={16} className="text-port-accent" />
@@ -530,6 +539,8 @@ export default function Review() {
                     onPromoteAsk={handleQueuePromoteAsk}
                     onTriage={handleQueueTriage}
                     onFeedbackSaved={fetchQueue}
+                    onGitHubUpdated={handleGitHubUpdated}
+                    actionLink={`/review/${encodeURIComponent(item.id)}?view=${actionView}`}
                     detailOpen={item.id === actionId}
                     resolving={resolvingQueueIds.has(item.id)}
                   />
@@ -714,6 +725,7 @@ export default function Review() {
         onTriage={handleQueueTriage}
         triagePending={Boolean(actionId && resolvingQueueIds.has(actionId))}
         onSaved={fetchQueue}
+        onGitHubUpdated={handleGitHubUpdated}
         onDrill={handleQueueDrill}
       />
     </div>
@@ -899,10 +911,33 @@ function QueueTriageControls({ item, onTriage, disabled = false }) {
   );
 }
 
-function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, onFeedbackSaved, detailOpen = false, resolving = false }) {
+function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, onFeedbackSaved, onGitHubUpdated, actionLink, detailOpen = false, resolving = false }) {
+  const borderTone = QUEUE_SEVERITY_STYLE[item.severity] || QUEUE_SEVERITY_STYLE.normal;
+  if (item.source === 'github' && item.githubNotification) {
+    return (
+      <div className={`min-w-0 rounded-lg border bg-port-card ${borderTone}`}>
+        <p className="px-3 pt-2 text-xs font-medium text-port-warning">{item.sourceLabel}</p>
+        {detailOpen ? (
+          <button type="button" onClick={() => onSelect?.(item)} className="min-h-[44px] px-3 py-2 text-left text-sm text-white break-words">{item.title}</button>
+        ) : (
+          <GitHubNotificationCard
+            notification={item.githubNotification}
+            accountLabel={item.githubNotification.accountLabel}
+            detailTo={actionLink}
+            onUpdated={(_row, updated) => onGitHubUpdated(item, updated)}
+          />
+        )}
+        {!detailOpen && item.triageOperations?.length > 0 && (
+          <div className="flex flex-wrap gap-2 border-t border-port-border px-3 py-2">
+            <QueueTriageControls item={item} onTriage={onTriage} disabled={resolving} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const config = QUEUE_SOURCE_CONFIG[item.source] || { icon: Inbox, color: 'text-gray-400' };
   const Icon = config.icon;
-  const borderTone = QUEUE_SEVERITY_STYLE[item.severity] || QUEUE_SEVERITY_STYLE.normal;
   const pullRequestUrl = safeExternalHttpUrl(item.meta?.reviewLoopPRUrl);
   const promoteTargets = Array.isArray(item.promoteTargets) ? item.promoteTargets : [];
   const goalOptions = Array.isArray(item.goalOptions) ? item.goalOptions : [];
@@ -922,7 +957,6 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
   const inlineActions = item.action
     ? [{ id: 'resolve', label: item.action }]
     : sourceOperations.filter((operation) => operation.id !== 'rate');
-
   return (
     <div className={`grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3 p-3 rounded-lg border bg-port-card ${borderTone}`}>
       <div className={`mt-0.5 shrink-0 ${config.color}`}>
@@ -1231,7 +1265,7 @@ const threadDraft = (record) => ({
   notes: record?.notes || '',
 });
 
-function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = false, onSaved, onDrill }) {
+function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = false, onSaved, onGitHubUpdated, onDrill }) {
   const isThread = item?.source === 'threads';
   const isTodo = item?.source === 'todo';
   const [record, setRecord] = useState(item);
@@ -1308,18 +1342,27 @@ function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = fals
       closeLabel="Close action"
     >
       <div className="space-y-5">
-        <div className="space-y-2">
-          <p className="text-sm text-gray-300">{item.summary || 'No additional context.'}</p>
-          <div className="flex flex-wrap gap-2 text-xs">
-            {localStatus && <span className="rounded border border-port-accent/30 px-2 py-1 text-port-accent">Commitment: {localStatus}</span>}
-            {item.meta?.taskStatus && <span className={`rounded border px-2 py-1 ${item.meta.taskStatus === 'blocked' ? 'border-port-warning/30 text-port-warning' : 'border-port-border text-gray-400'}`}>Task: {item.meta.taskStatus}</span>}
-            {item.meta?.blockedCategory && <span className="rounded border border-port-warning/30 px-2 py-1 text-port-warning">Block: {item.meta.blockedCategory}</span>}
-            {externalState && <span className="rounded border border-port-border px-2 py-1 text-gray-400">External: {externalState}</span>}
-            {item.meta?.externalSource && <span className="rounded border border-port-border px-2 py-1 text-gray-400">Source: {item.meta.externalSource}</span>}
-            {item.meta?.appLabel && <span className="rounded border border-port-border px-2 py-1 text-gray-400">App: {item.meta.appLabel}</span>}
+        {item.source === 'github' && item.githubNotification ? (
+          <GitHubNotificationCard
+            key={item.id}
+            notification={item.githubNotification}
+            accountLabel={item.githubNotification.accountLabel}
+            onUpdated={(_row, updated) => onGitHubUpdated(item, updated)}
+          />
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm text-gray-300">{item.summary || 'No additional context.'}</p>
+            <div className="flex flex-wrap gap-2 text-xs">
+              {localStatus && <span className="rounded border border-port-accent/30 px-2 py-1 text-port-accent">Commitment: {localStatus}</span>}
+              {item.meta?.taskStatus && <span className={`rounded border px-2 py-1 ${item.meta.taskStatus === 'blocked' ? 'border-port-warning/30 text-port-warning' : 'border-port-border text-gray-400'}`}>Task: {item.meta.taskStatus}</span>}
+              {item.meta?.blockedCategory && <span className="rounded border border-port-warning/30 px-2 py-1 text-port-warning">Block: {item.meta.blockedCategory}</span>}
+              {externalState && <span className="rounded border border-port-border px-2 py-1 text-gray-400">External: {externalState}</span>}
+              {item.meta?.externalSource && <span className="rounded border border-port-border px-2 py-1 text-gray-400">Source: {item.meta.externalSource}</span>}
+              {item.meta?.appLabel && <span className="rounded border border-port-border px-2 py-1 text-gray-400">App: {item.meta.appLabel}</span>}
+            </div>
+            {pullRequestUrl && <a href={pullRequestUrl} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-[44px] items-center gap-1 text-sm text-port-accent hover:underline"><ExternalLink size={14} /> Open pull request</a>}
           </div>
-          {pullRequestUrl && <a href={pullRequestUrl} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-[44px] items-center gap-1 text-sm text-port-accent hover:underline"><ExternalLink size={14} /> Open pull request</a>}
-        </div>
+        )}
 
         {(isThread || isTodo) && (
           <section className="space-y-3">

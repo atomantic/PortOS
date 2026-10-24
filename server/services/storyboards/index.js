@@ -56,10 +56,13 @@ export async function getStoryboard(id) {
   return board;
 }
 
-/** A new board; `beats` seeds it (e.g. built from a music video's shots). */
-export async function createStoryboard(input = {}, { beats = [] } = {}) {
+/**
+ * A new board; `beats` seeds it (e.g. built from a music video's shots) and
+ * `source` names the production it was made from (server-set, never patched).
+ */
+export async function createStoryboard(input = {}, { beats = [], source = null } = {}) {
   const now = new Date().toISOString();
-  const board = sanitizeStoryboard({ ...pickFields(input, BOARD_FIELDS), id: newStoryboardId(), beats, createdAt: now, updatedAt: now });
+  const board = sanitizeStoryboard({ ...pickFields(input, BOARD_FIELDS), id: newStoryboardId(), beats, source, createdAt: now, updatedAt: now });
   await writeRaw(board.id, board);
   emitRecordUpdated(STORYBOARD_KIND, board.id);
   autoSubscribeRecordToAllPeers(STORYBOARD_KIND, board.id).catch(() => {});

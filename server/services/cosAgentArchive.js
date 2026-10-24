@@ -17,6 +17,8 @@ import { cosEvents } from './cosEvents.js';
 import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, ensureDir } from '../lib/fileUtils.js';
 import { loadAgentIndex, saveAgentIndex, recordArchivedAgentOrder, moveAgentDir } from './cosAgentIndex.js';
+import { readProtectedCleanupOwners } from './cosAgentLifecycle.js';
+import { releaseAgentReservation } from './agentMaintenanceReservations.js';
 
 // Archive stale completed agents from state.json.
 // Completed agents are already persisted to per-agent metadata files on disk
@@ -88,35 +90,70 @@ export async function clearCompletedAgents() {
   return withBackupAssetPublication(() => withStateLock(async () => {
     const state = await loadState();
     const idx = await loadAgentIndex();
+    const protectedOwners = await readProtectedCleanupOwners({ state, index: idx });
 
-    // Remove completed agents from state
+    // Remove unprotected completed agents from state; retain current cleanup/retry owners
     const stateCompleted = Object.keys(state.agents).filter(
       id => state.agents[id].status === 'completed'
     );
+    const removableStateIds = [];
+    const retainedIds = new Set();
     for (const id of stateCompleted) {
+      if (protectedOwners.isProtected(id)) {
+        retainedIds.add(id);
+        continue;
+      }
+      removableStateIds.push(id);
       delete state.agents[id];
     }
-    await saveState(state);
+    if (removableStateIds.length > 0) {
+      await saveState(state, { changedAgentIds: removableStateIds });
+    }
 
-    // Collect all unique dates from index, then remove date bucket dirs
-    const dates = new Set(idx.values());
-    const totalCleared = idx.size + stateCompleted.filter(id => !idx.has(id)).length;
+    const removedIndexEntries = [];
+    const retainedDates = new Set();
+    const allDates = new Set();
+    for (const [id, date] of idx) {
+      allDates.add(date);
+      if (protectedOwners.isProtected(id)) {
+        retainedIds.add(id);
+        retainedDates.add(date);
+      } else {
+        removedIndexEntries.push([id, date]);
+      }
+    }
+
+    const totalCleared = removedIndexEntries.length + removableStateIds.filter(id => !idx.has(id)).length;
 
     // Remove durable references before bytes; a failed index write must leave
     // the old archive trees readable and its in-memory lookup retryable.
-    const previousEntries = [...idx];
-    idx.clear();
-    try { await saveAgentIndex(); }
-    catch (err) { for (const [id, date] of previousEntries) idx.set(id, date); throw err; }
+    if (removedIndexEntries.length > 0) {
+      for (const [id] of removedIndexEntries) idx.delete(id);
+      try { await saveAgentIndex(); }
+      catch (err) { for (const [id, date] of removedIndexEntries) idx.set(id, date); throw err; }
+    }
 
-    const removals = [...dates].map(date => {
+    // Whole buckets with no retained entries can be removed in one pass; mixed
+    // buckets remove only the unprotected agent directories inside them.
+    const removals = [];
+    for (const date of allDates) {
+      if (retainedDates.has(date)) continue;
       const dateDir = join(AGENTS_DIR, date);
-      return existsSync(dateDir)
-        ? rm(dateDir, { recursive: true }).catch(() => {})
-        : Promise.resolve();
-    });
+      if (existsSync(dateDir)) {
+        removals.push(rm(dateDir, { recursive: true }).catch(() => {}));
+      }
+    }
+    for (const [id, date] of removedIndexEntries) {
+      if (!retainedDates.has(date)) continue;
+      const agentDir = join(AGENTS_DIR, date, id);
+      if (existsSync(agentDir)) {
+        removals.push(rm(agentDir, { recursive: true }).catch(() => {}));
+      }
+    }
     await Promise.all(removals);
 
-    return { cleared: totalCleared };
+    for (const id of removableStateIds) await releaseAgentReservation(id);
+    cosEvents.emit('agents:changed', { action: 'cleared-completed', cleared: totalCleared, retained: retainedIds.size });
+    return { cleared: totalCleared, retained: retainedIds.size };
   }));
 }

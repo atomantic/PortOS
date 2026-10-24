@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, act } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, act, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../hooks/useAssignableInstances', () => ({ default: () => ({ instances: [], isFederated: false }) }));
@@ -48,6 +48,62 @@ describe('TasksTab spawning window', () => {
   // `startedAt` is how the settlement tells a live spawn from a zombie record —
   // registerAgent always stamps it. See server/lib/cosSpawnWindow.js.
   const liveAgent = (id, taskId, ageMs = 0) => ({ id, status: 'running', taskId, startedAt: new Date(Date.now() - ageMs).toISOString() });
+
+  it('separates cleanup-held user and system tasks from running work', async () => {
+    const heldTask = id => ({ id, description: `Finalize ${id}`, status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: `agent-${id}` } });
+    renderTab({
+      tasks: { user: { tasks: [heldTask('task-example')] }, cos: { tasks: [heldTask('sys-rl-example')] } },
+      agents: [{ id: 'agent-sys-rl-example', taskId: 'sys-rl-example', status: 'completed' }],
+    });
+
+    const user = await screen.findByRole('region', { name: 'User tasks finalizing delivery' });
+    const system = screen.getByRole('region', { name: 'System tasks finalizing delivery' });
+    expect(within(user).getByText('Finalize task-example')).toBeInTheDocument();
+    expect(within(system).getByText('Finalize sys-rl-example')).toBeInTheDocument();
+    expect(within(system).getByRole('button', { name: /Status: finalizing/ })).toBeInTheDocument();
+    expect(screen.queryByText(/^Active \(/)).toBeNull();
+    expect(screen.queryByText(/^Active agent /)).toBeNull();
+  });
+
+  it('keeps an actual running agent active even if an old cleanup marker remains', async () => {
+    renderTab({
+      tasks: { user: { tasks: [] }, cos: { tasks: [{ ...pendingTask('sys-running'), status: 'in_progress',
+        metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-older' } }] } },
+      agents: [liveAgent('agent-current', 'sys-running')],
+    });
+
+    expect(await screen.findByText('Active (1)')).toBeInTheDocument();
+    expect(screen.getByText('Active agent agent-current')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /finalizing delivery/ })).toBeNull();
+  });
+
+  it('shows the exact cleanup owner, last check and retry gate, and animates only live recovery', async () => {
+    const task = { id: 'task-held', description: 'Deliver example change', status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-owner' } };
+    const owner = { id: 'agent-owner', taskId: task.id, status: 'completed', metadata: {
+      repoStateVerification: { checkedAt: '2026-01-01T12:00:00Z', reasons: ['cleanup-already-warned'] },
+      cleanupOutcome: { status: 'blocked', reason: 'preservation-unverified', taskId: 'task-recovery' },
+    }, result: { taskOutcome: { reason: 'The archive still needs verification.' } } };
+    const view = activity => <MemoryRouter><TasksTab tasks={{ user: { tasks: [task] }, cos: { tasks: [] } }}
+      agents={[{ ...owner, deliveryActivity: activity }, { id: 'agent-other', taskId: task.id, status: 'completed' }]}
+      completionRecovery={{ blockedReason: 'CoS is paused', nextRunAt: null, intervalMs: 1800000, batchSize: 10 }}
+      onRefresh={vi.fn()} providers={[]} apps={[]} /></MemoryRouter>;
+    const { rerender } = render(view(null));
+    expect(await screen.findByText(/Automatic recovery is waiting: CoS is paused/)).toBeInTheDocument();
+    expect(screen.getByText(/Waiting for delivery recovery — agent is not running/)).toBeInTheDocument();
+    expect(screen.getByText('Last check: preservation unverified.')).toBeInTheDocument();
+    expect(screen.getByText(/Last checked:/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /View recovery task/ })).toHaveAttribute('href', '/cos/tasks?task=task-recovery');
+    expect(screen.getByRole('link', { name: /View agent report/ })).toHaveAttribute('href', '/cos/agents/agent-owner');
+    expect(screen.getByLabelText('Delivery activity').querySelector('.animate-spin')).toBeNull();
+    rerender(view({ label: 'Checking repository preservation' }));
+    expect(screen.getByText('Checking repository preservation')).toBeInTheDocument();
+    expect(screen.getByLabelText('Delivery activity').querySelector('.animate-spin')).not.toBeNull();
+    rerender(view(null));
+    expect(screen.getByText(/agent is not running/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Delivery activity').querySelector('.animate-spin')).toBeNull();
+  });
 
   it('moves a pending task with a live agent out of Pending and into Active', async () => {
     renderTab({

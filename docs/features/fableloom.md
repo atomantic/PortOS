@@ -8,6 +8,11 @@ decision nodes loop while the viewer chooses a path or gives free-text
 feedback—when that story's audience role permits it. A loom holds one or more ordered episodes, and the Play surface can
 rehearse the same experience at any of those three production stages.
 
+The [runtime v1 contract](fableloom-runtime-v1.md) documents traversal, live-input
+gates and the mapping from portable events to private hosted sessions. The
+[portable export](fableloom-export-v1.md) packages authored episodes for an
+external host and, only when asked, cast inputs and approved voice references.
+
 ## Planning a series
 
 The series editor has separate, linkable sections for the arc, plot points and
@@ -111,6 +116,17 @@ scene-local clothes cannot silently reappear between episodes.
   story order with their authored prose, endings, and reader paths. Unreachable
   scenes remain visible in a separate section, and path destinations return to
   the matching scene in the visual editor.
+- **`/fableloom/:loomId/:episodeId/board`** — one path through the episode as
+  storyboard panels (scene image or text, shot length, ending), grouped by
+  dramatic scene. The path follows the first choice at each fork; a fork's
+  choices sit under its panel, and picking one moves the path (`?via=` holds
+  the picked transition ids). The path stops at an ending, a loop back or a
+  scene with no way on; tapping a panel opens that scene in the graph.
+  **Make storyboard from this path** copies the path into Create ›
+  Storyboards (one beat per dramatic scene, one panel per scene with its image
+  prompt, length, camera move and image), where the panel maker's recipes make
+  new art; a panel's **Use as scene art** sends its selected image back to its
+  scene. Boards made from the episode are linked beside the button.
 - **Episode setup → Story beats → teleplay** — the production gate: draft one
   concise log-line per eventual camera cut, edit paths and audience-channel
   states, run the deterministic validator, and optionally ask the AI story

@@ -1,9 +1,9 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { delimiter, join } from 'path';
+import { delimiter, dirname, join, relative } from 'path';
 import { stripVTControlCharacters } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -24,9 +24,15 @@ import * as nodeFs from 'node:fs';
 import * as nodePath from 'node:path';
 import { computeTestMemoKeys, createDiskFs, relatedTests } from './lib/testMemo.js';
 import { vitestShardSlice } from './lib/testMemoRunner.js';
+import { guardInputSnapshot } from './lib/pregateReport.js';
 import { toWorkspacePath } from './lib/workspaceTests.js';
-import { OWNER_FILE, STALE_ROOT_AGE_MS } from './lib/vitestStaleRunRoots.js';
+import { BROWSER_SUITES } from './lib/browserSuites.js';
+import { staticImportClosure } from '../server/lib/staticImportGraph.js';
+import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js';
+import { readTestProcesses } from './lib/testOwnedProcesses.js';
+import { OWNER_FILE, STALE_ROOT_AGE_MS, sweepStaleRunRoots } from './lib/vitestStaleRunRoots.js';
 import { workflowJobs } from './lib/workflowJobs.js';
+import { buildCiTestPlan, collectPlanInputs } from './ci-test-plan.js';
 
 // Synthetic crash/retry cases must not print a fabricated crash as a real
 // Actions annotation. Duration/summary tests retain real I/O.
@@ -108,6 +114,41 @@ it('hands Vitest the selection as a file, sliced by the runner for the matrix sh
   }
 }, 150_000);
 
+it('hands the real client fixture consumers to Vitest for a shared browser cleanup change', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'portos-client-helper-selection-'));
+  try {
+    installFakeNpm(fixture, REPORTING_NPM);
+    const source = 'scripts/lib/ownedBrowserCleanup.js';
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd: join(import.meta.dirname, '..') });
+    const plan = buildCiTestPlan(inputs.changedFiles, inputs);
+    expect(plan.full).toBe(false);
+    expect(plan.build).toBe(false);
+    expect(plan.server.mode).toBe('related');
+    expect(plan.server.sources).toContain(source);
+    expect(plan.browserFiles.length).toBeGreaterThan(0);
+    expect(plan.client.mode).toBe('files');
+    const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'client'], {
+      encoding: 'utf8', timeout: 120000,
+      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
+        CI_TEST_MODE: plan.client.mode, CI_SHARD: '', PORTOS_TEST_MEMO: 'off',
+        CI_TEST_SOURCES: JSON.stringify(plan.client.sources), CI_TEST_FILES: JSON.stringify(plan.client.files),
+        PORTOS_PREGATE_GUARDS: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const { selection } = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"args"')));
+    expect(selection.include).toEqual(expect.arrayContaining([
+      'src/test/browserFixture.test.js',
+      'src/components/ThemeSwitcher.browser.test.js',
+      'src/components/goals/GoalsTreeView.browser.test.js',
+      'src/components/ui/OverflowMenu.browser.test.js',
+    ]));
+    expect(selection.include.sort()).toEqual(plan.client.files.map(file => toWorkspacePath('client', file)).sort());
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+}, 150_000);
+
 it('runs the db scope through the server workspace\'s test:db:ci script with the same selection file', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'portos-db-scope-'));
   try {
@@ -146,6 +187,7 @@ describe('test memo through the real runner', () => {
         // The run-level report scripts/vitestRunDiagnostics.js would write; PORTOS_FAKE_LATE_ERROR simulates a rejection after the last test.
         'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: process.env.PORTOS_FAKE_LATE_ERROR ? 1 : 0, errors: [] }));',
         'process.stdout.write("RAN " + JSON.stringify(selection.include) + "\\n");',
+        'process.stdout.write("ARGS " + JSON.stringify(process.argv.slice(2)) + "\\n");',
       ].join('\n'));
       const test = 'scripts/lib/releaseTitle.test.js';
       const run = (extraEnv = {}) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
@@ -154,7 +196,7 @@ describe('test memo through the real runner', () => {
           CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([test]), CI_TEST_SOURCES: '[]',
           // An inherited PORTOS_TEST_MEMO=off (a developer's shell, a recording run) must not turn this contract off,
           // and an inherited CI_SHARD (a matrix job) must not slice the one selected file away.
-          PORTOS_TEST_MEMO: '', CI_SHARD: '', PORTOS_TEST_MEMO_DIR: memoDir, PORTOS_TEST_MEMO_VERBOSE: '1', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
+          PORTOS_TEST_MEMO: '', CI_SHARD: '', PORTOS_TEST_MEMO_DIR: memoDir, PORTOS_TEST_MEMO_VERBOSE: '1', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', GITHUB_EVENT_NAME: 'push', ...extraEnv },
       });
       // A green-looking report with a run-level error records nothing.
       const tainted = run({ PORTOS_FAKE_LATE_ERROR: '1' });
@@ -162,18 +204,36 @@ describe('test memo through the real runner', () => {
       expect(tainted.stdout).toContain('RAN ');
       expect(tainted.stdout).not.toContain('recorded');
 
+      // Pull-request jobs restore trusted memos but never publish them. Their
+      // green test result must not pay to compute a disposable replacement.
+      const pullRequestMemo = join(fixture, 'pull-request-memo');
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const pr = run({ GITHUB_EVENT_NAME: 'pull_request', PORTOS_TEST_MEMO_DIR: pullRequestMemo });
+        expect(pr.status, pr.stderr).toBe(0);
+        expect(pr.stdout).toContain('RAN ["../scripts/lib/releaseTitle.test.js"]');
+        expect(pr.stdout).not.toContain('recorded');
+        expect(pr.stdout).not.toContain('--experimental.recordDependencies');
+        expect(existsSync(pullRequestMemo) && readdirSync(pullRequestMemo).length > 0).toBe(false);
+      }
+
       const first = run();
       expect(first.status, first.stderr).toBe(0);
       expect(first.stdout).toContain('🧠 Test memo: skipped 0 of 1 selected files (closure unchanged); running 1.');
       expect(first.stdout).toContain('RAN ["../scripts/lib/releaseTitle.test.js"]');
       // Two entries when this checkout's Vitest cache already holds a depfile for the file (a recorded key), one otherwise.
       expect(first.stdout).toMatch(/recorded [12] green entries for 1 passed files/);
+      expect(first.stdout).toContain('--experimental.recordDependencies');
 
       const second = run();
       expect(second.status, second.stderr).toBe(0);
       expect(second.stdout).toContain('🧠 Test memo: skipped 1 of 1 selected files (closure unchanged); running 0.');
       expect(second.stdout).toMatch(new RegExp(`skipped ${test.replace(/[./]/g, '\\$&')} \\((?:recorded|floor) key\\)`));
       expect(second.stdout).not.toContain('RAN ');
+
+      const trustedPr = run({ GITHUB_EVENT_NAME: 'pull_request' });
+      expect(trustedPr.status, trustedPr.stderr).toBe(0);
+      expect(trustedPr.stdout).toContain('skipped 1 of 1 selected files');
+      expect(trustedPr.stdout).not.toContain('RAN ');
 
       // A gating environment variable is part of the key.
       const other = run({ PORTOS_TEST_QUIET: process.env.PORTOS_TEST_QUIET === '1' ? '' : '1' });
@@ -219,6 +279,113 @@ describe('test memo through the real runner', () => {
       rmSync(fixture, { recursive: true, force: true });
     }
   }, 120_000);
+});
+
+// Guard admission hashes tree/index/status/refs. Keep synthetic proofs off
+// the shared checkout, where other real suites may create source fixtures.
+async function createRunnerSandbox(files) {
+  const sandbox = await makeGitSandbox({ prefix: 'portos-runner-proof-' });
+  const { scratch, repo } = sandbox;
+  try {
+    const sourceRoot = join(import.meta.dirname, '..');
+    for (const source of staticImportClosure(join(sourceRoot, 'scripts/run-ci-tests.js')).files) {
+      const destination = join(repo, relative(sourceRoot, source));
+      mkdirSync(dirname(destination), { recursive: true });
+      copyFileSync(source, destination);
+    }
+    writeFileSync(join(repo, 'package.json'), '{"type":"module"}');
+    for (const path of files) {
+      mkdirSync(dirname(join(repo, path)), { recursive: true });
+      writeFileSync(join(repo, path), '// synthetic runner selection fixture\n');
+    }
+    const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+    git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
+    git('add', '--all');
+    git('commit', '-qm', 'runner selection fixture');
+    return sandbox;
+  } catch (error) {
+    await destroyGitSandbox(scratch);
+    throw error;
+  }
+}
+
+it.each(['files', 'full'])('validates the guard proof before the actual %s Vitest selection with the persistent memo off', async (mode) => {
+  const guard = 'server/lib/index.test.js';
+  const { scratch: fixture, repo: root } = await createRunnerSandbox([guard, 'scripts/example.test.js']);
+  try {
+    installFakeNpm(fixture, 'if (process.env.PORTOS_PREGATE_GUARDS) throw new Error("Guard proof leaked to test process");\n' + REPORTING_NPM);
+    const result = spawnSync(process.execPath, [join(root, 'scripts/run-ci-tests.js'), 'server'], {
+      cwd: root, encoding: 'utf8', timeout: 120000,
+      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, CI_SHARD: '',
+        CI_TEST_MODE: mode, CI_TEST_FILES: JSON.stringify([guard, 'scripts/example.test.js']),
+        CI_TEST_SOURCES: '["scripts/lib/directInvocation.js"]',
+        PORTOS_PREGATE_GUARDS: JSON.stringify({ files: [guard], snapshot: mode === 'files' ? guardInputSnapshot(root) : 'stale' }),
+        PORTOS_TEST_MEMO: 'off', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    if (mode === 'files') expect(result.stdout).toContain('Reused 1 structural guards');
+    else expect(result.stdout).not.toContain('Reused');
+    const { selection } = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"args"')));
+    if (mode === 'files') expect(selection.include).not.toContain('lib/index.test.js');
+    else expect(selection.include).toContain('lib/index.test.js');
+    expect(selection.include).toContain('../scripts/example.test.js');
+  } finally {
+    await destroyGitSandbox(fixture);
+  }
+  // Include the child's existing 120s budget plus real Git setup/teardown.
+  // Windows can otherwise expire the outer 30s test while that child is valid.
+}, 150_000);
+
+it('keeps explicit browser selectors with their owner after structural guard reuse', async () => {
+  const guard = 'server/lib/index.test.js';
+  const browser = 'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js';
+  const ordinary = 'scripts/example.test.js';
+  const { scratch: fixture, repo: root } = await createRunnerSandbox([guard, browser, ordinary]);
+  const run = ({ owner, files, proof }) => spawnSync(process.execPath, [join(root, 'scripts/run-ci-tests.js'), 'server'], {
+    cwd: root, encoding: 'utf8', timeout: 10000,
+    env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, CI_SHARD: '',
+      CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify(files), CI_TEST_SOURCES: '[]',
+      CI: 'true', PORTOS_CI_BROWSER_OWNER: owner, PORTOS_BROWSER_TEST_PROFILE: undefined,
+      PORTOS_PREGATE_GUARDS: proof ? JSON.stringify({ files: [guard], snapshot: proof }) : '',
+      PORTOS_TEST_MEMO: 'off', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+  });
+  try {
+    expect(BROWSER_SUITES).toContain(browser);
+    installFakeNpm(fixture, REPORTING_NPM);
+    const proof = guardInputSnapshot(root);
+    expect(proof).toEqual(expect.any(String));
+    // The failing pregate boundary: the guard is already proven and the only
+    // remaining explicit selector belongs to the separate browser stage.
+    const unitOnly = run({ owner: 'unit', files: [guard, browser], proof });
+    expect(unitOnly.error).toBeUndefined();
+    expect(unitOnly.status, unitOnly.stderr).toBe(0);
+    expect(unitOnly.stdout).toContain('Reused 1 structural guards');
+    expect(unitOnly.stdout).toContain('No server tests left to run');
+    expect(unitOnly.stdout).not.toContain('{"args"');
+
+    // A mixed selection still runs its ordinary contract, and dedicated
+    // browser / local / Windows callers keep explicitly selected coverage.
+    const mixed = run({ owner: 'unit', files: [ordinary, browser] });
+    expect(mixed.status, mixed.stderr).toBe(0);
+    const selectionOf = (result) => JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"args"'))).selection.include;
+    expect(selectionOf(mixed)).toEqual(['../scripts/example.test.js']);
+    const owned = run({ owner: 'browser', files: [browser] });
+    expect(owned.status, owned.stderr).toBe(0);
+    expect(selectionOf(owned)).toEqual([toWorkspacePath('server', browser)]);
+    const local = run({ owner: '', files: [browser] });
+    expect(local.status, local.stderr).toBe(0);
+    expect(selectionOf(local)).toEqual([toWorkspacePath('server', browser)]);
+
+    // Control: a real on-disk change invalidates the same proof and runs the
+    // guard, preserving production's exact-input admission under CI=true.
+    writeFileSync(join(root, 'initial.txt'), 'changed after proof');
+    const changed = run({ owner: 'unit', files: [guard, browser], proof });
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(changed.stdout).not.toContain('Reused');
+    expect(selectionOf(changed)).toEqual([toWorkspacePath('server', guard)]);
+  } finally {
+    await destroyGitSandbox(fixture);
+  }
 });
 
 it('rejects empty browser coverage except explicitly deferred smoke-only inputs', () => {
@@ -691,6 +858,28 @@ describe('structured failure diagnostics', () => {
   }, 35_000);
 });
 
+// A containment report written after the ordinary reporter snapshot must survive
+// the launcher's nondurable-attempt cleanup, including otherwise green runs.
+it('retains process settlement evidence from a completed launcher attempt', async () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'process-report-launcher-'));
+  let diagnosticsPath;
+  try {
+    installFakeNpm(fixture, `require('node:fs').writeFileSync(process.env.PORTOS_TEST_PROCESS_DIAGNOSTICS_PATH,
+      JSON.stringify({ version: 1, total: 1, terminated: 1, unsettled: 0, processes: [] }));`);
+    const { runNpm } = await import('./run-ci-tests.js');
+    const result = await runNpm('server', 'test:ci', [], {
+      env: { ...process.env, PORTOS_CI_DIAGNOSTICS_DIR: '', PATH: `${fixture}${delimiter}${process.env.PATH}` },
+    });
+    diagnosticsPath = result.diagnosticsPath;
+    expect(result.status).toBe(0);
+    expect(diagnosticsPath).toBeTruthy();
+    expect(JSON.parse(readFileSync(join(diagnosticsPath, 'processes.json'), 'utf8'))).toMatchObject({ total: 1, terminated: 1 });
+  } finally {
+    if (diagnosticsPath) rmSync(diagnosticsPath, { recursive: true, force: true });
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 describe('report launcher subprocess lifecycle (#9804)', () => {
   const runnerUrl = new URL('./run-ci-tests.js', import.meta.url).href;
 
@@ -884,6 +1073,10 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
       const result = await next.closed;
       expect(result.code, result.output).toBe(0);
       expect(ownedRoot(host, next.child.pid)).toBeUndefined();
+      // Unreadable unrelated host processes now make automatic reclamation
+      // conservative. Prove retirement against the complete fixture inventory.
+      sweepStaleRunRoots(host, { prefix: 'portos-vitest-',
+        read: ids => readTestProcesses(ids ?? [process.pid, process.ppid, ...descendants, ...runs.map(run => run.child.pid)]) });
       expect(existsSync(deadRoot)).toBe(false);
       expect(existsSync(liveRoot)).toBe(true);
       expect(alive(live.child.pid)).toBe(true);

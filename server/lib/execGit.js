@@ -5,6 +5,7 @@
 
 import { spawn } from './childProcess.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { StringDecoder } from 'node:string_decoder';
 
 const mutationLifetime = new AsyncLocalStorage();
 /** Admission owners retain their durable permit when Git/helper exit is uncertain. */
@@ -16,11 +17,12 @@ export const withGitMutationLifetime = (work, onUncertain) => mutationLifetime.r
  * @param {string} cwd - Working directory (required — an absent cwd would
  *   silently resolve to process.cwd(), i.e. PortOS's own checkout)
  * @param {object} options - Additional options
- * @param {number} [options.maxBuffer] - Max output buffer size in bytes (default 10 MB)
+ * @param {number} [options.maxBuffer] - Max combined output in JavaScript code units (default 10 * 1024 * 1024)
+ * @param {boolean} [options.bufferOutput] - Return original output bytes; the same decoded code-unit limit applies
  * @param {number} [options.timeout] - Timeout in ms (default 30s)
  * @param {boolean} [options.ignoreExitCode] - Resolve instead of reject on non-zero exit
  * @param {object} [options.env] - Explicit child environment; omitted inherits normally
- * @returns {Promise<{stdout: string, stderr: string, exitCode: number|null, signal?: string, terminated?: boolean}>}
+ * @returns {Promise<{stdout: string|Buffer, stderr: string|Buffer, exitCode: number|null, signal?: string, terminated?: boolean}>}
  */
 export function execGit(args, cwd, options = {}) {
   return new Promise((resolve, reject) => {
@@ -46,6 +48,19 @@ export function execGit(args, cwd, options = {}) {
     const onUncertain = mutationLifetime.getStore();
     let stdout = '';
     let stderr = '';
+    let outputUnits = 0;
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    const collect = (data, decoder, chunks, channel) => {
+      const bytes = typeof data === 'string' ? Buffer.from(data) : data;
+      const decoded = decoder.write(bytes);
+      outputUnits += decoded.length;
+      if (options.bufferOutput) chunks.push(bytes);
+      else if (channel === 'stdout') stdout += decoded;
+      else stderr += decoded;
+    };
+    const stdoutDecoder = new StringDecoder('utf8');
+    const stderrDecoder = new StringDecoder('utf8');
     let killed = false;
     let failure = null;
     let escalation = null;
@@ -65,36 +80,56 @@ export function execGit(args, cwd, options = {}) {
       }, 5000);
     };
 
+    const started = performance.now();
     const timer = setTimeout(() => {
       if (!killed) {
-        terminate(new Error(`git command timed out after ${timeout / 1000}s: git ${args.join(' ')}`));
+        terminate(Object.assign(new Error(`git command timed out after ${timeout / 1000}s: git ${args.join(' ')}`), {
+          code: 'GIT_TIMEOUT', limitMs: timeout, observedMs: Math.ceil(performance.now() - started),
+        }));
       }
     }, timeout);
 
-    // Both streams share one overflow guard against the combined byte count so
+    // Both streams share one overflow guard against the combined code-unit count so
     // a runaway command can't blow past maxBuffer on either channel.
+    const outputLimitError = () => Object.assign(new Error(`git output exceeded maxBuffer (${maxBuffer} code units)`), {
+      code: 'GIT_OUTPUT_LIMIT', limitCodeUnits: maxBuffer, observedCodeUnits: outputUnits,
+    });
     const guardOverflow = () => {
-      if (stdout.length + stderr.length > maxBuffer && !killed) {
+      if (outputUnits > maxBuffer && !killed) {
         clearTimeout(timer);
-        terminate(new Error(`git output exceeded maxBuffer (${maxBuffer} bytes)`));
+        terminate(outputLimitError());
       }
     };
 
     child.stdout.on('data', (data) => {
       if (killed) return;
-      stdout += data.toString();
+      collect(data, stdoutDecoder, stdoutChunks, 'stdout');
       guardOverflow();
     });
 
     child.stderr.on('data', (data) => {
       if (killed) return;
-      stderr += data.toString();
+      collect(data, stderrDecoder, stderrChunks, 'stderr');
       guardOverflow();
     });
 
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       clearTimeout(escalation);
+      const stdoutTail = stdoutDecoder.end();
+      const stderrTail = stderrDecoder.end();
+      outputUnits += stdoutTail.length + stderrTail.length;
+      if (options.bufferOutput) {
+        stdout = Buffer.concat(stdoutChunks);
+        stderr = Buffer.concat(stderrChunks);
+      } else {
+        stdout += stdoutTail;
+        stderr += stderrTail;
+      }
+      if (!failure && outputUnits > maxBuffer) {
+        markUncertain();
+        failure = outputLimitError();
+      }
       if (failure) { reject(failure); return; }
       if (code === null && signal) {
         markUncertain();
@@ -106,7 +141,7 @@ export function execGit(args, cwd, options = {}) {
           }));
         }
       } else if (code !== 0 && !options.ignoreExitCode) {
-        reject(new Error(stderr || `git exited with code ${code}`));
+        reject(new Error(stderr.length ? stderr.toString() : `git exited with code ${code}`));
       } else {
         resolve({ stdout, stderr, exitCode: code });
       }

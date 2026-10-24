@@ -59,6 +59,25 @@ const isLongLivedSourceBranch = (headBranch, baseBranch) => {
   return !head || PROTECTED_BRANCHES.includes(head) || head === String(baseBranch || '').trim();
 };
 
+/** Conservative readiness for unattended inbox merges; no checks is unknown. */
+export function pullRequestMergeReadiness(pullRequest) {
+  if (!pullRequest || pullRequest.state !== 'open') return 'closed';
+  if (pullRequest.isDraft) return 'draft';
+  if (!/^[a-f0-9]{40}$/i.test(pullRequest.headSha || '')) return 'unknown-head';
+  if (pullRequest.mergeStateStatus !== 'CLEAN' || pullRequest.mergeable !== 'MERGEABLE') return 'not-mergeable';
+  if (['CHANGES_REQUESTED', 'REVIEW_REQUIRED'].includes(pullRequest.reviewDecision)) return 'review-required';
+  if (!pullRequest.checks?.length || pullRequest.checks.some(check => !['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(check.status))) return 'checks-not-passing';
+  return null;
+}
+
+/** Remote-only merge: never lets gh change a local checkout. */
+export async function mergeGithubPullRequest(pullRequest, { repoSpec, env, cwd, method = DEFAULT_MERGE_METHOD, deleteBranch = false } = {}) {
+  const deleting = deleteBranch && !isLongLivedSourceBranch(pullRequest.headBranch, pullRequest.baseBranch);
+  const result = await runForgeMerge({ cwd, env, forge: 'github', repoSpec, number: pullRequest.number, method,
+    deleteBranch: deleting, expectedHeadSha: pullRequest.headSha ?? '', timeoutMs: MERGE_TIMEOUT_MS });
+  return result.ok ? { ...result, method, deletedBranch: deleting } : result;
+}
+
 // A token missing an OAuth scope is neither a bad method nor a forge outage: the
 // merge would succeed once the credential is refreshed, so it gets its own code
 // (and the scopes) for the route to turn into a fix the user can act on.
@@ -171,6 +190,10 @@ export async function mergeAppPullRequest(app, pullRequest, { method = DEFAULT_M
   // Same owner-pinned gh environment the listing uses: an app whose repo belongs
   // to a different logged-in account 404s without it (#7540).
   const { cwd, env } = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount });
+  if (target.forge === 'github') {
+    const result = await mergeGithubPullRequest(pullRequest, { cwd, env, repoSpec: target.repoSpec, method, deleteBranch });
+    return result.code === 'missing-scope' ? { ...result, host: target.webHost || target.apiHost || null } : result;
+  }
   const deleting = deleteBranch && !isLongLivedSourceBranch(pullRequest.headBranch, pullRequest.baseBranch);
   const result = await runForgeMerge({
     cwd,

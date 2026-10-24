@@ -11,6 +11,8 @@ import {
   syncSignal,
 } from '../../services/api';
 
+const SIGNAL_DISABLED_MESSAGE = 'Enable Signal sync and save before checking setup or syncing.';
+
 // Comms → Messages → Signal (#2154). Opt-in, machine-local ingestion of Signal Desktop's
 // SQLCipher-encrypted chat database into the Tribe touchpoint log + activity
 // timeline. OFF by default — reading the DB needs Signal's keychain-wrapped key.
@@ -35,7 +37,7 @@ export function SignalTab() {
     setChecking(false);
     setSetup(report);
     if (report?.ok) toast.success(`Signal DB reachable — ${report.messageCount ?? 0} message(s)`);
-    else toast.error(report?.error || 'Signal DB not reachable');
+    else toast.error(report?.enabled === false ? SIGNAL_DISABLED_MESSAGE : report?.error || 'Signal DB not reachable');
   };
 
   const handleSyncNow = async () => {
@@ -114,7 +116,7 @@ export function SignalTab() {
             <button
               type="button"
               onClick={handleCheck}
-              disabled={checking}
+              disabled={checking || !enabled || dirty || saving || loadError}
               className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-bg border border-port-border hover:border-port-accent text-gray-200 rounded-lg text-sm transition-colors disabled:opacity-40"
             >
               {checking ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
@@ -123,7 +125,7 @@ export function SignalTab() {
             <button
               type="button"
               onClick={handleSyncNow}
-              disabled={syncing}
+              disabled={syncing || !enabled || dirty || saving || loadError}
               className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-bg border border-port-border hover:border-port-accent text-gray-200 rounded-lg text-sm transition-colors disabled:opacity-40"
             >
               {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
@@ -147,7 +149,7 @@ export function SignalTab() {
             </p>
           ) : (
             <div className="text-sm text-gray-300 space-y-2">
-              <p className="text-port-error">{setup.error}</p>
+              <p className="text-port-error">{setup.enabled === false ? SIGNAL_DISABLED_MESSAGE : setup.error}</p>
               {setup.remediation && <p className="text-gray-400">{setup.remediation}</p>}
             </div>
           )}

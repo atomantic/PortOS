@@ -3,7 +3,8 @@
  *
  * URL is the source of truth: /fableloom/:loomId/plan is the series workspace;
  * /fableloom/:loomId/:episodeId selects an episode, /outline switches that
- * episode to its text outline, and /:nodeId selects a scene in the graph. The
+ * episode to its text outline, /board shows one path as storyboard panels
+ * (its fork picks in ?via=), and /:nodeId selects a scene in the graph. The
  * full-screen player rides ?play=1.
  * Left: the scene-graph canvas (stacks top-to-bottom under the `lg` rail
  * breakpoint). Right rail: the selected scene's editor, or the
@@ -18,7 +19,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, BookOpenText, ListTree, PencilLine, Plus, Settings, Sparkles, Trash2, Waypoints, Workflow as WorkflowIcon, X } from 'lucide-react';
+import { ArrowLeft, BookOpenText, LayoutGrid, ListTree, PencilLine, Plus, Settings, Sparkles, Trash2, Waypoints, Workflow as WorkflowIcon, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Drawer from '../components/Drawer';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -32,6 +33,7 @@ import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import useFableLoomAiRun from '../hooks/useFableLoomAiRun';
 import useContainerWidth from '../hooks/useContainerWidth';
 import { useScrollLock } from '../hooks/useScrollLock';
+import LoomBoard from '../components/fableloom/LoomBoard';
 import LoomCanvas from '../components/fableloom/LoomCanvas';
 import LoomEpisodeOutline from '../components/fableloom/LoomEpisodeOutline';
 import LoomEpisodeOutlinePlanner from '../components/fableloom/LoomEpisodeOutlinePlanner';
@@ -53,6 +55,7 @@ import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { universeStylePreset } from '../lib/universeStylePreset';
 import { LOOM_ORIENTATION, LOOM_STACK_WIDTH } from '../lib/loomLayout';
 import { asFableLoomRenderSettings } from '../../../server/lib/fableLoomProduction.js';
+import { fableLoomBoardPick } from '../../../server/lib/fableLoomBoard.js';
 import {
   addLoomEpisode, addLoomNode, deleteLoomEpisode, generateImage, generateVideo,
   getLoom, getPipelineSeries, getUniverse, updateLoomEpisode, updateLoomNode,
@@ -90,6 +93,8 @@ export default function FableLoomStory({ view = 'graph' }) {
   useScrollLock(playOpen);
   const seriesPlanOpen = episodeId === 'plan';
   const outlineOpen = view === 'outline';
+  const boardOpen = view === 'board';
+  const via = useMemo(() => (searchParams.get('via') || '').split(',').filter(Boolean), [searchParams]);
   // Orientation keys off the PAGE, not the canvas. The canvas is the leftover
   // after the 380–420px rail on `lg+`, so measuring it would stack a laptop graph
   // while the rail is still beside it.
@@ -597,9 +602,10 @@ export default function FableLoomStory({ view = 'graph' }) {
               tabs={[
                 { id: 'graph', label: 'Graph', icon: Waypoints },
                 { id: 'outline', label: 'Outline', icon: ListTree },
+                { id: 'board', label: 'Board', icon: LayoutGrid },
               ]}
-              activeTab={outlineOpen ? 'outline' : 'graph'}
-              onChange={(id) => navigate(id === 'outline' ? `${episodePath(episode.id)}/outline` : episodePath(episode.id))}
+              activeTab={outlineOpen ? 'outline' : boardOpen ? 'board' : 'graph'}
+              onChange={(id) => navigate(id === 'graph' ? episodePath(episode.id) : `${episodePath(episode.id)}/${id}`)}
             />
           )}
         </div>
@@ -623,6 +629,19 @@ export default function FableLoomStory({ view = 'graph' }) {
             </button>
           </div>
         </div>
+      ) : boardOpen ? (
+        <LoomBoard
+          loomId={loomId}
+          episode={episode}
+          aspectRatio={asFableLoomRenderSettings(loom.renderSettings).aspectRatio}
+          via={via}
+          onPick={(transitionId) => setSearchParams((prev) => {
+            const next = new URLSearchParams(prev);
+            next.set('via', fableLoomBoardPick(episode, via, transitionId).join(','));
+            return next;
+          }, { replace: true })}
+          onOpenNode={(id) => navigate(episodePath(episode.id, id))}
+        />
       ) : outlineOpen ? (
         <LoomEpisodeOutline
           loom={loom}

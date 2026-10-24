@@ -48,6 +48,7 @@
 import { UNTRUSTED_PULL_REQUEST_NOTICE } from '../lib/promptFencing.js';
 import { getSlashdoWorkflow } from '../lib/slashdoCatalog.js';
 import { emitLog } from './cosEvents.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { notificationAgentAccountBinding } from '../lib/githubNotificationTriage.js';
 
 /** The bundled slashdo workflow this task runs. */
@@ -118,11 +119,14 @@ function renderContext({ number, url, repoLabel, selfReview }) {
  * @param {Object|null} [params.notificationAccount] - trusted inbox account to
  *   bind when this review was requested from the notifications manager
  * @param {string} [params.notificationOrigin] - user tap or automated handoff
+ * @param {Object|null} [params.githubAccount] - concrete viewer selected for this
+ *   review; an implicit configured account may have a different null login
  * @returns {Promise<{task: Object|null, duplicate: boolean, dispatch: {started: boolean, reason: string|null}}>}
  */
 export async function spawnPrDoReviewTask({
   app, pullRequest, repoFullName = '', provider, model, effort,
-  selfReview = false, reviewerConfig = null, immediate = true, notificationAccount = null, notificationOrigin = 'user',
+  selfReview = false, reviewerConfig = null, immediate = true,
+  githubAccount = null, notificationAccount = null, notificationOrigin = 'user',
 } = {}) {
   const { addTask } = await import('./cosTaskStore.js');
   const { forceSpawnTask } = await import('./cos.js');
@@ -162,12 +166,23 @@ export async function spawnPrDoReviewTask({
     reviewLoop: false,
     metadata: {
       targetPullRequest: number,
+      ...(githubAccount ? { githubAccount } : {}),
       ...(notificationAccount ? { githubNotificationAccount: notificationAgentAccountBinding(notificationAccount, notificationOrigin) } : {}),
     },
   }, 'user', { suppressDequeue: immediate });
 
   if (!created) return { task: null, duplicate: false, dispatch: { started: false, reason: null } };
   if (created.duplicate) {
+    const existingAccount = created.metadata?.githubAccount || created.metadata?.githubNotificationAccount;
+    const expectedAccount = githubAccount || (notificationAccount && notificationAgentAccountBinding(notificationAccount, notificationOrigin));
+    if (expectedAccount && (!existingAccount
+      || (existingAccount.id || existingAccount.accountId) !== (expectedAccount.id || expectedAccount.accountId)
+      || existingAccount.host?.toLowerCase() !== expectedAccount.host.toLowerCase()
+      || (existingAccount.login || '').toLowerCase() !== (expectedAccount.login || '').toLowerCase())) {
+      throw new ServerError('A review for this PR is already queued under a different GitHub account; finish it before requesting this account', {
+        status: 409, code: 'GITHUB_REVIEW_ACCOUNT_CONFLICT',
+      });
+    }
     emitLog('info', `🔍 /do:review for ${repoLabel} #${number} is already queued as ${created.id}`, {
       taskId: created.id, appId: app?.id || null, prNumber: number,
     });

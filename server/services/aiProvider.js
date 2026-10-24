@@ -1,9 +1,11 @@
+import { awaitWithAbort } from '../lib/abortTimeout.js';
 /**
  * Shared AI provider utilities for LLM calls.
  * Used by insightsService, identity, goalCheckIn, taste-questionnaire, etc.
  */
 
 import { normalizeReviewFinishReason } from '../lib/reviewerHealth.js';
+import { normalizeChatCompletionUsage } from '../lib/chatCompletionUsage.js';
 import { getAllProviders } from './providers.js';
 import { startAIOp } from './aiStatusEvents.js';
 // localModelHealing is lazy-imported at its (rare, error-recovery) call site
@@ -258,16 +260,38 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
     // OpenAI-compatible bodies report token counts under `usage`; surface the completion
     // token count so the AI Core landmark can size its activity beam by output volume
     // (tokens/sec). Absent on some providers — callers treat a missing count as "unknown".
-    const completionTokens = Number.isFinite(data.usage?.completion_tokens) ? data.usage.completion_tokens : NaN;
-    const promptTokens = Number.isFinite(data.usage?.prompt_tokens) ? data.usage.prompt_tokens : NaN;
+    const normalized = normalizeChatCompletionUsage(data.usage, { model, endpoint: provider.endpoint });
+    if (normalized && (normalized.inputTokens || normalized.outputTokens || normalized.cacheReadTokens)) {
+      // Ledger failure must not fail the completion. Codex subscription turns
+      // never reach this HTTP path; their transcript reconciler owns that bill.
+      void import('./usage.js').then(({ recordRunUsage }) => recordRunUsage({
+        providerId: provider.id,
+        model,
+        messages: 1,
+        tokensIn: normalized.inputTokens,
+        tokensOut: normalized.outputTokens,
+        cacheReadTokens: normalized.cacheReadTokens,
+        cacheWriteTokens: normalized.cacheWriteTokens,
+        ...(normalized.longContext ? {
+          longTokensIn: normalized.inputTokens,
+          longTokensOut: normalized.outputTokens,
+          longCacheReadTokens: normalized.cacheReadTokens,
+          longCacheWriteTokens: normalized.cacheWriteTokens,
+        } : {}),
+        source: 'measured',
+      })).catch((err) => console.error(`❌ Failed to record chat usage: ${err.message}`));
+    }
+    const completionTokens = normalized ? normalized.outputTokens : (Number.isFinite(data.usage?.completion_tokens) ? data.usage.completion_tokens : NaN);
     return {
       text: content,
       finishReason: normalizeReviewFinishReason(data?.choices?.[0]?.finish_reason),
       tokens: Number.isFinite(completionTokens) ? completionTokens : undefined,
-      ...(Number.isFinite(promptTokens) || Number.isFinite(completionTokens)
+      ...(normalized
         ? { usage: {
-          ...(Number.isFinite(promptTokens) ? { inputTokens: promptTokens } : {}),
-          ...(Number.isFinite(completionTokens) ? { outputTokens: completionTokens } : {}),
+          inputTokens: normalized.inputTokens,
+          outputTokens: normalized.outputTokens,
+          cacheReadTokens: normalized.cacheReadTokens,
+          source: normalized.source,
         } }
         : {}),
     };
@@ -461,6 +485,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     // subscription quota for an answer nobody is waiting for. The HTTP path
     // manages its own AbortController from `timeout`.
     signal = null,
+    deadlineMs = null,
     // Internal: the status op an outer attempt already opened. `startAIOp` mints
     // a fresh id per call and the client tracks ops BY ID, so a fallback leg that
     // opened its own would leave the outer one's loading toast spinning forever
@@ -468,6 +493,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     // one op: "falling back to X…" → "done".
     __statusOp = null,
   } = options;
+  if (signal?.aborted || (Number.isFinite(deadlineMs) && Date.now() >= deadlineMs)) return { error: 'Provider request deadline expired.' };
   if (provider.type !== 'api' && !isSubscriptionText(provider)) {
     return { error: 'This operation requires an API-based provider' };
   }
@@ -540,14 +566,19 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   // doesn't get a bare connection refusal.
   // Provider selection and parsing need none of the managed daemon graph.
   const { ensureManagedRuntimeReady } = await import('./providerExecutionReadiness.js');
-  const ready = await ensureManagedRuntimeReady(provider, {
+  const ready = await awaitWithAbort(ensureManagedRuntimeReady(provider, {
     onStarting: (label) => statusOp.update('provider:starting', `Starting ${label} if needed…`, { providerId: provider.id }),
-  });
+  }), signal).catch(() => ({ success: false, error: 'Provider readiness cancelled.' }));
   if (!ready.success) {
     statusOp.error(ready.error);
     return { error: ready.error };
   }
 
+  if (signal?.aborted || (Number.isFinite(deadlineMs) && Date.now() >= deadlineMs)) {
+    statusOp.error('Provider request deadline expired.');
+    return { error: 'Provider request deadline expired.' };
+  }
+  if (Number.isFinite(deadlineMs)) opts.timeout = Math.min(opts.timeout, deadlineMs - Date.now());
   const first = await postChatCompletion(provider, model, body, opts);
   if (!first.error) {
     statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, throughput(first.tokens));

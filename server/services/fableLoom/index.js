@@ -93,13 +93,16 @@ export {
   MAX_SESSION_TTL_MINUTES,
   _getInternalSession,
   _resetHostedSessions,
+  HOSTED_SPEECH_ACK_TIMEOUT_MS,
   abortHostedTurn,
+  acknowledgeHostedSpeech,
   checkHostedSessionReadiness,
   createHostedSession,
   endHostedSession,
   getHostedSession,
   initialPhaseForNode,
   processHostedUtterance,
+  releaseHostedSpeechOutput,
   revalidateLiveConversationGate,
   sanitizeHostedSession,
   startHostedListening,
@@ -127,3 +130,4 @@ export {
   startFalVideoAutomation,
 } from './falVideoAutomation.js';
 export { applyEpisodeShots, runEpisodeShotAutopilot } from './shots.js';
+export { startFableLoomExport, getFableLoomExport, getFableLoomExportDownload } from './exports.js';

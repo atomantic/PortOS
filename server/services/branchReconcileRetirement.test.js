@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { prepareReconcileRetirements, retirementReviewInstructions, retirementCognitiveIdentity } from './branchReconcileRetirement.js';
 
 const forge = vi.hoisted(() => ({ read: vi.fn() }));
@@ -12,19 +12,58 @@ const branch = { branch: 'claim/issue-42', tip: head, worktreePath: '/example/ch
   rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' };
 const tree = { branch: branch.branch, path: branch.worktreePath, head, managed: true, locked: false, lockReason: null };
 const scan = (b = {}, t = {}) => ({ wip: [{ ...branch, ...b }], worktreeInventory: [{ ...tree, ...t }] });
+const retainedMerged = () => ({ wip: [], merged: [{ ...branch, state: 'MERGED', rule: 'merged', isMerged: true }],
+  skipped: [{ branch: branch.branch, reason: 'claim-completion-unverified' }], worktreeInventory: [tree] });
 const setup = () => ({
   readPr: vi.fn(async () => 'https://github.com/example/repo/pull/42'),
   prepare: vi.fn(async () => ({ ok: true, review: { digest: 'd'.repeat(64), policy: { policies: [{ id: 'old-owner', status: 'completed', success: true }] }, comparison: { disposition: 'review-supersession', localPatch: '+old', difference: '+new' }, forge: { prHead: head } } })),
 });
 
 describe('historical completed-checkout review obligations', () => {
+  beforeEach(() => forge.read.mockReset());
+  it('routes a retained merged claim through its known completed-owner policy before full archival retirement', async () => {
+    const deps = setup();
+    deps.prepare.mockResolvedValue({ ok: true, review: { digest: 'd'.repeat(64), forge: { prHead: head },
+      policy: { integratedCleanupHead: 'c'.repeat(40), policies: [{ id: 'known-owner', status: 'completed', success: false }] },
+      comparison: { disposition: 'integrated', localPatch: '+original', difference: '' } } });
+    deps.retire = vi.fn(async () => ({ ok: true, branchDeleted: true, archiveDir: '/private/verified-archive' }));
+    expect(await prepareReconcileRetirements(app, retainedMerged(), deps)).toMatchObject({ candidates: [], held: [],
+      retired: [expect.objectContaining({ branch: branch.branch, head })] });
+    expect(deps.prepare).toHaveBeenCalledOnce();
+    expect(deps.retire).toHaveBeenCalledWith({ appId: app.id, release: expect.objectContaining({ head }),
+      review: { prUrl: 'https://github.com/example/repo/pull/42', digest: 'd'.repeat(64), acceptSuperseded: false } },
+    { beforeMutation: expect.any(Function) });
+    deps.retire.mockClear();
+    deps.prepare.mockResolvedValue({ ok: true, review: { digest: 'e'.repeat(64), forge: { prHead: head },
+      policy: { integratedCleanupHead: 'c'.repeat(40), policies: [{ id: 'known-owner', status: 'completed', success: false }] },
+      comparison: { disposition: 'review-supersession', localPatch: '+original', difference: '+replacement' } } });
+    expect(await prepareReconcileRetirements(app, retainedMerged(), deps)).toMatchObject({ candidates: [{ state: 'REVIEW_RETIREMENT' }], retired: [] });
+    expect(deps.retire).not.toHaveBeenCalled();
+  });
+
+  it('does not turn registry silence or another merged-cleanup refusal into a completed-owner release', async () => {
+    const deps = setup();
+    deps.retire = vi.fn();
+    deps.prepare.mockResolvedValue({ ok: true, review: { forge: { prHead: head }, policy: { policies: [] } } });
+    expect(await prepareReconcileRetirements(app, retainedMerged(), deps)).toMatchObject({
+      retired: [], held: [{ reason: 'retirement-policy-changed' }],
+    });
+    deps.prepare.mockClear();
+    for (const reason of ['claim-owner-active', 'pr-completion-human-handoff', 'archive-failed', 'worktree-unmanaged-location']) {
+      const result = retainedMerged(); result.skipped[0].reason = reason;
+      expect(await prepareReconcileRetirements(app, result, deps)).toEqual({ candidates: [], held: [], retired: [] });
+    }
+    expect(deps.prepare).not.toHaveBeenCalled();
+    expect(deps.retire).not.toHaveBeenCalled();
+  });
   it('archives and retires a checkout whose commits are all on the default branch without a PR read or dispatch', async () => {
     const deps = setup();
     deps.retire = vi.fn(async () => ({ ok: true, branchDeleted: true, archiveDir: '/private/verified-archive' }));
-    const result = await prepareReconcileRetirements(app, scan({ isMerged: true }), deps);
+    const observation = { observedAt: '2026-10-23T00:00:00Z', checkoutIdentity: 'original-checkout' };
+    const result = await prepareReconcileRetirements(app, scan({ isMerged: true }, observation), deps);
     expect(result).toMatchObject({ candidates: [], held: [], retired: [expect.objectContaining({ branch: branch.branch, head })] });
     expect(deps.readPr).not.toHaveBeenCalled();
-    expect(deps.retire).toHaveBeenCalledWith({ appId: app.id, release: { branch: tree.branch, path: tree.path, head, locked: false, lockReason: null } },
+    expect(deps.retire).toHaveBeenCalledWith({ appId: app.id, release: { ...observation, branch: tree.branch, path: tree.path, head, locked: false, lockReason: null } },
       { beforeMutation: expect.any(Function), settleMergedReviewObligation: true });
   });
 
@@ -147,12 +186,103 @@ describe('historical completed-checkout review obligations', () => {
     expect(await prepareReconcileRetirements(app, scan(), deps)).toMatchObject({ candidates: [], held: [{ branch: branch.branch, reason }] });
   });
 
+  it.each(['preview', 'merged-retirement', 'reviewed-retirement'])('keeps archive capacity diagnostics in held status after %s', async phase => {
+    const deps = setup();
+    const refusal = { ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit: {
+      scope: 'content', kind: 'total', limitBytes: 250 * 1024 * 1024, observedBytes: 264 * 1024 * 1024,
+    } };
+    if (phase === 'preview') deps.prepare.mockResolvedValue(refusal);
+    if (phase === 'reviewed-retirement') {
+      const prepared = await deps.prepare();
+      prepared.review.comparison = { disposition: 'integrated', localPatch: '', difference: '' };
+      deps.prepare.mockResolvedValue(prepared);
+    }
+    deps.retire = vi.fn(async () => refusal);
+    expect(await prepareReconcileRetirements(app, scan({ isMerged: phase === 'merged-retirement' }), deps)).toEqual({ candidates: [], retired: [], held: [{ branch: tree.branch, path: tree.path, head, locked: false, lockReason: null,
+      reason: refusal.reason, archiveLimit: refusal.archiveLimit,
+    }] });
+    if (phase === 'preview') expect(deps.retire).not.toHaveBeenCalled();
+  });
+
   it('does not invent approval after forge failure or vanished historical policy', async () => {
     const deps = setup(); deps.readPr.mockRejectedValueOnce(new Error('unreadable'));
-    expect((await prepareReconcileRetirements(app, scan(), deps)).held[0].reason).toBe('retirement-review-unavailable');
+    expect((await prepareReconcileRetirements(app, scan(), deps)).held[0].reason).toBe('retirement-pr-lookup-unavailable');
     deps.prepare.mockResolvedValue({ ok: true, review: { policy: { policies: [] } } });
     expect((await prepareReconcileRetirements(app, scan(), deps)).held[0].reason).toBe('retirement-policy-changed');
   });
+
+  it.each([404, 422])('recovers historical review when the local tip is not published on the forge (HTTP %s)', async status => {
+    const deps = setup();
+    forge.read.mockRejectedValueOnce(Object.assign(new Error('synthetic missing commit'), {
+      ghStderr: `gh: No commit found for SHA: ${head} (HTTP ${status})`, ghExitCode: 1,
+    })).mockResolvedValueOnce(JSON.stringify([{ url: 'https://github.com/example/repo/pull/42' }]));
+    const result = await prepareReconcileRetirements(app, scan(), { prepare: deps.prepare });
+    expect(result.candidates).toHaveLength(1);
+    expect(deps.prepare).toHaveBeenCalledWith(expect.objectContaining({ prUrl: 'https://github.com/example/repo/pull/42', release: expect.objectContaining({ head }) }));
+    expect(forge.read).toHaveBeenLastCalledWith(['pr', 'list', '--repo', 'github.com/example/repo', '--head', branch.branch,
+      '--state', 'merged', '--limit', '2', '--json', 'url'], undefined, expect.any(Object));
+  });
+
+  it.each([
+    { history: [] },
+    { history: [{ url: 'https://github.com/example/repo/pull/41' }, { url: 'https://github.com/example/repo/pull/42' }] },
+    { history: [{ url: 'https://github.com/other/repo/pull/42' }] },
+  ])('does not turn missing exact-head evidence into historical approval: %j', async ({ history }) => {
+    const deps = setup();
+    forge.read.mockRejectedValueOnce(Object.assign(new Error('missing'), { ghStderr: 'gh: Not Found (HTTP 404)' }))
+      .mockResolvedValueOnce(JSON.stringify(history));
+    expect(await prepareReconcileRetirements(app, scan(), { prepare: deps.prepare })).toMatchObject({
+      candidates: [], retired: [], held: [{ reason: 'retirement-pr-ambiguous' }],
+    });
+    expect(deps.prepare).not.toHaveBeenCalled();
+  });
+
+  it('retains a historical candidate when fresh preview refuses it', async () => {
+    const deps = setup();
+    forge.read.mockRejectedValueOnce(Object.assign(new Error('missing'), { ghStderr: 'gh: Not Found (HTTP 404)' }))
+      .mockResolvedValueOnce(JSON.stringify([{ url: 'https://github.com/example/repo/pull/42' }]));
+    deps.prepare.mockResolvedValue({ ok: false, reason: 'claim-owner-active' });
+    expect(await prepareReconcileRetirements(app, scan(), { prepare: deps.prepare })).toMatchObject({
+      candidates: [], retired: [], held: [{ reason: 'claim-owner-active' }],
+    });
+  });
+
+  it('distinguishes a failed preview from uncertain retirement without leaking raw errors', async () => {
+    const deps = setup();
+    deps.prepare.mockRejectedValueOnce(new Error('private diagnostic'));
+    expect((await prepareReconcileRetirements(app, scan(), deps)).held[0].reason).toBe('retirement-review-unavailable');
+    const prepared = await deps.prepare();
+    prepared.review.comparison = { disposition: 'integrated', localPatch: '', difference: '' };
+    deps.prepare.mockResolvedValue(prepared);
+    deps.retire = vi.fn(async () => { throw new Error('private diagnostic after possible removal'); });
+    expect(await prepareReconcileRetirements(app, scan(), deps)).toMatchObject({
+      candidates: [], retired: [], held: [{ reason: 'retirement-receipt-unverified' }],
+    });
+    expect(deps.retire).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a failed historical fallback held rather than inferring a merged PR', async () => {
+    const deps = setup();
+    forge.read.mockRejectedValueOnce(Object.assign(new Error('gh: Not Found (HTTP 404)'), { ghStderr: 'gh: Not Found (HTTP 404)' }))
+      .mockRejectedValueOnce(new Error('synthetic unavailable'));
+    expect(await prepareReconcileRetirements(app, scan(), { prepare: deps.prepare })).toMatchObject({
+      candidates: [], retired: [], held: [{ reason: 'retirement-forge-unavailable' }],
+    });
+    expect(deps.prepare).not.toHaveBeenCalled();
+  });
+
+  it.each(['gh: rate limit exceeded (HTTP 403)', 'gh: authentication required (HTTP 401)', 'operation timed out',
+    'gh: Validation Failed (HTTP 422)', `gh: No commit found for SHA: ${'b'.repeat(40)} (HTTP 422)`])(
+    'does not replace an unreadable exact-head lookup with branch history: %s', async message => {
+      const deps = setup();
+      forge.read.mockRejectedValueOnce(Object.assign(new Error(message), { ghStderr: message }));
+      const calls = forge.read.mock.calls.length;
+      expect(await prepareReconcileRetirements(app, scan(), { prepare: deps.prepare })).toMatchObject({
+        candidates: [], retired: [], held: [{ reason: 'retirement-forge-unavailable' }],
+      });
+      expect(forge.read.mock.calls.length).toBe(calls + 1);
+      expect(deps.prepare).not.toHaveBeenCalled();
+    });
 
   it('selects the unique exact head on a reused branch, then requires its fresh preview', async () => {
     const deps = setup();

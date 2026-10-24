@@ -263,7 +263,13 @@ async function resolveForgeCredentials(dir, { timeoutMs, signal, pinned }) {
  * @returns {Promise<{ GH_TOKEN?: string, GH_ENTERPRISE_TOKEN?: string, GH_HOST?: string, GIT_AUTHOR_NAME?: string, GIT_AUTHOR_EMAIL?: string,
  *                     GIT_COMMITTER_NAME?: string, GIT_COMMITTER_EMAIL?: string }>}
  */
-export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000, forgeAccount = null } = {}) {
+export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000, forgeAccount = null, githubAccount = null } = {}) {
+  if (githubAccount) {
+    // Preserve the explicit account API while sharing launch identity checks
+    // with inbox tasks; this selector alone carries no automation policy grant.
+    const { resolveNotificationAgentEnv } = await import('./githubNotificationAgentAuth.js');
+    return resolveNotificationAgentEnv({ metadata: { githubAccount } });
+  }
   // Keep the whole lookup inside the agent-spawn budget. The shared abort signal
   // kills whichever gh subprocess is active when the outer budget expires and
   // prevents a slow git lookup from starting a stale follow-on auth probe. Each

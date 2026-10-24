@@ -4,6 +4,7 @@ import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
 import ModelInputPreview from '../media/ModelInputPreview';
+import UniverseMoodBoardPicker, { useStyleSourceLists, BOARD_FOLLOW_UNIVERSE, BOARD_NONE } from '../media/UniverseMoodBoardPicker';
 import CatalogMediaTile from './CatalogMediaTile';
 import useMounted from '../../hooks/useMounted';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
@@ -53,13 +54,32 @@ function LookForm({ formId, initial, busy, onSubmit, onCancel }) {
 // The server's preview of exactly what this look's render sends (prompt plus
 // labeled style/negative additions), then Render. Mounted only while open so
 // the preview is fetched on demand.
-function LookGenerate({ ingredientId, wardrobe, blockedReason, savedStamp, onLookFile, onClose }) {
+function LookGenerate({ ingredientId, wardrobe, initialUniverseId, blockedReason, savedStamp, onLookFile, onClose }) {
   const mountedRef = useMounted();
   const [starting, setStarting] = useState(false);
   const [pending, setPending] = useState(null); // { jobId, role }
-  const fetchPreview = useCallback(({ savedStamp: _stamp, ...body }, options) =>
-    previewCatalogSheet(ingredientId, body, options).then((r) => r?.preview ?? null), [ingredientId]);
-  const preview = useModelInputPreview(fetchPreview, { variant: 'look', wardrobeId: wardrobe.id, savedStamp });
+  const lists = useStyleSourceLists();
+  const [universeId, setUniverseId] = useState(initialUniverseId || '');
+  const [moodBoardChoice, setMoodBoardChoice] = useState(BOARD_FOLLOW_UNIVERSE);
+  const [visualDirection, setVisualDirection] = useState({ style: '', camera: '', lighting: '', environment: '' });
+  const body = {
+    variant: 'look', wardrobeId: wardrobe.id, universeId,
+    ...(moodBoardChoice !== BOARD_FOLLOW_UNIVERSE ? { moodBoardId: moodBoardChoice === BOARD_NONE ? '' : moodBoardChoice } : {}),
+    visualDirection,
+  };
+  const previewBody = { ...body, savedStamp };
+  const requestKey = JSON.stringify(previewBody);
+  const fetchPreview = useCallback(({ savedStamp: stamp, ...optionsBody }, options) =>
+    previewCatalogSheet(ingredientId, optionsBody, options).then((r) => r?.preview
+      ? { ...r.preview, requestKey: JSON.stringify({ ...optionsBody, savedStamp: stamp }) } : null), [ingredientId]);
+  const loadedPreview = useModelInputPreview(fetchPreview, previewBody);
+  // The hook retains its last result while a new request debounces. A changed
+  // field must immediately invalidate that result's permission to render.
+  const current = loadedPreview.preview?.requestKey === requestKey;
+  const preview = current ? loadedPreview : { preview: null, error: loadedPreview.error };
+  const direction = preview.preview?.visualDirection;
+  const renderBlocked = blockedReason || preview.error || (!current ? 'Updating visual direction preview…'
+    : !direction?.ready ? `Define before rendering: ${direction?.missing?.join(', ') || 'visual direction'}` : null);
 
   const role = pending?.role;
   const handleFilename = useCallback((filename) => {
@@ -74,9 +94,9 @@ function LookGenerate({ ingredientId, wardrobe, blockedReason, savedStamp, onLoo
   }, []);
 
   const handleRender = async () => {
-    if (blockedReason) return;
+    if (renderBlocked || starting || pending) return;
     setStarting(true);
-    const queued = await renderCatalogSheet(ingredientId, { variant: 'look', wardrobeId: wardrobe.id }, { silent: true })
+    const queued = await renderCatalogSheet(ingredientId, body, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Look render failed'); return null; });
     if (!mountedRef.current) return;
     setStarting(false);
@@ -91,10 +111,34 @@ function LookGenerate({ ingredientId, wardrobe, blockedReason, savedStamp, onLoo
   const busy = starting || !!pending;
   return (
     <div className="space-y-2 rounded border border-port-border bg-port-bg/40 p-3">
+      <fieldset disabled={busy} className="space-y-3">
+        <legend className="text-sm font-medium text-white">Look visual direction</legend>
+        <p className="text-xs text-gray-400">Choose the world this look belongs to, then define its photography. These choices apply to this render. No illustration or animation style is assumed.</p>
+        <UniverseMoodBoardPicker lists={lists} universeId={universeId} moodBoardChoice={moodBoardChoice}
+          onUniverseChange={setUniverseId} onBoardChoiceChange={setMoodBoardChoice}
+          idPrefix={`look-${wardrobe.id}-style`} labelClass="block text-xs text-gray-400 mb-1" inputClass={inputClass} />
+        {!universeId && <p className="text-xs text-port-warning">No universe selected. Choose a mood board or describe an overall style below.</p>}
+        {direction?.moodBoard && <p className="text-xs text-gray-400">Mood board: {direction.moodBoard.name}{!direction.moodBoard.hasStyle && ' — no composed style yet. Compose its style on the board or enter an overall style below.'}</p>}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {[
+            ['style', 'Overall style / medium', 'Optional with a defined source style. Otherwise specify photography, illustration or another deliberate medium.'],
+            ['camera', 'Camera', 'Lens, framing, perspective and film or camera treatment.'],
+            ['lighting', 'Lighting', 'Light sources, softness, contrast, color and time of day.'],
+            ['environment', 'Environment', 'The world, era and backdrop — including a plain backdrop if intended.'],
+          ].map(([key, label, placeholder]) => (
+            <div key={key}>
+              <label htmlFor={`look-${wardrobe.id}-${key}`} className="block text-xs text-gray-400 mb-1">{label}</label>
+              <textarea id={`look-${wardrobe.id}-${key}`} value={visualDirection[key]} rows={2} maxLength={1200}
+                placeholder={placeholder} className={inputClass}
+                onChange={(e) => setVisualDirection((prev) => ({ ...prev, [key]: e.target.value }))} />
+            </div>
+          ))}
+        </div>
+      </fieldset>
       <ModelInputPreview preview={preview} prompt="" />
-      {blockedReason && <p className="text-xs text-port-warning" role="status">{blockedReason}</p>}
+      {renderBlocked && <p className="text-xs text-port-warning" role="status">{renderBlocked}</p>}
       <div className="flex items-center gap-2 flex-wrap">
-        <button type="button" onClick={handleRender} disabled={busy || !!blockedReason} title={blockedReason || undefined}
+        <button type="button" onClick={handleRender} disabled={busy || !!renderBlocked} title={renderBlocked || undefined}
           className="inline-flex items-center gap-1.5 min-h-[36px] px-3 py-1.5 rounded bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-medium">
           {busy ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <Sparkles size={12} aria-hidden="true" />}
           {pending ? 'Rendering…' : 'Render look'}
@@ -110,7 +154,7 @@ function LookGenerate({ ingredientId, wardrobe, blockedReason, savedStamp, onLoo
 }
 
 function LookCard({
-  ingredientId, wardrobe, images, candidates, missingMedia, editLocked, savingList,
+  ingredientId, wardrobe, initialUniverseId, images, candidates, missingMedia, editLocked, savingList,
   blockedReason, savedStamp, onSave, onDelete, onSetRole, onDetach, onLookFile,
 }) {
   const [mode, setMode] = useState(null); // 'edit' | 'generate' | 'attach' | 'delete'
@@ -175,7 +219,7 @@ function LookCard({
       )}
       {mode === 'generate' && (
         <LookGenerate ingredientId={ingredientId} wardrobe={wardrobe} blockedReason={blockedReason}
-          savedStamp={savedStamp} onLookFile={onLookFile} onClose={() => setMode(null)} />
+          initialUniverseId={initialUniverseId} savedStamp={savedStamp} onLookFile={onLookFile} onClose={() => setMode(null)} />
       )}
       {mode === 'attach' && (
         <div className="rounded border border-port-border bg-port-bg/40 p-3">
@@ -218,7 +262,7 @@ function LookCard({
 // the payload as sent. Deleting a look leaves its images attached; they then
 // show on References.
 export default function CatalogLooksPanel({
-  ingredientId, wardrobes, lookMedia, candidates, missingMedia, editLocked = false,
+  ingredientId, initialUniverseId, wardrobes, lookMedia, candidates, missingMedia, editLocked = false,
   blockedReason = null, savedStamp = null, onSaveWardrobes, onSetRole, onDetach, onLookFile,
 }) {
   const [adding, setAdding] = useState(false);
@@ -262,7 +306,7 @@ export default function CatalogLooksPanel({
         <p className="text-xs text-gray-500">No looks yet. Add one to describe an outfit, then generate or attach its images.</p>
       )}
       {list.map((w) => (
-        <LookCard key={w.id} ingredientId={ingredientId} wardrobe={w}
+        <LookCard key={w.id} ingredientId={ingredientId} wardrobe={w} initialUniverseId={initialUniverseId}
           images={media.filter((m) => lookIdOf(m) === w.id)} candidates={candidateList}
           missingMedia={missingMedia} editLocked={editLocked || savingList} savingList={savingList}
           blockedReason={blockedReason} savedStamp={savedStamp}

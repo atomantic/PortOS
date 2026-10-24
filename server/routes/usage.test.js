@@ -3,6 +3,8 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
+vi.mock('../services/imageRenderUsage.js', () => ({ getImageRenderUsage: vi.fn(async () => ({ renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null })) }));
+
 vi.mock('../services/usage.js', () => ({
   getUsageSummary: vi.fn(),
   getUsage: vi.fn(),
@@ -15,6 +17,7 @@ vi.mock('../services/usage.js', () => ({
 
 vi.mock('../services/peerUsage.js', () => ({
   getFleetUsage: vi.fn(async () => ({ instances: [], totals: null })),
+  getFleetMonthlyUsage: vi.fn(async () => ({ instanceCount: 1, series: [], history: [] })),
   getFleetRollingCost: vi.fn(async () => ({ windowDays: 30, instanceCount: 1, points: [] }))
 }));
 
@@ -54,12 +57,13 @@ vi.mock('../services/usageBackfill.js', () => ({
 }));
 
 import * as usage from '../services/usage.js';
+import { getImageRenderUsage } from '../services/imageRenderUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getHistoricalUsageBackfillStatus, startHistoricalUsageBackfill } from '../services/usageBackfill.js';
 import { getSubscriptionSavings, saveSubscriptionCosts } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
-import { getFleetUsage, getFleetRollingCost } from '../services/peerUsage.js';
+import { getFleetUsage, getFleetRollingCost, getFleetMonthlyUsage } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import usageRoutes from './usage.js';
 
@@ -74,6 +78,28 @@ const buildApp = () => {
 describe('usage routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('GET /api/usage includes local image activity in the selected range without changing the text cost report', async () => {
+    usage.getUsageSummary.mockReturnValue({ report: { totals: { estimatedCost: 12 } } });
+    const response = await request(buildApp()).get('/api/usage?from=2026-07-01&to=2026-07-31');
+    expect(response.status).toBe(200);
+    expect(getImageRenderUsage).toHaveBeenCalledWith({ from: '2026-07-01', to: '2026-07-31' });
+    expect(response.body.imageRenders).toEqual({ renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null });
+    expect(response.body.report.totals.estimatedCost).toBe(12);
+  });
+
+  it('keeps text reporting available when the optional image ledger is damaged', async () => {
+    usage.getUsageSummary.mockReturnValue({ report: { totals: { estimatedCost: 12 } } });
+    getImageRenderUsage.mockRejectedValueOnce(new Error('Invalid image render usage receipt'));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await request(buildApp()).get('/api/usage');
+      expect(response.status).toBe(200);
+      expect(response.body.report.totals.estimatedCost).toBe(12);
+      expect(response.body.imageRenders).toEqual({ error: 'Image render usage is unavailable.' });
+      expect(logged).toHaveBeenCalled();
+    } finally { logged.mockRestore(); }
   });
 
   it('GET /api/usage/hourly projects only counters and bypasses all reporting work', async () => {
@@ -132,7 +158,11 @@ describe('usage routes', () => {
       totalSessions: 4,
       providers: ['anthropic'],
       subscriptionSavings: { configured: false, families: [] },
-      fleet: { instances: [], totals: null }
+      fleet: { instances: [], totals: null },
+      imageRenders: { renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null },
+      monthlyHistory: [],
+      monthlySeries: [],
+      monthlyInstanceCount: 1,
     });
     const arg = usage.getUsageSummary.mock.calls[0][0];
     expect(arg.from).toMatch(/^\d{4}-\d{2}-\d{2}$/);
@@ -141,6 +171,20 @@ describe('usage routes', () => {
     // The fleet breakdown must be priced over the SAME window as the summary,
     // or a peer row would silently report a different period than its heading.
     expect(getFleetUsage).toHaveBeenCalledWith({ from: arg.from, to: null, providers: [], apiBilledInstanceIds: [] });
+  });
+
+  it('GET /api/usage returns fleet monthly history independently of the selected report window', async () => {
+    const monthly = {
+      instanceCount: 2,
+      series: [{ key: 'codex', label: 'Codex' }],
+      history: [{ month: '2026-09', estimatedCost: 12, values: [12], tokens: 1000, partial: false }],
+    };
+    getFleetMonthlyUsage.mockResolvedValueOnce(monthly);
+    usage.getUsageSummary.mockReturnValue({ totalSessions: 4 });
+    const res = await request(buildApp()).get('/api/usage?from=2026-10-01&to=2026-10-02');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ monthlyHistory: monthly.history, monthlySeries: monthly.series, monthlyInstanceCount: 2 });
+    expect(getFleetMonthlyUsage).toHaveBeenCalledWith({ providers: [] });
   });
 
   it('GET /api/usage passes an explicit from/to range through', async () => {
@@ -394,6 +438,16 @@ describe('usage routes', () => {
     const started = await request(buildApp()).post('/api/usage/backfill');
     expect(started.status).toBe(202);
     expect(startHistoricalUsageBackfill).toHaveBeenCalledTimes(1);
+  });
+
+  it('POST /api/usage/backfill returns the Grok and Antigravity repair summaries on the job', async () => {
+    const grok = { added: 2, turns: 1, images: 1, videos: 0, backedUp: true, note: null };
+    const agy = { added: 3, images: 3, backedUp: true, note: null };
+    startHistoricalUsageBackfill.mockResolvedValue({ status: 'complete', corrected: 1, grok, agy });
+    const started = await request(buildApp()).post('/api/usage/backfill');
+    expect(started.status).toBe(202);
+    expect(started.body.grok).toEqual(grok);
+    expect(started.body.agy).toEqual(agy);
   });
 
   it('POST /api/usage/session records a session and returns its number', async () => {

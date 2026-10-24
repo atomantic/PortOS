@@ -14,6 +14,7 @@ import { useQuotaUpdates } from '../hooks/useQuotaUpdates';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
 import ClaudeCodeModelTokensCard from '../components/usage/ClaudeCodeModelTokensCard';
 import FleetUsageCard from '../components/usage/FleetUsageCard';
+import MonthlyUsageCard from '../components/usage/MonthlyUsageCard';
 import RollingCostCard from '../components/usage/RollingCostCard';
 import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
 import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
@@ -22,6 +23,33 @@ import { USAGE_PERIOD_OPTIONS, DEFAULT_USAGE_PERIOD } from '../lib/usagePeriods'
 
 
 const BACKFILL_EVENTS = ['usage-backfill:updated'];
+const IMAGE_USAGE_EVENTS = ['image-gen:completed'];
+
+function joinAnd(parts) {
+  if (parts.length <= 1) return parts[0] || '';
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(', ')}, and ${parts.at(-1)}`;
+}
+
+/** What Reconcile now added to the Grok ledger. Absent until that job finishes. */
+function grokRepairLine(grok) {
+  if (!grok) return '';
+  const parts = [];
+  if (grok.turns) parts.push(`${formatCount(grok.turns)} long-context turn${grok.turns === 1 ? '' : 's'}`);
+  if (grok.images) parts.push(`${formatCount(grok.images)} image${grok.images === 1 ? '' : 's'}`);
+  if (grok.videos) parts.push(`${formatCount(grok.videos)} video${grok.videos === 1 ? '' : 's'}`);
+  const added = parts.length ? `Added ${joinAnd(parts)}.` : 'Grok usage was already recorded.';
+  return grok.note ? `${added} ${grok.note}` : added;
+}
+
+/** What Reconcile now added to the Antigravity ledger. Absent until that job finishes. */
+function agyRepairLine(agy) {
+  if (!agy) return '';
+  const parts = [];
+  if (agy.images) parts.push(`${formatCount(agy.images)} image${agy.images === 1 ? '' : 's'}`);
+  const added = parts.length ? `Added ${joinAnd(parts)}.` : 'Antigravity usage was already recorded.';
+  return agy.note ? `${added} ${agy.note}` : added;
+}
 
 // A subscription is one account across every federated instance, but each
 // instance can only read its own CLI's panel. When peers have contributed a
@@ -303,6 +331,9 @@ function CostReportTable({ report }) {
                       <span>{formatNumber(m.tokensIn)} in · {formatNumber(m.tokensOut)} out</span>
                       <span>Cache: {formatNumber((m.cacheReadTokens ?? 0) + (m.cacheWriteTokens ?? 0))}</span>
                     </div>
+                    {usageExtras(m) && (
+                      <div className="text-[10px] text-gray-500">{usageExtras(m)}</div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -357,6 +388,18 @@ function CostReportTable({ report }) {
 const cacheTitle = (row) =>
   `Cache read ${formatCount(row.cacheReadTokens, { fallback: '0' })} · cache write ${formatCount(row.cacheWriteTokens, { fallback: '0' })} tokens`;
 
+// Imagine units and the 200k subset are not visible in the token columns.
+function usageExtras(row) {
+  if (!row) return '';
+  const parts = [];
+  if (row.images > 0) parts.push(`${formatNumber(row.images)} images`);
+  if (row.inputImages > 0) parts.push(`${formatNumber(row.inputImages)} input images`);
+  if (row.videoSeconds > 0) parts.push(`${formatNumber(row.videoSeconds)}s video`);
+  const longTokens = (row.longTokensIn || 0) + (row.longCacheReadTokens || 0) + (row.longCacheWriteTokens || 0);
+  if (longTokens > 0) parts.push(`${formatNumber(longTokens)} long-context`);
+  return parts.join(' · ');
+}
+
 function ProviderCostRows({ provider }) {
   return (
     <>
@@ -389,6 +432,9 @@ function ProviderCostRows({ provider }) {
               : undefined}
           >
             {m.model}
+            {usageExtras(m) && (
+              <div className="font-sans text-[10px] text-gray-500 truncate">{usageExtras(m)}</div>
+            )}
           </td>
           <td className="py-1.5 px-2 text-right text-xs">{formatNumber(m.sessions)}</td>
           <td className="py-1.5 px-2 text-right text-xs" title={cacheTitle(m)}>{formatNumber(m.tokensIn)}</td>
@@ -596,6 +642,8 @@ function InternalUsageMetrics() {
     return () => { requestRef.current += 1; };
   }, [fetchUsage]);
 
+  useSocketResource(fetchUsage, { events: IMAGE_USAGE_EVENTS, immediate: false });
+
   const [startBackfill, startingBackfill] = useAsyncAction(async () => {
     const status = await api.startUsageBackfill({ silent: true });
     setBackfill(status);
@@ -664,6 +712,7 @@ function InternalUsageMetrics() {
       <h2 className="text-lg font-semibold text-white">PortOS AI Usage</h2>
       {/* Trailing 30 days across every instance — independent of the range below. */}
       <RollingCostCard />
+      <MonthlyUsageCard history={usage.monthlyHistory} series={usage.monthlySeries} instanceCount={usage.monthlyInstanceCount} />
       {reportControls}
 
       <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -673,7 +722,7 @@ function InternalUsageMetrics() {
             Reconcile historical usage
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Re-read PortOS run transcripts to replace older token estimates. This changes recorded history but makes no provider calls.
+            Re-read saved transcripts, Grok sessions, and Antigravity media to replace older estimates and record media and long-context charges. This changes recorded history but makes no provider calls.
           </p>
           {backfill?.status === 'running' && (
             <p className="text-xs text-port-accent mt-1" role="status">
@@ -684,6 +733,12 @@ function InternalUsageMetrics() {
             <p className="text-xs text-port-success mt-1" role="status">
               Corrected {backfill.corrected || 0} run{backfill.corrected === 1 ? '' : 's'}.
             </p>
+          )}
+          {backfill?.grok && (backfill.status === 'complete' || backfill.status === 'error') && (
+            <p className="text-xs text-port-success mt-1" role="status">{grokRepairLine(backfill.grok)}</p>
+          )}
+          {backfill?.agy && (backfill.status === 'complete' || backfill.status === 'error') && (
+            <p className="text-xs text-port-success mt-1" role="status">{agyRepairLine(backfill.agy)}</p>
           )}
           {backfill?.status === 'error' && (
             <p className="text-xs text-port-error mt-1" role="alert">{backfill.error}</p>
@@ -699,6 +754,36 @@ function InternalUsageMetrics() {
           {backfill?.status === 'running' ? 'Reconciling…' : 'Reconcile now'}
         </button>
       </div>
+
+      {usage.imageRenders && (
+        <section className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-2" aria-label="Codex image usage">
+          <h3 className="text-sm font-medium text-white">Codex image usage · this machine</h3>
+          {usage.imageRenders.error ? (
+            <p className="text-sm text-gray-400" role="status">Image render usage is unavailable. Text usage remains available.</p>
+          ) : (
+            <>
+          <p className="text-sm text-gray-300">
+            {formatCount(usage.imageRenders.codexSessions)} Codex sessions · {formatCount(usage.imageRenders.savedOutputs)} saved outputs in this period
+          </p>
+          <p className="text-xs text-gray-400">
+            Image tokens, image cost and subscription allowance attribution: unknown.
+            Any driver tokens already captured by text accounting stay in the text report. Image costs are excluded from the API estimate.
+            Saved outputs show observed activity; they do not measure every image-tool call or failed attempt.
+            Historical saved records do not establish which machine executed a render.
+          </p>
+          <p className="text-xs text-gray-400">
+            {usage.imageRenders.driverTokens
+              ? `${formatCount(usage.imageRenders.driverTokens.reportedTotal)} reported driver tokens across ${formatCount(usage.imageRenders.driverTokens.sessionsMeasured)} sessions; no input/output split or image attribution.`
+              : 'Driver tokens: unknown.'}
+            {usage.imageRenders.driverTokens && ` Driver tokens are unknown for ${formatCount(usage.imageRenders.driverSessionsUnknown)} other render groups.`}
+          </p>
+          {usage.imageRenders.jobIdentityGroups > 0 && (
+            <p className="text-xs text-gray-400">{formatCount(usage.imageRenders.jobIdentityGroups)} additional render groups use saved job IDs; their Codex session IDs are unavailable.</p>
+          )}
+            </>
+          )}
+        </section>
+      )}
 
       {/* Summary Stats (all-time) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">

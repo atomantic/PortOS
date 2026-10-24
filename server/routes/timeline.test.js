@@ -74,6 +74,8 @@ vi.mock('../services/gmailMboxImport.js', () => ({
 vi.mock('../services/humanActivity.js', () => ({
   getDaySummary: vi.fn(async () => ({ date: '2026-07-07', events: [] })),
   listEvents: vi.fn(async () => []),
+  eraseEvents: vi.fn(async () => ({ deleted: 4 })),
+  listSourceCounts: vi.fn(async () => [{ source: 'location', eventCount: 4, earliestAt: null, latestAt: null }]),
 }));
 
 import { importSpotifyHistory } from '../services/spotifyImport.js';
@@ -82,6 +84,7 @@ import { importDiscordHistory } from '../services/discordImport.js';
 import { importWhatsappHistory } from '../services/whatsappImport.js';
 import { importBrowserHistory } from '../services/browserHistoryImport.js';
 import { importGmailMbox } from '../services/gmailMboxImport.js';
+import * as humanActivity from '../services/humanActivity.js';
 import timelineRoutes from './timeline.js';
 
 function makeApp() {
@@ -442,5 +445,37 @@ describe('timeline import routes', () => {
     const r = await request(app).post('/api/timeline/import/gmail').send({ preview: false });
     expect(r.status).toBe(400);
     expect(importGmailMbox).not.toHaveBeenCalled();
+  });
+});
+
+describe('timeline erase routes (#12987)', () => {
+  let app;
+  beforeEach(() => { app = makeApp(); vi.clearAllMocks(); });
+
+  it('DELETE /events erases one source with its range and returns the count', async () => {
+    const r = await request(app).delete('/api/timeline/events?source=location&from=2026-01-01T00:00:00.000Z');
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ deleted: 4 });
+    expect(humanActivity.eraseEvents).toHaveBeenCalledWith({ source: 'location', from: '2026-01-01T00:00:00.000Z' });
+  });
+
+  it('rejects a missing or empty source without deleting', async () => {
+    expect((await request(app).delete('/api/timeline/events')).status).toBe(400);
+    expect((await request(app).delete('/api/timeline/events?source=')).status).toBe(400);
+    expect(humanActivity.eraseEvents).not.toHaveBeenCalled();
+  });
+
+  it('accepts every listed connector source for exact scoped erasure', async () => {
+    const sources = ['location', 'imap', 'teams', `connector-${'x'.repeat(80)}`]
+      .map(source => ({ source, eventCount: 4 }));
+    humanActivity.listSourceCounts.mockResolvedValueOnce(sources);
+    const listed = await request(app).get('/api/timeline/sources');
+    expect(listed.status).toBe(200);
+    expect(listed.body.sources).toEqual(sources);
+    for (const { source } of listed.body.sources) {
+      const erased = await request(app).delete(`/api/timeline/events?${new URLSearchParams({ source })}`);
+      expect(erased.status).toBe(200);
+      expect(humanActivity.eraseEvents).toHaveBeenLastCalledWith({ source });
+    }
   });
 });

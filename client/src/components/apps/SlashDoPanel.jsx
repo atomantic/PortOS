@@ -5,7 +5,7 @@ import toast from '../ui/Toast';
 import { NON_PM2_TYPES } from './constants';
 import { slashdoLabel, slashdoWorkflowsForApp } from '../../lib/slashdoCatalog';
 import ProviderModelSelector from '../ProviderModelSelector';
-import { useRunWithPicker } from '../../hooks';
+import useRunWithPicker from '../../hooks/useRunWithPicker.js';
 import SlashDoRunDrawer from './SlashDoRunDrawer';
 import * as api from '../../services/api';
 

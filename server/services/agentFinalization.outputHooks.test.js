@@ -1,3 +1,14 @@
+import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-finalization-output-') }));
+afterAll(cleanupTempDataRoots);
+const mergedTarget = vi.hoisted(() => ({
+  getOriginInfo: vi.fn(),
+  probeChangeRequestState: vi.fn(),
+}));
+vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: mergedTarget.getOriginInfo }));
+vi.mock('./prProbe.js', () => ({ probeChangeRequestState: mergedTarget.probeChangeRequestState }));
+const claimVerifier = vi.hoisted(() => ({ verifyClaimDisposition: vi.fn() }));
+vi.mock('./claimDisposition.js', () => claimVerifier);
 vi.mock('../lib/fileUtils.js', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, tryReadFile: vi.fn(actual.tryReadFile) };
@@ -23,7 +34,7 @@ vi.mock('./codeReview.js', async (importOriginal) => ({
   getGoalFidelityConfig: vi.fn(async () => null),
 }));
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -49,6 +60,7 @@ import { getAgent, getAgentRecord, updateAgent, completeAgent } from './cosAgent
 import { canRunTaskOutputHookWithoutPayload, getTaskOutputHook, isProgrammaticIoTaskType } from './taskTypeHooks.js';
 import {
   finalizeAgent,
+  retireDeadAgent,
   dispatchRecoveredTaskOutputHook,
   dispatchTaskOutputHookOnce,
 } from './agentFinalization.js';
@@ -130,7 +142,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
     });
 
     await vi.waitFor(() => expect(recordTaskTypeSuccess).toHaveBeenCalledWith('example-output-hook', 'app-example'));
-    expect(updateTask).toHaveBeenCalledWith(TASK.id, { status: 'completed' }, 'internal');
+    expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ taskOutcome: { status: 'completed', reason: 'The task delivery criteria passed.' } }) }), 'internal');
     expect(processAgentCompletion).not.toHaveBeenCalled();
     rejectLedger(new Error('ledger write failed'));
 
@@ -308,16 +320,44 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(recordAuditQuality).not.toHaveBeenCalled();
   });
 
-  it('persists assessment and delivery verdicts without rewriting a clean execution', async () => {
+  it.each([false, true])('preserves legacy learning results while enforcing explicit delivery=%s', async explicit => {
     isProgrammaticIoTaskType.mockImplementation(type => type !== 'security');
     const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'security' } };
     recordAuditQuality.mockResolvedValueOnce(false);
     await finalizeAgent({ agentId: 'audit-final', task, success: true, exitCode: 0, duration: 1000,
-      workspacePath: '/missing-audit-worktree', startedAt: Date.now() - 1000, outputBuffer: 'Audit complete' });
+      workspacePath: '/missing-audit-worktree', startedAt: Date.now() - 1000, outputBuffer: 'Audit complete',
+      finalSummary: explicit ? JSON.stringify({ summary: 'Invented audit report.', taskOutcome: { status: 'completed', reason: 'Invented completion claim.' } }) : null });
     expect(completeAgent).toHaveBeenCalledWith('audit-final', expect.objectContaining({
-      success: true, validationPassed: false, auditAssessment: { status: 'not-recorded' },
+      success: !explicit, executionSuccess: true, validationPassed: false,
+      taskOutcome: explicit ? { status: 'incomplete', reason: 'Delivery checks did not pass.' } : null, auditAssessment: { status: 'not-recorded' },
     }));
     isProgrammaticIoTaskType.mockReturnValue(true);
+  });
+
+  it('keeps exact large ingestion and replay bytes in run artifacts rather than hot agent metadata', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { readCompletionData } = await import('./agentCompletionData.js');
+    const workspacePath = await mkdtemp(join(tmpdir(), 'completion-large-ingestion-'));
+    const payload = 'payload-'.repeat(150000);
+    const outputBuffer = 'provider-output-'.repeat(100000);
+    const sentinel = JSON.stringify({ summary: 'Delivered.', payload });
+    try {
+      await writeFile(join(workspacePath, '.agent-done-agent-example'), sentinel);
+      await finalizeAgent({ agentId: 'agent-example', task: { ...TASK, prompt: payload, history: payload },
+        success: true, exitCode: 0, duration: 1000, workspacePath, outputBuffer });
+      expect(JSON.stringify(persistedAgent.metadata).length).toBeLessThan(15000);
+      expect(JSON.parse(JSON.stringify(persistedAgent.metadata))).not.toHaveProperty('completionSentinelContents');
+      expect(JSON.parse(JSON.stringify(persistedAgent.metadata.completionCleanup))).not.toHaveProperty('context');
+      expect(await readCompletionData(persistedAgent, persistedAgent.metadata.completionSentinelData)).toBe(sentinel);
+      const replay = await readCompletionData(persistedAgent, persistedAgent.metadata.completionCleanup.replay);
+      expect(replay.outputBuffer).toBe(outputBuffer);
+      expect(replay.task.id).toBe(TASK.id);
+      expect(replay.task).not.toHaveProperty('prompt');
+      expect(replay.task).not.toHaveProperty('history');
+      await expect(readCompletionData({ ...persistedAgent, startedAt: '2020-01-01T00:00:00Z' },
+        persistedAgent.metadata.completionCleanup.replay)).rejects.toThrow('completion-data-run-changed');
+    } finally { await rm(workspacePath, { recursive: true, force: true }); }
   });
 
   it.each([
@@ -345,6 +385,262 @@ describe('recovery output-hook dispatch (#3182)', () => {
     } finally {
       await rm(workspacePath, { recursive: true, force: true });
     }
+  });
+
+  it.each(['blocked', 'incomplete', 'completed', 'no-action-needed'])('persists explicit %s delivery independently of a zero exit', async (status) => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const workspacePath = await mkdtemp(join(tmpdir(), 'task-outcome-'));
+    const taskOutcome = { status, reason: 'Invented prerequisite or delivery evidence.' };
+    const held = ['blocked', 'incomplete'].includes(status);
+    const task = { ...TASK, metadata: { ...TASK.metadata } };
+    try {
+      await writeFile(join(workspacePath, '.agent-done-agent-example'), JSON.stringify({ summary: 'Invented final report.', taskOutcome, payload: { result: 'example' } }));
+      const result = await finalizeAgent({ agentId: 'agent-example', runId: 'run-example', task, success: true,
+        exitCode: 0, duration: 1000, workspacePath, outputBuffer: '' });
+      expect(result).toMatchObject({ success: !held, taskOutcome });
+      expect(completeAgent).toHaveBeenCalledWith('agent-example', expect.objectContaining({ executionSuccess: true, success: !held, taskOutcome }));
+      expect(completeAgentRun).toHaveBeenCalledWith('run-example', '', 0, 1000, held ? expect.objectContaining({ category: `task-${status}` }) : undefined, held ? false : null, { executionSuccess: true, taskOutcome });
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: held ? 'in_progress' : 'completed', metadata: expect.objectContaining({ taskOutcome }) }), task.taskType);
+      expect(persistedAgent.metadata.taskOutcome).toEqual(taskOutcome);
+      expect(processAgentCompletion).toHaveBeenCalledWith('agent-example', task, !held, '');
+    } finally {
+      await rm(workspacePath, { recursive: true, force: true });
+    }
+  });
+
+  const reviewTask = () => ({ id: TASK.id, taskType: 'internal', status: 'in_progress', metadata: {
+    reviewLoopFollowUp: true, reviewLoopPRUrl: 'https://github.com/atomantic/PortOS/pull/123',
+    reviewLoopPRBranch: 'fix/example', failureCount: 2,
+  } });
+
+  it.each(['normal', 'restart'])('completes a verified merged review target without retrying during %s completion', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    mergedTarget.getOriginInfo.mockResolvedValue({ host: 'github.com', fullName: 'atomantic/PortOS' });
+    mergedTarget.probeChangeRequestState.mockResolvedValue({ readable: true, prState: 'MERGED' });
+    const task = reviewTask();
+    const reported = { status: mode === 'normal' ? 'blocked' : 'incomplete', reason: 'The target is merged; corrections are tracked separately and the checkout is preserved.' };
+    persistedAgent.metadata.workspacePath = '/example/repo';
+    persistedAgent.metadata.taskOutcome = reported;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    const result = mode === 'normal'
+      ? await finalizeAgent({ agentId: 'agent-example', runId: 'run-example', task, success: true,
+        exitCode: 0, duration: 1000, workspacePath: '/example/repo', outputBuffer: '',
+        finalSummary: JSON.stringify({ summary: reported.reason, taskOutcome: reported }) })
+      : await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 1000 });
+    expect(mergedTarget.probeChangeRequestState).toHaveBeenCalledWith('/example/repo', { number: 123, branch: 'fix/example' });
+    expect(result).toMatchObject({ success: true, taskOutcome: { status: 'no-action-needed' } });
+    if (mode === 'normal') expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed',
+      metadata: expect.objectContaining({ failureCount: 2, taskOutcome: expect.objectContaining({ status: 'no-action-needed' }) }) }), 'internal');
+    expect(completeAgent).toHaveBeenCalledWith('agent-example', expect.objectContaining({ success: true, validationPassed: true,
+      taskOutcome: expect.objectContaining({ status: 'no-action-needed' }) }));
+    expect(persistedAgent.metadata).toMatchObject({ taskOutcomeSource: 'forge-verification', reportedTaskOutcome: reported });
+    expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    if (mode === 'normal') expect(processAgentCompletion).toHaveBeenCalledWith('agent-example', task, true, '');
+    else expect(result.deliveryHeld).toBe(false);
+  });
+
+  it.each([
+    { name: 'an open target', state: { readable: true, prState: 'OPEN' } },
+    { name: 'a closed unmerged target', state: { readable: true, prState: 'CLOSED' } },
+    { name: 'an unreadable target', state: { readable: false, prState: null } },
+    { name: 'a different repository', meta: { reviewLoopPRUrl: 'https://github.com/another/project/pull/123' } },
+    { name: 'a leave-open policy', meta: { reviewLoopLeaveOpen: true } },
+    { name: 'an ordinary task', meta: { reviewLoopFollowUp: false } },
+    { name: 'a failed process', execution: { success: false, exitCode: 1 } },
+    { name: 'a provider safety refusal', execution: { executionInterruption: { category: 'content-refusal' } } },
+  ])('does not replace a blocked outcome for $name', async ({ state, meta, execution }) => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    mergedTarget.getOriginInfo.mockResolvedValue({ host: 'github.com', fullName: 'atomantic/PortOS' });
+    mergedTarget.probeChangeRequestState.mockResolvedValue(state || { readable: true, prState: 'MERGED' });
+    const task = reviewTask();
+    Object.assign(task.metadata, meta);
+    const reported = { status: 'blocked', reason: 'An unmet prerequisite remains.' };
+    const result = await finalizeAgent({ agentId: 'agent-example', task, success: true, exitCode: 0,
+      duration: 1000, workspacePath: '/example/repo', outputBuffer: '', ...execution,
+      finalSummary: JSON.stringify({ summary: reported.reason, taskOutcome: reported }) });
+    expect(result).toMatchObject({ success: false, taskOutcome: reported });
+    expect(updateTask).not.toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed' }), 'internal');
+  });
+
+  it('retains explicit approval with choices instead of retrying', async () => {
+    const taskOutcome = { status: 'blocked', reason: 'Continuing would exceed the authorized budget.',
+      recovery: { mode: 'approval', options: ['Increase the budget and retry.', 'Keep the work stopped.'] } };
+    await finalizeAgent({ agentId: 'agent-example', task: TASK, success: true, exitCode: 0,
+      finalSummary: JSON.stringify({ summary: 'Budget decision needed.', taskOutcome }) });
+    expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'blocked',
+      metadata: expect.objectContaining({ blockedCategory: 'task-approval',
+        blockedReason: expect.stringContaining('1. Increase the budget and retry.') }) }), TASK.taskType);
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['worktree', 'pinned-claim'])('hands %s cleanup-only work to completion recovery without another agent or success claim', async mode => {
+    const taskOutcome = { status: 'incomplete', reason: 'Verified delivery; owner still holds checkout.', recovery: { mode: 'cleanup' } };
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    persistedAgent.metadata = mode === 'worktree' ? { isWorktree: true }
+      : { isWorktree: false, claimPicksOwnBranch: false, claimBranch: 'claim/issue-42', claimBranches: ['claim/issue-42'] };
+    try {
+      await finalizeAgent({ agentId: 'agent-example', task: { id: TASK.id, taskType: 'user', metadata: {} },
+        success: true, exitCode: 0, finalSummary: JSON.stringify({ summary: 'Cleanup handed off.', taskOutcome }) });
+      expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'in_progress',
+        metadata: expect.objectContaining({ deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' }) }), 'user');
+      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: false, cleanupPending: true }));
+      expect(addTask).not.toHaveBeenCalled();
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
+  it.each(['saved', 'pinned-claim'])('retains a %s cleanup handoff when its run is recovered after a crash', async mode => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const workspacePath = await mkdtemp(join(tmpdir(), 'cleanup-restart-'));
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const taskOutcome = { status: 'incomplete', reason: 'Only preservation remains.', recovery: { mode: 'cleanup' } };
+    const task = { ...TASK, status: 'in_progress', description: 'Preserve the delivered checkout.', priority: 'MEDIUM', metadata: { ...TASK.metadata, ...(mode === 'saved'
+      ? { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' } : {}) } };
+    persistedAgent.metadata = { workspacePath, ...(mode === 'saved' ? { isWorktree: true }
+      : { isWorktree: false, claimPicksOwnBranch: false, claimBranch: 'claim/issue-42', claimBranches: ['claim/issue-42'] }) };
+    try {
+      await writeFile(join(workspacePath, '.agent-done-agent-example'), JSON.stringify({ taskOutcome }));
+      await retireDeadAgent({ agent: persistedAgent, task, success: mode === 'pinned-claim', exitCode: mode === 'pinned-claim' ? 0 : 1, duration: 1000 });
+      expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'in_progress',
+        metadata: expect.objectContaining({ deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' }) }), TASK.taskType, {
+        expectedStatus: 'in_progress',
+        expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+        recoveryOwner: { id: 'agent-example', startedAt: '2026-09-10T00:00:00Z' },
+      });
+      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: false, cleanupPending: true }));
+    } finally {
+      isProgrammaticIoTaskType.mockReturnValue(true);
+      await rm(workspacePath, { recursive: true, force: true });
+    }
+  });
+
+  it('stops repeated delivery recovery at the existing budget with concrete choices', async () => {
+    const taskOutcome = { status: 'incomplete', reason: 'Validation remains red.' };
+    await finalizeAgent({ agentId: 'agent-example', task: { ...TASK, metadata: { ...TASK.metadata, failureCount: MAX_TASK_RETRIES - 1 } },
+      success: true, exitCode: 0, finalSummary: JSON.stringify({ summary: 'Retained failed work.', taskOutcome }) });
+    expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'blocked',
+      metadata: expect.objectContaining({ blockedCategory: 'task-recovery-exhausted',
+        blockedReason: expect.stringContaining('Options:') }) }), TASK.taskType);
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['normal', 'restart'])('settles a selected claim no-op from the shared verifier during %s completion', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: 'claim-example', taskType: 'user', metadata: { app: 'app-example', claimFlow: true, claimTarget: '42' } };
+    const taskOutcome = { status: 'no-action-needed', reason: 'Selected issue no longer requires a change.' };
+    const claimDisposition = { status: 'verified', taskId: task.id, issues: [{ issue: 42, disposition: 'not-planned' }] };
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.taskOutcome = taskOutcome;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    claimVerifier.verifyClaimDisposition.mockResolvedValue(claimDisposition);
+    try {
+      if (mode === 'normal') await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+        finalSummary: JSON.stringify({ summary: 'Claim stood down.', taskOutcome }) });
+      else await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+      expect(claimVerifier.verifyClaimDisposition).toHaveBeenLastCalledWith(expect.objectContaining({ task,
+        agent: expect.objectContaining({ id: persistedAgent.id, taskId: task.id }), reportedOutcome: taskOutcome, success: true }));
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: true,
+        validationPassed: true, taskOutcome, claimDisposition }));
+      expect(hook).not.toHaveBeenCalled();
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
+  it.each(['normal', 'restart'])('keeps an unreadable tracker unverified during %s completion even with a saved validation pass', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: 'claim-example', taskType: 'user', metadata: { app: 'app-example', claimFlow: true, claimTarget: '42' } };
+    const taskOutcome = { status: 'no-action-needed', reason: 'Agent says done.' };
+    persistedAgent.taskId = task.id;
+    persistedAgent.result = { validationPassed: true };
+    persistedAgent.metadata.taskOutcome = taskOutcome;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    claimVerifier.verifyClaimDisposition.mockRejectedValue(new Error('Invented forge outage'));
+    try {
+      if (mode === 'normal') await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+        finalSummary: JSON.stringify({ summary: 'Claim stood down.', taskOutcome }) });
+      else await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: false,
+        validationPassed: null, taskOutcome: { status: 'incomplete', reason: 'The reported no-action-needed result was not verified.' },
+        claimDisposition: { status: 'unverified', reason: 'tracker-unavailable' } }));
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
+  it('preserves a failed delivery gate during claim no-op recovery', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: 'claim-example', taskType: 'user', metadata: { claimFlow: true, claimTarget: '42' } };
+    persistedAgent.taskId = task.id;
+    persistedAgent.result = { validationPassed: false };
+    persistedAgent.metadata.taskOutcome = { status: 'no-action-needed', reason: 'Issue was closed.' };
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    claimVerifier.verifyClaimDisposition.mockResolvedValue({ status: 'verified' });
+    try {
+      await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: false,
+        validationPassed: false, taskOutcome: { status: 'incomplete', reason: 'Delivery checks did not pass.' } }));
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
+  it('holds an unverified no-op', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    try {
+      const task = { id: 'user-example', taskType: 'user', metadata: {} };
+      await finalizeAgent({ agentId: 'agent-example', task, success: true, exitCode: 0, outputBuffer: '',
+        finalSummary: JSON.stringify({ summary: 'Invented no-op.', taskOutcome: { status: 'no-action-needed', reason: 'No changes made.' } }) });
+      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ executionSuccess: true, success: false,
+        taskOutcome: { status: 'incomplete', reason: 'The reported no-action-needed result was not verified.' } }));
+    } finally {
+      isProgrammaticIoTaskType.mockReturnValue(true);
+    }
+  });
+
+  it('leaves legacy prose as unknown delivery when the agent has no saved outcome', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    try {
+      const task = { id: 'user-example', taskType: 'user', metadata: {} };
+      await finalizeAgent({ agentId: 'agent-example', task, success: true, exitCode: 0, outputBuffer: '',
+        finalSummary: 'Status: BLOCKED - invented contradictory instructions' });
+      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ executionSuccess: true, taskOutcome: null }));
+    } finally {
+      isProgrammaticIoTaskType.mockReturnValue(true);
+    }
+  });
+
+  it('replays verified no-op recovery after terminal persistence fails without repeating its hook', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const workspacePath = await mkdtemp(join(tmpdir(), 'verified-noop-replay-'));
+    const taskOutcome = { status: 'no-action-needed', reason: 'Invented verified no-op.' };
+    persistedAgent.metadata.workspacePath = workspacePath;
+    hook.mockResolvedValue({ accepted: true });
+    completeAgent.mockRejectedValueOnce(new Error('invented persistence failure'));
+    const finish = () => retireDeadAgent({ agent: persistedAgent, task: TASK, success: true, exitCode: 0, duration: 1000 });
+    try {
+      await writeFile(join(workspacePath, '.agent-done-agent-example'), JSON.stringify({ taskOutcome }));
+      await expect(finish()).rejects.toThrow('invented persistence failure');
+      await expect(finish()).resolves.toEqual({ success: true, taskOutcome, deliveryHeld: false });
+      expect(hook).toHaveBeenCalledOnce();
+      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: true, validationPassed: true, taskOutcome }));
+    } finally { await rm(workspacePath, { recursive: true, force: true }); }
+  });
+
+  it.each([null, 'Invented terminal report.'])('retains an outcome-only sentinel on repeat finalization after cleanup with finalSummary=%s', async finalSummary => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const workspacePath = await mkdtemp(join(tmpdir(), 'outcome-replay-'));
+    const sentinelPath = join(workspacePath, '.agent-done-agent-example');
+    const taskOutcome = { status: 'blocked', reason: 'Invented prerequisite remains unmet.' };
+    const finish = (finalSummary = null) => finalizeAgent({ agentId: 'agent-example', task: TASK, success: true,
+      exitCode: 0, duration: 1000, workspacePath, finalSummary, outputBuffer: '' });
+    try {
+      await writeFile(sentinelPath, JSON.stringify({ taskOutcome }));
+      await finish();
+      await rm(sentinelPath);
+      await finish(finalSummary);
+      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: false, executionSuccess: true, taskOutcome }));
+      expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'in_progress', metadata: expect.objectContaining({ taskOutcome }) }), TASK.taskType);
+      expect(persistedAgent.metadata.taskSummary).toBe(finalSummary);
+    } finally { await rm(workspacePath, { recursive: true, force: true }); }
   });
 
   it.each(['sentinel', 'terminal-result', 'legacy'])('retains only authoritative %s summaries on repeat finalization after cleanup', async (source) => {
@@ -381,7 +677,7 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
     workspacePath: '/example/repo', finalSummary: 'Investigated high-risk paths and fixed two coherent defects. Coverage remains partial.', outputBuffer: 'tool transcript' });
   expect(deep.checkpointDeepAudit).not.toHaveBeenCalled();
   expect(deep.settleDeepAuditDelivery).not.toHaveBeenCalled();
-  expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed' }), expect.anything());
+  expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ taskOutcome: null }) }), expect.anything());
   expect(persistedAgent.metadata.taskSummary).toContain('Coverage remains partial');
   expect(persistedAgent.metadata.taskSummarySource).toBe('terminal-result');
 });
@@ -428,7 +724,7 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
     }));
     expect(updateAgent).toHaveBeenCalledWith(
       persistedAgent.id,
-      { metadata: { outputHookDispatchedAt: expect.any(String) } },
+      { metadata: { outputHookDispatchedAt: expect.any(String), outputHookValidationPassed: expect.any(Boolean) } },
     );
   });
 
@@ -457,7 +753,7 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
       agentId: persistedAgent.id,
       task: TASK,
       success: false,
-    })).resolves.toEqual({ ran: false, alreadyDispatched: true });
+    })).resolves.toMatchObject({ ran: false, alreadyDispatched: true });
     expect(hook).toHaveBeenCalledOnce();
   });
 
@@ -484,7 +780,7 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
     finishHook({ recorded: true });
     await vi.waitFor(() => expect(updateAgent).toHaveBeenCalledWith(
       persistedAgent.id,
-      { metadata: { outputHookDispatchedAt: expect.any(String) } },
+      { metadata: { outputHookDispatchedAt: expect.any(String), outputHookValidationPassed: expect.any(Boolean) } },
     ));
     vi.useRealTimers();
 
@@ -492,7 +788,7 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
       agentId: persistedAgent.id,
       task: TASK,
       success: false,
-    })).resolves.toEqual({ ran: false, alreadyDispatched: true });
+    })).resolves.toMatchObject({ ran: false, alreadyDispatched: true });
     expect(hook).toHaveBeenCalledOnce();
   });
 
@@ -503,7 +799,7 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
       agentId: persistedAgent.id,
       task: TASK,
       success: false,
-    })).resolves.toEqual({ ran: false, alreadyDispatched: true });
+    })).resolves.toMatchObject({ ran: false, alreadyDispatched: true });
     expect(hook).not.toHaveBeenCalled();
   });
 
@@ -600,7 +896,7 @@ describe('permanent output-hook rejection (#6124)', () => {
       errorAnalysis: expect.objectContaining({ permanent: true, origin: 'task-output-hook' }),
     }));
     expect(completeAgentRun).toHaveBeenCalledWith('run-rejected', '', 1, 1000,
-      expect.objectContaining({ category: 'output-missing', permanent: true }), false);
+      expect.objectContaining({ category: 'output-missing', permanent: true }), false, expect.objectContaining({ executionSuccess: false, taskOutcome: { status: 'incomplete', reason: 'Delivery checks did not pass.' } }));
     expect(addTask).not.toHaveBeenCalled();
     // The task's retry decision is resolved once, against the final verdict —
     // not once for the run's own failure and again for the escalation (#9645).

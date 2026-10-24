@@ -300,8 +300,8 @@ describe('MoodBoardDetail stale-response guards', () => {
 });
 
 describe('MoodBoardDetail private Pinterest import', () => {
-  it('imports a board directly through the signed-in PortOS browser action', async () => {
-    const boardUrl = 'https://www.pinterest.com/example-user/example-board/';
+  it('imports a single Pin through the signed-in PortOS browser action', async () => {
+    const boardUrl = 'https://www.pinterest.com/pin/9999999999999999999/';
     const importedBoard = {
       id: 'a',
       name: 'Board A',
@@ -319,10 +319,10 @@ describe('MoodBoardDetail private Pinterest import', () => {
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
     openTool('Import');
-    fireEvent.change(screen.getByLabelText('Board URL'), { target: { value: boardUrl } });
+    fireEvent.change(screen.getByLabelText('Pin or board URL'), { target: { value: boardUrl } });
     fireEvent.click(screen.getByRole('button', { name: 'Import pins' }));
 
-    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('Added 1 of 1 Pinterest pins'));
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('Added 1 of 1 Pinterest pin'));
     expect(mockImportMoodBoardPinterest).toHaveBeenCalledWith('a', boardUrl, { silent: true });
     expect(screen.getByAltText('Example pin')).toHaveAttribute('src', '/data/images/pinterest-example.jpg');
   });
@@ -666,7 +666,7 @@ describe('MoodBoardDetail layout', () => {
     expect(tools).toContainElement(screen.getByRole('button', { name: 'Pin to board' }));
     expect(screen.queryByRole('button', { name: 'Import pins' })).toBeNull();
     openTool('Import');
-    expect(screen.getByRole('heading', { name: 'Pinterest board' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Import from Pinterest' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Import from an X post' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Pin to board' })).toBeNull();
     expect(screen.getByTestId('generate-more-panel')).toBeInTheDocument();
@@ -719,7 +719,7 @@ describe('MoodBoardDetail phone tool sheet', () => {
     const row = screen.getByRole('navigation', { name: 'Board tools' });
     fireEvent.click(within(row).getByRole('button', { name: 'Import' }));
     const sheet = screen.getByRole('dialog', { name: 'Board tools' });
-    expect(sheet).toContainElement(screen.getByRole('heading', { name: 'Pinterest board' }));
+    expect(sheet).toContainElement(screen.getByRole('heading', { name: 'Import from Pinterest' }));
 
     // Switching tools inside the sheet keeps it open on the same entry.
     fireEvent.click(screen.getByRole('tab', { name: 'Add' }));

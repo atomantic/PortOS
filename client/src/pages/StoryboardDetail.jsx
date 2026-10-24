@@ -11,14 +11,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, Clapperboard, LayoutGrid, LayoutPanelLeft, ListMusic, Loader2, Play, Plus, Rows3, ScrollText } from 'lucide-react';
+import { ArrowLeft, BookOpen, Clapperboard, LayoutGrid, LayoutPanelLeft, ListMusic, Loader2, Play, Plus, Rows3, ScrollText } from 'lucide-react';
 import TabPills from '../components/ui/TabPills';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import {
   addStoryboardBeat, addStoryboardPanel, addStoryboardPanelTake, createBlankSketch, deleteStoryboardBeat,
   deleteStoryboardPanel, getStoryboard, listMoodBoardNames, moveStoryboardBeat, moveStoryboardPanel,
-  removeStoryboardPanelTake, runStoryboardPanelNode, selectStoryboardPanelTake, updateStoryboard, updateStoryboardBeat,
+  removeStoryboardPanelTake, runStoryboardPanelNode, selectStoryboardPanelTake, sendStoryboardPanelToFableLoom, updateStoryboard, updateStoryboardBeat,
   updateStoryboardPanel, updateStoryboardPanelNode, updateStoryboardRecipe,
 } from '../services/api';
 import { formatTimecode } from '../utils/formatters';
@@ -168,6 +168,10 @@ export default function StoryboardDetail() {
     onSelectTake: (takeId) => write(() => selectStoryboardPanelTake(id, panelId, takeId)),
     onRemoveTake: (takeId) => write(() => removeStoryboardPanelTake(id, panelId, takeId)),
     onMove: (target) => write(() => moveStoryboardPanel(id, panelId, target)),
+    onSendToScene: async () => {
+      const res = await write(() => sendStoryboardPanelToFableLoom(id, panelId));
+      if (res) toast.success(board.source?.kind === 'pipeline' ? 'Shot start frame updated in the pipeline' : 'Scene art updated in FableLoom');
+    },
     onRecipe: (recipe) => write(() => updateStoryboardRecipe(id, recipe)),
     onNodePatch: (nodeId, patch) => write(() => updateStoryboardPanelNode(id, panelId, nodeId, patch)),
     // Resolves true when the node ran (Run all stops at the first failure,
@@ -267,6 +271,16 @@ export default function StoryboardDetail() {
             </button>
           )}
           {board.beats.some((beat) => beat.panels.length) && <MakeEmptyPanels boardId={id} />}
+          {board.source?.kind === 'fableloom' && (
+            <Link to={`/fableloom/${encodeURIComponent(board.source.loomId)}/${encodeURIComponent(board.source.episodeId)}/board`} className={headerButton}>
+              <BookOpen size={16} aria-hidden="true" /> FableLoom episode
+            </Link>
+          )}
+          {board.source?.kind === 'pipeline' && (
+            <Link to={`/pipeline/issues/${encodeURIComponent(board.source.issueId)}/storyboards`} className={headerButton}>
+              <BookOpen size={16} aria-hidden="true" /> Pipeline issue
+            </Link>
+          )}
         </div>
       </header>
 

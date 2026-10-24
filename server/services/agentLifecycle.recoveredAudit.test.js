@@ -11,7 +11,7 @@ vi.mock('../lib/fileUtils.js', async importOriginal => {
   });
 });
 vi.mock('../lib/maintenanceAdmission.js', () => ({ maintenance: {
-  recoverOwned: vi.fn(), withResource: (_kind, _id, fn) => fn(), finishResource: vi.fn(), markResourceUnsettled: vi.fn(),
+  continueSettlement: fn => fn(), recoverOwned: vi.fn(), withResource: (_kind, _id, fn) => fn(), finishResource: vi.fn(), markResourceUnsettled: vi.fn(),
 } }));
 vi.mock('./cosRunnerClient.js', () => ({
   getActiveAgentsFromRunner: vi.fn(), connectTuiSessionViaRunner: vi.fn(),
@@ -29,6 +29,13 @@ vi.mock('./cosAgentLifecycle.js', async importOriginal => ({
     if (update.metadata?.auditFindings) fixture.trace.push('findings');
     return record;
   }),
+  recordCompletionCleanup: async (id, startedAt, patch) => {
+    const record = fixture.records.get(id);
+    if (record?.status !== 'completed' || record.startedAt !== startedAt) return false;
+    const prior = record.metadata.completionCleanup || {};
+    record.metadata.completionCleanup = { ...prior, ...patch, stages: { ...prior.stages, ...patch.stages } };
+    return true;
+  },
   completeAgent: vi.fn(async (id, result) => {
     fixture.trace.push('complete');
     Object.assign(fixture.records.get(id), { status: 'completed', result });
@@ -159,7 +166,7 @@ describe('recovered runner audit completion (#11526)', () => {
     if (mode === 'stale primary cwd') runnerAgents.get(run.agentId).workspacePath = run.primaryPath;
     await handleAgentCompletion(run.agentId, 0, true, 1000);
     expect(run.record.metadata.auditFindings).toMatchObject({ status: 'complete', report });
-    expect(run.record.result).toMatchObject({ success: true, auditAssessment: { status: 'recorded' } });
+    expect(run.record.result).toMatchObject({ success: true, executionSuccess: true, taskOutcome: null, auditAssessment: { status: 'recorded' } });
     expect(fixture.quality).toEqual([{ category: 'observability', agentId: run.agentId, report: quality(82) }]);
     expect(fixture.trace.indexOf('findings')).toBeLessThan(fixture.trace.indexOf('quality'));
     expect(fixture.trace.indexOf('quality')).toBeLessThan(fixture.trace.indexOf('complete'));

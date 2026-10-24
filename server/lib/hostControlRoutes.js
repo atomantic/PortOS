@@ -468,6 +468,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // CoS: queue, release or steer an agent that runs shell commands in a
   // worktree, or a job that runs a shell command directly.
   'POST /api/cos/merge-admission',
+  'POST /api/cos/merge-admission/external',
   'POST /api/cos/merge-handoff',
   'POST /api/cos/claim-ownership',
   'POST /api/cos/start',
@@ -495,6 +496,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'PUT /api/tools/:id',
   'PUT /api/cos/schedule/task/:taskType',
   'POST /api/cos/schedule/trigger',
+  'POST /api/cos/schedule/branch-reconcile/refresh',
   // Archives and removes a checkout and its merged branch under a scoped release.
   'POST /api/cos/schedule/branch-reconcile/checkouts/retire',
   'POST /api/cos/schedule/branch-reconcile/checkouts/review',
@@ -1014,6 +1016,11 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Autopilots and support requests that queue CoS agents.
   'POST /api/pipeline/series/:id/autopilot/start',
   'POST /api/fableloom/:id/editorial/autopilot/start',
+  // Export preparation decodes authored media; download releases the resulting
+  // private package. Both preserve authenticated delegated agent authority.
+  'POST /api/fableloom/:id/export',
+  'DELETE /api/fableloom/:id/export/:jobId',
+  'GET /api/fableloom/:id/export/:jobId/download',
   'POST /api/image-video/models/support-request',
 
   // FableLoom authoring and production (#10668) can dispatch CLI/TUI agents,
@@ -1093,6 +1100,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/github/secrets/:name/sync',
   // Resolve with agent queues CoS agent work against the thread's app.
   'POST /api/github/notifications/:accountId/:threadId/agent',
+  'POST /api/github/notifications/:accountId/:threadId/pull-request',
   // Notifications inbox (#12952): thread actions (and the learned rules an
   // operator action trains), audit apply and the undo routes write to the
   // account with `gh`; the schedule arms a CoS System task; account

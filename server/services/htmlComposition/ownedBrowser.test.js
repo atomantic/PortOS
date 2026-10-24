@@ -7,7 +7,9 @@ import { access, mkdir, rm } from 'node:fs/promises';
 import { createOwnedBrowserDiagnostics, readOwnedBrowserObservations } from '../../test/ownedBrowserDiagnostics.js';
 
 const launch = vi.hoisted(() => ({ spawn: vi.fn() }));
-vi.mock('./browserProcessGroup.js', async original => ({ ...await original(), drainBrowserProcessGroup: vi.fn(async () => {}) }));
+vi.mock('./browserProcessGroup.js', async original => ({
+  ...await original(), drainBrowserProcessGroup: vi.fn(async () => {}), observeBrowserProcessGroup: vi.fn(async () => 'unavailable'),
+}));
 vi.mock('node:fs/promises', async original => {
   const actual = await original();
   return { ...actual, rm: vi.fn(actual.rm) };
@@ -15,7 +17,7 @@ vi.mock('node:fs/promises', async original => {
 vi.mock('../../lib/childProcess.js', async original => ({ ...await original(), spawn: launch.spawn }));
 vi.mock('../browserService.js', () => ({ loadConfig: async () => ({ chromePath: '/synthetic/chrome' }) }));
 const { launchCompositionBrowser } = await import('./ownedBrowser.js');
-const { drainBrowserProcessGroup } = await import('./browserProcessGroup.js');
+const { drainBrowserProcessGroup, observeBrowserProcessGroup } = await import('./browserProcessGroup.js');
 
 let child;
 let profile;
@@ -25,6 +27,7 @@ const endpoint = 'ws://127.0.0.1:12345/devtools/browser/synthetic-browser';
 beforeEach(() => {
   vi.spyOn(process, 'kill').mockImplementation(() => true);
   vi.mocked(drainBrowserProcessGroup).mockReset().mockResolvedValue();
+  vi.mocked(observeBrowserProcessGroup).mockReset().mockResolvedValue('unavailable');
   diagnostics = createOwnedBrowserDiagnostics();
   child = new EventEmitter();
   Object.assign(child, { pid: 12345, exitCode: null, signalCode: null, stderr: new PassThrough() });
@@ -135,6 +138,7 @@ describe('owned composition capture browser lifecycle', () => {
     await Promise.all([owner.close(), owner.close()]);
     expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
     await expect(access(profile)).rejects.toThrow();
+    expect(observeBrowserProcessGroup).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -381,6 +385,8 @@ it.each([
     term: 'accepted', kill: 'accepted', signalError: malformed ? 'other' : 'none', elapsedMs: '5000',
     groupTerm: process.platform === 'win32' ? 'not-attempted' : 'accepted', groupKill: process.platform === 'win32' ? 'not-attempted' : 'accepted',
     groupSignalError: 'none', groupFailedSignal: 'none', groupFailedPhase: 'none',
+    groupSignalObservation: 'not-requested',
+    groupDeadlineObservation: process.platform === 'win32' ? 'not-requested' : 'startMs:6500|endMs:6500|unavailable',
     spawned: 'true', closed: 'false', exitCode: malformed ? 'other' : exitCode === null ? 'none' : String(exitCode),
     signalCode: malformed ? 'other' : signalCode ?? 'none',
     exitListener: String(!emitExit), closeListener: 'true', errorListener: 'true',
@@ -484,4 +490,55 @@ it.skipIf(process.platform === 'win32')('latches the first group failure across 
   await vi.waitFor(() => expect(drainBrowserProcessGroup).toHaveBeenCalledWith(child.pid, 10000, 1000,
     expect.objectContaining({ error: 'EPERM', failedSignal: 'SIGTERM', failedPhase: 'shutdown' })));
   await vi.waitFor(() => expect(rm).toHaveBeenCalled());
+});
+
+it.skipIf(process.platform === 'win32').each(['observed', 'pending'])('retains %s OS evidence after a group SIGKILL refusal without extending shutdown', async observation => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  child.kill = vi.fn(() => true);
+  vi.mocked(process.kill).mockImplementation((_, name) => {
+    if (name === 'SIGKILL') throw Object.assign(new Error('/private/signal-error'), { code: 'EPERM' });
+    return true;
+  });
+  let finishObservation;
+  if (observation === 'pending') {
+    const pending = new Promise(resolve => { finishObservation = resolve; });
+    vi.mocked(observeBrowserProcessGroup).mockReturnValue(pending);
+  } else {
+    vi.mocked(observeBrowserProcessGroup)
+      .mockResolvedValueOnce('leader:sleeping|parent:same|group:same|uid:same|ruid:same|live:2|zombies:0|foreignUid:0|states:sleeping:2|capped:false')
+      .mockResolvedValueOnce('leader:absent|parent:absent|group:absent|uid:absent|ruid:absent|live:0|zombies:1|foreignUid:0|states:zombie:1|capped:false');
+  }
+  const owner = await launchCompositionBrowser();
+  let error;
+  const closing = owner.close();
+  const settled = closing.catch(result => { error = result; });
+  await vi.advanceTimersByTimeAsync(4999);
+  expect(error).toBeUndefined();
+  expect(rm).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await settled;
+  expect(error.message).toContain('groupTerm=accepted, groupKill=threw, groupSignalError=EPERM');
+  expect(error.message).toContain('groupFailedSignal=SIGKILL, groupFailedPhase=shutdown');
+  expect(error.message).toContain('exit=false, stdioClosed=false, term=accepted, kill=accepted');
+  expect(error.message).toContain('elapsedMs=5000');
+  if (observation === 'observed') {
+    expect(error.message).toContain('groupSignalObservation=startMs:1000|endMs:1000|leader:sleeping|parent:same');
+    expect(error.message).toContain('groupDeadlineObservation=startMs:4500|endMs:4500|leader:absent');
+  } else {
+    expect(error.message).toContain('groupSignalObservation=pending, groupDeadlineObservation=pending');
+    const original = error.message;
+    finishObservation('leader:absent');
+    await Promise.resolve();
+    expect(error.message).toBe(original);
+  }
+  expect(observeBrowserProcessGroup.mock.calls).toEqual([[child.pid, 500], [child.pid, 500]]);
+  expect(error.message).not.toContain('/private');
+  expect(process.kill.mock.calls).toEqual([[-child.pid, 'SIGTERM'], [-child.pid, 'SIGKILL']]);
+  expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+  expect(rm).not.toHaveBeenCalled();
+  child.emit('exit', null, 'SIGKILL');
+  expect(rm).not.toHaveBeenCalled();
+  child.emit('close', null, 'SIGKILL');
+  await vi.waitFor(() => expect(rm).toHaveBeenCalledExactlyOnceWith(profile, { recursive: true, force: true }));
+  await expect(owner.close()).rejects.toBe(error);
 });

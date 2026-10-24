@@ -75,12 +75,28 @@ function fakeHangingChild(stderr) {
   return child;
 }
 
+const prPages = rows => JSON.stringify([{ data: { repository: { pullRequests: {
+  nodes: rows.map((pr, index) => ({ ...pr, number: pr.number || index + 1, commits: {
+    nodes: (pr.commits || []).map(commit => ({ commit: { message: `${commit.messageHeadline || ''}\n${commit.messageBody || ''}` } })),
+    pageInfo: { hasNextPage: (pr.commits || []).length >= 100 },
+  } })), pageInfo: { hasNextPage: false, endCursor: null },
+} } } }]);
+
+function fakePrChild(rows) {
+  return fakeChild(prPages(typeof rows === 'string' ? JSON.parse(rows) : rows));
+}
+
 // Route spawn calls to canned output by command + first arg.
 function routeSpawn(routes) {
   spawn.mockImplementation((cmd, args = []) => {
-    const key = `${cmd} ${args[0] || ''}`;
-    const r = routes[key] ?? (key === 'gh api' ? { stdout: 'alice\n' } : undefined);
-    return fakeChild(r?.stdout ?? '', r?.code ?? 0, r?.stderr ?? '');
+    const key = cmd === 'gh' && args[0] === 'api' && args.includes('graphql') ? 'gh pr' : `${cmd} ${args[0] || ''}`;
+    const r = routes[key] ?? (key === 'gh api' ? { stdout: 'alice\n' } : key === 'glab mr' ? { stdout: '[]' } : undefined);
+    let stdout = r?.stdout ?? '';
+    if (key === 'gh pr' && !stdout.startsWith('[') && !stdout.startsWith('{')) {
+      stdout = JSON.stringify(stdout.split('\n').filter(Boolean).map(headRefName => ({ headRefName, body: '', commits: [] })));
+    }
+    if (key === 'gh pr' && stdout.startsWith('[')) stdout = prPages(JSON.parse(stdout));
+    return fakeChild(stdout, r?.code ?? 0, r?.stderr ?? '');
   });
 }
 
@@ -122,12 +138,6 @@ describe('perpetualWork', () => {
 
     it('rejects an assigned issue', () => {
       expect(isActionableIssue({ ...base, assignees: [{ login: 'someone' }] })).toBe(false);
-    });
-
-    it('accepts an issue assigned to the authenticated account', () => {
-      expect(isActionableIssue({ ...base, assignees: [{ login: 'Alice' }] }, new Set(), null, 'alice')).toBe(true);
-      expect(isActionableIssue({ ...base, assignees: [{ username: 'ALICE' }] }, new Set(), null, 'alice')).toBe(true);
-      expect(isActionableIssue({ ...base, assignees: [{ login: 'bob' }] }, new Set(), null, 'alice')).toBe(false);
     });
 
     it('rejects an in-flight issue number', () => {
@@ -455,7 +465,7 @@ describe('perpetualWork', () => {
       expect(out.skipCauses).toEqual({ 'excluded-label:in-flight': 1 });
     });
 
-    it('keeps an issue assigned to the authenticated account claimable', async () => {
+    it('preserves same-login assignment while querying the enterprise origin', async () => {
       spawn.mockImplementation((cmd, args = []) => {
         if (cmd === 'git' && args[0] === 'remote') return fakeChild('git@ghe.example.com:acme/widget.git\n');
         if (cmd === 'gh' && args[0] === 'api' && args.includes('user')) return fakeChild('alice\n');
@@ -463,16 +473,17 @@ describe('perpetualWork', () => {
           number: 3, title: 'retry my claim', assignees: [{ login: 'alice' }], labels: []
         }]));
         if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
-        if (cmd === 'gh' && args[0] === 'pr') return fakeChild('');
+        if (cmd === 'gh' && args[0] === 'api' && args.includes('graphql')) return fakePrChild([]);
+        if (cmd === 'glab' && args[0] === 'mr') return fakeChild('[]');
         return fakeChild('');
       });
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
-      expect(out).toMatchObject({ actionable: true, count: 1, sample: [3] });
-      const loginCall = spawn.mock.calls.find(([cmd, args]) => cmd === 'gh' && args[0] === 'api' && args.includes('user'));
-      expect(loginCall[1]).toEqual(expect.arrayContaining(['--hostname', 'ghe.example.com']));
+      expect(out).toMatchObject({ actionable: false, count: 0, skipCauses: { assigned: 1 } });
+      const query = spawn.mock.calls.find(([cmd, args]) => cmd === 'gh' && args.includes('graphql'));
+      expect(query[1]).toEqual(expect.arrayContaining(['--hostname', 'ghe.example.com']));
     });
 
-    it('keeps an assigned-only queue transient when the GitHub identity probe fails', async () => {
+    it('does not need an identity probe to park an assigned-only GitHub queue', async () => {
       spawn.mockImplementation((cmd, args = []) => {
         if (cmd === 'git' && args[0] === 'remote') return fakeChild('git@ghe.example.com:acme/widget.git\n');
         if (cmd === 'gh' && args[0] === 'api' && args.includes('user')) return fakeChild('', 1);
@@ -480,14 +491,15 @@ describe('perpetualWork', () => {
           { number: 3, title: 'retry my claim', assignees: [{ login: 'alice' }], labels: [] }
         ]));
         if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
-        if (cmd === 'gh' && args[0] === 'pr') return fakeChild('');
+        if (cmd === 'gh' && args[0] === 'api' && args.includes('graphql')) return fakePrChild([]);
+        if (cmd === 'glab' && args[0] === 'mr') return fakeChild('[]');
         return fakeChild('');
       });
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
-      expect(out).toMatchObject({ actionable: false, reason: 'gh-unavailable', transient: true });
+      expect(out).toMatchObject({ actionable: false, reason: 'no-actionable-issues', skipCauses: { assigned: 1 } });
     });
 
-    it('lists open PRs with an explicit limit and excludes PR-backed issues beyond the first 30', async () => {
+    it('paginates open PRs and excludes PR-backed issues beyond the first 30', async () => {
       const prRefs = Array.from({ length: 40 }, (_, i) => `claim/issue-${i + 100}`).join('\n');
       routeSpawn({
         'gh issue': { stdout: JSON.stringify([
@@ -500,8 +512,51 @@ describe('perpetualWork', () => {
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
       expect(out.sample).toEqual([500]);
       expect(out.inFlightCount).toBe(1);
-      const prCall = spawn.mock.calls.find(([cmd, args]) => cmd === 'gh' && args[0] === 'pr');
-      expect(prCall[1]).toEqual(expect.arrayContaining(['--limit', '500']));
+      const prCall = spawn.mock.calls.find(([cmd, args]) => cmd === 'gh' && args.includes('graphql'));
+      expect(prCall[1]).toEqual(expect.arrayContaining(['--paginate', '--slurp']));
+      expect(prCall[1].find(arg => arg.startsWith('query='))).not.toContain('authors');
+    });
+
+    it('excludes arbitrary PR branches by closing trailer and head commit references', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([7, 8, 9, 70].map(number => ({ number, title: 'work', labels: [], assignees: [] }))) },
+        'gh pr': { stdout: JSON.stringify([
+          { headRefName: 'feature/interactive', body: 'Closes: #7', commits: [] },
+          { headRefName: 'fix/combined', body: 'Refs #70', commits: [{ messageHeadline: 'fix: first [issue-8]', messageBody: 'Also fixes a regression (#9)' }] }
+        ]) }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+      expect(out).toMatchObject({ sample: [70], inFlightCount: 3, count: 1 });
+    });
+
+    it('paginates a large PR without parking unrelated issue claims', async () => {
+      const pr = { number: 23, headRefName: 'large', body: '', commits: Array.from({ length: 100 }, () => ({ messageHeadline: 'other work' })) };
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([7, 8].map(number => ({ number, title: 'work', labels: [], assignees: [] }))) },
+        'gh pr': { stdout: JSON.stringify([pr]) },
+        'gh api': { stdout: JSON.stringify([pr.commits.map(() => ({ commit: { message: 'other work' } })), [{ commit: { message: 'fix: work (#7)' } }]]) }
+      });
+      expect(await detectGithubIssues(app, { issueAuthorFilter: 'any' })).toMatchObject({ sample: [8], count: 1, inFlightCount: 1 });
+      expect(spawn.mock.calls.some(([cmd, args]) => cmd === 'gh' && args.includes('--paginate') && args.includes('repos/{owner}/{repo}/pulls/23/commits?per_page=100'))).toBe(true);
+    });
+
+    it.each(['{broken', JSON.stringify([{ headRefName: 'feature', body: '', commits: Array.from({ length: 100 }, () => ({ messageHeadline: 'change' })) }])])(
+      'keeps incomplete PR evidence transient', async stdout => {
+        routeSpawn({
+          'gh issue': { stdout: JSON.stringify([{ number: 7, title: 'work', labels: [], assignees: [] }]) },
+          'gh pr': { stdout }
+        });
+        expect(await detectGithubIssues(app, { issueAuthorFilter: 'any' })).toMatchObject({ actionable: false, transient: true, reason: 'gh-unavailable' });
+      }
+    );
+
+    it('refuses an incomplete paginated GraphQL response', async () => {
+      routeSpawn({ 'gh issue': { stdout: JSON.stringify([{ number: 7, title: 'work', labels: [], assignees: [] }]) } });
+      const routed = spawn.getMockImplementation();
+      spawn.mockImplementation((cmd, args, options) => cmd === 'gh' && args.includes('graphql')
+        ? fakeChild(JSON.stringify([{ data: { repository: { pullRequests: { nodes: [], pageInfo: { hasNextPage: true } } } } }]))
+        : routed(cmd, args, options));
+      expect(await detectGithubIssues(app, { issueAuthorFilter: 'any' })).toMatchObject({ actionable: false, transient: true });
     });
 
     it('stays transient instead of under-counting in-flight work when gh pr list fails', async () => {
@@ -594,6 +649,8 @@ describe('perpetualWork', () => {
           return fakeChild(JSON.stringify([{ number: 5, title: 'x', assignees: [], labels: [] }]));
         }
         if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
+        if (cmd === 'gh' && args[0] === 'api' && args.includes('graphql')) return fakePrChild([]);
+        if (cmd === 'glab' && args[0] === 'mr') return fakeChild('[]');
         return fakeChild('');
       });
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'owner' });
@@ -731,6 +788,7 @@ describe('perpetualWork', () => {
       const routeCollaborators = ({ me = 'alice', collaborators = 'bob\ncarol\n', collabCode = 0, issuesByAuthor = {} } = {}) => {
         spawn.mockImplementation((cmd, args = []) => {
           if (cmd === 'gh' && args[0] === 'api' && args.includes('user')) return fakeChild(`${me}\n`);
+          if (cmd === 'gh' && args[0] === 'api' && args.includes('graphql')) return fakePrChild([]);
           if (cmd === 'gh' && args[0] === 'api') return fakeChild(collabCode === 0 ? collaborators : '', collabCode);
           if (cmd === 'gh' && args[0] === 'issue') {
             const authorIdx = args.indexOf('--author');
@@ -738,6 +796,7 @@ describe('perpetualWork', () => {
             return fakeChild(JSON.stringify(issuesByAuthor[args[authorIdx + 1]] || []));
           }
           if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
+          if (cmd === 'gh' && args[0] === 'api' && args.includes('graphql')) return fakePrChild([]);
           return fakeChild('');
         });
       };
@@ -946,7 +1005,15 @@ describe('perpetualWork', () => {
       expect(out.sample).toEqual([10]);
     });
 
-    it('keeps an issue assigned to the authenticated account claimable', async () => {
+    it('excludes an unassigned issue closed by an MR description on an arbitrary branch', async () => {
+      routeSpawn({
+        'glab issue': { stdout: JSON.stringify([{ iid: 10, title: 'work', labels: [], assignees: [] }]) },
+        'glab mr': { stdout: JSON.stringify([{ source_branch: 'interactive', description: 'Fixes: #10' }]) },
+      });
+      expect(await detectGitlabIssues(app, { issueAuthorFilter: 'any' })).toMatchObject({ actionable: false, inFlightCount: 1 });
+    });
+
+    it('does not reclaim an issue assigned to the authenticated account', async () => {
       routeSpawn({
         'glab api': { stdout: '{"username":"octo"}\n' }, // glab api user
         'glab issue': { stdout: JSON.stringify([{ iid: 10, title: 'retry my claim', assignees: [{ username: 'octo' }], labels: [] }]) },
@@ -954,10 +1021,10 @@ describe('perpetualWork', () => {
         'glab mr': { stdout: '[]' }
       });
       const out = await detectGitlabIssues(app, { issueAuthorFilter: 'any' });
-      expect(out).toMatchObject({ actionable: true, count: 1, sample: [10] });
+      expect(out).toMatchObject({ actionable: false, count: 0, skipCauses: { assigned: 1 } });
     });
 
-    it('keeps an assigned-only queue transient when the GitLab identity probe fails', async () => {
+    it('does not need an identity probe to park an assigned-only GitLab queue', async () => {
       routeSpawn({
         'glab api': { stdout: '', code: 1 },
         'glab issue': { stdout: JSON.stringify([{ iid: 10, title: 'retry my claim', assignees: [{ username: 'octo' }], labels: [] }]) },
@@ -965,7 +1032,7 @@ describe('perpetualWork', () => {
         'glab mr': { stdout: '[]' }
       });
       const out = await detectGitlabIssues(app, { issueAuthorFilter: 'any' });
-      expect(out).toMatchObject({ actionable: false, reason: 'glab-unavailable', transient: true });
+      expect(out).toMatchObject({ actionable: false, reason: 'no-actionable-issues', skipCauses: { assigned: 1 } });
     });
 
     it('stays transient instead of under-counting in-flight work when glab mr list fails', async () => {

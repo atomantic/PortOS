@@ -236,6 +236,20 @@ describe('composable skill template routing', () => {
     }
   });
 
+  it('scopes merge guards to PortOS in both prompt paths and carries recovery evidence', async () => {
+    for (const app of ['portos-default', 'example-app']) {
+      const task = makeTask({ description: 'Finish the selected issue', metadata: { app, claimFlow: true,
+        failureCount: 1, taskOutcome: { status: 'incomplete', reason: 'Existing PR needs its remaining check.' } } });
+      const prompts = [buildLightContextPrompt(task, '/workspace/app', null, { agentId: 'parent-example', providerId: 'codex-tui', providerCommand: 'codex' }),
+        await buildAgentPrompt(task, {}, '/workspace/app', null, { agentId: 'parent-example', providerType: 'api' })];
+      for (const prompt of prompts) {
+        expect(prompt.includes('node scripts/pregate.js --guards-only')).toBe(app === 'portos-default');
+        expect(prompt).toContain('Existing PR needs its remaining check.');
+        expect(prompt).toContain('"action":"acquire"');
+      }
+    }
+  });
+
   it('keeps the final module-hygiene mission generic across API and TUI/CLI paths', async () => {
     const description = DEFAULT_TASK_PROMPTS['module-hygiene']
       .replaceAll('{appName}', 'Example App')
@@ -804,6 +818,9 @@ describe('buildLightContextPrompt', () => {
 
       expect(prompt.userPrompt).toContain('Custom security mission');
       expect(prompt.systemPrompt).toContain('## Codex Security Audit Runtime');
+      expect(prompt.systemPrompt).toContain('Before vulnerability discovery or active testing');
+      expect(prompt.systemPrompt).toContain('"paths": ["."]');
+      expect(prompt.systemPrompt).not.toContain('completing repository-wide discovery, request the scanner');
       expect(prompt.systemPrompt).toContain('/security-scan');
       expect(prompt.systemPrompt).toContain('subscription ChatGPT authentication');
       expect(prompt.systemPrompt).toContain('saved grants retain their original limits');
@@ -1730,7 +1747,8 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/### Local Review Before Opening the PR\/MR/);
       expect(prompt).toMatch(/## Merge Gate/);
       expect(prompt).toMatch(/You are done — exit/);
-      expect(prompt).toContain('repeat the pre-PR local review phase');
+      expect(prompt).toContain('The completed local phase survives later feedback pushes');
+      expect(prompt).not.toContain('repeat the pre-PR local review phase');
       expect(prompt).toContain('the pre-PR local review is the only configured review');
       expect(prompt).toContain('Required local-review merge gate');
       expect(prompt).toContain('review-blocked');
@@ -1773,11 +1791,13 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/\/data\/slashdo-resolved\/local-agent-review-loop\.md/);
       expect(prompt).not.toMatch(/RECIPE HEADER/);
       // This ceiling detects accidentally inlining the staged 40KB recipe.
-      // Exclude the exact shared safety contracts, whose independently tested
-      // required prose is not recipe content; retain the original ceiling.
+      // Exclude the exact shared safety contracts and the checkout root prefix
+      // embedded in doc pointers, whose independently tested required prose and
+      // worktree path length are not recipe content; retain the original ceiling.
       expect(prompt).toContain(MANAGED_WORKTREE_CLEANUP_CONTRACT);
       const withoutFixedGuidance = prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '')
-        .replace(MANAGED_WORKTREE_CLEANUP_CONTRACT, '');
+        .replace(MANAGED_WORKTREE_CLEANUP_CONTRACT, '')
+        .replaceAll(PATHS.root, '');
       expect(withoutFixedGuidance.length).toBeLessThan(33_000);
     });
 
@@ -2235,7 +2255,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/--review-with claude/);
       // The Copilot-specific pre-request wording must be replaced when no
       // Copilot reviewer leads the order (the agent invokes the reviewers itself).
-      expect(prompt).toMatch(/invoke each configured reviewer yourself/);
+      expect(prompt).toMatch(/invoke each remaining configured reviewer yourself/);
     });
 
     it('threads an ordered multi-reviewer list + flags into the follow-up block', () => {

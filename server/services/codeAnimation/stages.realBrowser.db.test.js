@@ -28,7 +28,7 @@ const { checkHealth, ensureSchema, query, close } = await import('../../lib/db.j
 const { requireDbOrSkip } = await import('../../lib/dbTestGate.js');
 const { createCodeAnimationPackage } = await import('../../lib/codeAnimationPackage.js');
 const { createProductionProject, getProductionHistory, importProductionPackage } = await import('./projects.js');
-const { startProductionStageRun } = await import('./stages.js');
+const { cancelProductionStageRun, startProductionStageRun } = await import('./stages.js');
 const { renderComposition } = await import('../htmlComposition/index.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
 
@@ -66,10 +66,40 @@ let browser;
 let artifacts;
 let projectId;
 let startup;
+// Keep only bounded phase/counter evidence; never stringify diagnostic payloads,
+// which may later acquire paths or other private context.
+const runs = [];
+let stageProgress;
+let renderProgress;
+let diagnosticTimer;
+const stageChannel = channel('portos.code-animation-stage.lifecycle');
+const renderChannel = channel('portos.composition-render.lifecycle');
+const observeStage = ({ stage, phase, elapsedMs }) => { stageProgress = { stage, phase, elapsedMs }; };
+const observeRender = ({ phase, elapsedMs, encoderPid, frame, frames }) => {
+  renderProgress = { phase, elapsedMs, encoderPid, frame, frames };
+};
+const reportPending = () => {
+  const pending = runs.find(run => !run.settled);
+  if (!pending) return;
+  const stage = stageProgress;
+  const render = renderProgress;
+  console.log(`🔬 Production fixture run ${runs.indexOf(pending) + 1} pending: stage=${stage?.stage ?? 'starting'}/${stage?.phase ?? 'starting'} stageAtMs=${stage?.elapsedMs ?? 0} render=${render?.phase ?? 'none'} renderAtMs=${render?.elapsedMs ?? 0} browserPid=${proc?.pid ?? 'none'} browserExited=${proc?.exitCode != null || proc?.signalCode != null} encoderPid=${render?.encoderPid ?? 'none'} frame=${render?.frame ?? 'none'}/${render?.frames ?? 'none'}`);
+};
+async function startTrackedRun(input, deps) {
+  stageProgress = null;
+  renderProgress = null;
+  const run = await startProductionStageRun(projectId, input, deps);
+  runs.push(run);
+  run.done.then(() => { run.settled = true; });
+  return run;
+}
 const detachedChromeProcessGroupId = (child = proc) => process.platform === 'win32' ? undefined : child?.pid;
 
 describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages with real Chrome and ffmpeg', () => {
   beforeAll(async () => {
+    stageChannel.subscribe(observeStage);
+    renderChannel.subscribe(observeRender);
+    diagnosticTimer = setInterval(reportPending, 15000);
     const root = lazyTempDataRoot('portos-code-animation-stages-');
     try {
       const ws = await _startTestChromeWithRetry({
@@ -96,9 +126,26 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
   }, 90000);
 
   afterAll(async () => {
-    if (projectId) await query('DELETE FROM code_animation_projects WHERE id = $1', [projectId]);
-    await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots, detachedProcessGroupId: detachedChromeProcessGroupId() });
-    await close();
+    clearInterval(diagnosticTimer);
+    reportPending();
+    try {
+      for (const run of runs.filter(run => !run.settled)) {
+        try { cancelProductionStageRun(projectId, run.run.id); } catch (error) {
+          if (!['CODE_ANIMATION_RUN_COMMITTING', 'CODE_ANIMATION_RUN_NOT_ACTIVE'].includes(error.code)) throw error;
+        }
+      }
+      // A timed-out test leaves its async body alive. Drain its stage and
+      // encoder before removing the rows/files they may still be using.
+      await Promise.all(runs.map(run => run.done));
+      await _cleanupTestBrowser({ browser, proc, artifacts, detachedProcessGroupId: detachedChromeProcessGroupId(), cleanup: async () => {
+        if (projectId) await query('DELETE FROM code_animation_projects WHERE id = $1', [projectId]);
+        await cleanupTempDataRoots();
+      } });
+      await close();
+    } finally {
+      stageChannel.unsubscribe(observeStage);
+      renderChannel.unsubscribe(observeRender);
+    }
   }, 25000);
 
   it('turns a frozen original into measured findings, a repaired revision and a real MP4, with a real style frame and pilot', async () => {
@@ -107,8 +154,8 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
     const repair = vi.fn(async ({ files, entryPath }) => ({
       files: [{ path: entryPath, content: files.find(file => file.path === entryPath).content.replace('const MOVE = false;', 'const MOVE = true;') }],
     }));
-    const { done } = await startProductionStageRun(projectId, {}, {
-      repair, render: ({ directory }) => renderComposition({ directory, jobId: 'stages-acceptance' }),
+    const { done } = await startTrackedRun({}, {
+      repair, render: ({ directory, signal }) => renderComposition({ directory, signal, jobId: 'stages-acceptance' }),
     });
     const status = await done;
     const [{ data }] = (await getProductionHistory(projectId, { limit: 1, offset: 0 })).items;
@@ -167,8 +214,8 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
       await writeFile(join(root, 'example.wav'), stereo);
       const staged = await stageProductionSoundAsset(projectId, { revisionId: data.currentRevisionId, source, filename: 'example.wav' });
       await writeFile(join(root, 'example.wav'), 'replaced');
-      const next = await startProductionStageRun(projectId, { revisionId: staged.revision.id }, {
-        render: ({ directory }) => renderComposition({ directory, jobId: `sound-${source}-acceptance` }),
+      const next = await startTrackedRun({ revisionId: staged.revision.id }, {
+        render: ({ directory, signal }) => renderComposition({ directory, signal, jobId: `sound-${source}-acceptance` }),
       });
       expect(await next.done).toBe('completed');
       const saved = (await getProductionHistory(projectId, { limit: 1, offset: 0 })).items[0].data;

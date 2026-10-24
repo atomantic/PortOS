@@ -47,6 +47,26 @@ export const isStoryboardTempTrackFilename = (value) => typeof value === 'string
 const pick = (value, set, fallback = null) => (set.has(value) ? value : fallback);
 const isoOr = (value, fallback) => (isNonBlankStr(value) && Number.isFinite(Date.parse(value)) ? value : fallback);
 const entityId = (value, prefix) => (typeof value === 'string' && ENTITY_ID_PATTERN.test(value) ? value : newStoryboardEntityId(prefix));
+const refOrNull = (value) => trimTo(value, STORYBOARD_LIMITS.refId) || null;
+
+/**
+ * The production a board was made from, when one keeps scenes of its own that
+ * panels send art back to: a FableLoom episode (`loomId`, `episodeId`) or a
+ * Series Pipeline issue (`issueId`). Each such panel names its scene in
+ * `sourceSceneId`, and a pipeline panel made from a shot that shot in
+ * `sourceShotId`, with `sourceRev` marking what the shot last took from it.
+ */
+function sanitizeSource(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (raw.kind === 'pipeline') {
+    const issueId = refOrNull(raw.issueId);
+    return issueId ? { kind: 'pipeline', issueId } : null;
+  }
+  if (raw.kind !== 'fableloom') return null;
+  const loomId = refOrNull(raw.loomId);
+  const episodeId = refOrNull(raw.episodeId);
+  return loomId && episodeId ? { kind: 'fableloom', loomId, episodeId } : null;
+}
 
 function refList(value) {
   if (!Array.isArray(value)) return [];
@@ -115,6 +135,9 @@ function sanitizePanel(raw) {
     takes,
     selectedTakeId,
     make: sanitizePanelMake(raw.make, takeIds),
+    sourceSceneId: refOrNull(raw.sourceSceneId),
+    sourceShotId: refOrNull(raw.sourceShotId),
+    sourceRev: trimTo(raw.sourceRev, 16) || null,
   };
 }
 
@@ -176,6 +199,7 @@ export function sanitizeStoryboard(raw) {
     plot: trimTo(raw.plot, BEAT_EXTRACT_LIMITS.plot),
     plotLlm: sanitizeLlmPick(raw.plotLlm),
     tempTrack,
+    source: sanitizeSource(raw.source),
     beats,
     createdAt,
     updatedAt: isoOr(raw.updatedAt, createdAt),
@@ -257,6 +281,7 @@ export function summarizeStoryboard(board) {
     panelCount: panels.length,
     runtimeSec: storyboardRuntime(board),
     cover: cover ? { image: cover.image, sketchKey: cover.sketchKey } : null,
+    source: board.source,
     updatedAt: board.updatedAt,
   };
 }

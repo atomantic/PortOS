@@ -418,6 +418,7 @@ const runLifecycle = (record, role) => ({
     record.activeLlmRunId = runId;
     patchRunMetadata(runId, {
       autopilotSystem: 'series',
+      seriesId: record.seriesId,
       autopilotRunId: record.runId || null,
       pipelineStage: record.currentStep || 'unknown',
       pipelineRole: role,

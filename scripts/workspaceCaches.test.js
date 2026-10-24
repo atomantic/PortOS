@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -21,10 +22,19 @@ describe('checkout-owned server Vite caches with shared dependencies', () => {
     }
   });
 
-  it.each([
-    ['vitest.config.js', 'vitest'],
-    ['vitest.config.db.js', 'vitest-db'],
-  ])('server %s keeps concurrent publications separate and reuses its owned cache', async (configName, cacheName) => {
-    await checkWorkspaceCacheIsolation('server', configName, cacheName, expect);
-  });
+  for (const [configName, cacheName] of [['vitest.config.js', 'vitest'], ['vitest.config.db.js', 'vitest-db']]) {
+    it(`server ${configName} keeps concurrent publications separate and reuses its owned cache`, async ({ signal }) => {
+      await checkWorkspaceCacheIsolation('server', configName, cacheName, expect, signal);
+    });
+  }
+
+  it('settles cancelled concurrent cache publishers before removing their shared host', async () => {
+    const before = readdirSync(tmpdir()).filter(name => name.startsWith('workspace-cache-'));
+    const controller = new AbortController();
+    const pending = checkWorkspaceCacheIsolation('server', 'vitest.config.js', 'vitest', expect, controller.signal);
+    // Both launches have started synchronously, before the first await.
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(readdirSync(tmpdir()).filter(name => name.startsWith('workspace-cache-'))).toEqual(before);
+  }, 15000);
 });

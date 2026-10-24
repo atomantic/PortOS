@@ -86,7 +86,12 @@ vi.mock('../services/fableLoom/shotRuns.js', () => ({
   getEpisodeShotRun: vi.fn(async () => ({ id: 'example-record' })),
   cancelEpisodeShotRun: vi.fn(async () => ({ id: 'example-record' })),
 }));
+vi.mock('../services/fableLoom/exports.js', () => ({
+  startFableLoomExport: vi.fn(async () => ({ jobId: 'example-export' })),
+  getFableLoomExportDownload: vi.fn(),
+}));
 import * as shotRuns from '../services/fableLoom/shotRuns.js';
+import * as exports from '../services/fableLoom/exports.js';
 import * as fableLoom from '../services/fableLoom/index.js';
 import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
@@ -98,6 +103,7 @@ const episode = `${loom}/episodes/example-episode`;
 const node = `${episode}/nodes/example-node`;
 const picker = { providerId: 'example-cli', model: 'example-model' };
 const operations = [
+  [`${loom}/export`, {}, exports.startFableLoomExport, 202],
   [`${loom}/plan/generate`, picker, fableLoom.generateSeriesPlan],
   [`${loom}/plan/review`, picker, fableLoom.reviewSeriesPlan],
   [`${loom}/plan/feedback`, { ...picker, feedback: 'Example feedback' }, fableLoom.feedbackSeriesPlan],
@@ -135,7 +141,7 @@ const call = (app, [path, body], headers = {}, method = 'post') => {
   return pending.send(body);
 };
 const expectNoEffects = () => {
-  for (const effect of [...Object.values(fableLoom), ...Object.values(shotRuns)]) expect(effect).not.toHaveBeenCalled();
+  for (const effect of [...Object.values(fableLoom), ...Object.values(shotRuns), ...Object.values(exports)]) expect(effect).not.toHaveBeenCalled();
 };
 
 beforeEach(() => {
@@ -147,6 +153,11 @@ beforeEach(() => {
 });
 
 describe('FableLoom agent workflow authority (#10668)', () => {
+  it('protects private package downloads before reading an artifact', async () => {
+    const result = await call(appFor(), [`${loom}/export/example-export/download`], {}, 'get');
+    expect([result.status, result.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(exports.getFableLoomExportDownload).not.toHaveBeenCalled();
+  });
   it('refuses remote authoring and production before effects for CLI/TUI/API-first and Express spelling variants', async () => {
     const app = appFor();
     for (const [path, body] of operations) {

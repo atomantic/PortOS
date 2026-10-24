@@ -10,7 +10,7 @@
  * 5. Authoritative server story/session state and computer playback clock.
  * 6. Half-duplex turn contract: LISTENING -> THINKING -> SPEAKING -> LISTENING.
  * 7. Live conversation gate revalidation (helper decision hold, offscreen protagonist, safe audio occupancy).
- * 8. Speech completion before story transition commitment.
+ * 8. Speech dispatch stays uncommitted until the designated output reports playback (#13112).
  * 9. Reconnect snapshots and session teardown with in-flight abort.
  */
 
@@ -27,7 +27,8 @@ import { pcmToWavBuffer } from '../../lib/chiptuneRender.js';
 import { pcmToFloat } from '../voice/callEndpointing.js';
 import {
   FABLELOOM_AUDIO_TARGETS,
-  isAssetSafeForLiveVoice,
+  FABLELOOM_RUNTIME_VERSION,
+  evaluateFableLoomLiveInput,
   resolvePlaybackPhaseAsset,
 } from '../../lib/fableLoomPlayback.js';
 import {
@@ -61,6 +62,12 @@ export const MAX_SESSION_TTL_MINUTES = 180;
 // a per-session timeout.
 export const HOSTED_SESSION_SWEEP_INTERVAL_MS = 60_000;
 
+// How long a dispatched narration may stay in `speaking` waiting for the
+// designated output socket. Past this the pending transition is dropped — a
+// missing completion is not a successful playback. Long enough for a spoken
+// paragraph, short enough that a vanished client cannot hold the scene.
+export const HOSTED_SPEECH_ACK_TIMEOUT_MS = 90_000;
+
 /** True once a session record is past its TTL. */
 const isExpired = (session) => new Date(session.expiresAt).getTime() <= Date.now();
 
@@ -81,6 +88,7 @@ export function sanitizeHostedSession(session) {
   if (!session) return null;
   return {
     id: session.id,
+    runtimeVersion: FABLELOOM_RUNTIME_VERSION,
     loomId: session.loomId,
     episodeId: session.episodeId,
     universeId: session.universeId || null,
@@ -230,28 +238,11 @@ export function revalidateLiveConversationGate({ session, node, asset }) {
   if (session?.status !== 'active') {
     return { allowed: false, reason: 'SESSION_INACTIVE' };
   }
-  if (!node) {
-    return { allowed: false, reason: 'NODE_NOT_FOUND' };
-  }
-  if (node.isEnding) {
-    return { allowed: false, reason: 'STORY_ENDED' };
-  }
-  if (node.audienceConnection !== 'connected') {
-    return { allowed: false, reason: 'AUDIENCE_DISCONNECTED' };
-  }
-  if (session.playbackPhase !== 'hold') {
-    return { allowed: false, reason: 'PLAYBACK_NOT_IN_HOLD_PHASE' };
-  }
-  if (node.protagonistPresence === 'onscreen') {
-    return { allowed: false, reason: 'PROTAGONIST_ONSCREEN' };
-  }
-  if (asset) {
-    const raw = asset.manifest || asset;
-    if (raw.safeForLiveVoice === false || !isAssetSafeForLiveVoice(raw)) {
-      return { allowed: false, reason: 'HOLD_ASSET_OCCUPIED_BY_DIALOGUE' };
-    }
-  }
-  return { allowed: true };
+  return evaluateFableLoomLiveInput({
+    node,
+    phase: session.playbackPhase,
+    asset,
+  });
 }
 
 /**
@@ -330,6 +321,8 @@ export async function createHostedSession(loomId, episodeId, {
     hostSocketId: null,
     audienceSocketId: null,
     activeTurn: null,
+    pendingSpeech: null,
+    sceneGeneration: 0,
     switchingEpisode: false,
     episodeSwitchGeneration: 0,
     createdAt: now.toISOString(),
@@ -456,6 +449,11 @@ export async function updateHostedSession(sessionId, patch = {}, { io } = {}) {
       });
     }
     session.currentNodeId = patch.currentNodeId;
+    session.sceneGeneration += 1;
+    // The host left the scene this narration was spoken against. Dropping the
+    // wait here is what stops a late playback ack from committing that move
+    // onto the scene the host already left.
+    cancelPendingSpeech(session, sessionId, { io, reason: 'node_changed' });
   }
   if (patch.playbackPhase) {
     session.playbackPhase = patch.playbackPhase;
@@ -500,11 +498,14 @@ export async function switchHostedEpisode(sessionId, episodeId, { io } = {}) {
 
   // Abort BEFORE the first await: a turn already in flight against the OLD
   // episode must not be able to resolve and commit narration/a transition
-  // while this function is off awaiting the loom read below.
+  // while this function is off awaiting the loom read below. Clear the speech
+  // wait in the same turn so its timer cannot emit that transition later.
+  cancelPendingSpeech(session, sessionId, { io, reason: 'episode_switch' });
   if (session.activeTurn?.abortController) {
     session.activeTurn.abortController.abort('episode_switch');
     session.activeTurn = null;
   }
+  session.sceneGeneration += 1;
   // Blocks `startHostedListening` from starting a NEW turn for the rest of
   // this function — without it, a turn that starts during the awaits below
   // would run against the OLD episode and could commit/emit AFTER this
@@ -573,6 +574,9 @@ export function endHostedSession(sessionId, { reason = 'ended', io } = {}) {
   const session = activeSessions.get(sessionId);
   if (!session) return { ok: true };
 
+  // Take the timer before the session leaves the map. A timeout that fires
+  // after `hosted:session:ended` must not emit a transition into a dead room.
+  takePendingSpeech(session);
   if (session.activeTurn?.abortController) {
     session.activeTurn.abortController.abort(reason);
     session.activeTurn = null;
@@ -663,6 +667,253 @@ export async function startHostedListening(sessionId, { io } = {}) {
   } finally {
     session.startingListening = false;
   }
+}
+
+function emitHosted(io, sessionId, event, payload) {
+  if (!io) return;
+  io.of('/fableloom-hosted').to(`session:${sessionId}`).emit(event, payload);
+}
+
+function designatedOutputSocketId(session) {
+  if (!session) return null;
+  return session.audioTarget === 'audience' ? session.audienceSocketId : session.hostSocketId;
+}
+
+function takePendingSpeech(session) {
+  const pending = session?.pendingSpeech;
+  if (!pending) return null;
+  if (pending.timer) clearTimeout(pending.timer);
+  pending.timer = null;
+  session.pendingSpeech = null;
+  return pending;
+}
+
+// Drop a playback wait without committing its transition. `emit` is false when
+// the caller is about to publish its own terminal phase (session end).
+function cancelPendingSpeech(session, sessionId, { io, reason, emit = true } = {}) {
+  const pending = takePendingSpeech(session);
+  if (!pending) return false;
+  if (session.activeTurn?.id === pending.turnId) {
+    session.activeTurn.abortController?.abort(reason);
+    session.activeTurn = null;
+  }
+  if (!emit || session.status !== 'active' || session.turnPhase !== 'speaking') return true;
+  session.turnPhase = 'idle';
+  emitHosted(io, sessionId, 'hosted:turn:phase', { phase: 'idle', turnId: pending.turnId, reason });
+  return true;
+}
+
+function expireHostedSpeech(sessionId, turnId, io) {
+  const session = activeSessions.get(sessionId);
+  if (!session || session.status !== 'active') return;
+  const pending = session.pendingSpeech;
+  if (!pending || pending.turnId !== turnId) return;
+  // A switch or scene change already owns the outcome. Clearing here must not
+  // publish a phase (or a transition) for a turn the room has left.
+  if (session.switchingEpisode
+    || session.episodeSwitchGeneration !== pending.episodeSwitchGeneration
+    || session.sceneGeneration !== pending.sceneGeneration
+    || session.currentNodeId !== pending.sourceNodeId) {
+    takePendingSpeech(session);
+    return;
+  }
+  cancelPendingSpeech(session, sessionId, { io, reason: 'speech_timeout' });
+  console.log(`⏭️ Hosted speech ${turnId} timed out before playback completion`);
+}
+
+function armPendingSpeech(session, sessionId, { io, turn, playResult, targetNode }) {
+  const outputSocketId = designatedOutputSocketId(session);
+  if (!outputSocketId) return false;
+  const pending = {
+    turnId: turn.id,
+    target: session.audioTarget === 'audience' ? 'audience' : 'host',
+    outputSocketId,
+    episodeId: session.episodeId,
+    episodeSwitchGeneration: session.episodeSwitchGeneration,
+    sceneGeneration: session.sceneGeneration,
+    sourceNodeId: session.currentNodeId,
+    action: targetNode ? 'move' : 'stay',
+    transitionId: targetNode ? playResult.transitionId : null,
+    targetNodeId: targetNode?.id || null,
+    timer: null,
+  };
+  pending.timer = setTimeout(() => {
+    try {
+      expireHostedSpeech(sessionId, pending.turnId, io);
+    } catch (err) {
+      console.error(`❌ Hosted speech timeout failed: ${err.message}`);
+    }
+  }, HOSTED_SPEECH_ACK_TIMEOUT_MS);
+  pending.timer.unref?.();
+  session.pendingSpeech = pending;
+  turn.outputSocketId = outputSocketId;
+  return true;
+}
+
+function commitHostedMove(session, sessionId, { io, loom, targetNode, transitionId }) {
+  session.currentNodeId = targetNode.id;
+  session.playbackPhase = initialPhaseForNode(targetNode);
+  session.activeHoldIndex = 0;
+  session.sceneGeneration += 1;
+  session.turnPhase = 'idle';
+  session.activeTurn = null;
+  emitHosted(io, sessionId, 'hosted:story:transition', {
+    node: publicNode(targetNode, loom),
+    transitionId,
+    playbackPhase: session.playbackPhase,
+  });
+}
+
+function releaseHostedStay(session, sessionId, { io, turnId }) {
+  session.turnPhase = 'listening';
+  session.activeTurn = null;
+  emitHosted(io, sessionId, 'hosted:turn:phase', { phase: 'listening', turnId });
+}
+
+function speechClaimStillCurrent(session, sessionId, claim) {
+  return activeSessions.get(sessionId) === session
+    && session.status === 'active'
+    && !session.switchingEpisode
+    && session.turnPhase === 'speaking'
+    && session.activeTurn?.id === claim.turnId
+    && !session.activeTurn.abortController.signal.aborted
+    && session.episodeId === claim.episodeId
+    && session.episodeSwitchGeneration === claim.episodeSwitchGeneration
+    && session.sceneGeneration === claim.sceneGeneration
+    && session.currentNodeId === claim.sourceNodeId;
+}
+
+/**
+ * Finish or drop the narration that `processHostedUtterance` left in `speaking`.
+ *
+ * Only the designated output socket's current-turn `ended` commits, and only
+ * after the session, episode, and scene generations still match the dispatch.
+ * Anything else leaves the node where it was.
+ */
+export async function acknowledgeHostedSpeech(sessionId, {
+  turnId,
+  role,
+  socketId,
+  status,
+  io,
+} = {}) {
+  const session = _getInternalSession(sessionId);
+  const pending = session?.pendingSpeech;
+  if (!session || !pending) return { accepted: false, reason: 'NO_PENDING_SPEECH' };
+  if (pending.turnId !== turnId) return { accepted: false, reason: 'STALE_TURN' };
+  if (role !== pending.target) return { accepted: false, reason: 'WRONG_ROLE' };
+  if (!socketId || socketId !== pending.outputSocketId) return { accepted: false, reason: 'WRONG_SOCKET' };
+  if (!speechClaimStillCurrent(session, sessionId, pending)) return { accepted: false, reason: 'STALE_TURN' };
+  if (status !== 'ended' && status !== 'failed' && status !== 'aborted') {
+    return { accepted: false, reason: 'INVALID_STATUS' };
+  }
+
+  if (status === 'ended' && pending.acknowledging) return { accepted: false, reason: 'ACKNOWLEDGEMENT_IN_PROGRESS' };
+  // Keep the original deadline while the authoritative scene read is pending.
+  // Its timeout invalidates this turn, so a delayed read cannot commit later.
+  const claim = status === 'ended' ? pending : takePendingSpeech(session);
+  if (status !== 'ended') {
+    if (session.activeTurn?.id === claim.turnId) {
+      session.activeTurn.abortController?.abort(status === 'failed' ? 'playback_failed' : 'playback_aborted');
+      session.activeTurn = null;
+    }
+    if (session.turnPhase === 'speaking') {
+      session.turnPhase = 'idle';
+      emitHosted(io, sessionId, 'hosted:turn:phase', {
+        phase: 'idle',
+        turnId: claim.turnId,
+        reason: status === 'failed' ? 'playback_failed' : 'playback_aborted',
+      });
+    }
+    return { accepted: true, committed: false };
+  }
+
+  claim.acknowledging = true;
+  try {
+    const loom = await getLoom(session.loomId);
+    if (!speechClaimStillCurrent(session, sessionId, claim)) {
+      // The scene changed while this acknowledgement was being checked.
+      // Release this speaking turn without changing a successor's state.
+      if (activeSessions.get(sessionId) === session
+        && session.status === 'active'
+        && session.turnPhase === 'speaking'
+        && session.activeTurn?.id === claim.turnId) {
+        session.activeTurn.abortController?.abort('speech_superseded');
+        session.activeTurn = null;
+        session.turnPhase = 'idle';
+        emitHosted(io, sessionId, 'hosted:turn:phase', {
+          phase: 'idle',
+          turnId: claim.turnId,
+          reason: 'speech_superseded',
+        });
+      }
+      return { accepted: false, committed: false, reason: 'STALE_TURN' };
+    }
+    if (claim.action !== 'move') {
+      releaseHostedStay(session, sessionId, { io, turnId: claim.turnId });
+      return { accepted: true, committed: true };
+    }
+    const episode = loom?.episodes?.find((item) => item.id === claim.episodeId) || null;
+    const source = episode?.nodes?.find((node) => node.id === claim.sourceNodeId) || null;
+    const transition = source?.transitions?.find((item) => item.id === claim.transitionId) || null;
+    const targetNode = episode?.nodes?.find((node) => node.id === claim.targetNodeId) || null;
+    if (!transition || transition.targetNodeId !== claim.targetNodeId || !targetNode) {
+      session.activeTurn = null;
+      session.turnPhase = 'idle';
+      emitHosted(io, sessionId, 'hosted:turn:phase', {
+        phase: 'idle',
+        turnId: claim.turnId,
+        reason: 'transition_unavailable',
+      });
+      return { accepted: true, committed: false, reason: 'TRANSITION_UNAVAILABLE' };
+    }
+    commitHostedMove(session, sessionId, {
+      io,
+      loom,
+      targetNode,
+      transitionId: claim.transitionId,
+    });
+    return { accepted: true, committed: true };
+  } catch (err) {
+    if (speechClaimStillCurrent(session, sessionId, claim)) {
+      session.activeTurn = null;
+      session.turnPhase = 'idle';
+      emitHosted(io, sessionId, 'hosted:turn:phase', {
+        phase: 'idle',
+        turnId: claim.turnId,
+        reason: 'speech_commit_failed',
+      });
+    }
+    console.error(`❌ Hosted speech commit failed: ${err?.message || err}`);
+    return { accepted: false, committed: false, reason: 'COMMIT_FAILED' };
+  } finally {
+    if (session.pendingSpeech === claim) takePendingSpeech(session);
+  }
+}
+
+/**
+ * The designated output disconnected while its narration was still in flight.
+ * A replacement socket must not inherit the wait: it never played this audio.
+ */
+export function releaseHostedSpeechOutput(sessionId, socketId, { io } = {}) {
+  const session = activeSessions.get(sessionId);
+  if (!session || session.status !== 'active' || !socketId) return { released: false };
+  const pendingMatches = session.pendingSpeech?.outputSocketId === socketId;
+  const claimedMatches = session.turnPhase === 'speaking' && session.activeTurn?.outputSocketId === socketId;
+  if (!pendingMatches && !claimedMatches) return { released: false };
+  if (pendingMatches) cancelPendingSpeech(session, sessionId, { io, reason: 'output_disconnected' });
+  else if (session.activeTurn?.outputSocketId === socketId) {
+    const turnId = session.activeTurn.id;
+    session.activeTurn.abortController?.abort('output_disconnected');
+    session.activeTurn = null;
+    session.turnPhase = 'idle';
+    emitHosted(io, sessionId, 'hosted:turn:phase', {
+      phase: 'idle',
+      turnId,
+      reason: 'output_disconnected',
+    });
+  }
+  return { released: true };
 }
 
 /**
@@ -841,7 +1092,13 @@ export async function processHostedUtterance(sessionId, {
     }
     if (!isLive()) return abandonTurn('speech synthesis');
 
-    // 4. Dispatch Audio to designated Audio Target
+    const targetNode = playResult.action === 'move' && playResult.transitionId && episode
+      ? episode.nodes?.find((node) => node.id === playResult.node?.id) || null
+      : null;
+
+    // 4. Dispatch audio to the designated output. While that socket is
+    // connected, the move stays pending: committing here is what let the
+    // scene change under audio that was still playing.
     if (ttsAudio) {
       emitIfLive('hosted:turn:tts', {
         audio: Buffer.isBuffer(ttsAudio) ? ttsAudio.toString('base64') : Buffer.from(ttsAudio).toString('base64'),
@@ -850,38 +1107,35 @@ export async function processHostedUtterance(sessionId, {
         turnId: turn.id,
       });
     }
+    if (!isLive()) return abandonTurn('speech dispatch');
 
-    // 5. If transition is chosen, commit it AFTER speech is recorded
-    if (playResult.action === 'move' && playResult.transitionId && episode) {
-      const targetNode = episode.nodes?.find((n) => n.id === playResult.node?.id);
-      if (targetNode) {
-        session.currentNodeId = targetNode.id;
-        session.playbackPhase = initialPhaseForNode(targetNode);
-        session.activeHoldIndex = 0;
-        session.turnPhase = 'idle';
-
-        emitIfLive('hosted:story:transition', {
-          node: publicNode(targetNode, loom),
-          transitionId: playResult.transitionId,
-          playbackPhase: session.playbackPhase,
-        });
-      }
-    } else {
-      // Stay on current node
-      session.turnPhase = 'listening';
-      emitIfLive('hosted:turn:phase', { phase: 'listening', turnId: turn.id });
+    if (ttsAudio && armPendingSpeech(session, sessionId, { io, turn, playResult, targetNode })) {
+      return { ok: true, awaitingSpeech: true, turnId: turn.id, playResult };
     }
 
-    session.activeTurn = null;
+    // No audio (synthesis failed) or no connected output: nothing is playing,
+    // so the narration text is the whole delivery and the turn commits now.
+    if (targetNode) {
+      commitHostedMove(session, sessionId, {
+        io,
+        loom,
+        targetNode,
+        transitionId: playResult.transitionId,
+      });
+    } else {
+      releaseHostedStay(session, sessionId, { io, turnId: turn.id });
+    }
     return { ok: true, playResult };
   } catch (err) {
     // A failure that lands after teardown has no room left to tell: the session
     // already emitted its terminal frame, so log and swallow rather than
     // emitting `hosted:error` behind it.
     if (!isLive()) {
+      takePendingSpeech(session);
       console.warn(`⚠️ [HostedPlay] Hosted turn ${turn.id} failed after teardown: ${err?.message || err}`);
       return abandonedResult;
     }
+    takePendingSpeech(session);
     // Emit BEFORE clearing `activeTurn` — clearing it first makes the turn
     // non-live and would suppress the very error frame the client needs.
     emitIfLive('hosted:error', {
@@ -906,6 +1160,8 @@ export function abortHostedTurn(sessionId, { reason = 'aborted', io } = {}) {
   const session = activeSessions.get(sessionId);
   if (!session) return { ok: true };
 
+  const turnId = session.pendingSpeech?.turnId || session.activeTurn?.id || null;
+  takePendingSpeech(session);
   if (session.activeTurn?.abortController) {
     session.activeTurn.abortController.abort(reason);
     session.activeTurn = null;
@@ -916,6 +1172,7 @@ export function abortHostedTurn(sessionId, { reason = 'aborted', io } = {}) {
     io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:turn:phase', {
       phase: 'idle',
       reason,
+      ...(turnId ? { turnId } : {}),
     });
   }
   return { ok: true };
@@ -981,6 +1238,7 @@ export function sweepExpiredHostedSessions({ io = sweepIo } = {}) {
 export function _resetHostedSessions() {
   stopHostedSessionSweep();
   for (const session of activeSessions.values()) {
+    takePendingSpeech(session);
     if (session.activeTurn?.abortController) {
       session.activeTurn.abortController.abort('reset');
     }

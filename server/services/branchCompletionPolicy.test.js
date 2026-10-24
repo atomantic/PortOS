@@ -295,6 +295,49 @@ describe('reviewed reused-branch checkout incarnation', () => {
     return [current, prior];
   }
 
+  it('permits retirement of a cleanup handoff only with its captured checkout and fresh merged-head proof', () => {
+    const agents = owners();
+    const current = agents[0];
+    current.result = { success: false, executionSuccess: true, cleanupPending: true,
+      taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
+    current.metadata.completedCheckouts = [{ version: 1, agentId: current.id, repoPath, branch, path: checkoutPath,
+      head: runtime.tip, incarnation: { pointer: { ino: '1' }, gitdir: { ino: '2' } } }];
+    expect(reviewedRetirementPolicy({ ...input(), agents }).reason).toBeNull();
+    expect(reviewedRetirementPolicy({ ...input(), agents, verifiedPrHead: null }).reason).toBeTruthy();
+    current.metadata.workspacePath = repoPath; // A self-managed claim runs from the primary checkout.
+    expect(reviewedRetirementPolicy({ ...input(), agents }).reason).toBeNull();
+    current.result.cleanupPending = false;
+    expect(reviewedRetirementPolicy({ ...input(), agents }).reason).toBeTruthy();
+    current.result.cleanupPending = true;
+    current.metadata.completedCheckouts[0].head = 'b'.repeat(40);
+    expect(reviewedRetirementPolicy({ ...input(), agents }).reason).toBeTruthy();
+  });
+
+  it('settles legacy pinned cleanup outcomes only with fresh exact-head integration evidence', () => {
+    const current = owners()[0];
+    current.metadata.workspacePath = repoPath;
+    current.metadata.reviewLoopMergeTarget = null;
+    current.result = { success: false, executionSuccess: true,
+      taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
+    const integrated = { ...input(), agents: [current], integratedCleanupHead: 'c'.repeat(40) };
+    expect(reviewedRetirementPolicy(integrated).reason).toBeNull();
+    // Modern replay/seed failures cannot be reclassified as legacy evidence.
+    current.metadata.checkoutSeeds = [];
+    expect(reviewedRetirementPolicy(integrated).reason).toBeTruthy();
+    delete current.metadata.checkoutSeeds;
+    for (const patch of [{ integratedCleanupHead: null }, { verifiedPrHead: 'b'.repeat(40) }]) {
+      expect(reviewedRetirementPolicy({ ...integrated, ...patch }).reason).toBeTruthy();
+    }
+    current.result.validationPassed = false;
+    expect(reviewedRetirementPolicy(integrated).reason).toBeTruthy();
+    current.result.validationPassed = null;
+    current.result.taskOutcome.recovery = undefined;
+    expect(reviewedRetirementPolicy(integrated).reason).toBeTruthy();
+    current.result.taskOutcome.recovery = { mode: 'cleanup' };
+    current.metadata.prCompletionPolicy = 'leave-open';
+    expect(reviewedRetirementPolicy(integrated).reason).toBe('pr-completion-human-handoff');
+  });
+
   it('separates explicit prior checkout history only under fresh current PR/head proof', () => {
     const agents = owners();
     const result = reviewedRetirementPolicy({ ...input(), agents });

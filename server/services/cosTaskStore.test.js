@@ -129,9 +129,9 @@ const baseState = () => ({ agents: {} });
 // Test-side access to what is stored, bypassing the store's cache and the
 // failure/after-write hooks above (they wrap only the store's own saves).
 const seed = async (source, tasks) => {
-  const { rows } = await actualRepository.loadTaskWorkingSet(source);
+  const { rows, version } = await actualRepository.loadTaskWorkingSet(source);
   const plan = planListSave({ previous: rows, next: tasks, source });
-  await actualRepository.applyTaskListSave(source, plan);
+  await actualRepository.applyTaskListSave(source, { ...plan, expectedVersions: { [source]: version } });
   __resetTaskCache();
 };
 const stored = async (source) => (await actualRepository.loadTaskWorkingSet(source)).rows.map((row) => row.task);
@@ -1728,6 +1728,16 @@ describe('cosTaskStore.updateTask', () => {
   // The pointer is spent once a task is done or parked for a human: a PERPETUAL
   // task id gets re-queued for unrelated work later, and a stale existingBranch
   // would attach that fresh run to a long-merged branch.
+  it('invalidates a completed run cleanup handoff before an explicit retry starts', async () => {
+    await addTask({ description: 'cleanup handoff', id: 'task-cleanup-retry' }, 'user');
+    await updateTask('task-cleanup-retry', { status: 'in_progress', metadata: {
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-old',
+    } }, 'user');
+    const retried = await updateTask('task-cleanup-retry', { status: 'pending' }, 'user');
+    expect(retried.metadata.deliveryRecovery).toBeUndefined();
+    expect(retried.metadata.deliveryRecoveryAgentId).toBeUndefined();
+  });
+
   it('drops the resume pointer on a terminal status', async () => {
     await addTask({ description: 'res', id: 'task-res' }, 'user');
     await updateTask('task-res', {
@@ -1879,6 +1889,47 @@ describe('cosTaskStore.updateTask', () => {
     for (const key of ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'failureCount', 'lastErrorCategory', 'lastFailureAt']) {
       expect(revived.metadata[key]).toBeUndefined();
     }
+  });
+
+  it('keeps the charged recovery budget durable if completion stops immediately after the recovery write', async () => {
+    const { recoverLegacyDeliveryBlocks } = await import('./deliveryRecovery.js');
+    const outcome = { status: 'incomplete', reason: 'Remaining delivery validation.' };
+    await addTask({ description: 'recover charged delivery', id: 'task-delivery-budget' }, 'user');
+    await updateTask('task-delivery-budget', { status: 'blocked', metadata: {
+      blockedCategory: 'task-incomplete', blockedAt: '2026-10-23T00:00:00.000Z', failureCount: 1, totalSpawnCount: 2, taskOutcome: outcome,
+    } }, 'user');
+    const task = await getTaskById('task-delivery-budget');
+    const owner = { id: 'agent-delivery-budget', taskId: task.id, status: 'completed', result: { taskOutcome: outcome }, metadata: {} };
+    mock.afterWrite = () => { throw new Error('interrupted after committed recovery transition'); };
+    const release = vi.fn();
+    await expect(recoverLegacyDeliveryBlocks([owner], { readTasks: async () => [task], update: updateTask, release })).rejects.toThrow('interrupted after committed recovery transition');
+    const saved = (await stored('user')).find(row => row.id === task.id);
+    expect(saved.status).toBe('in_progress');
+    expect(Number(saved.metadata.failureCount)).toBe(2);
+    expect(Number(saved.metadata.totalSpawnCount)).toBe(2);
+    expect(saved.metadata.retryPendingCleanup).toBe(owner.id);
+    expect(saved.metadata.legacyDeliveryRecovery).toBe(owner.id);
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it.each(['manual-blocker', 'new-owner'])('preserves a %s arriving after delivery recovery reads its task', async race => {
+    const { recoverLegacyDeliveryBlocks } = await import('./deliveryRecovery.js');
+    const outcome = { status: 'incomplete', reason: 'Remaining delivery validation.' };
+    await addTask({ description: 'recover ownership', id: 'task-delivery-owner' }, 'user');
+    await updateTask('task-delivery-owner', { status: 'blocked', metadata: {
+      blockedCategory: 'task-incomplete', blockedAt: '2026-10-23T00:00:00.000Z', failureCount: 1, taskOutcome: outcome,
+    } }, 'user');
+    const task = await getTaskById('task-delivery-owner');
+    const owner = { id: 'agent-delivery-owner', taskId: task.id, status: 'completed', result: { taskOutcome: outcome }, metadata: {} };
+    if (race === 'manual-blocker') await updateTask(task.id, { metadata: { blocker: 'Operator hold' } }, 'user');
+    else mock.state.agents.newOwner = { id: 'newOwner', taskId: task.id, status: 'running' };
+    const release = vi.fn();
+    expect(await recoverLegacyDeliveryBlocks([owner], { readTasks: async () => [task], update: updateTask, release })).toEqual({ recovered: 0 });
+    const saved = await getTaskById(task.id);
+    expect(saved.status).toBe('blocked');
+    if (race === 'manual-blocker') expect(saved.metadata.blocker).toBe('Operator hold');
+    expect(saved.metadata.legacyDeliveryRecovery).toBeUndefined();
+    expect(release).not.toHaveBeenCalled();
   });
 
   // A requeue releases the in-flight-only markers in the SAME write that makes
@@ -2472,6 +2523,16 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
     // CLI provider — so the reaper must leave it alone no matter how old it gets.
     // Flipping it to `completed` with `resolution: 'auto-expired'` would report
     // work nobody dropped as done, and federate that to every peer (#6193).
+    it.each(['task-approval', 'task-recovery-exhausted'])('preserves the checkout and human decision for stale %s', async blockedCategory => {
+      await addTask({ description: 'delivery decision', id: 'task-decision', priority: 'HIGH' }, 'user', { now: NOW });
+      await updateTask('task-decision', { metadata: { existingBranch: 'fix/retained', resumedFromAgentId: 'agent-old', resumeWorktreePath: '/example/retained' } }, 'user', { now: NOW });
+      await updateTask('task-decision', { status: 'blocked', metadata: { blockedCategory, blockedAt: daysAgo(90) } }, 'user', { now: NOW });
+      expect((await sweepResolvedFailureTasks({ now: NOW })).reaped).toBe(0);
+      const retained = await getTaskById('task-decision');
+      expect(retained.status).toBe('blocked');
+      expect(retained.metadata).toMatchObject({ existingBranch: 'fix/retained', resumedFromAgentId: 'agent-old', resumeWorktreePath: '/example/retained' });
+    });
+
     it('never auto-expires a provider-config block, however stale', async () => {
       await addTask({ description: 'api-only provider pinned', id: 'task-pc-old', priority: 'HIGH' }, 'user', { now: NOW });
       await updateTask('task-pc-old', { status: 'blocked', metadata: { blockedCategory: 'provider-config', blockedAt: daysAgo(90) } }, 'user', { now: NOW });

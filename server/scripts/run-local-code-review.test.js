@@ -5,10 +5,12 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, chmod } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from '../lib/childProcess.js';
+import { promisify } from 'node:util';
+import { spawn, execFile } from '../lib/childProcess.js';
 
 it('runs a saved provider reviewer from the standalone claim bridge without bootstrapping PortOS', async () => {
   const root = await mkdtemp(join(tmpdir(), 'review-bridge-test-'));
+  await promisify(execFile)('git', ['init', '--quiet'], { cwd: root });
   const bodies = [];
   const api = createServer((request, response) => {
     let body = '';
@@ -50,6 +52,7 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
   } }));
   await writeFile(join(data, 'settings.json'), JSON.stringify({ codeReview: {
     reviewers: ['provider:example-gpu'], providerModels: { 'provider:example-gpu': 'review-model' },
+    reviewerHealth: { 'provider:example-gpu': { code: 'NO_MODEL', reason: 'configuration', lastFailureAt: 1000 } },
   } }));
   const runReview = request => {
     const env = { ...process.env, NODE_ENV: 'test', MEMORY_BACKEND: 'file', PORTOS_DATA_ROOT: root };
@@ -67,16 +70,33 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
       child.stderr.on('data', chunk => { stderr += chunk; });
       child.on('error', error => { clearTimeout(timeout); reject(error); });
       child.on('close', code => { clearTimeout(timeout); resolve({ code, stdout, stderr }); });
-      child.stdin.end(JSON.stringify(request));
+      child.stdin.end(JSON.stringify({ recordAttribution: true, ...request }));
     });
   };
   const results = await (async () => {
     const request = { backend: 'provider:example-gpu', diff: 'diff --git a/example.js b/example.js' };
+    // A resumed claim can complete its review before attribution was initialized.
+    // Preserve the verdict and actual health outcome, while blocking publication.
+    const noState = await runReview(request);
+    expect(noState.code).toBe(1);
+    expect(JSON.parse(noState.stdout)).toMatchObject({ ok: true, model: 'review-model', verdict: 'clean', findings: 'NO FINDINGS', attributionError: 'REVIEW_ATTRIBUTION_FAILED' });
+    expect(noState.stderr).toContain('Publication is blocked');
+    expect(noState.stderr).not.toContain(root);
+    const healthy = JSON.parse(await readFile(join(data, 'settings.json'), 'utf8'));
+    expect(healthy.codeReview?.reviewerHealth?.['provider:example-gpu']).toBeUndefined();
+    expect(existsSync(join(root, '.git/portos-local-review-models'))).toBe(false);
+    expect(JSON.parse(bodies.shift())).toMatchObject({ model: 'review-model' });
+    await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'reset'], { cwd: root });
+    expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('');
     const cliRequest = { backend: 'provider:example-cli', model: 'review-model', diff: request.diff };
-    return [await runReview(request), await runReview({ ...request, inheritDefaults: false }), await runReview(cliRequest),
+    const results = [await runReview(request), await runReview({ ...request, inheritDefaults: false }), await runReview(cliRequest),
       await runReview({ ...cliRequest, kind: 'claim-review' }),
       await runReview({ kind: 'claim-comments', backend: 'provider:example-cli', model: 'review-model', comments: [{ login: 'example-user', type: 'User', body: 'I will work on this' }] }),
       await runReview({ ...cliRequest, backend: 'provider:example-refusal', kind: 'claim-review', inheritDefaults: false })];
+    expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\ndefault-model\nreview-model\nreview-model\n');
+    const { stdout } = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'labels'], { cwd: root });
+    expect(JSON.parse(stdout).labels).toEqual(['reviewer:review-model', 'reviewer:default-model']);
+    return results;
   })().finally(async () => {
     await new Promise(resolve => api.close(resolve));
     await rm(root, { recursive: true, force: true });
@@ -113,9 +133,58 @@ it('shuts down the Codex app-server child and cleans up scratch resources after 
 
   const binDir = join(root, 'bin');
   await mkdir(binDir);
+  // Freeze budget accounting and hold only the review's 250ms deadlines.
+  // The synthetic server advances
+  // them after it has reached the phase this case is intended to exercise.
+  // The outer watchdog and app-server shutdown timers still use real time.
+  const clockPreload = join(root, 'review-clock.cjs');
+  await writeFile(clockPreload, `
+    const cp = require('node:child_process');
+    const { syncBuiltinESMExports } = require('node:module');
+    const { writeFileSync } = require('node:fs');
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    const pending = new Map();
+    let now = Date.now();
+    if (process.env.FAKE_CODEX_CLOCK_FILE) Date.now = () => now;
+    globalThis.setTimeout = (callback, ms, ...args) => {
+      if (!process.env.FAKE_CODEX_CLOCK_FILE || ms !== 250) return realSetTimeout(callback, ms, ...args);
+      const handle = realSetTimeout(() => {}, 2147483647);
+      pending.set(handle, () => callback(...args));
+      return handle;
+    };
+    globalThis.clearTimeout = handle => {
+      pending.delete(handle);
+      return realClearTimeout(handle);
+    };
+    const realSpawn = cp.spawn;
+    cp.spawn = (...args) => {
+      const child = realSpawn(...args);
+      let buffered = '';
+      child.stdout?.on('data', chunk => {
+        buffered += chunk;
+        const lines = buffered.split('\\n');
+        buffered = lines.pop();
+        for (const line of lines) {
+          if (!line.includes('test/advance-review-clock')) continue;
+          setImmediate(() => {
+            now += 250;
+            const timers = [...pending];
+            writeFileSync(process.env.FAKE_CODEX_CLOCK_FILE, JSON.stringify({ timersFired: timers.length }));
+            for (const [handle, fire] of timers) {
+              globalThis.clearTimeout(handle);
+              fire();
+            }
+          });
+        }
+      });
+      return child;
+    };
+    syncBuiltinESMExports();
+  `);
   const fakeCodex = join(binDir, 'fake-codex.cjs');
   await writeFile(fakeCodex, `
-    const { writeFileSync, appendFileSync } = require('node:fs');
+    const { writeFileSync, appendFileSync, readdirSync } = require('node:fs');
     const readline = require('node:readline');
 
     if (process.env.FAKE_CODEX_INVOCATION_FILE) {
@@ -133,6 +202,12 @@ it('shuts down the Codex app-server child and cleans up scratch resources after 
       try {
         const msg = JSON.parse(line);
         if (msg.method === 'initialize') {
+          if (mode === 'pre-turn-timeout') {
+            const scratch = readdirSync(process.env.TMPDIR).filter(name => name.startsWith('portos-codex-text-'));
+            writeFileSync(process.env.FAKE_CODEX_SCRATCH_FILE, JSON.stringify(scratch));
+            process.stdout.write(JSON.stringify({ method: 'test/advance-review-clock' }) + '\\n');
+            return;
+          }
           process.stdout.write(JSON.stringify({
             jsonrpc: '2.0',
             id: msg.id,
@@ -153,6 +228,9 @@ it('shuts down the Codex app-server child and cleans up scratch resources after 
             id: msg.id,
             result: { turn: { id: 'turn-test', items: [], status: 'inProgress' } }
           }) + '\\n');
+          if (mode === 'timeout') {
+            process.stdout.write(JSON.stringify({ method: 'test/advance-review-clock' }) + '\\n');
+          }
           if (mode === 'success') {
             process.stdout.write(JSON.stringify({
               jsonrpc: '2.0',
@@ -230,6 +308,8 @@ it('shuts down the Codex app-server child and cleans up scratch resources after 
     },
   }));
 
+  const scratchDir = join(root, 'scratch');
+  await mkdir(scratchDir);
   const invocationsFile = join(root, 'codex-invocations.txt');
   const unrelatedChild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
 
@@ -242,10 +322,13 @@ it('shuts down the Codex app-server child and cleans up scratch resources after 
       MEMORY_BACKEND: 'file',
       PORTOS_DATA_ROOT: root,
       FAKE_CODEX_INVOCATION_FILE: invocationsFile,
+      TMPDIR: scratchDir,
+      TMP: scratchDir,
+      TEMP: scratchDir,
       ...envOverrides,
     };
     delete env.VITEST;
-    const child = spawn(process.execPath, ['--preserve-symlinks', '--preserve-symlinks-main', join(root, 'server/scripts/run-local-code-review.mjs')], {
+    const child = spawn(process.execPath, ['--require', clockPreload, '--preserve-symlinks', '--preserve-symlinks-main', join(root, 'server/scripts/run-local-code-review.mjs')], {
       cwd: root,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -288,12 +371,13 @@ it('shuts down the Codex app-server child and cleans up scratch resources after 
     const settingsAfterSuccess = JSON.parse(await readFile(settingsFile, 'utf8'));
     expect(settingsAfterSuccess.codeReview?.reviewerHealth?.['provider:codex']).toBeUndefined();
 
-    // 2. Timed-out review: proves child exits, scratch dir is removed, failure exit code
+    // 2. Expire only after turn/start: child exit and scratch cleanup must hold
+    // even when the reviewer accepts a turn but never completes it.
     const pidFile2 = join(root, 'codex-timeout.pid');
     const cwdFile2 = join(root, 'codex-timeout-cwd.txt');
     const timeoutRes = await runReview(
       { backend: 'provider:codex', diff: 'diff --git a/b.js b/b.js', timeoutMs: 250 },
-      { FAKE_CODEX_MODE: 'timeout', FAKE_CODEX_PID_FILE: pidFile2, FAKE_CODEX_CWD_FILE: cwdFile2 },
+      { FAKE_CODEX_MODE: 'timeout', FAKE_CODEX_PID_FILE: pidFile2, FAKE_CODEX_CWD_FILE: cwdFile2, FAKE_CODEX_CLOCK_FILE: join(root, 'turn-clock.json') },
     );
 
     expect(timeoutRes.code).toBe(1);
@@ -311,11 +395,36 @@ it('shuts down the Codex app-server child and cleans up scratch resources after 
     expect(scratchCwd2).toContain('portos-codex-text-');
     expect(existsSync(scratchCwd2)).toBe(false);
 
-    // 3. Standalone non-Codex reviewers do not spawn Codex child solely for cleanup
+    expect(JSON.parse(await readFile(join(root, 'turn-clock.json'), 'utf8')).timersFired).toBeGreaterThan(0);
+
+    // 3. Expire during initialize: no thread/CWD evidence exists yet, but the
+    // scratch directory created before connecting and the owned child must go.
+    const preTurnPidFile = join(root, 'codex-pre-turn.pid');
+    const preTurnCwdFile = join(root, 'codex-pre-turn-cwd.txt');
+    const preTurnScratchFile = join(root, 'pre-turn-scratch.json');
+    const preTurnRes = await runReview(
+      { backend: 'provider:codex', diff: 'diff --git a/b.js b/b.js', timeoutMs: 250 },
+      { FAKE_CODEX_MODE: 'pre-turn-timeout', FAKE_CODEX_PID_FILE: preTurnPidFile,
+        FAKE_CODEX_CWD_FILE: preTurnCwdFile, FAKE_CODEX_SCRATCH_FILE: preTurnScratchFile,
+        FAKE_CODEX_CLOCK_FILE: join(root, 'pre-turn-clock.json') },
+    );
+    expect(preTurnRes.code, preTurnRes.stderr).toBe(1);
+    expect(JSON.parse(preTurnRes.stdout)).toMatchObject({ ok: false, error: expect.stringMatching(/250ms/) });
+    expect(preTurnRes.stderr).toContain('Codex app-server stopped');
+    const preTurnPid = Number(await readFile(preTurnPidFile, 'utf8'));
+    expect(preTurnPid).toBeGreaterThan(0);
+    expect(() => process.kill(preTurnPid, 0)).toThrow();
+    expect(existsSync(preTurnCwdFile)).toBe(false);
+    const preTurnScratch = JSON.parse(await readFile(preTurnScratchFile, 'utf8'));
+    expect(preTurnScratch).toHaveLength(1);
+    expect(existsSync(join(scratchDir, preTurnScratch[0]))).toBe(false);
+    expect(JSON.parse(await readFile(join(root, 'pre-turn-clock.json'), 'utf8')).timersFired).toBeGreaterThan(0);
+
+    // 4. Standalone non-Codex reviewers do not spawn Codex child solely for cleanup
     const invocationsBefore = existsSync(invocationsFile)
       ? (await readFile(invocationsFile, 'utf8')).trim().split('\n').filter(Boolean).length
       : 0;
-    expect(invocationsBefore).toBe(2);
+    expect(invocationsBefore).toBe(3);
 
     const nonCodexRes = await runReview(
       { backend: 'provider:unsupported', diff: 'diff --git a/c.js b/c.js' },
@@ -326,9 +435,9 @@ it('shuts down the Codex app-server child and cleans up scratch resources after 
     expect(nonCodexStdout).toMatchObject({ ok: false, code: 'REVIEWER_UNAVAILABLE' });
 
     const invocationsAfter = (await readFile(invocationsFile, 'utf8')).trim().split('\n').filter(Boolean).length;
-    expect(invocationsAfter).toBe(2);
+    expect(invocationsAfter).toBe(3);
 
-    // 4. Unrelated processes remain untouched
+    // 5. Unrelated processes remain untouched
     expect(() => process.kill(unrelatedChild.pid, 0)).not.toThrow();
   } finally {
     try { process.kill(unrelatedChild.pid, 'SIGKILL'); } catch {}

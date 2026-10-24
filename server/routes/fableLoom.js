@@ -45,6 +45,7 @@ import {
   editorialAutopilotStartSchema,
   editorialRemediateSchema,
   playthroughReviewSchema,
+  exportOptionsSchema,
 } from '../lib/fableLoomValidation.js';
 import { analyzeEpisodeGraph } from '../lib/fableLoomGraph.js';
 import { analyzeSeriesStoryOutlines } from '../lib/fableLoomOutline.js';
@@ -128,6 +129,33 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const loom = await getLoom(req.params.id);
   if (!loom) throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
   res.json(loom);
+}));
+
+router.post('/:id/export', asyncHandler(async (req, res) => {
+  const input = validateRequest(exportOptionsSchema, req.body ?? {});
+  const { startFableLoomExport } = await import('../services/fableLoom/exports.js');
+  res.status(202).json(await startFableLoomExport(req.params.id, input));
+}));
+
+router.get('/:id/export/:jobId', asyncHandler(async (req, res) => {
+  const { getFableLoomExport } = await import('../services/fableLoom/exports.js');
+  res.json(await getFableLoomExport(req.params.id, req.params.jobId));
+}));
+
+router.delete('/:id/export/:jobId', asyncHandler(async (req, res) => {
+  const { cancelFableLoomExport } = await import('../services/fableLoom/exports.js');
+  res.json(await cancelFableLoomExport(req.params.id, req.params.jobId));
+}));
+
+router.get('/:id/export/:jobId/download', asyncHandler(async (req, res) => {
+  let artifact;
+  let closed = false;
+  res.once('close', () => { closed = true; artifact?.release(); });
+  const { getFableLoomExportDownload } = await import('../services/fableLoom/exports.js');
+  if (closed) return;
+  artifact = await getFableLoomExportDownload(req.params.id, req.params.jobId);
+  if (closed) { artifact.release(); return; }
+  res.download(artifact.path, artifact.filename);
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {

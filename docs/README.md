@@ -48,6 +48,8 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [features/music-video-temporal-evidence.md](./features/music-video-temporal-evidence.md) | Performance source provenance, synchronized playback and optional local temporal analyzer protocol |
 | [features/music-renderer-benchmarks.md](./features/music-renderer-benchmarks.md) | Technical and full-length listening evidence for local music renderer profiles |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup (PostgreSQL required), code conventions |
+| [LOCAL_REVIEW_LIFECYCLE.md](./LOCAL_REVIEW_LIFECYCLE.md) | Durable one-time pre-PR review, recovery and hosted-feedback continuation |
+| [PR_REVIEW_ATTRIBUTION.md](./PR_REVIEW_ATTRIBUTION.md) | Completed local reviewer model receipts and additive PR labels |
 | [CLI_REVIEW_OUTCOMES.md](./CLI_REVIEW_OUTCOMES.md) | Reviewer tiers, provider pins and bounded, authenticated CLI health reports |
 | [SECURITY_SCANNER_RUNTIME.md](./SECURITY_SCANNER_RUNTIME.md) | Runner-owned Codex security scans, pinned execution, process cleanup and observed evidence |
 | [UX_DESIGN_GUIDE.md](./UX_DESIGN_GUIDE.md) | Admin workspace design specification: icon navigation, responsive layouts, disclosure, visual hierarchy, and redesign acceptance |
@@ -82,7 +84,7 @@ Identity & self: [digital-twin](./features/digital-twin.md) · [identity-system]
 
 Knowledge: [brain-system](./features/brain-system.md) · [untrusted messages and GitHub automation](./features/messages-security.md) · [scope adherence](./features/scope-adherence.md)
 
-Create: [writers-room](./features/writers-room.md) · [creative-director-video](./features/creative-director-video.md) · [apple-video-options](./features/apple-video-options.md) · [qwen-image-21](./features/qwen-image-21.md) · [fableloom](./features/fableloom.md) · [Eidoverse Worlds integration](./features/eidoverse.md) · [Eidoverse music-video renderer](./EIDOVERSE_VIDEO.md) · [OpenWorld historical reference](./features/openworld.md) · [sprite-export-contract](./features/sprite-export-contract.md) · [video-text-encoders](./features/video-text-encoders.md) · [video-speed-profiles](./features/video-speed-profiles.md) · [video-render-batches](./features/video-render-batches.md) · [video-upscale](./features/video-upscale.md)
+Create: [writers-room](./features/writers-room.md) · [creative-director-video](./features/creative-director-video.md) · [apple-video-options](./features/apple-video-options.md) · [qwen-image-21](./features/qwen-image-21.md) · [fableloom](./features/fableloom.md) · [FableLoom runtime v1](./features/fableloom-runtime-v1.md) · [FableLoom export v1](./features/fableloom-export-v1.md) · [Eidoverse Worlds integration](./features/eidoverse.md) · [Eidoverse music-video renderer](./EIDOVERSE_VIDEO.md) · [OpenWorld historical reference](./features/openworld.md) · [sprite-export-contract](./features/sprite-export-contract.md) · [video-text-encoders](./features/video-text-encoders.md) · [video-speed-profiles](./features/video-speed-profiles.md) · [video-render-batches](./features/video-render-batches.md) · [video-upscale](./features/video-upscale.md)
 
 Comms & voice: [beeper](./features/beeper.md) · [messages-browser-send](./features/messages-browser-send.md) · [openclaw-operator-chat](./features/openclaw-operator-chat.md) ([pre-build audit](./research/2026-03-31-openclaw-operator-chat-audit.md)) · [stacker-news](./features/stacker-news.md) · [voice](./features/voice.md) ([Jev feasibility](./research/2026-09-30-jev-voice-feasibility.md))
 

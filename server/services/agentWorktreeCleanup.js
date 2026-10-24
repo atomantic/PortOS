@@ -3,8 +3,8 @@ import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
  * Agent Worktree Cleanup
  *
  * Post-completion worktree handling for agents: merge-or-PR the worktree
- * branch, drive the multi-reviewer review-loop follow-up, and auto-create
- * recovery tasks when a merge or PR creation fails. Extracted from
+ * branch, drive the multi-reviewer review-loop follow-up, and retain
+ * completion recovery when a merge or PR creation fails. Extracted from
  * agentLifecycle.js as a self-contained leaf so the completion-cleanup
  * orchestrator (agentCompletionCleanup.js) can import it without a circular
  * dependency back into agentLifecycle.js. Consumers import these functions from
@@ -29,7 +29,6 @@ import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { isRetryHoldOwner, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, resolveTaskRemoteBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
-import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { normalizeForkHead } from '../lib/forkHead.js';
@@ -992,6 +991,16 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
   });
   if (!persisted) return {};
 
+  if (persisted.status === 'blocked' && ['task-approval', 'task-recovery-exhausted'].includes(persisted.metadata?.blockedCategory)) {
+    if (persisted.metadata.deliveryDecisionAgentId !== agentId) return {};
+    const metadata = agentMetadata === undefined ? (await getAgentRecord(agentId))?.metadata : agentMetadata;
+    const patch = await resolveTaskResumePatch({ task, agentId, agentMetadata: metadata });
+    const result = await updateTask(task.id, { metadata: patch }, task.taskType || persisted.taskType || 'user', {
+      expectedStatus: 'blocked', expectedMetadata: { blockedCategory: persisted.metadata.blockedCategory, blockedAt: persisted.metadata.blockedAt, deliveryDecisionAgentId: agentId },
+    });
+    return result?.error || result?.statusChanged ? {} : patch;
+  }
+
   if (isLegacyDeepAudit(task.metadata)) {
     if (persisted.status !== 'in_progress' || !isRetryHoldOwner(persisted.metadata, agentId)) return {};
     const metadata = agentMetadata === undefined
@@ -1455,90 +1464,24 @@ async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget
   return { id: taskId, resumed: true };
 }
 
-/**
- * Auto-create a recovery task when a worktree merge or PR creation fails, so stale
- * branches don't accumulate in managed app repos and block future agent work.
- */
+/** Retain warning recovery on the original completion receipt. No new agent,
+ * retry budget or personal obligation is created by a cleanup warning. */
 export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, sourceWorkspace) {
-  let staleBranch = null;
-  let isMergeFail = false;
-
-  for (const w of cleanupWarnings) {
-    const mergeMatch = w.match(/Auto-merge failed for branch (\S+)/);
-    if (mergeMatch) { staleBranch = mergeMatch[1]; isMergeFail = true; break; }
-
-    const prMatch = w.match(/PR creation failed for branch (\S+?):/);
-    if (prMatch) { staleBranch = prMatch[1]; break; }
+  if (!cleanupWarnings?.length || !agentId || !sourceWorkspace) return null;
+  // Draft/review-only delivery remains with its explicit owner. A warning
+  // cannot grant the completion sweep authority to retire that checkout.
+  if (resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN) return null;
+  const { getAgentRecord, recordCleanupOutcome, recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+  const agent = await getAgentRecord(agentId);
+  const branch = agent?.metadata?.worktreeBranch || agent?.metadata?.claimBranch
+    || cleanupWarnings.map(warning => warning.match(/(?:Auto-merge failed|PR creation failed) for branch (\S+?)(?=:|\s|$)/)?.[1]).find(Boolean);
+  if (branch) {
+    const recorded = await recordCleanupOutcome(agentId, { status: 'pending', reason: 'cleanup-warning-pending', branch,
+      path: agent?.metadata?.worktreePath || null, warnings: cleanupWarnings, sourceWorkspace, taskId: task?.id || null });
+    if (!recorded) throw new Error('cleanup-warning-receipt-unavailable');
   }
-
-  if (!staleBranch || !sourceWorkspace) return;
-
-  // Review-only runs must not delegate to a recovery agent that can land work.
-  if (resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN) {
-    emitLog('warn', `Review-only branch ${staleBranch} needs manual recovery; automatic recovery suppressed`, { agentId, staleBranch });
-    return null;
-  }
-
-  const appId = task?.metadata?.app;
-
-  if (isMergeFail) {
-    const defaultBr = await git.getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
-    const recoveryTask = await addTask({
-      description: `${RECOVERY_TASK_PREFIX} Resolve merge conflict and clean up stale branch ${staleBranch} in ${appName}`,
-      priority: 'HIGH',
-      app: appId,
-      isRecovery: true,
-      context: `An agent failed to auto-merge branch "${staleBranch}" back to ${defaultBr} in ${sourceWorkspace}. `
-        + `Resolve this by: (1) checking if the branch's changes are already on ${defaultBr} (superseded by other commits), `
-        + `and if so, delete the branch with "git branch -D ${staleBranch}"; `
-        + `(2) if the changes are NOT on ${defaultBr}, attempt "git merge ${staleBranch} --no-edit" from ${defaultBr}, resolve any conflicts, and commit; `
-        + `(3) after merging or determining the branch is stale, delete it with "git branch -D ${staleBranch}". `
-        + `Original agent: ${agentId}, original task: ${task?.description || 'unknown'}.`,
-      useWorktree: false,
-    }, 'user').catch(err => {
-      emitLog('warn', `Failed to create merge recovery task: ${err.message}`, { agentId, staleBranch });
-      return null;
-    });
-    if (recoveryTask) {
-      emitLog('info', `🔧 Auto-created merge recovery task for stale branch ${staleBranch}`, { agentId, appName });
-    }
-    return recoveryTask;
-  } else {
-    // PR/MR creation failed — spawn an agent to investigate and retry. Pick gh vs
-    // glab based on the repo's forge so the recovery agent gets commands that
-    // actually work against this remote.
-    const [{ cli }, detectedBase] = await Promise.all([
-      git.resolveForgeForRepo(sourceWorkspace).catch(() => ({ cli: 'gh' })),
-      git.getDefaultBranch(sourceWorkspace).catch(() => null)
-    ]);
-    const targetBase = detectedBase || 'main';
-    const isGitLab = cli === 'glab';
-    const reqWord = isGitLab ? 'MR' : 'PR';
-    const listCmd = isGitLab
-      ? `glab mr list --source-branch ${staleBranch}`
-      : `gh pr list --head ${staleBranch}`;
-    const createCmd = isGitLab
-      ? `glab mr create --source-branch ${staleBranch} --target-branch ${targetBase} --title '...' --description '...'`
-      : `gh pr create --head ${staleBranch} --base ${targetBase} --title '...' --body '...'`;
-
-    const recoveryTask = await addTask({
-      description: `${RECOVERY_TASK_PREFIX} Investigate and retry failed ${reqWord} for branch ${staleBranch} in ${appName}`,
-      priority: 'HIGH',
-      app: appId,
-      isRecovery: true,
-      context: `An agent pushed branch "${staleBranch}" to ${sourceWorkspace} but automated ${reqWord} creation failed. `
-        + `Investigate by: (1) checking if a ${reqWord} already exists for this branch: "${listCmd}"; `
-        + `(2) if no ${reqWord} exists, review the branch changes and create one: "${createCmd}"; `
-        + `(3) if the branch is stale or changes are already on ${targetBase}, delete the remote branch: "git push origin --delete ${staleBranch}". `
-        + `Original agent: ${agentId}, original task: ${task?.description || 'unknown'}.`,
-      useWorktree: false,
-    }, 'user').catch(err => {
-      emitLog('warn', `Failed to create ${reqWord} recovery task: ${err.message}`, { agentId, staleBranch });
-      return null;
-    });
-    if (recoveryTask) {
-      emitLog('info', `🔧 Auto-created ${reqWord} recovery task for branch ${staleBranch}`, { agentId, appName, cli });
-    }
-    return recoveryTask;
-  }
+  const pending = await recordRepoStateVerification(agentId, { status: 'pending', reasons: ['cleanup-warning-pending'] });
+  if (!pending) throw new Error('cleanup-warning-replay-unavailable');
+  emitLog('info', 'Cleanup warning retained for deterministic completion recovery', { agentId, appName });
+  return null;
 }

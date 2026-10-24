@@ -55,7 +55,8 @@ const MAX_FRAME_RETRIES = 2;
 // recoverable browser failure; the frame is redrawn there and the encoder
 // keeps running, so frames already piped are kept. `onRetry({ frame, attempt,
 // error })` reports each restart, `frame` counted on song time.
-export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, offsetSec = 0, continuous = false, followed = false, videoFilter = null, master = false, reopenPage = null, onRetry = null, runFfmpeg = runFfmpegProcess, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
+export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, onLifecycle, offsetSec = 0, continuous = false, followed = false, videoFilter = null, master = false, reopenPage = null, onRetry = null, runFfmpeg = runFfmpegProcess, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
+  onLifecycle?.({ phase: 'encoder-preflight' });
   const ffmpeg = await locateFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
   const tag = await tagFilter();
@@ -90,8 +91,16 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   args.push('-map', '0:v', '-vf', [motionBlurFilter, videoFilter, 'scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tag].filter(Boolean).join(','), ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS);
   if (exactAudio) args.push('-map', '1:a', ...AAC_ENCODE_ARGS);
   else if (musicPath) args.push('-map', '1:a', '-af', `${bedTrim}${mastering ? `,${mastering.filter}` : ''},afade=t=out:st=${durationSec - 0.5}:d=0.5`, ...AAC_ENCODE_ARGS);
+  // select drops subframes without changing the input's advertised rate.
+  // Pin the output cadence so ffmpeg cannot duplicate frames or shorten it.
+  if (sub > 1) args.push('-r', String(fps));
   args.push('-frames:v', String(numFrames), '-t', String(durationSec), '-movflags', '+faststart', '-y', outputPath);
   const proc = spawnProcess(ffmpeg, args, safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));
+  let currentFrame = null;
+  const report = (phase, frame = currentFrame) => {
+    currentFrame = frame;
+    onLifecycle?.({ phase, encoderPid: proc.pid ?? null, frame, frames: numFrames });
+  };
   let stderr = '';
   let exited = false;
   let stopping = false;
@@ -131,6 +140,8 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   signal?.addEventListener('abort', abort, { once: true });
   if (!Number.isFinite(offsetSec) || offsetSec < 0) throw new Error('offsetSec must be a non-negative number');
   const captureOnce = async t => {
+    signal?.throwIfAborted();
+    report('seek', Math.round(t * fps));
     page.check();
     // awaitPromise in evaluate is essential: each seek owns its paint.
     // Unrounded: pages pick their frame with floor(t × fps + 1e-6), and a time
@@ -139,6 +150,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     const at = offsetSec + t;
     await seekComposition(page, at, Math.round(t * fps));
     page.check();
+    report('capture', Math.round(t * fps));
     const captureStarted = performance.now();
     const { data } = await page.send('Page.captureScreenshot', SCREENSHOT).catch(error => {
       throw new Error(`Composition capture failed at frame ${Math.round(t * fps)} (song ${+at.toFixed(6)}s) after ${Math.round(performance.now() - captureStarted)}ms: ${error.message}`);
@@ -165,10 +177,13 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
       }
     }
   };
-  const write = bytes => Promise.race([
-    new Promise((resolve, reject) => proc.stdin.write(bytes, error => error ? reject(error) : resolve())),
-    encoderStopped,
-  ]);
+  const write = bytes => {
+    report('encoder-write');
+    return Promise.race([
+      new Promise((resolve, reject) => proc.stdin.write(bytes, error => error ? reject(error) : resolve())),
+      encoderStopped,
+    ]);
+  };
   const toRgb = png => sharp(png).removeAlpha().raw().toBuffer();
   // Output frames per sub-frame count: where a shutter render spent its time.
   const histogram = {};
@@ -199,6 +214,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
       onProgress?.((n + 1) / numFrames, { frame: n + 1, frames: numFrames });
     }
     proc.stdin.end();
+    report('encoder-finish');
     await finished;
     page.check();
     const loudness = mastering ? await reportMasteredLoudness({ bin: ffmpeg, outputPath, before: mastering.before, signal, run: runFfmpeg }) : null;
@@ -214,6 +230,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     throw error;
   } finally {
     signal?.removeEventListener('abort', abort);
+    report('encoder-close');
     stop('cleanup requested');
     // Wait for close, not just the first error, before deleting partial output.
     if (!exited) await new Promise(resolve => proc.once('close', resolve));

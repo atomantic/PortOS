@@ -414,62 +414,108 @@ describe('listAppIssues — the list must match the tracker a claim would use', 
   });
 });
 
+const prPages = rows => JSON.stringify([{ data: { repository: { pullRequests: {
+  nodes: rows.map((pr, index) => ({ ...pr, number: pr.number || index + 1, commits: {
+    nodes: (pr.commits || []).map(commit => ({ commit: { message: `${commit.messageHeadline || ''}\n${commit.messageBody || ''}` } })),
+    pageInfo: { hasNextPage: (pr.commits || []).length >= 100 },
+  } })), pageInfo: { hasNextPage: false, endCursor: null },
+} } } }]);
+
 describe('prepareAppIssueClaim', () => {
-  it('removes only invitations present on GitHub and verifies the result', async () => {
-    execGh.mockResolvedValueOnce(JSON.stringify({ labels: [{ name: 'Help Wanted' }, { name: 'good first issue' }, { name: 'bug' }] }))
-      .mockResolvedValueOnce('').mockResolvedValueOnce(JSON.stringify({ labels: [{ name: 'bug' }] }));
+  const issue = (labels = [], extra = {}) => JSON.stringify({ labels, assignees: [], state: 'OPEN', ...extra });
+  const prs = (...rows) => prPages(rows);
+
+  it('removes only invitations present on GitHub after verifying eligibility', async () => {
+    execGh.mockResolvedValueOnce(issue([{ name: 'Help Wanted' }, { name: 'good first issue' }, { name: 'bug' }]))
+      .mockResolvedValueOnce(prs()).mockResolvedValueOnce('').mockResolvedValueOnce(issue([{ name: 'bug' }]));
     await prepareAppIssueClaim(APP, '42', 'github');
     expect(execGh.mock.calls.map(([args]) => args)).toEqual([
-      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels'],
+      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels,assignees,state'],
+      expect.arrayContaining(['api', 'graphql', '--paginate', '--slurp', '-F', 'owner=acme', 'repo=widget', '--hostname', 'github.com']),
       ['issue', 'edit', '42', '--repo', 'github.com/acme/widget', '--remove-label', 'Help Wanted', '--remove-label', 'good first issue'],
-      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels'],
+      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels,assignees,state'],
     ]);
   });
 
-  it('does not mutate an issue without contributor labels', async () => {
-    execGh.mockResolvedValue(JSON.stringify({ labels: [] }));
-    await prepareAppIssueClaim(APP, '42', 'github');
+  it.each([
+    { assignees: [{ login: 'atomantic' }] },
+    { labels: ['in-progress'] },
+    { state: 'CLOSED' },
+  ])('refuses an existing claim before changing invitations: %j', async extra => {
+    execGh.mockResolvedValue(issue(['help wanted'], extra));
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toMatchObject({ status: 409, code: 'ISSUE_IN_FLIGHT' });
     expect(execGh).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { headRefName: 'interactive', body: 'Closes #42', commits: [] },
+    { headRefName: 'interactive', body: 'Fixes #42', commits: [] },
+    { headRefName: 'interactive', body: 'Fixes: #42', commits: [] },
+    { headRefName: 'interactive', body: '', commits: [{ messageHeadline: 'fix: work [issue-42]' }] },
+    { headRefName: 'interactive', body: '', commits: [{ messageHeadline: 'fix: work (#42)' }] },
+    { headRefName: 'next/issue-42', body: '', commits: [] },
+  ])('refuses PR-backed work without an assignee: %j', async pr => {
+    execGh.mockResolvedValueOnce(issue(['help wanted'])).mockResolvedValueOnce(prs(pr));
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toMatchObject({ status: 409, code: 'ISSUE_IN_FLIGHT' });
+    expect(execGh.mock.calls.some(([args]) => args[1] === 'edit')).toBe(false);
+  });
+
+  it('does not mutate an eligible issue without contributor labels', async () => {
+    execGh.mockResolvedValueOnce(issue()).mockResolvedValueOnce(prs({ headRefName: 'feature', body: 'Refs #42; Closes #420', commits: [] }));
+    await prepareAppIssueClaim(APP, '42', 'github');
+    expect(execGh).toHaveBeenCalledTimes(2);
   });
 
   it('uses GitLab and preserves unrelated labels', async () => {
     useGitlabOrigin();
-    execGlab.mockResolvedValueOnce(JSON.stringify({ labels: ['help wanted', 'bug'] }))
-      .mockResolvedValueOnce('').mockResolvedValueOnce(JSON.stringify({ labels: ['bug'] }));
+    execGlab.mockResolvedValueOnce(issue(['help wanted', 'bug'], { state: 'opened' }))
+      .mockResolvedValueOnce('[]').mockResolvedValueOnce('').mockResolvedValueOnce(issue(['bug'], { state: 'opened' }));
     await prepareAppIssueClaim(APP, '42', 'gitlab');
-    expect(execGlab).toHaveBeenNthCalledWith(2, ['issue', 'update', '42', '--unlabel', 'help wanted'], '/repo', undefined, { rejectOnError: true });
+    expect(execGlab).toHaveBeenNthCalledWith(3, ['issue', 'update', '42', '--unlabel', 'help wanted'], '/repo', undefined, { rejectOnError: true });
     expect(execGh).not.toHaveBeenCalled();
   });
 
-  it('rejects unreadable labels, failed edits, and labels that remain after an edit', async () => {
+  it.each([
+    { source_branch: 'claim/issue-42', description: '' },
+    { source_branch: 'interactive', description: 'Closes: #42' },
+  ])('refuses GitLab MR-backed work before mutation: %j', async mr => {
+    useGitlabOrigin();
+    execGlab.mockResolvedValueOnce(issue(['help wanted'], { state: 'opened' })).mockResolvedValueOnce(JSON.stringify([mr]));
+    await expect(prepareAppIssueClaim(APP, '42', 'gitlab')).rejects.toMatchObject({ status: 409, code: 'ISSUE_IN_FLIGHT' });
+    expect(execGlab.mock.calls.some(([args]) => args[1] === 'update')).toBe(false);
+  });
+
+  it('reads all commits on large PRs and finds issue references beyond the first page', async () => {
+    const pr = { number: 23, headRefName: 'large-change', body: '', commits: Array.from({ length: 100 }, () => ({ messageHeadline: 'other work' })) };
+    const firstPage = pr.commits.map(() => ({ commit: { message: 'other work' } }));
+    execGh.mockResolvedValueOnce(issue()).mockResolvedValueOnce(prs(pr))
+      .mockResolvedValueOnce(JSON.stringify([firstPage, [{ commit: { message: 'fix: remaining work (#42)' } }]]));
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toMatchObject({ code: 'ISSUE_IN_FLIGHT' });
+    expect(execGh).toHaveBeenLastCalledWith(
+      ['api', '--hostname', 'github.com', '--paginate', '--slurp', 'repos/acme/widget/pulls/23/commits?per_page=100'],
+      undefined, expect.any(Object),
+    );
+  });
+
+  it('rejects unreadable state, failed edits, and labels that remain after an edit', async () => {
     execGh.mockResolvedValueOnce('{}');
     await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toThrow('Could not read issue labels');
-    execGh.mockResolvedValueOnce('{"labels":["help wanted"]}').mockRejectedValueOnce(new Error('offline'));
+    execGh.mockResolvedValueOnce(issue()).mockResolvedValueOnce('{}');
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toThrow('Could not read complete open PR');
+    execGh.mockResolvedValueOnce(issue(['help wanted'])).mockResolvedValueOnce(prs()).mockRejectedValueOnce(new Error('offline'));
     await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toThrow('offline');
-    execGh.mockResolvedValue('{"labels":["help wanted"]}');
+    execGh.mockResolvedValueOnce(issue(['help wanted'])).mockResolvedValueOnce(prs()).mockResolvedValueOnce('').mockResolvedValueOnce(issue(['help wanted']));
     await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toThrow('Contributor labels remain');
   });
 
   it('passes cwd and repo forge auth env when claiming on GitHub', async () => {
-    resolveForgeForRepoMock.mockResolvedValue({
-      cli: 'gh',
-      env: { ...process.env, GH_TOKEN: 'other-user-token' },
-      account: 'other-user',
-    });
-    execGh.mockResolvedValueOnce(JSON.stringify({ labels: [{ name: 'Help Wanted' }] }))
-      .mockResolvedValueOnce('')
-      .mockResolvedValueOnce(JSON.stringify({ labels: [] }));
-
+    resolveForgeForRepoMock.mockResolvedValue({ cli: 'gh', env: { ...process.env, GH_TOKEN: 'other-user-token' }, account: 'other-user' });
+    execGh.mockResolvedValueOnce(issue()).mockResolvedValueOnce(prs());
     await prepareAppIssueClaim({ ...APP, forgeAccount: 'other-user' }, '42', 'github');
-
     expect(resolveForgeForRepoMock).toHaveBeenCalledWith('/repo', { forgeAccount: 'other-user' });
     expect(execGh).toHaveBeenCalledWith(
-      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels'],
-      undefined,
-      expect.objectContaining({
-        cwd: '/repo',
-        env: expect.objectContaining({ GH_TOKEN: 'other-user-token' }),
-      }),
+      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels,assignees,state'], undefined,
+      expect.objectContaining({ cwd: '/repo', env: expect.objectContaining({ GH_TOKEN: 'other-user-token' }) }),
     );
   });
 });

@@ -9,6 +9,11 @@ const { statusOp } = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/providers.js', () => ({ getAllProviders: vi.fn() }));
+const { recordRunUsage } = vi.hoisted(() => ({ recordRunUsage: vi.fn(async () => {}) }));
+vi.mock('./usage.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, recordRunUsage };
+});
 vi.mock('../services/aiStatusEvents.js', () => ({ startAIOp: vi.fn(() => statusOp) }));
 vi.mock('../services/ollamaManager.js', () => ({
   ensureProviderReady: vi.fn(),
@@ -238,6 +243,7 @@ describe('callProviderAISimple through the ChatGPT subscription', () => {
     statusOp.update.mockClear();
     statusOp.complete.mockClear();
     statusOp.error.mockClear();
+    recordRunUsage.mockClear();
     runTurn.mockReset();
     bench.mockReset();
     peekBench.mockReset().mockReturnValue(null);
@@ -257,6 +263,7 @@ describe('callProviderAISimple through the ChatGPT subscription', () => {
 
     expect(result).toMatchObject({ text: 'a subscription answer' });
     expect(result.usage.source).toBe('chatgpt-subscription');
+    expect(recordRunUsage).not.toHaveBeenCalled();
     expect(runTurn).toHaveBeenCalledWith(expect.objectContaining({
       prompt: 'Summarize this.', model: 'model-alpha',
     }));
@@ -581,5 +588,78 @@ describe('HTTP provider body cancellation', () => {
     expect((await pending).error).toContain('No models loaded');
     expect(requestSignal.aborted).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+
+describe('provider review preparation deadline', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it('cancels readiness waiting and never dispatches inference when shared startup finishes later', async () => {
+    const { ensureProviderReady, isOllamaProvider } = await import('./ollamaManager.js');
+    vi.mocked(isOllamaProvider).mockReturnValue(true);
+    let finishReady;
+    let entered;
+    const started = new Promise(resolve => { entered = resolve; });
+    vi.mocked(ensureProviderReady).mockImplementationOnce(() => { entered(); return new Promise(resolve => { finishReady = resolve; }); });
+    const controller = new AbortController();
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    const pending = callProviderAISimple({ id: 'deadline-local', type: 'api', endpoint: 'http://localhost:11434/v1' }, 'm', 'prompt', { signal: controller.signal, deadlineMs: Date.now() + 1000, allowModelRecovery: false });
+    await started;
+    controller.abort();
+    expect(await pending).toMatchObject({ error: 'Provider readiness cancelled.' });
+    finishReady({ success: true });
+    await Promise.resolve();
+    expect(fetch).not.toHaveBeenCalled();
+    vi.mocked(isOllamaProvider).mockReturnValue(false);
+  });
+
+  it('rechecks the absolute deadline after readiness before sending the completion', async () => {
+    const { ensureProviderReady, isOllamaProvider } = await import('./ollamaManager.js');
+    let now = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.mocked(isOllamaProvider).mockReturnValue(true);
+    vi.mocked(ensureProviderReady).mockImplementationOnce(async () => { now = 200; return { success: true }; });
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    expect(await callProviderAISimple({ id: 'deadline-after-ready', type: 'api', endpoint: 'http://localhost:11434/v1' }, 'm', 'prompt', { deadlineMs: 100, allowModelRecovery: false })).toMatchObject({ error: 'Provider request deadline expired.' });
+    expect(fetch).not.toHaveBeenCalled();
+    vi.mocked(isOllamaProvider).mockReturnValue(false);
+  });
+});
+
+describe('callProviderAISimple xAI usage ledger', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('records cached and reasoning tokens from a successful xAI completion', async () => {
+    recordRunUsage.mockClear();
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: {
+          prompt_tokens: 32,
+          completion_tokens: 9,
+          prompt_tokens_details: { cached_tokens: 6 },
+          completion_tokens_details: { reasoning_tokens: 94 },
+        },
+      }),
+    })));
+    const result = await callProviderAISimple(
+      { id: 'grok', type: 'api', endpoint: 'https://api.x.ai/v1' },
+      'grok-4.7',
+      'prompt',
+    );
+    expect(result.usage).toMatchObject({ inputTokens: 26, outputTokens: 103, cacheReadTokens: 6 });
+    await vi.waitFor(() => expect(recordRunUsage).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'grok',
+      model: 'grok-4.7',
+      tokensIn: 26,
+      tokensOut: 103,
+      cacheReadTokens: 6,
+      source: 'measured',
+    })));
   });
 });

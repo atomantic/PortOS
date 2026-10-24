@@ -1,10 +1,13 @@
 // @vitest-environment node
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as barrel from './index.js';
+
+// Enumeration never renders a GLTF; keep Drei's render-only dependency out of this harness.
+vi.mock('@react-three/drei', () => ({ useAnimations: vi.fn(), useGLTF: vi.fn() }));
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BARREL_SRC = readFileSync(join(HERE, 'index.js'), 'utf8');

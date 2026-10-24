@@ -30,7 +30,8 @@ const MAX_THREADS_PER_RUN = 60;
 // 4 finishes a review request on a merged or closed PR; version 5 matches a
 // deployment approval to its waiting run; version 6 trusts GitHub's own bots
 // and, where the account opts in, everyone on an Enterprise instance; version 7
-// re-checks commenter trust on legacy commented threads (#13213). A thread
+// re-checks commenter trust on legacy commented threads (#13213); version 9
+// records a PR's draft and merge state for the inbox row. A thread
 // handed off keeps its hand-off; one whose hand-off was refused (a Private
 // account without agents) is re-decided like any other. One an Assist model sorted is not
 // read again, except your own PR: the rule table decides those, so a verdict
@@ -41,6 +42,7 @@ const REDECIDE_SQL = `(state = 'open' AND decision IS DISTINCT FROM 'handed-off'
     OR (reason = 'review_requested' AND evidence->>'subjectState' IN ('merged', 'closed'))
     OR reason = 'approval_requested'
     OR trust = 'outside'
+    OR (subject_type = 'PullRequest' AND COALESCE(evidence->>'rulesVersion', '0') <> '${TRIAGE_RULES_VERSION}')
     OR (latest_comment_api_url IS NOT NULL AND NOT (evidence ? 'commenterTrust'))))`;
 // A deployment waiting on you is re-checked every sync: approving or rejecting
 // it on GitHub does not touch the notification thread.
@@ -49,7 +51,7 @@ const WAITING_RUNS_JQ = '[.workflow_runs[] | {id, name, displayTitle: .display_t
 const LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(?:\[bot\])?$/;
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 
-const SUBJECT_JQ = '{author: .user.login, authorType: .user.type, association: .author_association, state: .state, merged: (.merged // false)}';
+const SUBJECT_JQ = '{author: .user.login, authorType: .user.type, association: .author_association, state: .state, merged: (.merged // false), draft: (.draft // false), mergeableState: .mergeable_state}';
 const COMMENT_JQ = '{author: .user.login, authorType: .user.type, association: .author_association, mentions: ([(.body // "") | scan("@[A-Za-z0-9][A-Za-z0-9-]*")] | length)}';
 
 const isBotLogin = (login) => /\[bot\]$/i.test(login);
@@ -253,6 +255,7 @@ async function triageThread(row, ctx) {
       rule,
       signals,
       actor: actorLogin,
+      actorType: typeof actorType === 'string' ? actorType : null,
       commenter: commenter && commenter !== actorLogin ? commenter : null,
       // Always recorded (null: no other commenter) so the generic agent lane
       // can tell a vouched thread from one triaged before it was kept (#13191).
@@ -260,6 +263,8 @@ async function triageThread(row, ctx) {
       repoOwned,
       repoManaged,
       subjectState: subject ? (subject.merged === true ? 'merged' : subject.state || null) : null,
+      subjectDraft: subject?.draft === true,
+      mergeState: typeof subject?.mergeableState === 'string' ? subject.mergeableState : null,
       ciBranch,
       metadataMissing: Boolean(subjectPath && !subject) || (isDeployment && waitingRun === undefined),
       ...(waitingRun ? { workflowRun: workflowRunEvidence(waitingRun) } : {}),

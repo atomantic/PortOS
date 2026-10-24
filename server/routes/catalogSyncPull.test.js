@@ -21,7 +21,6 @@ vi.mock('../services/settings.js', async () => ({
 }));
 vi.mock('../services/catalogSync.js', () => ({
   getChangesSince: vi.fn(async () => ({ changes: {}, maxSequences: {}, hasMore: false })),
-  applyRemoteChanges: vi.fn(),
 }));
 
 import * as catalogSync from '../services/catalogSync.js';

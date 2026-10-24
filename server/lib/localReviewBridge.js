@@ -15,11 +15,25 @@ import { PATHS } from './fileUtils.js';
  * working. Each caller applies its own `shellQuote`.
  */
 export const LOCAL_REVIEW_BRIDGE_SCRIPT = join(PATHS.root, 'server/scripts/run-local-code-review.mjs');
+export const LOCAL_REVIEW_LIFECYCLE_GUIDE = join(PATHS.root, 'docs/LOCAL_REVIEW_LIFECYCLE.md');
+export const LOCAL_REVIEW_LIFECYCLE_SCRIPT = join(PATHS.root, 'server/scripts/local-review-lifecycle.mjs');
+export const LOCAL_REVIEW_ATTRIBUTION_GUIDE = join(PATHS.root, 'docs/PR_REVIEW_ATTRIBUTION.md');
 
 /** Preserve a claim's enforced review policy at the bridge boundary. */
 export function localReviewBridgeRequest(request, cwd) {
-  const { timeoutMs, ...reviewRequest } = request;
+  const { timeoutMs, recordAttribution: _recordAttribution, ...reviewRequest } = request;
   if (Number.isFinite(timeoutMs) && timeoutMs > 0) reviewRequest.timeoutMs = timeoutMs;
   if (request.kind === 'claim-review') reviewRequest.toolFree = true;
   return { ...reviewRequest, cwd };
+}
+
+/** Preserve completed review evidence while keeping receipt failures out of availability gates. */
+export function localReviewAttributionErrorGate({ cleanupDiff = false } = {}) {
+  const diffCleanup = cleanupDiff ? '"$REVIEW_DIFF" ' : '';
+  return `if jq -e '.attributionError != null' "$REVIEW_RESPONSE" >/dev/null; then
+  trap 'rm -f ${diffCleanup}"\${REVIEW_RESPONSE}.findings"' EXIT
+  jq -r '.findings // empty' "$REVIEW_RESPONSE"
+  echo "Review completed; attribution persistence failed. Stop publication, not review-blocked. Repair attribution from the retained private response: $REVIEW_RESPONSE" >&2
+  exit 1
+fi`;
 }

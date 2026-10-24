@@ -72,6 +72,8 @@ const EXCLUSIVE_TESTS = [
   'scripts/run-local-code-review.test.js',
   'lib/workTracker.trackerInstructions.test.js',
   '../scripts/ci-test-plan.test.js',
+  // Three real nested runners need quiet startup, with owned cancellation.
+  '../scripts/workspaceCaches.test.js',
   '../scripts/persistentMindProcessAuditCleanup.test.js',
   '../scripts/writersRoomPromotionCleanup.test.js',
 ];
@@ -110,12 +112,12 @@ export function applyRunnerSelection(test, selection) {
   return applied;
 }
 
-export function vitestCaptureProjects(test, { cacheDir, selection = { include: null, exclude: [] } } = {}) {
+export function vitestCaptureProjects(test, { cacheDir, selection = { include: null, exclude: [] }, exclusiveTests = EXCLUSIVE_TESTS } = {}) {
   const { include, exclude, ...shared } = test;
   // An explicit selection narrows the capture group too; its fixed include
   // would otherwise run every exclusive suite on every scoped plan.
   const captureInclude = selection.include === null
-    ? EXCLUSIVE_TESTS : EXCLUSIVE_TESTS.filter(file => selection.include.includes(file));
+    ? exclusiveTests : exclusiveTests.filter(file => selection.include.includes(file));
   // Vite concatenates inherited include arrays: extending the broad root
   // glob would also run EVERY unit file in the capture project. Copy shared
   // worker settings explicitly and leave run-wide ownership at the root.
@@ -130,7 +132,7 @@ export function vitestCaptureProjects(test, { cacheDir, selection = { include: n
         ...shared,
         name: 'parallel',
         include,
-        exclude: [...exclude, ...EXCLUSIVE_TESTS],
+        exclude: [...exclude, ...exclusiveTests],
         sequence: { groupOrder: 0 },
       },
     },

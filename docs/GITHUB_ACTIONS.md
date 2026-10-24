@@ -171,14 +171,17 @@ CI run that never needed it — they keep the documented skip.
 ### Local equivalent: `npm run pregate`
 
 `scripts/pregate.js` runs the same planner over the committed and uncommitted
-diff and hands its plan to the same runners, so a scoped plan is reproduced
-locally stage for stage: hidden-content scan, lint, server and client tests,
-the client build and its API Explorer bundle pin, the boot smoke, the browser
-suites (smoke profile, prerequisites required rather than skipped), and the
-serial `portos_test` DB suite last and alone. Each stage receives the
-environment the matching job sets. A full plan runs only the always-run guards
-unless `--full` is passed. A suite the machine cannot run (no reachable test
-Postgres; no Chrome, ffmpeg or client bundler), or one left to CI with
+diff and hands its plan to the same runners. Default `npm run pregate` runs the
+hidden-content scan, early server and client structural guards, lint, and
+focused unit tests: edited test files and sibling tests for changed sources,
+including untracked tests, without expanding through transitive imports.
+
+`npm run pregate -- --full` opts into the CI-selected broad suites locally:
+server and client tests, the client build and its API Explorer bundle pin, the
+boot smoke, browser suites (smoke profile, prerequisites required rather than
+skipped), and the serial `portos_test` DB suite last and alone. Each stage
+receives the environment the matching job sets. A suite the machine cannot run
+(no reachable test Postgres; no Chrome, ffmpeg or client bundler), or one left to CI with
 `--skip-db`, `--skip-browser`, `--skip-build` or `--skip-smoke`, is reported
 as not run — in the summary and in the receipt `.cache/pregate/report.json`,
 which records the plan, stage outcomes and durations, the skipped suites, the
@@ -186,6 +189,15 @@ base and HEAD SHAs, and the hash of the exact working tree validated. The
 shipped prompt-history guard runs locally when selected; the Windows job and
 the Linux worker-containment job are the two suites only CI can prove. Details and the receipt
 contract: `docs/CONTRIBUTING.md`.
+
+The early guards use the same always-run and diff-selected structural selection
+as CI and `--guards-only`. They run before broad tests and resource probes.
+Successful guards are reused within this invocation only when the working tree,
+index, HEAD and refs remain unchanged; otherwise the broad runner executes them
+again. The receipt records guard outcomes and reuse proofs. Persistent test
+memo rules, required stages and worker caps remain the same. Downgraded full
+plans and `--guards-only` run the guard selection once; `--full` runs it before
+the full suites.
 
 The fixed `pregate:merged` package script advertises support for
 `node scripts/pregate.js --guards-only --merged-with <base-sha>` to the quality
@@ -204,7 +216,11 @@ Repositories without
 this capability retain their existing snapshot merge behavior; arbitrary scripts
 are never executed as a substitute.
 
+
 ### Pregate attestation
+
+Default local pregate is focused validation, not a local CI run. Version 3 focused receipts cannot produce CI-skipping attestations. The following mechanism applies only to explicit `npm run pregate -- --full` validation and compatible legacy receipts. Hosted CI remains authoritative for broad coverage on ordinary pushes; do not rerun locally merely to obtain an attestation.
+
 
 A green pregate on this machine runs the same planner, runners, environment
 and `portos_test` database the Linux jobs do, so repeating those stages in CI
@@ -233,7 +249,11 @@ pushed head, and the impact planner skips what it attests to:
   planner compares it with the head commit's tree on the PR. A SHA is never
   compared, for the same reason `scripts/verify-ci-status.js` compares trees:
   the content is what was tested. The commit must already be on the upstream
-  remote (the one `branch.<name>.remote` names); GitHub only accepts a status
+  remote (the one `branch.<name>.remote` names). Local tracking containment is
+  checked first; if stale after a URL/path push, exact advertised branch tips
+  are checked through that remote without fetching or changing the checkout.
+  Unreadable or malformed remote evidence refuses publication verification.
+  GitHub only accepts a status
   on a commit it has, which is why attesting is a step after `git push`, not a
   pregate flag.
 - **The merge ref is not the head tree.** The receipt vouches for the head
@@ -278,10 +298,10 @@ pushed head, and the impact planner skips what it attests to:
 - **When it applies.** Only a same-repository pull request into a non-`release`
   base that was not forced full. The planner verifies the merge-ref checkout's
   second parent is the event's head (so the attested tree is compared with
-  the right commit) and reads `repos/{repo}/commits/{head}/statuses`. A head
-  committed less than five minutes ago with no `pregate` status yet is re-read
-  for up to 90 seconds (10-second interval; the summary says how long it
-  waited), because the status is posted after the push that started the run.
+  the right commit) and reads `repos/{repo}/commits/{head}/statuses`.
+  Statuses are read once: a missing or late attestation immediately leaves
+  broad hosted coverage enabled. Focused pushes intentionally post no
+  attestation, so the planner never waits for one.
   When you open the pull request yourself, the order is push, attest, then
   `gh pr create`, so the status precedes the `pull_request` event. Any
   failure — API error, unreadable description, tree mismatch, wrong creator,
@@ -743,13 +763,18 @@ The three test-runner jobs are therefore matrices. The impact job emits
 `server_shards`, `client_shards`, and `windows_shards` — `[1]` for exact-file
 plans and `[1..n]` for full plans. Windows also uses its full matrix for
 related-test plans: a single shared source can select most of the server graph
-and exceed the 15-minute test-step budget on one Windows runner. Matrices are
+and exceed the bounded test-step budget on one Windows runner. Full Windows
+shards reached 19,911 passing tests in 877.6 seconds before post-test timeout,
+and another reached 1,091/1,100 modules at the 15-minute deadline (2026-10-24,
+#13402). The test step now has 25 minutes within its unchanged 40-minute job (#13301);
+the two-worker cap, matrix size and all tests remain unchanged. Matrices are
 sized by `FULL_SUITE_SHARDS` in
 `scripts/ci-test-plan.js` (client 3, Windows 3, server 2) — and each job builds
 its matrix from that output. The decision has to be made in the planner: a
 job-level `if` cannot read the `matrix` context, so a job cannot skip its own
 extra shards. `scripts/run-ci-tests.js` turns `CI_SHARD=<index>/<count>` into
-Vitest's `--shard`, which slices the file list by path hash — every shard is a
+a file-selection slice before launching Vitest (without a `--shard` flag),
+using the same path-hash partition — every shard is a
 fixed, disjoint subset, and their union is the complete selected suite. Windows
 related plans retain the same source graph and explicit contracts on every
 shard; only execution is partitioned. Scoped Linux plans fan out the same way

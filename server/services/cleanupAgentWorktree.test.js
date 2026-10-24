@@ -45,6 +45,8 @@ vi.mock('../lib/uuid.js', () => ({
 }));
 
 vi.mock('./cosAgentLifecycle.js', () => ({
+  recordCleanupOutcome: vi.fn(async () => true),
+  recordRepoStateVerification: vi.fn(async () => true),
   registerAgent: vi.fn().mockResolvedValue(undefined),
   updateAgent: vi.fn().mockResolvedValue(undefined),
   completeAgent: vi.fn().mockResolvedValue(undefined),
@@ -1724,6 +1726,24 @@ describe('releaseRetryHold', () => {
   // The direct-CLI / TUI shape: neither spawn path holds the agent record, so the
   // helper has to read it for the worktree fields — via the transcript-free
   // `getAgentRecord`, since a long TUI run's output.txt is megabytes.
+  it('never lets an older completion replace the current decision owner resume pointer', async () => {
+    getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked', metadata: {
+      blockedCategory: 'task-approval', blockedAt: 'now', deliveryDecisionAgentId: 'agent-new',
+    } });
+    await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['task-approval', 'task-recovery-exhausted'])('records a first attempt resume pointer for %s without dispatching it', async blockedCategory => {
+    getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked', metadata: { blockedCategory, blockedAt: 'now', deliveryDecisionAgentId: 'agent-x' } });
+    git.getWorktreeBranches.mockResolvedValue(new Set([DEAD_BRANCH]));
+    existsSyncMock.mockReturnValue(true);
+    await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+    expect(updateTask).toHaveBeenCalledWith('task-1', { metadata: expect.objectContaining({
+      existingBranch: DEAD_BRANCH, resumedFromAgentId: 'agent-x', resumeWorktreePath: DEAD_TREE,
+    }) }, 'user', { expectedStatus: 'blocked', expectedMetadata: { blockedCategory, blockedAt: 'now', deliveryDecisionAgentId: 'agent-x' } });
+  });
+
   it('records the pointer for a failed run whose task is still pending', async () => {
     await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false });
 
@@ -2188,188 +2208,26 @@ describe('spawnReviewLoopFollowUp', () => {
   });
 });
 
-describe('spawnMergeRecoveryTask', () => {
-  let logEvents;
-  let captureLog;
-
-  beforeEach(() => {
-    logEvents = [];
-    captureLog = entry => logEvents.push(entry);
-    cosEvents.on('log', captureLog);
+describe('cleanup warning recovery', () => {
+  it('leaves failed persistence unresolved instead of claiming recovery was recorded', async () => {
+    const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+    vi.mocked(recordRepoStateVerification).mockResolvedValueOnce(false);
+    await expect(spawnMergeRecoveryTask(['cleanup unavailable'], 'agent-1', { id: 'original' }, 'Example', '/mock/workspace'))
+      .rejects.toThrow('cleanup-warning-replay-unavailable');
   });
 
-  afterEach(() => {
-    cosEvents.off('log', captureLog);
-  });
-
-  beforeEach(() => {
+  it('keeps repeated failures on the original durable receipt without successor tasks', async () => {
+    const { recordCleanupOutcome, recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
     vi.clearAllMocks();
-    addTask.mockResolvedValue({ id: 'task-recovery' });
-  });
-
-  it('should create a recovery task when merge failure warning is present', async () => {
-    const warnings = ['Auto-merge failed for branch cos/task-abc123/agent-1 — branch preserved for manual recovery'];
-    const task = { id: 'task-original', description: 'Fix deps', metadata: { app: 'sparsetree' } };
-
-    const result = await spawnMergeRecoveryTask(warnings, 'agent-1', task, 'SparseTree', '/mock/workspace');
-
-    expect(addTask).toHaveBeenCalledTimes(1);
-    expect(addTask).toHaveBeenCalledWith(
-      expect.objectContaining({
-        description: expect.stringContaining('[Recovery]'),
-        priority: 'HIGH',
-        app: 'sparsetree',
-        context: expect.stringContaining('cos/task-abc123/agent-1'),
-        useWorktree: false,
-      }),
-      'user'
-    );
-    expect(result).toEqual({ id: 'task-recovery' });
-    expect(logEvents).toContainEqual(expect.objectContaining({
-      level: 'info',
-      message: expect.stringContaining('Auto-created merge recovery task'),
+    for (let i = 0; i < 3; i++) {
+      await spawnMergeRecoveryTask(['PR creation failed for branch claim/example: unavailable forge'], 'agent-1',
+        { id: 'original', metadata: { isRecovery: true } }, 'Example', '/mock/workspace');
+    }
+    expect(addTask).not.toHaveBeenCalled();
+    expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', expect.objectContaining({
+      status: 'pending', reason: 'cleanup-warning-pending', taskId: 'original',
     }));
-  });
-
-  it('should include branch name and repo path in recovery context', async () => {
-    const warnings = ['Auto-merge failed for branch feature/my-branch — branch preserved for manual recovery'];
-    const task = { id: 'task-1', description: 'Original task', metadata: { app: 'myapp' } };
-
-    await spawnMergeRecoveryTask(warnings, 'agent-1', task, 'MyApp', '/mock/workspace');
-
-    const call = addTask.mock.calls[0];
-    expect(call[0].context).toContain('feature/my-branch');
-    expect(call[0].context).toContain('/mock/workspace');
-    expect(call[0].context).toContain('agent-1');
-    expect(call[0].description).toContain('feature/my-branch');
-    expect(call[0].description).toContain('MyApp');
-  });
-
-  it('should not create a task when no merge failure warning exists', async () => {
-    const warnings = ['Worktree cleanup failed: some other error'];
-
-    await spawnMergeRecoveryTask(warnings, 'agent-1', {}, 'TestApp', '/mock/workspace');
-
-    expect(addTask).not.toHaveBeenCalled();
-  });
-
-  it('should not create a task when warnings array is empty', async () => {
-    await spawnMergeRecoveryTask([], 'agent-1', {}, 'TestApp', '/mock/workspace');
-
-    expect(addTask).not.toHaveBeenCalled();
-  });
-
-  it('should not create a task when sourceWorkspace is undefined', async () => {
-    const warnings = ['Auto-merge failed for branch cos/task-abc/agent-1 — branch preserved'];
-
-    await spawnMergeRecoveryTask(warnings, 'agent-1', {}, 'TestApp', undefined);
-
-    expect(addTask).not.toHaveBeenCalled();
-  });
-
-  it('should not create a task when sourceWorkspace is null', async () => {
-    const warnings = ['Auto-merge failed for branch cos/task-abc/agent-1 — branch preserved'];
-
-    await spawnMergeRecoveryTask(warnings, 'agent-1', {}, 'TestApp', null);
-
-    expect(addTask).not.toHaveBeenCalled();
-  });
-
-  // Rejected persistence must retain its diagnostic without claiming a task exists.
-  it.each([
-    ['merge', 'Auto-merge failed for branch cos/task-abc/agent-1 — branch preserved', 'gh'],
-    ['PR', 'PR creation failed for branch cos/task-abc/agent-1: forge error. Worktree preserved.', 'gh'],
-    ['MR', 'PR creation failed for branch cos/task-abc/agent-1: forge error. Worktree preserved.', 'glab'],
-  ])('should handle addTask failure gracefully for %s recovery', async (kind, warning, cli) => {
-    if (kind !== 'merge') git.resolveForgeForRepo.mockResolvedValueOnce({ cli });
-    addTask.mockRejectedValue(new Error('write failed'));
-
-    await expect(spawnMergeRecoveryTask(
-      [warning], 'agent-1', { metadata: {} }, 'TestApp', '/mock/workspace'
-    )).resolves.toBeNull();
-
-    expect(addTask).toHaveBeenCalledTimes(1);
-    expect(logEvents).toContainEqual(expect.objectContaining({
-      level: 'warn',
-      message: `Failed to create ${kind} recovery task: write failed`,
-      agentId: 'agent-1',
-      staleBranch: 'cos/task-abc/agent-1',
-    }));
-    expect(logEvents.some(entry => entry.message.includes('Auto-created'))).toBe(false);
-  });
-
-  it('should use "unknown" for task description when not provided', async () => {
-    const warnings = ['Auto-merge failed for branch cos/branch-1 — branch preserved'];
-
-    await spawnMergeRecoveryTask(warnings, 'agent-1', { metadata: {} }, 'TestApp', '/mock/workspace');
-
-    const call = addTask.mock.calls[0];
-    expect(call[0].context).toContain('original task: unknown');
-  });
-
-  it('should create a PR recovery task when a PR creation failure warning is present', async () => {
-    const warnings = ['PR creation failed for branch cos/task-xyz/agent-1: GraphQL: some error. Worktree preserved for manual PR creation.'];
-    const task = { id: 'task-original', description: 'Add feature', metadata: { app: 'myapp' } };
-
-    const result = await spawnMergeRecoveryTask(warnings, 'agent-1', task, 'MyApp', '/mock/workspace');
-
-    expect(addTask).toHaveBeenCalledTimes(1);
-    expect(addTask).toHaveBeenCalledWith(
-      expect.objectContaining({
-        description: expect.stringContaining('[Recovery]'),
-        priority: 'HIGH',
-        app: 'myapp',
-        context: expect.stringContaining('cos/task-xyz/agent-1'),
-        useWorktree: false,
-      }),
-      'user'
-    );
-    expect(result).toEqual({ id: 'task-recovery' });
-    expect(logEvents).toContainEqual(expect.objectContaining({
-      level: 'info',
-      message: expect.stringContaining('Auto-created PR recovery task'),
-    }));
-  });
-
-  it('should include branch name and workspace in PR recovery context', async () => {
-    const warnings = ['PR creation failed for branch feature/my-pr-branch: gh exited with code 1. Worktree preserved for manual PR creation.'];
-    const task = { id: 'task-1', description: 'Original task', metadata: { app: 'myapp' } };
-
-    await spawnMergeRecoveryTask(warnings, 'agent-1', task, 'MyApp', '/mock/workspace');
-
-    const call = addTask.mock.calls[0];
-    expect(call[0].context).toContain('feature/my-pr-branch');
-    expect(call[0].context).toContain('/mock/workspace');
-    expect(call[0].description).toContain('feature/my-pr-branch');
-    expect(call[0].description).toContain('MyApp');
-  });
-
-  it('should not create a PR recovery task when sourceWorkspace is missing', async () => {
-    const warnings = ['PR creation failed for branch cos/task-xyz/agent-1: some error. Worktree preserved for manual PR creation.'];
-
-    await spawnMergeRecoveryTask(warnings, 'agent-1', {}, 'TestApp', null);
-
-    expect(addTask).not.toHaveBeenCalled();
-  });
-
-  it('emits glab/MR commands when the source workspace is a GitLab repo', async () => {
-    git.resolveForgeForRepo.mockResolvedValueOnce({ cli: 'glab', env: process.env, host: 'gitlab.com', owner: 'mygroup', account: null });
-
-    const warnings = ['PR creation failed for branch feature/x: glab error. Worktree preserved for manual PR creation.'];
-    const task = { id: 'task-gl', description: 'Add thing', metadata: { app: 'gl-app' } };
-
-    await spawnMergeRecoveryTask(warnings, 'agent-gl', task, 'GitLabApp', '/mock/gl-workspace');
-
-    expect(addTask).toHaveBeenCalledTimes(1);
-    const call = addTask.mock.calls[0][0];
-    expect(call.description).toContain('MR');
-    expect(call.context).toContain('glab mr list --source-branch feature/x');
-    expect(call.context).toContain('glab mr create --source-branch feature/x --target-branch main');
-    expect(call.context).not.toContain('gh pr ');
-    expect(logEvents).toContainEqual(expect.objectContaining({
-      level: 'info',
-      message: expect.stringContaining('Auto-created MR recovery task'),
-    }));
+    expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', { status: 'pending', reasons: ['cleanup-warning-pending'] });
   });
 });
 

@@ -8,6 +8,13 @@ async function mergedPrUrl(app, branch, tip) {
   return (await findMergedPullRequest(app.repoPath, branch, tip, { forgeAccount: app.forgeAccount ?? null })).url;
 }
 
+/** The manual-claim grace gate is not a completed run's cleanup handoff. Only
+ * that one refusal is eligible for a fresh, exact-head policy review below. */
+export function retainedMergedClaims(result) {
+  return (result.merged || []).filter(branch => result.skipped?.some(row =>
+    row.branch === branch.branch && row.reason === 'claim-completion-unverified'));
+}
+
 /** Inventory is persisted first: the same preview used by the live endpoint
  * rejects changed owners, policies, checkout identity and missing proof objects.
  */
@@ -17,34 +24,46 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
   const retired = [];
   const readPr = deps.readPr || mergedPrUrl;
   const prepare = deps.prepare || (await import('./heldCheckoutRecovery.js')).prepareInventoriedCheckoutRetirement;
-  for (const branch of result.wip || []) {
-    if (branch.rule !== 'completion-policy' || branch.completionPolicyReason !== 'pr-completion-review-required'
+  const mergedClaims = retainedMergedClaims(result);
+  for (const branch of [...(result.wip || []), ...mergedClaims]) {
+    const mergedClaim = mergedClaims.includes(branch);
+    if ((!mergedClaim && (branch.rule !== 'completion-policy' || branch.completionPolicyReason !== 'pr-completion-review-required'))
       || branch.liveOwnerReason || branch.worktreeDirty || branch.worktreeStatusUnavailable) continue;
     if (branch.openPr && !staleBehindOpenPr(branch)) continue;
     const tree = result.worktreeInventory?.find(row => row.branch === branch.branch && row.path === branch.worktreePath);
     if (!tree || tree.managed !== true || tree.locked !== false || tree.head !== branch.tip) continue;
     // The open PR ships from another checkout; this one has idled behind it.
     if (branch.openPr && !(await isIdleCheckout(tree.path, deps))) continue;
-    const release = { branch: tree.branch, path: tree.path, head: tree.head, locked: false, lockReason: tree.lockReason ?? null };
+    const release = { ...(tree.observedAt && { observedAt: tree.observedAt }), ...(tree.checkoutIdentity && { checkoutIdentity: tree.checkoutIdentity }), branch: tree.branch, path: tree.path, head: tree.head, locked: false, lockReason: tree.lockReason ?? null };
     // Every commit is already on the default branch, so no PR identity or owner
     // history is needed to prove nothing is lost: archive and retire it. The
     // service re-proves merge evidence and ownership under its fence.
-    if (branch.isMerged === true) {
+    if (branch.isMerged === true && !mergedClaim) {
       const retire = deps.retire || (await import('./heldCheckoutRecovery.js')).retireInventoriedCheckout;
       const outcome = await retire({ appId: app.id, release },
         { beforeMutation: assertAutomaticRetirementAllowed, settleMergedReviewObligation: true })
         .catch(error => ({ ok: false, reason: ['daemon-stopped', 'automatic-retirement-disabled'].includes(error.message) ? error.message : 'retirement-receipt-unverified' }));
       if (outcome.ok && outcome.archiveDir && outcome.branchDeleted === true) retired.push(release);
-      else held.push({ ...release, reason: outcome.reason || outcome.branchRetainedReason || 'retirement-receipt-unverified' });
+      else held.push({ ...release, reason: outcome.reason || outcome.branchRetainedReason || 'retirement-receipt-unverified', ...(outcome.archiveLimit && { archiveLimit: outcome.archiveLimit }) });
       continue;
     }
+    let failureReason = 'retirement-pr-lookup-unavailable';
     try {
       const prUrl = await readPr(app, branch.branch, release.head);
+      failureReason = 'retirement-review-unavailable';
       const prepared = await prepare({ appId: app.id, release, prUrl });
-      if (!prepared.ok) { held.push({ ...release, reason: prepared.reason }); continue; }
+      if (!prepared.ok) { held.push({ ...release, reason: prepared.reason, ...(prepared.archiveLimit && { archiveLimit: prepared.archiveLimit }) }); continue; }
       // The preview's policy gate requires completed successful legacy review
       // owners. An empty policy set after a concurrent change is not that proof.
       if (!prepared.review?.policy?.policies?.length) { held.push({ ...release, reason: 'retirement-policy-changed' }); continue; }
+      if (mergedClaim) {
+        // The existing review policy requires a terminal exact-bound owner;
+        // an empty registry, merged PR alone or the old grace clock grants
+        // nothing. Keep this digest-bound policy proof through final removal.
+        if (prepared.review.forge?.prHead !== release.head || !prepared.review.policy.integratedCleanupHead) {
+          held.push({ ...release, reason: 'claim-completion-unverified' }); continue;
+        }
+      }
       if (!['integrated', 'review-supersession'].includes(prepared.review.comparison?.disposition)
         || typeof prepared.review.comparison.localPatch !== 'string' || typeof prepared.review.comparison.difference !== 'string') {
         held.push({ ...release, reason: 'retirement-comparison-unavailable' }); continue;
@@ -55,17 +74,20 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
         && prepared.review.comparison?.disposition === 'integrated'
         && prepared.review.comparison.difference === '') {
         const retire = deps.retire || (await import('./heldCheckoutRecovery.js')).retireInventoriedCheckout;
+        // The service may have archived/removed the checkout before rejecting.
+        // Preserve an exact receipt obligation, not a retryable preview failure.
+        failureReason = 'retirement-receipt-unverified';
         const result = await retire({ appId: app.id, release,
           review: { prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, { beforeMutation: assertAutomaticRetirementAllowed });
         if (result.ok && result.archiveDir && result.branchDeleted === true) retired.push(release);
-        else held.push({ ...release, reason: result.reason || 'retirement-receipt-unverified' });
+        else held.push({ ...release, reason: result.reason || 'retirement-receipt-unverified', ...(result.archiveLimit && { archiveLimit: result.archiveLimit }) });
         continue;
       }
       candidates.push({ ...branch, state: 'REVIEW_RETIREMENT', retirement: { release, prUrl, digest: prepared.review.digest,
         cognition: retirementCognitiveIdentity(prepared.review, release, prUrl) } });
     } catch (error) {
-      const reason = ['retirement-pr-ambiguous', 'retirement-forge-unsupported', 'daemon-stopped', 'automatic-retirement-disabled'].includes(error.message)
-        ? error.message : 'retirement-review-unavailable';
+      const reason = ['retirement-pr-ambiguous', 'retirement-forge-unsupported', 'retirement-forge-unavailable', 'daemon-stopped', 'automatic-retirement-disabled'].includes(error.message)
+        ? error.message : failureReason;
       held.push({ ...release, reason });
     }
   }

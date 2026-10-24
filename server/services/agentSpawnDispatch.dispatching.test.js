@@ -173,19 +173,25 @@ describe('dispatchAgentRun GitHub inbox account binding', () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each(['direct', 'tui', 'runner'])('launches %s as the inbox account, overriding unrelated provider credentials without persisting them', async mode => {
+  it.each(['direct', 'tui', 'runner'].flatMap(mode => ['config-binding', 'viewer-selector'].map(bindingType => [mode, bindingType])))('launches %s from %s, overriding unrelated provider credentials without persisting them', async (mode, bindingType) => {
     f.provider.envVars = { GH_TOKEN: 'portos-a-token', GITHUB_TOKEN: 'provider-a-token', EXAMPLE_FLAG: 'kept' };
     const original = structuredClone(f.provider);
     f.tui = mode === 'tui';
     setUseRunner(mode === 'runner');
     const runner = vi.fn(async () => 'agent-x');
-    await dispatchAgentRun(inboxContext(), { spawnViaRunner: runner });
+    const context = bindingType === 'viewer-selector'
+      ? inboxContext({ githubNotificationAccount: undefined, githubNotificationResolve: undefined,
+        githubAccount: { id: account.id, host: account.host, login: account.login } })
+      : inboxContext();
+    const originalMetadata = structuredClone(context.task.metadata);
+    await dispatchAgentRun(context, { spawnViaRunner: runner });
     const launched = mode === 'runner' ? runner.mock.calls[0][2] : (mode === 'tui' ? spawnTuiAgent : spawnDirectly).mock.calls[0][0];
     expect(launched.provider.envVars).toMatchObject({
       GH_HOST: 'github.com', GH_TOKEN: 'inbox-b-token', GITHUB_TOKEN: '', GH_ENTERPRISE_TOKEN: '', GITHUB_ENTERPRISE_TOKEN: '',
       GIT_AUTHOR_NAME: 'Inbox User', GIT_AUTHOR_EMAIL: '42+inbox-user@users.noreply.github.com', EXAMPLE_FLAG: 'kept',
     });
     expect(f.provider).toEqual(original);
+    expect(context.task.metadata).toEqual(originalMetadata);
     expect(registerAgent.mock.calls[0][2]).not.toHaveProperty('githubNotificationAccount');
     expect(JSON.stringify(registerAgent.mock.calls)).not.toContain('inbox-b-token');
     expect(createAgentRun.mock.calls[0][0].provider).toEqual(original);
@@ -225,6 +231,42 @@ describe('dispatchAgentRun GitHub inbox account binding', () => {
     getAccount.mockResolvedValueOnce(account).mockResolvedValueOnce({ ...account, enabled: false });
     expect(await dispatchAgentRun(inboxContext())).toBeNull();
     expect(registerAgent).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { id: 'another-account', host: 'github.com', login: account.login },
+    { id: account.id, host: 'ghe.example.com', login: account.login },
+    { id: account.id, host: 'github.com', login: 'another-viewer' },
+  ])('refuses conflicting config and concrete-viewer identities before credential lookup: %j', async githubAccount => {
+    expect(await dispatchAgentRun(inboxContext({ githubAccount }))).toBeNull();
+    expect(resolveGitHubAccountEnv).not.toHaveBeenCalled();
+    expect(prepareAgentWorkspace).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+  });
+
+  it('pins an implicit configured account to the review\'s queued viewer and accepts normalized hosts', async () => {
+    getAccount.mockResolvedValue({ ...account, login: null });
+    execGh.mockResolvedValue(JSON.stringify({ id: 42, login: 'queued-viewer' }));
+    const context = inboxContext({ githubNotificationAccount: { ...binding, login: null },
+      githubAccount: { id: account.id, host: 'GITHUB.COM', login: 'queued-viewer' } });
+    await dispatchAgentRun(context);
+    expect(resolveGitHubAccountEnv.mock.calls[0][0]).toMatchObject({ login: 'queued-viewer', host: 'github.com' });
+    expect(spawnDirectly.mock.calls[0][0].provider.envVars.GH_TOKEN).toBe('inbox-b-token');
+    spawnDirectly.mockClear();
+    execGh.mockResolvedValue(JSON.stringify({ id: 99, login: 'changed-viewer' }));
+    expect(await dispatchAgentRun(context)).toBeNull();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+  });
+
+  it('preserves an explicit operator review account independently of inbox automation modes and grants', async () => {
+    getAccount.mockResolvedValue({ ...account, mode: 'disabled', trust: 'private', allowAgents: false });
+    await dispatchAgentRun(inboxContext({ githubNotificationAccount: undefined, githubNotificationResolve: undefined,
+      githubAccount: { id: account.id, host: account.host, login: account.login } }));
+    expect(spawnDirectly).toHaveBeenCalledOnce();
+    spawnDirectly.mockClear();
+    expect(await dispatchAgentRun(inboxContext({ githubNotificationAccount: { ...binding, origin: 'user' },
+      githubAccount: { id: account.id, host: account.host, login: account.login } }))).toBeNull();
     expect(spawnDirectly).not.toHaveBeenCalled();
   });
 

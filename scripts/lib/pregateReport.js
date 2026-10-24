@@ -12,6 +12,7 @@
  * checkouts its own tests build.
  */
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -20,11 +21,12 @@ import { dirname, join, resolve } from 'node:path';
 export const PREGATE_REPORT_PATH = '.cache/pregate/report.json';
 
 /**
+ * Version 3 adds validationMode: focused receipts never attest CI suites.
  * Version 2 added `plan.downgraded`: whether a full plan was replaced by the
  * always-run guards. `scripts/pregate-attest.js` refuses a receipt without it,
  * because a downgraded server stage passing is not CI's server selection passing.
  */
-export const PREGATE_REPORT_VERSION = 2;
+export const PREGATE_REPORT_VERSION = 3;
 
 /**
  * Hash the exact working tree as it stands: tracked, modified, deleted and
@@ -51,6 +53,26 @@ export function validatedTreeHash(cwd, { env = process.env } = {}) {
   }
 }
 
+// This cache lives only for one pregate invocation. Tree scanners deliberately
+// cannot use the persistent module memo: their inputs include the index and Git
+// refs as well as every working-tree file. Any unreadable input means no reuse.
+export function guardInputSnapshot(cwd) {
+  try {
+    const digest = createHash('sha256').update(validatedTreeHash(cwd));
+    for (const args of [
+      ['rev-parse', 'HEAD'], ['ls-files', '--stage', '-z'],
+      ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
+      ['for-each-ref', '--format=%(refname) %(objectname)'],
+    ]) {
+      digest.update(execFileSync('git', args, { cwd, maxBuffer: 32 * 1024 * 1024,
+        env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }));
+    }
+    return digest.digest('hex');
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Shape the receipt. Pure: every input is a value the gate already holds.
  *
@@ -73,12 +95,15 @@ export function buildPregateReport({
   finishedAt,
   downgraded = false,
 }) {
-  const stageRecords = stages.map(({ name, suite, command, status, durationMs, exitCode = null, signal = null }) => ({
+  const stageRecords = stages.map(({ name, suite, command, status, durationMs, exitCode = null, signal = null, guard, files, guardReuse }) => ({
     name, suite, command, status, durationMs, exitCode, signal,
+    ...(guard ? { guard: true, files } : {}),
+    ...(guardReuse ? { guardReuse } : {}),
   }));
   const passed = stageRecords.length > 0 && stageRecords.every((stage) => stage.status === 'passed');
   return {
     version: PREGATE_REPORT_VERSION,
+    validationMode: options.full ? 'ci' : 'focused',
     startedAt,
     finishedAt,
     passed,
@@ -91,7 +116,7 @@ export function buildPregateReport({
     options,
     plan: {
       full: plan.full,
-      // True when a full plan ran only the always-run guards (no `--full`):
+      // True when the local selection reduced CI coverage (no `--full`):
       // the server and client stages below then prove less than CI's selection.
       downgraded: Boolean(downgraded),
       reason: plan.reason,

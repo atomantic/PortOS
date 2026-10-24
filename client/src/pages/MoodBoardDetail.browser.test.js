@@ -18,7 +18,7 @@ const savedVideo = { id: 'upload-video', filename: 'upload-video.mp4', thumbnail
 const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
 
 // Every request is contained by this fixture; no live API, catalog or provider.
-async function openBoard(fixture, viewport) {
+async function openBoard(fixture, viewport, containerWidth) {
   const page = await fixture.browser.newPage({ viewport });
   page.setDefaultTimeout(10000);
   const boards = { a: { id: 'a', name: 'Example A', items: [] }, b: { id: 'b', name: 'Example B', items: [] } };
@@ -35,6 +35,12 @@ async function openBoard(fixture, viewport) {
       if (state.hold) await state.hold;
       return route.fulfill({ json: path === '/image-gen/upload' ? savedImage : savedVideo });
     }
+    if (path === '/mood-boards/a/pinterest/import') {
+      const { url } = route.request().postDataJSON();
+      const item = { id: 'pinterest-pin', type: 'image', source: url, imageUrl: '/data/images/pinterest-pin.jpg' };
+      boards.a.items.push(item);
+      return route.fulfill({ json: { board: boards.a, added: 1, found: 1 } });
+    }
     const match = path.match(/^\/mood-boards\/([ab])(?:\/(items))?$/);
     if (!match) { state.errors.push(`Unexpected API: ${path}`); return route.abort(); }
     const board = boards[match[1]];
@@ -46,7 +52,9 @@ async function openBoard(fixture, viewport) {
     return route.fulfill({ json: item });
   });
   await page.goto(`${fixture.origin}board-test`);
-  if (viewport.width < 896) await page.getByRole('navigation', { name: 'Board tools' }).getByRole('button', { name: 'Add', exact: true }).click();
+  if (containerWidth) await page.locator('main').evaluate((main, width) => { main.style.width = `${width}px`; }, containerWidth);
+  await page.getByLabel('Name', { exact: true }).waitFor();
+  if (viewport.width < 896 || containerWidth < 896) await page.getByRole('navigation', { name: 'Board tools' }).getByRole('button', { name: 'Add', exact: true }).click();
   await page.getByLabel('Upload', { exact: true }).waitFor();
   return { page, boards, state };
 }
@@ -80,7 +88,13 @@ describe.skipIf(!chrome)('direct mood board upload in Chromium', () => {
               import { createRoot } from 'react-dom/client';
               import { MemoryRouter, Routes, Route, Link } from 'react-router';
               import MoodBoardDetail from '/src/pages/MoodBoardDetail.jsx';
+              import { THEMES } from '/src/themes/portosThemes.js';
               import '/src/index.css';
+              document.documentElement.dataset.portTheme = 'lumen-glass-day';
+              document.documentElement.dataset.portThemeFamily = 'glass';
+              for (const [name, value] of Object.entries({ ...THEMES['lumen-glass-day'].colors, ...THEMES['lumen-glass-day'].tokens })) {
+                document.documentElement.style.setProperty(name, value);
+              }
               const h = React.createElement;
               createRoot(document.getElementById('root')).render(
                 h(MemoryRouter, { initialEntries: ['/mood-boards/a'] },
@@ -101,6 +115,55 @@ describe.skipIf(!chrome)('direct mood board upload in Chromium', () => {
     });
   }, BROWSER_FIXTURE_STARTUP_MS);
   afterAll(() => fixture?.close());
+
+  it.each([
+    { width: 320, height: 740 },
+    { width: 390, height: 844 },
+    { width: 1440, height: 900, containerWidth: 640 },
+    { width: 1440, height: 900 },
+  ])('keeps import controls and evenly centered tool tabs usable at $width px', async ({ containerWidth, ...viewport }) => {
+    const { page, boards, state } = await openBoard(fixture, viewport, containerWidth);
+    try {
+      await page.getByRole('tab', { name: 'Import', exact: true }).click();
+      await page.getByLabel('Pin or board URL', { exact: true }).waitFor();
+      const tabs = page.getByRole('tablist', { name: 'Board tool' });
+      const geometry = await tabs.evaluate(strip => {
+        const rect = strip.getBoundingClientRect();
+        return {
+          left: rect.left, right: rect.right, width: strip.clientWidth, scrollWidth: strip.scrollWidth,
+          tabs: [...strip.querySelectorAll('[role="tab"]')].map(tab => {
+            const box = tab.getBoundingClientRect();
+            const icon = tab.querySelector('svg').getBoundingClientRect();
+            return { left: box.left, right: box.right, width: box.width, height: box.height,
+              iconOffset: Math.abs((box.left + box.right) / 2 - (icon.left + icon.right) / 2) };
+          }),
+        };
+      });
+      expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width + 1);
+      expect(Math.max(...geometry.tabs.map(tab => tab.width)) - Math.min(...geometry.tabs.map(tab => tab.width))).toBeLessThan(1);
+      for (const tab of geometry.tabs) {
+        expect(tab.left).toBeGreaterThanOrEqual(geometry.left);
+        expect(tab.right).toBeLessThanOrEqual(geometry.right);
+        if (viewport.width < 640) {
+          expect(tab.height).toBeGreaterThanOrEqual(44);
+          expect(tab.width).toBeGreaterThanOrEqual(44);
+          expect(tab.iconOffset).toBeLessThan(1);
+        }
+      }
+      for (const label of ['Pin or board URL', 'Post URL']) {
+        const field = page.getByLabel(label, { exact: true });
+        const bounds = await field.boundingBox();
+        expect(bounds.x).toBeGreaterThanOrEqual(0);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width);
+      }
+      const pinUrl = 'https://www.pinterest.com/pin/9999999999999999999/';
+      await page.getByLabel('Pin or board URL', { exact: true }).fill(pinUrl);
+      await page.getByRole('button', { name: 'Import pins', exact: true }).click();
+      await vi.waitFor(() => expect(boards.a.items).toHaveLength(1));
+      expect(boards.a.items[0].source).toBe(pinUrl);
+      expect(state.errors).toEqual([]);
+    } finally { await page.close(); }
+  });
 
   it.each([{ width: 390, height: 844 }, { width: 1440, height: 900 }])('imports a mixed batch, rejects repeated actions and retries assignment at $width px', async viewport => {
     const { page, boards, state } = await openBoard(fixture, viewport);

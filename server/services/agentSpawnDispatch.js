@@ -1,3 +1,4 @@
+import { bindCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { join } from 'path';
 import { existsSync } from 'fs';
@@ -96,7 +97,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
   if (publicReviewBlock) return context.blockAndBail(publicReviewBlock);
   // Inbox actions can target a different account and repository from this
   // checkout. Bind their credential before any workspace work or registration.
-  const inboxAccountTask = task.metadata?.githubNotificationAccount || task.metadata?.githubNotificationResolve || task.metadata?.githubSecurityFix;
+  const inboxAccountTask = task.metadata?.githubNotificationAccount || task.metadata?.githubNotificationResolve || task.metadata?.githubSecurityFix || task.metadata?.githubAccount;
   if (publicReview && inboxAccountTask) return context.blockAndBail({
     reason: 'An inbox account credential cannot be given to a public-content review stage.',
     category: 'github-inbox-account-unavailable',
@@ -303,6 +304,8 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       await context.cleanupOnError('Failed to update task status');
       return null;
     }
+
+    if (!updateResult.error && !updateResult.statusChanged) await bindCompletionTaskDispatch(agentId, { ...updateResult, taskType: task.taskType || 'user' });
 
     if (task.metadata?.autonomousJob && task.metadata?.jobId) {
       cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });

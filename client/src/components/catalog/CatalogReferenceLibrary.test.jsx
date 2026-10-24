@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 vi.mock('../../services/apiCatalog', () => ({
   updateCatalogIngredientMediaLibrary: vi.fn(async () => ({})),
@@ -34,7 +34,7 @@ describe('CatalogReferenceLibrary', () => {
     render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={media} onChanged={onChanged} />);
     fireEvent.click(screen.getByRole('button', { name: /make guide/i }));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
-    expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith('cat-chr-1', { mediaKey: 'seventeen.png', kind: 'reference', guide: true });
+    expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith('cat-chr-1', { mediaKey: 'seventeen.png', kind: 'reference', guide: true }, { silent: true });
   });
 
   it('disables new guides at the cap of four', () => {
@@ -45,11 +45,12 @@ describe('CatalogReferenceLibrary', () => {
 
   it('imports mood board items with age inference', async () => {
     render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[]} />);
+    fireEvent.click(screen.getByText('Add from mood board', { selector: 'summary' }));
     fireEvent.change(screen.getByLabelText('Mood board id'), { target: { value: 'mb-1' } });
     fireEvent.change(screen.getByLabelText('Mood board item ids'), { target: { value: 'a, b' } });
     fireEvent.click(screen.getByRole('button', { name: /add from mood board/i }));
     await waitFor(() => expect(api.attachCatalogIngredientMediaFromMoodBoard)
-      .toHaveBeenCalledWith('cat-chr-1', { boardId: 'mb-1', itemIds: ['a', 'b'], inferAge: true }));
+      .toHaveBeenCalledWith('cat-chr-1', { boardId: 'mb-1', itemIds: ['a', 'b'], inferAge: true }, { silent: true }));
   });
 
   it('tags a reference with one of the saved ages/looks and filters by it', async () => {
@@ -63,7 +64,50 @@ describe('CatalogReferenceLibrary', () => {
     expect(screen.getAllByTestId('library-row')).toHaveLength(1);
     fireEvent.change(screen.getByLabelText('Age or look for now.png'), { target: { value: 'form-kid' } });
     await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary)
-      .toHaveBeenCalledWith('cat-chr-1', { mediaKey: 'now.png', kind: 'reference', variant: { formId: 'form-kid' } }));
+      .toHaveBeenCalledWith('cat-chr-1', { mediaKey: 'now.png', kind: 'reference', variant: { formId: 'form-kid' } }, { silent: true }));
+  });
+
+  it('keeps each preview with its metadata and filters the visuals with the cards', () => {
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={media} />);
+    const cards = screen.getAllByTestId('library-row');
+    expect(within(cards[0]).getByRole('img')).toHaveAttribute('src', '/data/image-thumbnails/seven.webp');
+    expect(within(cards[0]).getByText(/Age 7/)).toHaveTextContent('Canonical · Age 7 · child · vhs');
+    expect(cards[2].querySelector('video')).toHaveAttribute('src', '/data/videos/clip.mp4');
+    fireEvent.click(screen.getByLabelText('Guides only'));
+    expect(screen.getAllByTestId('library-row')).toHaveLength(1);
+    expect(screen.getByRole('img')).toHaveAttribute('src', '/data/image-thumbnails/seven.webp');
+  });
+
+  it('shows one visual while retaining independently stored portrait and reference metadata', async () => {
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[
+      { kind: 'portrait', mediaKey: 'shared.png', library: { tags: ['portrait-tag'] } },
+      { kind: 'reference', mediaKey: 'shared.png', library: { guide: true, variant: { age: 17 }, tags: ['reference-tag'] } },
+    ]} />);
+    expect(screen.getAllByRole('img')).toHaveLength(1);
+    const reference = screen.getByRole('group', { name: 'reference details for shared.png' });
+    expect(within(reference).getByText(/Age 17/)).toHaveTextContent('reference-tag');
+    expect(screen.getByRole('group', { name: 'portrait details for shared.png' })).toHaveTextContent('portrait-tag');
+    fireEvent.click(within(reference).getByRole('button', { name: 'Guide' }));
+    await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
+      'cat-chr-1', { mediaKey: 'shared.png', kind: 'reference', guide: false }, { silent: true }));
+  });
+
+  it('preserves per-attachment read-only provenance and counts guides outside this tab', () => {
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1"
+      referenceMedia={media.slice(0, 2)}
+      media={[{ ...media[0], readOnly: true }, ...media.slice(1), ...[1, 2, 3].map((n) => ({ kind: 'reference', mediaKey: `sheet-${n}.png`, library: { guide: true } }))]} />);
+    expect(within(screen.getAllByTestId('library-row')[0]).queryByText('Edit reference details')).toBeNull();
+    expect(screen.getByRole('button', { name: /make guide/i })).toBeDisabled();
+    expect(screen.getByTestId('guide-count')).toHaveTextContent('4/4');
+  });
+
+  it('keeps an update failure visible beside the gallery', async () => {
+    api.updateCatalogIngredientMediaLibrary.mockRejectedValueOnce(new Error('Reference update failed'));
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={media} />);
+    fireEvent.click(screen.getByRole('button', { name: /make guide/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Reference update failed');
+    expect(screen.getAllByTestId('library-row')).toHaveLength(3);
+    expect(screen.getByRole('button', { name: /make guide/i })).not.toBeDisabled();
   });
 
   it('hides editing controls when read-only', () => {

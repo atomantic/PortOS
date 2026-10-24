@@ -33,6 +33,7 @@ import { copyToClipboard } from '../../../lib/clipboard';
 import { estimateCosDuration } from '../../../lib/cosDurationEstimate';
 import { isAgentFeedbackUpdateTarget, isSystemAgent as isSystemAgentRecord } from '../../../lib/cosAgentFeedback';
 import AgentResultLine, { SecurityScanEvidence } from '../AgentResultLine';
+import DeliveryStatus from '../DeliveryStatus';
 import AuditSourceEvidence from '../AuditSourceEvidence';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
 import { formatBytes, formatCount, formatDurationMs, formatDateTime, formatTimeOfDay, shortClaudeModelName } from '../../../utils/formatters';
@@ -630,6 +631,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   useStickToBottom(outputPanelRef, { enabled: expanded && !inactive, revision: output });
   const taskSummary = completed && (fullMetadata && Object.hasOwn(fullMetadata, 'taskSummary')
     ? fullMetadata.taskSummary : agent.metadata?.taskSummary);
+  const cleanupTracked = agent.metadata?.cleanupOutcome || agent.result?.cleanupPending;
   const lastOutput = output.length > 0 ? output[output.length - 1]?.line : null;
 
   // Why this run has NO "Open Shell" link. Scoped to the one case where the user
@@ -734,7 +736,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
 
   return (
     <div className={`min-w-0 bg-port-card border rounded-lg overflow-hidden ${completed && expanded ? 'col-span-full' : ''} ${
-      inactive
+      agent.deliveryPending ? 'border-port-warning/40' : inactive
         ? isSystemAgent ? 'border-port-border opacity-50' : 'border-port-border opacity-75'
         : 'border-port-accent/50'
     }`}>
@@ -1132,6 +1134,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         />
 
         <AuditSourceEvidence evidence={agent.metadata?.auditSourceEvidence} />
+        {agent.deliveryPending && <DeliveryStatus agent={agent} />}
 
         {!agent.result && <SecurityScanEvidence scanner={agent.metadata?.securityScan} control={agent.metadata?.securityScanControl} />}
 
@@ -1142,11 +1145,14 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             {agent.result.warnings?.length > 0 && (
               <div className="text-sm text-port-warning flex items-start gap-2">
                 <AlertTriangle size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
-                <div>
+                {cleanupTracked ? <details>
+                  <summary className="cursor-pointer">Earlier cleanup warnings</summary>
+                  {agent.result.warnings.map((w, i) => <p key={i}>{w}</p>)}
+                </details> : <div>
                   {agent.result.warnings.map((w, i) => (
                     <p key={i}>{w}</p>
                   ))}
-                </div>
+                </div>}
               </div>
             )}
             {/* Memory extraction status */}
@@ -1303,7 +1309,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             <div className="mt-2 bg-port-bg/50 border border-port-border/50 rounded p-2.5">
               <div className="text-[11px] text-gray-500 mb-1 flex items-center gap-1">
                 <Sparkles size={10} aria-hidden="true" className="text-emerald-400" />
-                Task Summary
+                {cleanupTracked ? 'Earlier agent report — current delivery and cleanup status shown above' : 'Task Summary'}
               </div>
               {taskSummary && <MarkdownOutput content={taskSummary} linkifyText={linkifyIssues} />}
               {agent.metadata?.taskSummaryTruncated && !fullMetadata?.taskSummary && (

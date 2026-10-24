@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,12 +18,17 @@ const fakeBrowser = (page) => ({ close: vi.fn(async () => {}), newPage: vi.fn(as
 // A process-backed launch: a Playwright browser server owning `child`, and
 // the client browser `connect` hands the suite. By default a graceful close
 // exits the child; `close`/`kill` replace that server's own steps.
+const profiles = [];
 const ownedServer = ({ close, kill } = {}) => {
-  const child = { exitCode: null, signalCode: null };
+  const profile = mkdtempSync(join(tmpdir(), 'playwright_chromiumdev_profile-'));
+  profiles.push(profile);
+  const clearProfile = () => rmSync(profile, { recursive: true, force: true });
+  const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null,
+    spawnargs: ['example-chrome', `--user-data-dir=${profile}`] });
   const server = { process: () => child, wsEndpoint: () => 'ws://127.0.0.1:1/owned',
-    close: vi.fn(close ?? (async () => { child.exitCode = 0; })),
-    kill: vi.fn(kill ?? (async () => { child.signalCode = 'SIGKILL'; })) };
-  return { child, server };
+    close: vi.fn(close ?? (async () => { child.exitCode = 0; clearProfile(); })),
+    kill: vi.fn(kill ?? (async () => { child.signalCode = 'SIGKILL'; clearProfile(); })) };
+  return { child, server, profile, clearProfile };
 };
 const ownedChromium = (server, browser = fakeBrowser()) => ({
   launchServer: vi.fn(async () => server), connect: vi.fn(async () => browser),
@@ -50,7 +56,7 @@ const stubStepSummary = () => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
-  for (const dir of summaryDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of [...summaryDirs.splice(0), ...profiles.splice(0)]) rmSync(dir, { recursive: true, force: true });
 });
 
 describe('startBrowserFixture', () => {
@@ -204,6 +210,7 @@ describe('startBrowserFixture', () => {
     expect(settled).toBe(true);
     expect(owned.server.kill).toHaveBeenCalledTimes(1);
     expect(owned.child.signalCode).toBe('SIGKILL');
+    expect(existsSync(owned.profile)).toBe(false);
     expect(server.close).toHaveBeenCalledTimes(1);
     expect(existsSync(fixture.temp)).toBe(false);
   });
@@ -216,9 +223,64 @@ describe('startBrowserFixture', () => {
 
     const error = await fixture.close().catch(caught => caught);
 
-    expect(error.message).toBe('browser close stalled after 15ms, then its kill returned without an exit status');
+    expect(error.message).toMatch(/^browser close stalled after 15ms, then its kill returned without an exit status; cleanup phases:/);
+    expect(error.message).toContain('killPromise=fulfilled profile=present');
     expect(owned.server.kill).toHaveBeenCalledTimes(1);
     expect(existsSync(fixture.temp)).toBe(false);
+  });
+
+  it.each(['exit', 'child-close', 'playwright-cleanup'])(
+    'distinguishes a stalled %s boundary without accepting unconfirmed cleanup', async boundary => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      const summary = stubStepSummary();
+      const { createServer } = fakeVite();
+      const owned = ownedServer({ close: stalls, kill: stalls });
+      const pipe = { destroyed: false, closed: false, destroy: vi.fn(() => { pipe.destroyed = true; }) };
+      owned.child.stdio = [null, pipe];
+      owned.child.stdout = pipe;
+      const fixture = await startBrowserFixture({ name: 'example', createServer, viteConfig: () => SCOPED,
+        chromium: ownedChromium(owned.server), phaseMs: PHASE_MS });
+      const closing = fixture.close().catch(error => error);
+      await vi.advanceTimersByTimeAsync(15);
+      expect(pipe.destroy).not.toHaveBeenCalled();
+      if (boundary !== 'exit') {
+        owned.child.exitCode = 0;
+        owned.child.emit('exit', 0, null);
+      }
+      if (boundary === 'playwright-cleanup') {
+        pipe.closed = true;
+        owned.child.emit('close', 0, null);
+      }
+      await vi.advanceTimersByTimeAsync(30);
+      const error = await closing;
+      expect(error).toBeInstanceOf(Error);
+      expect(error.message).toContain('close elapsed=15ms owner=retained exit=unconfirmed');
+      expect(error.message).toContain(`kill elapsed=30ms owner=retained exit=${boundary === 'exit' ? 'unconfirmed' : 'confirmed'}`);
+      expect(error.message).toContain(`childClose=${boundary === 'playwright-cleanup' ? 'observed' : 'unobserved'} pipes=1/${boundary === 'exit' ? 0 : 1}-destroyed/${boundary === 'playwright-cleanup' ? 1 : 0}-closed`);
+      expect(error.message).toContain('closePromise=pending killPromise=pending profile=present');
+      expect(error.message).not.toContain(owned.profile);
+      expect(existsSync(owned.profile)).toBe(true);
+      expect(pipe.destroy).toHaveBeenCalledTimes(boundary === 'exit' ? 0 : 1);
+      expect(owned.child.eventNames()).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(summary.read()).toContain(error.message);
+    },
+  );
+
+  it.each(['present', 'unavailable'])('rejects fulfilled Playwright cleanup with profile %s despite exit', async state => {
+    const { createServer } = fakeVite();
+    const owned = ownedServer();
+    // Playwright logs directory-removal errors but fulfills its cleanup promise.
+    owned.server.close.mockImplementation(async () => { owned.child.exitCode = 0; });
+    owned.server.kill.mockImplementation(async () => {});
+    if (state === 'unavailable') owned.child.spawnargs.push('--user-data-dir=/unowned-profile');
+    const fixture = await startBrowserFixture({ name: 'example', createServer, viteConfig: () => SCOPED,
+      chromium: ownedChromium(owned.server), phaseMs: PHASE_MS });
+    const error = await fixture.close().catch(caught => caught);
+    expect(error.message).toContain('returned without confirmed profile removal');
+    expect(error.message).toContain(`closePromise=fulfilled killPromise=fulfilled profile=${state}`);
+    expect(error.message).not.toContain(owned.profile);
+    expect(existsSync(owned.profile)).toBe(true);
   });
 
   it('reaps owned browsers that arrive after startup gave up with the same bounded cleanup, and reports one it cannot', async () => {
@@ -253,8 +315,8 @@ describe('startBrowserFixture', () => {
     expect(reaped.child.signalCode).toBe('SIGKILL');
     expect(failureLine).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(30);
-    expect(failureLine).toHaveBeenCalledWith('❌ example browser fixture could not close a late browser: '
-      + 'browser close stalled after 15ms, then its kill stalled after 30ms (no exit status)');
+    expect(failureLine).toHaveBeenCalledWith(expect.stringContaining('❌ example browser fixture could not close a late browser: '
+      + 'browser close stalled after 15ms, then its kill stalled after 30ms (no exit status); cleanup phases:'));
     // An abandoned launch is never connected to.
     expect(chromium.connect).not.toHaveBeenCalled();
     failureLine.mockRestore();

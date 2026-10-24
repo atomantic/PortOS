@@ -388,16 +388,18 @@ export const TUI_TRUST_PROMPT_PATTERN =
 // Claude Code builds can render "No, exit" first and highlight it. Consumers must
 // wait until the choices themselves have painted, then move off a highlighted
 // decline choice instead of assuming a bare Enter always accepts the folder.
+// Codex 0.162.1 labels these choices "Trust and continue" and "Quit". Keep the
+// bare Quit match tied to a numbered option rather than its explanatory text.
 // These patterns run against createInputReadyTracker's whitespace-free tail.
-const TUI_TRUST_ACCEPT_OPTION_PATTERN = /(?:yes,?itrustthisfolder|yes,?continue|\[a\]trustthisworkspace)/i;
-const TUI_TRUST_DECLINE_OPTION_PATTERN = /no,?(?:exit|quit)/i;
+const TUI_TRUST_ACCEPT_OPTION_PATTERN = /(?:yes,?itrustthisfolder|yes,?continue|trustandcontinue|\[a\]trustthisworkspace)/i;
+const TUI_TRUST_DECLINE_OPTION_PATTERN = /no,?(?:exit|quit)|\d+\.quit/i;
 const TUI_HIGHLIGHT_PATTERN_PREFIX = String.raw`(?:❯|›|>)\d*\.?`;
 const TUI_TRUST_HIGHLIGHTED_ACCEPT_PATTERN = new RegExp(
-  `${TUI_HIGHLIGHT_PATTERN_PREFIX}(?:yes,?itrustthisfolder|yes,?continue)`,
+  `${TUI_HIGHLIGHT_PATTERN_PREFIX}(?:yes,?itrustthisfolder|yes,?continue|trustandcontinue)`,
   'i',
 );
 const TUI_TRUST_HIGHLIGHTED_DECLINE_PATTERN = new RegExp(
-  `${TUI_HIGHLIGHT_PATTERN_PREFIX}no,?(?:exit|quit)`,
+  `${TUI_HIGHLIGHT_PATTERN_PREFIX}(?:no,?(?:exit|quit)|quit)`,
   'i',
 );
 

@@ -141,8 +141,8 @@ describe('finalizeAgent — private report delivery', () => {
     getTaskOutputHook.mockResolvedValue(async () => ({ accepted: true, reportId: 'report-example' }));
     expect(await finishPrivate()).toMatchObject({ success: true });
     expect(completion()).toMatchObject({ success: true, validationPassed: true });
-    expect(updateTaskMock).toHaveBeenCalledWith('private-task', { status: 'completed' }, 'internal');
-    expect(completeAgentRun).toHaveBeenCalledWith('private-run', 'Private security assessment: see the local Review Hub report.', 0, 1000, null, null);
+    expect(updateTaskMock).toHaveBeenCalledWith('private-task', expect.objectContaining({ status: 'completed' }), 'internal');
+    expect(completeAgentRun).toHaveBeenCalledWith('private-run', 'Private security assessment: see the local Review Hub report.', 0, 1000, null, null, expect.objectContaining({ executionSuccess: true }));
     expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
   });
 
@@ -155,8 +155,8 @@ describe('finalizeAgent — private report delivery', () => {
     getTaskOutputHook.mockResolvedValue(hook);
     expect(await finishPrivate()).toMatchObject({ success: false });
     expect(completion()).toMatchObject({ success: false, validationPassed: false });
-    expect(updateTaskMock).toHaveBeenCalledWith('private-task', { status: 'blocked' }, 'internal');
-    expect(completeAgentRun).toHaveBeenCalledWith('private-run', 'Private security assessment report was not verified; inspect the local assessment archive.', 0, 1000, expect.any(Object), false);
+    expect(updateTaskMock).toHaveBeenCalledWith('private-task', expect.objectContaining({ status: 'blocked' }), 'internal');
+    expect(completeAgentRun).toHaveBeenCalledWith('private-run', 'Private security assessment report was not verified; inspect the local assessment archive.', 0, 1000, expect.any(Object), false, expect.objectContaining({ executionSuccess: true }));
   });
 
   it('fails closed when report delivery outlives the completion timeout', async () => {
@@ -167,7 +167,7 @@ describe('finalizeAgent — private report delivery', () => {
       const finished = finishPrivate();
       await vi.advanceTimersByTimeAsync(5 * 60_000);
       expect(await finished).toMatchObject({ success: false });
-      expect(updateTaskMock).toHaveBeenCalledWith('private-task', { status: 'blocked' }, 'internal');
+      expect(updateTaskMock).toHaveBeenCalledWith('private-task', expect.objectContaining({ status: 'blocked' }), 'internal');
       expect(completeAgentRun.mock.calls[0][5]).toBe(false);
       settle({ accepted: true, reportId: 'late-report' });
       await vi.advanceTimersByTimeAsync(0);
@@ -362,7 +362,7 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('not judgeable from a diff'), expect.anything());
       expect(cosEvents.emit).not.toHaveBeenCalledWith(GOAL_FIDELITY_HOLD_EVENT, expect.anything());
       expect(runGoalFidelityFollowUpMock).not.toHaveBeenCalled();
-      expect(updateTaskMock).toHaveBeenCalledWith(task.id, { status: 'completed' }, 'internal');
+      expect(updateTaskMock).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed' }), 'internal');
     });
 
     it.each([
@@ -538,7 +538,7 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     const finalized = await finalize({ runId: 'fidelity-held-run', prExpected: true });
     expect(finalized).toMatchObject({ success: false, cleanupEvidence: { ok: true } });
     expect(completeAgentRun).toHaveBeenCalledWith('fidelity-held-run', 'done', 0, 1000,
-      expect.objectContaining({ category: GOAL_FIDELITY_CATEGORY }), false);
+      expect.objectContaining({ category: GOAL_FIDELITY_CATEGORY }), false, expect.objectContaining({ executionSuccess: true }));
 
     const result = completion();
     expect(result.success).toBe(false);
@@ -555,7 +555,7 @@ describe('finalizeAgent — goal-fidelity gate', () => {
   });
 
   it('preserves a drift diagnosis over a missing PR and skips fidelity', async () => {
-    getAgentRecord.mockResolvedValueOnce({ metadata: { primaryCheckoutBaseline: {} } });
+    getAgentRecord.mockResolvedValue({ metadata: { primaryCheckoutBaseline: {} } });
     detectPrimaryCheckoutDrift.mockResolvedValueOnce({
       drifted: true, category: 'primary-checkout-mutated', message: 'Primary checkout changed',
     });
@@ -583,7 +583,7 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       completionReason: terminatedByUser ? 'user-terminated' : 'failed',
     });
     expect(finished).toMatchObject({ success: false, cleanupEvidence: { ok: true } });
-    expect(completeAgentRun).toHaveBeenCalledWith('failed-run', 'done', 0, 1000, analysis, false);
+    expect(completeAgentRun).toHaveBeenCalledWith('failed-run', 'done', 0, 1000, analysis, false, expect.objectContaining({ executionSuccess: false }));
     expect(completion()).toMatchObject({
       success: false, completionReason: terminatedByUser ? 'user-terminated' : 'failed',
     });

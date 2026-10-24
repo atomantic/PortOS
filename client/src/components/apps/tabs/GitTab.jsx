@@ -153,6 +153,7 @@ export default function GitTab({ appId, appName, repoPath }) {
   const [pushing, setPushing] = useState(null);
   const [syncing, setSyncing] = useState(null);
   const [pushingAll, setPushingAll] = useState(false);
+  const [rebasingAndPushing, setRebasingAndPushing] = useState(false);
   const [openingPullRequest, setOpeningPullRequest] = useState(false);
   const [reconciling, setReconciling] = useState(false);
   const [remoteBranches, setRemoteBranches] = useState([]);
@@ -354,6 +355,19 @@ export default function GitTab({ appId, appName, repoPath }) {
       toast.error(`Push failed for: ${failedNames.join(', ')}`);
     }
     await loadGitInfo();
+  };
+
+  const handleRebaseAndPush = async () => {
+    if (!repoPath || rebasingAndPushing) return;
+    setRebasingAndPushing(true);
+    const result = await api.rebaseAndPushDefaultBranch(repoPath, { silent: true }).catch(error => {
+      toast.error(error.message || 'Rebase & push failed');
+      return null;
+    });
+    if (result?.success) toast.success(`Rebased and pushed ${result.branch}`);
+    else if (result?.error) toast.error(result.error);
+    await loadGitInfo();
+    setRebasingAndPushing(false);
   };
 
   const handleOpenPullRequest = async () => {
@@ -564,7 +578,7 @@ export default function GitTab({ appId, appName, repoPath }) {
   }
 
   return (
-    <div className="space-y-6">
+    <fieldset disabled={rebasingAndPushing} className="min-w-0 space-y-6">
       <RepositorySourcePanel
         appId={appId}
         appName={appName}
@@ -577,6 +591,16 @@ export default function GitTab({ appId, appName, repoPath }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold text-white">Git Status</h2>
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleRebaseAndPush}
+            disabled={rebasingAndPushing || loading || updating || pushingAll || Boolean(syncing || pushing || checkingOut || merging || checkingOutRemote) || committing || resetting
+              || !gitInfo?.status?.clean || gitInfo?.branch !== gitInfo?.baseBranch || !(gitInfo?.originComparison?.ahead > 0)}
+            title="Rebase local default-branch commits onto origin, then push; requires a clean checkout ahead of origin"
+            className="flex min-h-[40px] items-center gap-1.5 px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-50"
+          >
+            {rebasingAndPushing ? <Loader2 size={16} className="animate-spin" /> : <ArrowUpDown size={16} />}
+            {rebasingAndPushing ? 'Rebasing & pushing...' : 'Rebase & push'}
+          </button>
           {branches.some(b => b.tracking && b.ahead > 0) && (
             <button
               onClick={handlePushAll}
@@ -1185,6 +1209,6 @@ export default function GitTab({ appId, appName, repoPath }) {
           The commit you are on now is reported after the reset, so <code>git reset --hard &lt;sha&gt;</code> can undo this.
         </p>
       </ConfirmModal>
-    </div>
+    </fieldset>
   );
 }

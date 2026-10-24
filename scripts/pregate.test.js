@@ -1,11 +1,5 @@
-/**
- * Contract for the local pre-push gate (`npm run pregate`).
- *
- * The value of this gate is that it runs exactly what CI runs, so the failures
- * worth pinning are the ones where it would quietly diverge: handing a runner a
- * scope CI skipped (or skipping one CI selected), passing the wrong selector
- * list, naming a downgraded test file that is not tracked, or reporting
- * "CI will also run: db" from a plan field that has since been renamed.
+/** Local validation selection, stage execution, process ownership and receipt
+ * contracts. Hosted CI owns the broader test-impact plan.
  */
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from 'vitest';
@@ -27,6 +21,7 @@ import {
   describeBrowserSelection,
   describeStageCommand,
   downgradeFullPlan,
+  focusedLocalPlan,
   parseArgs,
   pregateWorkerEnv,
   stageSpawnEnv,
@@ -84,6 +79,7 @@ describe('resolvePlanStages', () => {
       CI_TEST_MODE: 'related',
       CI_TEST_FILES: '["server/lib/a.test.js"]',
       CI_TEST_SOURCES: '["server/lib/a.js"]',
+      PORTOS_PREGATE_GUARDS: '',
     });
   });
 
@@ -119,6 +115,28 @@ describe('resolvePlanStages', () => {
       { skipLint: true },
     );
     expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'server tests']);
+  });
+
+  it.each(['related', 'full'])('runs shared guards before every costly %s stage without changing the broad selection', (mode) => {
+    const tracked = ['server/lib/index.test.js', ALWAYS_RUN_TESTS[0], 'client/src/fooConventions.test.js'];
+    const plan = planWith({
+      server: { mode, files: tracked.slice(0, 2), sources: ['server/lib/helper.js'] },
+      client: { mode, files: tracked.slice(2), sources: [] },
+      lint: { mode: 'full', files: [] },
+      build: true, smoke: true, db: true, browser: { files: BROWSER_SUITES.slice(0, 1) },
+    });
+    const stages = resolvePlanStages(plan, { guardPlan: downgradeFullPlan(plan, tracked, ['server/lib/helper.js']) });
+    expect(stages.map(stage => stage.name)).toEqual([
+      'hidden-content scan', 'server structural guards', 'client structural guards',
+      'client/server lint', 'server tests', 'client tests', 'client build',
+      'API Explorer bundle pin', 'boot smoke', 'browser suites', 'DB provision (portos_test)', 'DB suite (portos_test)',
+    ]);
+    for (const scope of ['server', 'client']) {
+      expect(stages.find(stage => stage.name === `${scope} tests`).env).toMatchObject({
+        CI_TEST_MODE: mode, CI_TEST_FILES: JSON.stringify(plan[scope].files), CI_TEST_SOURCES: JSON.stringify(plan[scope].sources),
+      });
+    }
+    expect(stages.filter(stage => stage.guard).flatMap(stage => stage.files).sort()).toEqual(tracked.sort());
   });
 });
 
@@ -190,6 +208,7 @@ describe('pregate hidden-content invocation', () => {
     // before the test snapshots its bytes, or the CLI's ordinary Git reads
     // appear to mutate the index even when they only notice the copy.
     git('update-index', '--refresh');
+    base = git('rev-parse', 'HEAD');
   });
 
   afterEach(async () => {
@@ -198,6 +217,115 @@ describe('pregate hidden-content invocation', () => {
 
   afterAll(async () => {
     if (template?.scratch) await destroyGitSandbox(template.scratch);
+  });
+
+  function prepareGuardFixture({ browser = false } = {}) {
+    write('server/lib/index.js', 'export {};\n');
+    write('server/lib/README.md', '# Shared helpers\n');
+    // This fixture guard pins the catalog failure at the CLI boundary; the real
+    // catalog suite separately owns the complete barrel/README contract.
+    write('server/lib/index.test.js', `
+      import { appendFileSync, existsSync, readFileSync } from 'fs';
+      appendFileSync('.cache/events', 'catalog\\n');
+      if (existsSync('server/lib/helper.js') &&
+          (!readFileSync('server/lib/index.js', 'utf8').includes('helper') ||
+           !readFileSync('server/lib/README.md', 'utf8').includes('helper'))) {
+        throw new Error('Missing helper barrel/catalog registration');
+      }
+    `);
+    write('server/lib/expensive.test.js', 'export {};\n');
+    write('scripts/run-ci-tests.js', `
+      import { appendFileSync } from 'fs';
+      import { resolve } from 'path';
+      import { pathToFileURL } from 'url';
+      const files = JSON.parse(process.env.CI_TEST_FILES);
+      const excluded = JSON.parse(process.env.PORTOS_PREGATE_GUARDS || '{}').files || [];
+      const broad = process.env.CI_TEST_MODE !== 'files' || files.includes('server/lib/expensive.test.js');
+      appendFileSync('.cache/events', JSON.stringify({ broad, excluded }) + '\\n');
+      if (files.includes('server/lib/index.test.js') && !excluded.includes('server/lib/index.test.js')) {
+        await import(pathToFileURL(resolve('server/lib/index.test.js')));
+      }
+    `);
+    write('scripts/run-ci-lint.js', `
+      import { appendFileSync, existsSync, writeFileSync } from 'fs';
+      appendFileSync('.cache/events', 'lint\\n');
+      if (existsSync('.cache/mutate')) writeFileSync('server/lib/helper.js', 'export const helper = 2;\\n');
+    `);
+    write('scripts/smoke-boot.js', `
+      import { appendFileSync } from 'fs';
+      appendFileSync('.cache/events', 'smoke\\n');
+    `);
+    if (browser) {
+      write(BROWSER_SUITES[0], 'export {};\n');
+      write('scripts/lib/pregateResources.js', `
+        import { writeFileSync } from 'fs';
+        writeFileSync('.cache/probe-started', 'unexpected probe');
+        throw new Error('Resource probe ran before structural refusal');
+      `);
+    }
+    git('add', '--all');
+    git('commit', '-qm', 'structural gate fixture');
+    base = git('rev-parse', 'HEAD');
+    mkdirSync(join(root, '.cache'), { recursive: true });
+    write('.cache/events', '');
+    write('server/lib/helper.js', 'export const helper = 1;\n');
+    if (browser) write(BROWSER_SUITES[0], 'export const changed = true;\n');
+  }
+
+  it('prints the selected guard, broad and browser stages without starting any process', () => {
+    prepareGuardFixture({ browser: true });
+    const result = run('--plan-only', '--full');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Planning against');
+    expect(result.stdout).toContain('changed file');
+    expect(result.stdout).toContain('server structural guards');
+    expect(result.stdout).toContain('server tests');
+    expect(result.stdout).toContain('Browser suites: 1 selected');
+    expect(readFileSync(join(root, '.cache/events'), 'utf8')).toBe('');
+    expect(existsSync(join(root, '.cache/probe-started'))).toBe(false);
+    expect(existsSync(join(root, PREGATE_REPORT_PATH))).toBe(false);
+  });
+
+  // A structural refusal must precede both related-test dispatch and Chrome's
+  // prerequisite probe, with the unfinished broad stages preserved in the receipt.
+  it('refuses a missing helper catalog registration before broad tests or browser probes start', () => {
+    prepareGuardFixture({ browser: true });
+    const result = run('--skip-lint', '--full');
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Missing helper barrel/catalog registration');
+    const events = readFileSync(join(root, '.cache/events'), 'utf8');
+    expect(events).not.toContain('"broad":true');
+    expect(existsSync(join(root, '.cache/probe-started'))).toBe(false);
+    const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    expect(report.passed).toBe(false);
+    expect(report.stages.find(stage => stage.guard)).toMatchObject({ status: 'failed', files: ['server/lib/index.test.js'] });
+    expect(report.stages.filter(stage => ['server tests', 'browser suites'].includes(stage.name)))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'server tests', status: 'not-run' }),
+        expect.objectContaining({ name: 'browser suites', status: 'not-run' }),
+      ]));
+  });
+
+  // Unlike the persistent module memo, this reuse includes tree scanners. A
+  // modification between stages invalidates it even when the test file is stable.
+  it.each([false, true])('rechecks guard inputs before broad dispatch (changed: %s)', (changed) => {
+    prepareGuardFixture();
+    write('server/lib/index.js', "export { helper } from './helper.js';\n");
+    write('server/lib/README.md', '# Shared helpers\nhelper\n');
+    if (changed) write('.cache/mutate', 'mutate during lint');
+    const result = run('--full');
+    expect(result.status, result.stderr).toBe(0);
+    const events = readFileSync(join(root, '.cache/events'), 'utf8').trim().split('\n');
+    expect(events.filter(event => event === 'catalog')).toHaveLength(changed ? 2 : 1);
+    expect(events.indexOf('catalog')).toBeLessThan(events.indexOf('lint'));
+    expect(events.at(-1)).toBe('smoke');
+    const broad = events.filter(event => event.startsWith('{')).map(event => JSON.parse(event)).find(event => event.broad);
+    expect(broad.excluded).toEqual(changed ? [] : ['server/lib/index.test.js']);
+    const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    expect(report.stages.every(stage => stage.status === 'passed')).toBe(true);
+    expect(report.treeStable).toBe(!changed);
+    expect(report.stages.find(stage => stage.name === 'server tests').guardReuse?.files)
+      .toEqual(changed ? undefined : ['server/lib/index.test.js']);
   });
 
   // A branch and base can each be green while their combined route inventory fails.
@@ -282,6 +410,59 @@ describe('pregate hidden-content invocation', () => {
     expect(conflict.stderr).toContain('Cannot construct merged guard tree');
     expect(conflict.stdout).not.toContain('Pregate passed');
     expect(snapshot()).toEqual(preConflict);
+  });
+
+  it('merges a remote-only base from a shallow source and still reports real conflicts', () => {
+    write('scripts/run-ci-tests.js', `
+      import { readFileSync } from 'fs';
+      if (readFileSync('docs/tracked note.md', 'utf8').trim() !== '# Base update'
+        || readFileSync('docs/feature.md', 'utf8').trim() !== '# Independent feature') {
+        throw new Error('guard did not receive both merge inputs');
+      }
+    `);
+    git('add', '--all'); git('commit', '-qm', 'merged guard fixture');
+    const upstream = root;
+    const shallow = join(scratch, 'shallow');
+    git('clone', '--quiet', '--no-local', '--depth', '1', '--', upstream, shallow);
+    write(trackedPath, '# Base update\n');
+    git('add', '--all'); git('commit', '-qm', 'base update');
+    const movedBase = git('rev-parse', 'HEAD');
+
+    root = shallow;
+    for (const workspace of ['', 'client', 'server', 'autofixer']) {
+      mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
+    }
+    git('config', 'user.name', 'Example Agent');
+    git('config', 'user.email', 'agent@example.com');
+    git('config', 'commit.gpgsign', 'false');
+    git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
+    git('checkout', '-qb', 'feature');
+    write('docs/feature.md', '# Independent feature\n');
+    git('add', '--all'); git('commit', '-qm', 'feature update');
+    git('fetch', '--quiet', 'origin', 'main:refs/remotes/origin/main');
+    expect(git('rev-parse', '--is-shallow-repository')).toBe('true');
+    expect(git('rev-parse', 'origin/main')).toBe(movedBase);
+    expect(git('for-each-ref', '--format=%(refname)', '--points-at', movedBase, 'refs/heads')).toBe('');
+    const tree = git('merge-tree', '--write-tree', 'HEAD', 'origin/main').split('\n')[0];
+    const invoke = () => spawnSync(process.execPath, ['scripts/pregate.js', '--guards-only', '--merged-with', 'origin/main'], {
+      cwd: root, encoding: 'utf8',
+    });
+    const sourceState = () => ({ ...snapshot(), refs: git('show-ref'), shallow: readFileSync(join(root, '.git/shallow')) });
+    const before = sourceState();
+    const merged = invoke();
+    expect(merged.status, merged.stderr).toBe(0);
+    expect(merged.stdout).toContain(`= tree ${tree.slice(0, 12)}.`);
+    expect(sourceState()).toEqual(before);
+
+    write(trackedPath, '# Conflicting feature update\n');
+    git('add', '--all'); git('commit', '-qm', 'conflicting feature update');
+    const preConflict = sourceState();
+    const conflict = invoke();
+    expect(conflict.status).not.toBe(0);
+    expect(conflict.stderr).toContain('Cannot construct merged guard tree');
+    expect(conflict.stderr).toContain('CONFLICT (content)');
+    expect(conflict.stdout).not.toContain('Pregate passed');
+    expect(sourceState()).toEqual(preConflict);
   });
 
   // This regression catches stale inherited packages before any lint/test child
@@ -577,10 +758,14 @@ describe('pregate hidden-content invocation', () => {
     expect(snapshot()).toEqual(before);
   });
 
-  it('plans the portos_test stages for a DB-only suite in a scoped working-tree plan', () => {
+  it('leaves DB-only changes to hosted CI by default and plans portos_test only with explicit full validation', () => {
     mkdirSync(join(root, 'server/routes'), { recursive: true });
     write('server/routes/decks.db.test.js', "import { it } from 'vitest';\nit('db contract', () => {});\n");
-    const result = run('--plan-only');
+    const focused = run('--plan-only');
+    expect(focused.status, focused.stderr).toBe(0);
+    expect(focused.stdout).toContain('CI will also run: db');
+    expect(focused.stdout).not.toContain('• DB suite');
+    const result = run('--plan-only', '--full');
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('• DB provision (portos_test): npm run setup:db:test --prefix server');
     expect(result.stdout).toContain('• DB suite (portos_test): npm run test:db:ci --prefix server');
@@ -856,25 +1041,6 @@ describe('the gate end to end', () => {
     }
   });
 
-  // `--base HEAD` rather than the default remote branch: CI clones at depth 2
-  // with no `origin/main` ref, so the default would abort here on a fetch the
-  // gate is right to demand of a human and wrong to demand of this test. HEAD
-  // is its own merge base in any checkout, and the run still exercises every
-  // stage — argument parsing, merge-base resolution, spawning the real planner,
-  // mapping its plan to stages — on an empty diff.
-  it('plans this checkout and names its stages without running them', () => {
-    const output = execFileSync(
-      process.execPath,
-      [join(REPO_ROOT, 'scripts', 'pregate.js'), '--plan-only', '--base', 'HEAD'],
-      { cwd: REPO_ROOT, encoding: 'utf8' },
-    );
-    expect(output).toMatch(/Planning against HEAD/);
-    expect(output).toMatch(/changed file/);
-    // An empty diff still selects the always-run guards, so the gate must name
-    // real work rather than reporting there is nothing to do.
-    expect(output).toMatch(/server tests/);
-  });
-
   it('refuses a base this checkout cannot resolve instead of planning against nothing', () => {
     const run = () => execFileSync(
       process.execPath,
@@ -958,12 +1124,7 @@ describe('describeBrowserSelection', () => {
       .not.toContain('Fidelity cases');
   });
 
-  it('shows the selection in --plan-only output', () => {
-    const out = execFileSync(process.execPath, [join(REPO_ROOT, 'scripts', 'pregate.js'), '--plan-only', '--skip-lint', '--base', 'HEAD'], {
-      cwd: REPO_ROOT, encoding: 'utf8',
-    });
-    expect(out).toContain('Browser suites:');
-  });
+
 });
 
 describe('resource suite stages', () => {
@@ -1052,8 +1213,8 @@ describe('uncoveredSuites', () => {
     const flagged = uncoveredSuites(selected, { options: { skipDb: true, skipBuild: true }, downgraded: true });
     expect(flagged.map(({ suite, reason }) => [suite, reason])).toEqual([
       ['build', 'skipped by --skip-build'],
-      ['smoke', 'full plan downgraded; pass --full to run it'],
-      ['browser', 'full plan downgraded; pass --full to run it'],
+      ['smoke', 'local focused mode; hosted CI runs it (opt in locally with --full)'],
+      ['browser', 'local focused mode; hosted CI runs it (opt in locally with --full)'],
       ['db', 'skipped by --skip-db'],
       ['windows', 'a Windows runner has no local equivalent'],
     ]);
@@ -1231,7 +1392,7 @@ describe('buildPregateReport', () => {
       startedAt: 's',
       finishedAt: 'f',
     });
-    expect(report.version).toBe(2);
+    expect(report.version).toBe(3);
     expect(report.plan.downgraded).toBe(false);
     expect(report.passed).toBe(false);
     expect(report.treeStable).toBe(false);
@@ -1301,5 +1462,16 @@ describe('validatedTreeHash', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('focused local policy', () => {
+  it('runs direct behavior owners and edited unit tests without transitive or resource suites', () => {
+    const tracked = ['server/lib/a.js', 'server/lib/a.test.js', 'server/lib/unrelated.test.js', 'server/lib/a.db.test.js', 'server/lib/a.browser.test.js', 'client/src/Card.jsx', 'client/src/Card.test.jsx', 'scripts/tool.test.js', 'server/services/htmlComposition/index.test.js'];
+    const changed = ['server/lib/a.js', 'client/src/Card.jsx', 'scripts/tool.test.js', 'server/lib/a.db.test.js', 'server/lib/a.browser.test.js', 'docs/README.md', 'server/services/htmlComposition/index.test.js'];
+    const local = focusedLocalPlan(planWith({ browser: { files: ['server/services/htmlComposition/index.test.js'] }, server: { mode: 'related', files: ['server/lib/unrelated.test.js'], sources: ['server/lib/a.js'] } }), tracked, changed);
+    expect(local.server).toEqual({ mode: 'files', files: ['server/lib/a.test.js', 'scripts/tool.test.js'], sources: [] });
+    expect(local.client.files).toContain('client/src/Card.test.jsx');
+    expect(resolvePlanStages(local, { skip: { db: true, browser: true, build: true, smoke: true } }).every(stage => !['db', 'browser', 'build', 'smoke'].includes(stage.suite))).toBe(true);
   });
 });

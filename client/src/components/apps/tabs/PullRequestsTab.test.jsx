@@ -462,7 +462,7 @@ describe('PullRequestsTab', () => {
     } }));
 
     expect(await screen.findByRole('link', { name: /Do:Review: Active/ }))
-      .toHaveAttribute('href', '/cos/tasks?task=task-doreview-1&source=internal');
+      .toHaveAttribute('href', '/cos/tasks?task=task-doreview-1&source=user');
     // The resolve row is backed by a different task and must not follow along.
     expect(screen.getByRole('button', { name: 'Resolve & merge' })).toBeInTheDocument();
   });

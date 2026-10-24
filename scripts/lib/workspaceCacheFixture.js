@@ -1,10 +1,9 @@
-import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createVitestTempFixture } from './vitestTempRootFixture.js';
+import { createVitestTempFixture, runFixtureToCompletion } from './vitestTempRootFixture.js';
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url));
 const link = (target, path) => {
@@ -39,6 +38,7 @@ function primaryDependencies(host, workspace) {
   }
   put(join(dependencies, '.vite/keep'), 'primary persistent cache');
   put(join(dependencies, '.vite-temp/keep'), 'primary config scratch');
+  put(join(dependencies, '.vitest-cache/keep'), 'primary filesystem module cache');
   return dependencies;
 }
 
@@ -57,9 +57,10 @@ function checkout(host, name, workspace, configName, dependencies) {
   // Copy the real config so import.meta.url names THIS checkout; its existing
   // helpers stay shared read-only, just like dependencies in an ordinary worktree.
   copyFileSync(join(REPO, workspace, configName), join(root, configName));
-  for (const file of ['lib/vitestTempRoot.js', 'lib/dbTestFiles.js', 'lib/browserSuites.js', 'lib/workspaceTests.js', 'vitestCiPool.js', 'vitestTempRootSetup.js']) {
+  for (const file of ['lib/vitestTempRoot.js', 'lib/testProcessAttribution.js', 'lib/dbTestFiles.js', 'lib/browserSuites.js', 'lib/workspaceTests.js', 'vitestCiPool.js', 'vitestTempRootSetup.js']) {
     link(join(REPO, 'scripts', file), join(parent, 'scripts', file));
   }
+  put(join(parent, 'scripts/vitestProcessEnvironment.js'), `export { default } from ${JSON.stringify(pathToFileURL(join(REPO, 'scripts/vitestProcessEnvironment.js')).href)};\n`);
   // The data exclusion belongs to the synthetic checkout, like its cache paths.
   copyFileSync(join(REPO, 'scripts/lib/vitestWatch.js'), join(parent, 'scripts/lib/vitestWatch.js'));
   if (workspace === 'server') {
@@ -83,54 +84,69 @@ function checkout(host, name, workspace, configName, dependencies) {
   args.push('--root', root, '--maxWorkers', '1');
   // This proof exercises cache publication, not DOM behavior. Three client
   // launches otherwise pay for happy-dom against one 15s enclosing budget.
-  if (workspace === 'client') args.push('--environment', 'node');
+  if (workspace === 'client') {
+    args.push('--environment', 'node', '--project', 'parallel');
+    // The synthetic test is Node-only even when project settings override CLI
+    // environment defaults. Do not initialize DOM or an empty capture project.
+    const test = join(root, 'src/lifecycle.test.js');
+    put(test, `// @vitest-environment node\n${readFileSync(test, 'utf8')}`);
+  }
   // Test roots and the caller's cwd differ from the config's parent directory.
   const cwd = join(parent, 'caller');
   mkdirSync(cwd);
   return { ...fixture, args: [fixture.args[0], ...args], options: { ...fixture.options, cwd }, root };
 }
 
-function run({ args, options }) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
-    let output = '';
-    child.stdout.on('data', chunk => { output += chunk; });
-    child.stderr.on('data', chunk => { output += chunk; });
-    child.once('error', reject);
-    child.once('close', (code, signal) => {
-      if (code === 0) resolve(output);
-      else reject(new Error(`fixture failed (${code ?? signal}): ${output}`));
-    });
-  });
+async function run(fixture, signal) {
+  const result = await runFixtureToCompletion(fixture, undefined, { signal });
+  if (result.error) {
+    result.error.stdout = result.stdout;
+    result.error.stderr = result.stderr;
+    throw result.error;
+  }
+  const output = `${result.stdout}${result.stderr}`;
+  if (result.status !== 0) throw new Error(`fixture failed (${result.status}): ${output}`);
+  return output;
 }
 
-async function runTogether(fixtures) {
-  const results = await Promise.allSettled(fixtures.map(run));
+async function runTogether(fixtures, signal) {
+  // Settle every owned child before the caller removes their shared host.
+  const results = await Promise.allSettled(fixtures.map(fixture => run(fixture, signal)));
   for (const result of results) if (result.status === 'rejected') throw result.reason;
   return results.map(result => result.value);
 }
 
 const cachedResults = root => snapshot(root).filter(([name]) => name.endsWith('results.json'));
+const cachedModules = root => snapshot(join(root, 'modules')).filter(([name]) => /^[a-f0-9]{40}$/.test(name));
 
 // Assertions are supplied by the owning Vitest workspace; this shared fixture
 // imports only Node builtins and dependency-free fixture support.
-export async function checkWorkspaceCacheIsolation(workspace, configName, cacheName, expect) {
+export async function checkWorkspaceCacheIsolation(workspace, configName, cacheName, expect, signal) {
     const host = mkdtempSync(join(tmpdir(), 'workspace-cache-'));
     try {
       const dependencies = primaryDependencies(host, workspace);
       const primary = [snapshot(join(dependencies, '.vite')), snapshot(join(dependencies, '.vite-temp'))];
       const a = checkout(host, 'a', workspace, configName, dependencies);
       const b = checkout(host, 'b', workspace, configName, dependencies);
-      await runTogether([a, b]);
+      const primaryModules = snapshot(join(dependencies, '.vitest-cache'));
+      await runTogether([a, b], signal);
+      expect(snapshot(join(dependencies, '.vitest-cache'))).toEqual(primaryModules);
       const cacheA = join(a.root, '.cache', cacheName);
       const cacheB = join(b.root, '.cache', cacheName);
       expect(cachedResults(cacheA).length).toBeGreaterThan(0);
       expect(cachedResults(cacheB).length).toBeGreaterThan(0);
+      // Actual transformed module files, not just a resolved config or metadata.
+      for (const cache of [cacheA, cacheB]) {
+        expect(cachedModules(cache).length).toBeGreaterThan(0);
+      }
+      const modules = cachedModules(cacheA);
       const sibling = snapshot(cacheB);
       const names = snapshot(cacheA).map(([name]) => name);
-      await run(a);
+      await run(a, signal);
+      expect(cachedModules(cacheA)).toEqual(modules);
       expect(snapshot(cacheA).map(([name]) => name)).toEqual(names);
       expect(snapshot(cacheB)).toEqual(sibling);
+      expect(snapshot(join(dependencies, '.vitest-cache'))).toEqual(primaryModules);
       expect([snapshot(join(dependencies, '.vite')), snapshot(join(dependencies, '.vite-temp'))]).toEqual(primary);
       rmSync(a.root, { recursive: true });
       expect(existsSync(cacheA)).toBe(false);
@@ -140,7 +156,7 @@ export async function checkWorkspaceCacheIsolation(workspace, configName, cacheN
     }
 }
 
-export async function checkDevCacheIsolation(source, expect) {
+export async function checkDevCacheIsolation(expect, signal) {
     const host = mkdtempSync(join(tmpdir(), 'workspace-dev-cache-'));
     try {
       const dependencies = primaryDependencies(host, 'client');
@@ -149,10 +165,14 @@ export async function checkDevCacheIsolation(source, expect) {
         npm: JSON.parse(readFileSync(join(REPO, 'client/package.json'), 'utf8')).scripts.dev.split(' '),
         PM2: createRequire(import.meta.url)(join(REPO, 'ecosystem.config.cjs')).apps.find(app => app.name === 'portos-ui').args.split(' '),
       };
-      const devArgs = commands[source];
-      const loaderAt = devArgs.indexOf('--configLoader');
-      const loader = loaderAt === -1 ? undefined : devArgs[loaderAt + 1];
-      expect(loader).toBe('runner');
+      // Both launchers load the same real config with the same loader. Inspect
+      // each launch command, then resolve each checkout once rather than
+      // repeating identical Vite startup for npm and PM2.
+      for (const devArgs of Object.values(commands)) {
+        const loaderAt = devArgs.indexOf('--configLoader');
+        expect(loaderAt === -1 ? undefined : devArgs[loaderAt + 1]).toBe('runner');
+      }
+      const loader = 'runner';
       const fixtures = ['a', 'b'].map(name => checkout(host, name, 'client', 'vitest.config.js', dependencies));
       for (const fixture of fixtures) {
         const parent = dirname(fixture.root);
@@ -169,7 +189,7 @@ export async function checkDevCacheIsolation(source, expect) {
           process.stdout.write(config.cacheDir);`);
         fixture.args = [script];
       }
-      const outputs = await runTogether(fixtures);
+      const outputs = await runTogether(fixtures, signal);
       expect(outputs[0]).not.toBe(outputs[1]);
       expect([snapshot(join(dependencies, '.vite')), snapshot(join(dependencies, '.vite-temp'))]).toEqual(primary);
       expect(fixtures.map(fixture => relative(host, fixture.options.cwd).replaceAll('\\', '/'))).toEqual(['a/caller', 'b/caller']);

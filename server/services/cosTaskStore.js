@@ -1,6 +1,7 @@
 import { auditWorkflow, newAuditMetadata, isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORGE_MAINTENANCE_REASON } from '../lib/forgeMaintenanceTasks.js';
 import { getSkipReason } from './cosTaskClaim.js';
+import { isDeepStrictEqual } from 'node:util';
 /**
  * CoS Task Store Module
  *
@@ -31,7 +32,7 @@ import { PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../
 import { splitTaskPromptFields, TASK_PROMPT_KEY, TASK_CONTEXT_KEY } from '../lib/cosTaskPrompt.js';
 import { normalizeOrchestrationMode, normalizeOrchestrationProfile } from '../lib/orchestrationProfile.js';
 import { loadState, withStateLock } from './cosState.js';
-import { hasActiveTaskOwner } from './agentState.js';
+import { activeAgents, runnerAgents, hasActiveTaskOwner } from './agentState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
@@ -175,6 +176,9 @@ function isContentEdit(updates, existingMetadata = {}) {
 //      exactly one (nobody else wrote in between); otherwise they drop it.
 const snapshotCache = new Map(); // source -> { version, snapshot }
 const snapshotLoads = createSingleFlight();
+// A list may be mutated or transformed before saving. Keep its ORIGINAL read
+// snapshot, never a fresh read whose omissions could turn into accidental deletes.
+const listSnapshots = new WeakMap();
 
 // Private snapshots never leave this module: list readers clone the array,
 // while ID lookups clone only the matching task. Both share invalidation.
@@ -185,7 +189,7 @@ async function readTaskSnapshot(source) {
   if (cached?.version === version) return cached.snapshot;
   return snapshotLoads.run(`${source}:${version}`, async () => {
     const loaded = await loadTaskWorkingSet(source);
-    const snapshot = { rows: loaded.rows, tasks: loaded.rows.map((row) => row.task) };
+    const snapshot = { version: loaded.version, rows: loaded.rows, tasks: loaded.rows.map((row) => row.task) };
     if (!snapshotCache.get(source) || snapshotCache.get(source).version <= loaded.version) {
       snapshotCache.set(source, { version: loaded.version, snapshot });
     }
@@ -194,7 +198,10 @@ async function readTaskSnapshot(source) {
 }
 
 async function readTaskFile(source) {
-  return structuredClone((await readTaskSnapshot(source)).tasks);
+  const snapshot = await readTaskSnapshot(source);
+  const tasks = structuredClone(snapshot.tasks);
+  listSnapshots.set(tasks, snapshot);
+  return tasks;
 }
 
 async function findTaskInFile(source, taskId) {
@@ -215,19 +222,22 @@ async function findTaskInFile(source, taskId) {
  * only the rows that changed, in one transaction. Every write path in this
  * module goes through here. Resolves to whether anything was written.
  */
-async function writeTaskList(source, tasks) {
-  const snapshot = await readTaskSnapshot(source);
+async function writeTaskList(source, tasks, original = tasks, dependencies = {}) {
+  const snapshot = listSnapshots.get(original);
+  if (!snapshot) throw new Error('Task saves require their original read snapshot');
   const cached = snapshotCache.get(source);
   const plan = planListSave({ previous: snapshot.rows, next: tasks, source });
   if (plan.upserts.length === 0 && plan.deletes.length === 0) return false;
-  const version = await applyTaskListSave(source, plan);
+  const version = await applyTaskListSave(source, {
+    ...plan, expectedVersions: { ...dependencies, [source]: snapshot.version },
+  });
 
   const positions = new Map(snapshot.rows.map((row) => [row.task.id, row.position]));
   for (const { task, position } of plan.upserts) positions.set(task.id, position);
   if (cached?.snapshot === snapshot && version === cached.version + 1) {
     // Same bound as a reload, so completions never accumulate in the cache.
     const rows = selectWorkingSet(plan.saved.map((task) => ({ task, position: positions.get(task.id) })));
-    snapshotCache.set(source, { version, snapshot: { rows, tasks: rows.map((row) => row.task) } });
+    snapshotCache.set(source, { version, snapshot: { version, rows, tasks: rows.map((row) => row.task) } });
   } else {
     snapshotCache.delete(source);
   }
@@ -488,7 +498,20 @@ async function uniqueTaskId(source, id, tasks) {
  * force-spawn the returned task itself; the change event still reaches socket
  * consumers, but the normal scheduler must not race that dispatch.
  */
-export async function addTask(taskData, taskType = 'user', { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false } = {}) {
+export async function addTask(taskData, taskType = 'user', options = {}) {
+  // Only addition is replayed: it has no effects before persistence. Re-read
+  // both queues and recompute dedup/IDs on conflict; never retry a stale plan.
+  // Other mutations surface 409 so decisions or side effects are not replayed.
+  for (let attempt = 0; ; attempt++) {
+    const result = await addTaskAttempt(taskData, taskType, options).catch(error => {
+      if (error.code !== 'COS_TASK_LIST_CONFLICT' || attempt >= 3) throw error;
+      return null;
+    });
+    if (result !== null) return result;
+  }
+}
+
+async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false }) {
   validateRequest(cosTaskTypeSchema, taskType);
   if (!raw && taskData.metadata) taskData = { ...taskData, metadata: newAuditMetadata(taskData.metadata) };
   return withStateLock(async () => {
@@ -497,8 +520,10 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
   // One state lock covers BOTH queues: manual and autonomous producers
   // must acquire the same durable work identity even with different titles.
   const newWorkIdentity = developmentWorkIdentity(taskData);
+  const dependencies = {};
   if (newWorkIdentity) {
     const other = await readTaskFile(taskType === 'user' ? 'internal' : 'user');
+    dependencies[taskType === 'user' ? 'internal' : 'user'] = listSnapshots.get(other).version;
     const owner = [...tasks, ...other].find(task => task.id !== ignoreTaskId
       && DEVELOPMENT_ACTIVE_STATUSES.has(task.status) && sameDevelopmentWork(task, taskData)
       // Targeted claims and the backlog drain coexist in either admission order.
@@ -617,7 +642,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     tasks.push(newTask);
   }
 
-  await writeTaskList(taskType, tasks);
+  await writeTaskList(taskType, tasks, tasks, dependencies);
 
   // cos.js init listens for this event. For user tasks it fires
   // tryImmediateSpawn so the task starts instantly if slots are available,
@@ -654,10 +679,10 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
  * `expectedStatus`, when supplied, is checked under the task-file lock. A mismatch
  * returns `{ statusChanged: true }` without writing or retiring pause state.
  */
-export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, expectedStatus = null, expectedMetadata = null } = {}) {
+export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false } = {}) {
   validateRequest(cosTaskTypeSchema, taskType);
   const release = await preparePauseRelease(taskId, updates);
-  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue, expectedStatus, expectedMetadata });
+  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue, expectedStatus, expectedMetadata, expectedTask, recoveryOwner, preserveRetryBudget });
   if (release && !result?.error && !result?.statusChanged) {
     await retirePausedAgent(release.agentId, taskId, resolveTaskTargetBranch(result?.metadata));
   }
@@ -711,6 +736,9 @@ async function preparePauseRelease(taskId, updates) {
  * than each re-testing `updates.status !== 'in_progress'`.
  */
 const TRANSITION_METADATA_CLEARS = Object.freeze([
+  // An explicit retry or new cycle cancels the old cleanup coordinator.
+  ['isRequeue', ['deliveryRecovery', 'deliveryRecoveryAgentId']],
+  ['isRevive', ['deliveryRecovery', 'deliveryRecoveryAgentId']],
   // Leaving `blocked` by any door — a dedupe revive, an autopilot re-dispatch, an
   // orphan-cooldown expiry, or a human unblocking it from the task list. Clearing
   // only in `resumeAgent` left every one of those paths running a task that still
@@ -718,7 +746,7 @@ const TRANSITION_METADATA_CLEARS = Object.freeze([
   // still-paused agent record then read its own pause as spent and spawned a SECOND
   // agent on a fresh task. The failure counters go too, or the revived task
   // re-blocks on the budget it blocked with.
-  ['leavesBlocked', ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'failureCount', 'lastErrorCategory', 'lastFailureAt', ...PAUSE_METADATA_KEYS]],
+  ['leavesBlocked', ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'deliveryDecisionAgentId', 'failureCount', 'lastErrorCategory', 'lastFailureAt', ...PAUSE_METADATA_KEYS]],
   // A retry hold (#3373) only means anything while the task is `in_progress` waiting
   // on a cleanup to resolve its resume pointer. Any other status the task reaches —
   // terminal, or a requeue some other path performed — retires it, so drop the marker
@@ -762,12 +790,12 @@ function mergeUpdateMetadata(existingMetadata, updates) {
   return merged;
 }
 
-async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null, expectedMetadata = null }) {
-  return withStateLock(() => writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue, expectedStatus, expectedMetadata }));
+async function writeTaskUpdate(taskId, updates, taskType, options) {
+  return withStateLock(() => writeTaskUpdateLocked(taskId, updates, taskType, options));
 }
 
 // Caller holds withStateLock, including its status and ownership decision.
-async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null, expectedMetadata = null }) {
+async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false }) {
   const tasks = await readTaskFile(taskType);
 
   let taskIndex = tasks.findIndex(t => t.id === taskId);
@@ -793,6 +821,18 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   }
 
   const current = tasks[taskIndex];
+  if (expectedTask && Object.entries(expectedTask).some(([key, value]) => !isDeepStrictEqual(current[key], value))) {
+    return { statusChanged: true, task: current };
+  }
+  if (recoveryOwner) {
+    const state = await loadState();
+    const registered = state.agents?.[recoveryOwner.id];
+    const competing = Object.values(state.agents || {}).some(agent => agent.id !== recoveryOwner.id
+      && agent.taskId === taskId && ['running', 'paused'].includes(agent.status))
+      || [activeAgents, runnerAgents].some(entries => [...entries].some(([id, agent]) => id !== recoveryOwner.id
+        && (agent.taskId || agent.task?.id) === taskId));
+    if (competing || (registered && registered.startedAt !== recoveryOwner.startedAt)) return { statusChanged: true, task: current };
+  }
   if (expectedMetadata && Object.entries(expectedMetadata).some(([key, value]) => current.metadata?.[key] !== value)) {
     return { statusChanged: true, task: current };
   }
@@ -825,6 +865,14 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   for (const [field, keys] of TRANSITION_METADATA_CLEARS) {
     if (!transition[field]) continue;
     for (const key of keys) delete updatedMetadata[key];
+  }
+  // Automatic delivery recovery continues the charged attempt, unlike an
+  // explicit human revive. Persist its budget in the same write as its hold.
+  if (preserveRetryBudget && expectedStatus === 'blocked' && expectedTask && transition.leavesBlocked
+    && updates.status === 'in_progress' && typeof updates.metadata?.retryPendingCleanup === 'string') {
+    for (const key of ['failureCount', 'lastErrorCategory', 'lastFailureAt']) {
+      if (Object.hasOwn(updates.metadata, key)) updatedMetadata[key] = updates.metadata[key];
+    }
   }
 
   // Drop the resume pointer once the task reaches a terminal state. `existingBranch`
@@ -1010,7 +1058,7 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() }
     // stored a terminal verdict before upgrading, or a crash before a prior consume, leaves
     // the task terminal with the merge producing no change, so a changed-only consume would
     // never catch up). Re-offering is cheap: the consumer is a durable no-op after the first.
-    if (!await writeTaskList(taskType, merged)) return { changed: false, merged };
+    if (!await writeTaskList(taskType, merged, localTasks)) return { changed: false, merged };
 
     cosEvents.emit('tasks:changed', { type: taskType, action: 'peer-merged' });
     return { changed: true, count: merged.length, merged };
@@ -1276,7 +1324,7 @@ export async function reorderTasks(taskIds) {
     reorderedTasks.push(task);
   }
 
-  await writeTaskList('user', reorderedTasks);
+  await writeTaskList('user', reorderedTasks, tasks);
 
   cosEvents.emit('tasks:changed', { type: 'user', action: 'reordered' });
   return { success: true, order: reorderedTasks.map(t => t.id) };

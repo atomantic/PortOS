@@ -327,7 +327,7 @@ describe('app socket handlers', () => {
 
   describe('failure recovery', () => {
     it('records a failed update in the ledger, broadcasts the change, and clears the operation', async () => {
-      appUpdater.updateApp.mockRejectedValue(new Error('git pull failed'));
+      appUpdater.updateApp.mockRejectedValue(Object.assign(new Error('git pull failed'), { context: { token: 'do-not-export' } }));
       const client = connect(bus);
 
       await client.fire('app:update', { appId: 'app-a' });
@@ -341,6 +341,45 @@ describe('app socket handlers', () => {
       // No success/complete frame may follow the failure.
       expect(client.events('app:update:complete')).toHaveLength(0);
       expect(client.last('app:operations:active').payload.operations).toEqual([]);
+    });
+
+    it.each([
+      { credential: 'oauth', command: 'gh auth refresh -h ghe.example.com -s workflow', refreshable: true },
+      { credential: 'personal-access-token', command: null, refreshable: false },
+      { credential: 'oauth', command: 'gh auth refresh -h ghe.example.com -s workflow', refreshable: false },
+    ])('preserves bounded scope repair and progress for a refused combined update ($credential, $refreshable)', async (guidance) => {
+      const context = { host: 'ghe.example.com', scopes: ['workflow'], ...guidance };
+      appUpdater.updateApp.mockImplementation(async (_app, emit) => {
+        emit('fork-sync', 'running', 'Syncing fork');
+        throw Object.assign(new Error('workflow scope missing'), {
+          code: 'FORGE_TOKEN_SCOPE_MISSING', context: { ...context, token: 'do-not-export', raw: { private: true } },
+        });
+      });
+      const client = connect(bus);
+      await client.fire('app:update', { appId: 'app-a', syncFork: true });
+      expect(appUpdater.updateApp).toHaveBeenCalledWith(APPS['app-a'], expect.any(Function), expect.objectContaining({ syncFork: true }));
+      expect(client.last('app:update:error').payload).toEqual({
+        appId: 'app-a', code: 'FORGE_TOKEN_SCOPE_MISSING', message: 'workflow scope missing', context,
+      });
+      expect(logAction).toHaveBeenCalledWith('update', 'app-a', 'Example App A', {
+        steps: [expect.objectContaining({ step: 'fork-sync', message: 'Syncing fork' })],
+        errorCode: 'FORGE_TOKEN_SCOPE_MISSING', errorContext: context,
+      }, false, 'workflow scope missing');
+      expect(client.events('app:update:complete')).toHaveLength(0);
+      expect(client.last('app:operations:active').payload.operations).toEqual([]);
+    });
+
+    it('withholds malformed or oversized scope context from failed operation events and history', async () => {
+      for (const context of [
+        { host: 'ghe.example.com', scopes: 'workflow' },
+        { host: 'ghe.example.com', scopes: ['workflow'], command: 'x'.repeat(1025) },
+      ]) {
+        appUpdater.updateApp.mockRejectedValue(Object.assign(new Error('scope missing'), { code: 'FORGE_TOKEN_SCOPE_MISSING', context }));
+        const client = connect(bus);
+        await client.fire('app:update', { appId: 'app-a', syncFork: true });
+        expect(client.last('app:update:error').payload).toEqual({ appId: 'app-a', code: 'FORGE_TOKEN_SCOPE_MISSING', message: 'scope missing' });
+        expect(logAction).toHaveBeenLastCalledWith('update', 'app-a', 'Example App A', { steps: [] }, false, 'scope missing');
+      }
     });
 
     it('surfaces a standardize analyze failure as an error step and never reaches apply', async () => {

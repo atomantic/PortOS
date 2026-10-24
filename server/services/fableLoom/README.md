@@ -18,6 +18,11 @@ intent to a transition and moves them through the graph until an ending.
 | `production.js` | Episodic production orchestration: batch planning, DAG generation, cancellable batch runs, and user-triggered episodic continuity review (#5384). |
 | `falVideoAutomation.js` | User-triggered, serialized Playwright automation over the persistent PortOS CDP browser: uploads a scene still + full shot prompt to fal.ai H3 Max, downloads the finished MP4 into shared video history, and attaches it to the originating scene. |
 | `store.js` | PostgreSQL/file backend facade (`fableloom_stories`; collectionStore escape hatch for tests). |
+| `exports.js` | Immutable authored snapshots, readiness/approval gates, deterministic portable ZIP packages, an optional static reference player, and bounded persistent export jobs. |
+| `staticPlayerFiles.js` | Stable filenames copied into an export's `player/` directory when `includePlayer` is set. |
+| `static-player/` | Dependency-free reference player copied into an export when `includePlayer` is set. |
+| `exportMedia.js` | Root-confined bounded media reads, metadata-free PNG stills and H.264/AAC MP4 stream copies; no network or generation. |
+| `exportVoice.js` | Root-confined reads of one approved voice-reference basename from that profile's source directory. Transcripts, engines and local paths stay out of the package. |
 | `db.js` | PostgreSQL leaf I/O. |
 
 Pure graph analysis (validation, BFS layering, prompt rendering) lives in

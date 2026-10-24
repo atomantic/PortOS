@@ -5,6 +5,7 @@ import WhatsappImportPanel from './WhatsappImportPanel';
 import BrowserHistoryImportPanel from './BrowserHistoryImportPanel';
 import YoutubeImportPanel from './YoutubeImportPanel';
 import GmailMboxImportPanel from './GmailMboxImportPanel';
+import ManageImportedDataPanel from './ManageImportedDataPanel';
 
 // The one-time bulk-backfill importers (#2160), grouped behind a single
 // disclosure on /timeline (#3789). They used to render permanently at full
@@ -26,10 +27,13 @@ const PANELS = [
 // says how much is behind it.
 export const IMPORT_SOURCE_COUNT = PANELS.length;
 
-export default function TimelineImportPanels({ onImported }) {
+export default function TimelineImportPanels({ onImported, reloadKey }) {
   return (
-    <div className="grid gap-2 sm:grid-cols-2">
-      {PANELS.map(({ id, Component }) => <Component key={id} onImported={onImported} />)}
+    <div className="space-y-2">
+      <div className="grid gap-2 sm:grid-cols-2">
+        {PANELS.map(({ id, Component }) => <Component key={id} onImported={onImported} />)}
+      </div>
+      <ManageImportedDataPanel reloadKey={reloadKey} onChanged={onImported} />
     </div>
   );
 }

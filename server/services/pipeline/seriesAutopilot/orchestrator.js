@@ -154,6 +154,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
   const runId = randomUUID();
   const record = {
     runId,
+    seriesId: sId,
     clients: [],
     lastPayload: null,
     cancelRequested: false,

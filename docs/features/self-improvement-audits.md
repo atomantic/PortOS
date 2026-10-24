@@ -27,20 +27,27 @@ missions. Selection follows the provider executable (with the shipped provider
 id as a fallback), rather than the model name. Other providers and the separate
 local-inference-only private assessment keep their existing workflows.
 
-The agent uses an available Codex Security scanner or the official
-[`@openai/codex-security` CLI](https://learn.chatgpt.com/docs/security/cli) in
-report-only, unattended mode, with private artifacts outside the checkout.
+The agent reads instructions and the documented threat model, establishes scope,
+then requests the runner's installed
+[`@openai/codex-security` CLI](https://learn.chatgpt.com/docs/security/cli)
+before vulnerability discovery or active testing. The runner discovers project,
+global PATH and cached npm installs without installing or invoking a launcher.
+The scan runs in report-only, unattended mode, with private artifacts outside
+the checkout.
 Existing authentication, configured model/effort, quota and spending limits
 still apply. This routing does not install a hook, patch code, create a PR,
 publish findings, or authorize a different provider account. The audit's
 file-issues/remediation contract remains responsible for delivery.
 
-Unavailable access or a refused action must be recorded without interactive
-login or repeated attempts through another tool. The agent preserves completed
-evidence, continues independently permitted review, delivers supported findings,
-and writes the usual quality assessment and completion sentinel. Scanner
-coverage and unresolved areas remain evidence to inspect, not a clean bill of
-health for the repository.
+Unavailable access must be recorded without interactive login or repeated
+attempts through another tool. The agent preserves completed evidence, continues
+independently permitted review, delivers supported findings, and writes the usual
+quality assessment and completion sentinel. A cybersecurity/content-policy
+refusal stops the scanner and outer request; it never authorizes continuation,
+retry, rephrasing or provider fallback. Installing the scanner does not grant
+broader [Trusted Access/Daybreak](https://learn.chatgpt.com/docs/cyber-safety).
+Scanner coverage and unresolved areas remain evidence to inspect, not a clean
+bill of health for the repository.
 
 The runner scans a private standalone snapshot of **committed HEAD**, with every
 selected source and knowledge-base path mapped into that snapshot. Ordinary

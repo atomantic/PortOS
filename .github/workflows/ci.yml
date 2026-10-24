@@ -1131,8 +1131,10 @@ jobs:
         id: windows-tests
         # A step timeout FAILS the step (log kept, `if: failure()` reporting
         # runs); the job-level timeout would cancel the job and lose the log
-        # (#10415). Observed healthy runs take 2-10 minutes.
-        timeout-minutes: 15
+        # (#10415). Scoped runs finish in a few minutes. A full shard has been
+        # observed still passing tests at 15 minutes, so keep headroom under
+        # the 40-minute job budget.
+        timeout-minutes: 25
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           # Outside the launcher's disposable temp root; recoverable after exit.

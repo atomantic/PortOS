@@ -89,36 +89,26 @@ See [VERSIONING.md](./VERSIONING.md) for full details.
 
 Pregate first checks installed package versions against all four workspace lockfiles without modifying dependency trees. Stale, missing, or unreadable evidence stops lint/tests with a reconciliation diagnostic. Pregate requires development dependencies (`npm ci --include=dev` in an owning workspace); a production-only installation cannot run its checks. Ordinary worktree links must be repaired only in their owning source checkout; a separate clone with its own locked installs is also suitable for validation. `--plan-only` prints the plan without checking installed dependencies.
 
-Pregate proves only the stages it runs, and it says which it did not. A scoped
-plan runs every suite CI would run for it, in CI's dependency order and with
-CI's environment: the hidden-content scan, lint, server and client tests, the
-client build plus the API Explorer bundle pin, the boot smoke, the
-cross-workspace browser suites (smoke profile), and the serial `portos_test`
-DB suite last and alone — never concurrently with the other suites, and never
-against `portos` (both `PGDATABASE` and `PGTESTDATABASE` are pinned and
-`TEST_DB_OK` is removed from the stage's environment). A full-suite plan runs
-only the always-run guards unless `--full` is supplied, which runs everything
-above as well.
+Test process containment keeps signal delivery separate from verified termination.
+After worker-pool closure, any discovered owned child gets a bounded report in
+`.cache/test-process-diagnostics/`; the CI launcher also retains `processes.json`
+in its attempt diagnostics. Reports contain repository-relative suite names,
+bounded worker IDs and fixed lifecycle/settlement categories, never raw process
+arguments, environments, PIDs or private paths. Suite attribution is captured at
+child construction and matched by a hash of the PID and birth identity. Children
+that bypass the observer (including grandchildren whose parent already exited)
+remain explicitly unattributed. Unknown/unconfirmed settlement retains the run
+root and fails the run; a successful signal alone does not authorize removal.
+Interrupted-run sweeps retain roots while their deferred escalation is pending.
+On POSIX, incomplete process inventories also retain stale roots; a dead runner
+does not prove its children exited. Pending identity checks apply to pool-close
+cleanup as well as later sweeps.
 
-A suite stays with CI, and is named as not run in the summary, when:
+`npm run pregate` is the lightweight local gate: lint/format checks, always-run and diff-selected structural guards, and directly owned unit tests. It selects edited test files and sibling tests for changed sources, including untracked new tests, without expanding through transitive imports. Browser, database, build and boot-smoke suites stay with hosted CI. Run a focused public-boundary regression for changed behavior that has no sibling test; automatic selection does not replace engineering judgment.
 
-- you pass `--skip-db`, `--skip-browser`, `--skip-build` or `--skip-smoke`;
-- a full plan was downgraded (no `--full`);
-- a prerequisite is missing — no Postgres answering at the resolved endpoint
-  (exported `PG*`, then the checkout's `.env`, then `localhost:5432`), or no
-  Chrome, ffmpeg or client bundler for the browser suites. The line names the
-  remedy; the run continues.
+`npm run pregate -- --full` explicitly runs the broad CI plan locally, including selected browser/DB/build/smoke stages when prerequisites are present. Missing prerequisites and `--skip-*` options remain explicit in the receipt. DB stages run last against `portos_test` only. Required hosted checks and configured reviews remain mandatory.
 
-The shipped prompt-history guard (CI's `prompt-history` job) runs locally
-when the planner selects it. The Windows job and the Linux worker-containment
-job (bubblewrap namespaces) are the two suites only CI can prove; both are
-named as not run. Every run writes a receipt to
-`.cache/pregate/report.json` (gitignored): the plan, each stage's outcome and
-duration, the suites not run and why, the base and HEAD SHAs, the Node
-version, platform and worker budget, and the hash of the exact working tree
-that was validated — untracked and uncommitted files included, so a later
-commit of that state yields the same `HEAD^{tree}`. A green summary never
-claims a suite it skipped; required CI checks still apply.
+The receipt at `.cache/pregate/report.json` records `validationMode` (`focused` or `ci`), exact tree/base/head, stage outcomes/durations and omitted suites. Focused mode marks server/client results as reduced coverage and cannot attest CI suites. Structural guard reuse remains confined to an unchanged snapshot within one invocation. `--guards-only --merged-with origin/<base>` retains the required current-base merge check, outside merge admission.
 
 Interrupting pregate (Ctrl-C or SIGTERM) does not leave tests running behind
 it: the running stage — including the test runner's npm and Vitest
@@ -136,7 +126,7 @@ pregate is still settling its stage. On Windows, where `cmd.exe` has no
 `exec`, the repository-root `exec.cmd` shim (found first in the working
 directory) runs the same command.
 
-After the push (and, when you open the pull request yourself, before
+The default focused receipt is local evidence only: do not invoke `pregate-attest.js` or rerun solely to attest it. After explicit `--full` validation, after the push (and, when you open the pull request yourself, before
 `gh pr create`), `node scripts/pregate-attest.js` posts that receipt as a
 `pregate` commit status on the pushed head, bound to the validated tree and
 naming the platform and Node it ran on, and the pull request's impact planner
@@ -294,7 +284,7 @@ npm test
 npm test --prefix server -- services/creativeDirector/videoAssembly.test.js
 ```
 
-`npm run pregate` runs the DB suite itself when the plan selects it, after
+`npm run pregate -- --full` runs the DB suite when the plan selects it, after
 every other stage, against `portos_test` only. For release validation by
 hand, run `npm run test:db` after the server and client
 suites finish rather than alongside them. A concurrent run is supported —
@@ -302,6 +292,20 @@ the database restore suite drains a timed-out case before the next one touches
 `portos_test` — but its per-case budgets assume an
 unloaded machine, so a concurrent run can time out cases a sequential run
 passes.
+
+For the intermittent synthetic gallery-page timeout investigation (#13369),
+`PORTOS_DB_PHASE_DIAGNOSTICS=1 npm run pregate -- --full` adds wall/CPU timings
+for fixture construction, seeding, public calls, EXPLAINs and result
+serialization when the plan selects the DB suite. To obtain
+the complete serial DB workload regardless of test-memo reuse, run
+`PORTOS_DB_PHASE_DIAGNOSTICS=1 npm run test:db` after the earlier validation
+stages finish. The observer reads only `portos_test` session state, waits,
+transaction ages and run-lock ownership: no query text, network addresses or
+record contents. It samples at most three times per phase, caps each snapshot
+at 16 sessions, and uses a separate connection with a 500 ms statement timeout.
+Opt-in diagnostics add observation work; original test deadlines stay intact.
+Failure messages retain bounded phase evidence even with quiet reporting.
+A passing run without a reproduced slow phase does not resolve the timeout.
 
 For server watch mode, run this alternative from the repository root:
 

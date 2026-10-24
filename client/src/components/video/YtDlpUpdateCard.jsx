@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw } from 'lucide-react';
 import toast from '../ui/Toast';
-import { useSocket } from '../../hooks';
+import { useSocket } from '../../hooks/useSocket.js';
 import { getYtDlpStatus, updateYtDlp } from '../../services/apiVideoDownload.js';
 
 /**

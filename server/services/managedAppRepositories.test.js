@@ -9,6 +9,7 @@ const mock = vi.hoisted(() => ({
   isFetchFresh: vi.fn(),
   resolveForgeForRepo: vi.fn(),
   execGh: vi.fn(),
+  inspectPinnedSubmoduleDrift: vi.fn(),
 }));
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
@@ -27,6 +28,7 @@ vi.mock('./git.js', () => ({
   resolveForgeForRepo: mock.resolveForgeForRepo,
 }));
 vi.mock('./github.js', () => ({ execGh: mock.execGh }));
+vi.mock('./gitPinnedSubmodules.js', () => ({ inspectPinnedSubmoduleDrift: mock.inspectPinnedSubmoduleDrift }));
 
 import {
   getManagedAppRepositorySources,
@@ -52,6 +54,7 @@ const forkOrigin = {
 describe('managed app repository topology', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mock.inspectPinnedSubmoduleDrift.mockResolvedValue({ repairablePaths: [], onlyRepairable: false });
     mock.pathExists.mockResolvedValue(true);
     mock.getOriginInfo.mockResolvedValue(forkOrigin);
     mock.readRemoteUrl.mockResolvedValue(null);
@@ -138,6 +141,19 @@ describe('managed app repository topology', () => {
     );
     expect(JSON.stringify(result)).not.toContain(REPO);
     expect(mock.fetchOrigin).toHaveBeenCalledWith(REPO);
+  });
+
+  it('offers an update for stale submodules even when the parent is current', async () => {
+    mock.execGit.mockImplementation(async (args) => {
+      if (args[0] === 'status') return { exitCode: 0, stdout: ' M lib/dep\n' };
+      if (args[0] === 'rev-list') return { exitCode: 0, stdout: '0\t0\n' };
+      return { exitCode: 0, stdout: args.includes('--abbrev-ref') ? 'main\n' : `${'1'.repeat(40)}\n` };
+    });
+    mock.execGh.mockResolvedValue('{}');
+    mock.getOriginInfo.mockResolvedValue({ ...forkOrigin, isUpstream: true });
+    mock.inspectPinnedSubmoduleDrift.mockResolvedValue({ repairablePaths: ['lib/dep'], onlyRepairable: true });
+    const result = await getManagedAppRepositorySources(app);
+    expect(result).toMatchObject({ updateAvailable: true, sources: [{ clean: false, submodulesOnly: true }] });
   });
 
   // The Eidoverse page runs this read on every visit, so an ungated fetch would

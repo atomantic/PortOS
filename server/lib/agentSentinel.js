@@ -21,6 +21,7 @@
  */
 
 import { join } from 'path';
+import { normalizeTaskOutcome } from './agentOutcome.js';
 
 import { safeJSONParse, sanitizeFilename } from './fileUtils.js';
 
@@ -154,7 +155,8 @@ export function parseSentinelPayload(contents) {
   if (parsed && typeof parsed === 'object') {
     const summary = typeof parsed.summary === 'string' ? parsed.summary : '';
     const payload = 'payload' in parsed ? parsed.payload : null;
-    return { summary, payload };
+    const taskOutcome = normalizeTaskOutcome(parsed.taskOutcome);
+    return { summary, payload, ...(taskOutcome ? { taskOutcome } : {}) };
   }
 
   return { summary: trimmed, payload: null };

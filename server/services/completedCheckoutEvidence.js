@@ -6,9 +6,18 @@ import { lstat, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { z } from 'zod';
 
 const shortBranch = branch => branch?.replace(/^refs\/heads\//, '');
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+export const hasClaimCheckoutBindings = meta => meta?.isWorktree !== true
+  && (isTruthyMeta(meta?.claimPicksOwnBranch) || Array.isArray(meta?.claimBranches));
+const physicalIdentitySchema = z.object({ dev: z.string(), ino: z.string(), birthtimeNs: z.string() });
+export const checkoutSeedSchema = z.object({ version: z.literal(1), agentId: z.string(), startedAt: z.string().datetime(),
+  seededAt: z.string().datetime(), repoPath: z.string(), branch: z.string(), path: z.string(),
+  repository: physicalIdentitySchema, checkout: physicalIdentitySchema,
+  incarnation: z.object({ pointer: physicalIdentitySchema,
+    gitdir: z.object({ path: z.string(), dev: z.string(), ino: z.string(), birthtimeNs: z.string() }) }) });
 
 const repoCommonByRepo = new Map();
 async function resolveRepoCommon(repository) {
@@ -31,14 +40,14 @@ async function filesystemIdentity(path, type) {
   return { dev: String(stat.dev), ino: String(stat.ino), birthtimeNs: String(stat.birthtimeNs) };
 }
 
-export async function readCompletedCheckoutIdentity({ repoPath, branch, path, head, worktrees = null, repoCommon = null }) {
+export async function readCompletedCheckoutIdentity({ repoPath, branch, path, head, worktrees = null, repoCommon = null, allowLocked = false }) {
   const { listWorktrees } = await import('./worktreeManager.js');
   const repository = await realpath(repoPath);
   const checkout = await realpath(path);
   if (checkout === repository || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(head || '')) return null;
   const trees = worktrees || await listWorktrees(repository);
   const holders = trees.filter(tree => shortBranch(tree.branch) === branch);
-  if (holders.length !== 1 || await realpath(holders[0].path) !== checkout || holders[0].head !== head) return null;
+  if (holders.length !== 1 || (!allowLocked && holders[0].locked === true) || await realpath(holders[0].path) !== checkout || holders[0].head !== head) return null;
   const pointer = await filesystemIdentity(join(checkout, '.git'), 'file');
   const gitdir = await realpath((await execGit(['rev-parse', '--absolute-git-dir'], checkout)).stdout.trim());
   const administration = await filesystemIdentity(gitdir, 'directory');
@@ -62,40 +71,127 @@ export async function readCompletedCheckoutIdentity({ repoPath, branch, path, he
  */
 function runRepository(meta) {
   if (typeof meta?.sourceWorkspace === 'string' && meta.sourceWorkspace) return meta.sourceWorkspace;
-  return isTruthyMeta(meta?.claimPicksOwnBranch) && meta.isWorktree !== true
+  return hasClaimCheckoutBindings(meta) && meta.isWorktree !== true
     && typeof meta.workspacePath === 'string' && meta.workspacePath ? meta.workspacePath : null;
 }
 
-/** Called under the agent-state lock while the successful run still owns its
- * current claim bindings. Never manufacture evidence for historical releases.
+/** Invoked only at server-controlled registration/binding while the owner is
+ * active. Bind before creation reserves the branch; binding again afterward
+ * records its physical generation before work starts. A changed seed refuses.
+ */
+export async function captureCheckoutSeeds(agent) {
+  const prior = agent.metadata?.checkoutSeeds || [];
+  const rows = await captureCompletedCheckouts(agent, { success: true, strict: true, allowUncreated: true });
+  const seeds = [...prior];
+  for (const row of rows) {
+    const seed = checkoutSeedSchema.parse({ version: 1, agentId: agent.id, startedAt: agent.startedAt,
+      seededAt: new Date().toISOString(), repoPath: row.repoPath, branch: row.branch, path: row.path,
+      repository: await filesystemIdentity(row.repoPath, 'directory'), checkout: await filesystemIdentity(row.path, 'directory'),
+      incarnation: row.incarnation });
+    const existing = prior.find(value => value.branch === seed.branch);
+    if (existing) {
+      if (!same({ ...existing, seededAt: seed.seededAt }, seed)) throw new Error('checkout-seed-generation-changed');
+    } else seeds.push(seed);
+  }
+  return seeds;
+}
+
+/** A late capture has an actual late timestamp and a separately bound early
+ * physical generation; legacy v1 evidence retains its original time contract.
+ */
+export function completedCheckoutReceiptValid(agent, receipt) {
+  if (!receipt || receipt.agentId !== agent.id || receipt.startedAt !== agent.startedAt
+    || !Number.isFinite(Date.parse(receipt.capturedAt)) || Date.parse(receipt.capturedAt) < Date.parse(agent.startedAt)) return false;
+  if (receipt.version === 1) return Date.parse(receipt.capturedAt) <= Date.parse(agent.completedAt);
+  if (receipt.version !== 2 || Date.parse(receipt.capturedAt) > Date.now()) return false;
+  return agent.metadata?.checkoutSeeds?.some(seed => checkoutSeedSchema.safeParse(seed).success
+    && seed.agentId === agent.id && seed.startedAt === agent.startedAt && seed.seededAt === receipt.seededAt
+    && Date.parse(seed.seededAt) >= Date.parse(agent.startedAt) && Date.parse(seed.seededAt) <= Date.parse(agent.completedAt) && seed.repoPath === receipt.repoPath
+    && seed.branch === receipt.branch && seed.path === receipt.path && same(seed.incarnation, receipt.incarnation)) === true;
+}
+
+/** Read the final head only inside the pre-existing physical binding. No fetch
+ * or branch-name discovery is allowed after terminal ingestion.
+ */
+export async function captureSeededCompletionCheckouts(agent, { preterminal = false } = {}) {
+  if (preterminal && !['running', 'paused'].includes(agent.status)) return null;
+  const terminalAt = preterminal ? Date.now() : Date.parse(agent.completedAt);
+  const bound = hasClaimCheckoutBindings(agent.metadata) ? agent.metadata.claimBranches : [agent.metadata?.worktreeBranch];
+  const seeds = agent.metadata?.checkoutSeeds?.filter(seed => Array.isArray(bound) && bound.includes(seed.branch));
+  if (!Array.isArray(seeds) || !seeds.length) return null;
+  const receipts = [];
+  for (const seed of seeds) {
+    if (!checkoutSeedSchema.safeParse(seed).success || seed.agentId !== agent.id || seed.startedAt !== agent.startedAt
+      || Date.parse(seed.seededAt) < Date.parse(agent.startedAt) || Date.parse(seed.seededAt) > terminalAt
+      || !same(seed.repository, await filesystemIdentity(seed.repoPath, 'directory'))
+      || !same(seed.checkout, await filesystemIdentity(seed.path, 'directory'))) return null;
+    const head = (await execGit(['rev-parse', '--verify', 'HEAD^{commit}'], seed.path, {
+      env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_REPLACE_OBJECTS: '1' }, timeout: 5000,
+    })).stdout.trim();
+    // A physical seed survives later commits in the same checkout. Only a head
+    // observed while this execution still owned it may authorize late capture.
+    const terminal = agent.metadata?.checkoutCapture?.targets?.find(row => row.agentId === agent.id
+      && row.startedAt === agent.startedAt && row.repoPath === seed.repoPath && row.branch === seed.branch
+      && row.path === seed.path && same(row.incarnation, seed.incarnation)
+      && Number.isFinite(Date.parse(row.capturedAt)) && Date.parse(row.capturedAt) >= Date.parse(agent.startedAt)
+      && Date.parse(row.capturedAt) <= terminalAt);
+    if (!preterminal && (!terminal || terminal.head !== head)) return null;
+    const target = { repoPath: seed.repoPath, branch: seed.branch, path: seed.path, head };
+    const current = await readCompletedCheckoutIdentity(target);
+    if (!current || !same(current.incarnation, seed.incarnation)) return null;
+    receipts.push({ version: 2, agentId: agent.id, startedAt: agent.startedAt, seededAt: seed.seededAt,
+      capturedAt: new Date().toISOString(), ...current });
+  }
+  return receipts;
+}
+
+/** Called under the agent-state lock while the run still owns its current
+ * bindings. The caller's success flag enables identity capture, as at initial
+ * registration; it never changes the provider's execution/delivery verdict.
+ * Never manufacture evidence for historical releases.
  * Capture errors withhold cleanup authority without breaking completion.
  */
-export async function captureCompletedCheckouts(agent, { success } = {}) {
+export async function captureCompletedCheckouts(agent, { success, strict = false, allowUncreated = false } = {}) {
   const meta = agent?.metadata;
   if (success !== true || !['running', 'paused'].includes(agent?.status) || !agent.id
     || !Number.isFinite(Date.parse(agent.startedAt))) return [];
   const repoPath = runRepository(meta);
   if (!repoPath) return [];
-  const claim = isTruthyMeta(meta.claimPicksOwnBranch);
+  const claim = hasClaimCheckoutBindings(meta);
   const branches = claim ? meta.claimBranches : meta.isWorktree === true && meta.worktreeBranch ? [meta.worktreeBranch] : null;
   if (!Array.isArray(branches)) return [];
   const { listWorktrees } = await import('./worktreeManager.js');
-  const trees = await listWorktrees(repoPath).catch(() => null);
+  const trees = await listWorktrees(repoPath).catch(error => {
+    if (strict) throw Object.assign(error, { checkoutCapture: { targets: [], unknown: true } });
+    return null;
+  });
   if (!trees) return [];
   const receipts = [];
+  const targets = [];
+  let incomplete = false;
+  let unknown = false;
   for (const branch of new Set(branches)) {
     if (typeof branch !== 'string' || !branch) continue;
     const holders = trees.filter(tree => shortBranch(tree.branch) === branch);
-    if (holders.length !== 1) continue;
+    if (holders.length !== 1) {
+      if (!allowUncreated || holders.length > 1) { incomplete = true; unknown = true; }
+      continue;
+    }
     if (!claim) {
       const recordedPath = typeof meta.workspacePath === 'string' ? await realpath(meta.workspacePath).catch(() => null) : null;
-      if (!recordedPath || await realpath(holders[0].path).catch(() => null) !== recordedPath) continue;
+      if (!recordedPath || await realpath(holders[0].path).catch(() => null) !== recordedPath) { incomplete = true; unknown = true; continue; }
     }
     const target = { repoPath, branch, path: holders[0].path, head: holders[0].head, worktrees: trees };
     const first = await readCompletedCheckoutIdentity(target).catch(() => null);
-    if (!first || !same(first, await readCompletedCheckoutIdentity(target).catch(() => null))) continue;
-    receipts.push({ version: 1, agentId: agent.id, startedAt: agent.startedAt, capturedAt: new Date().toISOString(), ...first });
+    if (!first) { incomplete = true; unknown = true; continue; }
+    // The original preterminal generation is retained even if the independent
+    // final read fails. Replay may compare this exact target, never infer one.
+    const snapshot = { version: 1, agentId: agent.id, startedAt: agent.startedAt, capturedAt: new Date().toISOString(), ...first };
+    targets.push(snapshot);
+    if (!same(first, await readCompletedCheckoutIdentity(target).catch(() => null))) { incomplete = true; continue; }
+    receipts.push(snapshot);
   }
+  if (strict && incomplete) throw Object.assign(new Error('checkout-incarnation-unverified'), { checkoutCapture: { targets, unknown } });
   return receipts;
 }
 
@@ -120,11 +216,8 @@ export async function hasCompletedCheckoutEvidence(records, target) {
     // head. Its failure/missing receipt supersedes the older success. Unknown
     // ordering is also a hold; only an unambiguous newest owner can grant this.
     && scoped.every(other => other === agent || Date.parse(other.startedAt) < Date.parse(agent.startedAt))
-    && isTruthyMeta(agent.metadata?.claimPicksOwnBranch) && Array.isArray(agent.metadata?.completedCheckouts)
-    && agent.metadata.completedCheckouts.some(receipt => receipt?.version === 1
-      && receipt.agentId === (agent.id || agent.agentId) && receipt.startedAt === agent.startedAt
-      && Number.isFinite(Date.parse(receipt.capturedAt)) && Date.parse(receipt.capturedAt) >= Date.parse(agent.startedAt)
-      && Date.parse(receipt.capturedAt) <= Date.parse(agent.completedAt)
+    && hasClaimCheckoutBindings(agent.metadata) && Array.isArray(agent.metadata?.completedCheckouts)
+    && agent.metadata.completedCheckouts.some(receipt => completedCheckoutReceiptValid(agent, receipt)
       && same(current, { repoPath: receipt.repoPath, branch: receipt.branch, path: receipt.path, head: receipt.head, incarnation: receipt.incarnation })));
 }
 

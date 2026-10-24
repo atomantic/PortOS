@@ -284,6 +284,8 @@ export const WINDOWS_RISK_RULES = [
   /\.(?:ps1|cmd|bat)$/i,
   /^scripts\/fix-windows-console(?:\.test)?\.js$/,
   /^scripts\/ps1-bom\.test\.js$/,
+  // Shell32 recycling and its opt-in real-bin smoke require an actual Windows runner.
+  /^server\/lib\/nativeTrash(?:\.(?:smoke\.)?test)?\.js$/,
   /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok)\b/,
   // The cmd.exe wrap and npm-shim bypass every Windows CLI launch goes through.
   /^server\/lib\/aiToolkit\/internal\/windowsSafeSpawn\.js$/,
@@ -819,7 +821,7 @@ const featureDirectory = (path) => {
 const WORKSPACE_CACHE_COMMON_INPUTS = new Set([
   '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
   'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
-  'scripts/lib/vitestWatch.js',
+  'scripts/lib/vitestWatch.js', 'scripts/lib/testProcessAttribution.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
   'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
   'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
   'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
@@ -832,7 +834,7 @@ const WORKSPACE_CACHE_SERVER_INPUTS = new Set([
 const WORKSPACE_CACHE_CLIENT_INPUTS = new Set([
   'ecosystem.config.cjs', 'client/package.json', 'client/package-lock.json',
   'client/vite.config.js', 'client/vite.buildEnv.js', 'client/vite.chunkGroups.js',
-  'client/vitest.config.js', 'client/src/test/timeouts.js',
+  'client/vitest.config.js', 'client/src/test/timeouts.js', 'scripts/vitestProcessEnvironment.js',
   'scripts/dev-start.js', 'scripts/publish-client-build.js',
   'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs',
   'lib/portosAuthCore.js', 'server/lib/eidoverseProxyRoutes.js',
@@ -1013,7 +1015,7 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
     ? (plan.full ? `full matrix: ${plan.reason}` : `${plan.browserFiles.length} cross-workspace browser suite(s) selected`)
     : 'skipped: no cross-workspace browser suite selected',
   db: plan.db ? (plan.full ? `full matrix: ${plan.reason}` : 'database-risk source changed') : 'skipped: no database-risk source changed',
-  lint: plan.lint.mode === 'skip' ? 'skipped: no changed client source needs linting' : plan.full ? `full matrix: ${plan.reason}` : 'changed client source',
+  lint: plan.lint.mode === 'skip' ? 'skipped: no changed source needs linting' : plan.full ? `full matrix: ${plan.reason}` : 'changed lintable source',
   build: plan.build ? (plan.full ? `full matrix: ${plan.reason}` : 'client-impacting source changed') : 'skipped: no client-impacting source changed',
   smoke: plan.smoke ? (plan.full ? `full matrix: ${plan.reason}` : 'server-impacting source changed') : 'skipped: no server-impacting source changed',
   // A full plan whose Windows job stayed at the contract baseline says so
@@ -1079,6 +1081,9 @@ function buildSuitePlan(changedFiles, {
   // Repository-derived browser dependencies; null means discovery failed and
   // a shared-source change must retain conservative full coverage.
   clientDependencies = [],
+  // Client test → shared dependencies; null conservatively retains that test.
+  // Kept separate from production dependencies so fixtures never force a build.
+  clientTestDependencies = {},
   // Includes literal deferred imports; null means discovery was inconclusive.
   dbDependencies = [],
   // Registered suite → reachable files; null retains that suite conservatively.
@@ -1237,6 +1242,11 @@ function buildSuitePlan(changedFiles, {
     ...fixtureTests,
     ...structuralTestsFor(changed, trackedSet),
     ...alwaysRun,
+    ...Object.entries(clientTestDependencies)
+      .filter(([test, dependencies]) => trackedSet.has(test) && runnerForTest(test) === 'client'
+        && jsSources.some((source) => isSharedClientDependency(source)
+          && (dependencies === null || dependencies.includes(source))))
+      .map(([test]) => test),
   ];
 
   for (const script of pythonSources) {
@@ -1526,48 +1536,89 @@ export function forceFullReasonFor({ forceFull, baseRef }) {
   return null;
 }
 
-// Start from every browser source, including lazy-loaded pages, then follow
-// relative static imports and re-exports across directory boundaries. Parsing
-// is shared with the structural graph guards, but unresolved edges must widen
-// CI instead of disappearing as they do in that helper's negative graph walk.
-function collectClientDependencies(trackedFiles, cwd) {
-  const known = new Set(trackedFiles);
-  const pending = trackedFiles.filter((path) => path.startsWith('client/src/')
-    && MODULE_SOURCE_RE.test(path) && !isTestFile(path));
-  const seen = new Set();
+// A collection owns its snapshot: each source is read and each prerequisite
+// edge is resolved once, even when many browser suites reach the same module.
+// Never retain this across collections: local pregate must see the next edit.
+function createDependencySnapshot(files, cwd) {
+  const known = new Set(files);
+  const sources = new Map();
+  const staticEdges = new Map();
+  const testEdges = new Map();
   const extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts', '.json'];
-  try {
-    for (let index = 0; index < pending.length; index++) {
-      const file = pending[index];
-      if (seen.has(file)) continue;
-      seen.add(file);
-      if (!MODULE_SOURCE_RE.test(file)) continue;
-      for (const specifier of staticImportSpecifiersFromSource(readFileSync(join(cwd, file), 'utf8'))) {
-        if (!specifier.startsWith('.')) continue;
-        const path = posix.normalize(posix.join(posix.dirname(file), specifier.split(/[?#]/)[0]));
-        // Keep every resolvable candidate when extensions collide rather than
-        // guessing a bundler-specific precedence and dropping a real consumer.
-        const dependencies = [path, ...extensions.map((extension) => `${path}${extension}`),
-          ...extensions.map((extension) => `${path}/index${extension}`)].filter((candidate) => known.has(candidate));
-        if (dependencies.length === 0) return null;
-        pending.push(...dependencies);
+  const readText = (file) => {
+    if (!sources.has(file)) {
+      try {
+        sources.set(file, { text: readFileSync(join(cwd, file), 'utf8') });
+      } catch (error) {
+        sources.set(file, { error });
       }
     }
-  } catch {
-    return null;
-  }
-  return uniqueSorted([...seen].filter((path) => path.startsWith('server/lib/')));
+    const source = sources.get(file);
+    if (source.error) throw source.error;
+    return source.text;
+  };
+  const resolve = (file, specifiers) => {
+    const dependencies = [];
+    let inconclusive = false;
+    for (const specifier of specifiers) {
+      if (!specifier.startsWith('.')) continue;
+      const path = posix.normalize(posix.join(posix.dirname(file), specifier.split(/[?#]/)[0]));
+      // Preserve all candidates when extensions collide, not a guessed bundler precedence.
+      const candidates = [path, ...extensions.map((extension) => `${path}${extension}`),
+        ...extensions.map((extension) => `${path}/index${extension}`)].filter((candidate) => known.has(candidate));
+      if (candidates.length === 0) inconclusive = true;
+      dependencies.push(...candidates);
+    }
+    return { dependencies, inconclusive };
+  };
+  const staticDependencies = (file) => {
+    if (!staticEdges.has(file)) {
+      staticEdges.set(file, resolve(file, staticImportSpecifiersFromSource(readText(file))));
+    }
+    return staticEdges.get(file);
+  };
+  const testDependencies = (file) => {
+    if (!testEdges.has(file)) {
+      const deferred = [];
+      let computed = false;
+      // Nonliterals and extra matches in comments widen prerequisites safely.
+      for (const match of readText(file).matchAll(/\bimport\s*\(\s*([^)]*)\)/g)) {
+        const literal = match[1].trim().match(/^(['"`])([^'"`]*?)\1\s*(?:,.*)?$/s);
+        if (!literal || literal[2].includes('${')) computed = true;
+        else deferred.push(literal[2]);
+      }
+      const statics = staticDependencies(file);
+      const dynamic = resolve(file, deferred);
+      testEdges.set(file, {
+        dependencies: [...statics.dependencies, ...dynamic.dependencies],
+        inconclusive: computed || statics.inconclusive || dynamic.inconclusive,
+      });
+    }
+    return testEdges.get(file);
+  };
+  return { readText, staticDependencies, testDependencies };
+}
+
+function isSharedClientDependency(path) {
+  return path.startsWith('server/lib/') || path.startsWith('scripts/lib/');
+}
+
+// Start from every browser source, including lazy-loaded pages, then follow
+// relative static imports and re-exports across directory boundaries. Unresolved
+// edges must widen CI rather than disappearing from a negative graph walk.
+function collectClientDependencies(files, snapshot) {
+  const entries = files.filter((path) => path.startsWith('client/src/')
+    && MODULE_SOURCE_RE.test(path) && !isTestFile(path));
+  const closure = collectTestDependencies(entries, snapshot.staticDependencies);
+  return closure?.filter((path) => path.startsWith('server/lib/')) ?? null;
 }
 
 // Project DB and browser consumers without importing test code or Vitest (the
-// planner runs before npm installation). Include deferred literals; unreadable,
+// planner runs before npm installation). Deferred literals participate; unreadable,
 // unresolved and computed imports retain conservative prerequisite coverage.
-// Share parsed edges between suite walks so common dependencies are read once.
-function collectTestDependencies(entries, files, cwd, importCache) {
-  const known = new Set(files);
+function collectTestDependencies(entries, dependenciesFor) {
   const pending = [...entries];
   const seen = new Set();
-  const extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts', '.json'];
   let inconclusive = false;
   try {
     for (let index = 0; index < pending.length; index++) {
@@ -1575,29 +1626,9 @@ function collectTestDependencies(entries, files, cwd, importCache) {
       if (seen.has(file)) continue;
       seen.add(file);
       if (!MODULE_SOURCE_RE.test(file)) continue;
-      if (!importCache.has(file)) {
-        const source = readFileSync(join(cwd, file), 'utf8');
-        const specifiers = staticImportSpecifiersFromSource(source);
-        let computed = false;
-        // A nonliteral cannot prove absence of a dependency; extra matches in
-        // comments widen safely. Template literals resolve without interpolation.
-        for (const match of source.matchAll(/\bimport\s*\(\s*([^)]*)\)/g)) {
-          const literal = match[1].trim().match(/^(['"`])([^'"`]*?)\1\s*(?:,.*)?$/s);
-          if (!literal || literal[2].includes('${')) computed = true;
-          else specifiers.push(literal[2]);
-        }
-        importCache.set(file, { specifiers, computed });
-      }
-      const { specifiers, computed } = importCache.get(file);
-      if (computed) inconclusive = true;
-      for (const specifier of specifiers) {
-        if (!specifier.startsWith('.')) continue;
-        const path = posix.normalize(posix.join(posix.dirname(file), specifier.split(/[?#]/)[0]));
-        const dependencies = [path, ...extensions.map((extension) => `${path}${extension}`),
-          ...extensions.map((extension) => `${path}/index${extension}`)].filter((candidate) => known.has(candidate));
-        if (dependencies.length === 0) inconclusive = true;
-        pending.push(...dependencies);
-      }
+      const edges = dependenciesFor(file);
+      if (edges.inconclusive) inconclusive = true;
+      pending.push(...edges.dependencies);
     }
   } catch {
     return null;
@@ -1665,21 +1696,31 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     return [path, sharedBasenames.has(basenameOf(path)) ? narrowSharedBasenameHits(path, hits, cwd) : hits];
   }));
 
+  const dependencyFiles = hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles;
+  const snapshot = createDependencySnapshot(dependencyFiles, cwd);
   const clientDependencies = collectedChangedFiles.some((path) => path.startsWith('server/lib/')
     && isExecutable(path) && !isTestFile(path))
-    ? collectClientDependencies(hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles, cwd)
+    ? collectClientDependencies(dependencyFiles, snapshot)
     : [];
+
+  // Include test fixtures and literal deferred imports, unlike the production
+  // projection. Keep uncertainty per test so one unresolved/computed fixture
+  // retains its consumer without widening every resolved test.
+  const clientTestDependencies = collectedChangedFiles.some((path) => isSharedClientDependency(path)
+    && isExecutable(path) && !isTestFile(path))
+    ? Object.fromEntries(dependencyFiles.filter((path) => path.startsWith('client/src/')
+      && isTestFile(path)).map((test) => [test,
+      collectTestDependencies([test], snapshot.testDependencies)?.filter(isSharedClientDependency) ?? null]))
+    : {};
 
   const hasRelatedServerSource = collectedChangedFiles.some((path) => isServerRunnerFile(path)
     && MODULE_SOURCE_RE.test(path) && !isTestFile(path) && !isStructuralBarrel(path));
-  const dependencyFiles = hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles;
-  const importCache = new Map();
   const dbDependencies = hasRelatedServerSource
-    ? collectTestDependencies(resolveDbTestFiles(dependencyFiles), dependencyFiles, cwd, importCache)
+    ? collectTestDependencies(resolveDbTestFiles(dependencyFiles), snapshot.testDependencies)
     : [];
   const browserDependencies = hasRelatedServerSource
     ? Object.fromEntries(browserSuitesIn(presentFiles).map((suite) => [suite,
-      collectTestDependencies([suite], dependencyFiles, cwd, importCache)]))
+      collectTestDependencies([suite], snapshot.testDependencies)]))
     : {};
 
   // Each changed manifest at the diff base vs the tree under test (the working
@@ -1713,6 +1754,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
       serverReach = measureRepoImportReach({
         cwd,
         files: dependencyFiles,
+        readText: snapshot.readText,
         sources: collectedChangedFiles.filter((path) => isServerRunnerFile(path)
           && MODULE_SOURCE_RE.test(path) && !isTestFile(path)),
       });
@@ -1728,7 +1770,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
   const dockerContainmentLiveInputs = forceFull ? null : collectDockerContainmentLiveInputs(cwd);
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
-    clientDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs,
+    clientDependencies, clientTestDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs,
     dockerContainmentLiveInputs, serverReach };
 }
 
@@ -1768,11 +1810,6 @@ const ATTESTATION_SKIPS = Object.freeze({
   db: () => ({ db: false }),
   'prompt-history': () => ({ promptHistory: false }),
 });
-
-/** How long after the head commit a just-posted status may still be on its way. */
-const ATTESTATION_YOUNG_HEAD_SECONDS = 300;
-const ATTESTATION_POLL_TOTAL_MS = 90_000;
-const ATTESTATION_POLL_INTERVAL_MS = 10_000;
 
 /**
  * Whether this run may honor an attestation at all, and the head it would
@@ -1863,17 +1900,16 @@ export function attestationDrift(plan, driftPaths) {
  * which `attestationDrift` weighs per stage in applyAttestation from the
  * `baseDrift` returned here.
  *
- * A status posted moments after the push can still be on its way when the
- * run starts, so a head younger than five minutes with no `pregate` status
- * is re-read for up to 90 seconds before "no attestation" is concluded.
+ * Focused local validation intentionally posts no attestation. Read once; a
+ * missing or late receipt leaves broad hosted checks enabled immediately.
  *
  * `log` defaults to stderr: the planner's stdout is the JSON plan pregate
  * and the tests parse, so every human-readable line here stays off it.
  *
- * @param {{env?: NodeJS.ProcessEnv, exec?: typeof execFileSync, cwd?: string, log?: (line: string) => void, now?: () => number, sleep?: (ms: number) => void}} [options]
+ * @param {{env?: NodeJS.ProcessEnv, exec?: typeof execFileSync, cwd?: string, log?: (line: string) => void}} [options]
  * @returns {{attested: boolean, reason: string, sha?: string, tree?: string, os?: string, node?: number, stages?: string[], creator?: string, createdAt?: string, baseDrift?: string[]|null, waitedMs?: number}}
  */
-export function resolveCiAttestation({ env = process.env, exec = execFileSync, cwd = process.cwd(), log = console.warn, now = Date.now, sleep = sleepMs } = {}) {
+export function resolveCiAttestation({ env = process.env, exec = execFileSync, cwd = process.cwd(), log = console.warn } = {}) {
   const none = (reason) => {
     log(`⏭️ Pregate attestation not honored: ${reason}.`);
     return { attested: false, reason };
@@ -1894,9 +1930,6 @@ export function resolveCiAttestation({ env = process.env, exec = execFileSync, c
   }
   const headTree = capture('git', ['rev-parse', '--verify', '--quiet', `${headSha}^{tree}`]);
   if (typeof headTree !== 'string') return none(`cannot resolve the tree of head ${headSha.slice(0, 9)}`);
-  const committed = capture('git', ['show', '-s', '--format=%ct', headSha]);
-  const headAgeSeconds = typeof committed === 'string' && /^\d+$/.test(committed) ? Math.floor(now() / 1000) - Number(committed) : null;
-
   const readStatuses = () => {
     const body = capture('gh', ['api', `repos/${repository}/commits/${headSha}/statuses?per_page=100`]);
     if (typeof body !== 'string') return { error: `statuses API failed: ${body.error}` };
@@ -1906,30 +1939,15 @@ export function resolveCiAttestation({ env = process.env, exec = execFileSync, c
       return { error: 'statuses API returned unreadable JSON' };
     }
   };
-  const started = now();
-  let waitedMs = 0;
-  let selected;
-  for (;;) {
-    const read = readStatuses();
-    if (read.error) return none(read.error);
-    selected = selectAttestation(read.statuses, { owner, headTree });
-    const missing = !selected.attestation && selected.reason.startsWith('no "');
-    const young = headAgeSeconds !== null && headAgeSeconds >= 0 && headAgeSeconds < ATTESTATION_YOUNG_HEAD_SECONDS;
-    if (!missing || !young || now() - started >= ATTESTATION_POLL_TOTAL_MS) break;
-    sleep(ATTESTATION_POLL_INTERVAL_MS);
-    waitedMs = now() - started;
-  }
-  if (waitedMs > 0) log(`⏳ Waited ${Math.round(waitedMs / 1000)}s for a pregate status on the ${headAgeSeconds}s-old head ${headSha.slice(0, 9)}.`);
+  const read = readStatuses();
+  if (read.error) return none(read.error);
+  const selected = selectAttestation(read.statuses, { owner, headTree });
   if (!selected.attestation) return none(selected.reason);
   const drift = capture('git', ['diff', '--name-only', 'HEAD^2', 'HEAD']);
   const baseDrift = typeof drift === 'string' ? drift.split('\n').filter(Boolean) : null;
   const { attestation, reason } = selected;
   log(`✅ Pregate attestation on ${headSha.slice(0, 9)} (tree ${attestation.tree.slice(0, 12)}): ${attestation.stages.join(', ')} — ${reason}; base moved by ${baseDrift ? `${baseDrift.length} file(s)` : 'an unreadable diff'}.`);
-  return { attested: true, reason, sha: headSha, ...attestation, baseDrift, waitedMs };
-}
-
-function sleepMs(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  return { attested: true, reason, sha: headSha, ...attestation, baseDrift, waitedMs: 0 };
 }
 
 /**
@@ -2000,7 +2018,7 @@ function main() {
     throw new Error('CI_CHANGED_FILES must be a JSON array of repository-relative path strings.');
   }
   const {
-    changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, dbDependencies, browserDependencies,
+    changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, clientTestDependencies, dbDependencies, browserDependencies,
     dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach,
   } = collectPlanInputs({
     baseSha: base,
@@ -2014,6 +2032,7 @@ function main() {
     appRouteOnly: isRouteOnlyAppDiff(appDiff),
     pathContractTests,
     clientDependencies,
+    clientTestDependencies,
     dbDependencies,
     browserDependencies,
     dependencyChanges,

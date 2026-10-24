@@ -2035,6 +2035,14 @@ describe('resetOrphanedTasks — latest run outcome (#12057)', () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it.each([false, true])('leaves durable cleanup handoffs to verification during boot=%s', async bootRecovery => {
+    taskStore.getAllTasks.mockResolvedValue({ user: { grouped: { in_progress: [{ id: taskId,
+      status: 'in_progress', metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: latest.id } }] } }, cos: { grouped: {} } });
+    await resetOrphanedTasks({ bootRecovery });
+    expect(taskStore.updateTask).not.toHaveBeenCalled();
+    expect(agentManagement.handleOrphanedTask).not.toHaveBeenCalled();
+  });
+
   it('recovers the latest failed rerun despite an older successful run', async () => {
     await resetOrphanedTasks();
 

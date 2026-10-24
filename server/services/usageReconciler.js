@@ -62,6 +62,7 @@ import { familyForProvider } from '../lib/providerFamilies.js';
 import { commandBasename } from '../lib/providerModels.js';
 import { summarizeOpenCodeEvents } from '../lib/opencodeStream.js';
 import { markUsageRunReconciled, recordRunUsage } from './usage.js';
+import { grokTurnRepairId } from './grokUsageRepair.js';
 
 // Widen the correlation window past the recorded run bounds: the CLI writes its
 // first line slightly before PortOS stamps startTime, and flushes its last
@@ -379,24 +380,40 @@ function codexDateDirs(root, fromMs, toMs) {
 }
 
 /**
- * Token buckets for a `parseAgyTranscript` result. Antigravity writes no token
- * counts, so every figure is chars/4 — but the model calls' replayed context is
- * priced as cache reads (`contextChars`) rather than dropped, since dropping it
- * is what made the plan read as cheaper than its subscription.
+ * Token buckets for a `parseAgyTranscript` result. When the transcript carries
+ * measured token counts (`input_tokens`, `output_tokens`), those counts are
+ * preserved with source `measured`. Otherwise figures fall back to chars/4
+ * estimates with source `estimate`.
  */
 export const agyEstimatedBuckets = (parsed) => ({
   messages: parsed.messages,
-  tokensIn: estimateTokensFromChars(parsed.charsIn),
-  tokensOut: estimateTokensFromChars(parsed.charsOut),
-  cacheReadTokens: estimateTokensFromChars(parsed.contextChars),
-  cacheWriteTokens: 0
+  tokensIn: parsed.measured ? parsed.tokensIn : estimateTokensFromChars(parsed.charsIn),
+  tokensOut: parsed.measured ? parsed.tokensOut : estimateTokensFromChars(parsed.charsOut),
+  cacheReadTokens: parsed.measured ? parsed.cacheReadTokens : estimateTokensFromChars(parsed.contextChars),
+  cacheWriteTokens: 0,
+  source: parsed.measured ? 'measured' : 'estimate',
 });
 
 const TOKEN_FIELDS = ['messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
 
+const LONG_USAGE_FIELDS = ['longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens'];
+
 function addBuckets(target, source) {
   for (const field of TOKEN_FIELDS) target[field] = (target[field] || 0) + (source[field] || 0);
+  // Copied only when the source has some, so a Codex high-water object that
+  // spreads addBuckets does not grow long-context keys it never had.
+  for (const field of LONG_USAGE_FIELDS) {
+    if (source?.[field]) target[field] = (target[field] || 0) + source[field];
+  }
   return target;
+}
+
+function longUsageFrom(bucket) {
+  const extra = {};
+  for (const field of LONG_USAGE_FIELDS) {
+    if (bucket?.[field]) extra[field] = bucket[field];
+  }
+  return extra;
 }
 
 function subtractBuckets(absolute, billed) {
@@ -516,7 +533,7 @@ async function readAgySessions({ home, workspacePath, from, to, fold, reserveFro
     reserveFrom(transcriptPath, parsed);
     // No model is named anywhere in the transcript — the UNKNOWN_MODEL bucket
     // lets the caller attribute it to the provider's own configured model.
-    fold({ ...estimated, models: [], byModel: { [UNKNOWN_MODEL]: { ...estimated } } }, 'estimate');
+    fold({ ...estimated, models: [], byModel: { [UNKNOWN_MODEL]: { ...estimated } } }, estimated.source || 'estimate');
   }
 }
 
@@ -663,6 +680,10 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
     sourcesSeen.add(source);
     totals.sessions += 1;
     addBuckets(totals, parsed);
+    if (parsed.longTurns?.length) {
+      totals.longTurns ??= [];
+      totals.longTurns.push(...parsed.longTurns);
+    }
     for (const model of parsed.models?.length ? parsed.models : [parsed.model]) {
       if (model) modelCounts.set(model, (modelCounts.get(model) || 0) + 1);
     }
@@ -745,9 +766,10 @@ export function recordsFromMeasured(providerId, recordedModel, measured, role) {
   // `mixed` on every record it produced: the two shapes fold into the same
   // per-model buckets, so no record can honestly claim to be purely measured.
   const source = measured.source || 'measured';
+  const repairIds = (measured.longTurns || []).map((turn) => grokTurnRepairId(turn.sessionId, turn.key));
   const perModel = Object.entries(measured.byModel || {});
-  if (perModel.length > 0) {
-    return perModel.map(([model, bucket]) => ({
+  const records = perModel.length > 0
+    ? perModel.map(([model, bucket]) => ({
       providerId,
       role,
       model: attributedModel(recordedModel ?? null, model, perModel.length === 1),
@@ -756,23 +778,29 @@ export function recordsFromMeasured(providerId, recordedModel, measured, role) {
       tokensOut: bucket.tokensOut,
       cacheReadTokens: bucket.cacheReadTokens,
       cacheWriteTokens: bucket.cacheWriteTokens,
+      ...longUsageFrom(bucket),
       source
-    }));
-  }
-  return [{
-    providerId,
-    role,
-    // Prefer the model PortOS recorded (it carries the provider's own id shape,
-    // e.g. a Bedrock-prefixed id the pricing table resolves); fall back to the
-    // transcript's when PortOS captured none.
-    model: recordedModel ?? measured.model ?? null,
-    messages: measured.messages || 1,
-    tokensIn: measured.tokensIn,
-    tokensOut: measured.tokensOut,
-    cacheReadTokens: measured.cacheReadTokens,
-    cacheWriteTokens: measured.cacheWriteTokens,
-    source
-  }];
+    }))
+    : [{
+      providerId,
+      role,
+      // Prefer the model PortOS recorded (it carries the provider's own id shape,
+      // e.g. a Bedrock-prefixed id the pricing table resolves); fall back to the
+      // transcript's when PortOS captured none.
+      model: recordedModel ?? measured.model ?? null,
+      messages: measured.messages || 1,
+      tokensIn: measured.tokensIn,
+      tokensOut: measured.tokensOut,
+      cacheReadTokens: measured.cacheReadTokens,
+      cacheWriteTokens: measured.cacheWriteTokens,
+      ...longUsageFrom(measured),
+      source
+    }];
+  // One id list on the first record. recordRunUsage persists it in the same
+  // save as the counts, and the array shape the tests lock stays unchanged
+  // when this transcript had no long-context turn.
+  if (repairIds.length) records[0].repairIds = repairIds;
+  return records;
 }
 
 // `lib/providerFamilies.js` deliberately excludes `kimi` from PROVIDER_FAMILIES

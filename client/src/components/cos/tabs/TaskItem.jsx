@@ -36,10 +36,13 @@ import EffortSelect from '../EffortSelect';
 import RelaunchAgentModal from './RelaunchAgentModal';
 import AgentCard from './AgentCard';
 import PreflightProgress from './PreflightProgress';
+import DeliveryStatus from '../DeliveryStatus';
+import { isDeliveryCleanupHeld } from '../../../../../server/lib/taskRetryHold.js';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
   in_progress: <Activity size={16} aria-hidden="true" className="text-port-accent animate-pulse" />,
+  finalizing: <Clock size={16} aria-hidden="true" className="text-gray-400" />,
   completed: <CheckCircle size={16} aria-hidden="true" className="text-port-success" />,
   blocked: <Ban size={16} aria-hidden="true" className="text-port-error" />,
   // A sub-agent disputing a reviewer rejection (#2441) — awaiting resolution.
@@ -151,7 +154,8 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
   // A spawning task is still persisted as 'pending' but is already running —
   // show the running glyph, not the queued clock. See spawnAgentForTask's
   // registration ordering for why the two disagree.
-  const displayStatus = spawning ? 'in_progress' : task.status;
+  const finalizing = task.status === 'in_progress' && isDeliveryCleanupHeld(task.metadata) && agent?.status !== 'running';
+  const displayStatus = finalizing ? 'finalizing' : spawning ? 'in_progress' : task.status;
   const idScope = isSystem ? 'sys' : 'user';
   // Either queue. A USER row can hold too: a row the importer had to RECOVER is
   // withheld from the unattended spawn and keeps that hold (#7300, #7367). Gating the button on `isSystem` would leave it pending with
@@ -443,6 +447,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
           {statusIcons[displayStatus]}
         </button>
         <div className="flex-1 min-w-0">
+          {finalizing && <DeliveryStatus agent={agent} ownerId={task.metadata.deliveryRecoveryAgentId} />}
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <span className="text-sm font-mono text-gray-500 min-w-0 break-words">{task.id}</span>
             {task.metadata?.app && apps?.find(a => a.id === task.metadata.app)?.name && (

@@ -35,6 +35,19 @@ beforeEach(async () => {
   await rm(join(workspace, 'review-status'), { force: true });
 });
 describe('completed owner required review inspection', () => {
+  it('keeps another instance owner separate even for the same repository branch and PR head', async () => {
+    const foreign = structuredClone(f.agents[0]);
+    foreign.id = 'other-instance-owner';
+    foreign.metadata.sourceWorkspace = '/other-instance/repo';
+    foreign.metadata.workspacePath = '/other-instance/worktree';
+    f.agents.push(foreign);
+    expect(await inspect()).toMatchObject({ disposition: 'review-required', agentId: 'owner' });
+    f.agents = [foreign];
+    expect(await inspect()).toMatchObject({ disposition: 'held', reason: 'review-owner-ambiguous' });
+    expect(f.queue).toEqual([]);
+    expect(f.pending).toEqual([]);
+  });
+
   it('establishes a missing nonoptional review without creating merge admission or changing backlog policy', async () => {
     const result = await inspect();
     expect(result).toMatchObject({ disposition: 'review-required', agentId: 'owner', originalTask: { id: 'task' },

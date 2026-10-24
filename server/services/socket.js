@@ -395,6 +395,8 @@ function setupRecordEventForwarding() {
       ioInstance?.emit('creative-director:project:changed', { id: recordId });
     } else if (recordKind === 'creativeCommission') {
       ioInstance?.emit('commission:changed', { id: recordId });
+    } else if (recordKind === 'storyboard') {
+      ioInstance?.emit('storyboard:changed', { id: recordId });
     }
   };
   recordEvents.on('updated', forward);
@@ -498,7 +500,7 @@ function setupCosEventForwarding() {
     ['learning:changed', 'cos:learning:changed'],
   ]) {
     cosEvents.on(source, data => {
-      broadcastToCos(target, {});
+      broadcastToCos(target, target === 'cos:scheduler:changed' && typeof data?.id === 'string' ? { id: data.id } : {});
       if (target === 'cos:scheduler:changed' && data?.id === 'backup-daily') {
         ioInstance?.emit('backup:changed', {});
       }

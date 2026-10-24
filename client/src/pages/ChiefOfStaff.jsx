@@ -350,8 +350,8 @@ export default function ChiefOfStaff() {
     agentReadRef.current = null;
     if (Array.isArray(data)) {
       const merged = new Map(data.map(agent => [agent.id, agent]));
-      for (const [id, agent] of request.updates) merged.set(id, agent);
-      const snapshot = [...merged.values()].filter(agent => agent.status !== 'completed');
+      for (const [id, agent] of request.updates) merged.set(id, { ...merged.get(id), ...agent });
+      const snapshot = [...merged.values()].filter(agent => agent.status !== 'completed' || agent.deliveryPending);
       setAgents(snapshot);
       setAgentsLoaded(true);
     } else {
@@ -597,11 +597,12 @@ export default function ChiefOfStaff() {
 
     const handleAgentUpdated = (updatedAgent) => {
       if (!needsAgents) return;
-      agentReadRef.current?.updates.set(updatedAgent.id, updatedAgent);
+      const updates = agentReadRef.current?.updates;
+      updates?.set(updatedAgent.id, { ...updates.get(updatedAgent.id), ...updatedAgent });
       // Update the specific agent in the agents list without fetching all data
       setAgents(prev => prev.map(agent =>
-        agent.id === updatedAgent.id ? updatedAgent : agent
-      ).filter(agent => agent.status !== 'completed'));
+        agent.id === updatedAgent.id ? { ...agent, ...updatedAgent } : agent
+      ).filter(agent => agent.status !== 'completed' || agent.deliveryPending));
     };
     socket.on('cos:agent:updated', handleAgentUpdated);
 
@@ -672,6 +673,10 @@ export default function ChiefOfStaff() {
       }
     };
     socket.on('cos:log', handleCosLog);
+    const handleRecoveryScheduleChanged = event => {
+      if (needsAgents && event?.id === 'cos-pending-merge-sweep') refreshQueue();
+    };
+    socket.on('cos:scheduler:changed', handleRecoveryScheduleChanged);
 
     // Stable reference data has its own invalidation path, independent of the queue.
     const handleAppsChanged = coalesce(() => {
@@ -704,6 +709,7 @@ export default function ChiefOfStaff() {
       socket.off('cos:agent:completed', handleAgentCompleted);
       socket.off('cos:health:check', handleHealthCheck);
       socket.off('cos:log', handleCosLog);
+      socket.off('cos:scheduler:changed', handleRecoveryScheduleChanged);
       socket.off('apps:changed', handleAppsChanged);
       refreshQueue.cancel();
     };
@@ -1387,9 +1393,9 @@ export default function ChiefOfStaff() {
       {/* Content Panel. Flex column so the Mind tab can fill leftover height
           on desktop (its chat pane owns the internal scroll); other tabs still
           grow this region and scroll here as before. */}
-      <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-y-auto overflow-x-hidden p-3 lg:p-4">
+      <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden">
         {desktopPanelCollapsed && (
-          <div className="hidden cos-wide:flex sticky top-0 z-20 bg-port-bg items-center flex-wrap gap-3 mb-3">
+          <div className="hidden cos-wide:flex shrink-0 bg-port-bg items-center flex-wrap gap-3 px-3 lg:px-4 border-b border-port-border">
             <button onClick={toggleDesktopPanel} aria-label="Expand CoS panel"
               className="min-h-[44px] flex items-center gap-2 px-2 text-sm text-port-text">
               <PanelLeftOpen size={16} aria-hidden="true" /> CoS
@@ -1400,6 +1406,7 @@ export default function ChiefOfStaff() {
             </> : statusPlaceholder}
           </div>
         )}
+        <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-y-auto overflow-x-hidden p-3 lg:p-4">
         {/* Stats Bar - hidden for SVG/canvas modes (now integrated into CoS sidebar);
             ascii/terminal mode keeps it because TerminalCoSPanel doesn't host the cards. */}
         <div className={`grid shrink-0 grid-cols-3 gap-1.5 sm:grid-cols-5 sm:gap-2 lg:gap-3 mb-3 sm:mb-4 lg:mb-6 ${avatarStyle !== 'ascii' ? 'hidden' : ''}`}>
@@ -1448,14 +1455,14 @@ export default function ChiefOfStaff() {
           <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
             <ActionableInsightsBanner insights={insights} onTaskUnblocked={handleTaskUnblocked} onRefresh={fetchData} />
             <Suspense fallback={<TabLoadFallback label="tasks" />}>
-              <TasksTab completedRevision={taskHistoryRevision} tasks={tasks} agents={agents} liveOutputs={liveOutputs} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} apps={apps} />
+              <TasksTab completionRecovery={status?.completionRecovery} completedRevision={taskHistoryRevision} tasks={tasks} agents={agents} liveOutputs={liveOutputs} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} apps={apps} />
             </Suspense>
           </div>
         )}
         {activeTab === 'agents' && (
           <div role="tabpanel" id="tabpanel-agents" aria-labelledby="tab-agents">
             <Suspense fallback={<TabLoadFallback label="agents" />}>
-              <AgentsTab agentsLoaded={agentsLoaded} agentsError={agentsError} onRetryAgents={fetchQueue} completedRevision={completedRevision} agents={agents} onRefresh={fetchData} liveOutputs={liveOutputs} providers={providers} providersLoaded={providersLoaded} apps={apps} />
+              <AgentsTab completionRecovery={status?.completionRecovery} agentsLoaded={agentsLoaded} agentsError={agentsError} onRetryAgents={fetchQueue} completedRevision={completedRevision} agents={agents} onRefresh={fetchData} liveOutputs={liveOutputs} providers={providers} providersLoaded={providersLoaded} apps={apps} />
             </Suspense>
           </div>
         )}
@@ -1543,6 +1550,7 @@ export default function ChiefOfStaff() {
             </Suspense>
           </div>
         )}
+        </div>
       </div>
     </div>
     </PageLayout>

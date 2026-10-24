@@ -37,7 +37,7 @@ import { videoGenEvents } from './events.js';
 import { discardUnpublishedVideo, finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
 import { noImageReason, deriveAspectRatio, GROK_ASPECT_RATIOS } from '../imageGen/grok.js';
-import { resolveGrokDuration } from '../../lib/grokVideoClip.js';
+import { grokVideoBillableUnits, resolveGrokDuration } from '../../lib/grokVideoClip.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
@@ -336,6 +336,17 @@ async function runGrokVideo(job, jobId, bin, args, {
       if (Number.isFinite(deliveredSec)) {
         meta.deliveredSec = Math.round(deliveredSec * 100) / 100;
         if (deliveredSec < meta.duration - 1) console.warn(`⚠️ grok delivered ${meta.deliveredSec}s for a ${meta.duration}s request [${jobId.slice(0, 8)}]`);
+      }
+      try {
+        const units = grokVideoBillableUnits({
+          requestedSeconds: meta.duration,
+          deliveredSeconds: Number.isFinite(deliveredSec) ? deliveredSec : null,
+          hasSourceImage: meta.mode === 'image',
+        });
+        const { recordGrokVideoUsage } = await import('../grokMediaUsage.js');
+        await recordGrokVideoUsage({ jobId, createdAt: meta.createdAt, ...units });
+      } catch (usageErr) {
+        console.error(`❌ Failed to record Grok video usage [${jobId.slice(0, 8)}]: ${usageErr.message}`);
       }
       // Removing the scratch directory also removes the harvested staging file.
       await cleanup();

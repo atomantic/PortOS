@@ -7,6 +7,14 @@ import { afterAll, describe, expect, it as vitestIt } from 'vitest';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ownTestBodies } from '../server/lib/mockPathsDataRoot.js';
 
+// Where PID 1 does not reap orphans (some containers), a killed orphan stays a
+// zombie that still answers signal 0; on Linux its /proc state says it exited.
+const exited = (pid) => {
+  try { process.kill(pid, 0); } catch { return true; }
+  if (process.platform !== 'linux') return false;
+  try { return /^[ZX]$/.test(readFileSync(`/proc/${pid}/stat`, 'utf8').replace(/^.*\) /s, '')[0]); } catch { return true; }
+};
+
 const { it, drain } = ownTestBodies(vitestIt);
 afterAll(drain);
 
@@ -70,7 +78,7 @@ describe.skipIf(process.platform === 'win32')('independent browser test watchdog
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr).toBe(denied || orphan ? 1 : stalled ? 124 : status);
       const owned = JSON.parse(readFileSync(join(root, 'owned.json'), 'utf8'));
-      if (!denied) for (const pid of [owned.worker, owned.launcher, ...(owned.orphan ? [owned.orphan] : [])]) expect(() => process.kill(pid, 0)).toThrow();
+      if (!denied) for (const pid of [owned.worker, owned.launcher, ...(owned.orphan ? [owned.orphan] : [])]) expect(exited(pid), `pid ${pid}`).toBe(true);
       if (stalled) {
         expect(result.stdout).toContain('CI test watchdog: 0s elapsed');
         const progress = result.stderr.indexOf('server/lib/synthetic.test.js');
