@@ -15,6 +15,7 @@ import * as agentOrchestrator from '../services/agentOrchestrator.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { toAgentListItems } from '../lib/cosAgentListProjection.js';
 import { isDeliveryCleanupHeld } from '../lib/taskRetryHold.js';
+import { getDeliveryActivity } from '../services/agentDeliveryActivity.js';
 import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
 import { validateRequest, resumeCosAgentSchema, relaunchCosAgentSchema, cosAgentFeedbackBodySchema, cosAgentBtwBodySchema } from '../lib/validation.js';
 
@@ -149,7 +150,8 @@ router.get('/agents', asyncHandler(async (req, res) => {
     if (visible.has(id)) return;
     const agent = resident.get(id) || await getAgentRecord(id);
     if (agent?.status === 'completed' && agent.taskId === task.id) {
-      visible.set(id, { ...agent, deliveryPending: true });
+      const deliveryActivity = getDeliveryActivity(id);
+      visible.set(id, { ...agent, deliveryPending: true, ...(deliveryActivity && { deliveryActivity }) });
     }
   }));
   res.json(toAgentListItems([...visible.values()]));

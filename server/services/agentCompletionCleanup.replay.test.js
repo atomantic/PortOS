@@ -11,7 +11,7 @@ vi.mock('./cosAgentIndex.js', () => ({
   getAgentDir: id => join(fixture.runRoot, ...(fixture.indexReady ? [] : ['unindexed']), id),
 }));
 vi.mock('./cos.js', () => ({}));
-vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('./cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
 vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(), reviveBlockedTask: vi.fn() }));
 vi.mock('./cosTaskGenerator.js', () => ({ checkStagePrecondition: () => ({ passed: true }) }));
 vi.mock('./cosAgentLifecycle.js', () => ({

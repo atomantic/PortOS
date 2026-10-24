@@ -293,6 +293,7 @@ async function updateCompletionReceipt(agentId, update) {
       await atomicWrite(join(getAgentDir(agentId, date), 'metadata.json'), record);
     }
     if (state.agents[agentId]) { state.agents[agentId] = updated; await saveState(state, { changedAgentIds: [agentId] }); }
+    cosEvents.emit('agent:updated', updated);
     return true;
   }));
 }

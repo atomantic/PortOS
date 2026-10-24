@@ -418,6 +418,30 @@ describe('cosAgentLifecycle', () => {
     const persisted = JSON.parse(await readFile(join(archiveDir, 'metadata.json'), 'utf8'));
     expect(persisted.metadata.malwareScan.verdict).toBe('DANGEROUS');
   });
+
+  it('publishes saved cleanup diagnostics for an archived owner without reviving execution', async () => {
+    const id = 'agent-archived-cleanup';
+    const date = '2026-01-01';
+    const record = { id, status: 'completed', completedAt: `${date}T12:00:00Z`, metadata: {} };
+    const directory = join(mockCosState.agentsDir, date, id);
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, 'metadata.json'), JSON.stringify(record));
+    (await loadAgentIndex()).set(id, date);
+    const observed = [];
+    const listener = agent => {
+      if (agent.id === id) observed.push(agent);
+    };
+    cosEvents.on('agent:updated', listener);
+    try {
+      await recordCleanupOutcome(id, { status: 'blocked', reason: 'preservation-unverified' });
+      const persisted = JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8'));
+      expect(observed).toEqual([persisted]);
+      expect(observed[0]).toMatchObject({ status: 'completed', metadata: { cleanupOutcome: { reason: 'preservation-unverified' } } });
+      expect(mockCosState.state.agents[id]).toBeUndefined();
+    } finally {
+      cosEvents.off('agent:updated', listener);
+    }
+  });
 });
 
 describe('completeAgent budget-ledger ordering (#1683)', () => {

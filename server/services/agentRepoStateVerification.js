@@ -1,4 +1,5 @@
 import { recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
+import { withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
 import { completionSentinelPresent } from './agentCompletionSentinel.js';
@@ -277,7 +278,8 @@ export async function verifyAgentRepoState(input) {
     return verifyRunBranches({ ...input, success: input.success || cleanupPending,
       ...(cleanupPending ? { cleanupWarnings: [] } : {}) });
   };
-  const run = verify().then(async result => {
+  const run = withDeliveryActivity(input.agentId, 'Checking delivery and repository preservation', async () => {
+    const result = await verify();
     if (result.skipReason === 'cleanup-owner-changed' || result.skipReason === 'cleanup-task-unavailable') return result;
     const outcomes = result.branches || [result];
     const unsupported = prStaysOpen(input.task) ? { skipReason: 'leave-open-cleanup-unsupported' } : outcomes.find(item => [REPO_STATE_SKIPS.DISABLED, REPO_STATE_SKIPS.NOT_WORKTREE,
@@ -371,7 +373,7 @@ async function resumeCompletionAudits() {
     || agent.metadata?.completionCleanup?.status === 'pending'))
     .sort((a, b) => lastAttempt(a).localeCompare(lastAttempt(b)));
   let checked = 0;
-  for (const original of pending.slice(0, 10)) {
+  for (const original of pending.slice(0, COMPLETION_RECOVERY_BATCH_SIZE)) {
     const { recordCompletionCleanup } = await import('./cosAgentLifecycle.js');
     await recordCompletionCleanup(original.id || original.agentId, original.startedAt, { lastAttemptAt: new Date().toISOString() });
     const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');

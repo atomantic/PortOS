@@ -38,7 +38,7 @@ vi.mock('./heldCheckoutRecovery.js', () => ({
   retireInventoriedCheckout: vi.fn(async () => ({ ok: true, archiveDir: '/private/archive', branchDeleted: true })),
   prepareInventoriedCheckoutRetirement: vi.fn().mockResolvedValue({ ok: true, review: { digest: 'a'.repeat(64) } }),
 }));
-vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('./cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
 vi.mock('./cosTaskStore.js', () => ({
   addTask: vi.fn().mockResolvedValue({ id: 'task-recovery-1' }),
   getAllTasks: vi.fn().mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } }),

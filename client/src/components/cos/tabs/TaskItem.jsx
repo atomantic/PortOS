@@ -36,6 +36,7 @@ import EffortSelect from '../EffortSelect';
 import RelaunchAgentModal from './RelaunchAgentModal';
 import AgentCard from './AgentCard';
 import PreflightProgress from './PreflightProgress';
+import DeliveryStatus from '../DeliveryStatus';
 import { isDeliveryCleanupHeld } from '../../../../../server/lib/taskRetryHold.js';
 
 const statusIcons = {
@@ -446,7 +447,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
           {statusIcons[displayStatus]}
         </button>
         <div className="flex-1 min-w-0">
-          {finalizing && <p className="mb-1 text-sm text-gray-400">Agent execution ended. Delivery verification and cleanup are pending.</p>}
+          {finalizing && <DeliveryStatus agent={agent} ownerId={task.metadata.deliveryRecoveryAgentId} />}
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <span className="text-sm font-mono text-gray-500 min-w-0 break-words">{task.id}</span>
             {task.metadata?.app && apps?.find(a => a.id === task.metadata.app)?.name && (
