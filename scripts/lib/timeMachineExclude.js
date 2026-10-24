@@ -53,14 +53,29 @@ export function excludeFromTimeMachine(installRoot, {
   if (platform !== 'darwin') return { status: 'unsupported' };
   if (env.PORTOS_SKIP_TIMEMACHINE_EXCLUDE === '1') return { status: 'skipped' };
   const result = { status: 'present', added: 0, excluded: 0, failures: [] };
+  let authenticated = false;
+  let authenticationError = null;
   const options = { encoding: 'utf8', stdio: ['inherit', 'pipe', 'pipe'], timeout: 30_000 };
   for (const relativePath of TIME_MACHINE_EXCLUDED_DIRS) {
     const path = resolve(installRoot, relativePath);
+    if (authenticationError) {
+      result.failures.push({ path, error: authenticationError });
+      continue;
+    }
     try {
       const check = run('tmutil', ['isexcluded', path], options);
       if (check.status === 0 && check.stdout?.includes('[Excluded]')) {
         result.excluded++;
         continue;
+      }
+      if (!authenticated) {
+        const auth = run('sudo', ['-v'], options);
+        if (auth.status !== 0) {
+          authenticationError = auth.error?.message || auth.stderr?.trim() || `sudo exited with status ${auth.status}`;
+          result.failures.push({ path, error: authenticationError });
+          continue;
+        }
+        authenticated = true;
       }
       const add = run('sudo', ['--', 'tmutil', 'addexclusion', '-p', path], options);
       if (add.status === 0) {

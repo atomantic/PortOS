@@ -46,6 +46,7 @@ describe('Time Machine setup backup boundary', () => {
       calls.push([command, ...args]);
       const path = args.at(-1);
       if (command === 'tmutil') return { status: 0, stdout: `${excluded.has(path) ? '[Excluded]' : '[Included]'} ${path}` };
+      if (args[0] === '-v') return { status: 0 };
       excluded.add(path);
       return { status: 0 };
     });
@@ -54,7 +55,7 @@ describe('Time Machine setup backup boundary', () => {
     expect(TIME_MACHINE_EXCLUDED_DIRS.slice().sort()).toEqual(expected.slice().sort());
     const result = setup({ run });
     expect(result).toEqual({ status: 'updated', added: expected.length - 1, excluded: 1, failures: [] });
-    const additions = calls.filter(call => call[0] === 'sudo');
+    const additions = calls.filter(call => call[0] === 'sudo' && call[1] === '--');
     expect(additions).toEqual(expected.filter(path => path !== 'data/cache')
       .map(path => ['sudo', '--', 'tmutil', 'addexclusion', '-p', resolve(root, path)]));
     for (const path of preservedData.map(path => `data/${path}`)) {
@@ -71,13 +72,15 @@ describe('Time Machine setup backup boundary', () => {
     const log = vi.fn();
     const run = vi.fn((command) => command === 'tmutil'
       ? { status: 0, stdout: '[Included]' }
-      : { status: 1, stderr: 'sudo: a password is required' });
+      : { status: 1, stderr: 'sudo: a terminal is required\nsudo: a password is required' });
     const result = setup({ run, log });
     expect(result.status).toBe('partial');
     expect(result.added).toBe(0);
+    expect(run.mock.calls.filter(([command]) => command === 'sudo')).toHaveLength(1);
     expect(result.failures).toHaveLength(TIME_MACHINE_EXCLUDED_DIRS.length);
-    expect(result.failures[0].error).toBe('sudo: a password is required');
+    expect(result.failures[0].error).toBe('sudo: a terminal is required\nsudo: a password is required');
     expect(log.mock.calls.flat().join('\n')).toContain('Setup will continue');
+    expect(log.mock.calls.every(([line]) => !line.includes('\n'))).toBe(true);
     run.mockImplementation(command => command === 'tmutil'
       ? { status: 0, stdout: '[Included]' } : { status: 0 });
     expect(setup({ run }).status).toBe('updated');
@@ -92,6 +95,12 @@ describe('Time Machine setup backup boundary', () => {
     expect(result.excluded).toBe(0);
     expect(result.failures[0].error).toBe('spawn sudo ENOENT');
     expect(run.mock.calls.some(([command]) => command === 'sudo')).toBe(true);
+    run.mockImplementation((command, args) => command === 'tmutil'
+      ? { status: 1, stderr: 'No such file or directory' }
+      : args[0] === '-v' ? { status: 0 } : { status: 1, stderr: 'Path does not exist' });
+    const missing = setup({ run });
+    expect(missing.failures).toHaveLength(TIME_MACHINE_EXCLUDED_DIRS.length);
+    expect(run.mock.calls.filter(([command, args]) => command === 'sudo' && args[0] === '--')).toHaveLength(TIME_MACHINE_EXCLUDED_DIRS.length);
     run.mockImplementation(() => { throw new Error('runner unavailable'); });
     expect(setup({ run }).failures[0].error).toBe('runner unavailable');
   });
