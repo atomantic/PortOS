@@ -170,6 +170,7 @@ class NativeArchive(unittest.TestCase):
             self.skipTest('Requires the Darwin inherited temporary group outside the caller groups')
         work = Path(tempfile.mkdtemp(prefix='initialized-inherited-group-', dir='/private/tmp'))
         try:
+            work.chmod(0o755)
             self.git(self.repo, 'worktree', 'add', '-b', 'feature/inherited', str(work))
             self.git(work, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init')
             (work / 'ignored-evidence').write_text('recoverable bytes\n')
@@ -186,6 +187,7 @@ class NativeArchive(unittest.TestCase):
             for prefix in ('archive', 'restore'):
                 copied = archive.manifest(self.txn / prefix / 'working')
                 self.assertTrue(all(row['gid'] == group for row in copied))
+                self.assertEqual((self.txn / prefix / 'working').stat().st_mode & 0o7777, 0o755)
             self.assertEqual(archive.manifest(work), before)
             self.assertTrue(archive.verify({**self.request, 'mode': 'standalone'})['standalone'])
         finally:

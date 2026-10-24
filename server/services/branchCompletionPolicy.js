@@ -143,7 +143,7 @@ function reviewedOrphanCheckout(policy, input) {
     && agent.result.validationPassed !== false && retirementPr(policy) === input.prUrl
     && input.verifiedPrHead === input.tip && !!input.tip
     && agent.metadata?.completedCheckouts?.some(row => completedCheckoutReceiptValid(agent, row)
-      && row.repoPath === input.repoPath && row.branch === input.branch && row.path === input.checkoutPath
+      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && samePath(row.path, input.checkoutPath)
       && row.head === input.tip && row.incarnation?.pointer && row.incarnation?.gitdir);
 }
 

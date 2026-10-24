@@ -497,8 +497,10 @@ def copy_tree_contents(source, destination):
             # Only NEW copies are changed, without following even dangling links.
             # chown may clear set-id bits; restore the original mode afterward.
             os.chown(target, original_stat.st_uid, original_stat.st_gid, follow_symlinks=False)
-            if stat.S_IMODE(target.lstat().st_mode) != stat.S_IMODE(original_stat.st_mode):
-                os.chmod(target, stat.S_IMODE(original_stat.st_mode), follow_symlinks=False)
+        # The inherited-group carrier starts private (0700). ditto may leave
+        # that existing root mode unchanged even when ownership already matches.
+        if stat.S_IMODE(target.lstat().st_mode) != stat.S_IMODE(original_stat.st_mode):
+            os.chmod(target, stat.S_IMODE(original_stat.st_mode), follow_symlinks=False)
         # ditto creates symlinks with the current timestamp and leaves a
         # pre-created root directory's timestamp changed by its child writes.
         # Restore only NEW-copy metadata; never resolve a dependency link.
