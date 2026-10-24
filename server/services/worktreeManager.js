@@ -2109,7 +2109,7 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, getActiveIds, { 
 
   // Scan for external-repo worktrees (directories whose .git points to a different repo).
   // These are invisible to `git worktree list` run against PortOS.
-  cleaned += await cleanupExternalRepoWorktrees(readActiveIds, handledAgentIds, readOwners);
+  cleaned += await cleanupExternalRepoWorktrees(readActiveIds, handledAgentIds, readOwners, retainedPaths);
 
   if (cleaned > 0) {
     console.log(`🌳 Cleaned ${cleaned} orphaned worktree(s)`);
@@ -2300,7 +2300,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
  * These are created when agents work on apps outside PortOS but use the shared
  * worktrees directory. They're invisible to PortOS's `git worktree list`.
  */
-async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readOwners) {
+async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readOwners, retainedPaths) {
   const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
   const { retireWithUnlockedArchive } = await import('./cosClaimOwnershipState.js');
   const entries = await readdir(WORKTREES_DIR, { withFileTypes: true }).catch(() => []);
@@ -2330,7 +2330,7 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
     // keeps them. Compare Git's own spelling with its registration output.
     const gitWorktreePath = await execGit(['rev-parse', '--show-toplevel'], worktreePath)
       .then(r => r.stdout.trim()).catch(() => null);
-    if (!gitWorktreePath) continue;
+    if (!gitWorktreePath || retainedPaths.has(gitWorktreePath)) continue;
     const registrations = await listWorktrees(worktreePath).catch(() => []);
     const wt = registrations.find(candidate => pathsEqual(candidate.path, gitWorktreePath));
     const primary = registrations[0];
