@@ -29,12 +29,19 @@ vi.mock('./grokUsageBackfill.js', () => ({
   })),
 }));
 
+vi.mock('./agyUsageBackfill.js', () => ({
+  applyAgyUsageRepair: vi.fn(async () => ({
+    added: 0, images: 0, backedUp: false, note: null, backupDir: null,
+  })),
+}));
+
 const {
   __resetHistoricalUsageBackfillForTests,
   getHistoricalUsageBackfillStatus,
   startHistoricalUsageBackfill
 } = await import('./usageBackfill.js');
 const { applyGrokUsageRepair } = await import('./grokUsageBackfill.js');
+const { applyAgyUsageRepair } = await import('./agyUsageBackfill.js');
 
 class FakeWorker extends EventEmitter {
   static instances = [];
