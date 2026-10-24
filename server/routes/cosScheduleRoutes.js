@@ -337,6 +337,23 @@ router.post('/schedule/branch-reconcile/initialized-checkouts/retire', asyncHand
   res.status(result.ok ? 200 : 409).json(result);
 }));
 
+// Explicit whole-checkout preservation uses the same journal, byte/capacity
+// bounds, metadata proof, quarantine and recovery as initialized modules. The
+// ordinary archive limits and existing initialized-only endpoint stay intact.
+router.post('/schedule/branch-reconcile/whole-checkouts/review', asyncHandler(async (req, res) => {
+  const { appId, prUrl, ...release } = validateRequest(heldCheckoutReviewBodySchema.omit({ kind: true }).strict(), req.body);
+  const { reviewInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await reviewInitializedCheckout({ appId, release, prUrl, wholeCheckout: true });
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.post('/schedule/branch-reconcile/whole-checkouts/retire', asyncHandler(async (req, res) => {
+  const { appId, review, ...release } = validateRequest(initializedCheckoutRetireBodySchema, req.body);
+  const { retireInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await retireInitializedCheckout({ appId, release, review, wholeCheckout: true });
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
 router.get('/schedule/branch-reconcile/initialized-checkouts/status', asyncHandler(async (req, res) => {
   const input = validateRequest(initializedCheckoutTransactionSchema, req.query);
   const { initializedCheckoutStatus } = await import('../services/initializedCheckoutRecovery.js');

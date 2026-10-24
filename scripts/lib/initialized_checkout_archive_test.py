@@ -121,6 +121,48 @@ class NativeArchive(unittest.TestCase):
         self.request['manifestSha256'] = proof['manifestSha256']
         return proof
 
+    def test_whole_checkout_preserves_uninitialized_gitlink_bytes_and_restores_offline(self):
+        module_admin = archive.read_pointer(self.work / 'sub/.git', 'gitdir:')
+        shutil.rmtree(self.work / 'sub')
+        shutil.rmtree(module_admin)
+        self.request['wholeCheckout'] = True
+        self.assertEqual(archive.inspect(self.request)['modules'], [])
+        del self.request['wholeCheckout']
+        (self.work / 'sub').mkdir()
+        (self.work / 'sub/unpublished.bin').write_bytes(b'private uninitialized content')
+        with self.assertRaises(FileNotFoundError):
+            archive.inspect(self.request)  # Existing initialized-only contract.
+        self.request['wholeCheckout'] = True
+        proof = self.preserve()
+        self.assertEqual(len(proof['restoreProof']), 1)
+        self.assertTrue(archive.verify(self.request)['verified'])
+        self.assertEqual((self.txn / 'archive/working/sub/unpublished.bin').read_bytes(),
+                         b'private uninitialized content')
+        for part in ['working', 'administration']:
+            archive.move({**self.request, 'part': part, 'direction': 'quarantine'})
+        self.assertFalse(self.work.exists())
+        self.assertTrue(archive.verify({**self.request, 'mode': 'standalone'})['standalone'])
+        for part in ['administration', 'working']:
+            archive.move({**self.request, 'part': part, 'direction': 'restore'})
+        self.assertEqual((self.work / 'sub/unpublished.bin').read_bytes(), b'private uninitialized content')
+        self.assertTrue(archive.verify(self.request)['verified'])
+
+    def test_stale_commit_graph_is_preserved_but_cannot_substitute_for_indexed_objects(self):
+        orphan = self.git(self.repo, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'disposable cached commit')
+        self.git(self.repo, 'update-ref', 'refs/fixture/graph-only', orphan)
+        self.git(self.repo, 'commit-graph', 'write', '--reachable')
+        self.git(self.repo, 'update-ref', '-d', 'refs/fixture/graph-only')
+        (self.repo / '.git/objects' / orphan[:2] / orphan[2:]).unlink()
+        graph = (self.repo / '.git/objects/info/commit-graph').read_bytes()
+        self.preserve()
+        self.assertEqual((self.txn / 'archive/common/objects/info/commit-graph').read_bytes(), graph)
+        self.assertTrue(archive.verify(self.request)['verified'])
+        saved = json.loads((self.txn / 'manifest.json').read_text())
+        index_blob = self.git(self.work, 'rev-parse', ':staged.txt')
+        (self.txn / 'restore/common/objects' / index_blob[:2] / index_blob[2:]).unlink()
+        with self.assertRaisesRegex(RuntimeError, 'missing-or-invalid-index-object|missing blob'):
+            archive.proof_repositories(self.txn, saved['facts'])
+
     def test_admission_bookkeeping_does_not_change_source_review(self):
         before = archive.inspect(self.request)
         admission = Path(before['commonGitDir']) / 'portos-checkout-admission'
