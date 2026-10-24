@@ -1829,7 +1829,15 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
 
       // Merge evidence and completion policy were checked before removal; the
       // branch helper checks them again before its leased local deletion.
-      if (await detachedCheckout() || await cleanupBranch(preservation.head)) console.log(`🌳 Removed worktree for ${agentId}${merged ? ' (merged)' : ''}`);
+      const branchCleaned = await detachedCheckout() || await cleanupBranch(preservation.head);
+      if (branchCleaned) console.log(`🌳 Removed worktree for ${agentId}${merged ? ' (merged)' : ''}`);
+      if (preservation.archiveDir) {
+        const { recordWorkspaceCheckoutRetirement } = await import('./taskSchedule.js');
+        await recordWorkspaceCheckoutRetirement(sourceWorkspace, {
+          path: worktreePath, branch: branchName, head: preservation.head,
+          branchDeleted: Boolean(branchCleaned), archiveDir: preservation.archiveDir,
+        }).catch(() => null);
+      }
       return { merged, removed: true, uncommittedSaved: false, warnings };
     },
   });
@@ -2381,8 +2389,16 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
           console.warn(`⚠️ Preserved external worktree ${entry.name}: ${err.message}`);
           return false;
         });
-        if (ok && !await deleteCompletedLocalBranch(parentRepo, branchName, wt.head)) {
+        const deleted = ok && await deleteCompletedLocalBranch(parentRepo, branchName, wt.head);
+        if (ok && !deleted) {
           console.warn(`⚠️ External branch ${branchName} retained: head changed, new holder, or deletion refused`);
+        }
+        if (ok && preservation?.archiveDir) {
+          const { recordWorkspaceCheckoutRetirement } = await import('./taskSchedule.js');
+          await recordWorkspaceCheckoutRetirement(parentRepo, {
+            path: worktreePath, branch: branchName, head: wt.head,
+            branchDeleted: Boolean(deleted), archiveDir: preservation.archiveDir,
+          }).catch(() => null);
         }
         return ok;
       },

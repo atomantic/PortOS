@@ -70,4 +70,24 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch reconciliation inventory refresh
     getApp.mockResolvedValueOnce(null);
     await expect(refreshBranchReconcileInventory('missing')).rejects.toMatchObject({ status: 404 });
   });
+
+  it('programmatically settles already-integrated obligations and prunes unneeded archives', async () => {
+    getApp.mockImplementation(async id => ['example', 'settled-app'].includes(id) ? { id, repoPath } : null);
+    await execGit(['branch', '-D', 'fix/current'], repoPath).catch(() => null);
+    const head = (await execGit(['rev-parse', 'HEAD'], repoPath)).stdout.trim();
+    const settledArchiveDir = join(PATHS.cos, 'held-checkout-archives', 'test-settled-archive');
+    await mkdir(settledArchiveDir, { recursive: true });
+    await writeFile(join(settledArchiveDir, 'manifest.json'), JSON.stringify({ repoPath, branch: 'claim/issue-settled', head }));
+
+    const integrated = { branch: 'claim/issue-settled', path: join(scratch, 'integrated'), head, locked: false, lockReason: null, reason: 'checkout-retained' };
+    await recordBranchReconcileOutcome('settled-app', { status: 'incomplete', remaining: [integrated] });
+
+    const result = await refreshBranchReconcileInventory('settled-app');
+    expect(result.outcome.retirementObligations || []).toEqual([]);
+    expect(result.outcome.remaining || []).toEqual([]);
+    expect(result.outcome.status).toBe('drained');
+
+    const { existsSync } = await import('fs');
+    expect(existsSync(settledArchiveDir)).toBe(false);
+  });
 });

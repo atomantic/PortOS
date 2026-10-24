@@ -1405,9 +1405,17 @@ export async function retirePendingMergeCheckout({ repoPath, release, prUrl, exp
   if (!prepared.ok) return prepared;
   if (prepared.review.forge.prHead !== expectedHeadSha) return { ok: false, reason: 'receipt-pr-head-changed' };
   if (prepared.review.comparison.disposition !== 'integrated') return { ok: false, reason: 'retirement-supersession-not-accepted' };
-  return retireHeldCheckout({ repoPath, release,
+  const result = await retireHeldCheckout({ repoPath, release,
     review: { prUrl, digest: prepared.review.digest, acceptSuperseded: false },
   }, receiptOptions);
+  if (result.ok) {
+    const { recordWorkspaceCheckoutRetirement } = await import('./taskSchedule.js');
+    await recordWorkspaceCheckoutRetirement(repoPath, {
+      path: release.path, branch: release.branch ?? null, head: release.head,
+      branchDeleted: result.branchDeleted, archiveDir: result.archiveDir, checkoutIdentity: result.checkoutIdentity,
+    }).catch(() => null);
+  }
+  return result;
 }
 
 /**

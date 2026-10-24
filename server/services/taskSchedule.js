@@ -793,6 +793,7 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
     // A fresh empty scan must not erase the last observation of vanished source.
     const omitted = remaining === undefined ? [] : (previous?.remaining || [])
       .filter(row => !remaining.some(current => sameRetirementCheckout(current, row))
+        && !hasRetirementReceipt(previous, row)
         && !rejected.some(entry => sameRetirementObservation(entry, row)));
     const missing = await missingInventoryRows(appId, omitted);
     const retirementObligations = retainRetirementObligations(previous,
@@ -858,7 +859,7 @@ export async function recordRecoveredCheckoutPreservations(appId, expected, obse
     // diagnosis and let the next sweep establish the aggregate completion state.
     const diagnosis = historical
       ? { status: 'incomplete', reason: 'historical-preservation-unresolved', nextAction: historical.preservationEvidence.nextAction }
-      : outcome.reason === 'historical-preservation-unresolved'
+      : ['historical-preservation-unresolved', 'retirement-provenance-unverified'].includes(outcome.reason)
         ? { status: 'incomplete', reason: remaining.length ? 'remaining-holds' : 'preservation-recovered',
           nextAction: remaining.length ? 'Resolve the remaining holds, then run branch reconciliation again.'
             : 'Historical preservation verified; run branch reconciliation again to confirm repository completion.' }
@@ -1003,12 +1004,37 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
       updatedAt: retiredAt,
       remaining: Array.isArray(outcome.remaining)
         ? outcome.remaining.filter(entry => retirementObligations.some(row => sameRetirementObservation(row, entry))
-          || !(sameRetirementObservation(entry, receipt) || (!entry.checkoutIdentity && sameRetirementCheckout(entry, receipt))))
+          || !(sameRetirementObservation(entry, receipt)
+            || (!entry.checkoutIdentity && sameRetirementCheckout(entry, receipt))
+            || (!isObligationRow(entry) && ((path && entry.path === path)
+              || (branchDeleted && branch && entry.branch === branch && (!entry.path || !path || entry.path === path))))))
         : outcome.remaining ?? null,
       retired,
     };
     return { result: record.branchReconcileOutcome, changed: true };
   });
+}
+
+/**
+ * Record a checkout retirement across any matching app for a workspace path or branch.
+ * Settles stale inventory rows left behind when an active run finishes and removes its worktree.
+ */
+export async function recordWorkspaceCheckoutRetirement(repoPath, receipt) {
+  if (!repoPath || (!receipt?.path && !receipt?.branch)) return null;
+  const schedule = await loadSchedule().catch(() => null);
+  const perApp = schedule?.executions?.['task:branch-reconcile']?.perApp;
+  if (!perApp || typeof perApp !== 'object') return null;
+  let updated = null;
+  for (const [appId, record] of Object.entries(perApp)) {
+    const outcome = record?.branchReconcileOutcome;
+    if (!outcome) continue;
+    const rows = [...(outcome.remaining || []), ...(outcome.retirementObligations || [])];
+    if (!rows.some(row => (receipt.path && row.path === receipt.path) || (receipt.branch && row.branch === receipt.branch))) continue;
+    const app = await getAppById(appId).catch(() => null);
+    if (app?.repoPath !== repoPath) continue;
+    updated = await recordHeldCheckoutRetirement(appId, receipt);
+  }
+  return updated;
 }
 
 /**

@@ -535,17 +535,21 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const absentObligations = unresolved.filter(release => !result.worktreeInventory?.some(tree => sameRetirementCheckout(tree, release)));
   let retirementReviews = { candidates: [], held: [] };
   const { prepareReconcileRetirements, retainedMergedClaims } = await import('./branchReconcileRetirement.js');
+  let latestAbsentObligations = absentObligations;
   if (actions.cleanupMerged !== false && (result.wip?.some(branch => branch.rule === 'completion-policy' && branch.completionPolicyReason === 'pr-completion-review-required')
     || retainedMergedClaims(result).length)) {
     const inventory = describeIdleReconcilePark(result.skipped || [], heldLive, {
       wip: result.wip, worktreeInventory: result.worktreeInventory,
       detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
     });
-    await taskSchedule.recordBranchReconcileOutcome(app.id, {
+    const prepOutcome = await taskSchedule.recordBranchReconcileOutcome(app.id, {
       status: 'running', reason: 'preparing-retirement-reviews', remaining: [...inventory.remaining, ...absentObligations],
       nextAction: 'Review completed local work before verified archival retirement.',
     });
     retirementReviews = await prepareReconcileRetirements(app, result);
+    const latestOutcome = (await taskSchedule.getBranchReconcileOutcome(app.id)) || prepOutcome || previousOutcome;
+    latestAbsentObligations = unresolvedRetirements(latestOutcome)
+      .filter(release => !result.worktreeInventory?.some(tree => sameRetirementCheckout(tree, release)));
   }
   const retiredNames = new Set((retirementReviews.retired || []).map(row => row.branch));
   if (retiredNames.size) {
@@ -554,6 +558,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     result.skipped = result.skipped.filter(row => !retiredNames.has(row.branch));
     result.worktreeInventory = result.worktreeInventory.filter(row => !retiredNames.has(row.branch));
     result.cleaned.push(...retiredNames);
+    latestAbsentObligations = latestAbsentObligations.filter(release => !retiredNames.has(release.branch));
   }
   // CI waiting and an open PR alone do not require a provider. Existing local
   // receipts were nudged above; only current exact-head code repair is cognitive.
@@ -586,7 +591,11 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   }
   const allActionable = filterActionable([...cognitiveInFlight, ...retirementReviews.candidates], actions);
   const actionableNames = new Set(allActionable.map(branch => branch.branch));
-  const idlePark = describeIdleReconcilePark([...(result.skipped || []), ...retirementReviews.held, ...absentObligations, ...routineDeliveryHolds], heldLive, {
+  const filteredSkipped = (result.skipped || []).filter(row =>
+    !actionableNames.has(row.branch)
+    && !retirementReviews.held.some(held => held.branch === row.branch)
+    && !routineDeliveryHolds.some(held => held.branch === row.branch));
+  const idlePark = describeIdleReconcilePark([...filteredSkipped, ...retirementReviews.held, ...latestAbsentObligations, ...routineDeliveryHolds], heldLive, {
     wip: result.wip?.filter(branch => !actionableNames.has(branch.branch) && !retirementReviews.held.some(held => held.branch === branch.branch) && !routineDeliveryHolds.some(held => held.branch === branch.branch)), detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
     claimMarkersHeld: result.claimMarkersHeld,
     worktreeInventory: result.worktreeInventory?.filter(tree => !actionableNames.has(tree.branch)) ?? result.worktreeInventory,
@@ -608,6 +617,10 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     nextAction: 'Continue the bounded sweep and rescan after the final batch.',
   });
   if (allActionable.length === 0) {
+    const { settleAndPruneBranchReconcileArchives } = await import('./branchReconcileRefresh.js');
+    await settleAndPruneBranchReconcileArchives(app.id, app.repoPath, {
+      defaultBranch: result.defaultBranch, worktreeInventory: result.worktreeInventory,
+    }).catch(() => null);
     // Definitive idle: nothing in-flight to drive. Park on the recheck cadence,
     // clearing the progress signature so a fresh set later dispatches and zeroing the
     // dispatch budget — this drain converged, so the next one gets a full one.
@@ -692,7 +705,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   metadata.perpetual = true;
   metadata.reconcileRetirements = actionable.filter(branch => branch.retirement).map(branch => ({
     ...branch.retirement,
-    createdAt: dispatchedOutcome.retirementObligations.find(row => sameRetirementObservation(row, branch.retirement.release))?.createdAt,
+    createdAt: dispatchedOutcome.retirementObligations?.find(row => sameRetirementObservation(row, branch.retirement.release) || sameRetirementCheckout(row, branch.retirement.release))?.createdAt,
   }));
   const supersededBlock = formatSupersededForPrompt(result.superseded || []);
   const block = [

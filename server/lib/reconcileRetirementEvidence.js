@@ -8,7 +8,7 @@ export const isRetirementObligation = row => ['retirement-review-pending', 'reti
   'retirement-provenance-unverified'].includes(row?.reason);
 
 export const matchingRetirementReceipts = (outcome, release) => [...(outcome?.retired || []), ...Object.values(outcome?.retirementReceiptEvidence || {})].filter(row =>
-  sameRetirementCheckout(row, release) && row.branchDeleted === true
+  (sameRetirementCheckout(row, release) || (!release.head && !release.path && release.branch && row.branch === release.branch)) && row.branchDeleted === true
   && typeof row.archiveDir === 'string' && row.archiveDir.length > 0
   && Number.isFinite(Date.parse(row.retiredAt)));
 
@@ -66,7 +66,9 @@ export function retainRetirementObligations(outcome, additional, now) {
         .filter(entry => sameRetirementCheckout(entry, row))
         .map(entry => Date.parse(entry.verifiedAt || entry.archivedAt)),
     ].filter(Number.isFinite);
-    const observed = Number.isFinite(Date.parse(row.observedAt)) ? Date.parse(row.observedAt) : Date.parse(now);
+    const fallbackObserved = row.reason === 'retirement-provenance-unverified' && Number.isFinite(Date.parse(outcome?.observedAt))
+      ? Date.parse(outcome.observedAt) : Date.parse(now);
+    const observed = Number.isFinite(Date.parse(row.observedAt)) ? Date.parse(row.observedAt) : fallbackObserved;
     return { ...row, createdAt: new Date(Math.max(observed, ...earlier.map(time => time + 1))).toISOString() };
   });
 }
