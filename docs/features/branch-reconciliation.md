@@ -470,6 +470,14 @@ never rewritten; the new proof is bound into the retirement review and archive.
 After removal, only that archive-bound generation can finish branch retirement;
 a recreated checkout path or new branch holder still refuses.
 
+An incomplete multi-claim batch does not prevent cleanup of a separately
+verified merged checkout. Its completed execution must have a valid capture of
+that same generation, and the captured head must be included in the exact
+merged delivery. Failed execution or validation, missing captures and unmerged
+delivery remain held. Cleanup preserves the batch's incomplete result, every
+capture and unfinished sibling checkout; it does not reset or resume exhausted
+retry budgets.
+
 ## Whole-checkout preservation
 
 For a reviewed checkout that exceeds the ordinary archive byte bounds, the

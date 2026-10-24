@@ -1,4 +1,4 @@
-/** Fresh delivery evidence for a later merged PR on one captured checkout.
+/** Fresh delivery evidence for one captured checkout, including partial batches.
  * This never changes the producing agent, its result, or its original policy.
  */
 import { execGit } from '../lib/execGit.js';
@@ -46,8 +46,8 @@ export async function readCheckoutDeliveryContinuations(input, agents, opts = {}
   if (!await ancestor(retirementForge.mergeCommit, retirementForge.defaultHead)) return [];
   const evidence = [];
   const historical = new Map();
-  // Bounded sequential forge reads, only for a physically matching successful
-  // owner whose known PR differs. Unknown or unreadable history remains held.
+  // Bounded sequential forge reads, only for a matching completed execution
+  // whose known PR differs. The aggregate task outcome is never promoted.
   for (const agent of candidates) {
     const policyUrl = agent.metadata.branchCompletionPolicy?.prUrl;
     const target = agent.metadata.reviewLoopMergeTarget;

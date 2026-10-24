@@ -1240,7 +1240,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return checkout;
   }
 
-  it.each(['delivered', 'recreated-after-removal', 'different-generation', 'unmerged-original', 'unreadable-original', 'unrelated-capture', 'human-handoff', 'failed-validation'])(
+  it.each(['delivered', 'recreated-after-removal', 'different-generation', 'unmerged-original', 'unreadable-original', 'unrelated-capture',
+    'human-handoff', 'failed-validation', 'batch-with-target', 'batch-without-target', 'failed-execution', 'batch-unmerged-current'])(
     'binds a later merged delivery to its captured owner without rewriting history: %s', async scenario => {
       const c = await reviewedCheckout(`continued-${scenario}`, { normalMerge: true });
       const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
@@ -1258,6 +1259,27 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
           completedCheckouts: [{ version: 1, agentId: 'agent-continued', startedAt: '2026-01-01T00:00:00.000Z',
             capturedAt: '2026-01-01T00:02:00.000Z', ...captured }],
         } };
+      let unfinished;
+      if (['batch-with-target', 'batch-without-target', 'failed-execution', 'failed-validation', 'batch-unmerged-current'].includes(scenario)) {
+        agent.result = { success: false, executionSuccess: scenario !== 'failed-execution',
+          taskOutcome: { status: 'incomplete', reason: 'Another claim remains unfinished' } };
+        agent.metadata.sourceWorkspace = null;
+        agent.metadata.workspacePath = repo;
+        agent.metadata.claimBranches = [c.release.branch];
+        delete agent.metadata.worktreeBranch;
+        agent.metadata.reviewLoopMergeTarget = scenario === 'batch-with-target' ? { branch: c.release.branch, url: c.forge.prUrl } : null;
+      }
+      if (scenario === 'batch-without-target') {
+        unfinished = await heldCheckout('batch-unfinished', { branch: 'feature/batch-unfinished', beforeLock: async tree => {
+          await writeFile(join(tree, 'pending.txt'), 'unfinished unique work\n');
+          await execGit(['add', 'pending.txt'], tree);
+          await execGit(['commit', '-m', 'unfinished claim'], tree);
+        } });
+        const pendingCapture = await readCompletedCheckoutIdentity({ repoPath: repo, ...unfinished.release, allowLocked: true });
+        agent.metadata.claimBranches.push(unfinished.release.branch);
+        agent.metadata.completedCheckouts.push({ version: 1, agentId: agent.id, startedAt: agent.startedAt,
+          capturedAt: '2026-01-01T00:02:00.000Z', ...pendingCapture });
+      }
       if (scenario === 'failed-validation') agent.result.validationPassed = false;
       if (scenario === 'different-generation') agent.metadata.completedCheckouts[0].incarnation.gitdir.ino += '0';
       if (scenario === 'unrelated-capture') {
@@ -1278,6 +1300,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       }
       Object.assign(c.forge, { prHead: c.release.head, mergeCommit: c.release.head, defaultHead: c.release.head,
         changedPaths: ['continued.txt', 'feature.txt'] });
+      if (scenario === 'batch-unmerged-current') {
+        const tree = (await execGit(['rev-parse', `${oldHead}^{tree}`], repo)).stdout.trim();
+        c.forge.mergeCommit = (await execGit(['commit-tree', tree, '-m', 'unintegrated delivery'], repo)).stdout.trim();
+      }
       c.opts.readHistoricalMerge = async () => scenario === 'unreadable-original' ? null : ({ url: oldUrl,
         state: scenario === 'unmerged-original' ? 'OPEN' : 'MERGED', isCrossRepository: false,
         headRefName: c.release.branch, headRefOid: oldHead, mergeCommit: { oid: oldHead }, baseRefName: 'main' });
@@ -1291,17 +1317,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
       const original = structuredClone(agent);
       const prepared = await c.prepare();
-      if (!['delivered', 'recreated-after-removal'].includes(scenario)) {
+      if (!['delivered', 'recreated-after-removal', 'batch-with-target', 'batch-without-target'].includes(scenario)) {
         expect(prepared).toMatchObject({ ok: false, reason: scenario === 'human-handoff'
           ? 'pr-completion-human-handoff' : 'retirement-policy-not-legacy-completed' });
         expect(await registered(c.path)).toBe(true);
         expect(await archives()).toEqual([]);
       } else {
         expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ continuedDelivery: {
-          originalPrUrl: oldUrl, capturedHead: oldHead, tip: c.release.head,
+          originalPrUrl: agent.metadata.reviewLoopMergeTarget?.url ?? null, capturedHead: oldHead, tip: c.release.head,
         } }] } } });
         const retired = await c.confirm(prepared.review);
-        expect(retired).toMatchObject({ ok: true, branchDeleted: scenario === 'delivered' });
+        expect(retired).toMatchObject({ ok: true, branchDeleted: scenario !== 'recreated-after-removal' });
         if (scenario === 'recreated-after-removal') {
           expect(retired.branchRetainedReason).toBe('retirement-evidence-changed');
           expect(await readFile(join(c.path, 'new-owner.txt'), 'utf8')).toBe('unrelated new work\n');
@@ -1315,6 +1341,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         expect(await registered(c.path)).toBe(false);
         expect((await c.prepare()).ok).toBe(false);
         expect(await archives()).toHaveLength(1);
+        if (unfinished) {
+          expect(await registered(unfinished.path)).toBe(true);
+          expect(await lockText(unfinished.path)).toBe(unfinished.release.lockReason);
+          expect(await readFile(join(unfinished.path, 'pending.txt'), 'utf8')).toBe('unfinished unique work\n');
+          expect((await execGit(['rev-parse', unfinished.release.branch], repo)).stdout.trim()).toBe(unfinished.release.head);
+        }
       }
       expect(agent).toEqual(original);
     });
