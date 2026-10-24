@@ -1596,7 +1596,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     const hold = await checkHold(tree.head);
     if (hold) throw new Error(hold);
     const archive = await preserveMergedCheckout(sourceWorkspace, tree, null);
-    return { ...archive, head: tree.head,
+    return { ...archive, head: tree.head, path: tree.path, branch: detached ? null : branchName,
       verify: async holder => await checkHold(tree.head) || await archive.verify(holder) };
   };
   // One archive between two critical sections. `admit` (under the lock, after the
@@ -1829,7 +1829,18 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
 
       // Merge evidence and completion policy were checked before removal; the
       // branch helper checks them again before its leased local deletion.
-      if (await detachedCheckout() || await cleanupBranch(preservation.head)) console.log(`🌳 Removed worktree for ${agentId}${merged ? ' (merged)' : ''}`);
+      const branchCleaned = await detachedCheckout() || await cleanupBranch(preservation.head);
+      if (branchCleaned) console.log(`🌳 Removed worktree for ${agentId}${merged ? ' (merged)' : ''}`);
+      if (preservation.archiveDir) {
+        const { recordWorkspaceCheckoutRetirement } = await import('./taskSchedule.js');
+        // A completed cleanup attempt may retain a moved or newly held branch.
+        const ref = preservation.branch && await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${preservation.branch}`],
+          sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
+        await recordWorkspaceCheckoutRetirement(sourceWorkspace, {
+          path: preservation.path, branch: preservation.branch, head: preservation.head,
+          branchDeleted: ref?.exitCode === 1, archiveDir: preservation.archiveDir, checkoutIdentity: preservation.checkoutIdentity,
+        }).catch(error => { warnings.push(`Retirement receipt not recorded: ${error.message}`); });
+      }
       return { merged, removed: true, uncommittedSaved: false, warnings };
     },
   });
@@ -2381,8 +2392,16 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
           console.warn(`⚠️ Preserved external worktree ${entry.name}: ${err.message}`);
           return false;
         });
-        if (ok && !await deleteCompletedLocalBranch(parentRepo, branchName, wt.head)) {
+        const deleted = ok && await deleteCompletedLocalBranch(parentRepo, branchName, wt.head);
+        if (ok && !deleted) {
           console.warn(`⚠️ External branch ${branchName} retained: head changed, new holder, or deletion refused`);
+        }
+        if (ok && preservation?.archiveDir) {
+          const { recordWorkspaceCheckoutRetirement } = await import('./taskSchedule.js');
+          await recordWorkspaceCheckoutRetirement(parentRepo, {
+            path: wt.path, branch: branchName, head: wt.head,
+            branchDeleted: Boolean(deleted), archiveDir: preservation.archiveDir, checkoutIdentity: preservation.checkoutIdentity,
+          });
         }
         return ok;
       },

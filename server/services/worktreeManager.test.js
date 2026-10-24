@@ -11,6 +11,8 @@ const preservedBranch = () => ({ archiveDir: '/branch-archive', verify: async ()
 const preserveBranchMock = vi.fn(async () => preservedBranch());
 vi.mock('../lib/branchRetirementArchive.js', () => ({ preserveBranchRetirement: (...args) => preserveBranchMock(...args) }));
 vi.mock('./heldCheckoutRecovery.js', () => ({ preserveMergedCheckout: (...args) => preserveCheckoutMock(...args) }));
+const retirementReceiptMock = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('./taskSchedule.js', () => ({ recordWorkspaceCheckoutRetirement: retirementReceiptMock }));
 const completionOwnersMock = vi.fn(async () => []);
 vi.mock('./cosClaimOwnershipState.js', async importOriginal => ({ ...await importOriginal(), readClaimOwnershipAgents: (...args) => completionOwnersMock(...args) }));
 const completionHoldMock = vi.fn(async () => null);
@@ -834,7 +836,8 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     execGitMock.mock.calls.some(([args]) => JSON.stringify(args) === JSON.stringify(subcommandArgs));
 
   beforeEach(() => {
-    preserveCheckoutMock.mockReset().mockResolvedValue({ archiveDir: '/archive', verify: async () => null });
+    preserveCheckoutMock.mockReset().mockResolvedValue({ archiveDir: '/archive', checkoutIdentity: 'original', verify: async () => null });
+    retirementReceiptMock.mockClear();
     completionHoldMock.mockReset().mockResolvedValue(null);
     completionOwnersMock.mockReset().mockResolvedValue([]);
     getDefaultBranchMock.mockResolvedValue('main');
@@ -1470,6 +1473,10 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
 
     expect(result.removed).toBe(true);
     expect(result.warnings).toEqual([]);
+    expect(retirementReceiptMock).toHaveBeenCalledWith('/repo', {
+      path: join(PATHS.worktrees, 'agent-x'), branch: 'cos/task-1/agent-x', head: 'a'.repeat(40),
+      archiveDir: '/archive', checkoutIdentity: 'original', branchDeleted: false,
+    });
   });
 
   it('removes a completed worktree whose only dirt is the consumed sentinel', async () => {

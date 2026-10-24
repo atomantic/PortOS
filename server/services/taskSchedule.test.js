@@ -158,6 +158,7 @@ import {
   getBranchReconcileOutcome,
   recordInitializedRetirementRecovery,
   recordHeldCheckoutRetirement,
+  recordWorkspaceCheckoutRetirement,
   applyOnDemandRunResets,
   queuePerpetualRefill,
   isRefillRequest,
@@ -3433,6 +3434,48 @@ describe('taskSchedule', () => {
         await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [{ ...row, checkoutIdentity: 'absent' }] });
         expect(outcome()).toMatchObject({ retirementObligations: [], remaining: [] });
         vi.useRealTimers();
+      });
+
+      it('retains an unidentified obligation instead of borrowing a branch-name receipt', async () => {
+        let saved = { version: 2, tasks: {}, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const row = { branch: 'fix/example', createdAt: '2026-01-01T00:00:00Z', reason: 'retirement-review-pending' };
+        await recordHeldCheckoutRetirement('app-1', { branch: row.branch, path: '/example/checkout', head: 'a'.repeat(40),
+          branchDeleted: true, archiveDir: '/example/archive' });
+        const result = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', retirementObligations: [row] });
+        expect(result.retirementObligations).toEqual([{ ...row, reason: 'retirement-receipt-unverified' }]);
+      });
+
+      it('routes workspace retirement only to the matching repository and exact checkout tuple', async () => {
+        let saved = { version: 2, tasks: {}, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const row = { branch: 'fix/example', path: '/example/checkout', head: 'a'.repeat(40),
+          checkoutIdentity: 'original', reason: 'worktree-locked' };
+        await recordBranchReconcileOutcome('matching', { status: 'incomplete', remaining: [row] });
+        await recordBranchReconcileOutcome('different-head', { status: 'incomplete', remaining: [{ ...row, head: 'b'.repeat(40) }] });
+        await recordBranchReconcileOutcome('different-repo', { status: 'incomplete', remaining: [row] });
+        getAppById.mockImplementation(async id => ({ repoPath: id === 'different-repo' ? '/other/repo' : '/example/repo' }));
+        await recordWorkspaceCheckoutRetirement('/example/repo', { ...row, branchDeleted: true, archiveDir: '/example/archive' });
+        const perApp = saved.executions['task:branch-reconcile'].perApp;
+        expect(perApp.matching.branchReconcileOutcome.remaining).toEqual([]);
+        expect(perApp['different-head'].branchReconcileOutcome).toMatchObject({ remaining: [{ ...row, head: 'b'.repeat(40) }] });
+        expect(perApp['different-head'].branchReconcileOutcome.retired).toBeUndefined();
+        expect(perApp['different-repo'].branchReconcileOutcome.remaining).toEqual([row]);
+        expect(perApp['different-repo'].branchReconcileOutcome.retired).toBeUndefined();
+      });
+
+      it('keeps a current inventory observation when a different-head retirement arrives at the same path', async () => {
+        let saved = { version: 2, tasks: {}, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const current = { branch: 'fix/example', path: '/example/checkout', head: 'b'.repeat(40),
+          checkoutIdentity: 'recreated', reason: 'worktree-locked' };
+        await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [current] });
+        const result = await recordHeldCheckoutRetirement('app-1', { ...current, head: 'a'.repeat(40),
+          checkoutIdentity: 'original', branchDeleted: true, archiveDir: '/example/archive' });
+        expect(result.remaining).toEqual([current]);
       });
 
       it('keeps both incarnations when recreation is observed before the original receipt arrives', async () => {
