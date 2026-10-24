@@ -2139,7 +2139,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'worktree-unmanaged-location' }] });
     const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release, prUrl: c.forge.prUrl }, c.opts);
     if (!['confirmed', 'owner-alias'].includes(scenario)) {
-      expect(prepared.ok).toBe(false); expect(await registered(path)).toBe(true); expect(await archives()).toEqual([]);
+      const reason = scenario === 'human-handoff' ? 'pr-completion-human-handoff'
+        : 'retirement-policy-not-legacy-completed';
+      expect(prepared).toMatchObject({ ok: false, reason });
+      expect(await registered(path)).toBe(true); expect(await archives()).toEqual([]);
       return;
     }
     expect(prepared.reason).toBeUndefined();
