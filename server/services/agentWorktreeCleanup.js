@@ -23,6 +23,7 @@ import { getAgents } from './cosAgentLifecycle.js';
 import * as git from './git.js';
 import { resolveTaskHookType } from './taskTypeHooks.js';
 import { removeWorktree, classifyWorktreeDirt, listWorktrees } from './worktreeManager.js';
+import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { claimContinuationPointer } from '../lib/claimContinuation.js';
 import { isTruthyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -1496,6 +1497,7 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
 async function runtimeResumePatch({ task, agentId, agentMetadata }) {
   const claim = await resolveClaimContinuationPatch({ task, agentId, agentMetadata });
   if (claim) return claim;
+  if (hasClaimFlowContract(task)) throw new Error('Runtime verification claim checkout identity is unavailable; retain the prerequisite');
   if (!agentMetadata?.isWorktree || agentMetadata.isPersistentWorktree) return {};
   const branch = agentMetadata.worktreeBranch;
   const path = agentMetadata.workspacePath || join(PATHS.worktrees, agentId);

@@ -13,7 +13,7 @@ vi.mock('./cosState.js', async () => ({
 }));
 vi.mock('./cosAgentLifecycle.js', () => ({ getAgentRecord: vi.fn(async () => facts.owner) }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
-vi.mock('./settings.js', () => ({ getSettingsWithStatus: vi.fn(async () => ({ corrupt: false, settings: { autoUpdate: { enabled: false } } })) }));
+vi.mock('./settings.js', async original => ({ ...(await original()), getSettingsWithStatus: vi.fn(async () => ({ corrupt: false, settings: { autoUpdate: { enabled: false } } })) }));
 vi.mock('./installState.js', () => ({ getBootCommit: () => facts.boot }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: vi.fn(async () => ({ isGithub: true, host: 'github.com', fullName: 'example/PortOS' })) }));
 vi.mock('./github.js', () => ({ execGh: vi.fn(async args => {
