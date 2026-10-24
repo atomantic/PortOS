@@ -1459,11 +1459,22 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(injected.policies[0].metadata.branchCompletionPolicy).toBeUndefined();
   });
 
-  it('reviews and retires a legacy pinned cleanup handoff against fresh default proof while local main lags', async () => {
+  it.each([false, true])('retires legacy pinned cleanup with lagging main and missing remote proof=%s', async missingProof => {
     const c = await reviewedCheckout('pinned-cleanup', { normalMerge: true });
     injected.policies[0].result = { success: false, executionSuccess: true,
       taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
-    const shippedDefault = c.forge.defaultHead;
+    let shippedDefault = c.forge.defaultHead;
+    if (missingProof) {
+      const remote = join(scratch, 'proof-remote');
+      await execGit(['clone', '--no-hardlinks', repo, remote], scratch);
+      await execGit(['config', 'user.email', 'test@example.com'], remote);
+      await execGit(['config', 'user.name', 'Test'], remote);
+      await execGit(['commit', '--allow-empty', '-m', 'new remote default'], remote);
+      shippedDefault = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
+      expect((await execGit(['cat-file', '-e', `${shippedDefault}^{commit}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
+      await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+      injected.fetchRemote = remote;
+    }
     await execGit(['reset', '--hard', 'HEAD^'], repo);
     const localMain = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
     c.forge.defaultHead = localMain;
@@ -1483,6 +1494,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
       branch: c.release.branch, head: c.release.head, archiveDir: result.archiveDir, branchDeleted: true,
     }));
+    expect(injected.fetches).toHaveLength(missingProof ? 1 : 0);
   });
 
   it('settles a review obligation for unattended retirement only once every commit is on the default branch', async () => {
