@@ -596,7 +596,22 @@ async function retirementPolicy(repoPath, branch, opts, reviewIdentity = {}) {
       }
     }
   }
-  return reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...reviewIdentity, checkoutIdentities });
+  const initial = reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...reviewIdentity, checkoutIdentities });
+  if (initial.reason !== 'retirement-policy-not-legacy-completed' || !reviewIdentity.retirementForge) return initial;
+  let identity = reviewIdentity;
+  if (!identity.checkoutIncarnation) {
+    const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+    // The caller has already checked the released lock and registration. This
+    // fact-read grants no unlock authority; ordinary matching policies avoid it.
+    const generation = await readCompletedCheckoutIdentity({ repoPath, branch, path: identity.checkoutPath,
+      head: identity.tip, allowLocked: true }).catch(() => null);
+    if (!generation) return initial;
+    identity = { ...identity, checkoutIncarnation: generation.incarnation };
+  }
+  const { readCheckoutDeliveryContinuations } = await import('./checkoutDeliveryContinuation.js');
+  const deliveryContinuations = await readCheckoutDeliveryContinuations({ repoPath, branch, ...identity }, policies, opts);
+  return deliveryContinuations.length
+    ? reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...identity, checkoutIdentities, deliveryContinuations }) : initial;
 }
 
 const policyReviewIdentity = (release, prUrl, forge) => ({
@@ -604,9 +619,14 @@ const policyReviewIdentity = (release, prUrl, forge) => ({
   verifiedPrHead: forge?.prUrl === prUrl ? forge.prHead : null,
 });
 
-async function integratedPolicyReviewIdentity(repoPath, release, prUrl, forge) {
+async function integratedPolicyReviewIdentity(repoPath, release, prUrl, forge, archivedIncarnation = null) {
   if (!forge || !await execGit(['cat-file', '-e', `${forge.defaultHead}^{commit}`], repoPath).then(() => true, () => false)) return null;
-  return { ...policyReviewIdentity(release, prUrl, forge),
+  // Only the post-removal caller supplies a generation already bound into the
+  // verified archive/review. A recreated path is never an absent original.
+  const absent = archivedIncarnation && await lstat(release.path).then(() => false, error => error.code === 'ENOENT');
+  const checkoutIncarnation = absent ? archivedIncarnation : null;
+  return { ...policyReviewIdentity(release, prUrl, forge), retirementForge: forge,
+    ...(checkoutIncarnation && { checkoutIncarnation }),
     // Older pinned claims missed completion capture. Fresh inclusion of every
     // commit settles cleanup-only outcomes without manufacturing receipts.
     integratedCleanupHead: forge?.prHead === release.head && await isAncestor(repoPath, release.head, forge.defaultHead)
@@ -1200,14 +1220,14 @@ async function matchRelease(repoPath, release) {
 /** Shared live policy/owner check for the explicit whole-checkout transaction.
  * It does not archive, unlock or infer integration.
  */
-export async function inspectCheckoutRetirementOwnership({ repoPath, release, registration = true }, opts = {}) {
+export async function inspectCheckoutRetirementOwnership({ repoPath, release, registration = true, reviewIdentity = {}, forgeAccount = null }, opts = {}) {
   if (!release.branch || PROTECTED_BRANCHES.includes(release.branch)) return { ok: false, reason: 'protected-branch' };
   const matched = registration ? await matchRelease(repoPath, release) : { tree: release };
   if (!matched.tree) return { ok: false, reason: matched.reason };
   const reason = await ownerReason({ repoPath, tree: matched.tree, branch: release.branch,
     readAgents: opts.readAgents || readClaimOwnershipAgents, reviewed: true });
   if (reason) return { ok: false, reason };
-  const policy = await retirementPolicy(repoPath, release.branch, opts);
+  const policy = await retirementPolicy(repoPath, release.branch, { ...opts, forgeAccount: opts.forgeAccount ?? forgeAccount }, reviewIdentity);
   return policy.reason ? { ok: false, reason: policy.reason } : { ok: true, tree: matched.tree, policy };
 }
 
@@ -1323,7 +1343,8 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   if (review) {
     const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
     const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, branch, review.prUrl, reviewForgeOptions(release, review.kind, opts)).catch(() => null);
-    const identity = await integratedPolicyReviewIdentity(repoPath, release, review.prUrl, forge);
+    const captured = reviewed.review.policy?.policies?.find(row => row.continuedDelivery)?.continuedDelivery.checkoutIncarnation;
+    const identity = await integratedPolicyReviewIdentity(repoPath, release, review.prUrl, forge, captured);
     const policy = identity ? await retirementPolicy(repoPath, branch, opts, identity) : null;
     if (JSON.stringify(policy) !== JSON.stringify(reviewed.review.policy) || JSON.stringify(forge) !== JSON.stringify(reviewed.review.forge)) {
       return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: 'retirement-evidence-changed' };

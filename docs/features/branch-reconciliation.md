@@ -457,6 +457,19 @@ by replaying an older retirement. Interrupted transactions outside the machine-v
 require explicit status and recovery; ambiguous identities remain held. The
 private journal and all copies remain available after success or recovery.
 
+## Later deliveries on a captured checkout
+
+A later merged PR on the same captured checkout generation can satisfy an
+earlier completed review obligation. Explicit retirement review must prove that
+both PRs merged on this repository's default branch, the earlier PR head is an
+ancestor of the captured completion head, and that capture is an ancestor of the
+currently reviewed delivery. The captured pointer and private-administration
+generation must match exactly. Missing evidence, changed generations, active
+owners and human handoffs remain held. The original agent result and policy are
+never rewritten; the new proof is bound into the retirement review and archive.
+After removal, only that archive-bound generation can finish branch retirement;
+a recreated checkout path or new branch holder still refuses.
+
 ## Whole-checkout preservation
 
 For a reviewed checkout that exceeds the ordinary archive byte bounds, the
