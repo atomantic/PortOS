@@ -22,7 +22,7 @@ afterAll(cleanupTempDataRoots);
 
 const SYMLINKS = process.platform !== 'win32';
 const retirementFaults = vi.hoisted(() => ({ onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null }));
-const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null, proofFailures: [] }));
+const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, proofFailures: [] }));
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
@@ -36,7 +36,11 @@ vi.mock('../lib/execGit.js', async importOriginal => {
       injected.fetches.push({ args, options });
       if (injected.fetchRemote) args = args.map(arg => arg === 'https://github.com/example/repo.git' ? injected.fetchRemote : arg);
     }
-    try { return await actual.execGit(args, cwd, options); }
+    try {
+      const result = await actual.execGit(args, cwd, options);
+      if (injected.onArchiveRef && args[0] === 'update-ref' && args[1]?.startsWith('refs/portos/archive/')) await injected.onArchiveRef();
+      return result;
+    }
     catch (error) {
       const phase = args.includes('unbundle') ? 'unbundle' : args.includes('fsck') ? 'fsck' : args.includes('--bare') ? 'init' : null;
       if (phase && options?.env?.GIT_NO_REPLACE_OBJECTS === '1') {
@@ -83,7 +87,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   beforeEach(async () => {
     Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
-    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null, proofFailures: [] });
+    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, proofFailures: [] });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -1041,16 +1045,28 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
-  it.each(['cancel', 'time'])('preserves originals and can restart after %s interrupts archive work', async mode => {
+  it.each([
+    { mode: 'cancel', phase: 'recovery refs' }, { mode: 'time', phase: 'recovery refs' },
+    { mode: 'cancel', phase: 'bundle' }, { mode: 'time', phase: 'bundle' },
+  ])('preserves originals and can restart after $mode interrupts $phase', async ({ mode, phase }) => {
     const c = await reviewedCheckout('bounded-interruption', { normalMerge: true });
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
     const before = await getBranchReconcileOutcome('app-1');
     const controller = new AbortController();
     let clock;
-    injected.onBundle = () => {
+    const interrupt = () => {
       if (mode === 'cancel') controller.abort();
       else clock = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 11 * 60 * 1000);
+    };
+    let recoveryRefs = 0;
+    let bundles = 0;
+    injected.onArchiveRef = () => {
+      if (++recoveryRefs === 1 && phase === 'recovery refs') interrupt();
+    };
+    injected.onBundle = () => {
+      bundles++;
+      if (phase === 'bundle') interrupt();
     };
     try {
       const result = await c.confirm(prepared.review, { signal: controller.signal });
@@ -1059,6 +1075,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       if (mode === 'time') expect(result.archiveLimit).toMatchObject({ kind: 'time', limitMs: 600000,
         observedMs: expect.any(Number) });
     } finally { clock?.mockRestore(); }
+    if (phase === 'recovery refs') {
+      expect(recoveryRefs).toBe(1);
+      expect(bundles).toBe(0);
+    } else expect(bundles).toBe(1);
     expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
     expect(await registered(c.path)).toBe(true);
     expect(await lockText(c.path)).toBe(c.release.lockReason);
@@ -1067,6 +1087,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
     // A new attempt takes fresh snapshots; no partial checkpoint grants removal.
+    injected.onArchiveRef = null;
     injected.onBundle = null;
     expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
     const repeated = await c.confirm(prepared.review);

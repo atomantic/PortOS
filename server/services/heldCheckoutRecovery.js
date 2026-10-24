@@ -145,15 +145,22 @@ async function archiveFile(root, path) {
   return path;
 }
 
-async function archiveManifest(dir) {
-  const path = await archiveFile(dir, join(dir, 'manifest.json'));
+async function archiveBytes(path, work, limitBytes, reason = 'retirement-archive-limit-exceeded') {
   const chunks = [];
   let size = 0;
   for await (const chunk of await archiveSource(path)) {
-    if ((size += chunk.length) > MAX_MANIFEST_BYTES) throw new Error('archive-manifest-budget-exceeded');
+    work.check();
+    if ((size += chunk.length) > limitBytes) throw Object.assign(new Error(reason), {
+      archiveLimit: { scope: 'metadata-read', kind: 'file', limitBytes, observedBytes: size },
+    });
     chunks.push(chunk);
   }
-  const bytes = Buffer.concat(chunks);
+  return Buffer.concat(chunks);
+}
+
+async function archiveManifest(dir, work = archiveWork()) {
+  const path = await archiveFile(dir, join(dir, 'manifest.json'));
+  const bytes = await archiveBytes(path, work, MAX_MANIFEST_BYTES, 'archive-manifest-budget-exceeded');
   return { manifest: JSON.parse(bytes), digest: evidenceHash(bytes) };
 }
 
@@ -162,7 +169,7 @@ async function archiveManifest(dir) {
  */
 async function verifyHeldArchive(repoPath, dir, release, work = archiveWork()) {
   work.check();
-  const { manifest: saved, digest } = await archiveManifest(dir);
+  const { manifest: saved, digest } = await archiveManifest(dir, work);
   if (saved.repoPath !== repoPath || !sameRetirementCheckout(saved, release)
     || (saved.release ? !sameRelease(saved.release, release) : release.locked !== false || release.lockReason !== null)) throw new Error('archive-identity-mismatch');
   if (!(Date.parse(saved.archivedAt) >= Date.parse(release.createdAt)) || Date.parse(saved.archivedAt) > Date.now()) throw new Error('archive-generation-mismatch');
@@ -247,7 +254,7 @@ async function verifyHeldArchive(repoPath, dir, release, work = archiveWork()) {
   } catch { throw new Error('archive-bundle-object-proof-failed'); }
   finally { await rmGuarded(scratch, { recursive: true, force: true }); }
   work.check();
-  if ((await archiveManifest(dir)).digest !== digest) throw new Error('archive-manifest-changed');
+  if ((await archiveManifest(dir, work)).digest !== digest) throw new Error('archive-manifest-changed');
   const recheck = async () => {
     const recheckWork = archiveWork();
     for (const [path, original] of stamps) {
@@ -730,11 +737,12 @@ function recoveryReferenceKind(path) {
   return /^[A-Z][A-Z0-9_]*$/.test(relative) ? 'ref' : null;
 }
 
-async function recoveryObjectHeads(administration, { repoPath, tree, missingRoot }) {
+async function recoveryObjectHeads(administration, { repoPath, tree, missingRoot }, work) {
   const heads = new Set([tree.head]);
   const oid = new RegExp(`^[a-f0-9]{${tree.head.length}}$`, 'i');
   const invalid = () => { throw new Error('unrecognized private recovery reference'); };
   const add = (value, allowZero = false) => {
+    work.check();
     if (!oid.test(value)) invalid();
     if (/^0+$/.test(value)) { if (allowZero) return; invalid(); }
     heads.add(value.toLowerCase());
@@ -744,10 +752,11 @@ async function recoveryObjectHeads(administration, { repoPath, tree, missingRoot
     if (recoveryReferenceKind(link.path)) throw new Error('unsupported linked recovery reference');
   }
   for (const file of administration.files) {
+    work.check();
     const kind = recoveryReferenceKind(file.path);
     if (!kind) continue;
     if (kind === 'unsafe') throw new Error('retirement-operation-active');
-    const contents = await readFile(file.source, 'utf8');
+    const contents = (await archiveBytes(file.source, work, MAX_FILE_BYTES)).toString('utf8');
     const lines = contents.split(/\r?\n/);
     if (lines.at(-1) === '') lines.pop();
     if (kind === 'ref') {
@@ -762,6 +771,7 @@ async function recoveryObjectHeads(administration, { repoPath, tree, missingRoot
     }
     if (kind === 'objects' && !lines.length) invalid();
     for (const line of lines) {
+      work.check();
       if (kind === 'reflog') {
         const fields = /^([a-f0-9]+) ([a-f0-9]+) [^\t]+(?:\t.*)?$/i.exec(line);
         if (!fields) invalid();
@@ -849,7 +859,7 @@ export async function preserveSupersededCheckout({ appId, repoPath, tree, defaul
 async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, release, review, missingRoot = null, work = archiveWork() }) {
   work.check();
   const [snapshot, administration] = await archiveSnapshots(tree, repoPath, missingRoot, work);
-  const recoveryHeads = await recoveryObjectHeads(administration, { repoPath, tree, missingRoot });
+  const recoveryHeads = await recoveryObjectHeads(administration, { repoPath, tree, missingRoot }, work);
   await ensureDir(dir);
   await chmod(dir, 0o700);
 
@@ -864,12 +874,14 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
   const namespace = `refs/portos/archive/${randomUUID()}`;
   try {
     for (const head of recoveryHeads) {
+      work.check();
       const type = (await git(['cat-file', '-t', head], repoPath)).trim();
       if (!['commit', 'tree', 'blob', 'tag'].includes(type)) throw new Error('private recovery object has an unsupported type');
       const ref = `${namespace}/${head}`;
       await git(['update-ref', ref, head, ''], repoPath);
       recoveryRefs.push({ ref, head });
     }
+    work.check();
     await git([...(missingRoot ? ['--git-dir', missingRoot, '--work-tree', tree.path] : []), 'bundle', 'create', bundle, 'HEAD', ...recoveryRefs.map(entry => entry.ref)], missingRoot ? repoPath : tree.path);
     const [, heads] = await Promise.all([git(['bundle', 'verify', bundle], repoPath), git(['bundle', 'list-heads', bundle], repoPath)]);
     const bundled = new Set(heads.trim().split('\n').map(line => line.split(' ')[0]));
