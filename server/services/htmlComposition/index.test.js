@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
+import sharp from 'sharp';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, probeVideoDuration, probeVideoStreamInfo } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
@@ -18,11 +19,24 @@ import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 vi.mock('./encode.js', async importOriginal => {
   const actual = await importOriginal();
   const { _withTestCaptureDiagnostics } = await import('./testBrowserCleanup.js');
-  return { ...actual, encodeComposition: _withTestCaptureDiagnostics(actual.encodeComposition, { getTestSignal: () => testSignal }) };
+  const encode = async (page, contract, ...args) => {
+    let capture = 0;
+    const observed = contract.motionBlur === 4 ? { ...page, send: async (method, ...params) => {
+      const result = await page.send(method, ...params);
+      if (method === 'Page.captureScreenshot') {
+        if (capture >= 24 && capture < 28) motionBlurCaptures.push(Buffer.from(result.data, 'base64'));
+        capture++;
+      }
+      return result;
+    } } : page;
+    return actual.encodeComposition(observed, contract, ...args);
+  };
+  return { ...actual, encodeComposition: _withTestCaptureDiagnostics(encode, { getTestSignal: () => testSignal }) };
 });
 
 let testSignal;
-beforeEach(({ signal }) => { testSignal = signal; });
+let motionBlurCaptures;
+beforeEach(({ signal }) => { testSignal = signal; motionBlurCaptures = []; });
 
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
@@ -126,7 +140,17 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     expect(await readFile(join(PATHS.videos, explicit.filename))).toEqual(await readFile(join(PATHS.videos, baseline.filename)));
 
     const blurred = await renderComposition(await composition(fixture('', 'motionBlur:4')));
-    const pixels = execFileSync(ffmpeg, ['-v', 'error', '-i', join(PATHS.videos, blurred.filename), '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 40 * 1024 * 1024 });
+    // Observe the renderer's actual PNG inputs before blaming tmix: a frozen
+    // compositor must name the capture failure instead of a decoded pixel.
+    const greens = await Promise.all(motionBlurCaptures.map(async png => {
+      const rgb = await sharp(png).extract({ left: 345, top: 110, width: 1, height: 1 }).removeAlpha().raw().toBuffer();
+      return rgb[1];
+    }));
+    expect(greens, 'Browser capture did not paint the requested subframe times (t=0.5..0.5625): check the capture environment clock/compositor').toEqual([255, 255, 255, 0]);
+    const output = join(PATHS.videos, blurred.filename);
+    expect(await probeVideoStreamInfo(output)).toMatchObject({ fps: 12, frameCount: 12 });
+    expect(await probeVideoDuration(output)).toBeCloseTo(1, 1);
+    const pixels = execFileSync(ffmpeg, ['-v', 'error', '-i', output, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 40 * 1024 * 1024 });
     const frameBytes = 1280 * 720 * 3;
     expect(pixels.length / frameBytes).toBe(12); // frame count still durationSec * fps, unaffected by motionBlur
     // Frame six spans t=0.5..0.5625s across 4 subframes. The block's trailing
