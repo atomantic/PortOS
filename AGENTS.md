@@ -56,15 +56,19 @@ npm test --prefix client         # Vitest (happy-dom) — component/unit tests
 npm run test:db                  # DB-backed suites → portos_test ONLY (see Security Model)
 
 npm run pregate                  # BEFORE EVERY PUSH — CI's plan run locally; receipt in .cache/pregate/report.json
-# pregate and CI skip test files whose every input already passed (the test
+# Local focused tests and CI skip test files whose every input already passed (the test
 # memo, docs/GITHUB_ACTIONS.md "Test memo"); PORTOS_TEST_MEMO=off runs them all.
-node scripts/pregate-attest.js   # AFTER the push: posts the green receipt as a `pregate` commit status bound to the
+node scripts/pregate-attest.js   # Only after explicit --full validation and the push: posts the green receipt as a `pregate` commit status bound to the
                                  # validated tree so the PR's CI skips the attested stages; a refusal means full CI as before
 ```
 
 **Run `npm run pregate` before every push and again after rebasing onto a moved base.** It uses CI's planner and runners, including tree-wide guards for import boundaries, catalog merges, and generated manifests. The local plan includes both committed and uncommitted changes, including untracked files.
 
-A scoped plan runs every suite it selects, in CI's order and with CI's environment: lint, server and client tests, the client build and its bundle pin, the boot smoke, the browser suites, and the serial `portos_test` DB suite last and alone (it is pinned to `portos_test` and can never target `portos`). A full-suite plan runs only the always-run guards unless `--full` is supplied, which runs everything. A suite left to CI — by `--skip-db`, `--skip-browser`, `--skip-build`, `--skip-smoke`, by the downgrade, or because the machine lacks a prerequisite (a reachable test Postgres; Chrome, ffmpeg and the client bundler) — is named as not run in the summary and in the receipt `.cache/pregate/report.json` (plan, stage outcomes and durations, base and HEAD SHAs, and the hash of the exact working tree validated, uncommitted and untracked files included). The shipped prompt-history guard runs locally when the planner selects it. A green pregate proves only the stages it ran; the Windows job and the Linux worker-containment job are the two only CI can prove, and required CI checks still apply. After the push, `node scripts/pregate-attest.js` posts the receipt as a `pregate` commit status on the head; the pull request's planner skips the attested stages for same-repository heads the repository owner attested (`docs/GITHUB_ACTIONS.md` "Pregate attestation"). It refuses when the receipt is not green, the tree changed after pregate, or the commit is not pushed — report the refusal and let CI run everything; never rerun pregate only to attest.
+The default local gate runs lint/format checks, always-run and diff-selected structural guards, and focused unit tests: explicitly changed tests and sibling tests for changed sources, including new untracked tests. It does not expand through the transitive import graph or run browser, database, build or boot-smoke suites. Changes without a direct test owner keep their broader coverage in hosted CI. Run an appropriate focused public-boundary regression as you implement; do not treat the automatic sibling selection as proof of every changed behavior.
+
+`npm run pregate -- --full` explicitly opts into CI's selected broad suites locally. Database tests remain pinned to `portos_test`; full runs retain prerequisite, isolation and process-cleanup guards. Required hosted CI and configured reviews remain mandatory before merging. A lightweight local pass never substitutes for hosted broad coverage.
+
+Every run records its exact tree, stages, skipped suites and `validationMode` in `.cache/pregate/report.json`. Focused receipts cannot produce CI-skipping attestations; do not run `pregate-attest.js` after the default gate or rerun validation solely to attest. Explicit full-validation and legacy receipts retain their bounded stage-proof semantics; only stages actually run may be attested, subject to the existing tree/base/trust checks. Merged-tree structural guards remain required before managed merges and run outside merge admission.
 
 ## Test Strategy: Value Over Assertion Count
 

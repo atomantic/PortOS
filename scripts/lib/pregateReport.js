@@ -21,11 +21,12 @@ import { dirname, join, resolve } from 'node:path';
 export const PREGATE_REPORT_PATH = '.cache/pregate/report.json';
 
 /**
+ * Version 3 adds validationMode: focused receipts never attest CI suites.
  * Version 2 added `plan.downgraded`: whether a full plan was replaced by the
  * always-run guards. `scripts/pregate-attest.js` refuses a receipt without it,
  * because a downgraded server stage passing is not CI's server selection passing.
  */
-export const PREGATE_REPORT_VERSION = 2;
+export const PREGATE_REPORT_VERSION = 3;
 
 /**
  * Hash the exact working tree as it stands: tracked, modified, deleted and
@@ -102,6 +103,7 @@ export function buildPregateReport({
   const passed = stageRecords.length > 0 && stageRecords.every((stage) => stage.status === 'passed');
   return {
     version: PREGATE_REPORT_VERSION,
+    validationMode: options.full ? 'ci' : 'focused',
     startedAt,
     finishedAt,
     passed,
@@ -114,7 +116,7 @@ export function buildPregateReport({
     options,
     plan: {
       full: plan.full,
-      // True when a full plan ran only the always-run guards (no `--full`):
+      // True when the local selection reduced CI coverage (no `--full`):
       // the server and client stages below then prove less than CI's selection.
       downgraded: Boolean(downgraded),
       reason: plan.reason,

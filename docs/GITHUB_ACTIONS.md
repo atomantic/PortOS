@@ -217,6 +217,9 @@ are never executed as a substitute.
 
 ### Pregate attestation
 
+Default local pregate is focused validation, not a local CI run. Version 3 focused receipts cannot produce CI-skipping attestations. The following mechanism applies only to explicit `npm run pregate -- --full` validation and compatible legacy receipts. Hosted CI remains authoritative for broad coverage on ordinary pushes; do not rerun locally merely to obtain an attestation.
+
+
 A green pregate on this machine runs the same planner, runners, environment
 and `portos_test` database the Linux jobs do, so repeating those stages in CI
 for the install's own pull requests buys queue time and nothing else (design

@@ -974,9 +974,11 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // issue labels — the same per-issue routing DISPATCH_HINT_FANOUT_GUIDANCE
   // already gives the claim swarm's Phase B, imported verbatim rather than
   // retyped so the two consumers can't drift on vocabulary.
-  it('branch-reconcile v10 routes each fan-out sub-agent by its own branch\'s dispatch labels and leaves superseded retirement to the deterministic pass', () => {
+  it('branch-reconcile v11 routes each fan-out sub-agent by its own branch\'s dispatch labels and leaves superseded retirement to the deterministic pass', () => {
     const current = DEFAULT_TASK_PROMPTS['branch-reconcile'];
-    expect(PROMPT_VERSIONS['branch-reconcile']).toBe(10);
+    expect(PROMPT_VERSIONS['branch-reconcile']).toBe(11);
+    expect(current).toContain('focused changed-behavior tests');
+    expect(current).toContain('focused results never attest unrun suites');
     expect(current).toContain('the deterministic pass backs the branch up and retires it');
     expect(current).not.toContain('a verdict alone does not authorize removal');
     expect(current).toContain('Base movement alone does not require a rebase or another CI run');
