@@ -109,11 +109,13 @@ freeing resources or preserving large outputs separately, then retrying the exac
 checkout with fresh evidence; do not remove it or raise global limits to clear a
 refusal. Existing unversioned archives follow an explicit compatibility path
 through the same bounded verification and complete content/private-Git proof.
-Unknown contract versions fail closed. The real-Git regression measured
-16.9–20.9 seconds for cancellation/cleanup/retry and 20.2 seconds for the
-1,100-plus-file restore; those integration cases have explicit 30-second test
-budgets. Existing tests retain their default timeout. This does not change
-initialized-checkout archives or their separate operational budgets.
+Unknown contract versions fail closed. The real-Git benchmark at `d200ec77d2`
+measured 16.9–20.9 seconds for cancellation/cleanup/retry and 20.2 seconds for
+the 1,100-plus-file restore. Integration fixture construction, retirement or
+confirmation, and independent proof retain separate existing 30-second phase
+budgets; cumulative case duration includes its hooks. Existing tests retain their
+default timeout. This does not change initialized-checkout archives or their
+separate operational budgets.
 
 Historical held-checkout archives must also prove that their staged patch
 reconstructs the preserved private index. Verification imports the bundle into
