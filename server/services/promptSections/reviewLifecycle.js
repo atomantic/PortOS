@@ -1114,7 +1114,7 @@ export function buildCiMergeGateSteps(startStep, { prRef, mrRef = '<MR_NUMBER>',
     ? localReviewBlockedMergeGuard()
     : '';
   const reviewRecheckNames = Array.isArray(reviewRecheckReviewers)
-    ? reviewRecheckReviewers.filter(reviewer => reviewer === 'copilot' || reviewer.startsWith('@')).map(reviewer => `\`${reviewer}\``).join(', ')
+    ? reviewRecheckReviewers.filter(reviewer => typeof reviewer === 'string' && (reviewer === 'copilot' || reviewer.startsWith('@'))).map(reviewer => `\`${reviewer}\``).join(', ')
     : '';
   const reviewRecheckAfterCodeFix = reviewRecheckNames
     ? ` If the CI fix changes code, repeat the configured review loop for ${reviewRecheckNames} against the new HEAD before returning to the CI wait; an earlier clean verdict does not cover changed code.`
