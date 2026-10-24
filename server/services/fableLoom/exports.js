@@ -280,6 +280,7 @@ async function inspectContext(job, snapshot, episodes, universe, signal) {
     });
   }
   const voicePlans = [];
+  const media = createMediaStore();
   if (job.options.includeVoice) {
     const universeId = typeof universe?.id === 'string' && universe.id
       ? universe.id
@@ -332,19 +333,19 @@ async function inspectContext(job, snapshot, episodes, universe, signal) {
           continue;
         }
         voicePlans.push({
-          characterId: character.id, bytes, sha256,
-          extension: asset.filename.slice(asset.filename.lastIndexOf('.') + 1).toLowerCase(),
+          characterId: character.id,
+          ...media.add({ bytes, extension: asset.filename.slice(asset.filename.lastIndexOf('.') + 1).toLowerCase(), durationMs: null }),
           consentConfirmed: asset.consentConfirmed, licensePosture: asset.licensePosture,
           sourcePolicy: character.approval?.sourcePolicy || null,
         });
       }
     }
   }
-  return { requests, voicePlans, characterProjection };
+  return { requests, voicePlans, characterProjection, media };
 }
 
 async function build(job, snapshot, episodes, history, universe, signal) {
-  const { requests, voicePlans, characterProjection } = await inspectContext(job, snapshot, episodes, universe, signal);
+  const { requests, voicePlans, characterProjection, media } = await inspectContext(job, snapshot, episodes, universe, signal);
   if (job.findings.some(f => f.severity === 'error')) {
     throw error('EXPORT_VALIDATION_FAILED', 'Resolve graph, outline, production, media, approval, character or voice findings before exporting.');
   }
@@ -355,7 +356,6 @@ async function build(job, snapshot, episodes, history, universe, signal) {
   await ensureDir(directory);
   const cache = new Map();
   const prepare = await createFableLoomMediaCache(join(root(), 'media-cache'), job.options, signal);
-  const media = createMediaStore();
   const nodeAssets = new Map();
   const provenance = [];
   for (const request of requests) {
@@ -403,9 +403,8 @@ async function build(job, snapshot, episodes, history, universe, signal) {
     await save(job);
   }
   const voiceProvenance = voicePlans.map(plan => {
-    const prepared = media.add({ bytes: plan.bytes, extension: plan.extension, durationMs: null });
     return {
-      characterId: plan.characterId, file: prepared.file, sha256: prepared.sha256, bytes: prepared.bytes,
+      characterId: plan.characterId, file: plan.file, sha256: plan.sha256, bytes: plan.bytes,
       approved: true, draftFlags: [], consentConfirmed: plan.consentConfirmed,
       licensePosture: plan.licensePosture, sourcePolicy: plan.sourcePolicy,
     };

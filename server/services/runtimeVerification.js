@@ -66,6 +66,14 @@ export async function resolveRuntimeVerificationUpdate(task, outcome, agentId) {
   if (!live || owner?.taskId !== task.id || (!replay && (live.status !== 'in_progress'
     || !matchesCompletionTaskDispatch(owner, live)))) throw new Error('Runtime verification dispatch ownership is unverified');
   task = live;
+  // Internal publication context, separate from metadata: the caller forwards it
+  // to updateTask's options; the task-store projection never persists this field.
+  // Snapshot before forge awaits so later edits cannot redefine observed authority.
+  const runtimeRecoveryContext = {
+    expectedStatus: task.status,
+    expectedTask: structuredClone({ description: task.description, priority: task.priority, metadata: task.metadata }),
+    recoveryOwner: { id: agentId, startedAt: owner.startedAt },
+  };
   const prior = task.metadata?.runtimeVerification;
   // Replaying finalization retains the original dispatch identity and evidence.
   const same = prior?.agentId === agentId && task.metadata?.runtimeVerificationId === `${task.id}:${agentId}`;
@@ -83,7 +91,7 @@ export async function resolveRuntimeVerificationUpdate(task, outcome, agentId) {
       reason = await prerequisiteReason(prerequisite);
     } else reason = 'Runtime prerequisite retained: merged-fix integration evidence is unreadable or invalid';
   }
-  return { status: 'blocked', metadata: { ...task.metadata,
+  return { status: 'blocked', runtimeRecoveryContext, metadata: { ...task.metadata,
     runtimeVerificationId: `${task.id}:${agentId}`, runtimeVerification: { ...prerequisite, dispatchStatus: task.status,
       dispatch: Object.fromEntries(['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount']
         .filter(key => task.metadata?.[key] !== undefined).map(key => [key, task.metadata[key]])) },

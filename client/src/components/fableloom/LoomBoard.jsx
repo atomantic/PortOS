@@ -24,12 +24,14 @@ const thumb = (image) => `/data/images/${encodeURIComponent(image)}`;
 export default function LoomBoard({ loomId, episode, aspectRatio, via, onPick, onOpenNode }) {
   const navigate = useNavigate();
   const path = useMemo(() => fableLoomBoardPath(episode, via), [episode, via]);
-  const [boards, setBoards] = useState([]);
+  const [boardList, setBoardList] = useState(null);
+  const boards = boardList?.loomId === loomId && boardList?.episodeId === episode.id ? boardList.rows : [];
   const [making, setMaking] = useState(false);
   useEffect(() => {
     let active = true;
     listStoryboards({ silent: true })
-      .then((rows) => { if (active) setBoards((rows || []).filter((b) => b.source?.loomId === loomId && b.source?.episodeId === episode.id)); })
+      .then((rows) => { if (active) setBoardList({ loomId, episodeId: episode.id,
+        rows: (rows || []).filter((b) => b.source?.loomId === loomId && b.source?.episodeId === episode.id) }); })
       .catch(() => {});
     return () => { active = false; };
   }, [loomId, episode.id]);

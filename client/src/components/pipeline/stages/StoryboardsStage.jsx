@@ -38,13 +38,27 @@ import {
   updatePipelineShotsFromBoard,
 } from '../../../services/api';
 import useUniverse from '../../../hooks/useUniverse';
+import { useSocketResource } from '../../../hooks/useSocketResource';
+import useMounted from '../../../hooks/useMounted';
 import { matchCharactersInText } from '../../../lib/scenePrompt';
 import MediaJobThumb from '../MediaJobThumb';
 import ImagePromptCandidates, { PromptCountInput } from '../ImagePromptCandidates';
 import { genConfigToImageOptions, genConfigToRefineOptions, IMAGE_PROMPT_COUNT_DEFAULT } from './VisualGenSettings';
 
+const STORYBOARD_CHANGE_EVENTS = ['storyboard:changed'];
+
 export default function StoryboardsStage({ issue, series, onStageUpdate, actionsGated = false }) {
   const navigate = useNavigate();
+  const mounted = useMounted();
+  // A new scope also invalidates requests when leaving and returning to the same issue.
+  const requestScope = useRef({ issueId: issue.id });
+  if (requestScope.current.issueId !== issue.id) requestScope.current = { issueId: issue.id };
+  const boardOpenRef = useRef(null);
+  const boardUpdateRef = useRef(null);
+  const [boardOpen, setBoardOpen] = useState(null);
+  const [boardUpdate, setBoardUpdate] = useState(null);
+  const openingBoard = boardOpen?.scope === requestScope.current;
+  const updatingFromBoard = boardUpdate?.scope === requestScope.current ? boardUpdate.shotId : null;
   const stage = issue.stages?.storyboards || { status: 'empty', scenes: [] };
   const [scenes, setScenes] = useState(stage.scenes || []);
   // Scene index currently minting a blank sketch (so its button shows a spinner
@@ -111,6 +125,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   const extractInFlight = !!extractingFrom;
 
   const persist = async (nextScenes) => {
+    if (boardUpdateRef.current?.scope === requestScope.current) return false;
     setScenes(nextScenes);
     // Keep the ref coherent for every write path (not just the ones that set it
     // explicitly), so a discrete pick fired between a persist and the next
@@ -129,30 +144,38 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
 
   // Open in storyboard editor: the issue's linked board in Create › Storyboards
   // (made from these scenes the first time), where recipes make panel art.
-  const [openingBoard, setOpeningBoard] = useState(false);
   const openBoard = async () => {
-    setOpeningBoard(true);
+    if (boardOpenRef.current?.scope === requestScope.current) return;
+    const request = { scope: requestScope.current };
+    boardOpenRef.current = request;
+    setBoardOpen(request);
     const res = await openStoryboardForPipelineIssue(issue.id).catch(() => null);
-    setOpeningBoard(false);
+    if (!mounted.current || requestScope.current !== request.scope || boardOpenRef.current !== request) return;
+    boardOpenRef.current = null;
+    setBoardOpen(null);
     if (res?.boardId) navigate(`/storyboards/${encodeURIComponent(res.boardId)}`);
   };
 
   // The linked board is a copy: panels edited there wait here, per shot, until Update.
-  const [boardChanges, setBoardChanges] = useState(null);
-  const [updatingFromBoard, setUpdatingFromBoard] = useState(null);
-  useEffect(() => {
-    let live = true;
-    getPipelineStoryboardChanges(issue.id, { silent: true })
-      .then((res) => { if (live) setBoardChanges(res); })
-      .catch(() => {});
-    return () => { live = false; };
-  }, [issue.id, issue.updatedAt]);
+  const { data: boardChanges, updateData: setBoardChanges } = useSocketResource(
+    ({ signal }) => getPipelineStoryboardChanges(issue.id, { silent: true, signal }),
+    {
+      events: STORYBOARD_CHANGE_EVENTS,
+      resourceKey: JSON.stringify([issue.id, issue.updatedAt]),
+      matchesEvent: event => !boardChanges?.boardId || event?.id === boardChanges.boardId,
+    },
+  );
   const changedShots = useMemo(() => new Map((boardChanges?.changed || []).map((c) => [c.shotId, c])), [boardChanges]);
   const boardLocked = stage.locked === true;
   const updateFromBoard = async (shotId = null) => {
-    setUpdatingFromBoard(shotId || 'all');
+    if (boardUpdateRef.current?.scope === requestScope.current) return;
+    const request = { scope: requestScope.current, shotId: shotId || 'all' };
+    boardUpdateRef.current = request;
+    setBoardUpdate(request);
     const res = await updatePipelineShotsFromBoard(issue.id, shotId).catch(() => null);
-    setUpdatingFromBoard(null);
+    if (!mounted.current || requestScope.current !== request.scope || boardUpdateRef.current !== request) return;
+    boardUpdateRef.current = null;
+    setBoardUpdate(null);
     if (!res) return;
     const { updated, issue: saved, ...changes } = res;
     setBoardChanges(changes);
@@ -487,7 +510,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   };
 
   return (
-    <div className="space-y-4">
+    <fieldset disabled={!!updatingFromBoard} className="min-w-0 space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-lg font-semibold text-white">Storyboards</h2>
@@ -728,7 +751,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
           ))}
         </ul>
       )}
-    </div>
+    </fieldset>
   );
 }
 

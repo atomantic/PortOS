@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
-import { captureCompletedCheckouts, hasCompletedCheckoutEvidence, readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
+import { captureCheckoutSeeds, captureCompletedCheckouts, captureSeededCompletionCheckouts, hasCompletedCheckoutEvidence, readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 
 describe('completed claim checkout evidence', () => {
   let scratch, repoPath, path, head, agent;
@@ -98,5 +98,14 @@ describe('completed claim checkout evidence', () => {
       expect(await hasCompletedCheckoutEvidence([record, { ...newer, result: { success: true } }], target())).toBe(false);
       expect(await hasCompletedCheckoutEvidence([record, { ...newer, startedAt: null }], target())).toBe(false);
     }
+  });
+
+  it('withholds late capture when only a physical seed survived and no terminal head was observed', async () => {
+    const checkoutSeeds = await captureCheckoutSeeds(agent);
+    const record = { ...completed([]), metadata: { ...agent.metadata, checkoutSeeds,
+      checkoutCapture: { status: 'pending', targets: [], unknown: true } } };
+    await execGit(['commit', '--allow-empty', '-m', 'later writer in the same physical checkout'], path);
+    expect(await captureSeededCompletionCheckouts(record)).toBeNull();
+    expect(await hasCompletedCheckoutEvidence([record], { ...target(), head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() })).toBe(false);
   });
 });

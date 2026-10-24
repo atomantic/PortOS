@@ -108,6 +108,7 @@ const RELEASE = { branch: BRANCH, path: WORKTREE, head: HEAD, locked: false, loc
 const CREATED_AT = '2026-01-01T00:00:00.000Z';
 
 const agentState = (overrides = {}) => ({
+  startedAt: CREATED_AT,
   metadata: {
     isWorktree: true,
     sourceWorkspace: '/repo',
@@ -284,6 +285,16 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(await run({ agentState: state })).toMatchObject({ verified: false, skipReason: 'already-absent-preservation-unverified' });
     findMissingCheckoutPreservation.mockResolvedValue(null);
     expect(await run({ agentState: state })).toMatchObject({ verified: false, skipReason: 'already-absent-preservation-unverified' });
+  });
+
+  it('withholds absent-checkout settlement for a receipt from an earlier execution generation', async () => {
+    const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
+      startedAt: '2025-01-01T00:00:00.000Z', capturedAt: CREATED_AT };
+    const state = agentState({ completedCheckouts: [completed], reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } });
+    findMissingCheckoutPreservation.mockResolvedValue({ archiveDir: '/example/archive', evidenceDigest: 'a'.repeat(64), recheck: async () => true });
+    expect(await run({ agentState: state })).toMatchObject({ verified: false });
+    expect(findMissingCheckoutPreservation).not.toHaveBeenCalled();
+    expect(recordCleanupOutcome).not.toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'verified' }));
   });
 
   it.each([['broken leaf symlink', true], ['unreadable EACCES leaf', null]])('never treats %s as absent or verified cleanup', async (_name, presence) => {

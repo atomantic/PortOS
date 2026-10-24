@@ -6,7 +6,7 @@ const facts = vi.hoisted(() => ({ boot: 'b'.repeat(40), integrated: 'c'.repeat(4
   owner: { id: 'agent-example', taskId: 'sys-example', status: 'completed', metadata: {} },
   trusted: true, running: false, forge: true, ancestor: false }));
 vi.mock('./cosState.js', async () => ({
-  loadState: vi.fn(async () => ({ agents: {} })),
+  loadState: vi.fn(async () => ({ agents: facts.running ? { sibling: { id: 'sibling', taskId: 'sys-example', status: 'running' } } : {} })),
   withStateLock: (await import('../lib/fileWriteQueue.js')).createFileWriteQueue(),
   readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: facts.trusted,
     agents: facts.running ? { sibling: { taskId: 'sys-example', status: 'running' } } : {} })),
@@ -33,7 +33,7 @@ vi.mock('./agentWorktreeCleanup.js', () => ({ releaseRetryHold: vi.fn(async ({ t
 }) }));
 
 import { resolveRuntimeVerificationUpdate, sweepRuntimeVerifications } from './runtimeVerification.js';
-import { addTask, getTaskById, updateTask, reviveBlockedTask, __resetTaskCache, sweepResolvedFailureTasks } from './cosTaskStore.js';
+import { addTask, getTaskById, updateTask, deleteTask, reviveBlockedTask, __resetTaskCache, sweepResolvedFailureTasks } from './cosTaskStore.js';
 import { __resetCosTaskRepository } from './cosTaskRepository.js';
 import { cosEvents } from './cosEvents.js';
 import { normalizeTaskOutcome } from '../lib/agentOutcome.js';
@@ -52,7 +52,8 @@ async function runningTask() {
 }
 async function park({ ready = true } = {}) {
   const task = await runningTask();
-  await updateTask(task.id, await resolveRuntimeVerificationUpdate({ ...task, metadata: { totalSpawnCount: 0 } }, outcome(), 'agent-example'), 'internal');
+  const update = await resolveRuntimeVerificationUpdate({ ...task, metadata: { totalSpawnCount: 0 } }, outcome(), 'agent-example');
+  await updateTask(task.id, update, 'internal', update.runtimeRecoveryContext);
   if (ready) await updateTask(task.id, { metadata: { runtimeVerificationReadyAgentId: 'agent-example' } }, 'internal');
   return getTaskById(task.id);
 }
@@ -67,6 +68,9 @@ describe('persisted runtime continuation', () => {
   it('parks stale code without budget changes, expiry, generic revival or affected-task completion', async () => {
     const task = await park();
     expect(task).toMatchObject({ status: 'blocked', metadata: { blockedCategory: 'runtime-verification', failureCount: '2', totalSpawnCount: '4' } });
+    expect(task).not.toHaveProperty('runtimeRecoveryContext');
+    expect(task.metadata).not.toHaveProperty('runtimeRecoveryContext');
+    expect(JSON.stringify(cosEvents.emit.mock.calls)).not.toContain('runtimeRecoveryContext');
     expect(task.metadata.blockedReason).toContain('Automatic updates are disabled');
     expect(await reviveBlockedTask(task.id)).toMatchObject({ error: expect.stringContaining('Runtime verification') });
     await sweepResolvedFailureTasks({ now: Date.now() + 60 * 86400000 });
@@ -124,6 +128,39 @@ describe('persisted runtime continuation', () => {
     await updateTask(task.id, { metadata: { totalSpawnCount: 5, lastSpawnedAt: '2026-01-02T00:00:00Z' } }, 'internal');
     await expect(resolveRuntimeVerificationUpdate(task, outcome(), 'agent-example')).rejects.toThrow('dispatch ownership');
     expect((await getTaskById(task.id)).status).toBe('in_progress');
+  });
+
+  it.each(['description', 'priority', 'manual-blocker', 'new-owner'])('preserves a %s change made during runtime prerequisite inspection', async kind => {
+    const task = await runningTask();
+    const observed = await getTaskById(task.id);
+    const originalForge = execGh.getMockImplementation();
+    let entered, release;
+    const inspecting = new Promise(resolve => { entered = resolve; });
+    const inspection = new Promise(resolve => { release = resolve; });
+    execGh.mockImplementationOnce(async (...args) => { entered(); await inspection; return originalForge(...args); });
+    const pending = resolveRuntimeVerificationUpdate(task, outcome(), 'agent-example');
+    await inspecting;
+    if (kind === 'description') await updateTask(task.id, { description: 'Operator revised the objective' }, 'internal');
+    if (kind === 'priority') await updateTask(task.id, { priority: 'HIGH' }, 'internal');
+    if (kind === 'manual-blocker') await updateTask(task.id, { metadata: { blocker: 'Operator hold' } }, 'internal');
+    if (kind === 'new-owner') facts.running = true;
+    const retained = await getTaskById(task.id);
+    release();
+    const update = await pending;
+    expect(update.runtimeRecoveryContext.expectedTask).toEqual({ description: observed.description, priority: observed.priority, metadata: observed.metadata });
+    expect(await updateTask(task.id, update, 'internal', update.runtimeRecoveryContext)).toMatchObject({ statusChanged: true });
+    __resetTaskCache();
+    expect(await getTaskById(task.id)).toEqual(retained);
+    expect((await getTaskById(task.id)).metadata).not.toHaveProperty('runtimeVerification');
+  });
+
+  it.each(['task', 'owner'])('refuses runtime prerequisite publication when its %s is missing', async kind => {
+    const task = await runningTask();
+    if (kind === 'task') await deleteTask(task.id, 'internal');
+    else facts.owner = null;
+    await expect(resolveRuntimeVerificationUpdate(task, outcome(), 'agent-example')).rejects.toThrow('dispatch ownership');
+    if (kind === 'task') expect(await getTaskById(task.id)).toBeNull();
+    else expect((await getTaskById(task.id)).metadata).not.toHaveProperty('runtimeVerification');
   });
 
   it('retains unreadable integration as a prerequisite without spending another run, then verifies it afresh', async () => {

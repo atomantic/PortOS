@@ -49,7 +49,7 @@ function callName(call) {
 }
 
 function callArgs(call) {
-  const raw = call?.arguments ?? call?.args ?? call?.function?.arguments ?? call?.input;
+  const raw = call?.arguments ?? call?.args ?? call?.function?.arguments ?? call?.input ?? call?.rawInput;
   if (raw && typeof raw === 'object') return raw;
   if (typeof raw !== 'string' || !raw) return {};
   try {
@@ -81,45 +81,61 @@ function inputImageCount(args) {
 
 function eventsFromToolText(text, { sessionId, day }) {
   const events = [];
+  const invocations = [];
+  const identified = new Map();
   let index = 0;
   for (const entry of parseJsonLines(text)) {
     for (const call of toolCallsFrom(entry)) {
+      const id = call?.toolCallId ?? call?.id ?? call?.tool_call_id;
+      const prior = typeof id === 'string' && id ? identified.get(id) : null;
+      // ACP updates are patches keyed by invocation, not new requests. Keep
+      // legacy occurrence ordinals for later calls so existing repair IDs stay
+      // stable, while retaining arguments omitted by progress-only updates.
       const name = callName(call);
-      if (!IMAGINE_IMAGE_TOOLS.has(name) && !IMAGINE_VIDEO_TOOLS.has(name)) continue;
-      const args = callArgs(call);
-      const idBase = `${sessionId || 'unknown'}:${index}`;
-      index += 1;
-      if (IMAGINE_VIDEO_TOOLS.has(name)) {
-        const requested = args.duration ?? args.seconds ?? args.length;
-        const hasDuration = requested != null && Number.isFinite(Number(requested));
-        const units = grokVideoBillableUnits({
-          requestedSeconds: requested,
-          deliveredSeconds: null,
-          // The still this call animates is either a prior image_gen in the
-          // same session or a file the user already had. It is an input, not
-          // a second generated image.
-          hasSourceImage: true,
-        });
-        events.push({
-          id: `session-video:${idBase}`,
-          day,
-          model: GROK_IMAGINE_VIDEO_MODEL,
-          images: 0,
-          videoSeconds: units.videoSeconds,
-          inputImages: units.inputImages,
-          source: hasDuration ? 'measured' : 'estimate',
-        });
-      } else {
-        events.push({
-          id: `session-image:${idBase}`,
-          day,
-          model: GROK_IMAGINE_IMAGE_MODEL,
-          images: 1,
-          inputImages: inputImageCount(args),
-          videoSeconds: 0,
-          source: 'measured',
-        });
-      }
+      const recognized = IMAGINE_IMAGE_TOOLS.has(name) || IMAGINE_VIDEO_TOOLS.has(name);
+      const ordinal = recognized ? index++ : null;
+      if (prior) { prior.call = { ...prior.call, ...call }; continue; }
+      if (!recognized) continue;
+      const invocation = { call, ordinal };
+      invocations.push(invocation);
+      if (typeof id === 'string' && id) identified.set(id, invocation);
+    }
+  }
+  for (const { call, ordinal } of invocations) {
+    const name = callName(call);
+    if (!IMAGINE_IMAGE_TOOLS.has(name) && !IMAGINE_VIDEO_TOOLS.has(name)) continue;
+    const args = callArgs(call);
+    const idBase = `${sessionId || 'unknown'}:${ordinal}`;
+    if (IMAGINE_VIDEO_TOOLS.has(name)) {
+      const requested = args.duration ?? args.seconds ?? args.length;
+      const hasDuration = requested != null && Number.isFinite(Number(requested));
+      const units = grokVideoBillableUnits({
+        requestedSeconds: requested,
+        deliveredSeconds: null,
+        // The still this call animates is either a prior image_gen in the
+        // same session or a file the user already had. It is an input, not
+        // a second generated image.
+        hasSourceImage: true,
+      });
+      events.push({
+        id: `session-video:${idBase}`,
+        day,
+        model: GROK_IMAGINE_VIDEO_MODEL,
+        images: 0,
+        videoSeconds: units.videoSeconds,
+        inputImages: units.inputImages,
+        source: hasDuration ? 'measured' : 'estimate',
+      });
+    } else {
+      events.push({
+        id: `session-image:${idBase}`,
+        day,
+        model: GROK_IMAGINE_IMAGE_MODEL,
+        images: 1,
+        inputImages: inputImageCount(args),
+        videoSeconds: 0,
+        source: 'measured',
+      });
     }
   }
   return events;
@@ -161,9 +177,11 @@ export function videoHistoryUsageEvents(entry) {
   if (!entry || entry.modelId !== 'grok' || !entry.id) return [];
   const day = dayFromIso(entry.createdAt);
   if (!day) return [];
+  const delivered = (typeof entry.deliveredSec === 'number' || (typeof entry.deliveredSec === 'string' && entry.deliveredSec.trim()))
+    && Number.isFinite(Number(entry.deliveredSec)) && Number(entry.deliveredSec) > 0 ? Number(entry.deliveredSec) : null;
   const units = grokVideoBillableUnits({
     requestedSeconds: entry.duration,
-    deliveredSeconds: Number.isFinite(Number(entry.deliveredSec)) ? Number(entry.deliveredSec) : null,
+    deliveredSeconds: delivered,
     hasSourceImage: entry.mode === 'image',
   });
   const events = [{
@@ -173,7 +191,7 @@ export function videoHistoryUsageEvents(entry) {
     images: 0,
     videoSeconds: units.videoSeconds,
     inputImages: units.inputImages,
-    source: Number.isFinite(Number(entry.deliveredSec)) ? 'measured' : 'estimate',
+    source: delivered === null ? 'estimate' : 'measured',
   }];
   if (units.images > 0) {
     events.push({

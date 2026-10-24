@@ -1,6 +1,7 @@
 import { auditWorkflow, newAuditMetadata, isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORGE_MAINTENANCE_REASON } from '../lib/forgeMaintenanceTasks.js';
 import { getSkipReason } from './cosTaskClaim.js';
+import { isDeepStrictEqual } from 'node:util';
 /**
  * CoS Task Store Module
  *
@@ -31,7 +32,7 @@ import { PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../
 import { splitTaskPromptFields, TASK_PROMPT_KEY, TASK_CONTEXT_KEY } from '../lib/cosTaskPrompt.js';
 import { normalizeOrchestrationMode, normalizeOrchestrationProfile } from '../lib/orchestrationProfile.js';
 import { loadState, withStateLock } from './cosState.js';
-import { hasActiveTaskOwner } from './agentState.js';
+import { activeAgents, runnerAgents, hasActiveTaskOwner } from './agentState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
@@ -678,10 +679,10 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
  * `expectedStatus`, when supplied, is checked under the task-file lock. A mismatch
  * returns `{ statusChanged: true }` without writing or retiring pause state.
  */
-export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, expectedStatus = null, expectedMetadata = null } = {}) {
+export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false } = {}) {
   validateRequest(cosTaskTypeSchema, taskType);
   const release = await preparePauseRelease(taskId, updates);
-  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue, expectedStatus, expectedMetadata });
+  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue, expectedStatus, expectedMetadata, expectedTask, recoveryOwner, preserveRetryBudget });
   if (release && !result?.error && !result?.statusChanged) {
     await retirePausedAgent(release.agentId, taskId, resolveTaskTargetBranch(result?.metadata));
   }
@@ -789,12 +790,12 @@ function mergeUpdateMetadata(existingMetadata, updates) {
   return merged;
 }
 
-async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null, expectedMetadata = null }) {
-  return withStateLock(() => writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue, expectedStatus, expectedMetadata }));
+async function writeTaskUpdate(taskId, updates, taskType, options) {
+  return withStateLock(() => writeTaskUpdateLocked(taskId, updates, taskType, options));
 }
 
 // Caller holds withStateLock, including its status and ownership decision.
-async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null, expectedMetadata = null }) {
+async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false }) {
   const tasks = await readTaskFile(taskType);
 
   let taskIndex = tasks.findIndex(t => t.id === taskId);
@@ -820,6 +821,18 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   }
 
   const current = tasks[taskIndex];
+  if (expectedTask && Object.entries(expectedTask).some(([key, value]) => !isDeepStrictEqual(current[key], value))) {
+    return { statusChanged: true, task: current };
+  }
+  if (recoveryOwner) {
+    const state = await loadState();
+    const registered = state.agents?.[recoveryOwner.id];
+    const competing = Object.values(state.agents || {}).some(agent => agent.id !== recoveryOwner.id
+      && agent.taskId === taskId && ['running', 'paused'].includes(agent.status))
+      || [activeAgents, runnerAgents].some(entries => [...entries].some(([id, agent]) => id !== recoveryOwner.id
+        && (agent.taskId || agent.task?.id) === taskId));
+    if (competing || (registered && registered.startedAt !== recoveryOwner.startedAt)) return { statusChanged: true, task: current };
+  }
   if (expectedMetadata && Object.entries(expectedMetadata).some(([key, value]) => current.metadata?.[key] !== value)) {
     return { statusChanged: true, task: current };
   }
@@ -861,6 +874,14 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     for (const key of keys) {
       if (runtimeRelease && ['failureCount', 'lastErrorCategory', 'lastFailureAt'].includes(key)) continue;
       delete updatedMetadata[key];
+    }
+  }
+  // Automatic delivery recovery continues the charged attempt, unlike an
+  // explicit human revive. Persist its budget in the same write as its hold.
+  if (preserveRetryBudget && expectedStatus === 'blocked' && expectedTask && transition.leavesBlocked
+    && updates.status === 'in_progress' && typeof updates.metadata?.retryPendingCleanup === 'string') {
+    for (const key of ['failureCount', 'lastErrorCategory', 'lastFailureAt']) {
+      if (Object.hasOwn(updates.metadata, key)) updatedMetadata[key] = updates.metadata[key];
     }
   }
 

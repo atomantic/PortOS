@@ -305,6 +305,23 @@ describe('static reference player runtime', () => {
     expect(session.snapshot().media.url).not.toBe(first);
   });
 
+  it('makes every hold reachable when shuffle has seventeen assets', () => {
+    const manifest = story();
+    const gate = gateOf(manifest);
+    gate.interactionWindow = { enabled: true, holdLoopRotation: 'shuffle' };
+    gate.playbackAssets.holds = Array.from({ length: 17 }, (_, index) => ({
+      ...clip(), file: `media/${index.toString(16).padStart(64, '0')}.mp4`,
+    }));
+    const session = atGate(manifest);
+    const visited = new Set();
+    for (let index = 0; index < 17; index++) {
+      const { media } = session.snapshot();
+      visited.add(media.url);
+      session.onMediaEnded(media.generation);
+    }
+    expect(visited.size).toBe(17);
+  });
+
   it('rejects an unsupported package and an unsafe media path', () => {
     expect(() => createSession({ ...story(), schemaVersion: '2.0.0' })).toThrow(/major version 1/);
     expect(() => createSession({ ...story(), runtimeVersion: '9.0.0' })).toThrow(/major version 1/);

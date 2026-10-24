@@ -176,12 +176,15 @@ describe('stitch job', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stitch 2' }));
     await waitFor(() => expect(toast).toHaveBeenCalledWith('Stitch status unknown — check media history'));
     await act(async () => socketHandlers.get('video-gen:completed')({ generationId: 'unknown-job' }));
-    expect(toast.success).toHaveBeenCalledTimes(1);
+    expect(toast.success).toHaveBeenCalledTimes(2);
+    await act(async () => socketHandlers.get('video-gen:completed')({ generationId: 'unknown-job' }));
+    expect(toast.success).toHaveBeenCalledTimes(2);
   });
 
   it('toasts success only when the job settles, and surfaces an enqueue failure', async () => {
     rows = ['a', 'b'].map(id => ({ kind: 'video', data: { id, filename: `${id}.mp4`, prompt: `Clip ${id}`, createdAt: '2026-01-01' } }));
     stitchVideos.mockResolvedValueOnce({ ok: true, job: { jobId: 'job-1', status: 'queued' } });
+    jobsApi.getMediaJob.mockRejectedValueOnce(new Error('Status unavailable'));
     open();
     await screen.findByText('Clip a');
     fireEvent.click(screen.getByRole('button', { name: 'Stitch' }));
@@ -190,6 +193,7 @@ describe('stitch job', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stitch 2' }));
     await waitFor(() => expect(stitchVideos).toHaveBeenCalledWith(['a', 'b'], { silent: true }));
     await waitFor(() => expect(toast).toHaveBeenCalled());
+    expect(toast).toHaveBeenCalledWith('Stitch status unknown — check media history');
     expect(toast.success).not.toHaveBeenCalled();
     await act(async () => socketHandlers.get('video-gen:completed')({ generationId: 'unrelated-job' }));
     expect(toast.success).not.toHaveBeenCalled();

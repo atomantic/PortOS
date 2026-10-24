@@ -10,6 +10,96 @@ import { assertNotRealDataWrite } from '../server/lib/testDataIsolation.js';
 const listProcesses = () => import('../server/services/pm2.js').then(pm2 => pm2.listMaintenanceProcesses());
 const refuse = message => { throw new Error(message); };
 
+// Publish a complete owner with the fence, never an ownerless mkdir/write gap.
+// Only a proven dead PID permits takeover; unknown/unfinished transitions stay
+// closed for explicit operator inspection, as with the migration runner lock.
+function claimRecoveryFence(directory, io, stat) {
+  const lock = join(directory, 'recovery');
+  // A takeover marker must not live inside a fence that a winning recovery
+  // could be releasing concurrently. Keep its shared name stable instead.
+  const transition = join(directory, 'recovery-transition');
+  const legacyTransition = join(lock, '.transition');
+  const unfinished = () => refuse('Maintenance recovery has an unfinished transition; stop all recovery processes and inspect its fence.');
+  const physical = value => value && [value.dev, value.ino, value.birthtimeMs].join(':');
+  const readOwner = path => {
+    const file = join(path, 'owner.json');
+    const info = stat(file);
+    if (!info?.isFile() || info.size > 4096) return null;
+    try {
+      const bytes = io.readFileSync(file);
+      const owner = JSON.parse(bytes);
+      return owner.version === 1 && Number.isSafeInteger(owner.pid) && owner.pid > 0 && typeof owner.token === 'string'
+        ? { ...owner, bytes } : null;
+    } catch { return null; }
+  };
+  const dead = pid => {
+    try { process.kill(pid, 0); return false; }
+    catch (error) { return error.code === 'ESRCH'; }
+  };
+  const owner = { version: 1, pid: process.pid, token: randomUUID() };
+  const bytes = Buffer.from(`${JSON.stringify(owner)}\n`);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (stat(transition)) unfinished();
+    if (!stat(lock)) {
+      const staged = join(directory, `recovery-acquire-${randomUUID()}`);
+      io.mkdirSync(staged, { mode: 0o700 });
+      let acquired = false;
+      try {
+        const fd = io.openSync(join(staged, 'owner.json'), 'wx', 0o600);
+        try { io.writeFileSync(fd, bytes); io.fsyncSync(fd); } finally { io.closeSync(fd); }
+        syncMaintenanceDirectory(staged, io);
+        try { io.renameSync(staged, lock); acquired = true; }
+        catch (error) { if (!stat(lock)) throw error; }
+      } finally {
+        if (!acquired) {
+          io.unlinkSync(join(staged, 'owner.json'));
+          io.rmdirSync(staged);
+        }
+      }
+      if (acquired) {
+        syncMaintenanceDirectory(directory, io);
+        const observed = physical(stat(lock));
+        const owns = () => physical(stat(lock)) === observed && readOwner(lock)?.bytes.equals(bytes) === true;
+        return { owns, release() {
+          if (!owns()) refuse('The maintenance recovery fence changed; preserve it for inspection.');
+          // Rename the nonempty fence first; never expose an empty shared name
+          // that another publisher could replace before our final rmdir.
+          const released = join(directory, `recovery-release-${owner.token}`);
+          io.renameSync(lock, released);
+          io.unlinkSync(join(released, 'owner.json'));
+          io.rmdirSync(released);
+          syncMaintenanceDirectory(directory, io);
+        } };
+      }
+    }
+    const observed = stat(lock);
+    const holder = observed?.isDirectory() ? readOwner(lock) : null;
+    if (!holder) refuse('Maintenance recovery ownership is unverified; preserve its fence for inspection.');
+    if (!dead(holder.pid)) refuse('Maintenance recovery is already owned by a live or unreadable process.');
+    if (stat(legacyTransition)) unfinished();
+    let transitionFd;
+    try { transitionFd = io.openSync(transition, 'wx', 0o600); }
+    catch { unfinished(); }
+    let transitionStat;
+    try {
+      // The descriptor identifies our creation even if its parent or pathname
+      // was replaced before this read; a path stat could identify another owner.
+      transitionStat = physical(io.fstatSync(transitionFd));
+      if (stat(legacyTransition)) unfinished();
+      if (physical(stat(lock)) !== physical(observed) || readOwner(lock)?.bytes.equals(holder.bytes) !== true || !dead(holder.pid))
+        refuse('Maintenance recovery ownership changed during inspection.');
+      io.renameSync(lock, join(directory, `recovery-interrupted-${randomUUID()}`));
+      syncMaintenanceDirectory(directory, io);
+    } finally {
+      try {
+        // Release only our exact marker, including after successful retirement.
+        if (transitionStat && physical(stat(transition)) === transitionStat) io.unlinkSync(transition);
+      } finally { io.closeSync(transitionFd); }
+    }
+  }
+  refuse('Maintenance recovery is already owned; retry after its owner finishes.');
+}
+
 /** Offline operator disposition of a transaction, never settlement of its work. */
 export async function recoverMaintenanceTransaction(reason, { data = PATHS.data, io = fs, processes = listProcesses } = {}) {
   const { reason: confirmedReason } = maintenanceBeginSchema.parse({ reason });
@@ -29,68 +119,78 @@ export async function recoverMaintenanceTransaction(reason, { data = PATHS.data,
     try { return io.lstatSync(path); }
     catch (err) { if (err.code === 'ENOENT') return null; throw err; }
   };
-  const dirStat = stat(directory);
-  if (dirStat && !dirStat.isDirectory()) refuse('The maintenance journal must be a real directory.');
-  const originalStat = stat(file);
-  if (originalStat && !originalStat.isFile()) refuse('state.json must be a regular file, not a link or directory.');
-  const original = originalStat ? io.readFileSync(file) : null;
-  // Use exactly the runtime schema; future or damaged journals require compatible
-  // code/data recovery, never replacement with an empty journal.
-  const state = original ? maintenanceJournalSchema.parse(JSON.parse(original.toString('utf8')))
-    : { version: 1, revision: 0, hold: null, operations: [] };
-  const lockStat = stat(lock);
-  if (lockStat && !lockStat.isDirectory()) refuse('The transaction lock must be a real directory.');
-  const pending = dirStat ? io.readdirSync(directory).filter(name => /^pending-.*\.json$/.test(name)).sort().map(name => {
-    const stats = stat(join(directory, name));
-    if (!stats?.isFile()) refuse('Pending journal evidence must be regular files.');
-    return { name, size: stats.size };
-  }) : [];
-  await offline();
   const identity = stats => stats && [stats.dev, stats.ino, stats.size, stats.mtimeMs, stats.ctimeMs].join(':');
-  const current = stat(file);
-  if (identity(current) !== identity(originalStat) || identity(stat(lock)) !== identity(lockStat)
-    || (original && !io.readFileSync(file).equals(original)))
-    refuse('The maintenance journal changed during inspection; inspect again before recovery.');
+  const existingDirectory = stat(directory);
+  if (existingDirectory && !existingDirectory.isDirectory()) refuse('The maintenance journal must be a real directory.');
   assertNotRealDataWrite(directory, 'maintenance transaction recovery');
   io.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  if (!lockStat) io.mkdirSync(lock, { mode: 0o700 });
-  const at = new Date().toISOString();
-  const archiveDir = join(directory, `recovered-${at.replace(/:/g, '-')}-${randomUUID()}`);
-  io.mkdirSync(archiveDir, { mode: 0o700 });
-  const durableWrite = (path, contents) => {
-    const fd = io.openSync(path, 'wx', 0o600);
-    try { io.writeFileSync(fd, contents); io.fsyncSync(fd); } finally { io.closeSync(fd); }
-  };
-  if (original) durableWrite(join(archiveDir, 'state.json'), original);
-  if (!state.hold) {
-    state.revision++;
-    state.hold = { id: randomUUID(), revision: state.revision, owner: 'Transaction recovery',
-      reason: confirmedReason, requestedAt: at };
+  const recoveryFence = claimRecoveryFence(directory, io, stat);
+  try {
+    const dirStat = stat(directory);
+    if (dirStat && !dirStat.isDirectory()) refuse('The maintenance journal must be a real directory.');
+    const originalStat = stat(file);
+    if (originalStat && !originalStat.isFile()) refuse('state.json must be a regular file, not a link or directory.');
+    const original = originalStat ? io.readFileSync(file) : null;
+    // Use exactly the runtime schema; future or damaged journals require compatible
+    // code/data recovery, never replacement with an empty journal.
+    const state = original ? maintenanceJournalSchema.parse(JSON.parse(original.toString('utf8')))
+      : { version: 1, revision: 0, hold: null, operations: [] };
+    const lockStat = stat(lock);
+    if (lockStat && !lockStat.isDirectory()) refuse('The transaction lock must be a real directory.');
+    const pending = dirStat ? io.readdirSync(directory).filter(name => /^pending-.*\.json$/.test(name)).sort().map(name => {
+      const stats = stat(join(directory, name));
+      if (!stats?.isFile()) refuse('Pending journal evidence must be regular files.');
+      return { name, size: stats.size };
+    }) : [];
+    await offline();
+    const current = stat(file);
+    if (identity(current) !== identity(originalStat) || identity(stat(lock)) !== identity(lockStat)
+      || !recoveryFence.owns() || (original && !io.readFileSync(file).equals(original)))
+      refuse('The maintenance journal changed during inspection; inspect again before recovery.');
+    if (!lockStat) io.mkdirSync(lock, { mode: 0o700 });
+    const transactionStat = lockStat || stat(lock);
+    const at = new Date().toISOString();
+    const archiveDir = join(directory, `recovered-${at.replace(/:/g, '-')}-${randomUUID()}`);
+    io.mkdirSync(archiveDir, { mode: 0o700 });
+    const durableWrite = (path, contents) => {
+      const fd = io.openSync(path, 'wx', 0o600);
+      try { io.writeFileSync(fd, contents); io.fsyncSync(fd); } finally { io.closeSync(fd); }
+    };
+    if (original) durableWrite(join(archiveDir, 'state.json'), original);
+    if (!state.hold) {
+      state.revision++;
+      state.hold = { id: randomUUID(), revision: state.revision, owner: 'Transaction recovery',
+        reason: confirmedReason, requestedAt: at };
+    }
+    maintenanceJournalSchema.parse(state);
+    const receipt = { version: 1, reason: confirmedReason, at, lockMtime: lockStat?.mtime.toISOString() ?? null,
+      pending, originalStateSha256: original ? createHash('sha256').update(original).digest('hex') : null,
+      hold: state.hold };
+    durableWrite(join(archiveDir, 'receipt.json'), `${JSON.stringify(receipt)}\n`);
+    // Interrupted writes may never have flushed their data. A directory fsync
+    // preserves names, not those bytes; retain the original fence on flush failure.
+    for (const { name } of pending) {
+      // Windows FlushFileBuffers requires write access; r+ never truncates evidence.
+      const fd = io.openSync(join(directory, name), 'r+');
+      try { io.fsyncSync(fd); } finally { io.closeSync(fd); }
+      io.renameSync(join(directory, name), join(archiveDir, name));
+    }
+    syncMaintenanceDirectory(archiveDir, io);
+    // Publish and fsync a hold BEFORE moving the admission lock. A crash at any
+    // step retains either the original fence or the deliberate recovery hold.
+    const staged = join(directory, `pending-${randomUUID()}.json`);
+    durableWrite(staged, `${JSON.stringify(state)}\n`);
+    io.renameSync(staged, file);
+    syncMaintenanceDirectory(directory, io);
+    if (identity(stat(lock)) !== identity(transactionStat) || !recoveryFence.owns())
+      refuse('The maintenance transaction changed during recovery; its replacement remains fenced.');
+    io.renameSync(lock, join(archiveDir, 'transaction'));
+    syncMaintenanceDirectory(archiveDir, io);
+    syncMaintenanceDirectory(directory, io);
+    return { archiveDir, hold: state.hold, pendingCount: pending.length };
+  } finally {
+    recoveryFence.release();
   }
-  maintenanceJournalSchema.parse(state);
-  const receipt = { version: 1, reason: confirmedReason, at, lockMtime: lockStat?.mtime.toISOString() ?? null,
-    pending, originalStateSha256: original ? createHash('sha256').update(original).digest('hex') : null,
-    hold: state.hold };
-  durableWrite(join(archiveDir, 'receipt.json'), `${JSON.stringify(receipt)}\n`);
-  // Interrupted writes may never have flushed their data. A directory fsync
-  // preserves names, not those bytes; retain the original fence on flush failure.
-  for (const { name } of pending) {
-    // Windows FlushFileBuffers requires write access; r+ never truncates evidence.
-    const fd = io.openSync(join(directory, name), 'r+');
-    try { io.fsyncSync(fd); } finally { io.closeSync(fd); }
-    io.renameSync(join(directory, name), join(archiveDir, name));
-  }
-  syncMaintenanceDirectory(archiveDir, io);
-  // Publish and fsync a hold BEFORE moving the admission lock. A crash at any
-  // step retains either the original fence or the deliberate recovery hold.
-  const staged = join(directory, `pending-${randomUUID()}.json`);
-  durableWrite(staged, `${JSON.stringify(state)}\n`);
-  io.renameSync(staged, file);
-  syncMaintenanceDirectory(directory, io);
-  io.renameSync(lock, join(archiveDir, 'transaction'));
-  syncMaintenanceDirectory(archiveDir, io);
-  syncMaintenanceDirectory(directory, io);
-  return { archiveDir, hold: state.hold, pendingCount: pending.length };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {

@@ -94,8 +94,8 @@ unapproved, unconsented, ambiguous or missing voice bytes.
 
 The host README states that character files and any voice bytes are inputs for
 the host's own resolver and TTS. The package does not grant PortOS access and
-contains no PortOS URL, credential or callback. The reference player remains
-unavailable.
+contains no PortOS URL, credential or callback. Set `includePlayer: true` to
+include the standalone reference player described below.
 
 Media reads accept basenames only, resolve inside the appropriate gallery/video
 root, refuse escaping symlinks and snapshot bounded regular-file bytes. No
