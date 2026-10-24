@@ -262,8 +262,8 @@ describe('ci.yml autofixer workspace install', () => {
     // could skip that job; the impact job is the one that always runs, so the
     // install and the `node --check` of the entry point moved there.
     // Named, so the loop below is never vacuously green on a deleted step.
-    expect(jobs.impact).toMatch(/- name: Install autofixer dependencies\n {8}run: npm ci --prefix autofixer/);
-    expect(jobs.impact).toMatch(/- name: Check server entry-point syntax\n {8}run: node --check server\/index\.js/);
+    expect(jobs.impact).toMatch(/- name: Install autofixer dependencies\n {8}run: node scripts\/ci-impact-diagnostics\.js autofixer-install -- npm ci --prefix autofixer/);
+    expect(jobs.impact).toMatch(/- name: Check server entry-point syntax\n {8}run: node scripts\/ci-impact-diagnostics\.js syntax -- node --check server\/index\.js/);
     // Shards are separate checkouts and run ../autofixer tests, which import
     // express from autofixer/node_modules, so they install it too.
     expect(jobs.server).toMatch(/- name: Install autofixer dependencies\n {8}run: npm ci --prefix autofixer/);
@@ -277,7 +277,7 @@ describe('ci.yml autofixer workspace install', () => {
     // the hole straight back. It is cheap enough to pay on every plan.
     for (const [id, body] of installers) {
       const step = body.match(
-        /- name: Install autofixer dependencies\n(?<between>(?: {8}.*\n)*?) {8}run: npm ci --prefix autofixer/,
+        /- name: Install autofixer dependencies\n(?<between>(?: {8}.*\n)*?) {8}run: (?:node scripts\/ci-impact-diagnostics\.js autofixer-install -- )?npm ci --prefix autofixer/,
       );
       expect(step, id).not.toBeNull();
       expect(step.groups.between, id).not.toMatch(/^ {8}if:/m);

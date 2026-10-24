@@ -66,7 +66,9 @@ export function retainRetirementObligations(outcome, additional, now) {
         .filter(entry => sameRetirementCheckout(entry, row))
         .map(entry => Date.parse(entry.verifiedAt || entry.archivedAt)),
     ].filter(Number.isFinite);
-    const observed = Number.isFinite(Date.parse(row.observedAt)) ? Date.parse(row.observedAt) : Date.parse(now);
+    const fallbackObserved = row.reason === 'retirement-provenance-unverified' && Number.isFinite(Date.parse(outcome?.observedAt))
+      ? Date.parse(outcome.observedAt) : Date.parse(now);
+    const observed = Number.isFinite(Date.parse(row.observedAt)) ? Date.parse(row.observedAt) : fallbackObserved;
     return { ...row, createdAt: new Date(Math.max(observed, ...earlier.map(time => time + 1))).toISOString() };
   });
 }
