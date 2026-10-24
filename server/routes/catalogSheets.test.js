@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   getSettings: vi.fn(),
   enqueueJob: vi.fn(),
   getImageModels: vi.fn(),
+  getBoard: vi.fn(),
 }));
 
 vi.mock('../lib/imageCleanDefaults.js', () => ({
@@ -28,6 +29,7 @@ vi.mock('../services/universeBuilder.js', () => ({
   getUniverse: (...args) => mocks.getUniverse(...args),
   updateUniverse: (...args) => mocks.updateUniverse(...args),
 }));
+vi.mock('../services/moodBoard/db.js', () => ({ getBoard: (...args) => mocks.getBoard(...args) }));
 vi.mock('../services/settings.js', () => ({ getSettings: (...args) => mocks.getSettings(...args) }));
 vi.mock('../services/mediaJobQueue/index.js', () => ({
   enqueueJob: (...args) => mocks.enqueueJob(...args),
@@ -74,6 +76,7 @@ beforeEach(() => {
   mocks.getImageModels.mockReturnValue([{ id: 'dev', hardwareCompatibility: { state: 'available' } }]);
   mocks.enqueueJob.mockReturnValue({ jobId: 'job-1', position: 1 });
   mocks.updateUniverse.mockResolvedValue({});
+  mocks.getBoard.mockResolvedValue(null);
 });
 
 describe('catalog sheet routes', () => {
@@ -168,6 +171,7 @@ describe('catalog sheet routes', () => {
   });
 
   describe('look renders', () => {
+    const visualDirection = { camera: '  50mm film photography\n', lighting: 'Soft window light', environment: 'A weathered timber room' };
     const dressed = {
       ...character,
       payload: {
@@ -186,7 +190,7 @@ describe('catalog sheet routes', () => {
         id: 'universe-1', name: 'Example Universe', influences: { embrace: ['ink and watercolor'] },
         characters: [{ id: 'char-entry-1', name: 'Example Hero', ingredientId: 'cat-chr-1' }],
       });
-      const body = { variant: 'look', wardrobeId: 'wd-scarf' };
+      const body = { variant: 'look', wardrobeId: 'wd-scarf', visualDirection };
       const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
       expect(preview.status).toBe(200);
       const sent = preview.body.preview;
@@ -208,6 +212,68 @@ describe('catalog sheet routes', () => {
       expect(params.negativePrompt).toBe(negatives.text);
       expect(params.prompt).not.toContain(negatives.text);
       expect(params.promptAdditions.map((a) => a.id)).toContain('universe-style');
+      expect(sent.visualDirection).toMatchObject({ ready: true, missing: [], universe: { id: 'universe-1' } });
+      expect(params.prompt).toContain(visualDirection.camera);
+      expect(params.prompt).not.toContain('Even, soft studio lighting');
+      expect(params.prompt).not.toContain('contemporary illustrated');
+    });
+
+    it('shows missing world and photography direction and refuses to spend a render on the default style', async () => {
+      mocks.getIngredient.mockResolvedValue(dressed);
+      const body = { variant: 'look', wardrobeId: 'wd-scarf' };
+      const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+      expect(preview.body.preview.visualDirection).toEqual({ ready: false,
+        missing: ['Overall style / medium', 'Camera', 'Lighting', 'Environment'], universe: null, moodBoard: null });
+      expect(preview.body.preview.promptAdditions.map((a) => a.id)).not.toContain('sheet-default-style');
+      const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('LOOK_VISUAL_DIRECTION_REQUIRED');
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('uses a chosen universe’s notes and linked board style and avoids in both preview and queued input', async () => {
+      mocks.getIngredient.mockResolvedValue(dressed);
+      mocks.getUniverse.mockResolvedValue({ id: 'chosen', name: 'Example World', styleNotes: 'Tactile photographic grain',
+        influences: { embrace: [], avoid: ['plastic skin'] }, moodBoardId: 'board-1' });
+      mocks.getBoard.mockResolvedValue({ id: 'board-1', name: 'Example Board', style: { prompt: 'Naturalistic analog film', negativePrompt: '3D animation' } });
+      const body = { variant: 'look', wardrobeId: 'wd-scarf', universeId: 'chosen', visualDirection };
+      const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+      expect(preview.body.preview.visualDirection).toMatchObject({ ready: true, moodBoard: { id: 'board-1', hasStyle: true } });
+      const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+      expect(res.status).toBe(200);
+      const params = queuedParams();
+      expect(params.prompt).toBe(preview.body.preview.sentPrompt);
+      expect(params.prompt).toContain('Tactile photographic grain');
+      expect(params.prompt).toContain('Naturalistic analog film');
+      expect(params.negativePrompt).toContain('plastic skin');
+      expect(params.negativePrompt).toContain('3D animation');
+      expect(params.prompt).not.toContain('3D animation');
+    });
+
+    it('supports an unlinked board or authored style, but a board without composed direction does not satisfy style', async () => {
+      mocks.getIngredient.mockResolvedValue(dressed);
+      mocks.getBoard.mockResolvedValue({ id: 'board-1', name: 'Example Board', items: [{ type: 'image', url: '/image.png' }] });
+      const body = { variant: 'look', wardrobeId: 'wd-scarf', moodBoardId: 'board-1', visualDirection };
+      const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+      expect(preview.body.preview.visualDirection.missing).toEqual(['Overall style / medium']);
+      const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({ ...body,
+        visualDirection: { ...visualDirection, style: 'Live-action photography' } });
+      expect(res.status).toBe(200);
+      expect(queuedParams().prompt).toContain('Live-action photography');
+    });
+
+    it('requires a source choice for multiple worlds and surfaces lookup failures without silently falling back', async () => {
+      mocks.getIngredient.mockResolvedValue(dressed);
+      mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'u-1' }, { refKind: 'universe', refId: 'u-2' }]);
+      const body = { variant: 'look', wardrobeId: 'wd-scarf', visualDirection };
+      const post = (options) => request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(options);
+      expect((await post(body)).body.code).toBe('LOOK_UNIVERSE_REQUIRED');
+      mocks.getUniverse.mockRejectedValueOnce(Object.assign(new Error('Universe unavailable'), { status: 503 }));
+      expect((await post({ ...body, universeId: 'u-1' })).status).toBe(503);
+      expect((await post({ ...body, universeId: '', moodBoardId: 'missing-board' })).status).toBe(404);
+      expect((await post({ ...body, overridePrompt: 'bypass direction' })).status).toBe(400);
+      expect((await post({ ...body, visualDirection: { lighting: 123 } })).status).toBe(400);
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
     });
 
     it('is not offered among the sheet variants', async () => {

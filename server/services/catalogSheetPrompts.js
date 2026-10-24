@@ -5,13 +5,13 @@
  * Same contract as the character builders in universeCharacterSheet.js:
  * `(universe, entry) → { prompt, negativePrompt, width, height, modelId }`,
  * pure, no I/O. `universe` may be an empty object (a catalog record with no
- * linked universe); the sheet then carries the variant's default style line,
- * which the renderer lists as a prompt addition.
+ * linked universe). Place/object sheets carry their default style; a look
+ * receives explicit visual direction from its renderer.
  */
 
 import { ServerError } from '../lib/errorHandler.js';
 import { universeAestheticLine } from '../lib/universeVisualStyle.js';
-import { DEFAULT_CHARACTER_SHEET_STYLE, REFERENCE_SHEET_CONSTANTS, extractCharacterPromptCommon } from './universeCharacterSheet.js';
+import { REFERENCE_SHEET_CONSTANTS, extractCharacterPromptCommon } from './universeCharacterSheet.js';
 
 const { DEFAULT_WIDTH, DEFAULT_HEIGHT } = REFERENCE_SHEET_CONSTANTS;
 
@@ -109,13 +109,12 @@ export function buildProductSheetPrompt(universe, object) {
 
 /**
  * Look reference for a character wearing one of its wardrobes: the same
- * person (identity from the record's own fields) in full-body views on a plain
- * backdrop, no text. `wardrobe` is a `payload.wardrobes` entry.
+ * person (identity from the record's own fields) in full-body views using the
+ * chosen visual direction, no text. `wardrobe` is a `payload.wardrobes` entry.
  */
-export function buildCharacterLookPrompt(universe, character, wardrobe) {
+export function buildCharacterLookPrompt(universe, character, wardrobe, direction) {
   requireEntry(character, 'buildCharacterLookPrompt');
   requireEntry(wardrobe, 'buildCharacterLookPrompt');
-  const styleBits = universeAestheticLine(universe || {});
   const { name, age, pronouns, physical, silhouette, posture, special, visualIdentity, visualNotes } =
     extractCharacterPromptCommon(character);
   const lookName = trim(wardrobe.name) || 'Unnamed look';
@@ -128,8 +127,8 @@ export function buildCharacterLookPrompt(universe, character, wardrobe) {
   ].filter(Boolean).join(' ');
 
   const promptParts = [
-    `LOOK REFERENCE — a costume reference of one character, ${name}, wearing a single outfit, shown as three full-body views side by side at identical scale: FRONT, THREE-QUARTER and BACK, standing in a relaxed neutral pose on a plain seamless light-grey backdrop.`,
-    styleBits || DEFAULT_CHARACTER_SHEET_STYLE,
+    `LOOK REFERENCE — a costume reference of one character, ${name}, wearing a single outfit, shown as three full-body views side by side at identical scale: FRONT, THREE-QUARTER and BACK, standing in a relaxed neutral pose. Use the visual direction below consistently across every view, including its medium, camera, lighting and environment.`,
+    direction?.styleLine || '',
     identityBits,
     physical ? `Physical description: ${physical}` : '',
     silhouette ? `Silhouette: ${silhouette}` : '',
@@ -139,7 +138,7 @@ export function buildCharacterLookPrompt(universe, character, wardrobe) {
     visualNotes ? `Visual notes: ${visualNotes}` : '',
     `Outfit: ${lookName}.`,
     lookDescription ? `Outfit description: ${lookDescription}` : '',
-    `Every view shows the same person with the same face, hair, proportions and the complete outfit from head to toe, including footwear and accessories. Even, soft studio lighting. No props beyond what the outfit includes, no other people, no text, no labels, no captions.`,
+    `Every view shows the same person with the same face, hair, proportions and the complete outfit from head to toe, including footwear and accessories. Keep the outfit readable within the specified environment. No props beyond what the outfit includes, no other people, no text, no labels, no captions.`,
   ].filter(Boolean);
 
   return {

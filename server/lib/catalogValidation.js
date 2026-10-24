@@ -435,6 +435,15 @@ export const catalogSheetRenderSchema = z.object({
   overridePrompt: z.string().max(8000).optional(),
   overrideNegativePrompt: z.string().max(2000).optional(),
   modelId: z.string().trim().max(64).optional(),
+  universeId: z.string().max(128).optional(),
+  // Absent follows the selected universe's linked board; '' explicitly opts out.
+  moodBoardId: z.string().max(128).optional(),
+  visualDirection: z.object({
+    style: z.string().max(1200).optional(),
+    camera: z.string().max(1200).optional(),
+    lighting: z.string().max(1200).optional(),
+    environment: z.string().max(1200).optional(),
+  }).strict().optional(),
 }).strict().superRefine((body, ctx) => {
   const isLook = body.variant === CATALOG_LOOK_VARIANT_ID;
   if (isLook && !body.wardrobeId) {
@@ -444,6 +453,12 @@ export const catalogSheetRenderSchema = z.object({
   }
   if (isLook && body.formId) {
     ctx.addIssue({ code: 'custom', path: ['formId'], message: 'formId is not accepted for a look render' });
+  }
+  if (!isLook && ['universeId', 'moodBoardId', 'visualDirection'].some((key) => body[key] !== undefined)) {
+    ctx.addIssue({ code: 'custom', message: 'Visual direction options are only accepted for a look render' });
+  }
+  if (isLook && body.overridePrompt !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['overridePrompt'], message: 'Use visualDirection for a look so its world and photography direction remain in the sent prompt' });
   }
 });
 
