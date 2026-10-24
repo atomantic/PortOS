@@ -31,13 +31,13 @@ beforeAll(async () => {
     requireDbOrSkip('gallery collection batches', false, 'requires portos_test');
     return;
   }
-  client = new pg.Client({ database: 'portos_test', host: process.env.PGHOST || '127.0.0.1',
+  const connection = { database: 'portos_test', host: process.env.PGHOST || '127.0.0.1',
     port: Number(process.env.PGPORT || 5432), user: process.env.PGUSER || 'portos',
-    password: process.env.PGPASSWORD || 'portos', options: '', connectionTimeoutMillis: 2000 });
+    password: process.env.PGPASSWORD || 'portos', options: '', connectionTimeoutMillis: 2000 };
+  client = new pg.Client(connection);
   await client.connect();
   if (process.env.PORTOS_DB_PHASE_DIAGNOSTICS === '1') {
-    observer = new pg.Client({ ...client.connectionParameters, options: '', application_name: 'portos-test-diagnostics',
-      connectionTimeoutMillis: 2000, statement_timeout: 500, query_timeout: 750 });
+    observer = new pg.Client({ ...connection, application_name: 'portos-test-diagnostics', statement_timeout: 500, query_timeout: 750 });
     observer.on('error', () => {});
     await observer.connect();
   }
@@ -56,12 +56,10 @@ beforeAll(async () => {
 });
 beforeEach(() => drain());
 afterAll(async () => {
-  try { await drain(); }
+  try { await drain(); await diagnostics?.drain(); }
   finally {
-    await diagnostics?.drain();
-    await observer?.end();
-    await client?.end();
-    vi.unstubAllEnvs();
+    try { await Promise.all([observer?.end(), client?.end()]); }
+    finally { vi.unstubAllEnvs(); }
   }
 });
 
@@ -229,7 +227,8 @@ it('projects compact no-search pages before SQL with identical rows, previews an
 
 it('sends no full video detail to SQL and does not spill for the synthetic 2400-image/1200-video page', async context => {
   if (!available) return context.skip();
-  diagnostics = createDbPhaseDiagnostics({ onTestFailed: callback => context.onTestFailed(callback), observer, fixturePid: client.processID });
+  diagnostics = createDbPhaseDiagnostics({ onTestFailed: callback => context.onTestFailed(callback), observer, fixturePid: client.processID,
+    enabled: process.env.PORTOS_DB_PHASE_DIAGNOSTICS === '1' });
   const { phase } = diagnostics;
   const images = await phase('fixture-images', () => Array.from({ length: 2400 }, (_, i) => mediaFixture('image', i)));
   await seed(images, [], phase);

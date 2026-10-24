@@ -16,8 +16,7 @@ const SNAPSHOT_SQL = `SELECT a.pid = $1 AS fixture, count(*) OVER ()::int AS ses
 const fields = ['fixture', 'session_count', 'state', 'wait_event_type', 'wait_event', 'transaction_ms', 'blockers', 'waiting_locks', 'run_lock'];
 
 /** Opt-in observation; the caller owns the observer connection and its query deadline. */
-export function createDbPhaseDiagnostics({ onTestFailed, observer, fixturePid,
-  enabled = process.env.PORTOS_DB_PHASE_DIAGNOSTICS === '1',
+export function createDbPhaseDiagnostics({ onTestFailed, observer, fixturePid, enabled = false,
   write = line => process.stdout.write(`${line}\n`), intervalMs = 1000 } = {}) {
   const track = createTestPhaseDiagnostics(onTestFailed);
   if (!enabled) return { phase: track, drain: async () => {} };
