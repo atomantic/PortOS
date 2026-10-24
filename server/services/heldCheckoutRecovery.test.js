@@ -1555,7 +1555,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
   });
 
-  it.each(['original', 'repo-alias', 'recreated-pointer', 'active-owner', 'different-pr-head', 'failed-validation'])('recovers a merged orphan only from its exact early generation: %s', async scenario => {
+  it.each(['original', 'repo-alias', 'recreated-pointer', 'active-owner', 'different-pr-head', 'failed-validation', 'missing-terminal-head', 'late-writer'])('recovers a merged orphan only from its exact early generation: %s', async scenario => {
     const c = await reviewedCheckout(`orphan-${scenario}`);
     await execGit(['worktree', 'unlock', c.path], repo);
     Object.assign(c.release, { locked: false, lockReason: null });
@@ -1566,10 +1566,21 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       metadata: { isWorktree: true, sourceWorkspace: repo, workspacePath: c.path, worktreeBranch: c.release.branch,
         prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { url: c.forge.prUrl, branch: c.release.branch } } };
     agent.metadata.checkoutSeeds = await evidence.captureCheckoutSeeds(agent);
+    // completeAgent preserves this exact target while the run is still bound,
+    // before publishing an orphan's terminal state with an empty initial capture.
+    const targets = await evidence.captureSeededCompletionCheckouts(agent, { preterminal: true });
+    expect(targets).toEqual([expect.objectContaining({ head: c.release.head, startedAt: agent.startedAt })]);
+    agent.metadata.checkoutCapture = { status: 'captured', targets, unknown: false };
     agent.status = 'completed';
     agent.completedAt = new Date().toISOString();
     agent.metadata.completedCheckouts = [];
-    agent.metadata.checkoutCapture = { status: 'captured' };
+    if (scenario === 'missing-terminal-head') agent.metadata.checkoutCapture = { status: 'captured' };
+    if (scenario === 'late-writer') {
+      await writeFile(join(c.path, 'later-user.txt'), 'later independent work\n');
+      await execGit(['add', 'later-user.txt'], c.path);
+      await execGit(['commit', '-m', 'later independent writer'], c.path);
+      expect(await evidence.captureSeededCompletionCheckouts(agent)).toBeNull();
+    }
     if (scenario === 'repo-alias') injected.app.repoPath = `${repo}/../repo`;
     if (scenario === 'failed-validation') agent.result.validationPassed = false;
     injected.policies = [agent];
@@ -1598,6 +1609,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       expect(await registered(c.path)).toBe(true);
       expect(await archives()).toEqual([]);
       expect(recoveries).toBe(0);
+      if (scenario === 'late-writer') expect(await readFile(join(c.path, 'later-user.txt'), 'utf8')).toBe('later independent work\n');
       return;
     }
     expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, orphanedExecution: true }] } } });
