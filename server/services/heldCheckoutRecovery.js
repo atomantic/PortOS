@@ -838,13 +838,30 @@ async function ownerReason({ repoPath, tree, branch, readAgents, reviewed = fals
   return mergedObligationSettled && hold === 'pr-completion-review-required' ? null : hold;
 }
 
+/** Optional server inventory identity binds private administration as well as
+ * the pointer file. Callers have already checked the exact released lock under
+ * the retirement fence; allowing a fact-read does not authorize unlocking it. */
+async function matchesObservedCheckoutIncarnation(repoPath, release, worktrees = null) {
+  if (!release.checkoutIncarnation) return true;
+  const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+  const current = await readCompletedCheckoutIdentity({ repoPath, ...release, worktrees,
+    allowLocked: release.locked === true }).catch(() => null);
+  return current && JSON.stringify(current.incarnation) === JSON.stringify(release.checkoutIncarnation);
+}
+
 /** Fresh registration that still matches the release, or the reason it does not. */
 async function matchRelease(repoPath, release) {
   const trees = await listWorktrees(repoPath).catch(() => null);
   if (!trees?.length) return { reason: 'worktree-ownership-unreadable' };
-  const index = trees.findIndex(tree => tree.path === release.path);
+  const index = trees.findIndex(tree => resolve(tree.path) === resolve(release.path));
   if (index === -1) return { reason: 'checkout-not-found' };
   const tree = trees[index];
+  // Lexical equality alone can collapse '..' across a symlink. Different
+  // spellings must also resolve to the same existing filesystem checkout.
+  if (tree.path !== release.path) {
+    try { if (realpathSync.native(tree.path) !== realpathSync.native(release.path)) return { reason: 'checkout-identity-changed' }; }
+    catch { return { reason: 'checkout-identity-changed' }; }
+  }
   if (index === 0 || tree.bare) return { reason: 'checkout-primary' };
   if (tree.prunable) return { reason: 'worktree-prunable' };
   if (tree.head !== release.head) return { reason: 'checkout-head-changed' };
@@ -852,7 +869,11 @@ async function matchRelease(repoPath, release) {
   if (Boolean(tree.locked) !== release.locked || (tree.lockReason ?? null) !== (release.lockReason ?? null)) {
     return { reason: 'checkout-lock-changed' };
   }
-  return { tree };
+  if (!await matchesObservedCheckoutIncarnation(repoPath, release, trees)) return { reason: 'checkout-identity-changed' };
+  // Carry the persisted release spelling through archive/receipt publication.
+  // Native lexical resolution above proves it names this registration; fresh
+  // head, lock and incarnation checks still bind the filesystem generation.
+  return { tree: { ...tree, path: release.path } };
 }
 
 /** Shared live policy/owner check for the explicit whole-checkout transaction.
@@ -940,6 +961,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   }
   const verifyRemoval = async (holder) => {
     if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
+    if (!await matchesObservedCheckoutIncarnation(repoPath, release)) return 'checkout-identity-changed';
     if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return 'checkout-identity-changed';
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
     const [reason, fresh] = await Promise.all([
@@ -999,7 +1021,8 @@ function bindInventoriedRelease(outcome, release) {
   if (!entry) return null;
   return { path: release.path, head: release.head, branch: release.branch ?? null,
     locked: release.locked, lockReason: release.lockReason ?? null,
-    ...(entry.checkoutIdentity && { checkoutIdentity: entry.checkoutIdentity }) };
+    ...(entry.checkoutIdentity && { checkoutIdentity: entry.checkoutIdentity }),
+    ...(entry.checkoutIncarnation && { checkoutIncarnation: entry.checkoutIncarnation }) };
 }
 
 // Preview and receipt paths may acquire exact server-verified proof commits

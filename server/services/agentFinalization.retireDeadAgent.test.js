@@ -14,7 +14,11 @@
  * the ORCHESTRATION — order, the private-security override, and which
  * per-caller facts land where.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-retire-dead-agent-') }));
+afterAll(cleanupTempDataRoots);
 
 vi.mock('./cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => null),

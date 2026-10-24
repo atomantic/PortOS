@@ -48,6 +48,40 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('updateClaimOwnership', () => {
+  it('reserves before creation, seeds the exact physical checkout on rebind, and refuses a replacement generation', async () => {
+    const { mkdtemp, readFile, writeFile, rename, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { materializeGitRepo } = await import('../lib/gitTestRepo.js');
+    const { execGit } = await import('../lib/execGit.js');
+    const scratch = await mkdtemp(join(tmpdir(), 'portos-claim-seed-'));
+    try {
+      const repo = join(scratch, 'repo');
+      const checkout = join(scratch, 'claim');
+      await materializeGitRepo(repo);
+      store.state.agents['agent-epicrun'] = { id: 'agent-epicrun', status: 'running',
+        startedAt: new Date().toISOString(), metadata: { sourceWorkspace: repo, workspacePath: repo,
+          claimPicksOwnBranch: true, claimBranches: [] } };
+      const bind = () => updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch: 'claim/issue-101' });
+      expect(await bind()).toEqual({ bound: true, branch: 'claim/issue-101' });
+      expect(store.state.agents['agent-epicrun'].metadata.checkoutSeeds).toEqual([]);
+      await execGit(['worktree', 'add', '-b', 'claim/issue-101', checkout, 'main'], repo);
+      expect(await bind()).toEqual({ bound: true, branch: 'claim/issue-101' });
+      const seed = store.state.agents['agent-epicrun'].metadata.checkoutSeeds[0];
+      expect(seed).toMatchObject({ branch: 'claim/issue-101', incarnation: { pointer: { ino: expect.any(String) } } });
+      await writeFile(join(checkout, 'wanted.txt'), 'wanted work');
+      expect(await bind()).toEqual({ bound: true, branch: 'claim/issue-101' });
+      expect(store.state.agents['agent-epicrun'].metadata.checkoutSeeds).toEqual([seed]);
+      const pointer = join(checkout, '.git');
+      const contents = await readFile(pointer);
+      await rename(pointer, join(scratch, 'original-pointer'));
+      await writeFile(pointer, contents);
+      expect(await bind()).toEqual({ bound: false, reason: 'checkout-seed-unavailable' });
+      expect(store.state.agents['agent-epicrun'].metadata.checkoutSeeds).toEqual([seed]);
+      expect(await readFile(join(checkout, 'wanted.txt'), 'utf8')).toBe('wanted work');
+    } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+
   it('persists the bound child branch on the run record and settles its selection', async () => {
     expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch: 'claim/issue-101' }))
       .toEqual({ bound: true, branch: 'claim/issue-101' });
