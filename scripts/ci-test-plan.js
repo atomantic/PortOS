@@ -1574,7 +1574,7 @@ function createDependencySnapshot(files, cwd) {
     return { dependencies, inconclusive };
   };
   const importsFor = (file) => {
-    if (!imports.has(file)) imports.set(file, moduleImports(readText(file)));
+    if (!imports.has(file)) imports.set(file, moduleImports(readText(file), { jsx: !/\.[cm]?ts$/.test(file) }));
     return imports.get(file);
   };
   const staticDependencies = (file) => {

@@ -28,7 +28,8 @@ function regexAllowed(tokens) {
   }
   if (!prev) return true;
   if (prev.t === 'p') return ![')', ']', '}', '++', '--'].includes(prev.v);
-  if (prev.t === 'id') return REGEX_PRECEDING_KEYWORDS.has(prev.v);
+  if (prev.t === 'id') return REGEX_PRECEDING_KEYWORDS.has(prev.v)
+    && !(tokens.at(-2)?.t === 'p' && ['.', '?.'].includes(tokens.at(-2).v));
   return false;
 }
 
@@ -75,7 +76,7 @@ function readRegex(src, start) {
  * partner before EOF is prose. Throws when a template hole never closes; the
  * caller fails closed on a throw.
  */
-export function tokenize(src, proseBackticks = new Set()) {
+export function tokenize(src, proseBackticks = new Set(), { jsx = true } = {}) {
   const out = [];
   let pos = 0;
   const n = src.length;
@@ -148,8 +149,12 @@ export function tokenize(src, proseBackticks = new Set()) {
         pos = end + 2;
         continue;
       }
-      if (c === '<' && /^<(?:[A-Za-z]|>)/.test(src.slice(pos))
-        && (regexAllowed(tokens) || tokens.at(-1)?.v === 'default')) {
+      // A comma after the first type parameter disambiguates generic arrows
+      // in TSX. Plain .ts assertions/generics use the caller's non-JSX mode.
+      if (jsx && c === '<' && /^<(?:[A-Za-z]|>)/.test(src.slice(pos))
+        && !/^<[A-Za-z_$][\w$]*\s*,/.test(src.slice(pos))
+        && (regexAllowed(tokens) || (tokens.at(-1)?.v === 'default'
+          && !['.', '?.'].includes(tokens.at(-2)?.v)))) {
         scanJsx(tokens);
         continue;
       }
@@ -227,7 +232,7 @@ export function tokenize(src, proseBackticks = new Set()) {
   } catch (error) {
     // A backtick with no partner before EOF is JSX prose; rescan with it demoted (bounded).
     if (error.prose === undefined || proseBackticks.size >= 32) throw error;
-    return tokenize(src, new Set([...proseBackticks, error.prose]));
+    return tokenize(src, new Set([...proseBackticks, error.prose]), { jsx });
   }
   return out;
 }
@@ -264,8 +269,8 @@ export function staticEdges(tokens, match) {
 }
 
 /** Static and deferred ES imports, including executable template expressions. */
-export function moduleImports(src) {
-  const tokens = tokenize(src);
+export function moduleImports(src, { jsx = true } = {}) {
+  const tokens = tokenize(src, new Set(), { jsx });
   const statics = [];
   const deferred = [];
   let computed = false;

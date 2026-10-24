@@ -537,7 +537,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     git: false,
   };
   let tokens;
-  try { tokens = tokenize(src); } catch (error) {
+  try { tokens = tokenize(src, new Set(), { jsx: !/\.[cm]?ts$/.test(fileRel) }); } catch (error) {
     facts.unresolvedEdges.push(`unparseable source: ${error.message}`);
     facts.unresolvedInputs.push(`unparseable source: ${error.message}`);
     return facts;

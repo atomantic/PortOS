@@ -395,7 +395,8 @@ it('projects test-only shared re-exports and retains unresolved consumers withou
     write(leaf, 'export const value = 1;\n');
     write(unused, 'export const unused = 1;\n');
     write('scripts/lib/cleanupBridge.js', "export { value } from './cleanupLeaf.js';\n");
-    write('client/src/test/fixture.js', "export { value } from '../../../scripts/lib/cleanupBridge.js';\n");
+    write('client/src/test/fixture.js', "export { value } from '../../../scripts/lib/cleanupBridge.js';\nimport './generic';\n");
+    write('client/src/test/generic.ts', 'const identity = <T,>(value: T) => value; const asserted = <Thing>value;\n');
     write(consumer, "const fixture = await import('./fixture.js');\n");
     write(unrelated, [
       '// import (#2895)',

@@ -48,8 +48,15 @@ describe('no-install module import extraction', () => {
     expect(() => moduleImports('const view = <Unknown>')).toThrow(/JSX/);
   });
 
+  it('distinguishes TypeScript assertions and TSX generic arrows from JSX', () => {
+    const ts = 'const identity = <T>(value: T) => value; const asserted = <Thing>value; import("./typed.js");';
+    expect(moduleImports(ts, { jsx: false })).toEqual({ statics: [], deferred: ['./typed.js'], computed: false });
+    const tsx = 'const identity = <T,>(value: T) => import("./generic.js"); const view = <div>{import("./jsx.js")}</div>;';
+    expect(moduleImports(tsx)).toEqual({ statics: [], deferred: ['./generic.js', './jsx.js'], computed: false });
+  });
+
   it('does not treat division as a regex and hide an executable import', () => {
-    for (const value of ['value', 'value++', 'value--', 'call()', 'value.catch()', 'value?.catch()', 'value.with()', 'value.if()']) {
+    for (const value of ['value', 'value++', 'value--', 'call()', 'value.catch()', 'value?.catch()', 'value.with()', 'value.if()', 'rates.of', 'rates?.of', 'rates.return', 'rates.await']) {
       expect(moduleImports(`const ratio = ${value} / import("./real.js") / divisor;`).deferred).toEqual(['./real.js']);
     }
   });
