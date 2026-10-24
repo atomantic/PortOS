@@ -1,6 +1,6 @@
 import { getMemoryStats } from './memoryStats.js';
 import { localEndpointPort } from './localEndpoint.js';
-import { isLocalEndpointBusy, onLocalEndpointSettled } from './localLlmConcurrency.js';
+import { isLocalEndpointBusy, localEndpointsSharePort, onLocalEndpointSettled } from './localLlmConcurrency.js';
 import { createSingleFlight } from './singleFlight.js';
 
 /**
@@ -245,6 +245,7 @@ export function createPm2ExitTail({ appName, execPm2, appendLog, lines = 15, tai
  *   exitTail?: (status: string) => Promise<string>,
  *   resolveLaunch: (current: object|null, saved: {model: string|null, port: number|null, raw: object}) => object,
  *   getConfig?: () => object|null,
+ *   parseConfigFromArgs?: (args: string[]|string) => object|null,
  *   sleep: (ms: number) => Promise<void>,
  *   getRelaunchReadyTimeoutMs: () => number,
  *   getRelaunchPollMs: () => number,
@@ -264,6 +265,7 @@ export function createOnDemandDaemon({
   exitTail,
   resolveLaunch,
   getConfig = () => null,
+  parseConfigFromArgs = () => null,
   sleep,
   getRelaunchReadyTimeoutMs,
   getRelaunchPollMs,
@@ -290,26 +292,20 @@ export function createOnDemandDaemon({
   };
 
   let inFlightStarts = 0;
-  const currentEndpoint = () => endpointFor(getConfig());
-  const isBusy = () => inFlightStarts > 0 || isLocalEndpointBusy(currentEndpoint());
+  // Explicit starts return after a short HTTP budget while weights are still
+  // loading. This stays raised until the endpoint answers or PM2 leaves online.
+  let inFlightLoads = 0;
+  // In-memory launch config is null after a PortOS restart until something
+  // recovers argv. The provider slot is the port the process is actually on.
+  let boundEndpoint = null;
 
-  onLocalEndpointSettled((endpoint) => {
-    const port = localEndpointPort(currentEndpoint());
-    if (port && localEndpointPort(endpoint) === port) {
-      markDaemonUsed(appName);
-    }
-  });
+  const portEndpoint = (config) => (
+    Number.isFinite(Number(config?.port)) ? endpointFor({ port: Number(config.port) }) : null
+  );
+  const busyEndpoint = () => portEndpoint(getConfig()) || boundEndpoint || endpointFor(getConfig());
+  const isBusy = () => inFlightStarts > 0 || inFlightLoads > 0 || isLocalEndpointBusy(busyEndpoint());
 
-  const registerIdle = () => {
-    registerIdleDaemon({
-      name: appName,
-      getIdleMs: async () => idleWindowMs(await configuredIdleMinutes()),
-      isPinned: async () => configuredKeepLoaded(),
-      isRunning: async () => Boolean((await getStatusStrict())?.status === 'online'),
-      isBusy,
-      stop: () => stop(),
-    });
-  };
+  let unsubscribeSettled = () => {};
 
   /** The launch line last saved on the settings card, sanitized. */
   const savedLaunchConfig = async () => {
@@ -323,6 +319,51 @@ export function createOnDemandDaemon({
       // never generically here, since only the manager knows that shape.
       raw: launch,
     };
+  };
+
+  const refreshBoundEndpoint = async (knownStatus) => {
+    const live = portEndpoint(getConfig());
+    if (live) {
+      boundEndpoint = live;
+      return;
+    }
+    const status = knownStatus ?? await Promise.resolve(getStatusStrict()).catch(() => null);
+    if (status?.status === 'online' && status.args) {
+      try {
+        const fromArgs = portEndpoint(parseConfigFromArgs(status.args));
+        if (fromArgs) {
+          boundEndpoint = fromArgs;
+          return;
+        }
+      } catch {
+        // Unparseable argv is not a port. The saved launch is the next source.
+      }
+    }
+    const saved = await savedLaunchConfig().catch(() => null);
+    if (saved?.port != null) boundEndpoint = endpointFor({ port: saved.port });
+  };
+
+  // Resolves once, then stays sync: the reaper's last busy check cannot await.
+  const ensureBoundEndpoint = () => (
+    portEndpoint(getConfig()) || boundEndpoint ? Promise.resolve() : refreshBoundEndpoint()
+  );
+
+  const registerIdle = () => {
+    unsubscribeSettled();
+    settledUnsubscribers.delete(unsubscribeSettled);
+    unsubscribeSettled = onLocalEndpointSettled((endpoint) => {
+      if (localEndpointsSharePort(endpoint, busyEndpoint())) markDaemonUsed(appName);
+    });
+    settledUnsubscribers.add(unsubscribeSettled);
+    registerIdleDaemon({
+      name: appName,
+      getIdleMs: async () => idleWindowMs(await configuredIdleMinutes()),
+      isPinned: async () => configuredKeepLoaded(),
+      isRunning: async () => Boolean((await getStatusStrict())?.status === 'online'),
+      isBusy,
+      warm: ensureBoundEndpoint,
+      stop: () => stop(),
+    });
   };
 
   /**
@@ -386,6 +427,18 @@ export function createOnDemandDaemon({
 
   const ensureRunning = () => trackStart('wake', wake);
 
+  const armLoadWatch = (endpoint) => {
+    inFlightLoads += 1;
+    const settle = () => {
+      inFlightLoads = Math.max(0, inFlightLoads - 1);
+      markUsed();
+    };
+    // Two-arm then, not finally: a floating finally re-raises on a promise
+    // nobody awaits. The watch must not hold the caller's start open — launch*
+    // returns after its short budget while a cold checkpoint is still loading.
+    waitForReady(endpoint).then(settle, settle);
+  };
+
   /**
    * Run an explicit start/stop sequence (a user-clicked Start, a tuning
    * relaunch) in the daemon's exclusive start slot. Each call gets its own key,
@@ -398,11 +451,20 @@ export function createOnDemandDaemon({
    * @param {() => Promise<T>} fn
    * @returns {Promise<T>}
    */
-  const runStart = (fn) => trackStart(Symbol('start'), fn);
+  const runStart = (fn) => trackStart(Symbol('start'), async () => {
+    const result = await fn();
+    if (result?.online === false && typeof result.endpoint === 'string') armLoadWatch(result.endpoint);
+    return result;
+  });
 
   const wake = async () => {
     const pm2Status = await getStatusStrict();
-    if (pm2Status?.status === 'online') return { ready: true, reason: null };
+    if (pm2Status?.status === 'online') {
+      // Reuse the status just read. A second PM2 read here would sit on every
+      // request, and getConfig() is still null until argv is recovered.
+      if (!portEndpoint(getConfig())) await refreshBoundEndpoint(pm2Status);
+      return { ready: true, reason: null };
+    }
 
     // Resolve the launch line BEFORE probing, so the probe below asks about
     // the port this start would actually bind. `resolveLaunch` sets the
@@ -410,6 +472,7 @@ export function createOnDemandDaemon({
     // launch the user saved, then the daemon's own default.
     const saved = await savedLaunchConfig();
     const config = resolveLaunch(getConfig(), saved);
+    if (Number.isFinite(Number(config?.port))) boundEndpoint = endpointFor({ port: Number(config.port) });
 
     // Something else is already serving that port — a daemon the user started
     // outside PortOS, or another process entirely. Either way this is not
@@ -492,8 +555,10 @@ export function formatReleaseTime(timestamp = Date.now()) {
   return `${hh}:${mm}`;
 }
 
-/** name → `{ getIdleMs, isPinned, isRunning, stop, lastUsedAt, releaseReason, releasedAt }`. */
+/** name → `{ getIdleMs, isPinned, isRunning, isBusy, warm, stop, lastUsedAt, releaseReason, releasedAt }`. */
 const idleDaemons = new Map();
+/** Unsubscribes for per-daemon slot listeners. Cleared with the idle map in tests. */
+const settledUnsubscribers = new Set();
 let reaperTimer = null;
 
 let pressureHistory = [];
@@ -558,20 +623,23 @@ export function idleWindowMs(minutes) {
  *   isPinned?: () => Promise<boolean>|boolean,
  *   isRunning?: () => Promise<boolean>|boolean,
  *   isBusy?: () => Promise<boolean>|boolean,
+ *   warm?: () => Promise<void>|void,
  *   stop: () => Promise<unknown>
  * }} daemon
  *   `getIdleMs` resolves the CURRENT configured window on every sweep; `null`/`0` = never stop.
  *   `isPinned` returns true if user pinned the server ("keep loaded") — pinned servers are never stopped.
  *   `isRunning` checks if the daemon process is online.
- *   `isBusy` returns true while a wake/start or inference request is in flight — busy servers are never stopped.
+ *   `isBusy` returns true while a wake/start, a still-loading checkpoint, or an inference request is in flight — busy servers are never stopped.
+ *   `warm` may resolve the port `isBusy` reads before the synchronous re-check. It must not itself decide to stop.
  */
-export function registerIdleDaemon({ name, getIdleMs, isPinned, isRunning, isBusy, stop }) {
+export function registerIdleDaemon({ name, getIdleMs, isPinned, isRunning, isBusy, warm, stop }) {
   const existing = idleDaemons.get(name);
   idleDaemons.set(name, {
     getIdleMs,
     isPinned: typeof isPinned === 'function' ? isPinned : () => Boolean(isPinned),
     isRunning: typeof isRunning === 'function' ? isRunning : null,
     isBusy: typeof isBusy === 'function' ? isBusy : () => Boolean(isBusy),
+    warm: typeof warm === 'function' ? warm : null,
     stop,
     lastUsedAt: existing?.lastUsedAt ?? Date.now(),
     releaseReason: existing?.releaseReason ?? null,
@@ -735,6 +803,22 @@ export function evaluateMemoryPressurePolicy({
   };
 }
 
+// Synchronous on purpose. Awaiting here is the yield in which a request can
+// start after the snapshot and still be stopped. A thenable fails safe to busy;
+// its rejection is swallowed so the second call cannot become unhandled.
+function readBusySync(entry) {
+  try {
+    const value = entry?.isBusy?.();
+    if (value && typeof value.then === 'function') {
+      value.catch(() => {});
+      return true;
+    }
+    return Boolean(value);
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Sweep: stop daemons whose idle window has elapsed, and run pressure-aware pass
  * to release the least recently used unpinned daemon under sustained host memory pressure.
@@ -751,6 +835,7 @@ export async function reapIdleDaemons(now = Date.now(), options = {}) {
     // Fail-safe to pinned/busy on a transient read error, matching the pressure-aware
     // pass below — assuming "not pinned" or "not busy" here would risk stopping a
     // keepLoaded or actively serving daemon on a flaky read.
+    await Promise.resolve(entry.warm?.()).catch(() => {});
     const isPinned = await Promise.resolve(entry.isPinned?.()).catch(() => true);
     if (isPinned) continue; // Pinned servers are exempt
 
@@ -770,6 +855,7 @@ export async function reapIdleDaemons(now = Date.now(), options = {}) {
     const windowMs = await Promise.resolve(entry.getIdleMs()).catch(() => null);
     if (!windowMs || windowMs <= 0) continue;
     if (now - entry.lastUsedAt < windowMs) continue;
+    if (readBusySync(entry)) continue;
 
     const idleMin = Math.round((now - entry.lastUsedAt) / 60_000);
     console.log(`💤 Stopping ${name} — idle ${idleMin}m (window ${Math.round(windowMs / 60_000)}m)`);
@@ -805,6 +891,7 @@ export async function reapIdleDaemons(now = Date.now(), options = {}) {
 
     const daemonList = [];
     for (const [name, entry] of idleDaemons) {
+      await Promise.resolve(entry.warm?.()).catch(() => {});
       const isPinned = await Promise.resolve(entry.isPinned?.()).catch(() => true);
       const isBusy = await Promise.resolve(entry.isBusy?.()).catch(() => true);
       const isRunning = entry.isRunning
@@ -830,7 +917,7 @@ export async function reapIdleDaemons(now = Date.now(), options = {}) {
       options: policyOptions,
     });
 
-    if (decision.shouldRelease && decision.target) {
+    if (decision.shouldRelease && decision.target && !readBusySync(decision.target.entry)) {
       const { target } = decision;
       const freeMb = Math.round((memoryStats.free || 0) / (1024 * 1024));
       console.log(`⚠️ Stopping ${target.name} — host memory pressure (free ${freeMb}MB)`);
@@ -884,6 +971,8 @@ export function stopIdleReaper() {
 /** Test seam: drop every registration, reset pressure state, and disarm the timer. */
 export function _resetIdleDaemonsForTests() {
   stopIdleReaper();
+  for (const unsubscribe of settledUnsubscribers) unsubscribe();
+  settledUnsubscribers.clear();
   idleDaemons.clear();
   pressureHistory = [];
   lastPressureReleaseAt = null;

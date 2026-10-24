@@ -31,9 +31,9 @@ export function acquireLocalSlot(endpoint) {
     gate = { active: 0, queue: [] };
     localEndpointGates.set(endpoint, gate);
   }
-  notifyEndpointActivity(endpoint);
   if (gate.active < LOCAL_LLM_MAX_CONCURRENCY) {
     gate.active += 1;
+    notifyEndpointActivity(endpoint);
     return Promise.resolve();
   }
   return new Promise((resolve) => {
@@ -55,7 +55,8 @@ export function releaseLocalSlot(endpoint) {
 
 /**
  * True when any local-LLM run is currently in flight (or queued) against
- * `endpoint` or a loopback alias sharing its port.
+ * `endpoint` or another endpoint string sharing its port. Scheme-less
+ * (`localhost:8010/v1`) and absolute (`http://127.0.0.1:8010/v1`) forms match.
  */
 export function isLocalEndpointBusy(endpoint) {
   if (typeof endpoint !== 'string' || !endpoint.trim()) return false;
@@ -66,6 +67,17 @@ export function isLocalEndpointBusy(endpoint) {
     if (targetPort && endpointPortKey(key) === targetPort) return true;
   }
   return false;
+}
+
+/** True when both endpoint strings parse to the same port, scheme optional. */
+export function localEndpointsSharePort(left, right) {
+  const leftPort = endpointPortKey(left);
+  return Boolean(leftPort) && leftPort === endpointPortKey(right);
+}
+
+/** Drop slot gates. Test isolation only — production state is the live process. */
+export function _resetLocalLlmSlotsForTests() {
+  localEndpointGates.clear();
 }
 
 /**
