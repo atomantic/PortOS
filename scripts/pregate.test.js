@@ -25,6 +25,7 @@ import {
   parseArgs,
   pregateWorkerEnv,
   stageSpawnEnv,
+  sweepStageGroup,
   suiteSelected,
   uncoveredSuites,
   UNCOVERED_SUITES,
@@ -60,6 +61,55 @@ const DEFAULT_OPTIONS = {
   base: null, full: false, skipLint: false, planOnly: false, help: false, guardsOnly: false, mergedWith: null,
   skipDb: false, skipBrowser: false, skipBuild: false, skipSmoke: false,
 };
+
+describe('owned stage group settlement', () => {
+  const pgid = 424242;
+  const fail = code => { throw Object.assign(new Error(code), { code }); };
+
+  it('waits through a zombie-only EPERM until a fresh exact-group probe returns ESRCH', async () => {
+    let elapsed = 0;
+    const calls = [];
+    const result = await sweepStageGroup(pgid, {
+      kill: (pid, signal) => {
+        calls.push([pid, signal]);
+        // Reproduce the held-zombie -> reaped transition without timing sleeps.
+        return fail(elapsed === 0 ? 'EPERM' : 'ESRCH');
+      },
+      now: () => elapsed,
+      wait: async ms => { elapsed += ms; },
+      inspect: group => { expect(group).toBe(pgid); return `${pgid}:Z`; },
+    });
+    expect(result.settled).toBe(true);
+    expect(calls).toEqual([[-pgid, 'SIGKILL'], [-pgid, 0], [-pgid, 0]]);
+    expect(elapsed).toBe(25);
+  });
+
+  it.each([
+    ['live', 'present', '424242:S'],
+    ['uninspectable', 'EPERM', 'unavailable (EACCES)'],
+    ['zombie-only', 'EPERM', '424242:Z'],
+    ['empty snapshot with denied probe', 'EPERM', 'none observed'],
+    ['failed probe', 'EIO', 'unavailable (EIO)'],
+  ])('refuses a %s group without a fresh ESRCH', async (_state, probe, members) => {
+    let elapsed = 0;
+    const signals = [];
+    const result = await sweepStageGroup(pgid, {
+      kill: (pid, signal) => {
+        expect(pid).toBe(-pgid);
+        signals.push(signal);
+        if (signal === 'SIGKILL') return fail('EPERM');
+        if (probe !== 'present') return fail(probe);
+      },
+      now: () => elapsed,
+      wait: async ms => { elapsed += ms; },
+      inspect: group => { expect(group).toBe(pgid); return members; },
+    });
+    expect(result).toEqual({ settled: false, reason: `group kill failed (EPERM); pgid=${pgid}; probe=${probe}; members=${members}` });
+    expect(signals[0]).toBe('SIGKILL');
+    expect(signals.slice(1).every(signal => signal === 0)).toBe(true);
+    expect(elapsed).toBe(probe === 'EIO' ? 0 : 5000);
+  });
+});
 
 describe('resolvePlanStages', () => {
   it('runs only the scopes the plan selected', () => {
@@ -689,6 +739,36 @@ describe('pregate hidden-content invocation', () => {
         try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
       }
     }
+  });
+
+  // #13458: replay the kernel's exit/signal crossing at the CLI boundary.
+  // Only an actually absent group gets the injected refusal; the subsequent
+  // probe must still go to the kernel, and the receipt must remain truthful.
+  it.skipIf(process.platform === 'win32')('verifies exact group absence after an exit-crossing EPERM', () => {
+    const preload = join(scratch, 'exit-crossing.cjs');
+    writeFileSync(preload, `
+      const kill = process.kill.bind(process);
+      process.kill = (pid, signal) => {
+        if (pid < 0 && signal === 'SIGKILL') {
+          try { kill(pid, 0); } catch (error) {
+            if (error.code !== 'ESRCH') throw error;
+            console.log('fixture-exit-crossing pgid=' + -pid);
+            throw Object.assign(new Error('exit crossing'), { code: 'EPERM' });
+          }
+        }
+        return kill(pid, signal);
+      };
+    `);
+    write(trackedPath, `${clean}updated\n`);
+    const result = spawnSync(process.execPath, ['--require', preload, 'scripts/pregate.js', '--base', base, '--skip-lint'], {
+      cwd: root, encoding: 'utf8',
+    });
+    expect(result.stdout).toMatch(/fixture-exit-crossing pgid=\d+/);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Pregate passed');
+    const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    expect(report.passed).toBe(true);
+    expect(report.stages[0]).toMatchObject({ name: 'hidden-content scan', status: 'passed' });
   });
 
   // run-ci-tests.js leaves npm and Vitest in pregate's stage group, so pregate
