@@ -231,16 +231,16 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(await run({ success: false, agentState: state, task: own })).toMatchObject({ skipReason: 'follow-up-pending' });
   });
 
-  it('settles only the cleanup handoff owned by this run after archive and integration proof', async () => {
+  it.each([[], ['Branch preserved by ordinary cleanup']])('settles its cleanup handoff after archive and integration proof despite warnings %j', async cleanupWarnings => {
     const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
       startedAt: CREATED_AT, capturedAt: CREATED_AT };
     const state = { ...agentState({ completedCheckouts: [completed],
       reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' }, repoStateVerification: { status: 'pending' } }),
       result: { success: false, cleanupPending: true } };
-    await run({ success: false, agentState: state });
+    await run({ success: false, agentState: state, cleanupWarnings });
     expect(updateTask).not.toHaveBeenCalled();
     findMissingCheckoutPreservation.mockResolvedValue({ archiveDir: '/example/archive', evidenceDigest: 'a'.repeat(64), recheck: async () => true });
-    expect(await run({ success: false, agentState: state })).toMatchObject({ verified: true });
+    expect(await run({ success: false, agentState: state, cleanupWarnings })).toMatchObject({ verified: true });
     expect(updateTask).toHaveBeenLastCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', {
       expectedStatus: 'in_progress', expectedMetadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' },
     });
@@ -731,9 +731,10 @@ describe('verifyAgentRepoState — every hold records the reason it returns', ()
     expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', { status: 'pending', reason: 'code-repair-queued', branch: BRANCH, path: WORKTREE, taskId: 'review-1' });
   });
 
-  it('records each held swarm branch under the reason it returns', async () => {
+  it.each([false, true])('records each held claim branch under the reason it returns (pinned=%s)', async pinned => {
     readClaimOwnershipAgents.mockRejectedValue(new Error('agents unreadable'));
-    const state = agentState({ isWorktree: false, worktreeBranch: null, workspacePath: '/repo', claimPicksOwnBranch: true, claimBranches: ['claim/issue-11'] });
+    const state = agentState({ isWorktree: false, worktreeBranch: null, workspacePath: '/repo', claimPicksOwnBranch: !pinned,
+      ...(pinned ? { claimBranch: 'claim/issue-11' } : {}), claimBranches: ['claim/issue-11'] });
     expect((await run({ agentState: state })).branches).toEqual([{ branch: 'claim/issue-11', verified: false, skipReason: 'claim-ownership-unreadable', issues: [], recoveryTaskId: null }]);
     expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', { branch: 'claim/issue-11', status: 'blocked', reason: 'claim-ownership-unreadable', owners: [] });
 

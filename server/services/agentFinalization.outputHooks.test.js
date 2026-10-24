@@ -475,10 +475,11 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it('hands cleanup-only work to completion recovery without another agent or success claim', async () => {
+  it.each(['worktree', 'pinned-claim'])('hands %s cleanup-only work to completion recovery without another agent or success claim', async mode => {
     const taskOutcome = { status: 'incomplete', reason: 'Verified delivery; owner still holds checkout.', recovery: { mode: 'cleanup' } };
     isProgrammaticIoTaskType.mockReturnValue(false);
-    persistedAgent.metadata.isWorktree = true;
+    persistedAgent.metadata = mode === 'worktree' ? { isWorktree: true }
+      : { isWorktree: false, claimPicksOwnBranch: false, claimBranch: 'claim/issue-42', claimBranches: ['claim/issue-42'] };
     try {
       await finalizeAgent({ agentId: 'agent-example', task: { id: TASK.id, taskType: 'user', metadata: {} },
         success: true, exitCode: 0, finalSummary: JSON.stringify({ summary: 'Cleanup handed off.', taskOutcome }) });
@@ -489,20 +490,26 @@ describe('recovery output-hook dispatch (#3182)', () => {
     } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
   });
 
-  it('retains an already persisted cleanup handoff when its run is recovered after a crash', async () => {
+  it.each(['saved', 'pinned-claim'])('retains a %s cleanup handoff when its run is recovered after a crash', async mode => {
     const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
     const workspacePath = await mkdtemp(join(tmpdir(), 'cleanup-restart-'));
+    isProgrammaticIoTaskType.mockReturnValue(false);
     const taskOutcome = { status: 'incomplete', reason: 'Only preservation remains.', recovery: { mode: 'cleanup' } };
-    const task = { ...TASK, metadata: { ...TASK.metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' } };
-    persistedAgent.metadata = { workspacePath, isWorktree: true };
+    const task = { ...TASK, metadata: { ...TASK.metadata, ...(mode === 'saved'
+      ? { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' } : {}) } };
+    persistedAgent.metadata = { workspacePath, ...(mode === 'saved' ? { isWorktree: true }
+      : { isWorktree: false, claimPicksOwnBranch: false, claimBranch: 'claim/issue-42', claimBranches: ['claim/issue-42'] }) };
     try {
       await writeFile(join(workspacePath, '.agent-done-agent-example'), JSON.stringify({ taskOutcome }));
-      await retireDeadAgent({ agent: persistedAgent, task, success: false, exitCode: 1, duration: 1000 });
+      await retireDeadAgent({ agent: persistedAgent, task, success: mode === 'pinned-claim', exitCode: mode === 'pinned-claim' ? 0 : 1, duration: 1000 });
       expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'in_progress',
         metadata: expect.objectContaining({ deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' }) }), TASK.taskType);
       expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: false, cleanupPending: true }));
-    } finally { await rm(workspacePath, { recursive: true, force: true }); }
+    } finally {
+      isProgrammaticIoTaskType.mockReturnValue(true);
+      await rm(workspacePath, { recursive: true, force: true });
+    }
   });
 
   it('stops repeated delivery recovery at the existing budget with concrete choices', async () => {

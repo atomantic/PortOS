@@ -273,7 +273,9 @@ export async function verifyAgentRepoState(input) {
       }
       input = { ...input, task: current };
     }
-    return verifyRunBranches({ ...input, success: input.success || cleanupPending });
+    // A cleanup warning describes retained work this audit must settle.
+    return verifyRunBranches({ ...input, success: input.success || cleanupPending,
+      ...(cleanupPending ? { cleanupWarnings: [] } : {}) });
   };
   const run = verify().then(async result => {
     if (result.skipReason === 'cleanup-owner-changed' || result.skipReason === 'cleanup-task-unavailable') return result;

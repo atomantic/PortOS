@@ -1459,6 +1459,44 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(injected.policies[0].metadata.branchCompletionPolicy).toBeUndefined();
   });
 
+  it.each([false, true])('retires legacy pinned cleanup with lagging main and missing remote proof=%s', async missingProof => {
+    const c = await reviewedCheckout('pinned-cleanup', { normalMerge: true });
+    injected.policies[0].result = { success: false, executionSuccess: true,
+      taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
+    let shippedDefault = c.forge.defaultHead;
+    if (missingProof) {
+      const remote = join(scratch, 'proof-remote');
+      await execGit(['clone', '--no-hardlinks', repo, remote], scratch);
+      await execGit(['config', 'user.email', 'test@example.com'], remote);
+      await execGit(['config', 'user.name', 'Test'], remote);
+      await execGit(['commit', '--allow-empty', '-m', 'new remote default'], remote);
+      shippedDefault = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
+      expect((await execGit(['cat-file', '-e', `${shippedDefault}^{commit}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
+      await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+      injected.fetchRemote = remote;
+    }
+    await execGit(['reset', '--hard', 'HEAD^'], repo);
+    const localMain = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
+    c.forge.defaultHead = localMain;
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-policy-not-legacy-completed' });
+    c.forge.defaultHead = shippedDefault;
+    injected.policies[0].result.validationPassed = false;
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-policy-not-legacy-completed' });
+    injected.policies[0].result.validationPassed = null;
+    const prepared = await c.prepare();
+    expect(prepared).toMatchObject({ ok: true, review: { comparison: { disposition: 'integrated', difference: '' },
+      policy: { integratedCleanupHead: shippedDefault } } });
+    const result = await c.confirm(prepared.review);
+    expect(result).toMatchObject({ ok: true, archiveDir: expect.any(String), branchDeleted: true });
+    expect(await registered(c.path)).toBe(false);
+    expect((await execGit(['rev-parse', 'main'], repo)).stdout.trim()).toBe(localMain);
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
+      branch: c.release.branch, head: c.release.head, archiveDir: result.archiveDir, branchDeleted: true,
+    }));
+    expect(injected.fetches).toHaveLength(missingProof ? 1 : 0);
+  });
+
   it('settles a review obligation for unattended retirement only once every commit is on the default branch', async () => {
     const c = await reviewedCheckout('settled', { normalMerge: true, superseded: true });
     await execGit(['worktree', 'unlock', c.path], repo);
