@@ -229,7 +229,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
 
           <ProviderModelSelector providers={providers || []} selectedProviderId={formData.provider}
             selectedModel={formData.model} availableModels={availableModels} loading={!providersLoaded}
-            onProviderChange={provider => setFormData(d => ({ ...d, provider, model: '', effort: '' }))}
+            onProviderChange={provider => setFormData(d => ({ ...d, provider, model: '', effort: '', executionOptions: {} }))}
             onModelChange={model => setFormData(d => ({ ...d, model, effort: effortSurvivingModel(selectedProvider, model, d.effort) }))}
             effort={formData.effort} onEffortChange={effort => setFormData(d => ({ ...d, effort }))}
             executionOptions={formData.executionOptions} onExecutionOptionsChange={executionOptions => setFormData(d => ({ ...d, executionOptions }))}
