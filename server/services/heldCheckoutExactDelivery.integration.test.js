@@ -1,7 +1,7 @@
 /** Capped forge scope must not strand an exact delivered clean checkout. */
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
@@ -38,6 +38,7 @@ vi.mock('./taskScheduleStore.js', () => ({
     return result.result;
   },
 }));
+const { listWorktrees } = await import('./worktreeManager.js');
 const { prepareInventoriedCheckoutRetirement, retireInventoriedCheckout, inspectCheckoutRetirementOwnership } = await import('./heldCheckoutRecovery.js');
 const { _createInitializedCheckoutRecovery } = await import('./initializedCheckoutRecovery.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
@@ -113,7 +114,7 @@ describe('exact delivered head retirement with capped historical API (real Git)'
           expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
           const outcome = await getBranchReconcileOutcome(fixture.app.id);
           expect(outcome.retired).toEqual(expect.arrayContaining([expect.objectContaining({ path, branch, head, branchDeleted: true })]));
-          expect((await execGit(['worktree', 'list', '--porcelain'], repo)).stdout).not.toContain(path);
+          expect((await listWorktrees(repo)).filter(tree => resolve(tree.path) === resolve(path))).toEqual([]);
           return;
         }
         expect(retired).toMatchObject({ ok: false, reason: scenario === 'dirty' ? 'worktree-dirty' : 'retirement-remote-head-changed' });
@@ -122,7 +123,8 @@ describe('exact delivered head retirement with capped historical API (real Git)'
           : scenario === 'wrong-target' ? 'retirement-merge-not-in-target'
           : scenario === 'wrong-merge-proof' ? 'retirement-pr-not-matching-merged' : 'retirement-original-scope-unavailable' });
       expect((await execGit(['rev-parse', 'HEAD'], path)).stdout.trim()).toBe(release.head);
-      expect((await execGit(['worktree', 'list', '--porcelain'], repo)).stdout).toContain(path);
+      expect((await listWorktrees(repo)).filter(tree => resolve(tree.path) === resolve(path)))
+        .toMatchObject([{ branch: `refs/heads/${branch}`, head: release.head }]);
       expect((await getBranchReconcileOutcome(fixture.app.id)).retired || []).toEqual([]);
       if (scenario === 'unpublished') expect(await readFile(join(path, 'wanted.txt'), 'utf8')).toContain('wanted work');
       if (scenario === 'dirty') expect(await readFile(join(path, 'feature.txt'), 'utf8')).toContain('wanted local edit');
