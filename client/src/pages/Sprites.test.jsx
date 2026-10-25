@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 
@@ -40,7 +40,7 @@ vi.mock('../components/sprites/NewSpritePanel.jsx', () => ({
 vi.mock('../components/sprites/SpriteSearch.jsx', () => ({ default: () => null }));
 
 import Sprites from './Sprites.jsx';
-import { getSpriteRecord, listSpriteRecords } from '../services/apiSprites.js';
+import { getSpriteRecord, listSpriteRecords, listSpriteAnimationProviders, generateSpriteWalk, generateSpriteTrack } from '../services/apiSprites.js';
 import { listMediaJobs, getMediaJob } from '../services/apiMediaJobs.js';
 
 const detail = (status = 'rendering', id = 'example-sprite') => ({
@@ -149,4 +149,29 @@ describe('persisted sprite events in the rendered page', () => {
     expect(screen.getByRole('button', { name: 'New Sprite' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create your first sprite' })).not.toBeInTheDocument();
   });
+});
+
+it('submits paired local inputs and verbatim corrections from the rendered authoring cards', async () => {
+  getSpriteRecord.mockResolvedValue(detail('error'));
+  listSpriteAnimationProviders.mockResolvedValue({ providers: [
+    { id: 'grok', ready: true, label: 'Grok' },
+    { id: 'local', ready: true, label: 'Local', returnToIdleAnchorSupported: true },
+  ] });
+  mount();
+  await act(async () => {});
+  fireEvent.change(screen.getAllByLabelText(/Render on/)[0], { target: { value: 'local' } });
+  const east = screen.getByRole('checkbox', { name: 'Return to idle anchor east' });
+  fireEvent.click(east);
+  fireEvent.click(screen.getByRole('button', { name: 'Show correction note for east walk cycle' }));
+  const correctionPrompt = '  Lift feet!\nKeep hat.  ';
+  fireEvent.change(screen.getByLabelText('Correction guidance for the east walk cycle re-roll'), { target: { value: correctionPrompt } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: /Generate walk/ })));
+  expect(generateSpriteWalk).toHaveBeenCalledWith('example-sprite', expect.objectContaining({
+    direction: 'east', provider: 'local', returnToIdleAnchor: true, correctionPrompt,
+  }), { silent: true });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Return to idle anchor south' }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
+  expect(generateSpriteTrack).toHaveBeenCalledWith('example-sprite', 'ambient', expect.objectContaining({
+    provider: 'local', returnToIdleAnchor: true,
+  }), { silent: true });
 });

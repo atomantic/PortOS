@@ -76,6 +76,7 @@ const H3_MODEL = {
   runtime: 'minimax_h3',
   defaultFrames: 124,
   frameOptions: [107, 124, 141, 158, 175],
+  supportedModes: ['text', 'image', 'fflf'],
   fpsOptions: [24],
   defaultWidth: 1344,
   defaultHeight: 768,
@@ -375,6 +376,27 @@ describe('local render lane (#4876)', () => {
     expect(enqueuedVideoJobs[0].params.prompt).toContain(track.promptMarker);
     // Portrait anchor → portrait canvas, so videoGen's center-crop is a no-op.
     expect(enqueuedVideoJobs[0].params).toMatchObject({ width: 768, height: 1024 });
+  });
+
+  it.each(TRACKS)('$id reloads the paired normalized endpoints on the correct track and facing', async (track) => {
+    const id = await track.seed(newId());
+    const { runId } = await startTrackGeneration(track.id, id, {
+      ...track.body, provider: 'local', returnToIdleAnchor: true,
+    });
+    const params = enqueuedVideoJobs[0].params;
+    expect(params.mode).toBe('fflf');
+    expect(params.lastImagePath).toBe(params.sourceImagePath);
+    expect(prepareWalkAnchorChromaInput).toHaveBeenCalledOnce();
+    const run = (await getTrackState(track.id, id)).runs.find((item) => item.id === runId);
+    expect(run).toMatchObject({
+      track: track.id, direction: track.expectedDirection,
+      conditioningMode: 'fflf', returnToIdleAnchor: true, renderPrompt: params.prompt,
+    });
+    expect(run.conditioningInputs.first).toEqual(run.conditioningInputs.last);
+    expect(run.conditioningInputs.first).toEqual({
+      path: run.animationInputPath,
+      sha256: createHash('sha256').update(await readFile(params.sourceImagePath)).digest('hex'),
+    });
   });
 
   it.each(TRACKS)('$id stamps the lane provenance on its run record', async (track) => {

@@ -27,7 +27,7 @@
  */
 
 import { join } from 'path';
-import { PATHS, pathExists, copyFileGuarded } from '../../lib/fileUtils.js';
+import { PATHS, pathExists, copyFileGuarded, sha256File } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getVideoModels, requiredModelCacheGroups } from '../../lib/mediaModels.js';
 import { inspectModelCache, findCachedRepoFiles } from '../../lib/hfCache.js';
@@ -210,6 +210,7 @@ export async function getLocalAnimationProviderStatus() {
     modelName: model.name,
     runtime: model.runtime,
     fps: localRenderFps(model),
+    returnToIdleAnchorSupported: model.supportedModes?.includes('fflf') === true,
   };
   const runtimeLabel = BYOV_RUNTIME_INFO[model.runtime]?.label || model.runtime;
   if (!await isByovRuntimeReady(model.runtime)) {
@@ -262,12 +263,19 @@ export async function listAnimationProviders() {
  * measurement happens exactly once and the padded input and the render argv
  * cannot disagree about which canvas was picked.
  */
-export async function planLocalAnimationRender({ durationSeconds } = {}) {
+export async function planLocalAnimationRender({ durationSeconds, returnToIdleAnchor = false } = {}) {
   const status = await getLocalAnimationProviderStatus();
   if (!status.ready) {
     throw new ServerError(status.reason, { status: 409, code: 'LOCAL_VIDEO_PROVIDER_NOT_READY' });
   }
   const model = resolveLocalVideoModel();
+  const mode = returnToIdleAnchor ? 'fflf' : 'image';
+  if (!model.supportedModes?.includes(mode)) {
+    throw new ServerError(
+      `${model.name} does not support ${mode} conditioning. Choose a supported local model.`,
+      { status: 409, code: 'LOCAL_VIDEO_MODE_UNSUPPORTED' },
+    );
+  }
   const numFrames = resolveLocalFrameCount(model, durationSeconds);
   if (!numFrames) {
     throw new ServerError(
@@ -291,6 +299,8 @@ export async function planLocalAnimationRender({ durationSeconds } = {}) {
   }
   return {
     model,
+    mode,
+    returnToIdleAnchor,
     numFrames,
     fps,
     chooseCanvas: (anchorSize) => pickLocalRenderCanvas(model, anchorSize),
@@ -302,8 +312,15 @@ export async function planLocalAnimationRender({ durationSeconds } = {}) {
  * self-documents which lane, model, runtime, and geometry produced it — the same
  * question `provider` alone answered while grok was the only lane.
  */
-export const localRenderManifest = (plan, canvas) => ({
+export const localRenderManifest = (plan, canvas, input = {}) => ({
   provider: LOCAL_VIDEO_PROVIDER_ID,
+  returnToIdleAnchor: plan.returnToIdleAnchor === true,
+  conditioningMode: plan.mode || 'image',
+  conditioningInputs: {
+    first: input.path ? { path: input.path, sha256: input.sha256 } : null,
+    last: plan.returnToIdleAnchor && input.path ? { path: input.path, sha256: input.sha256 } : null,
+  },
+  ...(input.prompt != null ? { renderPrompt: input.prompt } : {}),
   videoModelId: plan.model.id,
   videoRuntime: plan.model.runtime,
   renderFrames: plan.numFrames,
@@ -328,6 +345,27 @@ export const spriteAnimationJobTag = ({ recordId, runId, track, direction }) => 
   ...(track === WALK_TRACK ? { spriteWalk: { recordId, direction } } : {}),
 });
 
+// Check the locked identity before preparing any input. A changed file must
+// never silently become a new anchor under an existing lock.
+export async function verifyLocalAnimationAnchor(anchor, inputAbs) {
+  if (!await pathExists(inputAbs)) {
+    throw new ServerError('Locked anchor file is missing on disk', { status: 409, code: 'ANCHOR_MISSING' });
+  }
+  const actual = await sha256File(inputAbs);
+  if (anchor.sha256 && actual !== anchor.sha256) {
+    throw new ServerError('Locked anchor has changed; lock the current reference again', { status: 409, code: 'ANCHOR_STALE' });
+  }
+  return actual;
+}
+
+// Local corrections remain verbatim; the shared cloud prompt builder retains
+// its legacy formatting. Persist this exact composed prompt on the run.
+export const localAnimationPrompt = (base, correction) => (
+  typeof correction === 'string' && correction.length
+    ? `${base}\n\nUser correction:\n${correction}`
+    : base
+);
+
 /**
  * Queue the render. Resolves to the media-job id once the queue has durably
  * admitted it (#8325), so the caller can stamp it on an already-persisted run
@@ -339,7 +377,8 @@ export const spriteAnimationJobTag = ({ recordId, runId, track, direction }) => 
  * explicitly chose the LOCAL provider, and the unattended helper's default
  * routing could send the job to a peer instead.
  */
-export async function enqueueLocalAnimationRender({ plan, canvas, prompt, inputAbs, recordId, runId, track, direction }) {
+export async function enqueueLocalAnimationRender({ plan, canvas, prompt, inputAbs, inputSha256, recordId, runId, track, direction }) {
+  if (plan.returnToIdleAnchor) await verifyLocalAnimationAnchor({ sha256: inputSha256 }, inputAbs);
   const { jobId } = await enqueueJob({
     kind: 'video',
     // The owner the client's sprite pending-render hook filters on.
@@ -347,8 +386,9 @@ export async function enqueueLocalAnimationRender({ plan, canvas, prompt, inputA
     params: {
       modelId: plan.model.id,
       prompt,
-      mode: 'image',
+      mode: plan.mode || 'image',
       sourceImagePath: inputAbs,
+      ...(plan.returnToIdleAnchor ? { lastImagePath: inputAbs } : {}),
       ...(canvas ? { width: canvas.width, height: canvas.height } : {}),
       numFrames: plan.numFrames,
       fps: plan.fps,
