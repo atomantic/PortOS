@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { markLegacyRetirements, applyLegacyRetirementResolutions } from '../lib/legacyRetirementTransition.js';
-import { planLegacyRetirementReconciliation } from './legacyRetirementReconciliation.js';
+import { _planLegacyRetirementReconciliation } from './legacyRetirementReconciliation.js';
 import migration from '../../scripts/migrations/443-legacy-retirement-record-transition.js';
 
 let root, repo;
@@ -62,7 +62,7 @@ describe('legacy retirement transition at the persisted reconciliation boundary'
       }
       if (scenario === 'live-checkout') { await mkdir(row.path); await writeFile(join(row.path, 'unfinished.txt'), 'new owner work\n'); }
       const input = { repoPath: repo, outcome, agents: owners, trees: [], defaultHead: forge.mergeCommit };
-      const plans = await planLegacyRetirementReconciliation(input, { readMergedDelivery: async () => forge });
+      const plans = await _planLegacyRetirementReconciliation(input, { readMergedDelivery: async () => forge });
       const expected = ['squash', 'rebased', 'foreign-owner'].includes(scenario);
       expect(plans).toHaveLength(expected ? 1 : 0);
       if (!expected) return;
@@ -75,7 +75,7 @@ describe('legacy retirement transition at the persisted reconciliation boundary'
       expect(restarted.remaining).toEqual([]);
       expect(restarted.retired).toEqual([]); // No manufactured service receipt.
       expect(restarted.legacyRetirementTransition.resolutions[0].observation).toEqual(row);
-      expect(await planLegacyRetirementReconciliation({ ...input, outcome: restarted })).toEqual([]);
+      expect(await _planLegacyRetirementReconciliation({ ...input, outcome: restarted })).toEqual([]);
       expect(await git('rev-parse', 'main')).toBe(forge.mergeCommit);
     });
 
@@ -85,7 +85,7 @@ describe('legacy retirement transition at the persisted reconciliation boundary'
     const receipt = { ...row, checkoutIdentity: 'a'.repeat(64), branchDeleted: true, archiveDir: null, retiredAt: '2026-01-01T00:00:00.000Z' };
     const outcome = { retirementObligations: [malformed], remaining: [malformed], retired: [receipt] };
     markLegacyRetirements(outcome);
-    const plans = await planLegacyRetirementReconciliation({ repoPath: repo, outcome, agents: [], trees: [], defaultHead: forge.mergeCommit });
+    const plans = await _planLegacyRetirementReconciliation({ repoPath: repo, outcome, agents: [], trees: [], defaultHead: forge.mergeCommit });
     expect(plans).toHaveLength(1);
     expect(plans[0]).toMatchObject({ removalVerified: true, evidence: { kind: 'existing-service-receipt', receipt } });
     // A newer reviewed head retired the same physical checkout after this
@@ -94,12 +94,12 @@ describe('legacy retirement transition at the persisted reconciliation boundary'
       createdAt: '2025-12-31T00:00:00.000Z' };
     const progressed = { retirementObligations: [intermediate], remaining: [intermediate], retired: [receipt] };
     markLegacyRetirements(progressed);
-    expect(await planLegacyRetirementReconciliation({ repoPath: repo, outcome: progressed, agents: [], trees: [], defaultHead: forge.mergeCommit }))
+    expect(await _planLegacyRetirementReconciliation({ repoPath: repo, outcome: progressed, agents: [], trees: [], defaultHead: forge.mergeCommit }))
       .toMatchObject([{ removalVerified: true, target: { head: receipt.head }, observation: intermediate }]);
     const changed = { ...malformed, checkoutIdentity: 'b'.repeat(64) };
     const different = { retirementObligations: [changed], remaining: [changed], retired: [receipt] };
     markLegacyRetirements(different);
-    expect(await planLegacyRetirementReconciliation({ repoPath: repo, outcome: different, agents: [], trees: [], defaultHead: forge.mergeCommit })).toEqual([]);
+    expect(await _planLegacyRetirementReconciliation({ repoPath: repo, outcome: different, agents: [], trees: [], defaultHead: forge.mergeCommit })).toEqual([]);
   });
 
   it('migration freezes only existing records, survives replay, and changes no task policy or worktree', async () => {

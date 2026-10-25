@@ -89,7 +89,7 @@ function targetFor(outcome, row, repoPath, agents) {
   return captures.length === 1 ? { target: { ...row, ...captures[0] } } : null;
 }
 
-export async function planLegacyRetirementReconciliation({ repoPath, outcome, agents, trees, defaultHead }, options = {}) {
+export async function _planLegacyRetirementReconciliation({ repoPath, outcome, agents, trees, defaultHead }, options = {}) {
   const transition = outcome?.legacyRetirementTransition;
   if (transition?.version !== 1 || !Array.isArray(agents) || !Array.isArray(trees) || !oid(defaultHead)) return [];
   const rows = [...new Map([...(outcome.retirementObligations || []), ...(outcome.remaining || [])]
@@ -136,7 +136,7 @@ export async function reconcileLegacyRetirementRecords(appId, outcome) {
   const repoPath = app.repoPath;
   const [agents, trees, branch] = await Promise.all([readClaimOwnershipAgents(), listWorktrees(repoPath), getDefaultBranch(repoPath, { allowRemote: false, strict: true })]);
   const defaultHead = (await git(repoPath, ['rev-parse', `refs/remotes/origin/${branch}^{commit}`])).stdout.trim();
-  const resolutions = await planLegacyRetirementReconciliation({ repoPath, outcome, agents, trees, defaultHead }, {
+  const resolutions = await _planLegacyRetirementReconciliation({ repoPath, outcome, agents, trees, defaultHead }, {
     readMergedDelivery: async target => {
       const selected = await findMergedPullRequest(repoPath, target.branch, target.head, { forgeAccount: app.forgeAccount });
       const facts = await readRetirementForgeEvidence(repoPath, target.branch, selected.url, { forgeAccount: app.forgeAccount });
