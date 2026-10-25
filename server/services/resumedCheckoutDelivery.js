@@ -1,0 +1,88 @@
+/** Read-only proof for rewritten commits in one explicitly resumed physical checkout.
+ * This never releases ownership, changes execution results, or authorizes retirement.
+ */
+import { resolve } from 'node:path';
+import { devNull } from 'node:os';
+import { isDeepStrictEqual } from 'node:util';
+import { execGit } from '../lib/execGit.js';
+import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
+import { reviewedRetirementPolicy } from './branchCompletionPolicy.js';
+
+const oid = value => typeof value === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(value);
+const samePath = (a, b) => typeof a === 'string' && typeof b === 'string'
+  && (process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b));
+const LIMIT = 64;
+
+export async function readResumedCheckoutDeliveries(input, agents) {
+  const { repoPath, branch, tip, prUrl, checkoutIncarnation, retirementForge: forge } = input;
+  const target = forge?.targetHead ?? forge?.defaultHead;
+  if (!Array.isArray(agents) || !checkoutIncarnation?.pointer || !checkoutIncarnation.gitdir
+    || input.verifiedPrHead !== tip || !oid(tip) || forge?.prHead !== tip || forge.prUrl !== prUrl
+    || !oid(forge.mergeCommit) || !oid(target)) return [];
+  const deadline = performance.now() + 10000;
+  const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_GRAFT_FILE: devNull };
+  const git = async args => {
+    const remaining = Math.floor(deadline - performance.now());
+    if (remaining <= 0) throw new Error('resumed-delivery-proof-budget');
+    return (await execGit(['--no-replace-objects', '-c', 'core.commitGraph=false', ...args], repoPath,
+      { env, timeout: Math.min(remaining, 2000), maxBuffer: 16384 })).stdout.trim();
+  };
+  const receipt = agent => {
+    const meta = agent?.metadata;
+    const policy = meta?.branchCompletionPolicy;
+    if (agent?.status !== 'completed' || !agent.taskId || agent.result?.validationPassed === false
+      || !samePath(meta?.sourceWorkspace, repoPath) || meta.prCompletionPolicy !== 'review-then-merge'
+      || meta.reviewLoopMergeTarget?.url !== prUrl || meta.reviewLoopMergeTarget.branch !== branch
+      || (policy && (policy.prUrl !== prUrl || policy.branch !== branch || policy.completion !== 'review-then-merge'))) return null;
+    const rows = meta.completedCheckouts?.filter(row => completedCheckoutReceiptValid(agent, row)
+      && samePath(row.repoPath, repoPath) && samePath(row.path, meta.workspacePath) && row.branch === branch
+      && oid(row.head) && (!policy?.tip || policy.tip === row.head) && isDeepStrictEqual(row.incarnation, checkoutIncarnation));
+    return rows?.length === 1 ? rows[0] : null;
+  };
+  // The archive can contain many unrelated executions. Bound this branch's
+  // captured history, rather than refusing because other projects ran tasks.
+  const scoped = agents.filter(agent => Array.isArray(agent?.metadata?.completedCheckouts)
+    && agent.metadata.completedCheckouts.some(row => samePath(row?.repoPath, repoPath) && row.branch === branch));
+  if (scoped.length > 25) return [];
+  const byId = new Map(scoped.map(agent => [agent.id, agent]));
+  if (byId.size !== scoped.length) return [];
+  const evidence = [];
+  let reads = 0;
+  const rewritten = async head => {
+    if (++reads > 25) return false;
+    const range = `${head}...${tip}`;
+    // Bound the graph before asking Git to compare patches. Merge commits have
+    // ambiguous per-parent patches and therefore cannot establish this proof.
+    const rows = (await git(['rev-list', '--left-right', '--parents', `--max-count=${LIMIT + 1}`, range])).split('\n').filter(Boolean);
+    if (!rows.length || rows.length > LIMIT || rows.some(row => row.split(' ').length !== 2)) return false;
+    const older = rows.filter(row => row.startsWith('<')).map(row => row.slice(1).split(' ')[0]);
+    if (!older.length || (await git(['merge-base', '--all', head, tip])).split('\n').length !== 1) return false;
+    const marked = (await git(['log', '--no-ext-diff', '--no-textconv', '--no-renames', '--left-right', '--cherry-mark', '--format=%m %H', range])).split('\n');
+    return older.every(commit => marked.includes(`= ${commit}`));
+  };
+  return (async () => {
+    await git(['merge-base', '--is-ancestor', forge.mergeCommit, target]);
+    for (const successor of scoped) {
+      const captured = receipt(successor);
+      if (!captured || captured.head !== tip || !samePath(captured.path, input.checkoutPath)
+        || successor.result?.cleanupPending !== true || successor.result.taskOutcome?.recovery?.mode !== 'cleanup'
+        || reviewedRetirementPolicy({ ...input, agents: [successor] }).reason) continue;
+      const seen = new Set([successor.id]);
+      let child = successor;
+      while (child.metadata?.resumedFromAgentId) {
+        const parent = byId.get(child.metadata.resumedFromAgentId);
+        const row = receipt(parent);
+        if (!row || seen.has(parent.id) || parent.taskId !== successor.taskId
+          || !(Date.parse(parent.completedAt) <= Date.parse(child.startedAt))) break;
+        seen.add(parent.id);
+        if (row.head !== tip) {
+          if (!await rewritten(row.head)) break;
+          evidence.push({ agentId: parent.id, successorAgentId: successor.id, taskId: parent.taskId,
+            capturedHead: row.head, capturedAt: row.capturedAt, prUrl, tip, checkoutIncarnation });
+        }
+        child = parent;
+      }
+    }
+    return evidence;
+  })().catch(() => []);
+}

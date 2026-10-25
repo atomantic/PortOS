@@ -211,10 +211,13 @@ function reviewedIncarnation(input, policies) {
   const firstStarted = Math.min(...owners.map(policy => Date.parse(policy.agent.startedAt)));
   const identity = input.checkoutIdentities?.[input.checkoutPath];
   const prior = [];
+  // Explicitly resumed owners are this checkout's history even after a move.
+  // A mismatching PR must hold, rather than masquerade as unrelated history.
+  const resumedOwners = new Set(policies.map(policy => policy.agent.metadata?.resumedFromAgentId).filter(Boolean));
   const current = policies.filter(policy => {
     const workspace = policy.agent.metadata?.workspacePath;
     const target = reviewTarget(policy);
-    const unrelated = policy.agent.status === 'completed'
+    const unrelated = policy.agent.status === 'completed' && !resumedOwners.has(policy.agent.id)
       && policy.completion !== PR_COMPLETIONS.LEAVE_OPEN
       && isAbsolute(workspace || '') && !samePath(workspace, input.repoPath) && !samePath(workspace, input.checkoutPath)
       && identity && input.checkoutIdentities?.[workspace] && input.checkoutIdentities[workspace] !== identity
@@ -260,13 +263,19 @@ function resumedCleanupPolicies(policies, input) {
   if (input.verifiedPrHead !== input.tip) return policies;
   const byId = new Map(policies.map(policy => [policy.agent.id, policy]));
   const proofs = new Map();
-  const receipt = (policy, incarnation) => {
+  const receipt = (policy, incarnation, successor = null) => {
     const agent = policy.agent;
     if (agent.status !== 'completed' || !agent.taskId || agent.result?.validationPassed === false
       || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE || retirementPr(policy) !== input.prUrl
-      || (policy.tip && policy.tip !== input.tip)) return null;
+      || (policy.tip && policy.tip !== input.tip && !successor)) return null;
+    const rewritten = row => successor && input.resumedDeliveries?.some(proof =>
+      proof.agentId === agent.id && proof.successorAgentId === successor.agent.id && proof.taskId === agent.taskId
+      && proof.capturedHead === row.head && proof.capturedAt === row.capturedAt
+      && proof.prUrl === input.prUrl && proof.tip === input.tip
+      && (!policy.tip || policy.tip === row.head) && isDeepStrictEqual(proof.checkoutIncarnation, incarnation));
     const rows = agent.metadata?.completedCheckouts?.filter(row => completedCheckoutReceiptValid(agent, row)
-      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && row.head === input.tip
+      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && (!policy.tip || policy.tip === row.head)
+      && (row.head === input.tip || rewritten(row))
       && samePath(row.path, agent.metadata.workspacePath) && isDeepStrictEqual(row.incarnation, incarnation));
     return rows?.length === 1 ? rows[0] : null;
   };
@@ -283,7 +292,7 @@ function resumedCleanupPolicies(policies, input) {
     while (child.agent.metadata?.resumedFromAgentId) {
       const parent = byId.get(child.agent.metadata.resumedFromAgentId);
       if (!parent || seen.has(parent.agent.id) || parent.agent.taskId !== successor.agent.taskId
-        || !(Date.parse(parent.agent.completedAt) <= Date.parse(child.agent.startedAt)) || !receipt(parent, context.checkoutIncarnation)) break;
+        || !(Date.parse(parent.agent.completedAt) <= Date.parse(child.agent.startedAt)) || !receipt(parent, context.checkoutIncarnation, successor)) break;
       seen.add(parent.agent.id);
       proofs.set(parent.agent.id, { successorAgentId: successor.agent.id, taskId: successor.agent.taskId,
         checkoutIncarnation: context.checkoutIncarnation,
@@ -315,7 +324,7 @@ export function reviewedRetirementPolicy(input) {
       && ((!incarnation && !completedDetachedSibling(p, input)
         && !(input.detachedCheckoutIdentity && p.resumedCleanup?.detachedCheckoutIdentity === input.detachedCheckoutIdentity)) || retirementPr(p) !== input.prUrl))
     || (reviewTarget(p) && (reviewTarget(p).branch !== input.branch || (p.prUrl && p.prUrl !== reviewTarget(p).url)))
-    || (incarnation && p.tip && p.tip !== input.tip && !continuedDelivery(p, input)))) {
+    || (incarnation && p.tip && p.tip !== input.tip && !continuedDelivery(p, input) && !p.resumedCleanup))) {
     return { reason: 'retirement-policy-not-legacy-completed' };
   }
   return { reason: null, ...(input.integratedCleanupHead && { integratedCleanupHead: input.integratedCleanupHead }), policies: policies.map(p => ({

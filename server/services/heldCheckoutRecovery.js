@@ -14,8 +14,9 @@ import { WORKTREE_NODE_MODULES_MARKER } from '../lib/worktreeNodeModules.js';
  * matches it. A lock's age, an absent process or its prose never establish
  * release: a changed lock, HEAD or branch is an ownership change and refuses.
  *
- * A merged, clean checkout is removed in place. Dirty, unmerged, protected,
- * and live-owner checkouts stay where they are. Retirement does not copy the
+ * A merged, clean checkout is removed in place. Explicit preserved-supersession
+ * review also admits a closed, published prototype after durable small-evidence
+ * preservation. Dirty, otherwise unmerged, protected, and live-owner checkouts stay. Retirement does not copy the
  * checkout, its ignored files, or its commit history.
  */
 
@@ -678,7 +679,11 @@ async function retirementPolicy(repoPath, branch, opts, reviewIdentity = {}) {
   if (!resumed.reason) return resumed;
   const { readCheckoutDeliveryContinuations } = await import('./checkoutDeliveryContinuation.js');
   const deliveryContinuations = await readCheckoutDeliveryContinuations({ repoPath, branch, ...identity }, policies, opts);
-  return reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...identity, checkoutIdentities, deliveryContinuations });
+  const continued = reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...identity, checkoutIdentities, deliveryContinuations });
+  if (!continued.reason) return continued;
+  const { readResumedCheckoutDeliveries } = await import('./resumedCheckoutDelivery.js');
+  const resumedDeliveries = await readResumedCheckoutDeliveries({ repoPath, branch, ...identity }, policies);
+  return reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...identity, checkoutIdentities, deliveryContinuations, resumedDeliveries });
 }
 
 const policyReviewIdentity = (release, prUrl, forge) => ({
@@ -704,10 +709,11 @@ async function integratedPolicyReviewIdentity(repoPath, release, prUrl, forge, a
 const reviewForgeOptions = (release, kind, opts) => ({ forgeAccount: opts.forgeAccount,
   ...(!kind && { exactDeliveredHead: release.head }),
   ...(!release.branch && { exactAliasHead: release.head }),
-  ...(kind === 'source-supersession' && { sourceSupersessionHead: release.head }) });
+  ...(kind && { sourceSupersessionHead: release.head }),
+  ...(kind === 'preserved-supersession' && { requirePublishedSupersession: true }) });
 
 async function matchReviewTarget({ repoPath, release, kind, unlocked = false }, opts) {
-  if (kind && kind !== 'source-supersession') return { ok: false, reason: 'retirement-review-kind-unavailable' };
+  if (kind && !['source-supersession', 'preserved-supersession'].includes(kind)) return { ok: false, reason: 'retirement-review-kind-unavailable' };
   if (kind && !release.branch) return { ok: false, reason: 'retirement-source-branch-required' };
   if (PROTECTED_BRANCHES.includes(release.branch)) return { ok: false, reason: 'protected-branch' };
   const matched = await matchRelease(repoPath, unlocked ? { ...release, locked: false, lockReason: null } : release);
@@ -743,11 +749,53 @@ async function readCheckoutReviewPrerequisites(input, opts) {
   return { ok: true, tree: matched.tree, forge, policy };
 }
 
+/** A closed prototype is not merged. Keep its exact published history plus a
+ * small, bounded copy of checkout-only evidence in the durable schedule record.
+ * This never creates a repository archive or treats arbitrary ignored data as
+ * cache. Oversized/unknown recovery objects retain the original checkout. */
+async function preservePublishedSourceReview(repoPath, tree, forge, content, administration, signal) {
+  const source = forge.sourcePreservation;
+  if (!source || source.head !== tree.head || source.remoteRef !== tree.branch
+    || forge.remoteHead !== `${tree.head}\t${tree.branch}`) throw new Error('retirement-source-not-published');
+  if (content.indexDiff.length || content.worktreeDiff.length) throw new Error('retirement-source-dirty');
+  // A clean index can still retain resolve-undo conflict stages that cannot be
+  // reconstructed from HEAD. Do not omit that private recovery evidence.
+  if ((await git(['ls-files', '--resolve-undo', '-z'], tree.path)).length) throw new Error('retirement-source-index-recovery-unpublished');
+  const work = archiveWork(signal);
+  const roots = await recoveryObjectHeads(administration, { repoPath, tree }, work);
+  // Saved private refs/reflogs may name work beyond the published tip. Do not
+  // discard it merely because its metadata fits in the small evidence budget.
+  for (const head of roots) {
+    work.check();
+    if (!await execGit(['merge-base', '--is-ancestor', head, tree.head], repoPath,
+      { ignoreExitCode: true, timeout: 2000, maxBuffer: 16384,
+        env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1' } }).then(result => result.exitCode === 0)) throw new Error('retirement-source-private-work-unpublished');
+  }
+  let bytes = 0;
+  const files = [];
+  for (const [scope, rows] of [['content', content.files], ['administration', administration.files]]) {
+    for (const file of rows) {
+      if (file.disposableCache || (scope === 'administration'
+        && ['gitdir/index', 'gitdir/gitdir', 'gitdir/commondir', 'gitdir/locked', 'git-indirection'].includes(file.path))) continue;
+      bytes += file.bytes;
+      if (bytes > 64 * 1024) throw new Error('retirement-source-evidence-too-large');
+      const sourcePath = scope === 'content' ? join(tree.path, file.path) : file.source;
+      const data = await archiveBytes(sourcePath, work, 64 * 1024);
+      if (data.length !== file.bytes || evidenceHash(data) !== file.sha256) throw new Error('retirement-review-changed');
+      files.push({ scope, path: file.path, sha256: file.sha256, data: data.toString('base64') });
+    }
+  }
+  return { ...source, files, symlinks: { content: content.symlinks, administration: administration.symlinks },
+    recoveryHeads: [...roots].sort(), omitted: 'clean-index-and-checkout-pointers-reconstructible; recognized-module-cache-disposable' };
+}
+
 async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { tree, forge, policy }, opts, captureContent) {
   const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
   return archiveSnapshots(tree, repoPath, null, archiveWork(opts.signal), true)
     .then(async ([content, administration]) => {
-      const review = await buildCheckoutRetirementReview({ repoPath, release, prUrl, kind,
+      const preservedSource = kind === 'preserved-supersession'
+        ? await preservePublishedSourceReview(repoPath, tree, forge, content, administration, opts.signal) : null;
+      const review = await buildCheckoutRetirementReview({ repoPath, release, prUrl, kind, preservedSource,
         contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge });
       captureContent?.(content);
       return review;
@@ -1460,14 +1508,18 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
       const reviewed = review ? await reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind }, opts) : null;
       if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed', reviewed.archiveLimit, reviewed.nextAction);
       const disposition = reviewed?.review.comparison.disposition;
-      if (disposition === 'review-supersession' && (!locallyMerged || review.acceptSuperseded !== true)) return refuse('retirement-supersession-not-accepted');
-      if (!locallyMerged && disposition !== 'integrated') return refuse('not-merged-on-recheck');
+      if (disposition === 'review-supersession' && !acceptedPreservedSupersession(review, reviewed?.review)
+        && (!locallyMerged || review.acceptSuperseded !== true)) return refuse('retirement-supersession-not-accepted');
+      if (!locallyMerged && disposition !== 'integrated' && !acceptedPreservedSupersession(review, reviewed?.review)) return refuse('not-merged-on-recheck');
       const owner = await ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled });
       if (owner) return refuse(owner);
       return { fence: { repoPath, path: tree.path, branch }, tree, reviewed, checkoutIdentity };
     },
-    archive: async ({ tree }) => {
+    archive: async ({ tree, reviewed }) => {
       try {
+        if (acceptedPreservedSupersession(review, reviewed?.review)) {
+          if (!await opts.preserveSupersession?.(reviewed.review)) throw new Error('retirement-source-preservation-unavailable');
+        }
         await releaseCheckoutWithoutArchive({ repoPath, path: tree.path, branch }, async () => {
           if (opts.signal?.aborted) throw new Error('retirement-archive-cancelled');
           const status = await getStatusPorcelain(tree.path).catch(() => null);
@@ -1494,6 +1546,10 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
     },
   });
 }
+
+const acceptedPreservedSupersession = (review, prepared) => review?.kind === 'preserved-supersession'
+  && review.acceptSuperseded === true && prepared?.comparison?.disposition === 'review-supersession'
+  && prepared.preservedSource?.head === prepared.release.head;
 
 /** The second critical section: re-prove the release, ownership and a clean tree, then remove. */
 async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, defaultBranch, checkoutIdentity, mergedObligationSettled = false }, opts) {
@@ -1530,8 +1586,9 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
       ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
       : await isAncestor(repoPath, tree.head, defaultBranch);
     const disposition = fresh?.review?.comparison?.disposition;
-    if (disposition === 'review-supersession' && (!locallyMerged || review.acceptSuperseded !== true)) return 'retirement-supersession-not-accepted';
-    if (!locallyMerged && disposition !== 'integrated') return 'not-merged-on-recheck';
+    if (disposition === 'review-supersession' && !acceptedPreservedSupersession(review, fresh?.review)
+      && (!locallyMerged || review.acceptSuperseded !== true)) return 'retirement-supersession-not-accepted';
+    if (!locallyMerged && disposition !== 'integrated' && !acceptedPreservedSupersession(review, fresh?.review)) return 'not-merged-on-recheck';
     if (reason) return reason;
     if (opts.signal?.aborted) return 'retirement-archive-cancelled';
     return null;
@@ -1707,7 +1764,9 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   release = bindInventoriedRelease(outcome, release);
   if (!release) return { ok: false, reason: 'release-not-in-inventory' };
   const inventoryCurrent = async () => (await taskSchedule.getBranchReconcileOutcome(appId))?.remaining?.some(entry => sameRelease(entry, release)) === true;
-  const result = await retireHeldCheckout({ repoPath: app.repoPath, release, review }, { ...opts, inventoryCurrent, forgeAccount: app.forgeAccount ?? null });
+  const result = await retireHeldCheckout({ repoPath: app.repoPath, release, review }, { ...opts, inventoryCurrent, forgeAccount: app.forgeAccount ?? null,
+    preserveSupersession: async prepared => taskSchedule.recordSupersededCheckoutPreservation(appId, release, prepared),
+  });
   // A missing original cannot be archived retroactively. Retain its exact
   // identity for provenance recovery rather than equating absence with success.
   if (!result.ok && result.reason === 'checkout-not-found') {
@@ -1721,6 +1780,7 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
     await taskSchedule.recordHeldCheckoutRetirement(appId, {
       path: release.path, branch: release.branch ?? null, head: release.head, branchDeleted: result.branchDeleted,
       ...(result.archiveDir && { archiveDir: result.archiveDir }), checkoutIdentity: result.checkoutIdentity,
+      ...(review?.kind === 'preserved-supersession' && { supersessionDigest: review.digest }),
     });
   }
   return result;
