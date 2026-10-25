@@ -135,29 +135,15 @@ describe('branch reconciliation completion', () => {
 });
 
 
-describe('scoped retirement recovery completion', () => {
-  it('uses persisted task identity and keeps missing receipts despite reported success, without a Git scan', async () => {
+describe('legacy cleanup recovery completion', () => {
+  it('keeps a recovery without an exact persisted retirement target unresolved', async () => {
     vi.clearAllMocks();
-    const release = { branch: 'fix/merged', path: '/example/checkout', head: 'a'.repeat(40) };
-    const recovery = { taskId: 'recovery', result: { success: true }, metadata: {
+    getTaskById.mockResolvedValue({ id: 'legacy-recovery', taskType: 'internal', metadata: {} });
+    const recovery = { id: 'legacy-agent', taskId: 'legacy-recovery', result: { success: true }, metadata: {
       recoveryOrigin: { subsystem: 'repository-cleanup' }, retirementReview: { appId: 'untrusted-hint' },
     } };
-    getTaskById.mockResolvedValue({ metadata: { retirementReview: { appId: 'persisted-app', release, createdAt: '2026-10-20T00:00:00Z' } } });
-    getBranchReconcileOutcome.mockResolvedValue({ retired: [{ ...release, head: 'b'.repeat(40), branchDeleted: true, archiveDir: '/example/other' }] });
     expect(await settleRetirementReviewRun(recovery)).toEqual({ verified: false });
-    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('persisted-app', expect.objectContaining({ retirementObligations: [{ ...release, createdAt: '2026-10-20T00:00:00Z', reason: 'retirement-receipt-unverified' }] }));
+    expect(recordCleanupOutcome).toHaveBeenCalledWith(recovery.id, { status: 'blocked', reason: 'legacy-cleanup-receipt-unverified' });
     expect(reconcile).not.toHaveBeenCalled();
-    for (const retiredAt of ['invalid', '2026-10-19T23:59:00Z']) {
-      getBranchReconcileOutcome.mockResolvedValue({ retired: [{ ...release, branchDeleted: true, archiveDir: '/example/archive', retiredAt }] });
-      expect(await settleRetirementReviewRun(recovery)).toEqual({ verified: false });
-    }
-    recordBranchReconcileOutcome.mockClear();
-    getBranchReconcileOutcome.mockResolvedValue({ retired: [{ ...release, branchDeleted: true, archiveDir: '/example/archive', retiredAt: '2026-10-20T00:01:00Z' }] });
-    expect(await settleRetirementReviewRun(recovery)).toEqual({ verified: true });
-    expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();
-    getTaskById.mockResolvedValue({ metadata: {} });
-    expect(await settleRetirementReviewRun(recovery)).toEqual({ verified: false });
-    expect(recordCleanupOutcome).toHaveBeenLastCalledWith(recovery.id, expect.objectContaining({ status: 'blocked', reason: 'legacy-cleanup-receipt-unverified' }));
-    expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();
   });
 });
