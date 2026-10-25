@@ -1189,6 +1189,10 @@ export function useVideoGenForm({
     setIcReferenceFile(null);
     setIcReferenceVideoId('');
     setIcReferenceImageFiles([]);
+    setIcReferenceNames([]);
+    setReferenceImageFiles([]);
+    setReferenceVideoIds([]);
+    setReferenceAudioFiles([]);
     if (typeof item.icStrength === 'number') setIcStrength(item.icStrength);
     setIcSkipStage2(item.icSkipStage2 === true);
     // Restore the LoRA picker from the render record. `item` here is the RAW
@@ -1337,18 +1341,17 @@ export function useVideoGenForm({
     // user re-picks a reference. The names ride into a read-only hint.
     if (typeof p.icStrength === 'number') setIcStrength(p.icStrength);
     if (typeof p.icSkipStage2 === 'boolean') setIcSkipStage2(p.icSkipStage2);
-    if (Array.isArray(p.icReferenceNames) && p.icReferenceNames.length) {
-      setIcReferenceNames(p.icReferenceNames);
-    }
+    setIcReferenceFile(null);
+    setIcReferenceVideoId('');
+    setIcReferenceNames(Array.isArray(p.icReferenceNames) ? p.icReferenceNames : []);
     // Unlike a clip, an image-kind reference IS re-derivable: it's a gallery
     // basename, which is exactly the submit shape. So the resumed form
     // repopulates its picker and the submit gate unblocks without a re-pick.
-    if (Array.isArray(p.icReferenceImageFiles) && p.icReferenceImageFiles.length) {
-      setIcReferenceImageFiles(p.icReferenceImageFiles);
-    }
-    if (Array.isArray(p.referenceImageFiles) && p.referenceImageFiles.length) {
-      setReferenceImageFiles(p.referenceImageFiles);
-    }
+    setIcReferenceImageFiles(Array.isArray(p.icReferenceImageFiles) ? p.icReferenceImageFiles : []);
+    setReferenceImageFiles(Array.isArray(p.referenceImageFiles) ? p.referenceImageFiles : []);
+    setReferenceVideoIds(Array.isArray(p.referenceVideoIds) ? p.referenceVideoIds : []);
+    // Uploaded voice files cannot be reconstructed from the display-only names.
+    setReferenceAudioFiles([]);
     // Restore the LoRA picker — params carry { filename, scale } basenames;
     // resolve the display name from the loaded library (falls back to the
     // filename if the library hasn't loaded yet or the LoRA was deleted).
