@@ -454,12 +454,18 @@ async function resumeReleasedCompletion(agentId) {
   await verificationRuns.get(agentId)?.catch(() => {});
   const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const agent = await getAgentRecord(agentId);
-  if (agent?.status !== 'completed' || agent.result?.cleanupPending !== true
-    || agent.metadata?.repoStateVerification?.status !== 'pending') return;
+  if (agent?.status !== 'completed') return;
+  const deliveryPending = agent.result?.cleanupPending === true
+    && agent.metadata?.repoStateVerification?.status === 'pending';
+  if (!deliveryPending && agent.metadata?.completionCleanup?.status !== 'pending') return;
   const { getTaskById } = await import('./cosTaskStore.js');
   const task = await getTaskById(agent.taskId);
   const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
   if (task) await replayAgentCompletionCleanup(agent);
+  // Failed/no-change runs can still owe physical cleanup. The owner-release
+  // event replays that obligation without changing their original verdict or
+  // granting a new task/provider retry budget.
+  if (!deliveryPending) return { verified: false, cleanupReplayed: Boolean(task), skipReason: 'original-result-preserved' };
   const current = await getAgentRecord(agentId);
   const result = await verifyAgentRepoState({ agentId, agentState: current, task: task || { id: agent.taskId },
     success: current.result?.success === true, prExpected: isTruthyMeta(task?.metadata?.openPR) });

@@ -93,6 +93,7 @@ import { replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { resumeAgentCompletionRetirement, verifyAgentRepoState, sweepRepoStateVerifications, bindCompletionRetirementEvents, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
+import { replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
 import { recordBranchReconcileOutcome } from './taskSchedule.js';
 import { findMissingCheckoutPreservation, prepareInventoriedCheckoutRetirement, retireInventoriedCheckout } from './heldCheckoutRecovery.js';
@@ -345,6 +346,22 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     expect(findMissingCheckoutPreservation).not.toHaveBeenCalled();
     expect(state.result).toEqual({ success: false, executionSuccess: true, cleanupPending: true });
+  });
+
+  it('replays a failed no-PR run cleanup at owner release without promoting its original result', async () => {
+    const state = { id: 'failed-no-pr', taskId: 'failed-task', status: 'completed',
+      result: { success: false, executionSuccess: true, taskOutcome: { status: 'blocked' } },
+      metadata: { completionCleanup: { status: 'pending' } } };
+    getAgentRecord.mockResolvedValue(state);
+    getTaskById.mockResolvedValue({ id: 'failed-task', taskType: 'internal', status: 'blocked', metadata: { failureCount: 3 } });
+    const before = JSON.stringify(state);
+    expect(await resumeAgentCompletionRetirement(state.id)).toMatchObject({ cleanupReplayed: true,
+      verified: false, skipReason: 'original-result-preserved' });
+    expect(replayAgentCompletionCleanup).toHaveBeenCalledWith(state);
+    expect(recordRepoStateVerification).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    expect(JSON.stringify(state)).toBe(before);
   });
 
   it('waits out a pre-release owner-active audit and immediately verifies again after release', async () => {
