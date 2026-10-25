@@ -218,6 +218,7 @@ function IngredientEditor() {
   const mediaSequence = useRef(0);
   const mediaReadyRef = useRef(false);
   mediaReadyRef.current = mediaReady;
+  const refreshMediaRef = useRef(null);
   const [missingMedia, setMissingMedia] = useState(new Set());
   const [ownerUniverse, setOwnerUniverse] = useState(null);
   const [showCharacterEditor, setShowCharacterEditor] = useState(false);
@@ -304,7 +305,7 @@ function IngredientEditor() {
     let active = true;
     let request = 0;
     const refreshIdentity = () => {
-      if (mediaReadyRef.current) setMediaReady(false);
+      if (mediaReadyRef.current) refreshMediaRef.current?.();
       const current = ++request;
       getCatalogIngredientDetails(id, { silent: true, view: detailView }).then(details => {
         if (!active || current !== request || !details?.ingredient) return;
@@ -378,6 +379,7 @@ function IngredientEditor() {
     }).catch((error) => { if (mountedRef.current && sequence === mediaSequence.current) setMediaError(error.message); })
       .finally(() => { if (mountedRef.current && sequence === mediaSequence.current) setMediaLoading(false); });
   }, [id, mountedRef]);
+  refreshMediaRef.current = refreshMedia;
   const mediaTab = library && record?.type === library.type ? resolveDetailTab(library, tabParam) : 'references';
   useEffect(() => {
     if (record?.id && mediaTab !== 'profile' && !mediaReady) refreshMedia();

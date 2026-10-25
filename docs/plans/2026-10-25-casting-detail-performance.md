@@ -42,8 +42,9 @@ data.
   returned rows. Revision history loads explicitly, with unavailable, loading,
   failed and legitimately empty states kept distinct.
 - Refresh core identity/context through the same lean projection. Keep drafts,
-  prevent stale secondary responses from winning, and invalidate media for its
-  next visible refresh after reconnect/change.
+  prevent stale secondary responses from winning, and refresh already loaded
+  media in the background after reconnect/change without unmounting panels.
+  Media that has never been opened remains deferred.
 - Project only the selected identity's canon IDs/names/aliases. Batch FableLoom
   pointers, voice bindings and series/issue prose through indexed universe and
   series scopes. Reuse the existing prose matchers. Avoid loading every series

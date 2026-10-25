@@ -1564,6 +1564,32 @@ describe('contextual unlock in Create libraries', () => {
 
 
 describe('Casting lean first render', () => {
+  it('keeps loaded sheet selection mounted and updates its cover during a background identity refresh', async () => {
+    const api = await import('../services/apiCatalog');
+    api.listCatalogSheetVariants.mockResolvedValue({ variants: [{ id: 'standard', label: 'Standard' }, { id: 'expressions', label: 'Expressions' }] });
+    const profile = detailsOf(CHAR_FIXTURE);
+    delete profile.media; delete profile.missingMedia; delete profile.revisions;
+    profile.coverMedia = { portraitKey: 'initial.png', referenceKey: null };
+    const background = Promise.withResolvers();
+    let mediaCalls = 0;
+    getCatalogIngredientDetails.mockImplementation((_id, options) => options?.view === 'media'
+      ? ++mediaCalls === 1 ? Promise.resolve({ media: [{ kind: 'portrait', mediaKey: 'loaded.png' }], missingMedia: [] }) : background.promise
+      : Promise.resolve(profile));
+    const { router } = await renderPage('/casting/cat-chr-1/sheets');
+    const picker = await screen.findByLabelText('Sheet kind');
+    fireEvent.change(picker, { target: { value: 'expressions' } });
+    await act(async () => socketHandlers.get('catalog:identity-changed')({ sourceId: CHAR_FIXTURE.id }));
+    expect(mediaCalls).toBe(2);
+    expect(screen.getByLabelText('Sheet kind')).toBe(picker);
+    expect(picker).toHaveValue('expressions');
+    expect(screen.queryByText('Loading media…')).toBeNull();
+    await act(async () => background.resolve({ media: [{ kind: 'portrait', mediaKey: 'fresh.png' }], missingMedia: [] }));
+    expect(screen.getByLabelText('Sheet kind')).toBe(picker);
+    expect(picker).toHaveValue('expressions');
+    await act(async () => router.navigate('/casting/cat-chr-1/profile'));
+    expect(screen.getByAltText(`${CHAR_FIXTURE.name} cover`)).toHaveAttribute('src', '/data/image-thumbnails/fresh.webp');
+  });
+
   it('edits the profile while usage is pending and loads history/media only when requested, preserving its draft', async () => {
     const profile = detailsOf(CHAR_FIXTURE);
     delete profile.revisions; delete profile.media; delete profile.missingMedia;
