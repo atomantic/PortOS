@@ -28,6 +28,7 @@ import {
   describeSignalDeath,
   isPromptEncodingMetalWatchdog,
   planMetalBufferRetry,
+  METAL_BUFFER_RETRY_ENV,
   bufferChildExit,
 } from './generateVideoHelpers.js';
 import {
@@ -37,7 +38,9 @@ import {
   runtimeUsesMlx,
   invalidateByovReadyCache,
   pickDeathFingerprint,
+  currentMetalProfileFingerprint,
 } from './runtimes.js';
+import { getMetalBufferProfiles, metalBufferExecutionSignature } from './metalBufferProfiles.js';
 import { isDisplaySleepEnabled, sleepDisplayForVideo, wakeDisplayForVideo } from './displayPower.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
 import { estimateRenderMs } from './eta.js';
@@ -69,6 +72,7 @@ export async function spawnAndWatchVideo({
   meta,
   actualSeed,
   model,
+  encoder = null,
   modelId,
   width: w,
   height: h,
@@ -79,7 +83,10 @@ export async function spawnAndWatchVideo({
   // delivered file should keep the original source (see ./extendSplice.js).
   extendSplice = null,
 }) {
+  delete job.metalBufferPolicy;
+  let ownershipSettled = true;
   const retainOwnership = () => {
+    ownershipSettled = false;
     // Chained renders use child job IDs; their ambient owner is the outer job.
     maintenance.markCurrentUnsettled();
     maintenance.markResourceUnsettled('media', jobId);
@@ -124,6 +131,14 @@ export async function spawnAndWatchVideo({
   // Hoisted out of the try so a relaunch can respawn with the SAME child env
   // plus smaller MLX command buffers, instead of rebuilding it from scratch.
   let childEnv;
+  let metalProfile = null;
+  let reactiveRecovery = false;
+  const reportMetalPolicy = (policy, diagnostic, message) => {
+    job.metalBufferPolicy = { ...job.metalBufferPolicy, policy, diagnostic };
+    broadcastSse(job, { type: 'status', message, metalBufferPolicy: job.metalBufferPolicy });
+    videoGenEvents.emit('status', { generationId: jobId, message, metalBufferPolicy: job.metalBufferPolicy });
+  };
+  const cacheDiagnostic = () => reportMetalPolicy(job.metalBufferPolicy?.policy || 'stock', 'cache-write-failed', 'Metal buffer profile cache update unavailable; ordinary rendering remains available');
 
   // Runners publish one atomically-replaced `preview.png`. Keep the reader
   // serialized because fs.watch can report several events for one replacement;
@@ -217,6 +232,9 @@ export async function spawnAndWatchVideo({
     // relaunch — reset it explicitly so a phase left open by the child that just
     // died can never be read as the replacement child's state.
     job.promptEncodePhase = null;
+    job.speedProfile = null;
+    job.draftDecode = null;
+    job.streamingPolicy = null;
     // Panel-side completion watchdog. Armed once we see the render's completion
     // marker on stdout; SIGKILLs the child if it hasn't exited after the grace
     // window. clearCompletionWatchdog() runs in every terminal path ('close',
@@ -555,19 +573,37 @@ export async function spawnAndWatchVideo({
             broadcastSse(job, { type: 'status', message });
             videoGenEvents.emit('status', { generationId: jobId, message });
           }
+          let thumbnail;
           if (batch) {
             if (batchResults.length !== batch.length) throw new Error(`Video batch stopped after ${batchResults.length}/${batch.length} outputs.`);
-            job.status = 'complete';
-            const result = { ...batchResults[0], results: batchResults };
-            broadcastSse(job, { type: 'complete', result });
-            videoGenEvents.emit('completed', { generationId: jobId, ...result });
           } else {
             // Best-effort: a failed splice leaves the model's own output in place.
             if (extendSplice && (await spliceExtendSource({ ...extendSplice, outputPath })).applied) {
               meta.extendSourceOriginal = true;
             }
-            await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory, publication: publications.get(outputPath) });
+            thumbnail = await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, terminal: false, mutateHistory: mutateVideoHistory, publication: publications.get(outputPath) });
           }
+          const effectiveProfileConfirmed = (!speedProfileId || (job.speedProfile?.id === speedProfileId && job.speedProfile.degraded?.length === 0))
+            && (!args.includes('--draft-decoder-id') || job.draftDecode?.applied === true);
+          if (reactiveRecovery && metalProfile && effectiveProfileConfirmed && code === 0 && !signal && !proc.killed && ownershipSettled
+            && videoJobState.cancelEpoch === cancelEpochAtClose && !preparation?.wasCanceled()
+            && [...publications.values()].every(publication => publication.committed)) {
+            const verified = await verifyPostCompletionOutputs({ outputPaths: expectedOutputPaths, completedOutputs,
+              startedAtMs: job.renderStartedAtMs, expectedFrames: parsedNumFrames, fps: meta?.fps });
+            if (verified.ok && ownershipSettled && videoJobState.cancelEpoch === cancelEpochAtClose && !preparation?.wasCanceled()) {
+              await getMetalBufferProfiles().learn(metalProfile).then(result => {
+                if (!result.learned) reportMetalPolicy('reactive-retry', result.diagnostic, 'Metal buffer recovery completed; profile was not retained');
+              }).catch(cacheDiagnostic);
+            }
+          }
+          // Complete only after learning settles, so a completion listener's
+          // next matching render can observe the successful policy.
+          job.status = 'complete';
+          const result = batch ? { ...batchResults[0], results: batchResults }
+            : { filename, seed: actualSeed, thumbnail, path: `/data/videos/${filename}` };
+          broadcastSse(job, { type: 'complete', result });
+          videoGenEvents.emit('completed', batch ? { generationId: jobId, ...result }
+            : { generationId: jobId, filename, path: result.path, thumbnail });
         }
       } catch (err) {
         await discardFailedOutputs();
@@ -673,6 +709,11 @@ export async function spawnAndWatchVideo({
   // excluded by construction rather than by a list that could drift.
   const maybeRelaunchForMetalWatchdog = async ({ code, signal, childKilled, cancelEpochAtClose, stderr }) => {
     if (code === 0) return false;
+    if (metalProfile?.applied && !childKilled && planMetalBufferRetry({ signal, stderr, mlxRuntime: runtimeUsesMlx(model.runtime) })) {
+      await getMetalBufferProfiles().invalidate(metalProfile).catch(cacheDiagnostic);
+      reportMetalPolicy('learned-initial', 'invalidated', 'Learned Metal buffer settings hit the watchdog again; profile invalidated');
+      return false;
+    }
     // A batch member already in history must never be rendered again over its
     // committed filename by a whole-batch prompt-encode retry.
     if ([...publications.values()].some(publication => publication.started || publication.committed)) return false;
@@ -702,8 +743,11 @@ export async function spawnAndWatchVideo({
     let retryWired = false;
     try {
       metalBufferRetriesUsed += 1;
+      reactiveRecovery = true;
+      job.metalBufferPolicy = { ...job.metalBufferPolicy, abortedAttemptMs: Date.now() - job.renderStartedAtMs };
       const retryArgs = args;
       const retryEnv = { ...childEnv, ...bufferPlan.env };
+      reportMetalPolicy('reactive-retry', metalProfile?.diagnostic || 'not-eligible', 'Retrying with smaller Metal command buffers');
       const message = inEncoder
         ? 'Metal watchdog aborted the prompt encoder — retrying once with smaller command buffers (prompt unchanged)'
         : 'Metal watchdog stopped the GPU — retrying once with smaller command buffers';
@@ -802,7 +846,6 @@ export async function spawnAndWatchVideo({
     const etaFields = etaEstimate
       ? { etaMs: etaEstimate.etaMs, etaBasis: etaEstimate.basis, etaSampleCount: etaEstimate.sampleCount }
       : { etaMs: null };
-    job.renderStartedAtMs = Date.now();
 
     console.log(`🎬 Generating video [${jobId.slice(0, 8)}]: ${modelId} ${w}x${h} frames=${parsedNumFrames} steps=${actualSteps} eta=${etaEstimate ? `${Math.round(etaEstimate.etaMs / 1000)}s (${etaEstimate.basis}, n=${etaEstimate.sampleCount})` : 'unknown'}`);
     videoGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps, ...meta, ...etaFields });
@@ -833,6 +876,27 @@ export async function spawnAndWatchVideo({
       childEnv.HF_HUB_OFFLINE = '1';
       childEnv.TRANSFORMERS_OFFLINE = '1';
     }
+    const operatorBufferCaps = Object.keys(METAL_BUFFER_RETRY_ENV).some(key => Object.hasOwn(process.env, key) || Object.hasOwn(childEnv, key));
+    const metalEligible = process.platform === 'darwin' && process.arch === 'arm64' && runtimeUsesMlx(model.runtime);
+    if (metalEligible) reportMetalPolicy(operatorBufferCaps ? 'operator' : 'stock', 'not-eligible', operatorBufferCaps ? 'Using operator Metal buffer settings' : 'Using stock Metal buffer settings');
+    if (metalEligible && !operatorBufferCaps) {
+      try {
+        const fingerprint = await currentMetalProfileFingerprint(model.runtime);
+        const signature = await metalBufferExecutionSignature({ model, encoder, runtimeInfo: BYOV_RUNTIME_INFO[model.runtime], fingerprint,
+          bin, args, meta, batch, env: childEnv, policy: METAL_BUFFER_RETRY_ENV });
+        if (signature) {
+          metalProfile = await getMetalBufferProfiles().lookup(signature);
+          if (metalProfile.applied) {
+            Object.assign(childEnv, METAL_BUFFER_RETRY_ENV);
+            metalBufferRetriesUsed = 1;
+          }
+          reportMetalPolicy(metalProfile.applied ? 'learned-initial' : 'stock', metalProfile.diagnostic,
+            metalProfile.applied ? 'Using proven smaller Metal command buffers from a matching successful recovery' : `Metal buffer profile cache: ${metalProfile.diagnostic}`);
+        }
+      } catch {
+        reportMetalPolicy('stock', 'fingerprint-or-cache-unavailable', 'Metal buffer profile evidence unavailable; using ordinary rendering');
+      }
+    }
     // `spawnDetached` double-forks the render child so it reparents to init
     // (PPID=1) and leaves pm2's process tree — without this a `pm2 restart
     // portos-server` (e.g. on the memory ceiling) SIGINTs the in-flight render
@@ -844,6 +908,7 @@ export async function spawnAndWatchVideo({
     // so it can't accumulate under data/videos.
     // Last spawn gate; the spawn call follows with no intervening await.
     preparation?.throwIfCanceled();
+    job.renderStartedAtMs = Date.now();
     firstProc = await spawnDetached(bin, args, {
       env: childEnv,
       controlDir: join(PATHS.videos, '.detached', jobId),

@@ -744,6 +744,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/video-gen/stitch',
   // Start trim probes/transcodes a new gallery clip with ffprobe/ffmpeg (#11418).
   'POST /api/video-gen/history/:id/trim-start',
+  'POST /api/video-gen/metal-buffer-profiles/clear',
   // Timeline render spawns ffmpeg/ffprobe on the host for segments and audio (#11432).
   'POST /api/video-timeline/projects/:id/render',
   // Music Video ffmpeg renders: final render, per-shot segments, shot preview
