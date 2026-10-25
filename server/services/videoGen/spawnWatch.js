@@ -83,6 +83,7 @@ export async function spawnAndWatchVideo({
   // delivered file should keep the original source (see ./extendSplice.js).
   extendSplice = null,
 }) {
+  delete job.metalBufferPolicy;
   let ownershipSettled = true;
   const retainOwnership = () => {
     ownershipSettled = false;
@@ -876,8 +877,9 @@ export async function spawnAndWatchVideo({
       childEnv.TRANSFORMERS_OFFLINE = '1';
     }
     const operatorBufferCaps = Object.keys(METAL_BUFFER_RETRY_ENV).some(key => Object.hasOwn(process.env, key) || Object.hasOwn(childEnv, key));
-    reportMetalPolicy(operatorBufferCaps ? 'operator' : 'stock', 'not-eligible', operatorBufferCaps ? 'Using operator Metal buffer settings' : 'Using stock Metal buffer settings');
-    if (!operatorBufferCaps && process.platform === 'darwin' && process.arch === 'arm64' && runtimeUsesMlx(model.runtime)) {
+    const metalEligible = process.platform === 'darwin' && process.arch === 'arm64' && runtimeUsesMlx(model.runtime);
+    if (metalEligible) reportMetalPolicy(operatorBufferCaps ? 'operator' : 'stock', 'not-eligible', operatorBufferCaps ? 'Using operator Metal buffer settings' : 'Using stock Metal buffer settings');
+    if (metalEligible && !operatorBufferCaps) {
       try {
         const fingerprint = await currentMetalProfileFingerprint(model.runtime);
         const signature = await metalBufferExecutionSignature({ model, encoder, runtimeInfo: BYOV_RUNTIME_INFO[model.runtime], fingerprint,

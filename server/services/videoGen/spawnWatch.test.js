@@ -148,6 +148,19 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     await vi.advanceTimersByTimeAsync(0);
   };
 
+  it.each([['linux', 'x64', false], ['win32', 'x64', false], ['darwin', 'arm64', false], ['darwin', 'x64', true]])('preserves non-Metal status/history on %s %s (MLX=%s)', async (platform, arch, mlx) => {
+    const restorePlatform = pinPlatform(platform);
+    const restoreArch = pinArch(arch);
+    mocks.mlx = mlx;
+    try {
+      await spawnAndWatchVideo(params);
+      expect(job.metalBufferPolicy).toBeUndefined();
+      expect(job.clients[0].write.mock.calls.flat().join('')).not.toMatch(/Metal buffer/);
+      await closeChild(0);
+      expect(mocks.history[0]).not.toHaveProperty('metalBufferPolicy');
+    } finally { restoreArch(); restorePlatform(); }
+  });
+
   describe('SIGABRT cause classification', () => {
     const abortWith = async (stderrText) => {
       child.stderr.emit('data', Buffer.from(stderrText));
