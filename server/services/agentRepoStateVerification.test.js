@@ -252,7 +252,7 @@ describe('verifyAgentRepoState — clean runs', () => {
 
   it('immediately finalizes a receipt-retired squash delivery when its follow-up completes, including duplicate observations', async () => {
     const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
-      startedAt: CREATED_AT, capturedAt: CREATED_AT };
+      startedAt: CREATED_AT, capturedAt: CREATED_AT, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
     const state = { ...agentState({ instanceId: 'fixture-local', completedCheckouts: [completed],
       reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' }, repoStateVerification: { status: 'pending' },
       completionCleanup: { version: 1 } }), id: 'agent-1', taskId: 'task-1', status: 'completed',
@@ -276,6 +276,7 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(addTask).not.toHaveBeenCalled();
     expect(inspectOrQueueCompletedReview).not.toHaveBeenCalled();
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(findMissingCheckoutPreservation).toHaveBeenCalledWith(expect.objectContaining({ release: expect.objectContaining({ checkoutIdentity: expect.stringMatching(/^[a-f0-9]{64}$/) }) }));
     expect(state.result).toEqual({ success: false, executionSuccess: true, cleanupPending: true });
   });
 

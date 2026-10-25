@@ -1159,6 +1159,23 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return { path, release, admin, opts, forge, prepare, confirm };
   }
 
+  it('settles an absent original generation from its existing service receipt without any checkout archive', async () => {
+    const c = await reviewedCheckout('receipt-no-archive');
+    const checkoutIdentity = await readRetirementCheckoutIdentity(c.path);
+    const release = { ...c.release, checkoutIdentity, createdAt: new Date(Date.now() - 1000).toISOString() };
+    const prepared = await c.prepare();
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
+    expect(await archives()).toEqual([]);
+    const proof = await findMissingCheckoutPreservation({ repoPath: repo, release });
+    expect(proof).toMatchObject({ kind: 'service-retirement-receipt', archiveDir: null,
+      receipt: { branchDeleted: true, checkoutIdentity }, evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    expect(await proof.recheck()).toBe(true);
+    expect(await findMissingCheckoutPreservation({ repoPath: repo, release: { ...release, checkoutIdentity: '0'.repeat(64) } })).toBeNull();
+    expect(await findMissingCheckoutPreservation({ repoPath: repo, release: { ...release, createdAt: new Date(Date.now() + 1000).toISOString() } })).toBeNull();
+    await mkdir(c.path);
+    expect(await proof.recheck()).toBe(false);
+  });
+
   it.each(['delivered', 'unpublished-tip', 'lagging-local-default', 'merge-not-in-default'])(
     'keeps exact squash delivery retirement scoped when shared files change: %s', async scenario => {
       const c = await reviewedCheckout(`exact-squash-${scenario}`, { multipleCommits: true, superseded: true });

@@ -1,3 +1,4 @@
+import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
 import { recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
@@ -683,8 +684,9 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
   }
   if (!staysOpen && integrated && completed && completed.head === forge.prHead && observed.remoteBranchPresent === false) {
     const { findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
+    const checkoutIdentity = retirementCheckoutIdentityFromPointer(completed.incarnation?.pointer);
     const release = { branch: branchName, path: worktreePath, head: completed.head,
-      locked: false, lockReason: null, createdAt: completed.capturedAt };
+      locked: false, lockReason: null, createdAt: completed.capturedAt, ...(checkoutIdentity && { checkoutIdentity }) };
     const proof = await findMissingCheckoutPreservation({ repoPath: sourceWorkspace, release }).catch(() => null);
     if (proof) {
       const { withClaimOwnershipLock } = await import('./cosClaimOwnership.js');
