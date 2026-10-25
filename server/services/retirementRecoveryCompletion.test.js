@@ -212,6 +212,7 @@ describe('retirement recovery public completion flow', () => {
 
 
   it('recognizes an existing recovery only through its original reservation and captured physical generation', async () => {
+    expect(capturedCheckout).not.toBeNull();
     await retire();
     const origin = store.task.metadata.recoveryOrigin;
     store.parent.metadata = {
@@ -219,7 +220,16 @@ describe('retirement recovery public completion flow', () => {
       completedCheckouts: [{ ...capturedCheckout, version: 1, agentId: store.parent.id, startedAt: store.parent.startedAt,
         capturedAt: store.parent.completedAt }],
     };
-    expect(await verifyRetirementRecoveryCompletion(store.task)).toMatchObject({ status: 'verified' });
+    const proof = await verifyRetirementRecoveryCompletion(store.task);
+    expect(proof, proof.reason).toMatchObject({ status: 'verified' });
+    // Path equivalence must survive removal, without reopening the checkout.
+    const receipt = store.parent.metadata.completedCheckouts[0];
+    receipt.path = `${capturedCheckout.path}/.`;
+    const equivalentPath = await verifyRetirementRecoveryCompletion(store.task);
+    expect(equivalentPath, equivalentPath.reason).toMatchObject({ status: 'verified' });
+    receipt.path = `${capturedCheckout.path}-different`;
+    expect(await verifyRetirementRecoveryCompletion(store.task)).toMatchObject({ status: 'unverified' });
+    receipt.path = capturedCheckout.path;
     store.parent.metadata.repoCleanupRecoveries[release.branch].taskId = 'sys-different-task';
     expect(await verifyRetirementRecoveryCompletion(store.task)).toMatchObject({ status: 'unverified' });
   });
