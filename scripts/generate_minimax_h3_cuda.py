@@ -97,6 +97,10 @@ def parse_args() -> argparse.Namespace:
                         help="repo-relative diffusers component file that must already be cached (repeatable)")
     parser.add_argument("--offload-profile", choices=OFFLOAD_PROFILES, default="auto",
                         help="weight-placement recipe; 'auto' sizes one from the visible CUDA device")
+    parser.add_argument("--speed-profile", choices=["lightx2v-v1.3-4step"])
+    parser.add_argument("--speed-adapter")
+    parser.add_argument("--lora", action="append", default=[])
+    parser.add_argument("--lora-scale", action="append", type=float, default=[])
     return parser.parse_args()
 
 
@@ -116,6 +120,19 @@ def validate_args(args: argparse.Namespace) -> None:
     )
     if not args.repo_file:
         raise SystemExit("MiniMax H3 needs its pinned component file list (--repo-file).")
+    if len(getattr(args, "lora", [])) != len(getattr(args, "lora_scale", [])):
+        raise SystemExit("Every H3 CUDA LoRA needs exactly one strength.")
+    if getattr(args, "speed_profile", None):
+        from minimax_h3_cuda_lora import CONTRACT, file_digest
+        spec = CONTRACT
+        if (args.model_repo != spec["model"]["repo"] or args.model_revision != spec["model"]["revision"]
+                or [args.width, args.height] not in spec["canvases"] or args.steps != spec["steps"]
+                or "last" in args.anchor or len(args.image) > 1):
+            raise SystemExit("LightX2V requires the pinned H3 CUDA checkpoint, 1344x768, five sigma points and text/first-image input only.")
+        if not args.speed_adapter or file_digest(args.speed_adapter) != spec["adapter"]["sha256"]:
+            raise SystemExit("LightX2V requires its original, SHA-256-verified cached adapter. Use Download adapter in Video Gen.")
+    elif getattr(args, "speed_adapter", None):
+        raise SystemExit("A speed adapter requires its explicit speed profile.")
 
 
 def resolve_offload_profile(requested: str) -> tuple[str, float]:
@@ -162,7 +179,7 @@ def resolve_offload_profile(requested: str) -> tuple[str, float]:
     return affordable[0], total_gb
 
 
-def load_pipeline(snapshot: Path, profile: str):
+def load_pipeline(snapshot: Path, profile: str, adapters=None):
     """Load the `fl2va` workflow under one of the documented memory recipes.
 
     `fl2va` covers text-to-video too (it is the same `transformer/` partition),
@@ -179,6 +196,9 @@ def load_pipeline(snapshot: Path, profile: str):
         manager = ComponentsManager()
         pipe = ModularPipeline.from_pretrained(str(snapshot), components_manager=manager)
         pipe.load_components(workflow="fl2va", dtype=torch.bfloat16)
+        if adapters:
+            from minimax_h3_cuda_lora import apply_adapters
+            pipe._portos_adapters = apply_adapters(pipe.transformer, adapters)
         manager.enable_auto_cpu_offload(device="cuda", memory_reserve_margin=BF16_DEVICE_RESERVE)
         return pipe
 
@@ -207,6 +227,9 @@ def load_pipeline(snapshot: Path, profile: str):
         ),
     )
     pipe.load_components(workflow="fl2va", dtype=torch.bfloat16)
+    if adapters:
+        from minimax_h3_cuda_lora import apply_adapters
+        pipe._portos_adapters = apply_adapters(pipe.transformer, adapters)
 
     # version=2 int8 tensors are pinnable, which streamed offload needs, and
     # freezing removes the one autograd path the quantized tensors cannot serve.
@@ -264,6 +287,11 @@ def main() -> int:
     # Gen" immediately instead of after a multi-second torch import.
     log("STAGE:resolve-cache")
     snapshot = resolve_cached_snapshot(args.model_repo, args.model_revision, args.repo_file)
+    adapters = list(zip(args.lora, args.lora_scale))
+    if args.speed_profile:
+        from minimax_h3_cuda_lora import CONTRACT, assert_runtime_contract
+        assert_runtime_contract()
+        adapters.insert(0, (args.speed_adapter, CONTRACT["adapter"]["scale"]))
 
     import torch
 
@@ -287,7 +315,11 @@ def main() -> int:
 
     log("STAGE:load-pipeline")
     with heartbeat("minimax-h3-cuda-load"):
-        pipe = load_pipeline(snapshot, profile)
+        pipe = load_pipeline(snapshot, profile, adapters) if adapters else load_pipeline(snapshot, profile)
+    if args.speed_profile:
+        pipe.scheduler.set_shift(CONTRACT["videoShift"])
+        pipe.audio_scheduler.set_shift(CONTRACT["audioShift"])
+        torch.cuda.reset_peak_memory_stats()
 
     # No explicit step callback: a ModularPipeline validates its inputs by
     # name against the workflow's declared set, and `callback_on_step_end` is
@@ -296,6 +328,8 @@ def main() -> int:
     # (`makeVideoGenLineHandler`'s `NN%|` branch) — same as every other runner
     # that leaves progress to tqdm.
     log("STAGE:inference")
+    import time
+    inference_start = time.perf_counter()
     with heartbeat("minimax-h3-cuda-inference"):
         results = pipe(
             prompt=args.prompt,
@@ -310,6 +344,19 @@ def main() -> int:
             output=["videos", "audio", "sampling_rate"],
             **keyframe_kwargs(images, args.anchor),
         )
+    if args.speed_profile:
+        torch.cuda.synchronize()
+        report = {
+            "id": args.speed_profile, "type": CONTRACT["type"], "applied": True, "degraded": [],
+            "adapter": CONTRACT["adapter"], "adapters": pipe._portos_adapters,
+            "sigmaPoints": CONTRACT["sigmaPoints"], "denoisingSteps": CONTRACT["denoisingSteps"],
+            "videoShift": CONTRACT["videoShift"], "audioShift": CONTRACT["audioShift"],
+            "videoSigmas": pipe.scheduler.sigmas.tolist(), "audioSigmas": pipe.audio_scheduler.sigmas.tolist(),
+            "inferenceSeconds": time.perf_counter() - inference_start,
+            "peakAllocatedMb": torch.cuda.max_memory_allocated() / 1e6,
+            "fallback": False,
+        }
+        log("SPEEDPROFILE:" + json.dumps(report))
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

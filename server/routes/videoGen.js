@@ -29,7 +29,7 @@ import { MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES } from '../lib/videoContinuity.j
 import { I2V_REFERENCE_MODES } from '../lib/videoReferenceModes.js';
 import {
   VIDEO_BACKEND_DISCLOSURES, acceptedVideoModelTerms,
-  videoModelTermsGateId,
+  videoModelTermsGateId, isVideoModelTermsAccepted, videoModelTermsError,
 } from '../lib/videoDisclosure.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { recordUserAction } from '../services/userActions.js';
@@ -265,10 +265,8 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.TEXT_ENCODER_ID]: z.string().min(1).max(64).optional(),
   // Named sampler schedule to render with (lib/videoSpeedProfiles.js). Loosely
   // validated here for the same reason as textEncoderId — the option list is
-  // per-MODEL. Deliberately never rejected downstream either: an id this model
-  // doesn't offer (or a mode the profile isn't validated for) falls back to the
-  // model's own sampler with the reason logged, because a knob that only makes
-  // a render faster must degrade rather than 400 a submitted job.
+  // per-MODEL. Legacy LTX profiles retain their disclosed fallback. H3's typed
+  // adapter/schedule contract refuses incompatible requests before admission.
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.SPEED_PROFILE_ID]: z.string().min(1).max(64).optional(),
   // Decode this render's latents on the model's own decoder or on its declared
   // preview-fidelity one (lib/videoDraftDecoders.js). A closed enum, unlike the
@@ -866,12 +864,16 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
   res.json({ id: model.id, ...await modelCacheStatus(model) });
 }));
 
+const speedProfileDownloadQuerySchema = modelDownloadQuerySchema.extend({ speedProfileId: z.string().min(1).max(64).optional() });
 router.post('/models/:modelId/download', asyncHandler(async (req, res) => {
-  const { force } = validateRequest(modelDownloadQuerySchema, req.query);
+  const { force, speedProfileId } = validateRequest(speedProfileDownloadQuerySchema, req.query);
   const { modelId } = validateRequest(modelDownloadParamsSchema, req.params);
   const model = listVideoModels().find((m) => m.id === modelId);
   if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
-  const repos = modelDownloadTargets(model);
+  if (speedProfileId && !isVideoModelTermsAccepted(model, acceptedVideoModelTerms(await getSettings()))) {
+    throw videoModelTermsError(model, 'adapter download');
+  }
+  const repos = modelDownloadTargets(model, { speedProfileId });
   if (repos.length === 0) throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
   const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
   const pythonPath = runtimeInfo?.hfDownloadPython !== false

@@ -269,7 +269,8 @@ function localOptionalFields({
     textEncoderId: normalizeTextEncoderForModel(textEncoderId, currentModel) === STOCK_TEXT_ENCODER_ID
       ? undefined
       : textEncoderId,
-    speedProfileId: selectedSpeedProfile(speedProfileId, currentModel, videoChainChunkModes({
+    speedProfileId: currentModel?.speedProfiles?.some((p) => p.id === speedProfileId && p.type === 'minimax-h3-lightx2v')
+      ? speedProfileId : selectedSpeedProfile(speedProfileId, currentModel, videoChainChunkModes({
       model: currentModel, mode, chaining: chainingActive, contextFrames,
     }))?.id,
     // Preview-fidelity decode (#5423). Sent only when it is a real, still-valid
@@ -316,6 +317,7 @@ function localVideoSubmission(args, { composed, withEnvelope, effectiveDisableAu
     chainingActive, chunks, contextFrames,
   } = args;
   const legacyFflf = mode === 'fflf' && !keyframesActive;
+  const h3SpeedProfile = currentModel?.speedProfiles?.some((p) => p.id === args.speedProfileId && p.type === 'minimax-h3-lightx2v');
   return {
     backend: 'local',
     prompt: withEnvelope(prompt),
@@ -324,8 +326,8 @@ function localVideoSubmission(args, { composed, withEnvelope, effectiveDisableAu
     ...clampedSize(width, height, videoEdgeBoundsForModel(currentModel)),
     numFrames,
     fps,
-    steps: steps || '',
-    guidanceScale: guidanceScale || '',
+    steps: h3SpeedProfile ? '' : (steps || ''),
+    guidanceScale: h3SpeedProfile ? '' : (guidanceScale || ''),
     seed: seed ?? '',
     ...(currentModel?.supportsWarmBatch && !chainingActive && batchSize > 1 ? { batchSize } : {}),
     tiling: currentModel?.supportsTiling === false ? 'auto' : tiling,

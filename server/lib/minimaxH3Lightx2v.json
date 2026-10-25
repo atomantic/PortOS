@@ -1,0 +1,33 @@
+{
+  "id": "lightx2v-v1.3-4step",
+  "type": "minimax-h3-lightx2v",
+  "name": "LightX2V v1.3 · 4 updates (experimental)",
+  "description": "Opt-in CUDA text/image profile at 1344×768. Four Euler updates, video/audio shifts 6/3, original split Diffusers adapter. PortOS speed and quality have not been benchmarked. Download the adapter separately before rendering.",
+  "speedupLabel": null,
+  "steps": 5,
+  "denoisingSteps": 4,
+  "guidance": 0,
+  "videoShift": 6,
+  "audioShift": 3,
+  "sigmaPoints": [1, 0.75, 0.5, 0.25, 0],
+  "modes": ["text", "image"],
+  "canvases": [[1344, 768]],
+  "model": {
+    "id": "minimax_h3_cuda",
+    "runtime": "minimax_h3_cuda",
+    "repo": "MiniMaxAI/MiniMax-H3",
+    "revision": "42ed227ee7df40d41602854ae760620d6eb651fe"
+  },
+  "runtimePackages": {"diffusers": "0.42.0", "torchao": "0.18.0"},
+  "geometry": {"layers": 50, "refinerLayers": 2, "hiddenSize": 5376, "attentionSize": 7168, "ffnSize": 14336},
+  "adapter": {
+    "repo": "lightx2v/Minimax-h3-Turbo",
+    "revision": "30f485ed874aa44c8183348ad361c5eabad318da",
+    "file": "minimax_h3_fl2v_turbo_4step_v1.3_768p_bf16.safetensors",
+    "sha256": "97b775707bb5732e01dba0cf3833d3fe2947c953859d4d05ea3bd74894c43d2b",
+    "sizeBytes": 1383677808,
+    "alpha": 8,
+    "rank": 128,
+    "scale": 1
+  }
+}

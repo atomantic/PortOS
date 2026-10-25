@@ -28,10 +28,15 @@ vi.mock('../services/apiImageVideo.js', () => ({
 
 const { getVideoModelStatuses } = await import('../services/apiImageVideo.js');
 const {
-  buildDownloadUrl, TEXT_ENCODER_DOWNLOAD_ID, textEncoderDownloadId, useModelDownloadStatus,
+  buildDownloadUrl, TEXT_ENCODER_DOWNLOAD_ID, textEncoderDownloadId, useModelDownloadStatus, speedProfileDownloadId,
 } = await import('./useModelDownloadStatus.js');
 
 describe('buildDownloadUrl', () => {
+  it('targets only the selected model profile adapter without touching the base download', () => {
+    const id = speedProfileDownloadId('minimax_h3_cuda', 'lightx2v-v1.3-4step');
+    expect(buildDownloadUrl('video', id)).toBe('/api/video-gen/models/minimax_h3_cuda/download?speedProfileId=lightx2v-v1.3-4step');
+    expect(buildDownloadUrl('video', id, true)).toBe('/api/video-gen/models/minimax_h3_cuda/download?force=1&speedProfileId=lightx2v-v1.3-4step');
+  });
   it('builds a plain model download URL', () => {
     // A restricted model's license acknowledgement is NOT a query parameter —
     // the server resolves it from the install record, so a download can't be

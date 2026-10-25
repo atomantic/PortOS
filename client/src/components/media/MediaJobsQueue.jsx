@@ -966,6 +966,10 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     if (modelId !== p.modelId || speedProfileId !== originalSpeedProfileForModel) {
       overrides.speedProfileId = speedProfileId === DEFAULT_SPEED_PROFILE_ID ? null : speedProfileId;
     }
+    if (currentModel?.speedProfiles?.some((profile) => profile.id === speedProfileId && profile.type === 'minimax-h3-lightx2v')) {
+      if (p.steps != null || overrides.steps !== undefined) overrides.steps = null;
+      if (p.guidanceScale != null || overrides.guidanceScale !== undefined) overrides.guidanceScale = null;
+    }
     // Same model-switch clause as its two siblings above, and the same clear:
     // `null` resets the inherited request to Full, because an explicit 'full'
     // and an absent field are the same request — sending the sentinel would
@@ -1028,6 +1032,7 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
           fps={displayedFps} onFpsChange={setFps} seed={seed} onSeedChange={setSeed} onRandomSeed={() => setSeed(Math.floor(Math.random() * 2147483647))}
           steps={steps} onStepsChange={setSteps} guidanceScale={guidanceScale} onGuidanceScaleChange={setGuidanceScale}
           speedProfileId={speedProfileId} onSpeedProfileChange={setSpeedProfileId}
+          width={width} height={height}
           streamingMode={streamingMode} onStreamingModeChange={setStreamingMode}
           showStreamingMode={currentModel ? undefined : !isDefaultVideoStreamingMode(p.streamingMode)}
           draftDecode={draftDecode} onDraftDecodeChange={setDraftDecode} draftDecodeLocked={deliveryModel}

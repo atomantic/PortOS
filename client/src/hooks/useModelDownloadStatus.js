@@ -13,6 +13,10 @@ import {
 // rewrites to the dedicated /text-encoder/download endpoint. Exported so
 // callers and the hook agree on the magic string.
 export const TEXT_ENCODER_DOWNLOAD_ID = '__text_encoder__';
+export const SPEED_PROFILE_DOWNLOAD_PREFIX = '__speed_profile__:';
+export const speedProfileDownloadId = (modelId, profileId) => `${SPEED_PROFILE_DOWNLOAD_PREFIX}${modelId}:${profileId}`;
+const speedProfileOf = (id) => String(id).startsWith(SPEED_PROFILE_DOWNLOAD_PREFIX)
+  ? String(id).slice(SPEED_PROFILE_DOWNLOAD_PREFIX.length).split(':') : null;
 
 // Namespace for a substitutable prompt-conditioner download id (#4081). The
 // video form passes `textEncoderDownloadId(option.id)` to start()/repair(); the
@@ -42,6 +46,11 @@ export const buildDownloadUrl = (kind, modelId, force = false) => {
   // and the deleted shard would never be pulled back.
   const params = new URLSearchParams();
   if (force) params.set('force', '1');
+  const speedProfile = kind === 'video' ? speedProfileOf(modelId) : null;
+  if (speedProfile) {
+    params.set('speedProfileId', speedProfile[1]);
+    return `/api/video-gen/models/${encodeURIComponent(speedProfile[0])}/download?${params.toString()}`;
+  }
   const q = params.size > 0 ? `?${params.toString()}` : '';
   if (kind === 'video' && modelId === TEXT_ENCODER_DOWNLOAD_ID) {
     return `/api/video-gen/text-encoder/download${q}`;
@@ -176,6 +185,10 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
   const [repairing, setRepairing] = useState(false);
   const repair = useCallback(async (modelId, { deep = false } = {}) => {
     if (!modelId) return;
+    if (kind === 'video' && speedProfileOf(modelId)) {
+      start(modelId, { force: true });
+      return;
+    }
     setRepairing(true);
     // The shared text encoder isn't a model id, so its repair hits the scalar
     // /text-encoder/repair endpoint; the sentinel `start()` below already maps
@@ -224,6 +237,11 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
   // integrity }` badge shape, so one resolver keeps every caller uniform.
   const findEntry = useCallback((modelId) => {
     const list = Array.isArray(statuses) ? statuses : [];
+    const speedProfile = speedProfileOf(modelId);
+    if (speedProfile) {
+      const profile = list.find((s) => s.id === speedProfile[0])?.speedProfiles?.find((p) => p.id === speedProfile[1]);
+      return profile ? { ...profile, id: modelId, cached: profile.cached === true || profile.status === 'ok' } : null;
+    }
     const found = list.find((s) => s.id === modelId);
     if (found) return found;
     const icList = Array.isArray(extra.icLoras) ? extra.icLoras : [];

@@ -21,6 +21,17 @@ const baseArgs = (overrides = {}) => ({
   ...overrides,
 });
 
+it('submits the H3 profile without stale sampler overrides and preserves incompatible selections for visible refusal', () => {
+  const model = { id: 'h3', runtime: 'minimax_h3_cuda', speedProfiles: [
+    { id: 'h3-speed', type: 'minimax-h3-lightx2v', modes: ['text', 'image'] },
+  ] };
+  for (const mode of ['text', 'fflf']) {
+    const result = buildVideoGenSubmission(baseArgs({ modelId: model.id, currentModel: model,
+      mode, speedProfileId: 'h3-speed', steps: '8', guidanceScale: '3' }));
+    expect(result).toMatchObject({ speedProfileId: 'h3-speed', steps: '', guidanceScale: '' });
+  }
+});
+
 describe('buildVideoGenSubmission — block streaming request (#6499)', () => {
   it('sends a non-default mode when the current model runs an LTX-2/2.5 MLX runtime', () => {
     const payload = buildVideoGenSubmission(baseArgs({

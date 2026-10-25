@@ -260,6 +260,7 @@ export * from './videoPromptLinter.js';
 export * from './videoDraftDecoders.js';
 export * from './videoFinishProfiles.js';
 export * from './videoSpeedProfiles.js';
+export * from './minimaxH3SpeedProfiles.js';
 export * from './videoModeProfiles.js';
 export * from './videoDurationProfiles.js';
 export * from './videoReferenceModes.js';

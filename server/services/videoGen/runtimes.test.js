@@ -385,20 +385,22 @@ describe('minimax_h3_cuda runtime registration', () => {
     expect(info.importProbe).toContain('torch.cuda.is_available()');
   });
 
-  it('declares no revision pin or LoRA probe — it runs distributions, not a checkout', () => {
-    // `expectedRevision`/`sourcePath` drive the clean-checkout gate, which has
-    // nothing to verify here; `loraProbeArgs` absent is the correct "this
-    // runtime can never take LoRAs", matching wan22 / fastvideo.
+  it('uses a distribution/scheduler/quantized-LoRA probe instead of a checkout revision pin', () => {
     expect(info.expectedRevision).toBeUndefined();
     expect(info.sourcePath).toBeUndefined();
-    expect(info.loraProbeArgs).toBeUndefined();
+    expect(info.loraProbeArgs[0]).toMatch(/minimax_h3_cuda_lora\.py$/);
+    expect(info.loraProbeArgs[1]).toBe('--probe');
   });
 
-  it('never reports LoRA capability, even after a probe attempt', async () => {
+  it('keeps CUDA adapters unavailable until its probe returns a positive verdict', async () => {
+    runtimeMocks.existsSync.mockReturnValue(false);
     expect(byovRuntimeLoraCapable('minimax_h3_cuda')).toBe(false);
     await expect(resolveByovRuntimeLoraCapable('minimax_h3_cuda')).resolves.toBe(false);
-    // No probe child may be spawned for a runtime with no loraProbeArgs.
     expect(runtimeMocks.spawn).not.toHaveBeenCalled();
+    runtimeMocks.existsSync.mockReturnValue(true);
+    runtimeMocks.spawn.mockImplementation(() => exitChild(0));
+    await expect(resolveByovRuntimeLoraCapable('minimax_h3_cuda')).resolves.toBe(true);
+    expect(byovRuntimeLoraCapable('minimax_h3_cuda')).toBe(true);
   });
 });
 

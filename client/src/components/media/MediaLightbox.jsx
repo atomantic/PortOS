@@ -255,6 +255,9 @@ export default function MediaLightbox({
     // as a clean full run — the whole point is that an unverified speed-up is
     // never presented as a verified one.
     if (!applied) return `${id} — outcome not reported`;
+    if (applied.type === 'minimax-h3-lightx2v') {
+      return `${id} · ${applied.denoisingSteps} updates · shifts ${applied.videoShift}/${applied.audioShift} · ${applied.adapter?.file || 'adapter unknown'} · ${applied.applied === true && applied.fallback === false ? 'applied, no fallback' : 'outcome unverified'}`;
+    }
     const degraded = applied.degraded;
     return Array.isArray(degraded) && degraded.length
       ? `${id} — reduced: ${degraded.join(', ')} unavailable`

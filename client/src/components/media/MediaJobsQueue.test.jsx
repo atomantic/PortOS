@@ -108,6 +108,28 @@ async function expandReel(user) {
   await user.click(toggle);
 }
 
+it('clears inherited sampler overrides when retrying a stock H3 job with LightX2V', async () => {
+  const user = userEvent.setup();
+  const profile = { id: 'example-speed', type: 'minimax-h3-lightx2v', name: 'Example speed',
+    steps: 5, guidance: 0, modes: ['text', 'image'], canvases: [[1344, 768]],
+    adapter: { file: 'example.safetensors', alpha: 8, rank: 128 }, videoShift: 6, audioShift: 3 };
+  const model = { id: 'example-h3-cuda', runtime: 'minimax_h3_cuda', name: 'Example H3 CUDA',
+    samplerLocked: true, steps: 8, guidance: 0, frameOptions: [124], fpsOptions: [24],
+    supportedModes: ['text', 'image'], speedProfiles: [profile] };
+  getVideoGenStatus.mockResolvedValue({ models: [model] });
+  listQueueMediaJobs.mockResolvedValue([{ id: 'h3-retry', kind: 'video', status: 'failed', error: 'Example failure',
+    params: { prompt: 'A paper boat.', modelId: model.id, mode: 'text', width: 1344, height: 768,
+      numFrames: 124, fps: 24, steps: 8, guidanceScale: 3, chunks: 1, contextFrames: 0 } }]);
+  render(<MediaJobsQueue kind="video" />);
+  await expandReel(user);
+  await user.click(await screen.findByLabelText('Edit and retry'));
+  await user.selectOptions(await screen.findByLabelText('Speed'), profile.id);
+  await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+  expect(retryMediaJob).toHaveBeenCalledWith('h3-retry', {
+    speedProfileId: profile.id, steps: null, guidanceScale: null,
+  }, { silent: true });
+});
+
 const failedCodexDefaultEffortJob = {
   id: 'codexdef00000dead',
   kind: 'image',

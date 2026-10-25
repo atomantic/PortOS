@@ -248,7 +248,7 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     // Three things must hold before a render is even attempted, and each fails
     // as an unusable install rather than as a bad render: diffusers must carry
     // the H3 modular integration (merged to main after v0.39.0 and released in
-    // diffusers 0.40.0, which is the version pinned by the requirements file),
+    // diffusers 0.40.0; the requirements file now pins 0.42.0),
     // torchao must be present
     // (int8 weight-only is the only way the 133 GB bf16 pair fits a consumer
     // card), and CUDA must actually be visible. A CPU-only torch is the trap
@@ -257,6 +257,7 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     importProbe: 'import torch; from diffusers import MiniMaxH3Transformer3DModel; from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference; import torchao; assert torch.cuda.is_available(), "no CUDA device"',
     // Mirror scripts/generate_minimax_h3_cuda.py's emit_runtime_fingerprint list.
     fingerprintPackages: ['torch', 'diffusers', 'transformers', 'torchao', 'accelerate', 'huggingface-hub'],
+    loraProbeArgs: [join(PATHS.root, 'scripts', 'minimax_h3_cuda_lora.py'), '--probe'],
   },
   ltx25_cuda: {
     id: 'ltx25_cuda',
@@ -597,7 +598,7 @@ export function videoLoraUnsupportedError(model, modelId) {
     // entries, and this runtime only appears in the Windows catalog, so the
     // advice would name models the user cannot select.
     return new ServerError(
-      `MiniMax H3 on CUDA cannot apply LoRAs. Model "${modelId}" renders through diffusers' MiniMaxH3ModularPipeline, which has no LoRA path for H3. No video model in the Windows catalog takes LoRAs today.`,
+      `The installed MiniMax H3 CUDA runtime cannot apply split Diffusers LoRAs. Repair the H3 CUDA runtime in Video Gen to install the pinned scheduler and quantization-aware adapter support, then retry model "${modelId}".`,
       { status: 400, code: 'MINIMAX_H3_LORA_UNSUPPORTED' },
     );
   }

@@ -43,7 +43,7 @@ import { resolveContextFrames, resolveContinuityStrategy } from './videoContinui
 
 // Every shipped entry, decorated exactly as the registry decorates it.
 const decoratedEntries = Object.entries(VIDEO_SPEED_PROFILES).map(([id, spec]) => (
-  applyVideoSpeedProfiles([{ id, repo: spec.shippedRepo, revision: spec.shippedRevision }])[0]
+  applyVideoSpeedProfiles([{ id, repo: spec.shippedRepo, revision: spec.shippedRevision, ...spec.profiles[0]?.model }])[0]
 ));
 
 // Every mode PortOS can submit, so a profile that ever widens its `modes`

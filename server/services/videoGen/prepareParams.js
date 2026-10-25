@@ -81,6 +81,26 @@ import { resolveByovRuntimeLoraCapable, videoLoraUnsupportedError } from './runt
 import { validateVideoBatch } from './batch.js';
 import { audioDurationToFrames } from './audioDuration.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES } from '../../lib/runwaySpecialVideoModels.js';
+import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
+
+async function validateMiniMaxH3SpeedParams(model, params, settings) {
+  const hasProfile = isMiniMaxH3SpeedProfileRequest(params.speedProfileId);
+  if (!hasProfile && model?.runtime === 'minimax_h3_cuda' && params.speedProfileId && params.speedProfileId !== 'quality') {
+    throw new ServerError('This H3 CUDA model does not offer the requested speed profile. Select Quality or its listed LightX2V profile.', { status: 400, code: 'VIDEO_SPEED_PROFILE_UNSUPPORTED' });
+  }
+  if (!hasProfile && (model?.runtime !== 'minimax_h3_cuda' || !params.loras?.length)) return;
+  const { prepareMiniMaxH3SpeedProfile, validateMiniMaxH3CudaLoras } = await import('./ensureWeights.js');
+  const profile = hasProfile ? await prepareMiniMaxH3SpeedProfile({
+    ...params, model, profileId: params.speedProfileId,
+    mode: params.mode || (params.sourceImagePath ? 'image' : 'text'),
+    width: params.width ?? model.defaultWidth,
+    height: params.height ?? model.defaultHeight,
+  }, settings || await getSettings()) : null;
+  if (params.loras?.length) {
+    const { resolveVideoLoras } = await import('./renderArgs.js');
+    await validateMiniMaxH3CudaLoras(await resolveVideoLoras(params.loras, { runtime: model.runtime }), profile);
+  }
+}
 
 // Retries reuse persisted worker parameters instead of passing through the
 // multipart preparation path. Keep the model/mode gates here so a model edit
@@ -200,6 +220,7 @@ export async function validateVideoRetryParams(params = {}) {
   }
   const frameCountError = wan22FrameCountError(model, numFrames);
   if (frameCountError) throw frameCountError;
+  await validateMiniMaxH3SpeedParams(model, params, settings);
 }
 
 /**
@@ -1258,6 +1279,10 @@ async function resolvePreparedParams({
   // reference clip), so chaining is meaningless — pin to 1 chunk. The IC path
   // also hard-rejects an explicit chunks>1 above; this covers the default.
   const effectiveChunks = (body.mode === 'a2v' || icSpec) ? 1 : (body.chunks ?? 1);
+  await validateMiniMaxH3SpeedParams(effectiveModel, {
+    ...body, loras, sourceImagePath, lastImagePath, keyframes: resolvedKeyframes,
+    extendFromVideoPath, audioFilePath,
+  }, settings).catch(async (error) => { await cleanupStaged(); throw error; });
 
   // Per-chunk prompt beats (#3695) — only meaningful once the RESOLVED request
   // really chains, so a single-chunk render (or an a2v/IC one pinned to 1 above)
