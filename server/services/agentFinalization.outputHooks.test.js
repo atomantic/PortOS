@@ -604,11 +604,12 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it.each(['normal', 'restart'])('settles a selected claim no-op from the shared verifier during %s completion', async mode => {
+  it.each(['normal', 'restart'].flatMap(mode => ['not-planned', 'operator-closed'].map(disposition => [mode, disposition])))
+  ('settles a selected claim no-op during %s completion from a verified %s disposition', async (mode, disposition) => {
     isProgrammaticIoTaskType.mockReturnValue(false);
     const task = { id: 'claim-example', taskType: 'user', metadata: { app: 'app-example', claimFlow: true, claimTarget: '42' } };
     const taskOutcome = { status: 'no-action-needed', reason: 'Selected issue no longer requires a change.' };
-    const claimDisposition = { status: 'verified', taskId: task.id, issues: [{ issue: 42, disposition: 'not-planned' }] };
+    const claimDisposition = { status: 'verified', taskId: task.id, issues: [{ issue: 42, disposition }] };
     persistedAgent.taskId = task.id;
     persistedAgent.metadata.taskOutcome = taskOutcome;
     persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
@@ -622,6 +623,9 @@ describe('recovery output-hook dispatch (#3182)', () => {
       expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: true,
         validationPassed: true, taskOutcome, claimDisposition }));
       expect(hook).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
+      if (mode === 'normal') expect(updateTask).toHaveBeenLastCalledWith(task.id,
+        expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ taskOutcome }) }), task.taskType);
     } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
   });
 
