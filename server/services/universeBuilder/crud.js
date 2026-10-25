@@ -442,12 +442,14 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
   // provably carries no canon key (see addStyleReference / removeStyleReference); a
   // literal-object PATCH doesn't need it, its own `'characters' in patch` checks are
   // already precise.
+  // `options.afterWrite(record)` keeps an idempotent catalog membership write
+  // inside this same queue, including no-op retries. It must not re-enter it.
   // `options.updatedAt` stamps that record clock instead of receipt time — only
   // the share-bucket importer's remote LWW apply passes it, so the winning
   // source revision's clock survives and the next one can still win (#10761).
   const {
     silent = false, canonProjectionGuard = null, canonProjectionIdentityIds = [], replaceCategories = false,
-    touchesCanon = true, updatedAt: incomingUpdatedAt = null,
+    touchesCanon = true, updatedAt: incomingUpdatedAt = null, afterWrite = null,
   } = options;
   const s = store();
   const { merged, nameChanged, skipped, removedCharacterIds, prevEphemeral, nextEphemeral } = await s.queueRecordWrite(id, async () => {
@@ -459,6 +461,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
     if (isMutator) {
       patch = await patchOrMutator(cur);
       if (patch === null || patch === undefined) {
+        if (afterWrite) await afterWrite(cur);
         return { merged: cur, nameChanged: false, skipped: true };
       }
       // `typeof === 'object'` matches arrays and null — reject both so a stray
@@ -658,6 +661,12 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
       mergedRecord.characters = pruneStaleReferenceSheets(mergedRecord.characters);
     }
     await s.writeRecord(id, mergedRecord);
+    if (afterWrite) await afterWrite(mergedRecord).catch(async (error) => {
+      // Keep the compatibility cache unchanged when its association write
+      // fails. The queue remains held through compensation and retry.
+      await s.writeRecord(id, cur);
+      throw error;
+    });
     // Project the freshly-persisted canon arrays back into their catalog rows
     // SYNCHRONOUSLY (inside the queue) so the authoritative catalog_ingredients
     // row can never lag the embedded cache on the same request. Best-effort:
@@ -877,6 +886,10 @@ export async function deleteUniverse(id) {
     const cur = await s.loadOne(id);
     if (!cur) throw codedError(`Universe not found: ${id}`, ERR_NOT_FOUND);
     if (cur.deleted) throw codedError(`Universe not found: ${id}`, ERR_NOT_FOUND);
+    if (!isFileBackend()) {
+      const { assertUniversePrimitivesRemovable } = await import('../catalogPrimitiveUsage.js');
+      await assertUniversePrimitivesRemovable(id);
+    }
     const now = new Date().toISOString();
     const tombstone = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
     await s.writeRecord(id, tombstone);

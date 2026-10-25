@@ -414,6 +414,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     payloadSchema: { type: 'object', properties: { operationId: { type: 'string' }, sourceId: { type: 'string' }, survivorId: { type: 'string' } },
       required: ['operationId', 'sourceId', 'survivorId'], additionalProperties: false },
   },
+  'catalog:primitive-changed': {
+    direction: 'server-to-client',
+    summary: 'Refresh creative primitive ownership, membership and usage views after a durable change.',
+    payloadSchema: { type: 'object', properties: { ingredientId: { type: 'string' } }, required: ['ingredientId'], additionalProperties: false },
+  },
   'github:notifications:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate the GitHub notifications inbox, thread drawer and Automations tab after a sync, triage or action changed stored rows.',

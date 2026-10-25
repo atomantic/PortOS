@@ -15,6 +15,7 @@ const musicVideoCastIngredientId = (projectId, { id, kind }) =>
 function makeDeps({ projects, universes = {}, rows = [], universeLinks = {} }) {
   const ingredients = new Map(rows.map((r) => [r.id, { deleted: false, ...r }]));
   const media = [];
+  const owners = [];
   const catalogDB = {
     getIngredient: vi.fn(async (id) => { const r = ingredients.get(id); return r && !r.deleted ? r : null; }),
     createIngredient: vi.fn(async (input) => {
@@ -41,8 +42,13 @@ function makeDeps({ projects, universes = {}, rows = [], universeLinks = {} }) {
       return { project };
     }),
     queueProjectCatalogLinkSync: vi.fn(),
+    createOwnedPrimitive: vi.fn(async (input, universeId) => {
+      const ingredient = await catalogDB.createIngredient(input);
+      owners.push({ ingredientId: ingredient.id, universeId });
+      return ingredient;
+    }),
   };
-  return { deps, ingredients, media };
+  return { deps, ingredients, media, owners };
 }
 
 const approvedStage = {
@@ -95,8 +101,8 @@ describe('saving approved Cast & Sets cast', () => {
   let projects;
   beforeEach(() => { projects = [videoProject()]; });
 
-  it('creates check-in cast and sets with their images, reusing a same-named universe record', async () => {
-    const { deps, ingredients, media } = makeDeps({
+  it('creates distinct check-in identities even when a universe record has the same name, with explicit ownership and images', async () => {
+    const { deps, ingredients, media, owners } = makeDeps({
       projects,
       universes: { 'u-1': { id: 'u-1', characters: [] } },
       rows: [{ id: 'cat-chr-bo', type: 'character', name: 'bo' }],
@@ -105,7 +111,7 @@ describe('saving approved Cast & Sets cast', () => {
 
     const result = await saveCheckinCastToCatalog('mv-1', deps);
 
-    expect(result).toMatchObject({ created: 2, linked: 1, kept: 0 });
+    expect(result).toMatchObject({ created: 3, linked: 0, kept: 0 });
     const leadId = musicVideoCastIngredientId('mv-1', { id: 'cs-protagonist', kind: 'character' });
     expect(leadId).toMatch(/^cat-chr-mv-[0-9a-f]{32}$/);
     expect(ingredients.get(leadId)).toMatchObject({ type: 'character', name: 'Ada', payload: { physicalDescription: 'Red scarf' }, tags: ['Example Video'] });
@@ -115,15 +121,19 @@ describe('saving approved Cast & Sets cast', () => {
     ]);
     const subjects = projects[0].concept.subjects;
     expect(subjects.find((s) => s.id === 'cs-protagonist').ingredientId).toBe(leadId);
-    expect(subjects.find((s) => s.id === 'cs-cast-bo').ingredientId).toBe('cat-chr-bo');
+    expect(subjects.find((s) => s.id === 'cs-cast-bo').ingredientId).not.toBe('cat-chr-bo');
     expect(subjects.find((s) => s.id === 'mvc-1').ingredientId).toBeUndefined();
     expect(deps.queueProjectCatalogLinkSync).toHaveBeenCalledWith('mv-1');
+    expect(owners).toEqual(expect.arrayContaining([{ ingredientId: leadId, universeId: 'u-1' }]));
+    expect(owners).toHaveLength(3);
+    expect(deps.catalogDB.findIngredientsByName).not.toHaveBeenCalled();
+    expect(ingredients.get('cat-chr-bo')).toEqual({ deleted: false, id: 'cat-chr-bo', type: 'character', name: 'bo' });
   });
 
   it('links to the row a synced machine already saved, and leaves a subject whose record was deleted in the video', async () => {
     const leadId = musicVideoCastIngredientId('mv-1', { id: 'cs-protagonist', kind: 'character' });
     const dinerId = musicVideoCastIngredientId('mv-1', { id: 'cs-set-diner', kind: 'place' });
-    const { deps } = makeDeps({
+    const { deps, owners } = makeDeps({
       projects,
       rows: [{ id: leadId, type: 'character', name: 'Ada' }, { id: dinerId, type: 'place', name: 'Night diner', deleted: true }],
     });
@@ -135,6 +145,16 @@ describe('saving approved Cast & Sets cast', () => {
     expect(subjects.find((s) => s.id === 'cs-protagonist').ingredientId).toBe(leadId);
     expect(subjects.find((s) => s.id === 'cs-set-diner')).toMatchObject({ localOnly: true });
     expect(subjects.find((s) => s.id === 'cs-set-diner').ingredientId).toBeUndefined();
+    expect(owners).toEqual([]);
+    expect(deps.createOwnedPrimitive).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a failed world lookup rather than creating ownerless records from a failed read', async () => {
+    const { deps, ingredients } = makeDeps({ projects });
+    deps.getUniverse.mockRejectedValue(new Error('Universe store unavailable'));
+    await expect(saveCheckinCastToCatalog('mv-1', deps)).rejects.toThrow('Universe store unavailable');
+    expect(ingredients.size).toBe(0);
+    expect(deps.mutateProjectRecord).not.toHaveBeenCalled();
   });
 });
 
@@ -195,30 +215,33 @@ describe('matching before creating', () => {
     { id: 'mv-b', name: 'Second', concept: { subjects: [{ id: 'mvc-9', kind: 'place', name: 'tattoo parlor ' }] } },
   ];
 
-  it('links to a same-named record anywhere in the catalog, and creates a name two videos share only once', async () => {
+  it('keeps same-named subjects in different videos independent from each other and global catalog records', async () => {
     const projects = twoVideos();
     const { deps, ingredients } = makeDeps({ projects, rows: [{ id: 'cat-plc-bible-1', type: 'place', name: 'Night Diner' }] });
 
     const preview = await previewCatalogCastImport(deps);
     const firstId = musicVideoCastIngredientId('mv-a', { id: 'mvc-1', kind: 'place' });
+    const dinerId = musicVideoCastIngredientId('mv-a', { id: 'mvc-2', kind: 'place' });
+    const secondId = musicVideoCastIngredientId('mv-b', { id: 'mvc-9', kind: 'place' });
     expect(preview[0].items.map((i) => [i.subjectId, i.action, i.ingredientId])).toEqual([
       ['mvc-1', 'create', firstId],
-      ['mvc-2', 'link', 'cat-plc-bible-1'],
+      ['mvc-2', 'create', dinerId],
     ]);
-    expect(preview[1].items[0]).toMatchObject({ action: 'link', ingredientId: firstId, ingredientName: 'Tattoo Parlor' });
+    expect(preview[1].items[0]).toMatchObject({ action: 'create', ingredientId: secondId });
 
     const selections = preview.flatMap((p) => p.items.map((i) => ({ projectId: p.projectId, subjectId: i.subjectId, action: i.action, ingredientId: i.ingredientId })));
-    expect(await commitCatalogCastImport(selections, deps)).toEqual({ projects: 2, created: 1, linked: 2, kept: 0 });
-    expect([...ingredients.keys()].filter((id) => id.includes('-mv-'))).toEqual([firstId]);
-    expect(projects[1].concept.subjects[0].ingredientId).toBe(firstId);
+    expect(await commitCatalogCastImport(selections, deps)).toEqual({ projects: 2, created: 3, linked: 0, kept: 0 });
+    expect([...ingredients.keys()].filter((id) => id.includes('-mv-'))).toEqual([firstId, dinerId, secondId]);
+    expect(projects[1].concept.subjects[0].ingredientId).toBe(secondId);
+    expect(deps.catalogDB.findIngredientsByName).not.toHaveBeenCalled();
   });
 
-  it('creates a shared name once in a later video when the first one is kept local', async () => {
+  it('preserves explicitly reviewed links but never fabricates a missing record belonging to another subject', async () => {
     const projects = [...twoVideos(), { id: 'mv-c', name: 'Third', concept: { subjects: [{ id: 'mvc-5', kind: 'place', name: 'Tattoo parlor' }] } }];
     const { deps, ingredients } = makeDeps({ projects });
     const preview = await previewCatalogCastImport(deps);
     const sharedId = preview[0].items[0].ingredientId;
-    expect(preview.slice(1).map((p) => p.items[0].ingredientId)).toEqual([sharedId, sharedId]);
+    expect(new Set(preview.map((p) => p.items[0].ingredientId)).size).toBe(3);
 
     const totals = await commitCatalogCastImport([
       { projectId: 'mv-a', subjectId: 'mvc-1', action: 'local' },
@@ -226,9 +249,13 @@ describe('matching before creating', () => {
       { projectId: 'mv-c', subjectId: 'mvc-5', action: 'link', ingredientId: sharedId },
     ], deps);
 
-    expect(totals).toMatchObject({ created: 1, linked: 1, kept: 1 });
-    expect([...ingredients.keys()].filter((id) => id.includes('-mv-'))).toEqual([sharedId]);
-    expect([projects[1], projects[2]].map((p) => p.concept.subjects[0].ingredientId)).toEqual([sharedId, sharedId]);
+    expect(totals).toMatchObject({ created: 0, linked: 0, kept: 1 });
+    expect(ingredients.size).toBe(0);
+    const liveId = preview[1].items[0].ingredientId;
+    await commitCatalogCastImport([{ projectId: 'mv-b', subjectId: 'mvc-9', action: 'create' }], deps);
+    expect(await commitCatalogCastImport([{ projectId: 'mv-c', subjectId: 'mvc-5', action: 'link', ingredientId: liveId }], deps))
+      .toMatchObject({ created: 0, linked: 1 });
+    expect(projects[2].concept.subjects[0].ingredientId).toBe(liveId);
   });
 
   it('never brings back a record the director deleted', async () => {

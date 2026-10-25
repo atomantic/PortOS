@@ -14,6 +14,8 @@
  */
 
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
+import { ingredientPath } from '../lib/creativeLibraries';
 import { Plus, Trash2, Loader2 } from 'lucide-react';
 import toast from './ui/Toast';
 import IngredientPicker from './IngredientPicker';
@@ -22,7 +24,7 @@ import {
   linkCatalogIngredient,
   unlinkCatalogIngredient,
 } from '../services/apiCatalog';
-import { CATALOG_BADGE_BY_ID, catalogRefRoleForType as roleForType } from '../lib/catalogTypes';
+import { CATALOG_BADGE_BY_ID, catalogReferenceRole } from '../lib/catalogTypes';
 
 function snippet(payload) {
   if (!payload || typeof payload !== 'object') return '';
@@ -62,7 +64,7 @@ export default function CatalogCastPanel({ refKind, refId, refLabel }) {
   const handlePicked = async (picked) => {
     const ingredient = Array.isArray(picked) ? picked[0] : picked;
     if (!ingredient) return;
-    const role = roleForType(ingredient.type);
+    const role = catalogReferenceRole(ingredient.type, refKind);
     await linkCatalogIngredient(ingredient.id, { refKind, refId, role }, { silent: true })
       .then(() => {
         setRows((prev) => {
@@ -151,9 +153,9 @@ export default function CatalogCastPanel({ refKind, refId, refLabel }) {
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium text-white truncate">
+                    <Link to={ingredientPath(ingredient)} className="text-sm font-medium text-port-accent hover:underline truncate" title="Open canonical editor, ownership and usages">
                       {ingredient.name || '(untitled)'}
-                    </span>
+                    </Link>
                     <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${badge}`}>
                       {ingredient.type}
                     </span>

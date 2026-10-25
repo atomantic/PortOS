@@ -264,6 +264,8 @@ export const catalogIngredientCreateSchema = z.object({
   name: z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX),
   payload,
   tags,
+  universeId: z.string().trim().min(1).max(120).optional(),
+  operationKey: z.string().uuid().optional(),
 }).strict();
 
 // Revision-history sources, mirrored from the catalog_ingredient_revisions
@@ -280,6 +282,16 @@ export const catalogIngredientPatchSchema = z.object({
   tags,
   source: revisionSource,
   actor: revisionActor,
+}).strict();
+
+export const catalogPrimitiveOwnerSchema = z.object({
+  universeId: z.string().trim().min(1).max(120),
+}).strict();
+
+export const catalogPrimitiveForkSchema = catalogPrimitiveOwnerSchema.extend({
+  name: z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX).optional(),
+  copyImages: z.boolean().default(false),
+  operationKey: z.string().uuid(),
 }).strict();
 
 // /ingredients/:id/revisions — paginated history list. Newest first.

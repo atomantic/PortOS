@@ -11,6 +11,10 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router';
+import { ingredientPath } from '../../lib/creativeLibraries';
+import { threadRefUrl } from '../../lib/threadRefKinds';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { Loader2, ImagePlus, ImageUp, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, X, Star, Square, ScanText } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import useRowDraft from '../../hooks/useRowDraft';
@@ -127,7 +131,7 @@ function SpoilerBadge({ entry }) {
 // `surfaceDescriptor` is the pre-reveal stand-in substituted into context.
 // Absent = always visible (backward-compatible default). Labels are
 // `htmlFor`/`id` paired per the accessibility convention.
-function RevealTimingField({ entry, editable, onPatch }) {
+export function RevealTimingField({ entry, editable, onPatch }) {
   const idBase = `reveal-${entry.id}`;
   const surfaceDraft = useFieldDraft(
     typeof entry.surfaceDescriptor === 'string' ? entry.surfaceDescriptor : '',
@@ -211,14 +215,14 @@ function RevealTimingField({ entry, editable, onPatch }) {
 
 function SourceSeriesChip({ sourceSeriesId, seriesName }) {
   return (
-    <span
+    <Link to={threadRefUrl('series', sourceSeriesId)}
       className="inline-flex items-center px-1.5 py-0.5 rounded bg-port-card border border-port-border text-[9px] uppercase tracking-wider text-gray-400"
       title={seriesName
         ? `Introduced by series "${seriesName}" (${sourceSeriesId})`
         : `Introduced by series ${sourceSeriesId}`}
     >
       {seriesName ? `from ${seriesName}` : 'from series'}
-    </span>
+    </Link>
   );
 }
 
@@ -382,7 +386,10 @@ export default function CanonCard({
   // images and any linked Catalog ingredient are left alone. Null in the
   // pipeline/series view (NounsStage), which has no removal channel.
   onRemove = null,
+  onRemoveImageRef = null,
 }) {
+  const [removingImage, setRemovingImage] = useState(null);
+  const [imageBusy, setImageBusy] = useState(false);
   const description = kind.descFor(entry);
   const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : [];
   const locked = entry.locked === true;
@@ -430,7 +437,10 @@ export default function CanonCard({
   const title = (
     <div className="flex items-center gap-2 flex-wrap">
       {/* Preserve the full name, including unbroken names, within the title slot. */}
-      <span className="min-w-0 text-sm text-white font-medium break-words">{entry.name}</span>
+      {entry.ingredientId
+        ? <Link to={ingredientPath({ id: entry.ingredientId, type: kind.apiKind || ({ characters: 'character', places: 'place', objects: 'object' }[kind.key]) })}
+            className="min-w-0 text-sm text-port-accent hover:underline font-medium break-words" title="Open canonical editor, ownership and usages">{entry.name}</Link>
+        : <span className="min-w-0 text-sm text-white font-medium break-words">{entry.name}</span>}
       {entry.aliases?.length ? (
         <span className="min-w-0 text-[10px] text-gray-500 break-words">
           aka {entry.aliases.join(', ')}
@@ -699,6 +709,9 @@ export default function CanonCard({
             const canPin = !!onPatchEntry && !locked;
             return (
               <div key={ref} className="relative w-16 h-16">
+                {onRemoveImageRef && <button type="button" onClick={() => setRemovingImage(ref)} disabled={imageBusy}
+                  aria-label={`Remove reference ${ref}`} title="Remove reference; keep the image file"
+                  className="absolute bottom-0.5 right-0.5 z-10 min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded port-media-overlay text-gray-400 hover:text-port-error"><X size={12} /></button>}
                 <button
                   type="button"
                   onClick={() => onPreview?.(ref)}
@@ -747,13 +760,23 @@ export default function CanonCard({
           })}
         </div>
       ) : null}
+      {removingImage && <InlineConfirmRow question="Remove this reference? The image file stays in the library."
+        confirmText={imageBusy ? 'Removing…' : 'Remove reference'} cancelText="Cancel"
+        onCancel={() => { if (!imageBusy) setRemovingImage(null); }}
+        onConfirm={async () => {
+          if (imageBusy) return;
+          setImageBusy(true);
+          const removed = await onRemoveImageRef(entry.id, removingImage);
+          setImageBusy(false);
+          if (removed) setRemovingImage(null);
+        }} />}
       {usage && usage.length > 0 ? (
         <div className="mt-2 text-[10px] text-gray-500">
           Appears in:{' '}
           {usage.map((u, i) => (
             <span key={u.seriesId}>
               {i > 0 ? ', ' : ''}
-              <span className="text-gray-400">{u.seriesName}</span>
+              <Link to={threadRefUrl('series', u.seriesId)} className="text-port-accent hover:underline">{u.seriesName}</Link>
               <span className="text-gray-600"> ({u.issueCount} {u.issueCount === 1 ? 'issue' : 'issues'})</span>
             </span>
           ))}

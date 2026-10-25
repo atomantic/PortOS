@@ -34,6 +34,7 @@ vi.mock('../../services/apiUniverseBuilder', () => ({
   setUniverseCanonLock: vi.fn(),
   setUniverseCanonLockAll: vi.fn(),
   removeUniverseCanonEntry: vi.fn(),
+  removeUniverseCanonImageRef: vi.fn(),
   expandUniverseCharacter: vi.fn(),
 }));
 
@@ -45,7 +46,7 @@ vi.mock('../ui/Toast', () => ({
 
 import UniverseCanonSection from './UniverseCanonSection';
 import {
-  removeUniverseCanonEntry, updateUniverse, getUniverseCanonUsage,
+  removeUniverseCanonEntry, removeUniverseCanonImageRef, updateUniverse, getUniverseCanonUsage,
 } from '../../services/apiUniverseBuilder';
 import { unlinkCatalogIngredient } from '../../services/apiCatalog';
 
@@ -103,6 +104,20 @@ beforeEach(() => {
 });
 
 describe('UniverseCanonSection — remove entry', () => {
+  it('confirms image-reference removal through the delta endpoint and reflects the canonical response', async () => {
+    removeUniverseCanonImageRef.mockResolvedValue({ universe: baseUniverse({ characters: [
+      { ...ALEX, imageRefs: ['arrived-during-removal.png'], primaryImageRef: null }, BLAIR,
+    ] }) });
+    await renderSection({ universe: { characters: [ALEX, BLAIR] } });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove reference alex.png' }));
+    expect(removeUniverseCanonImageRef).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove reference' }));
+    await waitFor(() => expect(removeUniverseCanonImageRef).toHaveBeenCalledWith('uni-1', 'character', 'chr-1', 'alex.png', { silent: true }));
+    expect(updateUniverse).not.toHaveBeenCalled();
+    expect(unlinkCatalogIngredient).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove reference alex.png' })).toBeNull());
+    expect(screen.getByRole('button', { name: 'Remove reference arrived-during-removal.png' })).toBeInTheDocument();
+  });
   it('calls the canon DELETE endpoint with the kind + entry id, touching nothing else', async () => {
     removeUniverseCanonEntry.mockResolvedValue({
       universe: baseUniverse({ characters: [BLAIR] }),

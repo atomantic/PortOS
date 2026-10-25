@@ -113,6 +113,15 @@ export const listCatalogIngredientsByIds = async (ids = [], options) => {
 export const getCatalogIngredientDetails = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}/details`, options);
 
+export const getCatalogUniverseContext = (id, options) =>
+  request(`/catalog/ingredients/${enc(id)}/universe-context`, options);
+
+export const setCatalogUniverseOwner = (id, universeId, options) =>
+  request(`/catalog/ingredients/${enc(id)}/owner`, { method: 'PUT', body: JSON.stringify({ universeId }), ...options });
+
+export const forkCatalogIngredient = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/fork`, { method: 'POST', body: JSON.stringify(body), ...options });
+
 export const listCatalogRelatedImages = (id, { limit = 24, offset = 0, ...options } = {}) => {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   return request(`/catalog/ingredients/${enc(id)}/related-images?${params}`, options);

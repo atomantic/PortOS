@@ -1,14 +1,4 @@
-/**
- * Focused tests for the "Pick from Catalog" wiring on UniverseCanonSection:
- *   - the pure `buildCanonEntryFromIngredient` payload→entry projection
- *     (stamps `ingredientId`, never leaks the catalog id into `entry.id`),
- *   - the component flow: button → IngredientPicker → updateUniverse +
- *     linkCatalogIngredient with role `canon-<kind>`.
- *
- * The peer-reconciliation invariant the PLAN calls out lives in the helper
- * test: identity must travel as `ingredientId` so the boot-time backfill
- * (`migrateBibleToCatalog`) recreates the SAME catalog row id on every peer.
- */
+// Catalog picks use server ownership admission and preserve canonical identity.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -36,7 +26,7 @@ vi.mock('../ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
-import UniverseCanonSection, { buildCanonEntryFromIngredient } from './UniverseCanonSection';
+import UniverseCanonSection from './UniverseCanonSection';
 import { listCatalogIngredients, linkCatalogIngredient } from '../../services/apiCatalog';
 import { updateUniverse, getUniverseCanonUsage } from '../../services/apiUniverseBuilder';
 
@@ -69,48 +59,12 @@ beforeEach(() => {
   linkCatalogIngredient.mockResolvedValue({ success: true });
 });
 
-describe('buildCanonEntryFromIngredient', () => {
-  it('stamps ingredientId and keeps payload fields, never leaking the catalog id into entry.id', () => {
-    const ingredient = {
-      id: 'cat-chr-abc123',
-      type: 'character',
-      name: 'Rust Vega',
-      payload: {
-        id: 'foreign-id-should-be-dropped',
-        physicalDescription: 'Lanky drifter in a sun-bleached coat',
-        personality: 'wry',
-        createdAt: '2020-01-01',
-        updatedAt: '2020-01-02',
-      },
-    };
-    const entry = buildCanonEntryFromIngredient(ingredient);
-    expect(entry.ingredientId).toBe('cat-chr-abc123');
-    expect(entry.id).toBeUndefined(); // server mints a fresh kind-prefixed id
-    expect(entry.createdAt).toBeUndefined();
-    expect(entry.updatedAt).toBeUndefined();
-    expect(entry.name).toBe('Rust Vega');
-    expect(entry.physicalDescription).toBe('Lanky drifter in a sun-bleached coat');
-    expect(entry.personality).toBe('wry');
-  });
-
-  it('falls back to payload.name then a placeholder when the ingredient name is blank', () => {
-    expect(buildCanonEntryFromIngredient({ id: 'x', payload: { name: 'From Payload' } }).name)
-      .toBe('From Payload');
-    expect(buildCanonEntryFromIngredient({ id: 'x', payload: {} }).name).toBe('Untitled');
-  });
-
-  it('returns null for non-object input', () => {
-    expect(buildCanonEntryFromIngredient(null)).toBeNull();
-    expect(buildCanonEntryFromIngredient('nope')).toBeNull();
-  });
-});
-
 describe('UniverseCanonSection — Pick from Catalog', () => {
   it('opens the picker, then appends + links the picked ingredient with role canon-character', async () => {
     const onUniverseChange = vi.fn();
-    updateUniverse.mockResolvedValue(baseUniverse({
+    linkCatalogIngredient.mockResolvedValue({ success: true, universe: baseUniverse({
       characters: [{ id: 'chr-server-minted', name: 'Rust Vega', ingredientId: 'cat-chr-abc123' }],
-    }));
+    }) });
     listCatalogIngredients.mockResolvedValue({
       items: [{ id: 'cat-chr-abc123', type: 'character', name: 'Rust Vega', payload: { physicalDescription: 'drifter' } }],
     });
@@ -123,15 +77,10 @@ describe('UniverseCanonSection — Pick from Catalog', () => {
     const row = await screen.findByRole('button', { name: /rust vega/i });
     fireEvent.click(row);
 
-    await waitFor(() => expect(updateUniverse).toHaveBeenCalled());
-
-    // updateUniverse received a full `characters` array whose new entry stamps
-    // the catalog id as ingredientId (and carries no `id`).
-    const [, patch] = updateUniverse.mock.calls[0];
-    expect(Array.isArray(patch.characters)).toBe(true);
-    const appended = patch.characters[patch.characters.length - 1];
-    expect(appended.ingredientId).toBe('cat-chr-abc123');
-    expect(appended.id).toBeUndefined();
+    await waitFor(() => expect(onUniverseChange).toHaveBeenCalledWith(expect.objectContaining({
+      characters: [expect.objectContaining({ id: 'chr-server-minted', ingredientId: 'cat-chr-abc123' })],
+    })));
+    expect(updateUniverse).not.toHaveBeenCalled();
 
     await waitFor(() => expect(linkCatalogIngredient).toHaveBeenCalledWith(
       'cat-chr-abc123',
@@ -163,9 +112,9 @@ describe('UniverseCanonSection — Pick from Catalog', () => {
     ));
   });
 
-  it('reverts the optimistic append when the save fails', async () => {
+  it('leaves the universe draft intact when ownership admission fails', async () => {
     const onUniverseChange = vi.fn();
-    updateUniverse.mockRejectedValue(new Error('boom'));
+    linkCatalogIngredient.mockRejectedValue(new Error('Resolve ownership first'));
     listCatalogIngredients.mockResolvedValue({
       items: [{ id: 'cat-chr-abc123', type: 'character', name: 'Rust Vega', payload: { physicalDescription: 'drifter' } }],
     });
@@ -175,15 +124,9 @@ describe('UniverseCanonSection — Pick from Catalog', () => {
     const row = await screen.findByRole('button', { name: /rust vega/i });
     fireEvent.click(row);
 
-    await waitFor(() => expect(updateUniverse).toHaveBeenCalled());
-    // Optimistic append fires first (characters carries the new entry); the
-    // failed save then reverts it, so the LAST onUniverseChange restores the
-    // pre-append (empty) list and the catalog link is never attempted.
-    await waitFor(() => {
-      const lastPatch = onUniverseChange.mock.calls.at(-1)[0];
-      expect(lastPatch.characters).toEqual([]);
-    });
-    expect(linkCatalogIngredient).not.toHaveBeenCalled();
+    await waitFor(() => expect(linkCatalogIngredient).toHaveBeenCalled());
+    expect(onUniverseChange).not.toHaveBeenCalled();
+    expect(updateUniverse).not.toHaveBeenCalled();
   });
 
   it('refuses to add an ingredient already linked by ingredientId', async () => {

@@ -76,6 +76,10 @@ export async function commitScrap({ scrapId, accepted = [], embeds = [], univers
         return readReceipt(client.query.bind(client), operationKey, fingerprint);
       }
     }
+    if (universeRef) {
+      const { rows } = await client.query('SELECT id FROM universes WHERE id = $1 AND deleted = false FOR SHARE', [universeRef]);
+      if (!rows.length) throw new ServerError('Owning universe not found', { status: 404 });
+    }
     const created = [];
     const ids = new Map();
     for (let i = 0; i < accepted.length; i++) {
@@ -91,6 +95,7 @@ export async function commitScrap({ scrapId, accepted = [], embeds = [], univers
       }, { client, source: 'extract' });
       await linkIngredientToSource(ingredient.id, scrapId, draft.span || null, { client });
       if (universeRef) {
+        await linkIngredientToRef(ingredient.id, 'universe', universeRef, 'owner', { client });
         await linkIngredientToRef(
           ingredient.id,
           'universe',

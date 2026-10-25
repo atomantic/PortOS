@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render as renderUI, screen, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+
+const render = (ui) => renderUI(ui, { wrapper: MemoryRouter });
 
 // CanonCard subscribes to live job progress via the socket-backed hook; the
 // chip-label code path doesn't touch it, but the hook would otherwise wire
@@ -51,6 +54,7 @@ describe('CanonCard — "from series" provenance chip', () => {
     const chip = screen.getByText('from series');
     expect(chip).toBeInTheDocument();
     expect(chip).toHaveAttribute('title', 'Introduced by series ser-abc');
+    expect(chip).toHaveAttribute('href', '/pipeline/series/ser-abc');
   });
 
   it('renders the series name from seriesNameMap and includes id in tooltip', () => {

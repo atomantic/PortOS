@@ -27,6 +27,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `catalogUniverseContext.js` | Explicit catalog owning-universe role and visible legacy/missing/conflicting ownership classification, independent of usage. |
 | `appOperationErrorContext.js` | `appOperationErrorContext` projects bounded forge scope repair fields for failed update events and history; all other error context is withheld. |
 | `checkoutRetirementAdmission.js` | Durable common-repository publication/cut admission for explicit initialized-checkout quarantine; pending reservations survive restart and block managed checkout mutations until verified recovery. |
 | `branchRetirementArchive.js` | `preserveBranchRetirement` remains for direct callers and historical tests. Production branch deletion does not call it and does not write `data/cos/branch-retirement-archives`. Deletion still uses Git's receiver lease and holder guards, then removes the local branch section after the ref is actually gone. |

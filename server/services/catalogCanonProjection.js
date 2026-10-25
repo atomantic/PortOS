@@ -39,6 +39,7 @@
 
 import { isDeepStrictEqual } from 'node:util';
 import * as catalogDB from './catalogDB.js';
+import { catalogEvents } from './catalogEvents.js';
 import { getCatalogIdentityAccess } from './catalogDB/identityAccess.js';
 import { BIBLE_FIELD } from '../lib/storyBible.js';
 
@@ -242,6 +243,7 @@ export async function projectToCatalog(universeId, canonArrays, { guardToken = n
         { sourceUpdatedAt, priorWrite, source: 'sync', actor: 'canon-projection' },
       );
       if (result?.status !== 'written') { stats.skipped++; continue; }
+      catalogEvents.emit('primitive-changed', { ingredientId: result.ingredient.id });
       ownWrites.set(ingredientId, { syncSequence: result.ingredient.syncSequence, sourceUpdatedAt });
       stats.written++;
     } catch (err) {

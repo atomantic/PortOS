@@ -318,6 +318,7 @@ const SIMPLE_BRIDGES = [
   // client ignores stragglers from a prior run.
   { emitter: importerEvents, event: 'progress', channel: 'importer:progress' },
   { emitter: catalogEvents, event: 'progress', channel: 'catalog:extract:progress' },
+  { emitter: catalogEvents, event: 'primitive-changed', channel: 'catalog:primitive-changed' },
   { emitter: catalogIdentityEvents, event: 'changed', channel: 'catalog:identity-changed' },
   // A GitHub notification inbox sync, triage or action changed stored rows.
   { emitter: githubNotificationEvents, event: 'changed', channel: 'github:notifications:changed' },

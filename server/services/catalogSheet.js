@@ -30,6 +30,7 @@ import { getBoard } from './moodBoard/db.js';
 import { recordRenderPin } from '../lib/renderTargets.js';
 import { shortId } from '../lib/fileUtils.js';
 import { getIngredient, getIngredientIdentityIds, listLiveRefsForIngredient } from './catalogDB.js';
+import { catalogUniverseContext } from '../lib/catalogUniverseContext.js';
 import { getUniverse } from './universeBuilder.js';
 import { enqueueJob } from './mediaJobQueue/index.js';
 import {
@@ -181,11 +182,13 @@ async function resolveSheetTarget(id, options) {
   }
 
   const refs = await listLiveRefsForIngredient(id);
+  const context = catalogUniverseContext(refs.map((ref) => ref.role === 'owner' && ref.ingredientId && ref.ingredientId !== ingredient.id
+    ? { ...ref, role: 'retained-owner' } : ref));
   const universes = [];
   const universeRefs = isLook && options.universeId !== undefined
     ? (options.universeId ? [{ refKind: 'universe', refId: options.universeId }] : [])
-    : refs;
-  if (isLook && options.universeId === undefined && new Set(universeRefs.filter((r) => r.refKind === 'universe').map((r) => r.refId)).size > 1) {
+    : context.owner ? [context.owner] : [];
+  if (isLook && options.universeId === undefined && !context.owner && new Set(refs.filter((r) => r.refKind === 'universe').map((r) => r.refId)).size > 1) {
     throw new ServerError('Choose which universe supplies this look’s visual direction', { status: 400, code: 'LOOK_UNIVERSE_REQUIRED' });
   }
   for (const ref of universeRefs) {

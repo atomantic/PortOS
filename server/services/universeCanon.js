@@ -784,8 +784,7 @@ export async function setCanonLocksForSeries(universeId, seriesId, locked, {
  *     its character reference-sheet PNGs (they stay in the gallery, reachable
  *     from Media, and re-attachable to another entry), and
  *   - delete or unlink the shared Catalog ingredient an entry may point at via
- *     `ingredientId` (the catalog row is a universe-independent record; other
- *     universes and series may embed the same ingredient).
+ *     `ingredientId` (the primitive and its ownership survive container removal).
  * Clearing the removed character's in-memory pending sheet-render slot (so an
  * in-flight sheet render doesn't stamp a pointer onto an entry that's gone) is
  * NOT done here — `updateUniverse` diffs the character ids across every
@@ -806,17 +805,38 @@ export async function removeCanonEntry(universeId, kind, entryId) {
   assertCanonKind(kind);
   const field = BIBLE_FIELD[kind];
   let removed = null;
-  const updated = await updateUniverse(universeId, (cur) => {
+  let unlink = false;
+  const updated = await updateUniverse(universeId, async (cur) => {
     const list = Array.isArray(cur[field]) ? cur[field] : [];
     removed = list.find((e) => e.id === entryId);
     if (!removed) return null;
+    const { assertCanonRemovable } = await import('./catalogPrimitiveUsage.js');
+    await assertCanonRemovable(universeId, kind, entryId);
+    if (removed.ingredientId) {
+      const { getIngredientIdentityIds } = await import('./catalogDB/ingredients.js');
+      const ids = new Set(await getIngredientIdentityIds(removed.ingredientId));
+      unlink = !list.some((entry) => entry !== removed && ids.has(entry.ingredientId));
+      if (unlink) {
+        const { assertCatalogIdentityWritable, assertCatalogAssociationRemovable } = await import('./catalogDB/identityAccess.js');
+        await assertCatalogIdentityWritable(removed.ingredientId);
+        await assertCatalogAssociationRemovable(removed.ingredientId, 'refs', ['universe', universeId, `canon-${kind}`]);
+      }
+    }
     return { [field]: list.filter((e) => e !== removed) };
-  });
+  }, { afterWrite: async () => {
+    if (!unlink) return;
+    const { unlinkIngredientFromRef } = await import('./catalogDB/refs.js');
+    await unlinkIngredientFromRef(removed.ingredientId, 'universe', universeId, `canon-${kind}`);
+  } });
   if (!removed) {
     throw new ServerError(
       `Canon ${kind} ${entryId} not found in universe`,
       { status: 404, code: 'UNIVERSE_CANON_NOT_FOUND' },
     );
+  }
+  if (unlink) {
+    const { catalogEvents } = await import('./catalogEvents.js');
+    catalogEvents.emit('primitive-changed', { ingredientId: removed.ingredientId });
   }
   console.log(`🗑️ Removed canon ${kind} "${removed.name}" from universe ${shortId(universeId)} (assets + catalog untouched)`);
   return { universe: updated, entry: removed };

@@ -113,7 +113,7 @@ describe('catalog sheet routes', () => {
 
   it('delegates a universe-linked character to the universe renderer', async () => {
     mocks.getIngredient.mockResolvedValue(character);
-    mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1' }]);
+    mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
     mocks.getUniverse.mockResolvedValue({
       id: 'universe-1', name: 'Example Universe', influences: { embrace: [] },
       characters: [{ id: 'char-entry-1', name: 'Example Hero', ingredientId: 'cat-chr-1' }],
@@ -185,7 +185,7 @@ describe('catalog sheet routes', () => {
     // wardrobe text; and the preview drifting from what is queued (#11317).
     it('previews and queues a look tagged look:<wardrobeId> through the catalog path, even when universe-linked', async () => {
       mocks.getIngredient.mockResolvedValue(dressed);
-      mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1' }]);
+      mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
       mocks.getUniverse.mockResolvedValue({
         id: 'universe-1', name: 'Example Universe', influences: { embrace: ['ink and watercolor'] },
         characters: [{ id: 'char-entry-1', name: 'Example Hero', ingredientId: 'cat-chr-1' }],
@@ -314,7 +314,7 @@ describe('catalog sheet routes', () => {
     // landing under the canonical role, or still describing the adult.
     it('renders a form through the catalog path with its age and look, tagged sheet:<variant>@<formId>', async () => {
       mocks.getIngredient.mockResolvedValue(aged);
-      mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1' }]);
+      mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
       mocks.getUniverse.mockResolvedValue({
         id: 'universe-1', name: 'Example Universe', influences: { embrace: [] },
         characters: [{ id: 'char-entry-1', name: 'Example Hero', ingredientId: 'cat-chr-1' }],

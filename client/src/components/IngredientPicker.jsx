@@ -26,6 +26,7 @@ import Modal from './ui/Modal';
 import { listCatalogIngredients } from '../services/apiCatalog';
 import { CATALOG_BADGE_BY_ID, payloadSnippet } from '../lib/catalogTypes';
 import { clickableProps, onActivateKeyDown } from '../lib/a11yKeyboard';
+import { ingredientPath, usageSummary } from '../lib/creativeLibraries';
 
 // Type chip color comes from the shared registry. Snippet uses the registry's
 // per-type fallback chain at a slightly longer cap for the picker rows.
@@ -213,6 +214,7 @@ export default function IngredientPicker({
                   {snippet(it.payload, it.type) && (
                     <p className="text-xs text-gray-400 line-clamp-2">{snippet(it.payload, it.type)}</p>
                   )}
+                  <p className="text-xs text-gray-500">{it.owningUniverse ? `Universe: ${it.owningUniverse.name}` : 'Ownership needs review'}{usageSummary(it.usage) ? ` · ${usageSummary(it.usage)}` : ''}</p>
                   {Array.isArray(it.tags) && it.tags.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
                       {it.tags.slice(0, 5).map((tag) => (
@@ -238,6 +240,8 @@ export default function IngredientPicker({
                       {inner}
                     </button>
                   )}
+                  <Link to={ingredientPath(it)} onClick={onClose} className="inline-block mt-1 text-xs text-port-accent hover:underline"
+                    aria-label={`Inspect ${it.name || it.id} ownership, usages and forks`}>Inspect ownership, usages &amp; forks</Link>
                 </li>
               );
             })}

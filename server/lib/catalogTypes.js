@@ -451,6 +451,7 @@ export function canonicalTagKey(label) {
  *             from both ingredients' detail pages.
  */
 const RELATION_REGISTRY = [
+  { id: 'forked-from', label: 'Forked from', inverseLabel: 'Forks' },
   { id: 'appears-in',  label: 'Appears in',  inverseLabel: 'Features' },
   { id: 'lives-in',    label: 'Lives in',    inverseLabel: 'Home of' },
   { id: 'owned-by',    label: 'Owned by',    inverseLabel: 'Owns' },
@@ -553,3 +554,12 @@ export function upgradePayload(id, payload = {}) {
 // surface (registry + limits) without a second import line in callers that
 // already pull from here. Sourced from BIBLE_LIMITS so it stays in lockstep.
 export const CATALOG_TAG_MAX = BIBLE_LIMITS.TAG_MAX;
+
+const CONTAINER_ROLES = Object.freeze({
+  universe: { character: 'canon-character', place: 'canon-place', object: 'canon-object' },
+  series: { character: 'cast', place: 'canon-place', object: 'canon-object' },
+  'creative-director': { character: 'cast', place: 'location', object: 'prop', scene: 'scene' },
+  'music-video': { character: 'cast', place: 'set', object: 'prop' },
+});
+
+export const catalogReferenceRole = (type, refKind) => CONTAINER_ROLES[refKind]?.[type] || (refKind === 'series' ? 'mentioned' : 'reference');

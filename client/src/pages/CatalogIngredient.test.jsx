@@ -37,7 +37,8 @@ const { CHAR_FIXTURE } = vi.hoisted(() => ({
       stats: [{ label: 'Logic', value: '9' }],
       aliases: ['The Countess'],
     },
-    refs: [{ refKind: 'universe', refId: 'u-1', refName: 'My Cool Universe', role: 'canon-character' }],
+    refs: [{ refKind: 'universe', refId: 'u-1', refName: 'My Cool Universe', role: 'canon-character' },
+      { refKind: 'universe', refId: 'u-1', refName: 'My Cool Universe', role: 'owner' }],
     sources: [],
   },
 }));
@@ -48,6 +49,8 @@ const { detailsOf } = vi.hoisted(() => ({
   detailsOf: (ing) => ({
     ingredient: ing,
     refs: ing.refs || [],
+    universeContext: { status: ing.refs?.some((ref) => ref.role === 'owner') ? 'owned' : 'needs-review',
+      owner: ing.refs?.find((ref) => ref.role === 'owner') || null, refs: ing.refs || [] },
     sources: ing.sources || [],
     relations: { outbound: [], inbound: [] },
     revisions: [],
@@ -537,6 +540,36 @@ describe('CatalogIngredient — character sheet', () => {
     expect(screen.getByDisplayValue('Being underestimated.')).toBeTruthy();
   });
 
+  it('edits the full shared character sheet and preserves unedited legacy fields', async () => {
+    const character = { ...CHAR_FIXTURE, payload: { ...CHAR_FIXTURE.payload, futureCanon: { retained: true } } };
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf(character));
+    updateCatalogIngredient.mockImplementation(async (_id, patch) => ({ ...character, ...patch }));
+    await renderPage('/casting/cat-chr-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit full character sheet' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Story' }));
+    const ghost = screen.getByLabelText(/^Ghost/);
+    fireEvent.change(ghost, { target: { value: 'Lost the first dispatch.' } });
+    fireEvent.blur(ghost);
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledWith(character.id,
+      expect.objectContaining({ payload: expect.objectContaining({ ghost: 'Lost the first dispatch.', futureCanon: { retained: true } }) }), { silent: true }));
+  });
+
+  it('keeps ambiguous legacy ownership visible and never picks a universe style by reference order', async () => {
+    const { getUniverse } = await import('../services/apiUniverseBuilder');
+    getUniverse.mockClear();
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf({ ...CHAR_FIXTURE, refs: [
+      { refKind: 'universe', refId: 'first', refName: 'First world', role: 'canon-character' },
+      { refKind: 'universe', refId: 'second', refName: 'Second world', role: 'canon-character' },
+    ] }));
+    await renderPage();
+    expect(screen.getByText('Ownership needs review')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /First world/ })).toHaveAttribute('href', '/universes/first');
+    fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
+    await screen.findByPlaceholderText(/Describe the image to render/);
+    expect(getUniverse).not.toHaveBeenCalled();
+  });
+
   it('shows additional stored canon read-only on a locked character and preserves it on an unrelated save', async () => {
     const character = {
       ...CHAR_FIXTURE, name: 'Example courier',
@@ -971,7 +1004,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       referenceSheets: { expressions: 'hero-expressions.png' },
       wardrobes: [{ id: 'wardrobe-1', name: 'Red scarf', description: 'Long red wool scarf.', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }],
     },
-    refs: [{ refKind: 'universe', refId: 'u-example', refName: 'Example Universe' }],
+    refs: [{ refKind: 'universe', refId: 'u-example', refName: 'Example Universe', role: 'owner' }],
     sources: [],
   };
   const MEDIA = [

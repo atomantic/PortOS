@@ -1080,6 +1080,42 @@ status — branch on the status first, and treat an unfamiliar `code` as a
 refinement of it.
 
 
+### Creative primitive ownership and forks
+
+Catalog `character`, `place` (Environments), `object`, `idea`, `scene`, `concept`
+and active custom creative types share one identity model. `GET
+/api/catalog/ingredients/:id/details` and `GET
+/api/catalog/ingredients/:id/universe-context` return `universeContext`: explicit
+`owner`, `status`, legacy `candidates` and labeled `refs`. Ownership uses the
+existing universe-reference role `owner`; it is separate from container uses.
+Missing/conflicting owners stay unresolved, and ordinary legacy references never
+select a style universe by list order. Derived FableLoom/Voice Studio uses are
+exact canon-pointer links; series/issue `prose-mention` uses are labeled inferred
+mentions. Derived uses are read-only and never confer export consent.
+
+`PUT /api/catalog/ingredients/:id/owner` accepts `{ universeId }`. It resolves
+unowned/ambiguous records explicitly and refuses to move an established owner.
+`POST /api/catalog/ingredients` accepts optional `universeId` and `operationKey`
+for atomic owned creation and retry-safe identity. Legacy callers can still
+create records staged for ownership review.
+
+`POST /api/catalog/ingredients/:id/fork` accepts `{ universeId, operationKey,
+name?, copyImages? }`. The UUID operation key is required. Replays return the
+original new primitive; changed input with the same key returns 409. A fork has
+fresh identity, initial revision and `forked-from` lineage. Image reuse defaults
+off. When enabled, attachment rows are independent and reuse immutable managed
+image files; voice media, execution/session bindings, approvals and export
+consent are excluded. Production uses and inter-character links are not copied.
+
+The existing `/ingredients/:id/link` API manages membership. Universe canon
+roles populate/remove compatibility projections through serialized mutations;
+new cross-universe placement requires a fork. Removing membership preserves the
+primitive, owning-universe association, other usages, revisions and files.
+Primitive deletion returns `CATALOG_PRIMITIVE_IN_USE` while linked containers
+remain. Canon removal returns `UNIVERSE_CANON_IN_USE` while FableLoom or local
+voice profiles still hold its exact entry ID. Reassign/remove those bindings
+first. `catalog:primitive-changed` refreshes ownership and membership views.
+
 ### Catalog scrap graph commits
 
 An optional UUID `operationKey` makes a reviewed submission retry-safe. Reuse it for retries with the same accepted content, relationships, scrap, universe and role: the server returns the original ingredient response without creating another batch, including after restart or concurrent requests. Reusing it with different input returns HTTP 409. Embedding output is excluded from request identity. Mint a new key for an intentional new submission; callers omitting it keep legacy behavior. Receipts remain local to the accepting instance and persist with its database.

@@ -14,6 +14,7 @@ vi.mock('../services/apiCatalog', () => ({
   getCatalogFacets: vi.fn(),
 }));
 vi.mock('../services/apiCatalogTypes', () => ({ listCatalogTypes: vi.fn() }));
+vi.mock('../services/apiUniverseBuilder', () => ({ listUniverseNames: vi.fn(async () => [{ id: 'u-1', name: 'Example Universe' }]) }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('../components/MediaImage', () => ({
   default: ({ src, alt, ...rest }) => <img src={src} alt={alt} {...rest} />,
@@ -75,6 +76,8 @@ describe('CreativeLibrary', () => {
     renderLibrary('objects', '/objects');
 
     fireEvent.click(await screen.findByRole('button', { name: /New/ }));
+    await screen.findByRole('option', { name: 'Example Universe' });
+    fireEvent.change(screen.getByLabelText(/Owning universe/), { target: { value: 'u-1' } });
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Reel can' } });
     fireEvent.change(screen.getByLabelText(/Description/), { target: { value: 'Dented tin.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));

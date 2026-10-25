@@ -382,11 +382,19 @@ async function decorateIngredientPage(ids) {
        SELECT cid, jsonb_object_agg(ref_kind, n) AS ref_usage FROM (
          SELECT r.cid, r.ref_kind, COUNT(DISTINCT r.ref_id) AS n
            FROM (SELECT catalog_canonical_ingredient_id(ingredient_id) AS cid, ref_kind, ref_id
-                   FROM catalog_identity_read_refs WHERE deleted = false) r
+                   FROM catalog_identity_read_refs WHERE deleted = false AND NOT (ref_kind = 'universe' AND role = 'owner')) r
           WHERE ${inSet('r.cid', 'SELECT id FROM page')}
             AND (r.ref_kind NOT IN (${HOMING_REF_KINDS_SQL}) OR ${liveHomingTargetSql('r')})
           GROUP BY r.cid, r.ref_kind
        ) u GROUP BY cid
+     ),
+     owners AS (
+       SELECT ingredient_id AS id, COUNT(DISTINCT ref_id) AS n, MIN(ref_id) AS universe_id
+         FROM catalog_identity_read_refs
+        WHERE ref_kind = 'universe' AND role = 'owner' AND deleted = false
+          AND ingredient_id = catalog_canonical_ingredient_id(ingredient_id)
+          AND ingredient_id = ANY($1)
+        GROUP BY ingredient_id
      ),
      thumbs AS (
        SELECT DISTINCT ON (m.cid) m.cid, m.media_key
@@ -397,8 +405,11 @@ async function decorateIngredientPage(ids) {
         WHERE ${inSet('m.cid', 'SELECT id FROM page')}
         ORDER BY m.cid, (m.kind = 'portrait') DESC, m.created_at DESC
      )
-     SELECT page.id, thumbs.media_key AS thumbnail_key, usage.ref_usage
-       FROM page LEFT JOIN thumbs ON thumbs.cid = page.id LEFT JOIN usage ON usage.cid = page.id`,
+     SELECT page.id, thumbs.media_key AS thumbnail_key, usage.ref_usage,
+       CASE WHEN owners.n = 1 AND u.id IS NOT NULL THEN jsonb_build_object('id', u.id, 'name', u.name) ELSE NULL END AS owning_universe,
+       CASE WHEN owners.n > 1 THEN 'conflict' WHEN owners.n = 1 AND u.id IS NOT NULL THEN 'owned' ELSE 'needs-review' END AS ownership_status
+       FROM page LEFT JOIN thumbs ON thumbs.cid = page.id LEFT JOIN usage ON usage.cid = page.id
+       LEFT JOIN owners ON owners.id = page.id LEFT JOIN universes u ON u.id = owners.universe_id AND u.deleted = false`,
     [ids],
   );
   return new Map(result.rows.map((row) => [row.id, row]));
@@ -508,7 +519,8 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
   return {
     items: result.rows.map((row) => {
       const decoration = decorations.get(row.id);
-      return { ...rowToIngredient(row), thumbnailKey: decoration?.thumbnail_key ?? null, usage: decoration?.ref_usage ?? {} };
+      return { ...rowToIngredient(row), thumbnailKey: decoration?.thumbnail_key ?? null, usage: decoration?.ref_usage ?? {},
+        owningUniverse: decoration?.owning_universe ?? null, ownershipStatus: decoration?.ownership_status ?? 'needs-review' };
     }),
     nextOffset: offset + result.rows.length,
   };

@@ -1,20 +1,11 @@
-/**
- * Tests for the manual "Add" affordance on UniverseCanonSection — minting a
- * blank canon entry from a typed name (+ optional description) without going
- * through Extract-from-prose / Pick-from-Catalog / promote-variation.
- *
- * Mirrors the optimistic-append-then-persist contract the catalog-pick path
- * uses: the new entry carries no `id` (server mints it), lands `locked: false`
- * so the card is immediately editable, and the typed description is written to
- * the kind's `descField` (physicalDescription for characters, description for
- * places/objects).
- */
+// Manual add creates an owned canonical primitive before server-side attachment.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../services/apiCatalog', () => ({
   listCatalogIngredients: vi.fn(),
+  createCatalogIngredient: vi.fn(),
   linkCatalogIngredient: vi.fn(),
 }));
 
@@ -37,6 +28,7 @@ vi.mock('../ui/Toast', () => ({
 }));
 
 import UniverseCanonSection from './UniverseCanonSection';
+import { createCatalogIngredient, linkCatalogIngredient } from '../../services/apiCatalog';
 import { updateUniverse, getUniverseCanonUsage } from '../../services/apiUniverseBuilder';
 import toast from '../ui/Toast';
 
@@ -65,6 +57,12 @@ const renderSection = (props = {}) => render(
 beforeEach(() => {
   vi.clearAllMocks();
   getUniverseCanonUsage.mockResolvedValue({});
+  createCatalogIngredient.mockImplementation(async (input) => ({ ...input, id: `cat-${input.type}-new` }));
+  linkCatalogIngredient.mockImplementation(async () => {
+    const input = createCatalogIngredient.mock.calls.at(-1)[0];
+    const field = { character: 'characters', place: 'places', object: 'objects' }[input.type];
+    return { success: true, universe: baseUniverse({ [field]: [{ ...input.payload, id: `${input.type}-server`, ingredientId: `cat-${input.type}-new`, name: input.name }] }) };
+  });
 });
 
 describe('UniverseCanonSection — manual Add', () => {
@@ -81,14 +79,12 @@ describe('UniverseCanonSection — manual Add', () => {
     fireEvent.change(screen.getByLabelText(/new character description/i), { target: { value: 'drifter' } });
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
-    await waitFor(() => expect(updateUniverse).toHaveBeenCalled());
-    const [, patch] = updateUniverse.mock.calls[0];
-    expect(Array.isArray(patch.characters)).toBe(true);
-    const appended = patch.characters[patch.characters.length - 1];
-    expect(appended.name).toBe('Rust Vega'); // trimmed
-    expect(appended.id).toBeUndefined(); // server mints it
-    expect(appended.locked).toBe(false); // immediately editable
-    expect(appended.physicalDescription).toBe('drifter');
+    await waitFor(() => expect(onUniverseChange).toHaveBeenCalled());
+    expect(createCatalogIngredient).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'character', name: 'Rust Vega', universeId: 'uni-1', payload: { locked: false, physicalDescription: 'drifter' }, operationKey: expect.any(String),
+    }), { silent: true });
+    expect(onUniverseChange.mock.calls.at(-1)[0].characters[0]).toMatchObject({ ingredientId: 'cat-character-new', locked: false });
+    expect(updateUniverse).not.toHaveBeenCalled();
   });
 
   it('writes the description to `description` for places', async () => {
@@ -104,10 +100,8 @@ describe('UniverseCanonSection — manual Add', () => {
     fireEvent.change(screen.getByLabelText(/new place description/i), { target: { value: 'a tunnel' } });
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
-    await waitFor(() => expect(updateUniverse).toHaveBeenCalled());
-    const [, patch] = updateUniverse.mock.calls[0];
-    const appended = patch.places[patch.places.length - 1];
-    expect(appended.description).toBe('a tunnel');
+    await waitFor(() => expect(createCatalogIngredient).toHaveBeenCalled());
+    expect(createCatalogIngredient.mock.calls[0][0]).toMatchObject({ type: 'place', universeId: 'uni-1', payload: { description: 'a tunnel' } });
   });
 
   it('omits the description field entirely when left blank', async () => {
@@ -121,10 +115,8 @@ describe('UniverseCanonSection — manual Add', () => {
     fireEvent.change(screen.getByLabelText(/new character name/i), { target: { value: 'Nameless' } });
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
-    await waitFor(() => expect(updateUniverse).toHaveBeenCalled());
-    const [, patch] = updateUniverse.mock.calls[0];
-    const appended = patch.characters[patch.characters.length - 1];
-    expect('physicalDescription' in appended).toBe(false);
+    await waitFor(() => expect(createCatalogIngredient).toHaveBeenCalled());
+    expect(createCatalogIngredient.mock.calls[0][0].payload).toEqual({ locked: false });
   });
 
   it('refuses to add a duplicate name (case-insensitive) without calling the server', async () => {
@@ -168,20 +160,18 @@ describe('UniverseCanonSection — manual Add', () => {
     expect(screen.getByLabelText(/new character description/i).value).toBe('');
   });
 
-  it('reverts the optimistic append when the save fails', async () => {
+  it('keeps the draft intact and reuses its operation key after a failed create', async () => {
     const onUniverseChange = vi.fn();
-    updateUniverse.mockRejectedValue(new Error('boom'));
-
+    createCatalogIngredient.mockRejectedValueOnce(new Error('boom'));
     renderSection({ onUniverseChange });
     fireEvent.click(screen.getByRole('button', { name: /add character/i }));
     fireEvent.change(screen.getByLabelText(/new character name/i), { target: { value: 'Rust Vega' } });
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
-
-    await waitFor(() => expect(updateUniverse).toHaveBeenCalled());
-    // Optimistic append fires first; the failed save reverts to the empty list.
-    await waitFor(() => {
-      const lastPatch = onUniverseChange.mock.calls.at(-1)[0];
-      expect(lastPatch.characters).toEqual([]);
-    });
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('boom')));
+    expect(onUniverseChange).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(/new character name/i).value).toBe('Rust Vega');
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(onUniverseChange).toHaveBeenCalled());
+    expect(createCatalogIngredient.mock.calls[1][0].operationKey).toBe(createCatalogIngredient.mock.calls[0][0].operationKey);
   });
 });
