@@ -192,6 +192,19 @@ function completedDetachedSiblingCapture(policy, input) {
 
 const completedDetachedSibling = (policy, input) => Boolean(completedDetachedSiblingCapture(policy, input));
 
+function knownPhysicalIdentity(value) {
+  return value && ['dev', 'ino', 'birthtimeNs'].every(key => typeof value[key] === 'string')
+    && /^(0|[1-9]\d*)$/.test(value.dev)
+    && /^[1-9]\d*$/.test(value.ino) && /^[1-9]\d*$/.test(value.birthtimeNs);
+}
+
+function distinctCapturedAdministration(incarnation, current) {
+  return checkoutSeedSchema.shape.incarnation.safeParse(incarnation).success
+    && isAbsolute(incarnation.gitdir.path) && knownPhysicalIdentity(incarnation.pointer)
+    && knownPhysicalIdentity(incarnation.gitdir) && knownPhysicalIdentity(current)
+    && ['dev', 'ino', 'birthtimeNs'].some(key => incarnation.gitdir[key] !== current[key]);
+}
+
 function separatelyDeliveredCheckout(policy, input) {
   const forge = input.retirementForge;
   if (forge?.scopeProof !== 'represented-detached-head' || forge.detachedRepresentation?.sourceHead !== input.tip
@@ -202,10 +215,10 @@ function separatelyDeliveredCheckout(policy, input) {
   const rows = policy.agent.metadata?.completedCheckouts?.filter(row => completedCheckoutReceiptValid(policy.agent, row)
     && samePath(row.repoPath, input.repoPath) && row.branch === input.branch
     && samePath(row.path, policy.agent.metadata.workspacePath) && !sameReviewedPath(row.path, input.checkoutPath, input)
-    && row.incarnation?.pointer && createHash('sha256')
+    && distinctCapturedAdministration(row.incarnation, input.detachedCheckoutGitdir) && createHash('sha256')
       .update(JSON.stringify(['dev', 'ino', 'birthtimeNs'].map(key => row.incarnation.pointer[key])))
       .digest('hex') !== input.detachedCheckoutIdentity
-    && input.detachedDeliveredCaptures?.some(proof => proof.agentId === policy.agent.id
+    && input.detachedSiblingCaptures?.some(proof => proof.agentId === policy.agent.id
       && proof.capturedHead === row.head && proof.capturedAt === row.capturedAt && proof.path === row.path
       && proof.detachedCheckoutIdentity === input.detachedCheckoutIdentity && isDeepStrictEqual(proof.incarnation, row.incarnation)));
   return rows?.length === 1 ? rows[0] : null;
@@ -349,7 +362,8 @@ export function reviewedRetirementPolicy(input) {
     || (incarnation && p.tip && p.tip !== input.tip && !continuedDelivery(p, input) && !p.resumedCleanup)))) {
     return { reason: 'retirement-policy-not-legacy-completed' };
   }
-  return { reason: null, ...(input.integratedCleanupHead && { integratedCleanupHead: input.integratedCleanupHead }), policies: policies.map(p => ({
+  return { reason: null, ...(input.integratedCleanupHead && { integratedCleanupHead: input.integratedCleanupHead }),
+    ...(input.detachedCheckoutGitdir && { detachedCheckoutGitdir: input.detachedCheckoutGitdir }), policies: policies.map(p => ({
     id: p.agent.id || p.agent.agentId, startedAt: p.agent.startedAt,
     completedAt: p.agent.completedAt, status: p.agent.status, success: p.agent.result.success,
     ...(p.resumedCleanup && { resumedCleanup: p.resumedCleanup }),

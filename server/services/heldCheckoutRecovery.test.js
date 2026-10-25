@@ -2997,11 +2997,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner', 'normal-completed', 'normal-invalid-time', 'normal-resumed-lineage', 'separate-incomplete', 'separate-wrong-pr'])('keeps an original sibling obligation separate from a detached copy: %s', async scenario => {
+  it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner', 'normal-completed', 'normal-invalid-time', 'normal-resumed-lineage', 'separate-incomplete', 'separate-retained-work', 'separate-same-incarnation', 'separate-replaced-pointer', 'separate-malformed-capture', 'separate-missing-receipt', 'separate-wrong-pr'])('keeps an original sibling obligation separate from a detached copy: %s', async scenario => {
     const c = await reviewedCheckout(`orphan-sibling-${scenario}`, { normalMerge: scenario.startsWith('separate-') });
     const namedPath = c.path;
     const namedBranch = c.release.branch;
     await execGit(['worktree', 'unlock', namedPath], repo);
+    if (scenario === 'separate-retained-work') {
+      await writeFile(join(namedPath, 'unpublished-reviewer.txt'), 'unique unfinished reviewer work\n');
+      await execGit(['add', 'unpublished-reviewer.txt'], namedPath);
+      await execGit(['commit', '-m', 'unfinished reviewer work'], namedPath);
+    }
+    const capturedHead = (await execGit(['rev-parse', 'HEAD'], namedPath)).stdout.trim();
     const evidence = await import('./completedCheckoutEvidence.js');
     const agent = { id: 'sibling-owner', status: 'running', startedAt: new Date(Date.now() - 60_000).toISOString(),
       metadata: { sourceWorkspace: repo, workspacePath: namedPath, isWorktree: true, worktreeBranch: namedBranch,
@@ -3009,7 +3015,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     agent.metadata.checkoutSeeds = await evidence.captureCheckoutSeeds(agent);
     // Completion records the exact terminal target before publishing the orphan.
     const targets = await evidence.captureSeededCompletionCheckouts(agent, { preterminal: true });
-    expect(targets).toEqual([expect.objectContaining({ head: c.release.head, startedAt: agent.startedAt })]);
+    expect(targets).toEqual([expect.objectContaining({ head: capturedHead, startedAt: agent.startedAt })]);
     agent.metadata.checkoutCapture = { status: 'captured', targets, unknown: false };
     agent.status = 'completed'; agent.completedAt = new Date().toISOString();
     agent.result = { success: false, executionSuccess: false, orphaned: true, validationPassed: null };
@@ -3036,11 +3042,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       agent.metadata.workspacePath = alias;
     }
     let path = join(external, `detached-${scenario}`);
-    if (scenario === 'same-incarnation') {
+    if (scenario === 'same-incarnation' || scenario === 'separate-same-incarnation' || scenario === 'separate-replaced-pointer') {
       const pointerIdentity = await readRetirementCheckoutIdentity(namedPath);
       await execGit(['worktree', 'move', namedPath, path], repo);
       await execGit(['switch', '--detach', c.release.head], path);
       expect(await readRetirementCheckoutIdentity(path)).toBe(pointerIdentity);
+      if (scenario === 'separate-replaced-pointer') {
+        const bytes = await readFile(join(path, '.git'));
+        await rename(join(path, '.git'), join(scratch, 'prior-checkout-pointer'));
+        await writeFile(join(path, '.git'), bytes);
+        expect(await readRetirementCheckoutIdentity(path)).not.toBe(pointerIdentity);
+      }
     }
     else {
       await execGit(['worktree', 'add', '--detach', path, c.release.head], repo);
@@ -3101,7 +3113,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         [ancestors[0].metadata.completedCheckouts[0], 'incarnation', differentGeneration],
         [ancestors[0].metadata, 'prCompletionPolicy', 'leave-open'], [ancestors[0], 'status', 'running']];
     }
-    if (scenario === 'missing-receipt') agent.metadata.completedCheckouts = [];
+    if (scenario === 'separate-malformed-capture') {
+      agent.metadata.completedCheckouts[0].version = 1;
+      delete agent.metadata.completedCheckouts[0].incarnation.gitdir;
+    }
+    if (scenario === 'missing-receipt' || scenario === 'separate-missing-receipt') agent.metadata.completedCheckouts = [];
     if (scenario === 'human-handoff') agent.metadata.prCompletionPolicy = 'leave-open';
     if (scenario === 'active-owner') { agent.status = 'running'; c.opts.readAgents = async () => [agent]; }
     const originalRelease = scenario === 'normal-resumed-lineage'
@@ -3119,7 +3135,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       target[key] = prior;
     }
     const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release, prUrl: c.forge.prUrl }, c.opts);
-    if (!['confirmed', 'owner-alias', 'normal-completed', 'normal-resumed-lineage', 'separate-incomplete'].includes(scenario)) {
+    if (!['confirmed', 'owner-alias', 'normal-completed', 'normal-resumed-lineage', 'separate-incomplete', 'separate-retained-work'].includes(scenario)) {
       const reason = scenario === 'human-handoff' ? 'pr-completion-human-handoff'
         : 'retirement-policy-not-legacy-completed';
       expect(prepared).toMatchObject({ ok: false, reason });
@@ -3143,7 +3159,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       ] } } });
     }
     else expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false,
-      ...(scenario === 'separate-incomplete' ? { retainedSiblingObligation: agent.metadata.completedCheckouts[0] }
+      ...(scenario.startsWith('separate-') ? { retainedSiblingObligation: agent.metadata.completedCheckouts[0] }
         : scenario === 'normal-completed' ? { completedSibling: true } : { orphanedSibling: true }) }] } } });
     const result = await retireInventoriedCheckout({ appId: 'app-1', release,
       review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts);
@@ -3151,7 +3167,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(result.archiveDir).toBeUndefined();
     expect(await registered(path)).toBe(false);
     expect(await registered(namedPath)).toBe(true);
-    expect((await execGit(['rev-parse', namedBranch], repo)).stdout.trim()).toBe(release.head);
+    expect((await execGit(['rev-parse', namedBranch], repo)).stdout.trim()).toBe(capturedHead);
+    if (scenario === 'separate-retained-work') {
+      expect((await execGit(['merge-base', '--is-ancestor', capturedHead, c.forge.prHead], repo, { ignoreExitCode: true })).exitCode).toBe(1);
+      expect(await readFile(join(namedPath, 'unpublished-reviewer.txt'), 'utf8')).toBe('unique unfinished reviewer work\n');
+    }
     expect(agent.result).toEqual(originalResult);
     expect(injected.policies).toEqual(originalPolicies);
     if (scenario === 'normal-resumed-lineage') {
