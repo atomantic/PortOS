@@ -26,7 +26,7 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 }));
 afterAll(cleanupTempDataRoots);
 
-const injected = vi.hoisted(() => ({ statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, forge: {}, gitSpawns: [] }));
+const injected = vi.hoisted(() => ({ statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, forge: {}, gitSpawns: [], gitInFlight: new Set() }));
 vi.mock('../lib/execGit.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, execGit: async (args, cwd, options) => {
@@ -42,7 +42,13 @@ vi.mock('../lib/execGit.js', async (importOriginal) => {
       await before();
       throw new Error('synthetic Git removal failure');
     }
-    return actual.execGit(args, cwd, options);
+    const running = { args, startedAt: Date.now() };
+    injected.gitInFlight.add(running);
+    try {
+      return await actual.execGit(args, cwd, options);
+    } finally {
+      injected.gitInFlight.delete(running);
+    }
   } };
 });
 vi.mock('./apps.js', () => ({ getAllApps: async () => [injected.app], getAppById: async id => injected.app?.id === id ? injected.app : null }));
@@ -87,14 +93,24 @@ const { clearAgentDispatching, getActiveAgentIds, markAgentDispatching } = await
 const { deleteMergedBranches } = await import('./git.js');
 
 const DAY = 24 * 60 * 60 * 1000;
+// A reconcile pass is ~55 sequential real-Git spawns plus fixture setup, all inside
+// Vitest's 30s test budget. A load-induced stall (#13459) otherwise surfaces as a bare
+// timeout; name the stalled Git command before the budget expires.
+const SLOW_REPORT_MS = 20_000;
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (real git)', () => {
   let scratch;
   let repo;
   let external;
+  let slowReport;
 
   beforeEach(async () => {
-    Object.assign(injected, { statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, forge: {}, gitSpawns: [] });
+    Object.assign(injected, { statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, forge: {}, gitSpawns: [], gitInFlight: new Set() });
+    slowReport = setTimeout(() => {
+      const now = Date.now();
+      const running = [...injected.gitInFlight].map(({ args, startedAt }) => `git ${args.slice(0, 3).join(' ')} (${now - startedAt}ms)`).join('; ') || 'none';
+      console.log(`🐢 ownership test still running after ${SLOW_REPORT_MS}ms: ${injected.gitSpawns.length} git spawns, in flight: ${running}`);
+    }, SLOW_REPORT_MS).unref();
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-reconcile-own-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -105,6 +121,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     await mkdir(external);
   });
   afterEach(async () => {
+    clearTimeout(slowReport);
     await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
