@@ -225,9 +225,13 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       ...(wholeCheckout && { wholeCheckout: true }) });
     const facts = await forge(ctx, release, prUrl);
     const base = await comparison(ctx, release, prUrl, snapshot, policy, facts);
+    const { captureRetirementValidationReceipt } = await import('./heldCheckoutRecovery.js');
+    const validationReceipt = base.forge?.prHead === release.head
+      ? await captureRetirementValidationReceipt(release.path, deps.execGit || execGit) : null;
     const checkoutIdentity = await readRetirementCheckoutIdentity(release.path);
     if (release.checkoutIdentity && release.checkoutIdentity !== checkoutIdentity) fail('checkout-identity-changed');
     const evidence = { ...base, mode: wholeCheckout ? 'whole-checkout' : 'initialized-private-modules', snapshot,
+      ...(validationReceipt && { validationReceipt }),
       ...(checkoutIdentity && { checkoutIdentity }), ...(checkoutIncarnation && { checkoutIncarnation }) };
     delete evidence.digest;
     return { ctx, review: { digest: hash(evidence), ...evidence } };
@@ -258,12 +262,20 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     const status = await runGit(['status', '--porcelain'], input.release.path, { ignoreExitCode: true }).catch(() => null);
     if (!status || status.exitCode !== 0) return { ok: false, reason: 'worktree-status-unavailable' };
     if (String(status.stdout || '').trim()) return { ok: false, reason: 'worktree-dirty' };
-    const { assertNoUniqueIgnoredCheckoutPayload } = await import('./heldCheckoutRecovery.js');
+    const { assertNoUniqueIgnoredCheckoutPayload, captureRetirementValidationReceipt, retainValidationReceipt } = await import('./heldCheckoutRecovery.js');
+    const receipt = prepared.review.validationReceipt;
+    const preservedFiles = receipt ? [receipt] : [];
     const paths = [input.release.path, ...(prepared.review.snapshot.modules || []).map(module => join(input.release.path, module.path))];
     for (const path of paths) {
-      const hold = await assertNoUniqueIgnoredCheckoutPayload(path, runGit, [], [], path === input.release.path ? ctx.repoPath : null).then(() => null,
+      const hold = await assertNoUniqueIgnoredCheckoutPayload(path, runGit, [], path === input.release.path ? preservedFiles : [], path === input.release.path ? ctx.repoPath : null).then(() => null,
         error => error.message || 'checkout-not-disposable');
       if (hold) return { ok: false, reason: hold };
+    }
+    let validationEvidence;
+    if (receipt) {
+      if (hash(await captureRetirementValidationReceipt(input.release.path, runGit)) !== hash(receipt)) fail('retirement-review-changed');
+      validationEvidence = await retainValidationReceipt(ctx.repoPath, prepared.review);
+      await retainValidationReceipt(ctx.repoPath, prepared.review, true);
     }
     const removed = await runGit(['worktree', 'remove', '--force', input.release.path], ctx.repoPath, { ignoreExitCode: true }).catch(() => null);
     if (!removed || removed.exitCode !== 0) {
@@ -280,6 +292,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       outcome = await record(input.appId, {
         path: input.release.path, branch: input.release.branch ?? null, head: input.release.head, branchDeleted,
         ...(checkoutIdentity && { checkoutIdentity }),
+        ...(validationEvidence && { validationEvidence }),
       });
     } catch {
       return { ok: false, reason: 'retirement-receipt-unverified', branchDeleted };
@@ -288,9 +301,10 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     const recorded = outcome?.retired?.some(row => (row.path || null) === (input.release.path || null)
       && (row.branch ?? null) === wantedBranch && row.head === input.release.head
       && row.branchDeleted === true && row.archiveDir == null
-      && (!checkoutIdentity || row.checkoutIdentity === checkoutIdentity)) === true;
+      && (!checkoutIdentity || row.checkoutIdentity === checkoutIdentity)
+      && (!validationEvidence || row.validationEvidence?.digest === validationEvidence.digest)) === true;
     if (!recorded) return { ok: false, reason: 'retirement-receipt-unverified', branchDeleted };
-    return { ok: true, branchDeleted };
+    return { ok: true, branchDeleted, ...(validationEvidence && { validationEvidence }) };
   }).catch(error => ({ ok: false, reason: error.message }));
 
   const loadBoundTransaction = async input => {

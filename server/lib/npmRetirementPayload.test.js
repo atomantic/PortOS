@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
-import { createNpmRetirementVerifier, npmTarballFiles } from './npmRetirementPayload.js';
+import { createNpmRetirementVerifier } from './npmRetirementPayload.js';
 
 const roots = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -25,11 +25,11 @@ function tarball(members) {
   return gzipSync(Buffer.concat([...parts, Buffer.alloc(1024)]));
 }
 
-async function fixture() {
+async function fixture(members = [{ name: 'package/index.js', content: 'export const value = 1;\n' }], localContent = 'export const value = 1;\n') {
   const root = await mkdtemp(join(tmpdir(), 'npm-retirement-'));
   roots.push(root);
   const checkout = join(root, 'checkout'); const primary = join(root, 'primary'); const cacheRoot = join(root, 'cache');
-  const archive = tarball([{ name: 'package/index.js', content: 'export const value = 1;\n' }]);
+  const archive = tarball(members);
   const entry = { version: '1.0.0', integrity: integrity(archive), optional: true };
   const lock = { name: 'fixture', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { 'node_modules/example': entry } };
   for (const dir of [checkout, primary]) {
@@ -39,7 +39,7 @@ async function fixture() {
   }
   await writeFile(join(checkout, 'node_modules/.package-lock.json'), JSON.stringify(lock));
   await mkdir(join(checkout, 'node_modules/example'));
-  await writeFile(join(checkout, 'node_modules/example/index.js'), 'export const value = 1;\n');
+  await writeFile(join(checkout, 'node_modules/example/index.js'), localContent);
   const hex = Buffer.from(entry.integrity.slice(7), 'base64').toString('hex');
   const cached = join(cacheRoot, '_cacache/content-v2/sha512', hex.slice(0, 2), hex.slice(2, 4), hex.slice(4));
   await mkdir(join(cached, '..'), { recursive: true }); await writeFile(cached, archive);
@@ -79,6 +79,22 @@ describe('private npm payload retirement proof', () => {
     expect(await f.verifier()('node_modules/.package-lock.json')).toBe(false);
   });
 
+  it('refuses cached-package fallback for install-script outputs', async () => {
+    const f = await fixture();
+    f.lock.packages['node_modules/example'].hasInstallScript = true;
+    for (const path of [join(f.checkout, 'package-lock.json'), join(f.primary, 'package-lock.json'), join(f.checkout, 'node_modules/.package-lock.json')]) {
+      await writeFile(path, JSON.stringify(f.lock));
+    }
+    expect(await f.verifier()('node_modules/example/index.js')).toBe(false);
+  });
+
+  it('propagates the retirement resource budget rather than disguising exhaustion as missing evidence', async () => {
+    const f = await fixture();
+    const limit = Object.assign(new Error('retirement-archive-work-limit-exceeded'), { archiveLimit: { scope: 'verification' } });
+    const verify = createNpmRetirementVerifier(f.checkout, f.primary, { check() { throw limit; }, add() {} });
+    await expect(verify('node_modules/example/index.js')).rejects.toBe(limit);
+  });
+
   it.skipIf(process.platform === 'win32')('refuses a primary counterpart reached through an escaping symlink', async () => {
     const f = await fixture();
     await rm(f.cached);
@@ -87,12 +103,11 @@ describe('private npm payload retirement proof', () => {
   });
 
   it.each([
-    [{ name: 'package/../wanted.txt', content: 'unique' }],
-    [{ name: 'package/index.js', type: '2' }],
-    [{ name: 'package/index.js', content: 'first' }, { name: 'package/index.js', content: 'second' }],
-    [{ name: 'package/extended', type: 'x' }],
-  ].map(members => ({ members })))('refuses unsafe or ambiguous tar members %#', ({ members }) => {
-    const bytes = tarball(members);
-    expect(() => npmTarballFiles(bytes, integrity(bytes))).toThrow();
+    { name: 'link member', members: [{ name: 'package/index.js', type: '2' }], localContent: '' },
+    { name: 'duplicate member', members: [{ name: 'package/index.js', content: 'first' }, { name: 'package/index.js', content: 'expected' }], localContent: 'expected' },
+    { name: 'extended header', members: [{ name: 'package/index.js', type: 'x', content: 'expected' }], localContent: 'expected' },
+  ])('refuses unsafe or ambiguous pinned cache: $name', async ({ members, localContent }) => {
+    const f = await fixture(members, localContent);
+    expect(await f.verifier()('node_modules/example/index.js')).toBe(false);
   });
 });

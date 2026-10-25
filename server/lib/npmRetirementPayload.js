@@ -36,7 +36,7 @@ async function regularBytes(path, limit, work) {
 /** Read only plain regular npm tar members. Never extract paths or follow links.
  * Unsupported tar extensions intentionally refuse recognition instead of guessing.
  */
-export function npmTarballFiles(compressed, integrity, work) {
+function npmTarballFiles(compressed, integrity, work) {
   if (compressed.length > MAX_CACHE_BYTES || typeof integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity)) throw new Error('npm-tarball-integrity-invalid');
   const digest = Buffer.from(integrity.slice(7), 'base64');
   if (digest.length !== 64 || createHash('sha512').update(compressed).digest('base64') !== integrity.slice(7)) throw new Error('npm-tarball-integrity-invalid');

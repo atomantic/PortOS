@@ -859,7 +859,21 @@ async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { 
 /** Keep a small validation record in the repository's persistent common Git
  * administration, outside the retiring worktree. No repository snapshot or
  * history copy is made. Content-addressed publication is durable and replayable. */
-async function retainValidationReceipt(repoPath, review, verifyOnly = false) {
+export async function captureRetirementValidationReceipt(path, runGit = execGit) {
+  const rel = '.cache/pregate/report.json';
+  const info = await lstat(join(path, rel)).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  if (!info) return null;
+  if (!info.isFile() || info.size > 64 * 1024) throw new Error('retirement-validation-preservation-unavailable');
+  const result = await runGit(['ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--', rel], path,
+    { maxBuffer: GIT_OUTPUT_BYTES, bufferOutput: true });
+  if (result.exitCode !== 0) throw new Error('worktree-status-unavailable');
+  if (!zLines(Buffer.isBuffer(result.stdout) ? archiveText(result.stdout) : result.stdout).includes(rel)) return null;
+  const bytes = await archiveBytes(await archiveFile(path, join(path, rel)), archiveWork(), 64 * 1024);
+  JSON.parse(bytes.toString('utf8'));
+  return { scope: 'content', path: rel, sha256: evidenceHash(bytes), data: bytes.toString('base64') };
+}
+
+export async function retainValidationReceipt(repoPath, review, verifyOnly = false) {
   const receipt = review?.validationReceipt;
   if (!receipt) return null;
   if (review.kind || review.comparison.disposition !== 'integrated' || review.release.head !== review.forge.prHead
