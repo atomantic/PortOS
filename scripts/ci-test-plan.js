@@ -496,6 +496,8 @@ export const ALWAYS_RUN_TESTS = [
   // breadcrumb, with no import edge back to this file.
   'server/lib/localProviderRuntime.test.js',
   'server/lib/qwenAgentParsers.test.js',
+  // Schema reachability reads consumers as text across the tracked source tree.
+  'server/lib/validationSplit.test.js',
   'server/lib/testDataIsolation.guards.test.js',
   'server/lib/testHelper.test.js',
   // Whole-tree scanner: any server/client file can re-inline a RegExp escape (#8723).

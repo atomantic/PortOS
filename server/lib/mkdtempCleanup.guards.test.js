@@ -78,10 +78,10 @@
  *
  * The comment must appear on the mkdtemp line itself (or immediately before it).
  */
+import { trackedFiles } from '../../scripts/lib/trackedFiles.js';
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
-import { execFileSync } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -117,11 +117,7 @@ const CLEANUP_PATTERN = /\b(?:rmSync|rm|fs\.rm|destroyGitSandbox)\s*\(/;
  * Finds all git-tracked files in test-bearing trees that match test patterns or are test helpers.
  */
 function findTestFiles() {
-  const files = execFileSync('git', ['ls-files', '*.js', '*.mjs', '*.cjs'], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  }).split('\n').filter((f) => f && (
+  const files = trackedFiles(REPO_ROOT, ['*.js', '*.mjs', '*.cjs']).filter((f) => f && (
     (f.endsWith('.test.js') && TEST_ROOTS.some((root) => f.startsWith(root))) ||
     TEST_HELPER_PATTERNS.some((pattern) => {
       // Simple glob pattern matching: _*.js becomes a startsWith check

@@ -26,6 +26,7 @@
  * helper (`await sleep(30)`) or a negative assertion further away is not seen;
  * the guard errs toward silence rather than guessing at intent.
  */
+import { existingPaths } from '../scripts/lib/trackedFiles.js';
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -70,8 +71,8 @@ export function scanNegativeProofSleeps(source, file) {
 }
 
 function trackedTests() {
-  return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', 'server', 'scripts', 'client/src', 'lib', 'autofixer'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-    .split('\0').filter((f) => /\.test\.[cm]?jsx?$/.test(f) && f !== SELF);
+  return existingPaths(ROOT, execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', 'server', 'scripts', 'client/src', 'lib', 'autofixer'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+    .split('\0').filter(Boolean)).filter((f) => /\.test\.[cm]?jsx?$/.test(f) && f !== SELF);
 }
 
 describe('negative proofs do not rest on real sleeps (#12047)', () => {

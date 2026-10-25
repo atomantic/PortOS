@@ -36,8 +36,8 @@
  * in another. `db.js` repairs plain-object parameters regardless, which covers
  * the call sites that never stringified at all.
  */
+import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -85,11 +85,7 @@ export function findPgJsonViolations(src) {
   }
 }
 
-const trackedSources = () => execFileSync('git', ['ls-files', '*.js', '*.mjs'], {
-  cwd: SERVER_ROOT,
-  encoding: 'utf8',
-  maxBuffer: 64 * 1024 * 1024,
-}).split('\n').filter((f) => f
+const trackedSources = () => trackedFiles(SERVER_ROOT, ['*.js', '*.mjs']).filter((f) => f
   && SCANNED_DIRS.some((dir) => f.startsWith(dir))
   && !f.includes('.test.')
   && !f.includes('db-migrations/'));

@@ -18,6 +18,7 @@
  * only through another module (a sub-router mounted by a barrel) is covered by
  * the barrel's test and is not itself listed.
  */
+import { existingPaths } from '../scripts/lib/trackedFiles.js';
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -48,8 +49,8 @@ function importedModules(testFile, source) {
 }
 
 function trackedTests() {
-  return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', 'server', 'scripts', 'lib', 'autofixer'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-    .split('\0').filter((f) => /\.test\.[cm]?js$/.test(f));
+  return existingPaths(ROOT, execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', 'server', 'scripts', 'lib', 'autofixer'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+    .split('\0').filter(Boolean)).filter((f) => /\.test\.[cm]?js$/.test(f));
 }
 
 function untestedMounted() {

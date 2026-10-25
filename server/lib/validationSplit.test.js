@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { execSync } from 'node:child_process';
+import { trackedFiles as workingTreeFiles } from '../../scripts/lib/trackedFiles.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -173,9 +173,7 @@ describe('exported validation schemas are wired (#5730)', () => {
       moduleExports.set(rel, exports);
     }
 
-    const tracked = trackedFiles ?? execSync('git ls-files -z "*.js" "*.jsx" "*.mjs"', {
-      cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
-    }).split('\0').filter(Boolean);
+    const tracked = trackedFiles ?? workingTreeFiles(repoRoot, ['*.js', '*.jsx', '*.mjs']);
 
     // One pass over the tree builds the identifier index for candidate schemas.
     // Per-module counts are kept (not just presence) so a schema's own `export const`
