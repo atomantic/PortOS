@@ -136,6 +136,7 @@ print(json.dumps({'id':args.speed_profile,'steps':args.steps,'adapter':args.spee
       loras: [{ filename: 'style.safetensors', scale: 0.7 }],
     });
     await expect(prepare({ loraFilenames: ['copied-speed.safetensors'] })).rejects.toMatchObject({ code: 'MINIMAX_H3_LORA_DUPLICATE' });
+    await expect(prepare({ speedProfileId: undefined, loraFilenames: ['copied-speed.safetensors'] })).rejects.toMatchObject({ code: 'MINIMAX_H3_LORA_PROFILE_REQUIRED' });
   });
 
   it('refuses incompatible H3 style adapter formats/dimensions before queue admission', async () => {

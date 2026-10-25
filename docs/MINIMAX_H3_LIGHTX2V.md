@@ -25,6 +25,8 @@ file records alpha 8 with rank 128: each residual uses strength × 8/128. There
 is no repacking, fused QKV conversion, SwiGLU row permutation, or base-weight
 fusion. Speed and character/style residuals are each attached once, before
 offload captures the buffers. Duplicate adapter contents are refused.
+The known LightX2V adapter is also refused as a user LoRA on the stock sampler;
+its identity always requires the named profile and its matching schedule.
 
 User LoRAs on this CUDA path must also be split Diffusers A/B safetensors with
 numeric `alpha` metadata and matching H3 projection dimensions. Native, fused,

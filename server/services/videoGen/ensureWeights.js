@@ -40,6 +40,9 @@ export async function validateMiniMaxH3CudaLoras(loras, speedProfile = null) {
     }
     if (!pairs.size || [...pairs.values()].some((p) => !p.A || !p.B || p.A[0] !== p.B[1])) refuse();
     const digest = await sha256File(lora.path);
+    if (!speedProfile && digest === MINIMAX_H3_LIGHTX2V_PROFILE.adapter.sha256) {
+      throw new ServerError('The LightX2V v1.3 adapter requires its named Speed profile. Remove it from the user LoRA stack and select LightX2V under Speed.', { status: 400, code: 'MINIMAX_H3_LORA_PROFILE_REQUIRED' });
+    }
     if (seen.has(digest)) throw new ServerError('The same H3 CUDA adapter was selected more than once, including the LightX2V speed adapter.', { status: 400, code: 'MINIMAX_H3_LORA_DUPLICATE' });
     seen.add(digest);
   }

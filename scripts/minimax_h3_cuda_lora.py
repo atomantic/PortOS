@@ -103,13 +103,15 @@ def attach_residual(module, down, up, scale):
     module.register_forward_hook(residual)
 
 
-def apply_adapters(transformer, adapters):
+def apply_adapters(transformer, adapters, *, speed_profile=False):
     """Validate the complete stack before attaching one residual per pair."""
     from safetensors.torch import load_file
 
     pending, seen, reports = [], set(), []
     for path, strength in adapters:
         digest = file_digest(path)
+        if digest == CONTRACT["adapter"]["sha256"] and not speed_profile:
+            raise ValueError("LightX2V v1.3 requires its named speed profile; it cannot run as a user LoRA on the stock sampler.")
         if digest in seen:
             raise ValueError("The same H3 CUDA adapter was selected more than once (including the speed adapter).")
         seen.add(digest)

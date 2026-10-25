@@ -64,13 +64,20 @@ with tempfile.TemporaryDirectory() as tmp:
     speed, style = Path(tmp)/'speed.safetensors', Path(tmp)/'style.safetensors'
     save_file({prefix+'.lora_A.weight':a,prefix+'.lora_B.weight':b},str(speed),metadata={'alpha':'8'})
     save_file({prefix+'.lora_A.weight':a*2,prefix+'.lora_B.weight':b},str(style),metadata={'alpha':'2'})
-    reports = adapter.apply_adapters(root,[(speed,1.),(style,0.5)])
+    original_digest = adapter.file_digest
+    adapter.file_digest = lambda path: adapter.CONTRACT['adapter']['sha256'] if path == speed else original_digest(path)
+    reports = adapter.apply_adapters(root,[(speed,1.),(style,0.5)],speed_profile=True)
     expected = base + torch.tensor([[40.,80.,120.]]) + torch.tensor([[10.,20.,30.]])
     torch.testing.assert_close(linear(value),expected)
     assert torch.equal(linear.weight().int_repr(),original)
     assert len(reports) == 2 and linear._portos_lora_count == 2
-    try: adapter.apply_adapters(root,[(speed,1.),(speed,1.)])
-    except ValueError: pass
+    try: adapter.apply_adapters(root,[(speed,1.),(speed,1.)],speed_profile=True)
+    except ValueError as exc: assert 'more than once' in str(exc)
     else: raise AssertionError('duplicate speed adapter accepted')
+    adapter.file_digest = lambda path: adapter.CONTRACT['adapter']['sha256']
+    try: adapter.apply_adapters(root,[(speed,1.)])
+    except ValueError as exc: assert 'named speed profile' in str(exc)
+    else: raise AssertionError('speed adapter accepted with stock sampler')
+    assert linear._portos_lora_count == 2
 print('quantized base preserved; each adapter applied once')`, tensorPython)).toBe('quantized base preserved; each adapter applied once');
 });

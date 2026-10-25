@@ -179,7 +179,7 @@ def resolve_offload_profile(requested: str) -> tuple[str, float]:
     return affordable[0], total_gb
 
 
-def load_pipeline(snapshot: Path, profile: str, adapters=None):
+def load_pipeline(snapshot: Path, profile: str, adapters=None, *, speed_profile=False):
     """Load the `fl2va` workflow under one of the documented memory recipes.
 
     `fl2va` covers text-to-video too (it is the same `transformer/` partition),
@@ -198,7 +198,7 @@ def load_pipeline(snapshot: Path, profile: str, adapters=None):
         pipe.load_components(workflow="fl2va", dtype=torch.bfloat16)
         if adapters:
             from minimax_h3_cuda_lora import apply_adapters
-            pipe._portos_adapters = apply_adapters(pipe.transformer, adapters)
+            pipe._portos_adapters = apply_adapters(pipe.transformer, adapters, speed_profile=speed_profile)
         manager.enable_auto_cpu_offload(device="cuda", memory_reserve_margin=BF16_DEVICE_RESERVE)
         return pipe
 
@@ -229,7 +229,7 @@ def load_pipeline(snapshot: Path, profile: str, adapters=None):
     pipe.load_components(workflow="fl2va", dtype=torch.bfloat16)
     if adapters:
         from minimax_h3_cuda_lora import apply_adapters
-        pipe._portos_adapters = apply_adapters(pipe.transformer, adapters)
+        pipe._portos_adapters = apply_adapters(pipe.transformer, adapters, speed_profile=speed_profile)
 
     # version=2 int8 tensors are pinnable, which streamed offload needs, and
     # freezing removes the one autograd path the quantized tensors cannot serve.
@@ -315,7 +315,7 @@ def main() -> int:
 
     log("STAGE:load-pipeline")
     with heartbeat("minimax-h3-cuda-load"):
-        pipe = load_pipeline(snapshot, profile, adapters) if adapters else load_pipeline(snapshot, profile)
+        pipe = load_pipeline(snapshot, profile, adapters, speed_profile=bool(args.speed_profile)) if adapters else load_pipeline(snapshot, profile)
     if args.speed_profile:
         pipe.scheduler.set_shift(CONTRACT["videoShift"])
         pipe.audio_scheduler.set_shift(CONTRACT["audioShift"])
