@@ -7,19 +7,31 @@ updates:
     open-pull-requests-limit: 10
   # server/, client/ and autofixer/ each carry their own package.json +
   # overrides and their own lockfile, so npm resolves each tree separately —
-  # without an entry per directory those trees are invisible to Dependabot (a
+  # list every directory so none of those trees is invisible to Dependabot (a
   # critical node-tar advisory sat unreported). browser/ is deliberately absent:
   # it has zero dependencies and its lockfile is gitignored.
   - package-ecosystem: npm
-    directory: /server
+    # One owner for both trees lets shared tooling update atomically.
+    directories:
+      - /server
+      - /client
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    # Preserve the combined budget of the former two ten-PR entries.
+    open-pull-requests-limit: 20
     groups:
+      biome:
+        patterns:
+          - "@biomejs/biome"
+        group-by: dependency-name
       vitest:
         patterns:
           - vitest
           - "@vitest/coverage-v8"
+      react:
+        patterns:
+          - react
+          - react-dom
     ignore:
       # 2.11.0's ESM build throws ERR_IMPORT_ATTRIBUTE_MISSING under Node — see
       # #7371 and https://github.com/cantoo-scribe/pdf-lib/issues/155. Remove
@@ -28,16 +40,6 @@ updates:
       # still proposed.
       - dependency-name: "@cantoo/pdf-lib"
         versions: ["2.11.0"]
-  - package-ecosystem: npm
-    directory: /client
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
-    groups:
-      react:
-        patterns:
-          - react
-          - react-dom
   - package-ecosystem: npm
     directory: /autofixer
     schedule:
