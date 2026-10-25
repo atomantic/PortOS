@@ -172,6 +172,39 @@ export async function localVideoSentPrompt({ prompt = '', negativePrompt, loraFi
   };
 }
 
+// History records references by basename, never by staging path.
+const referenceNames = (pathsByField) => Object.fromEntries(
+  Object.entries(pathsByField)
+    .filter(([, paths]) => Array.isArray(paths) && paths.length > 0)
+    .map(([field, paths]) => [field, paths.map((p) => basename(p))]),
+);
+
+// FastH3 Omni renders from five separately pinned downloads: the BF16 export
+// (the model snapshot), the base snapshot's text encoder / tokenizer / audio VAE,
+// the FastH3 quality decoder and the LightVAE reference encoder. The helper
+// composes them, so hand it the resolved cache paths — a missing file fails here
+// as a clean 400 rather than minutes into the render.
+async function resolveFastH3OmniAssets(model) {
+  const byRole = (role) => (model.requiredWeights || []).find((dep) => dep?.role === role);
+  const [base, decoder, encoder] = ['base', 'vaeDecoder', 'vaeEncoder'].map(byRole);
+  const missing = () => new ServerError(
+    `${model.name} is missing downloaded weights. Download or repair them in Video Gen.`,
+    { status: 400, code: 'FASTVIDEO_OMNI_WEIGHTS_NOT_CACHED' },
+  );
+  if (!base?.repo || !decoder?.repo || !encoder?.repo) {
+    throw new ServerError(`Video model "${model.id}" is missing its required weights.`, { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' });
+  }
+  const resolveDep = async (dep) => {
+    const paths = await findCachedRepoFiles(dep.repo, dep.files, { revision: dep.revision });
+    if (!paths) throw missing();
+    return paths;
+  };
+  const [basePaths, [vaeDecoder], [vaeEncoder]] = await Promise.all([base, decoder, encoder].map(resolveDep));
+  const configIndex = base.files.indexOf('vae/config.json');
+  const baseRoot = basePaths[configIndex].slice(0, -'/vae/config.json'.length);
+  return { baseRoot, vaeDecoder, vaeEncoder };
+}
+
 // Resolve required render assets before staging media or acquiring GPU work.
 // Runtime-specific pin/fallback policies and dependency ordering stay explicit.
 async function resolveVideoModelAssets({ model, modelId, textEncoderId }) {
@@ -207,13 +240,18 @@ async function resolveVideoModelAssets({ model, modelId, textEncoderId }) {
     }
   }
   let fastvideoModelPath = null;
+  let fastvideoOmniAssets = null;
   if (model.runtime === 'fastvideo') {
-    fastvideoModelPath = await resolvePinnedSnapshotPath(model, {
-      notCachedCode: 'FASTVIDEO_MODEL_NOT_CACHED',
-      onMissingRevision: 'best-effort',
-      // A null miss preserves the legacy handoff: buildFastVideoArgs falls
-      // back to the repo id only when no unpinned snapshot is resident.
-    });
+    // The Omni piece lookups don't depend on the primary snapshot, so overlap them.
+    [fastvideoModelPath, fastvideoOmniAssets] = await Promise.all([
+      resolvePinnedSnapshotPath(model, {
+        notCachedCode: 'FASTVIDEO_MODEL_NOT_CACHED',
+        onMissingRevision: 'best-effort',
+        // A null miss preserves the legacy handoff: buildFastVideoArgs falls
+        // back to the repo id only when no unpinned snapshot is resident.
+      }),
+      model.fastvideoFamily === 'fasth3omni' ? resolveFastH3OmniAssets(model) : null,
+    ]);
   }
   // Pinned LTX family entries (LTX-2.5 today) must render the verified
   // snapshot, not whatever `main` snapshot_download would follow. Unpinned
@@ -267,7 +305,7 @@ async function resolveVideoModelAssets({ model, modelId, textEncoderId }) {
       configOverrides: textEncoderOption.configOverrides,
     };
   }
-  return { wanModelPath, wanRequiredWeights, fastvideoModelPath, ltxModelPath, ref2vaModelPath, resolvedTextEncoder };
+  return { wanModelPath, wanRequiredWeights, fastvideoModelPath, fastvideoOmniAssets, ltxModelPath, ref2vaModelPath, resolvedTextEncoder };
 }
 
 // Preview-fidelity video decode (#5423). Every gate lives in
@@ -315,7 +353,7 @@ async function resolveRequestedDraftDecoder({ model, draftDecode, jobId }) {
   return draftDecoder;
 }
 
-async function renderLocalVideo(preparation, { pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [] }) {
+async function renderLocalVideo(preparation, { pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, referenceImagePaths = null, referenceVideoPaths = null, referenceAudioPaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [] }) {
   const sourceAudioProvenance = audioConditioning == null ? null : federatedSourceAudioSchema.parse(audioConditioning);
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
@@ -354,6 +392,9 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
     audioFilePath,
     audioStartSec,
     icReferencePaths,
+    referenceImagePaths,
+    referenceVideoPaths,
+    referenceAudioPaths,
   });
   // Registry defaults are user-editable. Validate them at this internal-call
   // boundary so an empty or malformed value cannot turn into a 0/NaN runner
@@ -363,7 +404,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
   const frameCountError = wan22FrameCountError(model, numFrames);
   if (frameCountError) throw frameCountError;
   const {
-    wanModelPath, wanRequiredWeights, fastvideoModelPath, ltxModelPath, ref2vaModelPath, resolvedTextEncoder,
+    wanModelPath, wanRequiredWeights, fastvideoModelPath, fastvideoOmniAssets, ltxModelPath, ref2vaModelPath, resolvedTextEncoder,
   } = await resolveVideoModelAssets({ model, modelId, textEncoderId });
 
   // Only require the legacy mlx_video pythonPath when the chosen runtime
@@ -623,6 +664,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
         ? { icReferenceNames: icReferencePaths.map((p) => basename(p)) }
         : {}),
     } : {}),
+    ...referenceNames({ referenceImageNames: referenceImagePaths, referenceVideoNames: referenceVideoPaths, referenceAudioNames: referenceAudioPaths }),
     // Stamp applied LoRAs using the SAME parallel-array contract image renders
     // use (`loraFilenames` + `loraScales`) so the existing history consumers —
     // normalizeVideo / getRenderConfigForItem (client/src/components/media/
@@ -669,6 +711,10 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
       model: loraCapableModel,
       wanModelPath,
       fastvideoModelPath,
+      fastvideoOmniAssets,
+      referenceImagePaths,
+      referenceVideoPaths,
+      referenceAudioPaths,
       wanRequiredWeights,
       ltxModelPath,
       ref2vaModelPath,

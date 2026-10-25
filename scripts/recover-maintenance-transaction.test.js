@@ -125,6 +125,153 @@ describe('offline maintenance transaction recovery', () => {
     expect(createMaintenanceAdmission(data).status()).toMatchObject({ state: 'ready', hold: recovered.hold });
   });
 
+  it('lets the winning recovery release while a stale contender inspects its takeover marker', async () => {
+    const { data, directory } = fixture();
+    const dead = spawnSync(process.execPath, ['-e', ''], { timeout: 5000 });
+    expect(dead.status).toBe(0);
+    const fence = join(directory, 'recovery');
+    fs.mkdirSync(fence);
+    const originalOwner = JSON.stringify({ version: 1, pid: dead.pid, token: randomUUID() });
+    fs.writeFileSync(join(fence, 'owner.json'), originalOwner);
+    const barrier = join(data, 'barrier');
+    fs.mkdirSync(barrier);
+    const module = new URL('./recover-maintenance-transaction.mjs', import.meta.url).href;
+    const source = `
+      import * as fs from 'node:fs';
+      import { join, basename } from 'node:path';
+      import { recoverMaintenanceTransaction } from ${JSON.stringify(module)};
+      const [data, barrier] = process.argv.slice(1);
+      const wait = name => {
+        const until = Date.now() + 10000;
+        while (!fs.existsSync(join(barrier, name))) {
+          if (Date.now() >= until) throw new Error('Recovery fixture barrier timed out');
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+        }
+      };
+      const io = { ...fs, mkdirSync(path, options) {
+        if (basename(path).startsWith('recovered-')) {
+          fs.writeFileSync(join(barrier, 'ready'), '');
+          wait('release');
+        }
+        return fs.mkdirSync(path, options);
+      } };
+      try {
+        wait('start');
+        const result = await recoverMaintenanceTransaction('Winning recovery fixture', { data, io, processes: async () => [] });
+        process.stdout.write(JSON.stringify(result));
+      } catch (error) { process.stdout.write(JSON.stringify({ error: error.message })); }
+      finally { fs.writeFileSync(join(barrier, 'finished'), ''); }
+    `;
+    const child = spawn(process.execPath, ['--input-type=module', '-e', source, data, barrier], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    let errors = '';
+    child.stdout.on('data', bytes => { output += bytes; });
+    child.stderr.on('data', bytes => { errors += bytes; });
+    const done = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', code => {
+        try { resolve(JSON.parse(output)); }
+        catch { reject(new Error(`Recovery fixture exited ${code}: ${errors}`)); }
+      });
+    });
+    let replacementOwner;
+    let transitionFd;
+    const io = { ...fs, openSync(path, ...args) {
+      const transition = path === join(directory, 'recovery-transition');
+      if (transition) {
+        // The other process takes ownership after our inspection, immediately
+        // before our takeover marker is created.
+        fs.writeFileSync(join(barrier, 'start'), '');
+        const until = Date.now() + 10000;
+        while (!fs.existsSync(join(barrier, 'ready'))) {
+          if (Date.now() >= until) throw new Error('Winning recovery did not take ownership');
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+        }
+        replacementOwner = fs.readFileSync(join(fence, 'owner.json'));
+      }
+      const fd = fs.openSync(path, ...args);
+      if (transition) transitionFd = fd;
+      return fd;
+    }, fstatSync(fd) {
+      if (fd === transitionFd) {
+        // Let the winner release after our marker is created but before our
+        // descriptor inspection and cleanup. Its fence must remain removable.
+        fs.writeFileSync(join(barrier, 'release'), '');
+        const until = Date.now() + 10000;
+        while (!fs.existsSync(join(barrier, 'finished'))) {
+          if (Date.now() >= until) throw new Error('Winning recovery did not finish');
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+        }
+      }
+      return fs.fstatSync(fd);
+    } };
+    try {
+      await expect(recoverMaintenanceTransaction(reason, { data, io, processes: stopped }))
+        .rejects.toThrow('Maintenance recovery ownership changed during inspection.');
+      expect(JSON.parse(replacementOwner).pid).toBe(child.pid);
+      fs.writeFileSync(join(barrier, 'release'), '');
+      const result = await done;
+      expect(result.error).toBeUndefined();
+      expect(fs.existsSync(fence)).toBe(false);
+      expect(fs.existsSync(join(directory, 'recovery-transition'))).toBe(false);
+      expect(createMaintenanceAdmission(data).status()).toMatchObject({ state: 'ready', hold: result.hold });
+      const retired = fs.readdirSync(directory).find(name => name.startsWith('recovery-interrupted-'));
+      expect(fs.readFileSync(join(directory, retired, 'owner.json'), 'utf8')).toBe(originalOwner);
+    } finally {
+      fs.writeFileSync(join(barrier, 'start'), '');
+      fs.writeFileSync(join(barrier, 'release'), '');
+      await done;
+    }
+  });
+
+  it('preserves a foreign transition that replaces its marker before descriptor inspection', async () => {
+    const { data, directory } = fixture();
+    const dead = spawnSync(process.execPath, ['-e', ''], { timeout: 5000 });
+    expect(dead.status).toBe(0);
+    const fence = join(directory, 'recovery');
+    fs.mkdirSync(fence);
+    fs.writeFileSync(join(fence, 'owner.json'), JSON.stringify({ version: 1, pid: dead.pid, token: randomUUID() }));
+    const transition = join(directory, 'recovery-transition');
+    const displaced = join(data, 'displaced-transition');
+    const replacement = JSON.stringify({ version: 1, pid: process.pid, token: randomUUID() });
+    const io = { ...fs, openSync(path, ...args) {
+      const fd = fs.openSync(path, ...args);
+      if (path === transition) {
+        fs.renameSync(transition, displaced);
+        fs.writeFileSync(transition, 'foreign transition evidence');
+        fs.writeFileSync(join(fence, 'owner.json'), replacement);
+      }
+      return fd;
+    } };
+    await expect(recoverMaintenanceTransaction(reason, { data, io, processes: stopped }))
+      .rejects.toThrow('Maintenance recovery ownership changed during inspection.');
+    expect(fs.readFileSync(transition, 'utf8')).toBe('foreign transition evidence');
+    expect(fs.readFileSync(join(fence, 'owner.json'), 'utf8')).toBe(replacement);
+    expect(fs.readFileSync(displaced)).toHaveLength(0);
+    expect(fs.existsSync(join(directory, 'state.json'))).toBe(false);
+  });
+
+  it('keeps legacy and standalone unfinished transitions closed without changing their evidence', async () => {
+    const dead = spawnSync(process.execPath, ['-e', ''], { timeout: 5000 });
+    expect(dead.status).toBe(0);
+    for (const kind of ['legacy-directory', 'legacy-file', 'standalone-file']) {
+      const { data, directory } = fixture();
+      const fence = join(directory, 'recovery');
+      const legacy = kind.startsWith('legacy-');
+      if (legacy) {
+        fs.mkdirSync(fence);
+        fs.writeFileSync(join(fence, 'owner.json'), JSON.stringify({ version: 1, pid: dead.pid, token: randomUUID() }));
+      }
+      const marker = legacy ? join(fence, '.transition') : join(directory, 'recovery-transition');
+      if (kind === 'legacy-directory') fs.mkdirSync(marker);
+      else fs.writeFileSync(marker, 'interrupted transition evidence');
+      await expect(recoverMaintenanceTransaction(reason, { data, processes: stopped })).rejects.toThrow(/unfinished transition/);
+      if (kind === 'legacy-directory') expect(fs.lstatSync(marker).isDirectory()).toBe(true);
+      else expect(fs.readFileSync(marker, 'utf8')).toBe('interrupted transition evidence');
+      expect(fs.existsSync(join(directory, 'state.json'))).toBe(false);
+    }
+  });
+
   it('preserves unknown recovery ownership and refuses journal symlinks before any mutation', async () => {
     const { data, directory } = fixture();
     fs.mkdirSync(join(directory, 'recovery'));

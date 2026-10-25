@@ -579,7 +579,7 @@ export const assertRenderModeContract = ({
 // this file — the same "execution facts live on the entry" convention
 // `samplerLocked` and `supportedModes` already use. An absent/unknown value
 // means FastMetal, which is what every pre-#5860 row is.
-export const FASTVIDEO_FAMILIES = Object.freeze(['fastmetal', 'fastmetal5b', 'fasth3']);
+export const FASTVIDEO_FAMILIES = Object.freeze(['fastmetal', 'fastmetal5b', 'fasth3', 'fasth3omni']);
 export const fastvideoFamily = (model) =>
   (FASTVIDEO_FAMILIES.includes(model?.fastvideoFamily) ? model.fastvideoFamily
     : model?.repo === 'FastVideo/FastMetal-5B-QAD' ? 'fastmetal5b' : 'fastmetal');
@@ -599,7 +599,7 @@ export const fastvideoMlxFormat = (model) =>
 
 // Build args for the FastVideo MLX helper on Apple Silicon.
 export const buildFastVideoArgs = ({
-  model, fastvideoModelPath, prompt, negativePrompt, width, height,
+  model, fastvideoModelPath, fastvideoOmniAssets, referenceImagePaths, referenceVideoPaths, referenceAudioPaths, prompt, negativePrompt, width, height,
   numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, mode, outputPath,
 }) => {
   assertByovRuntimeInstalled('fastvideo');
@@ -641,6 +641,26 @@ export const buildFastVideoArgs = ({
     const mlxFormat = fastvideoMlxFormat(model);
     if (mlxFormat) args.push('--mlx-format', mlxFormat, '--mlx-checkpoint-cache-dir', FASTVIDEO_MLX_CHECKPOINT_DIR);
     else args.push('--mlx-checkpoint', modelRoot);
+  }
+  // FastH3 Omni: the same convert-once-then-cache shape as the V2 rows, plus
+  // the composed model root's other components. The input image is the FIRST
+  // ordered reference, followed by the extra gallery stills.
+  if (family === 'fasth3omni') {
+    if (!fastvideoOmniAssets || !fastvideoModelPath) {
+      throw new ServerError(`${model.name} is missing its downloaded weights.`, { status: 400, code: 'FASTVIDEO_OMNI_WEIGHTS_NOT_CACHED' });
+    }
+    const mlxFormat = fastvideoMlxFormat(model);
+    if (!mlxFormat) throw new ServerError(`${model.name} needs a fastvideoMlxFormat.`, { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' });
+    args.push(
+      '--prompt-cache-dir', FASTVIDEO_PROMPT_CACHE_DIR,
+      '--mlx-format', mlxFormat, '--mlx-checkpoint-cache-dir', FASTVIDEO_MLX_CHECKPOINT_DIR,
+      '--omni-base-root', fastvideoOmniAssets.baseRoot,
+      '--vae-decoder', fastvideoOmniAssets.vaeDecoder,
+      '--vae-encoder', fastvideoOmniAssets.vaeEncoder,
+    );
+    for (const path of referenceImagePaths || []) args.push('--reference-image', path);
+    for (const path of referenceVideoPaths || []) args.push('--reference-video', path);
+    for (const path of referenceAudioPaths || []) args.push('--reference-audio', path);
   }
   if (negativePrompt) args.push('--negative-prompt', negativePrompt);
   if (sourceImagePath) args.push('--image', sourceImagePath);
@@ -1133,7 +1153,7 @@ export const buildMiniMaxH3Ref2vaArgs = ({
   return { bin: process.execPath, args };
 };
 
-export const buildArgs = ({ upscale, pythonPath, modelId, model, wanModelPath, fastvideoModelPath, wanRequiredWeights, ltxModelPath, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, draftDecoder, streamingMode, ffmpegPath, ffprobePath }) => {
+export const buildArgs = ({ upscale, pythonPath, modelId, model, wanModelPath, fastvideoModelPath, fastvideoOmniAssets, referenceImagePaths, referenceVideoPaths, referenceAudioPaths, wanRequiredWeights, ltxModelPath, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, draftDecoder, streamingMode, ffmpegPath, ffprobePath }) => {
   // Generative upscale (#6511) declines FIRST. It is not a text/image render:
   // it carries no video model, no prompt and no reference mode, so every guard
   // below would either dereference a model it was never given or reject it for
@@ -1193,7 +1213,7 @@ export const buildArgs = ({ upscale, pythonPath, modelId, model, wanModelPath, f
       : videoLoraUnsupportedError(model, modelId);
   }
   if (model.runtime === 'fastvideo') {
-    return buildFastVideoArgs({ model, fastvideoModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, mode, outputPath });
+    return buildFastVideoArgs({ model, fastvideoModelPath, fastvideoOmniAssets, referenceImagePaths, referenceVideoPaths, referenceAudioPaths, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, mode, outputPath });
   }
   if (model.runtime === 'wan22') {
     return buildWan22Args({ model, wanModelPath, wanRequiredWeights, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath });

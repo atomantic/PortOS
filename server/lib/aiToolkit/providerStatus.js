@@ -555,6 +555,7 @@ export function createProviderStatusService(config = {}) {
     getFallbackProvider(primaryProviderId, providers, taskFallbackId = null, taskFallbackModelId = null, requestCapabilities = null) {
       const capabilityRejections = [];
       const acceptCandidate = (provider, source, pinnedModel = null) => {
+        if (source === 'system' && (provider?.executionSourceProviderId || provider?.executionSelectionRoot)) return null;
         if (!provider?.enabled || !this.isAvailable(provider.id) || !meetsPrerequisites(provider, providers)) return null;
         // Caller mode policy, applied to EVERY tier — task-level, configured and
         // system-priority alike. A configured `fallbackProvider` pointing at a

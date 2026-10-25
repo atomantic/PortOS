@@ -4,7 +4,7 @@ import { mkdir, rm, writeFile, readFile, mkdtemp, rename } from 'fs/promises';
 import { tmpdir } from 'node:os';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies } from '../lib/mockPathsDataRoot.js';
 
 const mockCosState = vi.hoisted(() => ({
   // Use $TMPDIR (falls back to /tmp) rather than a hardcoded /private/tmp — the
@@ -28,6 +28,7 @@ vi.mock('./cosState.js', () => ({
 
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: vi.fn(async () => Object.values(mockCosState.state?.agents || {})) }));
 const recoveryTasks = vi.hoisted(() => new Map());
+vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./cosTaskStore.js', () => ({
   getTaskById: vi.fn(async id => recoveryTasks.get(id) || null),
   getTaskView: vi.fn(async () => ({ user: { tasks: [...recoveryTasks.values()] }, cos: { tasks: [] } })),
@@ -98,7 +99,7 @@ vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await import
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -556,6 +557,7 @@ describe('completeAgent budget-ledger ordering (#1683)', () => {
 
 describe('completeAgent idempotence (#3384)', () => {
   const emittedCompletions = [];
+  const seedBodies = ownTestBodies(it);
 
   beforeEach(async () => {
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
@@ -569,9 +571,15 @@ describe('completeAgent idempotence (#3384)', () => {
   });
 
   afterEach(async () => {
-    fsFailures.dateBucketWritesFail = false;
-    await rm(mockCosState.agentsDir, { recursive: true, force: true });
-    cosEvents.removeAllListeners('agent:completed');
+    // Bail settles Vitest's wrapper before its body: retain fixtures and spies
+    // until the seed's Git work, completion/retry and finally have all finished.
+    try {
+      await seedBodies.drain();
+    } finally {
+      fsFailures.dateBucketWritesFail = false;
+      await rm(mockCosState.agentsDir, { recursive: true, force: true });
+      cosEvents.removeAllListeners('agent:completed');
+    }
   });
 
   it.each([{ success: true, pinned: false }, { success: false, pinned: false }, { success: true, pinned: true }, { success: false, pinned: true }])('archives checkout evidence before releasing a delivered or cleanup-pending claim ($success, pinned=$pinned)', async ({ success, pinned }) => {
@@ -593,6 +601,39 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(archived.metadata.completedCheckouts).toEqual([receipt]);
     await completeAgent(agentId, { success: true });
     expect(captureCompletedCheckouts).toHaveBeenCalledTimes(1);
+  });
+
+  it('atomically persists removed-task ledger and verification settlement without changing the execution result', async () => {
+    const id = 'removed-task-completion';
+    const startedAt = '2026-01-01T00:00:00Z';
+    const completedAt = '2026-01-01T00:01:00Z';
+    const stages = Object.fromEntries(['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report']
+      .map(key => [key, { status: 'done' }]));
+    stages.worktree = { status: 'held' };
+    const record = { id, taskId: 'removed-original', status: 'completed', startedAt, completedAt,
+      result: { success: false, executionSuccess: true, cleanupPending: true }, metadata: {
+        instanceId: 'fixture-local', repoStateVerification: { status: 'pending' },
+        completedCheckouts: [{ branch: 'synthetic-owned-checkout', head: 'a'.repeat(40) }],
+        completionCleanup: { version: 1, status: 'pending', stages,
+          replay: { version: 1, kind: 'replay', bytes: 123, sha256: 'b'.repeat(64) } } } };
+    mockCosState.state.agents[id] = record;
+    const directory = join(mockCosState.agentsDir, completedAt.slice(0, 10), id);
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, 'metadata.json'), JSON.stringify(record));
+    const expected = structuredClone(record);
+    recoveryTasks.set(record.taskId, { id: record.taskId, status: 'in_progress' });
+    expect(await settleAbsentTaskCompletion(id, expected)).toBe(false);
+    recoveryTasks.delete(record.taskId);
+    expect(await settleAbsentTaskCompletion(id, { ...expected, metadata: { ...expected.metadata,
+      completedCheckouts: [{ branch: 'different-checkout' }] } })).toBe(false);
+    expect(await settleAbsentTaskCompletion(id, expected)).toBe(true);
+    const persisted = JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8'));
+    expect(persisted.metadata.completionCleanup).toMatchObject({ status: 'completed', stages: { worktree: { status: 'done' } } });
+    expect(persisted.metadata.completionCleanup).not.toHaveProperty('replay');
+    expect(persisted.metadata.repoStateVerification.status).toBe('completed');
+    expect(persisted.result).toEqual(record.result);
+    expect(recoveryTasks.has(record.taskId)).toBe(false);
+    expect(await settleAbsentTaskCompletion(id, expected)).toBe(false);
   });
 
   it('drops replay inputs from durable terminal ledgers without erasing independent preservation holds', async () => {
@@ -646,71 +687,73 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(persisted.metadata.completedCheckouts).toEqual([evidence]);
   });
 
-  it.each(['unchanged', 'physical-generation', 'new-owner', 'later-head', 'orphan-empty', 'orphan-physical-generation', 'orphan-new-owner', 'orphan-later-head'])('recovers only the original completion physical seed after restart, scenario=%s', async scenario => {
-    const orphan = scenario.startsWith('orphan-');
-    const changed = !['unchanged', 'orphan-empty'].includes(scenario);
-    const scratch = await mkdtemp(join(tmpdir(), 'portos-completion-capture-seed-'));
-    let failFirstRead;
-    try {
-      const repo = join(scratch, 'repo');
-      const checkout = join(scratch, 'checkout');
-      await materializeGitRepo(repo);
-      await execGit(['worktree', 'add', '-b', 'feature/seeded', checkout, 'main'], repo);
-      const actual = await vi.importActual('./completedCheckoutEvidence.js');
-      captureCheckoutSeeds.mockImplementationOnce(actual.captureCheckoutSeeds);
-      captureCompletedCheckouts.mockImplementationOnce(actual.captureCompletedCheckouts);
-      const agentId = `seeded-${changed}`;
-      await registerAgent(agentId, 'seeded-task', { isWorktree: true, sourceWorkspace: repo,
-        workspacePath: checkout, worktreeBranch: 'feature/seeded' });
-      const seed = mockCosState.state.agents[agentId].metadata.checkoutSeeds[0];
-      expect(seed).toMatchObject({ agentId, branch: 'feature/seeded' });
-      await writeFile(join(checkout, 'delivery.txt'), 'wanted original work');
-      await execGit(['add', 'delivery.txt'], checkout);
-      await execGit(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'final delivered head'], checkout);
-      const head = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
-      if (orphan) captureCompletedCheckouts.mockReset().mockResolvedValueOnce([]); // Historical failed-run empty capture.
-      else failFirstRead = vi.spyOn(await import('./worktreeManager.js'), 'listWorktrees').mockRejectedValueOnce(new Error('first completion Git read unavailable'));
-      const completed = await completeAgent(agentId, orphan ? { success: false, executionSuccess: false, orphaned: true } : { success: true });
-      if (orphan) expect(completed).toMatchObject({ result: { success: false, executionSuccess: false, orphaned: true },
-        metadata: { completedCheckouts: [], checkoutCapture: { status: 'captured' } } });
-      else expect(completed).toMatchObject({ status: 'completed', result: { cleanupPending: true, executionSuccess: true },
-        metadata: { checkoutCapture: { status: 'pending', unknown: false, targets: [expect.objectContaining({ head })] } } });
-      expect(cosEvents.listenerCount('agent:completed')).toBeGreaterThan(0);
-      delete mockCosState.state.agents[agentId]; // Restart: only the real archived metadata remains.
-      let retainedHead = head;
-      if (scenario.endsWith('later-head')) {
-        await execGit(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'later unrelated writer'], checkout);
-        retainedHead = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
+  for (const scenario of ['unchanged', 'physical-generation', 'new-owner', 'later-head', 'orphan-empty', 'orphan-physical-generation', 'orphan-new-owner', 'orphan-later-head']) {
+    seedBodies.it(`recovers only the original completion physical seed after restart, scenario=${scenario}`, async () => {
+      const orphan = scenario.startsWith('orphan-');
+      const changed = !['unchanged', 'orphan-empty'].includes(scenario);
+      const scratch = await mkdtemp(join(tmpdir(), 'portos-completion-capture-seed-'));
+      let failFirstRead;
+      try {
+        const repo = join(scratch, 'repo');
+        const checkout = join(scratch, 'checkout');
+        await materializeGitRepo(repo);
+        await execGit(['worktree', 'add', '-b', 'feature/seeded', checkout, 'main'], repo);
+        const actual = await vi.importActual('./completedCheckoutEvidence.js');
+        captureCheckoutSeeds.mockImplementationOnce(actual.captureCheckoutSeeds);
+        captureCompletedCheckouts.mockImplementationOnce(actual.captureCompletedCheckouts);
+        const agentId = `seeded-${changed}`;
+        await registerAgent(agentId, 'seeded-task', { isWorktree: true, sourceWorkspace: repo,
+          workspacePath: checkout, worktreeBranch: 'feature/seeded' });
+        const seed = mockCosState.state.agents[agentId].metadata.checkoutSeeds[0];
+        expect(seed).toMatchObject({ agentId, branch: 'feature/seeded' });
+        await writeFile(join(checkout, 'delivery.txt'), 'wanted original work');
+        await execGit(['add', 'delivery.txt'], checkout);
+        await execGit(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'final delivered head'], checkout);
+        const head = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
+        if (orphan) captureCompletedCheckouts.mockReset().mockResolvedValueOnce([]); // Historical failed-run empty capture.
+        else failFirstRead = vi.spyOn(await import('./worktreeManager.js'), 'listWorktrees').mockRejectedValueOnce(new Error('first completion Git read unavailable'));
+        const completed = await completeAgent(agentId, orphan ? { success: false, executionSuccess: false, orphaned: true } : { success: true });
+        if (orphan) expect(completed).toMatchObject({ result: { success: false, executionSuccess: false, orphaned: true },
+          metadata: { completedCheckouts: [], checkoutCapture: { status: 'captured' } } });
+        else expect(completed).toMatchObject({ status: 'completed', result: { cleanupPending: true, executionSuccess: true },
+          metadata: { checkoutCapture: { status: 'pending', unknown: false, targets: [expect.objectContaining({ head })] } } });
+        expect(cosEvents.listenerCount('agent:completed')).toBeGreaterThan(0);
+        delete mockCosState.state.agents[agentId]; // Restart: only the real archived metadata remains.
+        let retainedHead = head;
+        if (scenario.endsWith('later-head')) {
+          await execGit(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'later unrelated writer'], checkout);
+          retainedHead = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
+        }
+        if (scenario.endsWith('new-owner')) {
+          mockCosState.state.agents['new-owner'] = { id: 'new-owner', status: 'completed', startedAt: new Date().toISOString(),
+            metadata: { sourceWorkspace: repo, workspacePath: checkout, worktreeBranch: 'feature/seeded' } };
+        }
+        if (scenario.endsWith('physical-generation')) {
+          const pointer = join(checkout, '.git');
+          const bytes = await readFile(pointer);
+          await rename(pointer, join(scratch, 'original-git-pointer'));
+          await writeFile(pointer, bytes);
+        }
+        const options = orphan ? { retirement: { repoPath: repo, branch: 'feature/seeded', path: checkout, head } } : {};
+        expect(await retryCompletionCheckoutCapture(agentId, options)).toBe(!changed);
+        const recovered = await getAgent(agentId);
+        if (changed) expect(recovered.metadata.checkoutCapture.status).toBe(orphan ? 'captured' : 'pending');
+        else {
+          const receipt = recovered.metadata.completedCheckouts[0];
+          expect(receipt).toMatchObject({ version: 2, head, seededAt: seed.seededAt });
+          expect(Date.parse(receipt.capturedAt)).toBeGreaterThanOrEqual(Date.parse(completed.completedAt));
+          expect(completedCheckoutReceiptValid(recovered, receipt)).toBe(true);
+        }
+        if (orphan) expect(recovered.result).toEqual(completed.result);
+        expect(await readFile(join(checkout, 'delivery.txt'), 'utf8')).toBe('wanted original work');
+        expect((await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim()).toBe(retainedHead);
+        expect(emittedCompletions).toHaveLength(1);
+      } finally {
+        failFirstRead?.mockRestore();
+        await rm(scratch, { recursive: true, force: true, maxRetries: 3 });
       }
-      if (scenario.endsWith('new-owner')) {
-        mockCosState.state.agents['new-owner'] = { id: 'new-owner', status: 'completed', startedAt: new Date().toISOString(),
-          metadata: { sourceWorkspace: repo, workspacePath: checkout, worktreeBranch: 'feature/seeded' } };
-      }
-      if (scenario.endsWith('physical-generation')) {
-        const pointer = join(checkout, '.git');
-        const bytes = await readFile(pointer);
-        await rename(pointer, join(scratch, 'original-git-pointer'));
-        await writeFile(pointer, bytes);
-      }
-      const options = orphan ? { retirement: { repoPath: repo, branch: 'feature/seeded', path: checkout, head } } : {};
-      expect(await retryCompletionCheckoutCapture(agentId, options)).toBe(!changed);
-      const recovered = await getAgent(agentId);
-      if (changed) expect(recovered.metadata.checkoutCapture.status).toBe(orphan ? 'captured' : 'pending');
-      else {
-        const receipt = recovered.metadata.completedCheckouts[0];
-        expect(receipt).toMatchObject({ version: 2, head, seededAt: seed.seededAt });
-        expect(Date.parse(receipt.capturedAt)).toBeGreaterThanOrEqual(Date.parse(completed.completedAt));
-        expect(completedCheckoutReceiptValid(recovered, receipt)).toBe(true);
-      }
-      if (orphan) expect(recovered.result).toEqual(completed.result);
-      expect(await readFile(join(checkout, 'delivery.txt'), 'utf8')).toBe('wanted original work');
-      expect((await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim()).toBe(retainedHead);
-      expect(emittedCompletions).toHaveLength(1);
-    } finally {
-      failFirstRead?.mockRestore();
-      await rm(scratch, { recursive: true, force: true, maxRetries: 3 });
-    }
-  });
+    });
+  }
 
   it('keeps the first verdict when a duplicate completion arrives', async () => {
     // Regression: a stray runner `agent:completed` for an agent that had already

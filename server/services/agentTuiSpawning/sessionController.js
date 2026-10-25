@@ -503,7 +503,13 @@ export function createTuiSessionController({
   finalization,
   probeMergeGatePr,
 }) {
-  const { appendLine, pushRaw, flushRaw, drainLines, drainRaw, getOutputBuffer } = spooler;
+  const { appendLine, flushRaw, drainLines, drainRaw, getOutputBuffer } = spooler;
+  let rawOutputBytes = 0;
+  let submissionOutputBytes = null;
+  const pushRaw = (text) => {
+    rawOutputBytes += Buffer.byteLength(text, 'utf8');
+    spooler.pushRaw(text);
+  };
   // The login shell prints "command not found" for the binary it was asked to
   // run — the SPAWNED one, which for a credential-bootstrap provider is the
   // bootstrap CLI, not the harness `tuiConfig.command` names.
@@ -948,8 +954,10 @@ export function createTuiSessionController({
       });
     }
 
-    persistence.releaseRunRecord(agentData?.pid ?? null);
-    if (sessionId && session.isAlive(sessionId)) session.kill(sessionId);
+    // Stop this finished writer before releasing its execution binding. The
+    // adapter then awaits deterministic retirement; no scheduled wake is owed.
+    if (sessionId && session.isAlive(sessionId)) await session.kill(sessionId);
+    await persistence.releaseRunRecord(agentData?.pid ?? null);
   };
 
   /**
@@ -1131,7 +1139,7 @@ export function createTuiSessionController({
       errorExecutionFallback: `TUI agent ended: ${reason}`,
     });
 
-    if (finalizeOutcome.outcome === 'paused') { persistence.releaseRunRecord(agentData?.pid ?? null); return; }
+    if (finalizeOutcome.outcome === 'paused') { await persistence.releaseRunRecord(agentData?.pid ?? null); return; }
 
     if (finalizeOutcome.outcome === 'abandoned') {
       await abandonForHostShutdown();
@@ -1188,6 +1196,11 @@ export function createTuiSessionController({
       // transcript when the analyzer recognizes it (COMPLETION_REASON_ANALYSES).
       completionReason: reason,
       completionError: finalError,
+      promptProvenance: {
+        submitted: submissionOutputBytes !== null,
+        bytesSinceSubmission: submissionOutputBytes === null ? null : rawOutputBytes - submissionOutputBytes,
+        suppliedPrompt: prompt,
+      },
     });
 
     // `prOwnership` was resolved once, up front, by the adapter, so the
@@ -1703,7 +1716,11 @@ export function createTuiSessionController({
       appendLine,
       isFinalized: () => isTerminal() || !!terminalRefusal,
       markPromptSent: () => { promptSentAt = Date.now(); },
-      markPromptSubmitted: () => { if (promptSubmittedAt === null) promptSubmittedAt = Date.now(); },
+      markPromptSubmitted: () => {
+        if (promptSubmittedAt !== null) return;
+        promptSubmittedAt = Date.now();
+        submissionOutputBytes = rawOutputBytes;
+      },
       noteInput: (evidence) => promptGate.noteInput(Date.now(), evidence),
       finishStartupFailure,
     });

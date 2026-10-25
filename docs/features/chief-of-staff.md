@@ -46,6 +46,27 @@ say “Execution completed.” Historical user feedback is unchanged. GitHub
 notification resolution requires explicit completed or verified no-action-needed
 delivery; exit success alone cannot mark a thread done.
 
+### Runtime verification prerequisites
+
+When verification requires a merged PortOS fix to be running, an agent may report
+`blocked` with `recovery: { "mode": "runtime", "prUrl": "https://github.com/example/PortOS/pull/123", "requiredCommit": "<full PR head or merge SHA>" }`.
+The server validates the configured repository, merged PR, default-branch
+integration and captured boot ancestry. A changed disk HEAD or completion
+sentinel does not satisfy this prerequisite.
+
+The original task retains its dispatch identity, merged checkout, receipt
+obligations and remaining retry/spawn budgets in the existing `cos_tasks` record.
+It stays blocked under `runtime-verification`, exempt from stale-failure expiry
+and generic revival. No new store, seed or migration is needed. The configured
+idle updater remains the only automatic update path: disabling it, cooldowns,
+active work and checkout-readiness gates continue to hold updates. A supported
+manual update can also satisfy the prerequisite.
+
+A CoS sweep resumes that same task once after verified boot ancestry and the
+original run's resume-pointer handoff. Concurrent sweeps use a conditional task
+write, and persisted evidence survives restart. This resumes verification; only
+its successful delivery can revive the investigation's affected tasks.
+
 ## Features
 
 1. **Dual Task Lists**: User tasks and system tasks, both stored in `cos_tasks`
@@ -154,18 +175,22 @@ never grant recovery permission. GitHub auto-merge enabled alone is unfinished.
 
 When cleanup is enabled, a clean, unlocked, ownerless checkout held only by a
 review obligation whose commits are already on the default branch (ancestor or
-patch-equivalent) is archived and retired directly: no PR identity, owner
-history or agent review is needed to show nothing is lost, and the retirement
-service re-proves merge evidence and ownership under its fence. Human handoffs
+patch-equivalent) is removed in place: no PR identity, owner
+history or agent review is needed, and the retirement
+service re-proves merge evidence and ownership under its fence. Nothing is copied
+into an archive. Git-ignored payload is checked separately: unverified ignored
+files retain the checkout and branch, while recognized disposable module caches
+and links retain their existing policy. Historical recovery archives and
+unfinished quarantine journals remain available after setup. Human handoffs
 and unreadable policy stay held. Other completed local review obligations become bounded
 `REVIEW_RETIREMENT` tasks after a fresh merged-PR preview accepts their policy,
 checkout identity and ownership. The task records the exact release and review
 digest, reads the complete original/current code comparison, and uses the live
 retirement endpoint only after review. That endpoint rechecks the digest and
-archives content before removal. A successful agent report without the matching
-archive receipt remains incomplete across restarts and later empty inventory scans.
+removes a merged clean checkout without copying it. A successful agent report without
+ok:true and branchDeleted:true remains incomplete across restarts and later empty inventory scans.
 Repository-cleanup recovery uses the same scoped API review and additive obligation;
-its completion checks the persisted task identity and exact archive receipt without
+its completion checks the persisted task identity and exact retirement receipt without
 starting another repository sweep. Intentional human handoffs, live owners,
 locks, unmanaged trees and refused previews stay visible with their own reasons.
 A missing remote proof commit can be fetched during preview without advancing
@@ -186,11 +211,11 @@ callers still opt in explicitly.
 
 The Git page's merged badge is a display hint. Delete merged branches and
 completion cleanup use the same retirement path: resolve the current checkout,
-re-read ownership and policy, verify the exact commit's merge evidence, archive
-and verify ignored content, private Git evidence and reflog-only commit objects.
-Before local ref deletion, a separate archive preserves the shared branch
-reflog verbatim and bundles every historical commit it names, including for
-branches without a checkout. Missing objects or changed archive bytes hold the ref.
+re-read ownership and policy, verify the exact commit's merge evidence, and
+remove a merged clean checkout in place. A dirty worktree, an unmerged branch,
+a protected branch, or a live owner stays, with no archive copy. Recovery refs
+under `refs/portos/completed/` keep original commit objects reachable for a
+squash merge. Missing merge evidence holds the ref.
 Local ref retirement uses Git’s checked-out-branch guard and an exact-head lease
 inside the worktree creation queue. Remote deletion binds its fresh proof and
 exact-head lease to one captured, matching fetch/push endpoint. Recovery refs retain original commit objects even for a squash
@@ -204,12 +229,12 @@ reused branch, or a checkout left behind while the branch shipped from
 elsewhere) retires once a GitHub read finds no open PR for the branch and the
 checkout's directory, index and HEAD log have been untouched for an hour. A
 merged checkout under a review obligation whose open PR head has moved past it
-(the delivery continues from another checkout) is archived and retired after
+(the delivery continues from another checkout) is removed after
 the same hour idle; an open PR at the checkout's own tip stays a live delivery.
 After a claim checkout retires, its issue markers are never written; a GitHub
 read showing the issue closed, or open with no `in-progress` label and no
 assignee, settles the reservation report, and any other answer keeps it held. Older records cannot release a reused claim. Initialized submodules currently retain
-the checkout because their complete content is not supported by the archive.
+the checkout. The explicit initialized-checkout endpoint removes a merged clean tree in place.
 A held merged receipt names a recovery task when policy and source ownership
 permit it; intentional human handoffs stay with their existing owner. The recovery
 task prepares preservation prerequisites; the coordinator makes one final retirement
@@ -308,10 +333,10 @@ native auto-merge, which cannot acquire PortOS's local merge admission. Existing
 explicit app and task policies remain unchanged.
 
 New receipts also retain the verified checkout path. After a confirmed merge,
-and after releasing merge admission, the coordinator archives unique contents
-and Git metadata before retiring that exact checkout and local branch. A
-cleanup refusal remains on the receipt as `cleanup.status`, `reason` and any
-`archiveDir`; transient failures retry every 30 minutes, at most 12 times.
+and after releasing merge admission, the coordinator removes that exact merged
+clean checkout and local branch without copying either one. A cleanup refusal
+remains on the receipt as `cleanup.status` and `reason`; transient failures
+retry every 30 minutes, at most 12 times.
 Locks, initialized submodules, changed checkout identity and supersession need
 explicit recovery and remain held. No worker waits for this cleanup, no lock is
 silently released, and no initialized submodule is discarded. Older receipts
@@ -539,3 +564,9 @@ Storage, retention and the privacy posture are in [STORAGE.md](../STORAGE.md).
 - [Self-Improvement](./cos-enhancement.md)
 - [Error Handling](./error-handling.md)
 - Scheduled Scripts — see the Schedule system (`server/services/taskSchedule.js`, `/api/cos/jobs`)
+
+### PortOS claim workflow audit
+
+`/cos/jobs` includes **PortOS Claim Workflow Audit**, fixed to PortOS rather than a managed app. It ships disabled and on demand. Choose an entitled provider/model, optional effort, investigation minutes, recent-run count and finding count before running; select a recurrence separately if wanted. The shared CoS daily action/minute budgets still apply. Investigation limits bound audit scope, not monetary cost or delivery waits; the job never purchases access or changes service tier.
+
+Each occurrence inspects its saved delivered prompt and recent workflow evidence, distinguishes observed phases from historical or unexercised phases, and records source hashes, runtime/model/settings, findings and delivery links in its retained CoS run output. Generator source hashes are a starting inventory, not proof of delivery. Queued, running and interrupted blocked audits retain their occurrence; a short reservation covers dispatch before persistence. Reuse existing finding issues and delivery PRs. A verified empty branch with a substantive no-change report is successful; changed work still requires normal review, CI, admission and retirement. Transient failures retain the existing recovery path without creating user Brain tasks.

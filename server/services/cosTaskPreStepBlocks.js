@@ -31,6 +31,7 @@ import { resolveClaimReviewerConfig, reviewerConfigMetadata, SWARM_COUNT_MIN, IS
 import { emitLog } from './cosEvents.js';
 import { getActiveApps } from './apps.js';
 import { getCodeReviewDefaults } from './codeReview.js';
+import { preflightClaimReviewers } from './claimReviewerPreflight.js';
 import { NON_ACTIONABLE_ISSUE_LABELS } from './perpetualWork.js';
 import { DISPATCH_HINT_FANOUT_GUIDANCE } from '../lib/dispatchLabels.js';
 import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
@@ -530,22 +531,28 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const detachedSuffix = countSuffix(result.detachedWorktrees, 'detached worktree(s) held back', (d) => d.reason);
   // Publish the exact release rows before preparing the live preview. Proof
   // objects may be fetched, but only a reviewed digest authorizes retirement.
-  const previousOutcome = await taskSchedule.getBranchReconcileOutcome(app.id);
+  const observedOutcome = await taskSchedule.getBranchReconcileOutcome(app.id);
+  const { reconcileLegacyRetirementRecords } = await import('./legacyRetirementReconciliation.js');
+  const previousOutcome = await reconcileLegacyRetirementRecords(app.id, observedOutcome).catch(() => observedOutcome);
   const unresolved = unresolvedRetirements(previousOutcome);
   const absentObligations = unresolved.filter(release => !result.worktreeInventory?.some(tree => sameRetirementCheckout(tree, release)));
   let retirementReviews = { candidates: [], held: [] };
   const { prepareReconcileRetirements, retainedMergedClaims } = await import('./branchReconcileRetirement.js');
+  let latestAbsentObligations = absentObligations;
   if (actions.cleanupMerged !== false && (result.wip?.some(branch => branch.rule === 'completion-policy' && branch.completionPolicyReason === 'pr-completion-review-required')
     || retainedMergedClaims(result).length)) {
     const inventory = describeIdleReconcilePark(result.skipped || [], heldLive, {
       wip: result.wip, worktreeInventory: result.worktreeInventory,
       detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
     });
-    await taskSchedule.recordBranchReconcileOutcome(app.id, {
+    const prepOutcome = await taskSchedule.recordBranchReconcileOutcome(app.id, {
       status: 'running', reason: 'preparing-retirement-reviews', remaining: [...inventory.remaining, ...absentObligations],
       nextAction: 'Review completed local work before verified archival retirement.',
     });
     retirementReviews = await prepareReconcileRetirements(app, result);
+    const latestOutcome = (await taskSchedule.getBranchReconcileOutcome(app.id)) || prepOutcome || previousOutcome;
+    latestAbsentObligations = unresolvedRetirements(latestOutcome)
+      .filter(release => !result.worktreeInventory?.some(tree => sameRetirementCheckout(tree, release)));
   }
   const retiredNames = new Set((retirementReviews.retired || []).map(row => row.branch));
   if (retiredNames.size) {
@@ -586,7 +593,11 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   }
   const allActionable = filterActionable([...cognitiveInFlight, ...retirementReviews.candidates], actions);
   const actionableNames = new Set(allActionable.map(branch => branch.branch));
-  const idlePark = describeIdleReconcilePark([...(result.skipped || []), ...retirementReviews.held, ...absentObligations, ...routineDeliveryHolds], heldLive, {
+  const filteredSkipped = (result.skipped || []).filter(row =>
+    !actionableNames.has(row.branch)
+    && !retirementReviews.held.some(held => held.branch === row.branch)
+    && !routineDeliveryHolds.some(held => held.branch === row.branch));
+  const idlePark = describeIdleReconcilePark([...filteredSkipped, ...retirementReviews.held, ...latestAbsentObligations, ...routineDeliveryHolds], heldLive, {
     wip: result.wip?.filter(branch => !actionableNames.has(branch.branch) && !retirementReviews.held.some(held => held.branch === branch.branch) && !routineDeliveryHolds.some(held => held.branch === branch.branch)), detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
     claimMarkersHeld: result.claimMarkersHeld,
     worktreeInventory: result.worktreeInventory?.filter(tree => !actionableNames.has(tree.branch)) ?? result.worktreeInventory,
@@ -692,7 +703,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   metadata.perpetual = true;
   metadata.reconcileRetirements = actionable.filter(branch => branch.retirement).map(branch => ({
     ...branch.retirement,
-    createdAt: dispatchedOutcome.retirementObligations.find(row => sameRetirementObservation(row, branch.retirement.release))?.createdAt,
+    createdAt: dispatchedOutcome.retirementObligations?.find(row => sameRetirementObservation(row, branch.retirement.release))?.createdAt,
   }));
   const supersededBlock = formatSupersededForPrompt(result.superseded || []);
   const block = [
@@ -1049,7 +1060,7 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
  * reviewers stamps the resolved bundle back onto `metadata` (see below), the
  * same way `applyPlanIdMetadata` writes `planId`.
  */
-export async function buildImprovementTaskDescription({ promptTemplate, app, promptTaskType, metadata, blocks }) {
+export async function buildImprovementTaskDescription({ promptTemplate, app, promptTaskType, metadata, blocks, reviewerTaskType = promptTaskType, reviewerOverrideMetadata = {} }) {
   // Resolve the `{reviewers}` the agent is told to run. When the task itself
   // didn't pin reviewers, fall back to the user's PortOS Code Review Defaults
   // (Settings → Code Reviewers) rather than a hardcoded reviewer —
@@ -1064,6 +1075,10 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
   // receive it without needing a new placeholder.
   const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
   const claimReviewers = resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers);
+  const rendersReviewers = /\{reviewers\}/.test(promptTemplate);
+  const reviewerIdentityNotice = rendersReviewers
+    ? await preflightClaimReviewers(app, claimReviewers, { metadata, appOverrideMetadata: reviewerOverrideMetadata, taskType: reviewerTaskType })
+    : '';
   const {
     reviewers: promptReviewers,
     reviewerModels: promptReviewerModels,
@@ -1083,9 +1098,6 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
   // sanitizeTaskMetadata, so read it from `metadata`. Empty for non-issue
   // trackers and when swarm is off.
   const swarmBlock = resolveSwarmBlock(promptTaskType, metadata.swarmCount);
-  // Does this template drive its own reviewers? Gates the two reviewer blocks
-  // appended after the substitutions below, and the persisted bundle.
-  const rendersReviewers = /\{reviewers\}/.test(promptTemplate);
   // Persist what the prompt just named, so `resolveReviewerConfig(task.metadata, …)`
   // at spawn time reads back THIS list instead of re-deriving the install-wide
   // Code Review Defaults — that is what lets the reviewer pin be emitted once,
@@ -1100,7 +1112,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
     .replace(/\{modeInstructions\}/g, () => blocks.modeInstructions || '')
     .replace(/\{trackerInstructions\}/g, () => blocks.trackerInstructions);
 
-  return applyAppPlaceholders(withBlocks, app)
+  return reviewerIdentityNotice + applyAppPlaceholders(withBlocks, app)
     // Function form — reviewersCsv can carry a user-set reviewerModels pin,
     // and normalizeReviewerModel allows `$` in that free text (only `[`, `]`,
     // `,`, and line breaks/tabs are forbidden), so a string replacement would

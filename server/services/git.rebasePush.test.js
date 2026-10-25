@@ -6,7 +6,7 @@ import { execGit } from '../lib/execGit.js';
 import { makeGitSandbox, destroyGitSandbox, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { getGitInfo, rebaseAndPushDefaultBranch } from './git.js';
 
-// Real Git pins preservation, rebase conflict cleanup and the exact push target.
+// Real Git pins preservation, rebase conflict recovery and the exact push target.
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('rebase and push the default branch', () => {
   let sandbox;
   afterEach(async () => {
@@ -71,16 +71,16 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('rebase and push the default branch', ()
     expect(await rebaseAndPushDefaultBranch(repo)).toMatchObject({ success: false, error: expect.stringContaining('no local commits') });
   });
 
-  it('aborts its conflicting rebase, preserving local and remote heads', async () => {
+  it('preserves its conflicting rebase and original branch for explicit recovery', async () => {
     const repo = await prepare({ conflict: true });
     const [local, remote] = await Promise.all([head(repo), head(sandbox.origin)]);
     const result = await rebaseAndPushDefaultBranch(repo);
     expect(result).toMatchObject({ success: false, pushed: false });
     expect(result.error).toMatch(/CONFLICT|could not apply/);
-    expect(await head(repo)).toBe(local);
+    expect((await execGit(['rev-parse', 'refs/heads/main'], repo)).stdout.trim()).toBe(local);
     expect(await head(sandbox.origin)).toBe(remote);
-    expect(existsSync(join(repo, '.git', 'rebase-merge'))).toBe(false);
-    expect((await execGit(['status', '--porcelain'], repo)).stdout).toBe('');
+    expect(existsSync(join(repo, '.git', 'rebase-merge'))).toBe(true);
+    expect((await execGit(['status', '--porcelain'], repo)).stdout).toContain('UU initial.txt');
   });
 
   it('refuses a local merge containing work recorded only in the merge commit', async () => {

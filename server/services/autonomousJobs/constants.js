@@ -36,7 +36,7 @@ export { DAY, HOUR }
 
 // Fields that are code contracts — always overwrite on restart so runtime
 // stays consistent with the shipped implementation.
-export const JOB_STRUCTURAL_FIELDS = ['type', 'scriptHandler', 'appId']
+export const JOB_STRUCTURAL_FIELDS = ['type', 'scriptHandler', 'appId', 'portosOnly']
 
 // Fields that ship with a default but are user-editable via PUT /api/cos/jobs/:id.
 // Only written when the field is absent on the stored job (first-time population).

@@ -283,6 +283,18 @@ function mockWorktreeAgent(overrides = {}) {
 }
 
 describe('cleanupAgentWorktree - PR-creation path', () => {
+  it.each([true, false])('preserves only an accepted runtime prerequisite when accepted=%s', async accepted => {
+    getAgent.mockResolvedValue({ ...mockWorktreeAgent(), result: { success: false,
+      taskOutcome: { status: 'blocked', recovery: { mode: 'runtime' } } } });
+    getTaskById.mockResolvedValue({ id: 'task-runtime', metadata: accepted ? {
+      runtimeVerificationId: 'task-runtime:agent-runtime', runtimeVerification: { agentId: 'agent-runtime' },
+    } : {} });
+    await cleanupAgentWorktree('agent-runtime', false, { originalTask: { id: 'task-runtime', metadata: { discardWorktree: true } } });
+    if (accepted) expect(removeWorktree).not.toHaveBeenCalled();
+    else expect(removeWorktree).toHaveBeenCalled();
+    expect(git.push).not.toHaveBeenCalled();
+  });
+
   it('publishes only after PortOS validation succeeds and persists that distinct outcome', async () => {
     validatePublication.mockResolvedValue({ status: 'passed', head: 'verified-head' });
     git.push.mockImplementation(async () => {
@@ -339,6 +351,21 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     git.suggestPRTitle.mockImplementation((_dir, _base, _head, fallback) =>
       Promise.resolve((fallback || 'CoS automated task').split(/[\r\n]/)[0].trim().substring(0, 100) || 'CoS automated task')
     );
+  });
+
+  it('cleans an already merged exact head after a cleanup-only incomplete result without a cognitive follow-up', async () => {
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'found', detail: 'MERGED',
+      headRefOid: '1'.repeat(40), url: 'https://github.com/test/repo/pull/78' });
+    execGitMock.mockResolvedValue({ exitCode: 0, stdout: `${'1'.repeat(40)}\n`, stderr: '' });
+    removeWorktree.mockResolvedValue({ removed: true, merged: false, warnings: [] });
+    const warnings = await cleanupAgentWorktree('agent-1', false, { prCreation: 'if-missing',
+      originalTask: { id: 'original', metadata: { prCompletion: 'review-then-merge' } } });
+    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
+    expect(addTask).not.toHaveBeenCalled();
+    expect(forceSpawnTask).not.toHaveBeenCalled();
+    expect(warnings).toEqual([]);
+    findPullRequestForBranchMock.mockReset().mockResolvedValue({ status: 'unavailable' });
+    execGitMock.mockReset().mockResolvedValue({ exitCode: 128, stdout: '', stderr: '' });
   });
 
   it.each([true, false])('verifies a server-created draft before completing cleanup: %s', async ok => {
@@ -1742,6 +1769,25 @@ describe('releaseRetryHold', () => {
     expect(updateTask).toHaveBeenCalledWith('task-1', { metadata: expect.objectContaining({
       existingBranch: DEAD_BRANCH, resumedFromAgentId: 'agent-x', resumeWorktreePath: DEAD_TREE,
     }) }, 'user', { expectedStatus: 'blocked', expectedMetadata: { blockedCategory, blockedAt: 'now', deliveryDecisionAgentId: 'agent-x' } });
+  });
+
+  it('retains an already-merged checkout for runtime verification and never makes it pending', async () => {
+    getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked', metadata: {
+      blockedCategory: 'runtime-verification', blockedAt: 'now', deliveryDecisionAgentId: 'agent-x',
+    } });
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    git.getBranch.mockResolvedValue(DEAD_BRANCH);
+    existsSyncMock.mockReturnValue(true);
+    await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+    expect(updateTask).toHaveBeenCalledWith('task-1', { metadata: {
+      existingBranch: DEAD_BRANCH, resumedFromAgentId: 'agent-x', resumeWorktreePath: DEAD_TREE,
+      runtimeVerificationReadyAgentId: 'agent-x',
+    } }, 'user', expect.objectContaining({ expectedStatus: 'blocked' }));
+    updateTask.mockClear();
+    git.getBranch.mockResolvedValue('another-owner');
+    await expect(releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata }))
+      .rejects.toThrow('checkout identity');
+    expect(updateTask).not.toHaveBeenCalled();
   });
 
   it('records the pointer for a failed run whose task is still pending', async () => {

@@ -1,5 +1,6 @@
 /** Exact checkout obligations survive scans until fresh service preservation evidence. */
-export const sameRetirementCheckout = (left, right) => left.branch === right.branch && left.path === right.path && left.head === right.head;
+// A detached checkout has no branch: absent, null and undefined are the same observation.
+export const sameRetirementCheckout = (left, right) => (left.branch ?? null) === (right.branch ?? null) && left.path === right.path && left.head === right.head;
 
 export const sameRetirementObservation = (left, right) => sameRetirementCheckout(left, right)
   && (left.checkoutIdentity || null) === (right.checkoutIdentity || null);
@@ -7,9 +8,19 @@ export const sameRetirementObservation = (left, right) => sameRetirementCheckout
 export const isRetirementObligation = row => ['retirement-review-pending', 'retirement-receipt-unverified',
   'retirement-provenance-unverified'].includes(row?.reason);
 
+const retirementArchiveRecorded = row => row?.archiveDir == null
+  || (typeof row.archiveDir === 'string' && row.archiveDir.length > 0);
+
+/** A receipt settles a checkout by deleting its branch, or — for a detached
+ * checkout, which has no branch to delete — by an explicit checkout-only removal.
+ * Checkout-only never settles a branch-bearing row and never claims a deletion.
+ */
+export const retirementReceiptSettles = row => row?.branchDeleted === true
+  || (row?.checkoutOnly === true && row.branchDeleted === false && !row.branch);
+
 export const matchingRetirementReceipts = (outcome, release) => [...(outcome?.retired || []), ...Object.values(outcome?.retirementReceiptEvidence || {})].filter(row =>
-  sameRetirementCheckout(row, release) && row.branchDeleted === true
-  && typeof row.archiveDir === 'string' && row.archiveDir.length > 0
+  sameRetirementCheckout(row, release) && retirementReceiptSettles(row)
+  && retirementArchiveRecorded(row)
   && Number.isFinite(Date.parse(row.retiredAt)));
 
 export const hasRetirementReceipt = (outcome, release) => {
@@ -66,7 +77,9 @@ export function retainRetirementObligations(outcome, additional, now) {
         .filter(entry => sameRetirementCheckout(entry, row))
         .map(entry => Date.parse(entry.verifiedAt || entry.archivedAt)),
     ].filter(Number.isFinite);
-    const observed = Number.isFinite(Date.parse(row.observedAt)) ? Date.parse(row.observedAt) : Date.parse(now);
+    const fallbackObserved = row.reason === 'retirement-provenance-unverified' && Number.isFinite(Date.parse(outcome?.observedAt))
+      ? Date.parse(outcome.observedAt) : Date.parse(now);
+    const observed = Number.isFinite(Date.parse(row.observedAt)) ? Date.parse(row.observedAt) : fallbackObserved;
     return { ...row, createdAt: new Date(Math.max(observed, ...earlier.map(time => time + 1))).toISOString() };
   });
 }

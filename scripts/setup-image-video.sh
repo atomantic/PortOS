@@ -170,11 +170,7 @@ INSTALL_VIDEO="${INSTALL_VIDEO:-$DEFAULT_INSTALL_VIDEO}"
 if [[ "$INSTALL_MFLUX" == "1" ]]; then
   # Install via pip --user so we don't pollute the system or require a venv.
   # mflux comes with the mflux-generate CLI which the local image backend
-  # spawns directly. Pin >=0.17: that's the first release with FLUX.2 LoRA
-  # training (`mflux-train --config`, `flux2-klein-*` base models). Older
-  # mflux (0.12.x) wants `--train-config` and has no flux2 models, so its
-  # trainer dies with a bare "exited with code 2" — see train_mflux_lora.py.
-  #
+  # spawns directly. The shared inference runtime remains supported.
   echo "📦 Installing image generation packages (mflux + deps)..."
   # VALIDATED TRIO (issue #1329) — pin the MLX/Metal backend, do NOT leave it a
   # floor. The original three M5 Max GPU-watchdog kernel panics
@@ -192,7 +188,7 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
   MLX_PIN='mlx==0.31.2'
   MLX_METAL_PIN='mlx-metal==0.31.2'
   # mflux/mlx need Python 3.10+. The historical layout installs mflux with
-  # `pip install --user` against $PYTHON_BIN, and PortOS finds `mflux-train`
+  # `pip install --user` against $PYTHON_BIN, and PortOS discovers the shared console scripts
   # beside that interpreter. But when $PYTHON_BIN is too old (e.g. a system
   # python3.8) or externally-managed (PEP 668) so the --user install fails or
   # can't be imported, fall back to a dedicated venv at ~/.portos/venv-mflux —
@@ -423,7 +419,7 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
     "${FASTVIDEO_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.8.14"
   fi
 
-  FASTVIDEO_PIN="${FASTVIDEO_PIN:-430e52154e76b902c3cc17a16b3edc1fad790012}"
+  FASTVIDEO_PIN="${FASTVIDEO_PIN:-fa2d1324c60050cd65209c6aaeac470e7fb412f5}"
   FASTVIDEO_DIR="${HOME}/.portos/fastvideo"
   FASTVIDEO_PY="${FASTVIDEO_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"

@@ -1,12 +1,15 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bot, ChevronDown, Search, Terminal, AlertTriangle } from 'lucide-react';
+import { Bot, ChevronDown, Search, Terminal, AlertTriangle, Settings2 } from 'lucide-react';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
 import useClickOutside from '../../hooks/useClickOutside';
 import useEscapeKey from '../../hooks/useEscapeKey';
 import useFocusTrap from '../../hooks/useFocusTrap.js';
 import { tokenizeQuery, matchHaystack } from '../../lib/mediaSearch.js';
 import { isLaunchableTuiProvider } from '../../utils/providers';
+
+import ExecutionOptionsSelect from '../providers/ExecutionOptionsSelect.jsx';
+import { saveExecutionOptionSelection } from '../../services/apiProviders.js';
 
 const PANEL_WIDTH = 384;
 
@@ -23,7 +26,7 @@ const FILTER_THRESHOLD = 6;
  */
 export function launchableProviders(providers) {
   return (providers || [])
-    .filter((p) => p?.enabled && isLaunchableTuiProvider(p))
+    .filter((p) => p?.enabled && !p.executionSourceProviderId && !p.executionSelectionRoot && isLaunchableTuiProvider(p))
     .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
     // Match on everything the row shows — name, id, and the command line — so
     // typing `ollama`, `opencode`, or `agy` all find their providers.
@@ -60,8 +63,13 @@ export function launchableProviders(providers) {
  */
 export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loading = false, placement = 'below' }) {
   const [open, setOpen] = useState(false);
+  const [selection, setSelection] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
   const [query, setQuery] = useState('');
   const containerRef = useRef(null);
+  const selectionGeneration = useRef(0);
+  useEffect(() => () => { selectionGeneration.current += 1; }, []);
 
   const launchable = launchableProviders(providers);
   const tokens = tokenizeQuery(query);
@@ -78,7 +86,14 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
     contentDeps: [visible.length, loading],
   });
 
-  const close = () => { setOpen(false); setQuery(''); };
+  const close = () => {
+    selectionGeneration.current += 1;
+    setOpen(false); setQuery(''); setSelection(null); setError(null); setSaving(false);
+  };
+  const selectProvider = (provider) => {
+    selectionGeneration.current += 1;
+    setSelection(provider); setError(null); setSaving(false);
+  };
   // The panel is portaled to <body>, so it is not a descendant of the trigger
   // container — a single-ref containment check would read every click inside
   // the panel (including typing in the filter) as an outside click.
@@ -155,8 +170,8 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
               sibling `cd to app` dropdown on this page already is. */}
           <div role="group" aria-label="Enabled AI providers">
             {visible.map((provider) => (
+              <div key={provider.id} className="flex items-center">
               <button
-                key={provider.id}
                 onClick={() => handlePick(provider.id)}
                 className="w-full text-left px-3 py-2 min-h-[44px] hover:bg-port-border transition-colors border-b border-port-border/50 last:border-b-0"
                 title={provider.tuiCommandLine}
@@ -177,8 +192,30 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
                 </div>
                 <div className="text-[11px] font-mono text-gray-500 truncate">{provider.tuiCommandLine}</div>
               </button>
+              <button type="button" aria-label={`Execution options for ${provider.name || provider.id}`} className="p-3 text-gray-400" onClick={() => selectProvider(provider)}><Settings2 size={14} /></button>
+              </div>
             ))}
           </div>
+
+          {selection && <div className="p-3 border-t border-port-border">
+            <p className="text-sm text-gray-200 mb-2">{selection.name}</p>
+            <ExecutionOptionsSelect provider={selection} model={selection.defaultModel} value={selection.executionSelectionOptions || {}} disabled={saving}
+              onChange={async (options) => {
+                const generation = selectionGeneration.current;
+                setSaving(true);
+                setError(null);
+                try {
+                  const saved = await saveExecutionOptionSelection(selection.id, selection.defaultModel, options, { silent: true });
+                  if (generation === selectionGeneration.current) setSelection(saved);
+                } catch (err) {
+                  if (generation === selectionGeneration.current) setError(err.message);
+                } finally {
+                  if (generation === selectionGeneration.current) setSaving(false);
+                }
+              }} className="w-full bg-port-card border border-port-border rounded p-2 text-sm" />
+            {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
+            <button type="button" disabled={saving} className="mt-2 text-sm text-port-accent" onClick={() => handlePick(selection.id)}>Launch selected configuration</button>
+          </div>}
 
           {visible.length === 0 && (
             <div className="px-3 py-3 text-xs text-gray-500">

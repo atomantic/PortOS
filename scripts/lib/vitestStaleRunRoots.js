@@ -67,14 +67,16 @@ export function verifyPendingTestProcesses(root, { read = readTestProcesses, pro
 }
 
 export const STALE_ROOT_AGE_MS = 6 * 60 * 60 * 1000;
-// `ps -o lstart=` has 1s resolution and the recorded start is derived from
-// process.uptime(), so allow slack before calling a pid "reused".
+// Legacy stamps derive start from wall time minus uptime; keep their
+// tolerance when comparing with the OS start time (second resolution).
 const START_TOLERANCE_MS = 5000;
 
-/** Record this process as the root's owner: `<pid> <start-ms>`. */
-export function writeOwnerFile(root) {
-  const startMs = Math.round(Date.now() - process.uptime() * 1000);
-  writeFileSync(join(root, OWNER_FILE), `${process.pid} ${startMs}\n`);
+/** Record the OS birth time, never a wall-clock/uptime estimate that can drift. */
+export function writeOwnerFile(root, options) {
+  const startMs = readProcessStartMs(process.pid, options);
+  // An unreadable birth identity must retain a signalable owner, even when a
+  // later reader recovers. ESRCH still permits individually verified cleanup.
+  writeFileSync(join(root, OWNER_FILE), `${process.pid} ${startMs ?? 'unknown'}\n`);
 }
 
 /** Process state and start time of a live pid, or null when it cannot be read (always null on win32). */
@@ -82,7 +84,7 @@ function readProcessInfo(pid, { exec = execFileSync } = {}) {
   if (process.platform === 'win32') return null;
   try {
     const out = exec('ps', ['-o', 'stat=,lstart=', '-p', String(pid)], {
-      encoding: 'utf8',
+      encoding: 'utf8', timeout: 5000,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],
       env: { ...process.env, LC_ALL: 'C' },
@@ -135,8 +137,11 @@ export function isOwnerAlive({ pid, startMs }, { exec = execFileSync } = {}) {
 
 function readOwner(path) {
   try {
-    const [pid, startMs] = readFileSync(join(path, OWNER_FILE), 'utf8').trim().split(/\s+/).map(Number);
-    return Number.isSafeInteger(pid) && pid > 0 && Number.isFinite(startMs) && startMs >= 0 ? { pid, startMs } : null;
+    const [pidText, startText] = readFileSync(join(path, OWNER_FILE), 'utf8').trim().split(/\s+/);
+    const pid = Number(pidText);
+    const startMs = startText === 'unknown' ? null : Number(startText);
+    return Number.isSafeInteger(pid) && pid > 0
+      && (startMs === null || (Number.isFinite(startMs) && startMs >= 0)) ? { pid, startMs } : null;
   } catch {
     return null;
   }
@@ -242,6 +247,14 @@ export function killTestProcessesUnder(root, { read = readTestProcesses, probe =
     const current = read(pending.map(item => item.record.pid));
     for (const item of pending) {
       if (item.settlement !== 'terminated') item.settlement = testProcessSettlement(item.record, current, probePid);
+      // A transient inspection failure can withhold the first signal. Retry
+      // only after fresh incarnation, ancestry and root proof; an attempted
+      // signal (including a permission failure) is never blindly repeated.
+      if (item.settlement !== 'terminated' && item.signal === 'not-attempted'
+        && stillOwned(item.record, snapshot, parent, prefix, read)) {
+        try { kill(item.record.pid, 'SIGKILL'); item.signal = 'delivered'; }
+        catch { item.signal = 'failed'; }
+      }
     }
     if (pending.every(item => item.settlement === 'terminated') || now() >= deadline) break;
     wait(Math.min(25, deadline - now()));

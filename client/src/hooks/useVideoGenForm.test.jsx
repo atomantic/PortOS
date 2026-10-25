@@ -793,6 +793,48 @@ describe('useVideoGenForm', () => {
     expect(payload.loraScales).toEqual([0.8]);
   });
 
+  it.each(['applyRemix', 'applyResumedParams'])('%s removes previous multimodal conditioning from the next render', async (restore) => {
+    const multimodal = { ...LTX25, maxReferenceImages: 4, maxReferenceVideos: 3, maxReferenceAudios: 3 };
+    const { result } = render({ models: [multimodal], modelContext: { defaultModel: multimodal.id } });
+    await waitFor(() => expect(result.current.modelId).toBe(multimodal.id));
+    act(() => {
+      result.current.addReferenceImage();
+      result.current.addReferenceVideo();
+      result.current.addReferenceAudio(new File(['voice'], 'old-voice.wav'));
+    });
+    act(() => {
+      result.current.updateReferenceImage(0, 'old-image.png');
+      result.current.pickReferenceVideo(0, '00000000-0000-4000-8000-000000000001');
+    });
+    expect(result.current.buildGeneratePayload()).toMatchObject({
+      referenceImageFiles: ['old-image.png'],
+      referenceVideoIds: ['00000000-0000-4000-8000-000000000001'],
+      referenceAudio0: expect.any(File),
+    });
+
+    act(() => result.current[restore]({ modelId: multimodal.id, prompt: 'restored' }));
+    const payload = result.current.buildGeneratePayload();
+    expect(payload.referenceImageFiles).toBeUndefined();
+    expect(payload.referenceVideoIds).toBeUndefined();
+    expect(payload.referenceAudio0).toBeUndefined();
+  });
+
+  it('replaces resumed reference selections, including explicit empty arrays', async () => {
+    const multimodal = { ...LTX25, maxReferenceImages: 4, maxReferenceVideos: 3, maxReferenceAudios: 3 };
+    const { result } = render({ models: [multimodal], modelContext: { defaultModel: multimodal.id } });
+    await waitFor(() => expect(result.current.modelId).toBe(multimodal.id));
+    act(() => result.current.applyResumedParams({
+      modelId: multimodal.id, referenceImageFiles: ['saved-image.png'],
+      referenceVideoIds: ['00000000-0000-4000-8000-000000000002'],
+    }));
+    expect(result.current.buildGeneratePayload()).toMatchObject({
+      referenceImageFiles: ['saved-image.png'], referenceVideoIds: ['00000000-0000-4000-8000-000000000002'],
+    });
+    act(() => result.current.applyResumedParams({ referenceImageFiles: [], referenceVideoIds: [] }));
+    expect(result.current.buildGeneratePayload().referenceImageFiles).toBeUndefined();
+    expect(result.current.buildGeneratePayload().referenceVideoIds).toBeUndefined();
+  });
+
   it('applyRemix restores a stitched chain\'s render params and clears stale conditioning inputs', async () => {
     const { result } = render();
     act(() => result.current.handleModeChange('image'));

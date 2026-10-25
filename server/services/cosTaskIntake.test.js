@@ -35,6 +35,7 @@ const METADATA_SAMPLES = {
   model: 'example-model',
   provider: 'example-provider',
   effort: 'high',
+  executionOptions: { serviceTier: 'fast' },
   orchestrationMode: 'orchestrated',
   orchestrationProfile: { architect: { provider: 'example-provider', model: 'example-model' } },
   temperature: 0.4,

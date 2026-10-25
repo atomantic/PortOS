@@ -470,6 +470,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/eidoverse/world/presence', CONFIGURED_WORLD_SYNC],
   ['POST /api/eidoverse/world/project', CONFIGURED_WORLD_SYNC],
   // /api/fableloom
+  ['POST /api/fableloom/:id/export/preflight', 'Read-only deterministic package gates and approved voice reference validation; no process, provider call or artifact write.'],
   ['POST /api/fableloom', RECORDS],
   ['DELETE /api/fableloom/:id', REMOVES_RECORD],
   ['PATCH /api/fableloom/:id', RECORDS],
@@ -656,17 +657,8 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['DELETE /api/loops/:id', REMOVES_RECORD],
   ['POST /api/loops/:id/stop', REDUCES_EXECUTION],
   // /api/lora-datasets
-  ['POST /api/lora-datasets', RECORDS],
-  ['DELETE /api/lora-datasets/:id', REMOVES_RECORD],
-  ['PATCH /api/lora-datasets/:id', RECORDS],
   ['POST /api/lora-datasets/:id/caption-runs/:runId/cancel', REDUCES_EXECUTION],
-  ['POST /api/lora-datasets/:id/images', RECORDS],
-  ['DELETE /api/lora-datasets/:id/images/:imageId', REMOVES_RECORD],
-  ['PATCH /api/lora-datasets/:id/images/:imageId', RECORDS],
-  ['POST /api/lora-datasets/:id/import-gallery', IN_PROCESS_MEDIA],
-  ['POST /api/lora-datasets/:id/strip-shared-fragments', RECORDS],
   // /api/lora-training
-  ['DELETE /api/lora-training/runs/:id', REMOVES_RECORD],
   ['POST /api/lora-training/runs/:id/cancel', REDUCES_EXECUTION],
   // /api/loras
   ['DELETE /api/loras/:filename', REMOVES_RECORD],

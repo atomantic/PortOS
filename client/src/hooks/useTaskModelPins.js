@@ -36,7 +36,8 @@ export function useTaskModelPins({ taskType, config, providers, activeProviderId
     providerId: config?.providerId || '',
     model: config?.model || '',
     effort: config?.effort || '',
-  }), [config?.providerId, config?.model, config?.effort]);
+    executionOptions: config?.executionOptions,
+  }), [config?.providerId, config?.model, config?.effort, config?.executionOptions]);
 
   const [pins, setPins] = useState(persisted);
   const [saving, setSaving] = useState(false);
@@ -79,6 +80,8 @@ export function useTaskModelPins({ taskType, config, providers, activeProviderId
   }, [change, provider, pins.effort]);
   const changeEffort = useCallback((next) => change({ effort: next }), [change]);
 
+  const changeExecutionOptions = useCallback((next) => change({ executionOptions: next }), [change]);
+
   // Both surfaces that use these pins persist a separate effort, so Antigravity
   // lists BASE models (`gemini-3.6-flash`) with the tier picked beside them —
   // `effortAwareModelOptions` also keeps a legacy suffixed pin selectable, since
@@ -102,6 +105,7 @@ export function useTaskModelPins({ taskType, config, providers, activeProviderId
     changeProvider,
     changeModel,
     changeEffort,
+    changeExecutionOptions,
   };
 }
 

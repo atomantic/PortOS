@@ -1,7 +1,9 @@
 /**
- * Explicit initialized-private-module retirement. Original directories are
- * quarantined whole, never unlinked. Immutable journal steps and a durable
- * repository reservation survive an interrupted request or server restart.
+ * Explicit initialized-private-module retirement. A merged, clean checkout is
+ * removed at its original path. An unmerged or dirty checkout stays there.
+ * Retirement does not quarantine the tree or copy it under
+ * data/cos/initialized-checkout-retirements. Historical restore helpers remain
+ * for journals that already exist.
  */
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { spawn } from '../lib/childProcess.js';
@@ -175,7 +177,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
   const ownership = deps.ownership || (async input => (await import('./heldCheckoutRecovery.js')).inspectCheckoutRetirementOwnership(input));
   const admission = async () => deps.admission || await import('../lib/checkoutRetirementAdmission.js');
   const forge = deps.forge || (async (ctx, release, prUrl) => (await import('./heldCheckoutReview.js')).readRetirementForgeEvidence(
-    ctx.repoPath, release.branch, prUrl, { forgeAccount: ctx.forgeAccount, exactAliasHead: release.head }));
+    ctx.repoPath, release.branch, prUrl, { forgeAccount: ctx.forgeAccount, exactAliasHead: release.head, exactDeliveredHead: release.head }));
   const comparison = deps.comparison || (async (ctx, release, prUrl, snapshot, policy, forgeFacts) => {
     const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
     const run = () => buildCheckoutRetirementReview({ repoPath: ctx.repoPath, release, prUrl,
@@ -195,21 +197,38 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       throw error;
     }
   });
-  const ensureOwner = async (ctx, release, registration = true) => {
-    const result = await ownership({ repoPath: ctx.repoPath, release, registration });
-    if (!result.ok) fail(result.reason);
-    return result.policy;
+  const ensureOwner = async (ctx, release, registration = true, reviewed = null) => {
+    const input = { repoPath: ctx.repoPath, release, registration };
+    const result = await ownership(input);
+    if (result.ok) return result.policy;
+    if (result.reason !== 'retirement-policy-not-legacy-completed' || !reviewed?.checkoutIncarnation) fail(result.reason);
+    const facts = await forge(ctx, release, reviewed.forge.prUrl);
+    const continued = await ownership({ ...input, forgeAccount: ctx.forgeAccount, reviewIdentity: {
+      checkoutPath: release.path, tip: release.head, prUrl: facts.prUrl, verifiedPrHead: facts.prHead,
+      retirementForge: facts, checkoutIncarnation: reviewed.checkoutIncarnation,
+    } });
+    if (!continued.ok || !continued.policy?.policies?.some(row => row.continuedDelivery)) fail(continued.reason || result.reason);
+    return continued.policy;
   };
-  const makeReview = async ({ appId, release, prUrl }) => {
+  const makeReview = async ({ appId, release, prUrl, wholeCheckout = false }) => {
     const ctx = await context(appId, release);
-    const policy = await ensureOwner(ctx, release);
-    const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release, requireOwnership: true });
+    let checkoutIncarnation;
+    const policy = await ensureOwner(ctx, release).catch(async error => {
+      if (error.message !== 'retirement-policy-not-legacy-completed') throw error;
+      const read = deps.readCompletedIdentity || (await import('./completedCheckoutEvidence.js')).readCompletedCheckoutIdentity;
+      const generation = await read({ repoPath: ctx.repoPath, ...release, allowLocked: release.locked === true }).catch(() => null);
+      if (!generation) throw error;
+      checkoutIncarnation = generation.incarnation;
+      return ensureOwner(ctx, release, true, { forge: { prUrl }, checkoutIncarnation });
+    });
+    const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release, requireOwnership: true, retirementOnly: true,
+      ...(wholeCheckout && { wholeCheckout: true }) });
     const facts = await forge(ctx, release, prUrl);
     const base = await comparison(ctx, release, prUrl, snapshot, policy, facts);
     const checkoutIdentity = await readRetirementCheckoutIdentity(release.path);
     if (release.checkoutIdentity && release.checkoutIdentity !== checkoutIdentity) fail('checkout-identity-changed');
-    const evidence = { ...base, mode: 'initialized-private-modules', snapshot,
-      ...(checkoutIdentity && { checkoutIdentity }) };
+    const evidence = { ...base, mode: wholeCheckout ? 'whole-checkout' : 'initialized-private-modules', snapshot,
+      ...(checkoutIdentity && { checkoutIdentity }), ...(checkoutIncarnation && { checkoutIncarnation }) };
     delete evidence.digest;
     return { ctx, review: { digest: hash(evidence), ...evidence } };
   };
@@ -221,64 +240,57 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     if (current.digest !== accepted.digest) fail('retirement-review-changed');
     if (current.comparison.disposition === 'review-supersession' && accepted.acceptSuperseded !== true) fail('retirement-supersession-not-accepted');
   };
-  const verifyFacts = async (ctx, state, registration) => {
-    const policy = await ensureOwner(ctx, state.release, registration);
-    const facts = await forge(ctx, state.release, state.review.forge.prUrl);
-    if (JSON.stringify(policy) !== JSON.stringify(state.review.policy)
-      || JSON.stringify(facts) !== JSON.stringify(state.review.forge)) fail('retirement-evidence-changed');
-  };
   const location = id => {
     if (!/^[a-f0-9-]{36}$/.test(id)) fail('retirement-transaction-invalid');
     return join(root(), id);
   };
   const retire = input => fenced(async () => {
+    // A locked registration is not disposable. worktree remove --force leaves it
+    // registered, and the directory fallback would delete the tree anyway.
+    if (input.release?.locked === true) return { ok: false, reason: 'checkout-locked' };
     const prepared = await makeReview({ ...input, prUrl: input.review.prUrl });
     assertReview(prepared.review, input.review);
     const { ctx } = prepared;
-    const id = randomUUID();
-    await privateDirectory(root(), true);
-    const directory = location(id);
-    await mkdir(directory, { mode: 0o700 });
-    await syncDirectory(root());
-    let state = await appendStep(directory, { version: 1, id, appId: input.appId,
-      repoPath: ctx.repoPath, release: input.release, review: prepared.review }, 'intent');
-    const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
-    const gate = await admission();
+    if (prepared.review.comparison?.disposition !== 'integrated') return { ok: false, reason: 'not-merged-on-recheck' };
+    // Captured by makeReview before removal. A later lstat of a deleted .git is null.
+    const checkoutIdentity = prepared.review.checkoutIdentity || input.release.checkoutIdentity || null;
+    const runGit = deps.execGit || execGit;
+    const status = await runGit(['status', '--porcelain'], input.release.path, { ignoreExitCode: true }).catch(() => null);
+    if (!status || status.exitCode !== 0) return { ok: false, reason: 'worktree-status-unavailable' };
+    if (String(status.stdout || '').trim()) return { ok: false, reason: 'worktree-dirty' };
+    const { assertNoUniqueIgnoredCheckoutPayload } = await import('./heldCheckoutRecovery.js');
+    const paths = [input.release.path, ...(prepared.review.snapshot.modules || []).map(module => join(input.release.path, module.path))];
+    for (const path of paths) {
+      const hold = await assertNoUniqueIgnoredCheckoutPayload(path, runGit).then(() => null,
+        error => error.message || 'checkout-not-disposable');
+      if (hold) return { ok: false, reason: hold };
+    }
+    const removed = await runGit(['worktree', 'remove', '--force', input.release.path], ctx.repoPath, { ignoreExitCode: true }).catch(() => null);
+    if (!removed || removed.exitCode !== 0) {
+      return { ok: false, reason: 'checkout-not-removed' };
+    }
+    let branchDeleted = false;
+    if (input.release.branch) {
+      const deleteRef = deps.deleteRef || (await import('./worktreeManager.js')).deleteCompletedLocalBranch;
+      branchDeleted = await deleteRef(ctx.repoPath, input.release.branch, input.release.head, {}) === true;
+    }
+    const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
+    let outcome = null;
     try {
-      const reservation = await gate.reserveCheckoutRetirement(ctx.repoPath, id);
-      state = await appendStep(directory, state, 'reserved', { reservation });
-      return await gate.withCheckoutReservation(reservation, async () => {
-        // Draining may have admitted earlier work. The exact review must still match.
-        assertReview((await makeReview({ ...input, prUrl: input.review.prUrl })).review, input.review);
-        executor.assertHeld();
-        const preserved = await native({ command: 'preserve', repoPath: ctx.repoPath, release: input.release,
-          expected: prepared.review.snapshot, transactionDir: directory });
-        state = await appendStep(directory, state, 'preserved', { proof: preserved });
-        await verifyFacts(ctx, state, true);
-        await native({ command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory });
-        for (const part of ['working', 'administration']) {
-          executor.assertHeld();
-          state = await appendStep(directory, state, `quarantine-${part}-intent`);
-          await native({ command: 'move', manifestSha256: state.proof?.manifestSha256, transactionDir: directory, part, direction: 'quarantine' });
-          state = await appendStep(directory, state, `quarantined-${part}`);
-        }
-        await native({ command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory });
-        await verifyFacts(ctx, state, false);
-        executor.assertHeld();
-        // Keep the original ref available for exact in-place rollback. A later
-        // branch-only retirement uses its own fresh proof and recovery archive.
-        const branchDeleted = false;
-        state = await appendStep(directory, state, 'quarantined', { branchDeleted,
-          branchRetainedReason: 'quarantined-checkout-rollback-ref' });
-        await gate.releaseCheckoutReservation(reservation);
-        return { ok: true, transactionId: id, archiveDir: directory, branchDeleted,
-          branchRetainedReason: state.branchRetainedReason, originalsQuarantined: true };
+      outcome = await record(input.appId, {
+        path: input.release.path, branch: input.release.branch ?? null, head: input.release.head, branchDeleted,
+        ...(checkoutIdentity && { checkoutIdentity }),
       });
-    } catch (error) {
-      // No automatic rollback after uncertainty: status/restore compare both
-      // placements under a new native executor lock before touching either.
-      return { ok: false, reason: error.message, transactionId: id, archiveDir: directory, recoveryRequired: true };
-    } finally { await executor.release(); }
+    } catch {
+      return { ok: false, reason: 'retirement-receipt-unverified', branchDeleted };
+    }
+    const wantedBranch = input.release.branch ?? null;
+    const recorded = outcome?.retired?.some(row => (row.path || null) === (input.release.path || null)
+      && (row.branch ?? null) === wantedBranch && row.head === input.release.head
+      && row.branchDeleted === true && row.archiveDir == null
+      && (!checkoutIdentity || row.checkoutIdentity === checkoutIdentity)) === true;
+    if (!recorded) return { ok: false, reason: 'retirement-receipt-unverified', branchDeleted };
+    return { ok: true, branchDeleted };
   }).catch(error => ({ ok: false, reason: error.message }));
 
   const loadBoundTransaction = async input => {
@@ -303,7 +315,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
   const branchReview = async ({ directory, state, ctx }) => {
     const transitioned = Boolean(state.quarantineResumptionReview);
     if (!['quarantined', 'quarantined-with-metadata-transitions', 'branch-retirement-prepared'].includes(state.phase) || state.branchDeleted) fail('retirement-branch-phase-not-ready');
-    const policy = await ensureOwner(ctx, state.release, false);
+    const policy = await ensureOwner(ctx, state.release, false, state.review);
     const proof = await native(transitioned
       ? { command: 'verify-completed-quarantine', ...quarantineProofInput({ directory, state, ctx }) }
       : { command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory, mode: 'restore' });
@@ -316,7 +328,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     if (head.exitCode !== 0 || head.stdout.trim() !== state.release.head) fail('branch-ref-changed');
     const facts = await forge(ctx, state.release, state.review.forge.prUrl);
     const base = await comparison(ctx, state.release, facts.prUrl, state.review.snapshot, policy, facts);
-    if (JSON.stringify(await ensureOwner(ctx, state.release, false)) !== JSON.stringify(policy)) fail('retirement-evidence-changed');
+    if (JSON.stringify(await ensureOwner(ctx, state.release, false, state.review)) !== JSON.stringify(policy)) fail('retirement-evidence-changed');
     const evidence = { ...base, mode: 'quarantined-branch', transactionId: state.id,
       journalDigest: hash(state), archiveFingerprint: proof.fingerprint,
       ...(transitioned ? { quarantineResumptionReview: state.quarantineResumptionReview,
@@ -352,7 +364,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       if (hash(await readJournal(directory)) !== hash(state)) fail('retirement-journal-changed');
       const verify = async () => {
         executor.assertHeld();
-        await ensureOwner(ctx, state.release, false);
+        await ensureOwner(ctx, state.release, false, state.review);
         let placement;
         if (state.quarantineResumptionReview) {
           placement = await native({ command: 'verify-retired-quarantine', ...quarantineProofInput({ directory, state, ctx }),
@@ -369,7 +381,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
           manifestSha256: state.proof?.manifestSha256, confirmedDeletion: { journalDigest: hash(state),
             branch: state.release.branch, head: state.release.head, phase: state.phase } });
         if (absence.verified !== true || absence.branchAbsent !== true) fail('retirement-deleted-branch-not-absent');
-        await ensureOwner(ctx, state.release, false);
+        await ensureOwner(ctx, state.release, false, state.review);
         executor.assertHeld();
       };
       const reservation = await gate.readCheckoutReservation(ctx.repoPath, state.id).catch(error => {
@@ -438,7 +450,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
         let receiverAuthorized = false;
         const deleted = await remove(ctx.repoPath, state.release.branch, state.release.head, { beforeMutation: async () => {
           executor.assertHeld();
-          if (JSON.stringify(await ensureOwner(ctx, state.release, false)) !== JSON.stringify(current.policy)
+          if (JSON.stringify(await ensureOwner(ctx, state.release, false, state.review)) !== JSON.stringify(current.policy)
             || JSON.stringify(await forge(ctx, state.release, state.review.forge.prUrl)) !== JSON.stringify(current.forge)) fail('retirement-evidence-changed');
           await beforeMutation();
           executor.assertHeld();
@@ -562,7 +574,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
         || (state.phase === 'restored' && state.cancelledUnboundPreservation === true)))) fail('retirement-cancellation-phase-invalid');
       const ctx = await context(input.appId);
       if (state.appId !== input.appId || state.repoPath !== ctx.repoPath) fail('retirement-transaction-app-mismatch');
-      await ensureOwner(ctx, state.release, false);
+      await ensureOwner(ctx, state.release, false, state.review);
       // A completed quarantine released its cut. An interrupted one retains it.
       let newReservation = false;
       const reservation = await gate.readCheckoutReservation(ctx.repoPath, state.id).catch(async error => {
@@ -589,7 +601,8 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
               || cancellationProof.archiveVerified !== false || cancellationProof.contentAndMetadataUnverified !== true
               || cancellationProof.partialArchivesRetained !== true) fail('retirement-cancellation-proof-invalid');
           } else {
-            const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release: state.release });
+            const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release: state.release,
+              ...(state.review.snapshot.wholeCheckout && { wholeCheckout: true }) });
             if (JSON.stringify(snapshot) !== JSON.stringify(state.review.snapshot)) {
               // Ordinary restore retains its original unchanged-content proof.
               if (state.proof?.manifestSha256 || state.phase === 'preserved') fail('retirement-source-changed');
@@ -599,7 +612,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
               if (cancellationProof.verified !== true || cancellationProof.originalsUnmoved !== true) fail('retirement-source-changed');
             }
           }
-          await ensureOwner(ctx, state.release, true);
+          await ensureOwner(ctx, state.release, true, state.review);
           executor.assertHeld();
           state = await appendStep(directory, state, 'restored', { reservation,
             cancelledUnboundPreservation: !state.proof?.manifestSha256,
@@ -631,7 +644,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
   }).catch(error => ({ ok: false, reason: error.message, transactionId: input.transactionId, recoveryRequired: true }));
 
   const metadataRestoreSafety = async ({ ctx, state }) => {
-    const policy = await ensureOwner(ctx, state.release, false);
+    const policy = await ensureOwner(ctx, state.release, false, state.review);
     const list = deps.listWorktrees || (await import('./worktreeManager.js')).listWorktrees;
     if ((await list(ctx.repoPath)).some(tree => String(tree.branch || '').replace(/^refs\/heads\//, '') === state.release.branch
       && tree.path !== state.release.path)) fail('branch-has-new-holder');
@@ -876,7 +889,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       || !isAbsolute(state.repoPath || '') || !isAbsolute(state.release?.path || '')
       || typeof state.release?.branch !== 'string' || !state.release.branch
       || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(state.release?.head || '')
-      || original?.mode !== 'initialized-private-modules' || original.digest !== hash(unsigned)
+      || !['initialized-private-modules', 'whole-checkout'].includes(original?.mode) || original.digest !== hash(unsigned)
       || !sameRelease(original.release, state.release)) fail('retirement-journal-binding-invalid');
     const ctx = await context(state.appId);
     if (ctx.repoPath !== state.repoPath) fail('retirement-transaction-app-mismatch');

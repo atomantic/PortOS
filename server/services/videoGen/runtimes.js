@@ -342,7 +342,7 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     killProcessGroup: true,
     repoUrl: 'https://github.com/hao-ai-lab/FastVideo',
     pinEnvVar: 'FASTVIDEO_PIN',
-    expectedRevision: '430e52154e76b902c3cc17a16b3edc1fad790012',
+    expectedRevision: 'fa2d1324c60050cd65209c6aaeac470e7fb412f5',
     importProbe: 'import fastvideo; import mlx.core',
     fingerprintPackages: ['fastvideo', 'mlx', 'mlx_metal', 'torch', 'transformers', 'huggingface-hub'],
   },

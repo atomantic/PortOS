@@ -6,11 +6,18 @@ import { dirname, join } from 'path';
 
 // Stub every git operation; lifecycle tests exercise the real service without
 // creating, changing or removing a live repository.
+const releaseCheckoutMock = vi.fn(async (_context, prepare) => prepare());
 const preserveCheckoutMock = vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null }));
 const preservedBranch = () => ({ archiveDir: '/branch-archive', verify: async () => true, retire: work => work() });
 const preserveBranchMock = vi.fn(async () => preservedBranch());
 vi.mock('../lib/branchRetirementArchive.js', () => ({ preserveBranchRetirement: (...args) => preserveBranchMock(...args) }));
-vi.mock('./heldCheckoutRecovery.js', () => ({ preserveMergedCheckout: (...args) => preserveCheckoutMock(...args) }));
+vi.mock('./heldCheckoutRecovery.js', () => ({
+  assertNoUniqueIgnoredCheckoutPayload: async () => {},
+  preserveMergedCheckout: (...args) => preserveCheckoutMock(...args),
+  releaseCheckoutWithoutArchive: (...args) => releaseCheckoutMock(...args),
+}));
+const retirementReceiptMock = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('./taskSchedule.js', () => ({ recordWorkspaceCheckoutRetirement: retirementReceiptMock }));
 const completionOwnersMock = vi.fn(async () => []);
 vi.mock('./cosClaimOwnershipState.js', async importOriginal => ({ ...await importOriginal(), readClaimOwnershipAgents: (...args) => completionOwnersMock(...args) }));
 const completionHoldMock = vi.fn(async () => null);
@@ -91,15 +98,16 @@ describe('completed branch archival boundary', () => {
   afterEach(() => {
     preserveBranchMock.mockReset().mockResolvedValue(preservedBranch());
   });
-  it('runs the trusted receiver guard after archival verification and preserves its refusal reason without pushing', async () => {
-    let ready = false;
-    preserveBranchMock.mockResolvedValue({ verify: async () => { ready = true; return true; } });
-    const beforeMutation = vi.fn(async () => {
-      expect(ready).toBe(true);
-      throw new Error('daemon-paused');
+  it('runs the trusted receiver guard before deletion and preserves its refusal reason without pushing', async () => {
+    execGitMock.mockImplementation(async args => {
+      if (args.includes('--git-common-dir')) return { stdout: '/repo/.git', exitCode: 0 };
+      if (args[0] === 'rev-parse' && args[1] === '--verify') return { stdout: `${head}\n`, exitCode: 0 };
+      return { stdout: '', exitCode: 0 };
     });
+    const beforeMutation = vi.fn(async () => { throw new Error('daemon-paused'); });
     await expect(deleteCompletedLocalBranch('/repo', 'done', head, { beforeMutation })).rejects.toThrow('daemon-paused');
     expect(beforeMutation).toHaveBeenCalledOnce();
+    expect(preserveBranchMock).not.toHaveBeenCalled();
     expect(execGitMock.mock.calls.some(([args]) => args[0] === 'push')).toBe(false);
   });
   it('checks automatic permission after final registration refresh before checkout removal', async () => {
@@ -153,12 +161,17 @@ describe('completed branch archival boundary', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Worktree cleanup incomplete'));
     expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Worktree cleanup incomplete'));
   });
-  it.each(['archive failure', 'archive verification failure'])('never sends the deletion when there is an %s', async failure => {
-    if (failure === 'archive failure') preserveBranchMock.mockRejectedValue(new Error('archive disk full'));
-    else preserveBranchMock.mockResolvedValue({ archiveDir: '/branch-archive', verify: async () => false });
-    expect(await deleteCompletedLocalBranch('/repo', 'done', head)).toBe(false);
-    expect(preserveBranchMock).toHaveBeenCalledWith('/repo', '/repo/.git', 'done', head);
-    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'push')).toBe(false);
+  it('deletes a completed ref without archiving it once the receiver drops the ref', async () => {
+    execGitMock.mockImplementation(async args => {
+      if (args.includes('--git-common-dir')) return { stdout: '/repo/.git', exitCode: 0 };
+      if (args[0] === 'rev-parse' && args[1] === '--verify') return { stdout: `${head}\n`, exitCode: 0 };
+      if (args[0] === 'show-ref') return { stdout: '', exitCode: 1 };
+      return { stdout: '', exitCode: 0 };
+    });
+    expect(await deleteCompletedLocalBranch('/repo', 'done', head)).toBe(true);
+    expect(preserveBranchMock).not.toHaveBeenCalled();
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'push')).toBe(true);
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'config' && args.includes('--remove-section'))).toBe(true);
   });
 });
 
@@ -808,6 +821,21 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
   function scriptGit({ porcelain = '', remoteTargetResolves = true, detectedToplevel } = {}) {
     execGitMock.mockReset();
     let registered = true;
+    let statusText = porcelain;
+    const deletedRefs = new Set();
+    // Discarding a lockfile (checkout of a tracked path, or rm of an untracked
+    // one) is what makes the next status clean. The removal recheck reads that
+    // status and refuses a still-dirty tree.
+    const porcelainPath = (line) => line.slice(3);
+    const dropPaths = (paths) => {
+      const drop = new Set(paths);
+      statusText = statusText.split('\n').filter(line => line && !drop.has(porcelainPath(line))).join('\n');
+    };
+    rm.mockImplementation(async (target) => {
+      const normalized = String(target).replaceAll('\\', '/');
+      const hit = statusText.split('\n').map(porcelainPath).filter(path => path && (normalized === path || normalized.endsWith(`/${path}`)));
+      if (hit.length) dropPaths(hit);
+    });
     execGitMock.mockImplementation((args, cwd) => {
       const [sub] = args;
       if (sub === 'worktree' && args[1] === 'list') return Promise.resolve({ stdout: registered ? `worktree ${join(PATHS.worktrees, 'agent-x')}\nHEAD ${'a'.repeat(40)}\nbranch refs/heads/cos/task-1/agent-x\n` : '', exitCode: 0 });
@@ -824,8 +852,21 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
       if (sub === 'rev-parse' && args[1] === '--show-toplevel') {
         return Promise.resolve({ stdout: detectedToplevel ?? cwd, stderr: '', exitCode: 0 });
       }
-      if (sub === 'status') return Promise.resolve({ stdout: porcelain, stderr: '', exitCode: 0 });
+      if (sub === 'checkout' && args[1] === '--') {
+        dropPaths(args.slice(2));
+        return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+      }
+      if (sub === 'status') return Promise.resolve({ stdout: statusText, stderr: '', exitCode: 0 });
       if (sub === 'rev-list') return Promise.resolve({ stdout: '0\n', stderr: '', exitCode: 0 });
+      if (sub === 'push') {
+        const spec = args.find(arg => typeof arg === 'string' && arg.startsWith(':refs/'));
+        if (spec) deletedRefs.add(spec.slice(1));
+        return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+      }
+      if (sub === 'show-ref') {
+        const ref = args.at(-1);
+        return Promise.resolve({ stdout: '', stderr: '', exitCode: deletedRefs.has(ref) ? 1 : 0 });
+      }
       return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
     });
   }
@@ -834,7 +875,9 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     execGitMock.mock.calls.some(([args]) => JSON.stringify(args) === JSON.stringify(subcommandArgs));
 
   beforeEach(() => {
-    preserveCheckoutMock.mockReset().mockResolvedValue({ archiveDir: '/archive', verify: async () => null });
+    releaseCheckoutMock.mockReset().mockImplementation(async (_context, prepare) => prepare());
+    preserveCheckoutMock.mockReset().mockResolvedValue({ archiveDir: '/archive', checkoutIdentity: 'original', verify: async () => null });
+    retirementReceiptMock.mockClear();
     completionHoldMock.mockReset().mockResolvedValue(null);
     completionOwnersMock.mockReset().mockResolvedValue([]);
     getDefaultBranchMock.mockResolvedValue('main');
@@ -1193,9 +1236,9 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     const otherOwner = { id: 'agent-other', status: 'running', workspacePath: join(PATHS.worktrees, 'agent-x'), metadata: { sourceWorkspace: '/repo', worktreeBranch: 'cos/task-1/agent-x' } };
     if (state === 'active') completionOwnersMock.mockResolvedValue([otherOwner]);
     if (state === 'unreadable') completionOwnersMock.mockResolvedValue(null);
-    if (state === 'arrives-during-archive') preserveCheckoutMock.mockImplementation(async () => {
+    if (state === 'arrives-during-archive') releaseCheckoutMock.mockImplementation(async (_context, prepare) => {
       completionOwnersMock.mockResolvedValue([otherOwner]);
-      return { archiveDir: '/archive', verify: async () => null };
+      return prepare();
     });
     const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
     expect(result.removed).toBe(false);
@@ -1211,14 +1254,14 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
       const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
       expect(result.removed).toBe(false);
       expect(result.warnings.join(' ')).toContain('checkout-retirement-reserved');
-      expect(preserveCheckoutMock).not.toHaveBeenCalled();
+      expect(releaseCheckoutMock).not.toHaveBeenCalled();
     } finally { release(); }
   });
 
   it.each(['present', 'missing', 'lockfile'])('retains %s checkout evidence when archival fails', async state => {
     if (state === 'missing') existsSync.mockReturnValue(false);
     if (state === 'lockfile') scriptGit({ porcelain: ' M package-lock.json' });
-    preserveCheckoutMock.mockRejectedValue(new Error('archive disk full'));
+    releaseCheckoutMock.mockRejectedValue(new Error('archive disk full'));
     const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
     expect(result.removed).toBe(false);
     expect(result.warnings.join(' ')).toContain('archive disk full');
@@ -1229,7 +1272,7 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
 
   // #12748: every agent completion archived its checkout inside the shared
   // claim-ownership lock, starving each bind/release/reserve queued behind it.
-  it.each(['present', 'missing', 'lockfile'])('archives a %s checkout with the ownership queue free and only it fenced', async state => {
+  it.each(['present', 'missing', 'lockfile'])('removes a %s checkout with the ownership queue free and only it fenced', async state => {
     if (state === 'missing') existsSync.mockReturnValue(false);
     if (state === 'lockfile') scriptGit({ porcelain: ' M package-lock.json' });
     const { withClaimOwnershipLock, checkoutRetirementFenceReason } = await import('./cosClaimOwnershipState.js');
@@ -1237,8 +1280,8 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     let started;
     let finish;
     const archiving = new Promise(resolve => { started = resolve; });
-    preserveCheckoutMock.mockImplementationOnce(() => new Promise(resolve => {
-      finish = () => resolve({ archiveDir: '/archive', verify: async () => null });
+    releaseCheckoutMock.mockImplementationOnce((_context, prepare) => new Promise(resolve => {
+      finish = () => resolve(prepare());
       started();
     }));
     const pending = removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
@@ -1282,9 +1325,9 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     execGitMock.mockImplementation((args, ...rest) => (archived && args[0] === 'status'
       ? Promise.resolve({ stdout: ' M package-lock.json\n?? notes.md', stderr: '', exitCode: 0 })
       : scripted(args, ...rest)));
-    preserveCheckoutMock.mockImplementationOnce(async () => {
+    releaseCheckoutMock.mockImplementationOnce(async (_context, prepare) => {
       archived = true;
-      return { archiveDir: '/archive', verify: async () => null };
+      return prepare();
     });
     const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
     expect(result.removed).toBe(false);
@@ -1293,8 +1336,13 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
       || (args[0] === 'worktree' && args[1] === 'remove'))).toBe(false);
   });
 
-  it('retains checkout and ref when preserved bytes change before removal', async () => {
-    preserveCheckoutMock.mockResolvedValue({ archiveDir: '/archive', verify: async () => 'checkout-content-changed' });
+  it('retains checkout and ref when the checkout becomes dirty before removal', async () => {
+    const scripted = execGitMock.getMockImplementation();
+    let statusReads = 0;
+    execGitMock.mockImplementation((args, ...rest) => {
+      if (args[0] === 'status' && ++statusReads > 1) return Promise.resolve({ stdout: ' M src/a.js\n', stderr: '', exitCode: 0 });
+      return scripted(args, ...rest);
+    });
     const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
     expect(result.removed).toBe(false);
     expect(execGitMock.mock.calls.some(([args]) => args[0] === 'push'
@@ -1470,6 +1518,10 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
 
     expect(result.removed).toBe(true);
     expect(result.warnings).toEqual([]);
+    expect(retirementReceiptMock).toHaveBeenCalledWith('/repo', {
+      path: join(PATHS.worktrees, 'agent-x'), branch: 'cos/task-1/agent-x', head: 'a'.repeat(40),
+      branchDeleted: true,
+    });
   });
 
   it('removes a completed worktree whose only dirt is the consumed sentinel', async () => {
@@ -1962,7 +2014,7 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
     expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'push').map(([args]) => args.at(-1)))
       .toEqual([':refs/heads/cos/task/agent-dead']);
     expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'status').map(([, cwd]) => cwd))
-      .toEqual([tree('agent-dead'), tree('agent-dirty')]);
+      .toEqual([tree('agent-dead'), tree('agent-dead'), tree('agent-dirty')]);
     expect(rm).not.toHaveBeenCalled();
   });
 

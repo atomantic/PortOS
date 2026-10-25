@@ -20,7 +20,9 @@
  */
 
 import { scheduleExecutionFieldsSchema } from '../lib/scheduleExecutionFieldsValidation.js';
-import { unresolvedRetirements, retainRetirementObligations, sameRetirementCheckout, sameRetirementObservation, matchingRetirementReceipts, hasRetirementReceipt } from '../lib/reconcileRetirementEvidence.js';
+import { unresolvedRetirements, retainRetirementObligations, sameRetirementCheckout, sameRetirementObservation, matchingRetirementReceipts, hasRetirementReceipt, retirementReceiptSettles } from '../lib/reconcileRetirementEvidence.js';
+import { applyLegacyRetirementResolutions } from '../lib/legacyRetirementTransition.js';
+import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 import { isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { findGoneInventoryRows, isObligationRow } from './branchReconcileInventoryPrune.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -775,12 +777,24 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
     const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
     const now = new Date().toISOString();
     const previous = record.branchReconcileOutcome;
+    const transition = schedule.retirementPolicyVersion === 2 && !previous?.legacyRetirementTransition
+      ? { version: 1, observations: [], resolutions: [] } : previous?.legacyRetirementTransition;
     const existing = unresolvedRetirements(previous);
     const admitted = [];
     const rejected = [];
     for (const row of [...(remaining || []), ...additionalObligations]) {
       if (!isObligationRow(row)) continue;
       if (existing.some(entry => sameRetirementObservation(entry, row))) continue;
+      const resolved = previous?.legacyRetirementTransition?.resolutions?.some(entry => sameRetirementObservation(entry.observation, row)
+        && (!row.createdAt || row.createdAt === entry.observation.createdAt));
+      if (resolved) {
+        const app = await getAppById(appId);
+        if (app?.repoPath && (!row.path || await readCheckoutPathPresence(row.path) === false)
+          && row.branch && await readLocalBranchPresence(app.repoPath, row.branch) === false) {
+          rejected.push(row);
+          continue;
+        }
+      }
       const previousIncarnation = existing.some(entry => sameRetirementCheckout(entry, row));
       const receipts = matchingRetirementReceipts(previous, row);
       // Legacy rows without observation identity cannot claim to be recreations.
@@ -793,6 +807,7 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
     // A fresh empty scan must not erase the last observation of vanished source.
     const omitted = remaining === undefined ? [] : (previous?.remaining || [])
       .filter(row => !remaining.some(current => sameRetirementCheckout(current, row))
+        && !hasRetirementReceipt(previous, row)
         && !rejected.some(entry => sameRetirementObservation(entry, row)));
     const missing = await missingInventoryRows(appId, omitted);
     const retirementObligations = retainRetirementObligations(previous,
@@ -808,6 +823,7 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
     const retained = retirementObligations.filter(obligation => !current?.some(row => sameRetirementObservation(row, obligation)));
     record.branchReconcileOutcome = {
       ...previous, status, reason, nextAction, updatedAt: now, retirementObligations,
+      ...(transition && { legacyRetirementTransition: transition }),
       ...(remoteInventory !== undefined && { remoteInventory }),
       remaining: retained.length ? [...(current || []), ...retained] : current,
       observedAt: remaining === undefined ? record.branchReconcileOutcome?.observedAt ?? null : now,
@@ -818,17 +834,35 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
   if (!appId || !unresolvedRetirements(outcome).length) return outcome;
   const app = await getAppById(appId).catch(() => null);
   if (!app?.repoPath) return outcome;
-  // Keep the expensive archive verifier off ordinary live-checkout writes.
-  const missing = await findGoneInventoryRows(app.repoPath, unresolvedRetirements(outcome), { includeObligations: true }).catch(() => []);
-  if (!missing.length) return outcome;
-  const { recoverMissingCheckoutPreservations } = await import('./heldCheckoutRecovery.js');
-  return recoverMissingCheckoutPreservations({ appId, repoPath: app.repoPath, outcome });
+  // Compatibility for stores that have not yet run migration 443. Upgraded and
+  // fresh stores always have the transition marker and never require archives.
+  if (!outcome.legacyRetirementTransition) {
+    const missing = await findGoneInventoryRows(app.repoPath, unresolvedRetirements(outcome), { includeObligations: true }).catch(() => []);
+    if (!missing.length) return outcome;
+    const { recoverMissingCheckoutPreservations } = await import('./heldCheckoutRecovery.js');
+    return recoverMissingCheckoutPreservations({ appId, repoPath: app.repoPath, outcome });
+  }
+  // Writers are also called while a checkout retirement owns the claim lock.
+  // The scan entry points run historical proof work after that lock is released.
+  return outcome;
+}
+
+export async function recordLegacyRetirementResolutions(appId, expected, resolutions, stillAbsent) {
+  return updateSchedule(async schedule => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    if (JSON.stringify(record.branchReconcileOutcome) !== JSON.stringify(expected) || !await stillAbsent()) {
+      return { result: record.branchReconcileOutcome, changed: false };
+    }
+    const outcome = applyLegacyRetirementResolutions(expected, resolutions, new Date().toISOString());
+    record.branchReconcileOutcome = outcome;
+    return { result: outcome, changed: outcome !== expected };
+  });
 }
 
 /** Compare the whole observed inventory and its generation inside the schedule
  * writer. A verifier result never authorizes a newer/recreated checkout.
  */
-export async function recordRecoveredCheckoutPreservations(appId, expected, observations, stillAbsent) {
+export async function recordRecoveredCheckoutPreservations(appId, expected, observations, stillAbsent, discovery) {
   return updateSchedule(async schedule => {
     const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
     const outcome = record.branchReconcileOutcome;
@@ -846,7 +880,7 @@ export async function recordRecoveredCheckoutPreservations(appId, expected, obse
       });
       return { ...release, preservationEvidence: { status: 'unresolved',
         reason: observation.proof && !accepted ? 'preservation-receipt-budget-exceeded' : observation.reason,
-        checkedAt: now, archives: observation.evidence, nextAction: observation.nextAction } };
+        checkedAt: now, archives: observation.evidence, ...(observation.coverage && { coverage: observation.coverage }), nextAction: observation.nextAction } };
     });
     const retirementObligations = unresolvedRetirements({ retirementObligations: diagnosed, recoveredPreservations });
     const remaining = (outcome.remaining || []).flatMap(row => {
@@ -858,12 +892,13 @@ export async function recordRecoveredCheckoutPreservations(appId, expected, obse
     // diagnosis and let the next sweep establish the aggregate completion state.
     const diagnosis = historical
       ? { status: 'incomplete', reason: 'historical-preservation-unresolved', nextAction: historical.preservationEvidence.nextAction }
-      : outcome.reason === 'historical-preservation-unresolved'
+      : ['historical-preservation-unresolved', 'retirement-provenance-unverified'].includes(outcome.reason)
         ? { status: 'incomplete', reason: remaining.length ? 'remaining-holds' : 'preservation-recovered',
           nextAction: remaining.length ? 'Resolve the remaining holds, then run branch reconciliation again.'
             : 'Historical preservation verified; run branch reconciliation again to confirm repository completion.' }
         : {};
     record.branchReconcileOutcome = { ...outcome, retirementObligations, recoveredPreservations, remaining, updatedAt: now,
+      ...(discovery && { preservationDiscovery: discovery }),
       ...diagnosis,
     };
     return { result: record.branchReconcileOutcome, changed: true };
@@ -894,13 +929,16 @@ export async function getBranchReconcileOutcome(appId) {
 }
 
 export async function getBranchReconcileInventory(appId) {
-  return reconcileMissingInventory(appId, await getBranchReconcileOutcome(appId));
+  const outcome = await getBranchReconcileOutcome(appId);
+  const { reconcileLegacyRetirementRecords } = await import('./legacyRetirementReconciliation.js');
+  const current = await reconcileLegacyRetirementRecords(appId, outcome).catch(() => outcome);
+  return reconcileMissingInventory(appId, current);
 }
 
 const missingPreservationObligation = row => ({ ...row, reason: 'retirement-provenance-unverified' });
 const missingPreservationStatus = {
   status: 'incomplete', reason: 'retirement-provenance-unverified',
-  nextAction: 'Trace the missing original checkout/ref and recover its exact archive receipt; disappearance and merged commits do not prove preservation.',
+  nextAction: 'Trace the missing original checkout/ref. Disappearance and merged commits do not prove the retirement service removed it. A service receipt settles it. Do not copy the checkout into an archive.',
 };
 
 async function missingInventoryRows(appId, rows, options) {
@@ -964,27 +1002,45 @@ const RETIRED_CHECKOUTS_KEPT = 20;
  * where its archive went. Status is untouched: only the next sweep can say the
  * repository converged.
  */
-export async function recordHeldCheckoutRetirement(appId, { path, branch, branchDeleted, head, archiveDir, checkoutIdentity }) {
+export async function recordHeldCheckoutRetirement(appId, { path, branch, branchDeleted, head, archiveDir, checkoutIdentity, checkoutOnly = false }) {
+  // Only a branchless checkout can be settled without a deleted branch; the
+  // receipt then records exactly that and never claims a deletion.
+  const checkoutOnlyReceipt = checkoutOnly === true && !branch && branchDeleted !== true;
   return updateSchedule(async (schedule) => {
     const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
     const outcome = record.branchReconcileOutcome || {};
     // Display history is bounded; receipt evidence and replay identity are durable. A delayed retry
     // must not become new evidence after its display row has been evicted.
     const identity = receipt => createHash('sha256').update(JSON.stringify([
-      receipt.archiveDir, receipt.path, receipt.branch ?? null, receipt.head,
+      // A non-empty archive path stays the historical id. In-place removal has no
+      // archive, so the checkout identity distinguishes a recreated tree at the
+      // same path, branch and head. An archive path is never replaced by it.
+      receipt.archiveDir ?? receipt.checkoutIdentity ?? null,
+      receipt.path, receipt.branch ?? null, receipt.head,
       receipt.branchDeleted === true,
+      // Appended only for checkout-only receipts so every persisted identity keeps its hash.
+      ...(receipt.checkoutOnly === true ? ['checkout-only'] : []),
     ])).digest('hex');
     const receipts = { ...(outcome.retirementReceiptIdentities || {}) };
     const evidence = { ...(outcome.retirementReceiptEvidence || {}) };
     for (const receipt of outcome.retired || []) {
-      if (receipt.archiveDir && receipt.retiredAt) {
-        receipts[identity(receipt)] ??= receipt.retiredAt;
-        evidence[identity(receipt)] ??= receipt;
+      const recordedArchive = receipt.archiveDir ?? null;
+      const archiveKept = recordedArchive === null || (typeof recordedArchive === 'string' && recordedArchive.length > 0);
+      if (retirementReceiptSettles(receipt) && receipt.retiredAt && archiveKept) {
+        const normalized = { ...receipt, archiveDir: recordedArchive };
+        receipts[identity(normalized)] ??= receipt.retiredAt;
+        evidence[identity(normalized)] ??= normalized;
       }
     }
-    const receiptId = archiveDir ? identity({ path, branch, head, archiveDir, branchDeleted }) : null;
+    const recordedArchive = archiveDir ?? null;
+    const archiveKept = recordedArchive === null || (typeof recordedArchive === 'string' && recordedArchive.length > 0);
+    const receiptId = (branchDeleted === true || checkoutOnlyReceipt) && archiveKept
+      ? identity({ path, branch, head, archiveDir: recordedArchive, branchDeleted, checkoutIdentity, checkoutOnly: checkoutOnlyReceipt }) : null;
     if (receiptId && receipts[receiptId]) {
-      // Keep the original timestamp AND any newer inventory incarnation.
+      // Keep the original timestamp. Fill a missing checkout identity so a
+      // later inventory row can match the receipt that already settled this tuple.
+      const prior = evidence[receiptId];
+      if (prior && checkoutIdentity && !prior.checkoutIdentity) evidence[receiptId] = { ...prior, checkoutIdentity };
       const changed = JSON.stringify(receipts) !== JSON.stringify(outcome.retirementReceiptIdentities || {})
         || JSON.stringify(evidence) !== JSON.stringify(outcome.retirementReceiptEvidence || {});
       if (changed) record.branchReconcileOutcome = { ...outcome, retirementReceiptIdentities: receipts, retirementReceiptEvidence: evidence };
@@ -992,7 +1048,8 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     }
     const retiredAt = new Date().toISOString();
     if (receiptId) receipts[receiptId] = retiredAt;
-    const receipt = { path, ...(branch && { branch }), head, branchDeleted, archiveDir, retiredAt, ...(checkoutIdentity && { checkoutIdentity }) };
+    const receipt = { path, ...(branch && { branch }), head, branchDeleted: checkoutOnlyReceipt ? false : branchDeleted, archiveDir: recordedArchive, retiredAt,
+      ...(checkoutOnlyReceipt && { checkoutOnly: true }), ...(checkoutIdentity && { checkoutIdentity }) };
     const retired = [receipt, ...(outcome.retired || [])].slice(0, RETIRED_CHECKOUTS_KEPT);
     if (receiptId) evidence[receiptId] = receipt;
     const retirementObligations = unresolvedRetirements({ ...outcome, retired, retirementReceiptEvidence: evidence });
@@ -1002,12 +1059,35 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
       updatedAt: retiredAt,
       remaining: Array.isArray(outcome.remaining)
         ? outcome.remaining.filter(entry => retirementObligations.some(row => sameRetirementObservation(row, entry))
-          || !(sameRetirementObservation(entry, receipt) || (!entry.checkoutIdentity && sameRetirementCheckout(entry, receipt))))
+          || !(sameRetirementObservation(entry, receipt)
+            || (!entry.checkoutIdentity && sameRetirementCheckout(entry, receipt))))
         : outcome.remaining ?? null,
       retired,
     };
     return { result: record.branchReconcileOutcome, changed: true };
   });
+}
+
+/**
+ * Record a checkout retirement across apps observing the exact checkout tuple.
+ * Settles stale inventory rows left behind when an active run finishes and removes its worktree.
+ */
+export async function recordWorkspaceCheckoutRetirement(repoPath, receipt) {
+  if (!repoPath || (!receipt?.path && !receipt?.branch)) return null;
+  const schedule = await loadSchedule();
+  const perApp = schedule?.executions?.['task:branch-reconcile']?.perApp;
+  if (!perApp || typeof perApp !== 'object') return null;
+  let updated = null;
+  for (const [appId, record] of Object.entries(perApp)) {
+    const outcome = record?.branchReconcileOutcome;
+    if (!outcome) continue;
+    const rows = [...(outcome.remaining || []), ...(outcome.retirementObligations || [])];
+    if (!rows.some(row => sameRetirementCheckout(row, receipt))) continue;
+    const app = await getAppById(appId).catch(() => null);
+    if (app?.repoPath !== repoPath) continue;
+    updated = await recordHeldCheckoutRetirement(appId, receipt);
+  }
+  return updated;
 }
 
 /**
@@ -1460,7 +1540,7 @@ export async function getNextTaskType(appId = null, { perpetualOnly = false, con
  */
 export async function triggerOnDemandTask(taskType, appId = null, {
   emit = true, origin = ON_DEMAND_ORIGINS.USER, targetPullRequest = null, burn = null,
-  provider = null, model = null, effort = null,
+  provider = null, model = null, effort = null, executionOptions,
 } = {}) {
   // A targeted run names ONE open PR/MR instead of letting the task pick from
   // the app's whole open set (the PR/MR row's "Review this PR" button). Coerced
@@ -1480,7 +1560,7 @@ export async function triggerOnDemandTask(taskType, appId = null, {
   // picker) — layered onto the task's metadata by
   // prepareManagedAppImprovementTask as the MOST specific pin, above
   // the schedule interval and the app's own per-app override.
-  const providerOverride = (provider || model || effort) ? { provider, model, effort } : null;
+  const providerOverride = (provider || model || effort || executionOptions) ? { provider, model, effort, ...(executionOptions !== undefined ? { executionOptions } : {}) } : null;
   const manual = isManualOnDemandRequest({ origin, burn: burnProvenance });
   // Unattended launches (burn, refill) of an input-gated audit are declined while
   // nothing it reads changed since its last clean run; a human Run always goes.

@@ -3,14 +3,14 @@ import { mkdir, readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 
-const observation = vi.hoisted(() => ({ commands: [], afterPull: null, pullOverride: null, abortOverride: null, pullExitCode: null }));
+const observation = vi.hoisted(() => ({ commands: [], beforePull: null, afterPull: null, pullOverride: null, pullExitCode: null }));
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
   return {
     ...actual,
     execGit: async (...args) => {
       observation.commands.push(args[0]);
-      if (args[0].join(' ') === 'rebase --abort' && observation.abortOverride) return observation.abortOverride;
+      if (args[0][0] === 'pull') await observation.beforePull?.();
       const result = await actual.execGit(...args);
       if (args[0][0] === 'pull') {
         observation.pullExitCode = result.exitCode;
@@ -29,9 +29,9 @@ import { checkout, syncBranch } from './git.js';
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch Sync', () => {
   let sandbox;
   afterEach(async () => {
+    observation.beforePull = null;
     observation.afterPull = null;
     observation.pullOverride = null;
-    observation.abortOverride = null;
     observation.pullExitCode = null;
     observation.commands = [];
     await destroyGitSandbox(sandbox?.scratch);
@@ -84,14 +84,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch Sync', () => {
     expect(await syncBranch(repo, 'main')).toMatchObject({ success: true });
   });
 
-  it('aborts its own conflicting rebase and restores autostashed work without pushing', async () => {
+  it('preserves a conflicting rebase and its autostash for explicit recovery without pushing', async () => {
     const repo = await prepare({ conflict: true });
     await writeFile(join(repo, 'dirty.txt'), 'tracked work\n');
     await execGit(['add', 'dirty.txt'], repo);
     const [local, remote] = await Promise.all([head(repo), head(sandbox.origin)]);
     observation.commands = [];
     expect(await syncBranch(repo, 'main')).toMatchObject({ success: false, pulled: false, pushed: false, error: expect.stringMatching(/CONFLICT|could not apply/) });
-    expect(observation.commands).toContainEqual(['rebase', '--abort']);
+    expect(observation.commands).not.toContainEqual(['rebase', '--abort']);
+    expect(existsSync(join(repo, '.git', 'rebase-merge'))).toBe(true);
+    const stash = (await readFile(join(repo, '.git', 'rebase-merge', 'autostash'), 'utf8')).trim();
+    expect((await execGit(['show', `${stash}:dirty.txt`], repo, { bufferOutput: true })).stdout).toEqual(Buffer.from('tracked work\n'));
+    // Explicit recovery still restores the original head and stashed bytes.
+    await execGit(['rebase', '--abort'], repo);
     expect(observation.commands.some(args => args[0] === 'push')).toBe(false);
     expect(await head(repo)).toBe(local);
     expect(await head(sandbox.origin)).toBe(remote);
@@ -113,19 +118,69 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch Sync', () => {
     expect(await head(sandbox.origin)).toBe(remote);
   });
 
-  it.each([
-    { name: 'an interrupted pull', pullOverride: { exitCode: null, signal: 'SIGTERM', terminated: true, stdout: '', stderr: '' }, abortOverride: null, aborts: false, error: /Pull failed/ },
-    { name: 'a failed abort', pullOverride: null, abortOverride: { exitCode: 1, stdout: '', stderr: 'error: abort failed' }, aborts: true, error: /Rebase abort failed: error: abort failed/ }
-  ])('preserves recovery state after $name', async ({ pullOverride, abortOverride, aborts, error }) => {
+  it('preserves recovery state after an interrupted pull', async () => {
     const repo = await prepare({ conflict: true });
     const remote = await head(sandbox.origin);
-    observation.pullOverride = pullOverride;
-    observation.abortOverride = abortOverride;
+    observation.pullOverride = { exitCode: null, signal: 'SIGTERM', terminated: true, stdout: '', stderr: '' };
     observation.commands = [];
-    expect(await syncBranch(repo, 'main')).toMatchObject({ success: false, pushed: false, error: expect.stringMatching(error) });
-    expect(observation.commands.some(args => args.join(' ') === 'rebase --abort')).toBe(aborts);
-    expect(observation.commands.some(args => args[0] === 'push')).toBe(false);
+    expect(await syncBranch(repo, 'main')).toMatchObject({ success: false, pushed: false, error: expect.stringMatching(/Pull failed.*preserved/) });
+    expect(observation.commands.some(args => args[0] === 'rebase' || args[0] === 'push')).toBe(false);
     expect(existsSync(join(repo, '.git', 'rebase-merge'))).toBe(true);
+    expect(await head(sandbox.origin)).toBe(remote);
+  });
+
+  it.each(['before pull', 'after failed pull', 'after failed pull with same operation'])(
+    "preserves an external actor's operation and raw resolution bytes %s", async boundary => {
+      const repo = await prepare({ conflict: true });
+      const remote = await head(sandbox.origin);
+      // Bypass the Sync adapter: these are independent real Git invocations.
+      const { execGit: externalGit } = await vi.importActual('../lib/execGit.js');
+      const resolution = Buffer.from('unfinished resolution\r\nno final newline');
+      const interfere = async () => {
+        if (boundary === 'after failed pull') await externalGit(['rebase', '--abort'], repo);
+        if (boundary !== 'after failed pull with same operation') {
+          await externalGit(['fetch', 'origin'], repo);
+          const rebased = await externalGit(['rebase', 'origin/main'], repo, { ignoreExitCode: true });
+          expect(rebased.exitCode).not.toBe(0);
+        }
+        await writeFile(join(repo, 'initial.txt'), resolution);
+      };
+      if (boundary === 'before pull') observation.beforePull = interfere;
+      else observation.afterPull = interfere;
+      observation.commands = [];
+      const result = await syncBranch(repo, 'main');
+      expect(await readFile(join(repo, 'initial.txt'))).toEqual(resolution);
+      expect(result).toMatchObject({
+        success: false, pulled: false, pushed: false, error: expect.stringContaining('preserved')
+      });
+      expect(observation.pullExitCode).not.toBe(0);
+      expect(observation.commands.some(args => args[0] === 'rebase' || args[0] === 'push')).toBe(false);
+      expect(existsSync(join(repo, '.git', 'rebase-merge'))).toBe(true);
+      expect(await head(sandbox.origin)).toBe(remote);
+    }
+  );
+
+  it('refuses to push when pull exits zero during an external rebase with staged resolutions', async () => {
+    const repo = await prepare({ conflict: true });
+    const remote = await head(sandbox.origin);
+    const { execGit: externalGit } = await vi.importActual('../lib/execGit.js');
+    const resolution = Buffer.from('staged external resolution\r\n');
+    observation.beforePull = async () => {
+      await externalGit(['fetch', 'origin'], repo);
+      const rebased = await externalGit(['rebase', 'origin/main'], repo, { ignoreExitCode: true });
+      expect(rebased.exitCode).not.toBe(0);
+      await writeFile(join(repo, 'initial.txt'), resolution);
+      await externalGit(['add', 'initial.txt'], repo);
+    };
+    observation.commands = [];
+    expect(await syncBranch(repo, 'main')).toMatchObject({
+      success: false, pulled: false, pushed: false, error: expect.stringContaining('preserved')
+    });
+    expect(observation.pullExitCode).toBe(0);
+    expect(observation.commands.some(args => args[0] === 'rebase' || args[0] === 'push')).toBe(false);
+    expect(existsSync(join(repo, '.git', 'rebase-merge'))).toBe(true);
+    expect(await readFile(join(repo, 'initial.txt'))).toEqual(resolution);
+    expect((await externalGit(['show', ':initial.txt'], repo, { bufferOutput: true })).stdout).toEqual(resolution);
     expect(await head(sandbox.origin)).toBe(remote);
   });
 

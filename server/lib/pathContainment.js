@@ -70,7 +70,10 @@ export function canonicalizePath(target) {
   let existing = resolved;
   for (;;) {
     try {
-      return join(realpathSync(existing), ...tail);
+      // Native realpath also expands Windows short names, matching async
+      // filesystem callers instead of comparing two spellings of one temp root.
+      const canonical = platform() === 'win32' ? realpathSync.native(existing) : realpathSync(existing);
+      return join(canonical, ...tail);
     } catch {
       const parent = dirname(existing);
       if (parent === existing) return resolved; // hit the root; nothing resolved

@@ -23,6 +23,7 @@ import { getLoom } from './records.js';
 import { checkExportCancelled, readFableLoomExportSource } from './exportMedia.js';
 import { readFableLoomVoiceReference } from './exportVoice.js';
 import { createFableLoomMediaCache } from './exportMediaCache.js';
+import { fableLoomRunEvents } from './runEvents.js';
 import { FABLELOOM_STATIC_PLAYER_FILES } from './staticPlayerFiles.js';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -41,7 +42,11 @@ const error = (code, message, status = 422) => new ServerError(message, { status
 const missing = () => error('NOT_FOUND', 'Export job not found for this loom.', 404);
 const invalidState = () => error('EXPORT_STATE_INVALID', 'Export state is unreadable or from an unsupported version.', 503);
 const absentJob = Symbol('absent-export-job');
-const save = job => atomicWrite(jobFile(job.jobId), job);
+const save = async job => {
+  job.revision = (job.revision || 0) + 1;
+  await atomicWrite(jobFile(job.jobId), job);
+  fableLoomRunEvents.emit('export', structuredClone(publicJob(job)));
+};
 function serializeAdmission(action) {
   const pending = admissionTail.then(action);
   admissionTail = pending.catch(() => {});
@@ -53,7 +58,7 @@ const portableLabel = value => typeof value === 'string'
 
 function publicJob(job) {
   return {
-    jobId: job.jobId, status: job.status, progress: job.progress, findings: job.findings,
+    loomId: job.loomId, revision: job.revision || 0, jobId: job.jobId, status: job.status, progress: job.progress, findings: job.findings,
     expiresAt: new Date(job.createdAt + FABLELOOM_EXPORT_LIMITS.maxAgeMs).toISOString(),
     ...(job.error ? { error: job.error } : {}),
     ...(job.sizeReport ? { sizeReport: job.sizeReport } : {}),
@@ -65,6 +70,7 @@ function publicJob(job) {
 
 async function readJob(id, loomId = null) {
   if (!uuid.test(id)) throw missing();
+  const wasActive = active.has(id);
   const job = await readJSONFile(jobFile(id), absentJob, { strict: true, logError: false }).catch(() => {
     throw invalidState();
   });
@@ -87,6 +93,9 @@ async function readJob(id, loomId = null) {
   if (job.status === 'failed' && (typeof job.error?.code !== 'string' || typeof job.error?.message !== 'string')) throw invalidState();
   if (loomId !== null && job.loomId !== loomId) throw missing();
   if (!active.has(id) && !['completed', 'failed'].includes(job.status)) {
+    // The worker publishes its terminal record before releasing ownership. A read
+    // spanning that release may hold an older snapshot; reload before recovery.
+    if (wasActive) return readJob(id, loomId);
     await rmGuarded(join(jobDirectory(id), 'work'), { recursive: true, force: true });
     job.status = 'failed';
     job.error = { code: 'EXPORT_INTERRUPTED', message: 'The server restarted during export. Start a new export.' };
@@ -247,7 +256,7 @@ async function loadVoiceProfiles(universeId, characterId) {
   return listVoiceProfiles({ universeId, characterId });
 }
 
-async function build(job, snapshot, episodes, history, universe, signal) {
+async function inspectContext(job, snapshot, episodes, universe, signal) {
   checkExportCancelled(signal);
   job.status = 'validating';
   job.findings = inspectFableLoomExport(snapshot, episodes, universe);
@@ -255,9 +264,6 @@ async function build(job, snapshot, episodes, history, universe, signal) {
     ? inspectFableLoomExportCharacters(snapshot, episodes, universe, { allowDraft: job.options.allowDraft })
     : null;
   if (characterProjection) job.findings.push(...characterProjection.findings);
-  if (job.findings.some(f => f.severity === 'error')) {
-    throw error('EXPORT_VALIDATION_FAILED', 'Resolve the graph, outline, production and character findings before exporting.');
-  }
   const requests = episodes.flatMap(episode => {
     const reachable = computeGraphLayers(episode).depthById;
     return episode.nodes.filter(n => reachable.has(n.id)).flatMap(node => (
@@ -339,8 +345,13 @@ async function build(job, snapshot, episodes, history, universe, signal) {
       }
     }
   }
+  return { requests, voicePlans, characterProjection, media };
+}
+
+async function build(job, snapshot, episodes, history, universe, signal) {
+  const { requests, voicePlans, characterProjection, media } = await inspectContext(job, snapshot, episodes, universe, signal);
   if (job.findings.some(f => f.severity === 'error')) {
-    throw error('EXPORT_VALIDATION_FAILED', 'Resolve missing media, approval, character or voice findings, or explicitly allow draft assets.');
+    throw error('EXPORT_VALIDATION_FAILED', 'Resolve graph, outline, production, media, approval, character or voice findings before exporting.');
   }
   job.status = 'packing';
   job.progress = { completed: 0, total: requests.length };
@@ -476,6 +487,27 @@ async function run(job, context, permit) {
   }
 }
 
+/** Read-only gates; the build repeats these against its own immutable snapshot. */
+export async function preflightFableLoomExport(loomId, input = {}) {
+  const options = exportOptionsSchema.parse(input);
+  if (options.includeVoice && !options.includeCharacters) {
+    throw error('EXPORT_VOICE_REQUIRES_CHARACTERS', 'Voice export requires character opt-in (includeCharacters).', 400);
+  }
+  if (options.mediaProfile === 'source' && options.includeWebm) {
+    throw error('EXPORT_OPTION_UNSUPPORTED', 'WebM requires a web media profile.', 400);
+  }
+  const loom = await getLoom(loomId);
+  if (!loom) throw error('NOT_FOUND', 'Loom not found.', 404);
+  const ids = options.episodeIds ?? loom.episodes.map(e => e.id);
+  const episodes = ids.map(id => loom.episodes.find(e => e.id === id));
+  if (!episodes.length || episodes.some(e => !e)) throw error('EXPORT_EPISODES_INVALID', 'Select existing episodes from this loom.', 400);
+  const universe = loom.universeId ? await getUniverse(loom.universeId) : null;
+  const job = { options, findings: [] };
+  await inspectContext(job, loom, episodes, universe);
+  return { findings: job.findings, canBuild: !job.findings.some(f => f.severity === 'error'),
+    episodeIds: ids, options, note: 'Build rechecks gates and source media bytes; preflight does not certify a finished package.' };
+}
+
 export async function startFableLoomExport(loomId, input = {}) {
   const options = exportOptionsSchema.parse(input);
   if (options.mediaProfile === 'source' && options.includeWebm) {
@@ -496,7 +528,7 @@ export async function startFableLoomExport(loomId, input = {}) {
       }
       await prune();
       const snapshot = structuredClone(loom);
-      const episodes = snapshot.episodes.filter(e => ids.has(e.id));
+      const episodes = [...ids].map(id => snapshot.episodes.find(e => e.id === id));
       const sourceHistory = await loadHistory();
       if (!Array.isArray(sourceHistory)) throw error('EXPORT_MEDIA_INVALID', 'Video history is unreadable.');
       const videoIds = new Set(episodes.flatMap(e => e.nodes.flatMap(n => fableLoomExportAssetRequests(n)

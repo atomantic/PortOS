@@ -109,7 +109,7 @@ export { PAUSED_BLOCKED_CATEGORIES };
 // with the #4153 split so the task editor can edit the agent-facing payload the
 // same way it edits the human note — deliberately WITHOUT re-classification, so
 // a multi-line note edit can't overwrite the payload (see `splitTaskPromptFields`).
-const LEGACY_DIRECT_FIELDS = ['context', 'prompt', 'model', 'provider', 'effort', 'temperature', 'thinking', 'app', 'orchestrationMode', 'orchestrationProfile'];
+const LEGACY_DIRECT_FIELDS = ['context', 'prompt', 'model', 'provider', 'effort', 'executionOptions', 'temperature', 'thinking', 'app', 'orchestrationMode', 'orchestrationProfile'];
 
 // Equality for metadata values across a fresh markdown re-parse: primitives by
 // ===, arrays/objects (reviewers[], screenshots[], …) by JSON since the two
@@ -849,6 +849,13 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     if (!releasesCurrentHold) return { error: 'Deep checkpoint cleanup is still pending; resume after cleanup finishes' };
   }
 
+  const runtimeHeld = current.status === 'blocked' && current.metadata?.blockedCategory === 'runtime-verification';
+  const runtimeRelease = runtimeHeld && updates.status === 'pending'
+    && expectedStatus === 'blocked' && expectedMetadata?.runtimeVerificationId === current.metadata.runtimeVerificationId
+    && updates.metadata?.runtimeVerification?.status === 'resumed';
+  if (runtimeHeld && updates.status && updates.status !== 'blocked' && !runtimeRelease) {
+    return { error: 'Runtime verification prerequisite must be released by its server coordinator' };
+  }
   const updatedMetadata = mergeUpdateMetadata(tasks[taskIndex].metadata, updates);
 
   // Ask "what status transition is this?" ONCE. Every lifecycle rule below reads a
@@ -864,7 +871,10 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   // the `blockedCategory` clear feeding the resume-pointer check below.
   for (const [field, keys] of TRANSITION_METADATA_CLEARS) {
     if (!transition[field]) continue;
-    for (const key of keys) delete updatedMetadata[key];
+    for (const key of keys) {
+      if (runtimeRelease && ['failureCount', 'lastErrorCategory', 'lastFailureAt'].includes(key)) continue;
+      delete updatedMetadata[key];
+    }
   }
   // Automatic delivery recovery continues the charged attempt, unlike an
   // explicit human revive. Persist its budget in the same write as its hold.
@@ -872,6 +882,15 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     && updates.status === 'in_progress' && typeof updates.metadata?.retryPendingCleanup === 'string') {
     for (const key of ['failureCount', 'lastErrorCategory', 'lastFailureAt']) {
       if (Object.hasOwn(updates.metadata, key)) updatedMetadata[key] = updates.metadata[key];
+    }
+  }
+  // Receipt-only completion is not a human revive. Keep the charged failure
+  // history when the original cleanup owner settles an exhausted dispatch.
+  if (preserveRetryBudget && expectedStatus === 'blocked' && expectedTask && recoveryOwner
+    && updates.status === 'completed' && current.metadata?.blockedCategory === 'task-recovery-exhausted'
+    && current.metadata.deliveryRecovery === 'cleanup' && current.metadata.deliveryRecoveryAgentId === recoveryOwner.id) {
+    for (const key of ['failureCount', 'lastErrorCategory', 'lastFailureAt']) {
+      if (Object.hasOwn(current.metadata, key)) updatedMetadata[key] = current.metadata[key];
     }
   }
 

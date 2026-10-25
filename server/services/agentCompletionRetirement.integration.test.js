@@ -1,6 +1,7 @@
-/** No-inventory completion must retain one exact obligation through execution release and real preservation. */
+/** No-inventory completion must retain one exact obligation through execution release and in-place removal. */
 import { afterEach, afterAll, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, writeFile, rm, realpath } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, mkdir, readFile, writeFile, rm, realpath, rename } from 'node:fs/promises';
 import { join, sep, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
@@ -67,7 +68,7 @@ const { cosEvents } = await import('./cosEvents.js');
 afterAll(cleanupTempDataRoots);
 let scratch;
 afterEach(async () => { fixture.inventoryAlias = false; activeAgents.clear(); if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); });
-describe('completion to archive retirement (real Git and persisted service state)', () => {
+describe('completion to in-place retirement (real Git and persisted service state)', () => {
   it('drains context-less legacy handoffs instead of sweeping nonretryable failures forever', async () => {
     scratch = await mkdtemp(join(tmpdir(), 'portos-completion-sweep-'));
     fixture.root = PATHS.data; await mkdir(fixture.root, { recursive: true });
@@ -178,22 +179,32 @@ describe('completion to archive retirement (real Git and persisted service state
     const { buildRenewal } = await import('./cosTaskClaim.js');
     Object.assign(fixture.task.metadata, buildRenewal(fixture.task.metadata, 'fixture-instance'));
     await writeFile(join(fixture.root, 'task.json'), JSON.stringify(fixture.task));
+    const held = await Promise.all([verify(), verify()]);
+    expect(held).toMatchObject([
+      { verified: false, skipReason: 'checkout-ignored-payload-unverified' },
+      { verified: false, skipReason: 'checkout-ignored-payload-unverified' },
+    ]);
+    expect(await readFile(join(path, 'ignored.txt'), 'utf8')).toBe('private preserved bytes\n');
+    expect((await execGit(['rev-parse', 'HEAD'], path)).stdout.trim()).toBe(head);
+    const retained = await getBranchReconcileOutcome(fixture.app.id);
+    expect(retained).toMatchObject({ status: 'incomplete', retirementObligations: [{ path, branch, head }] });
+    expect(retained.retired).toBeUndefined();
+    expect(JSON.parse(await readFile(join(fixture.root, 'task.json'), 'utf8')).status).toBe('in_progress');
+    // Recover the wanted bytes outside the checkout before retrying retirement.
+    const recovered = join(scratch, 'recovered-private-bytes.txt');
+    await rename(join(path, 'ignored.txt'), recovered);
     const results = await Promise.all([verify(), verify()]); expect(results).toMatchObject([{ verified: true, skipReason: null }, { verified: true, skipReason: null }]);
     const outcome = await getBranchReconcileOutcome(fixture.app.id); expect(outcome.retirementObligations).toEqual([]);
     expect(outcome.retired).toHaveLength(1); const receipt = outcome.retired[0];
-    expect(receipt).toMatchObject({ path, branch, head, branchDeleted: true });
-    expect(await readFile(join(receipt.archiveDir, 'files', 'ignored.txt'), 'utf8')).toBe('private preserved bytes\n');
-    const restored = join(scratch, 'restored.git'); await execGit(['init', '--bare', restored], scratch);
-    await execGit(['bundle', 'unbundle', join(receipt.archiveDir, 'commits.bundle')], restored);
-    expect((await execGit(['show', `${head}:feature.txt`], restored)).stdout).toBe('delivered original\n');
+    expect(receipt).toMatchObject({ path, branch, head, branchDeleted: true, archiveDir: null });
+    expect(existsSync(join(PATHS.cos, 'held-checkout-archives'))).toBe(false);
     const { listWorktrees } = await import('./worktreeManager.js');
     expect((await listWorktrees(repo)).some(tree => resolve(tree.path) === resolve(path))).toBe(false);
     expect((await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
     expect(JSON.parse(await readFile(join(fixture.root, 'task.json'), 'utf8')).status).toBe('completed');
+    expect(await readFile(recovered, 'utf8')).toBe('private preserved bytes\n');
     await verify(); expect((await getBranchReconcileOutcome(fixture.app.id)).retired).toHaveLength(1);
-  // This public-boundary scenario makes 182 real Git calls across capture,
-  // fresh reviews, archive verification, retirement and independent restore.
-  // Measured wall time reaches 29s before host contention; keep its own budget
-  // separate from the default 30s unit budget without weakening any proof.
+  // Completion capture, held retirement, recovery and fresh receipt proof are
+  // separate real-Git workflows. Keep their existing public-boundary budget.
   }, 60_000);
 });

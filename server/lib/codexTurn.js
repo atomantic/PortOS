@@ -158,6 +158,7 @@ const normalizeModel = (raw) => {
     hidden: raw.hidden === true,
     defaultEffort: trimmed(raw.defaultReasoningEffort),
     supportedEfforts,
+    ...(Array.isArray(raw.serviceTiers) ? { serviceTiers: raw.serviceTiers.filter((tier) => typeof tier?.id === 'string').map(({ id }) => ({ id })) } : {}),
     contextWindow: finiteInt(raw.contextWindow),
   };
 };

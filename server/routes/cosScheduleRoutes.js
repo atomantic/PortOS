@@ -1,3 +1,4 @@
+import { executionOptionsSchema } from '../lib/aiToolkit/internal/executionOptionsValidation.js';
 import { PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 import { AUDIT_DEFINITIONS } from '../lib/auditCatalog.js';
 /**
@@ -52,16 +53,18 @@ const maintenanceRunStartSchema = z.object({
     providerId: z.string().trim().min(1),
     model: z.string().trim().min(1),
     effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+  executionOptions: executionOptionsSchema.optional(),
   }).nullable().optional(),
   appId: z.string().trim().min(1),
   providerId: z.string().trim().min(1),
   model: z.string().trim().min(1),
   effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+  executionOptions: executionOptionsSchema.optional(),
 }).strict();
 
 const router = Router();
 
-const SCHEDULE_FIELDS = ['type', 'autoStart', 'perpetual', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'description', 'labels', 'dataInputs', 'taskMetadata', 'runAfter',
+const SCHEDULE_FIELDS = ['type', 'autoStart', 'perpetual', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'executionOptions', 'prompt', 'description', 'labels', 'dataInputs', 'taskMetadata', 'runAfter',
   // Advisory run order — which OTHER scheduled tasks a user should generally run
   // first. Editable and unenforced; `runAfter` above is the enforced gate.
   'suggestedAfter',
@@ -301,6 +304,9 @@ router.post('/schedule/branch-reconcile/checkouts/review', asyncHandler(async (r
   const { appId, prUrl, kind, ...release } = validateRequest(heldCheckoutReviewBodySchema, req.body);
   const { prepareInventoriedCheckoutRetirement } = await import('../services/heldCheckoutRecovery.js');
   const result = await prepareInventoriedCheckoutRetirement({ appId, release, prUrl, ...(kind && { kind }) });
+  if (!result.ok && result.reason === 'retirement-submodule-not-uninitialized' && !result.nextAction) {
+    result.nextAction = 'This checkout has initialized Git submodules. Request its exact review through /api/cos/schedule/branch-reconcile/initialized-checkouts/review; do not deinitialize or remove modules to bypass this refusal.';
+  }
   if (!result.ok) throw new ServerError(`Checkout review refused: ${result.reason}`, {
     status: 409, code: 'CHECKOUT_REVIEW_REFUSED', context: { reason: result.reason, ...(result.archiveLimit && { archiveLimit: result.archiveLimit }), ...(result.nextAction && { nextAction: result.nextAction }) },
   });
@@ -334,6 +340,23 @@ router.post('/schedule/branch-reconcile/initialized-checkouts/retire', asyncHand
   const { appId, review, ...release } = validateRequest(initializedCheckoutRetireBodySchema, req.body);
   const { retireInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
   const result = await retireInitializedCheckout({ appId, release, review });
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+// Explicit whole-checkout preservation uses the same journal, byte/capacity
+// bounds, metadata proof, quarantine and recovery as initialized modules. The
+// ordinary archive limits and existing initialized-only endpoint stay intact.
+router.post('/schedule/branch-reconcile/whole-checkouts/review', asyncHandler(async (req, res) => {
+  const { appId, prUrl, ...release } = validateRequest(heldCheckoutReviewBodySchema.omit({ kind: true }).strict(), req.body);
+  const { reviewInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await reviewInitializedCheckout({ appId, release, prUrl, wholeCheckout: true });
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.post('/schedule/branch-reconcile/whole-checkouts/retire', asyncHandler(async (req, res) => {
+  const { appId, review, ...release } = validateRequest(initializedCheckoutRetireBodySchema, req.body);
+  const { retireInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await retireInitializedCheckout({ appId, release, review, wholeCheckout: true });
   res.status(result.ok ? 200 : 409).json(result);
 }));
 

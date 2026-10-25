@@ -21,6 +21,13 @@ const safeSignal = signal => ['SIGTERM', 'SIGKILL'].includes(signal) ? signal : 
 const safePhase = phase => ['shutdown', 'drain'].includes(phase) ? phase : 'other';
 const safeCode = code => ['EPERM', 'EACCES', 'EINVAL', 'ENOSYS'].includes(code) ? code : 'other';
 
+// BSD ps may print uid_t values as signed integers; Node exposes them unsigned.
+const observedUid = value => {
+  const uid = Number(value);
+  if (!Number.isSafeInteger(uid) || uid < -2147483648 || uid > 4294967295) throw new Error('Invalid process credential observation');
+  return uid < 0 ? uid + 4294967296 : uid;
+};
+
 const PROCESS_STATES = { R: 'runnable', S: 'sleeping', D: 'uninterruptible', Z: 'zombie', T: 'stopped', t: 'traced', X: 'dead', I: 'idle' };
 const validGroup = pgid => Number.isSafeInteger(pgid) && pgid > 1 && pgid !== process.pid;
 
@@ -35,10 +42,10 @@ export async function observeBrowserProcessGroup(pgid, timeout) {
       timeout, maxBuffer: 4 * 1024 * 1024,
     });
     const rows = stdout.trim().split('\n').map(line => {
-      const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line);
+      const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+(-?\d+)\s+(\S+)\s*$/.exec(line);
       if (!match) throw new Error('Invalid process observation');
       return { pid: Number(match[1]), parent: Number(match[2]), group: Number(match[3]),
-        uid: Number(match[4]), ruid: Number(match[5]), state: PROCESS_STATES[match[6][0]] ?? 'other' };
+        uid: observedUid(match[4]), ruid: observedUid(match[5]), state: PROCESS_STATES[match[6][0]] ?? 'other' };
     });
     if (!rows.some(row => row.pid === process.pid)) return 'unavailable';
     const leader = rows.find(row => row.pid === pgid);
@@ -94,7 +101,11 @@ export async function drainBrowserProcessGroup(pgid, deadline, graceMs, state = 
     if (remaining <= 0) throw failure('Composition browser group cleanup exceeded its deadline');
     let members;
     try { members = await liveMembers(pgid, remaining); }
-    catch { throw failure('Composition browser group observation failed'); }
+    catch {
+      throw failure(performance.now() >= deadline
+        ? 'Composition browser group cleanup exceeded its deadline'
+        : 'Composition browser group observation failed');
+    }
     if (!members.length) {
       if (state.error !== 'none') {
         const signal = safeSignal(state.failedSignal);

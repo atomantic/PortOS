@@ -93,7 +93,8 @@ export async function resolvePublicReviewProvider({ posture, pinnedProviderId = 
   const activeId = activeProviderId || activeProvider?.id || activeProvider || null;
   const active = activeId ? eligible.find((provider) => provider.id === activeId) : null;
   const chosen = active
-    || eligible.find((provider) => isProviderAvailable(provider.id))
-    || eligible[0];
+    || eligible.find((provider) => !(provider.executionSourceProviderId || provider.executionSelectionRoot) && isProviderAvailable(provider.id))
+    || eligible.find((provider) => !(provider.executionSourceProviderId || provider.executionSelectionRoot));
+  if (!chosen) return { ok: false, code: 'public-review-no-automatic-provider', error: 'Choose an explicit provider for this review.' };
   return { ok: true, provider: chosen, pinHonored: false };
 }

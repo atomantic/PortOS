@@ -226,6 +226,7 @@ const onDemand = createOnDemandDaemon({
     tuning: current?.tuning ?? normalizeTuning('mtplx', saved.raw?.tuning),
   }),
   getConfig: () => currentConfig,
+  parseConfigFromArgs,
   sleep,
   getRelaunchReadyTimeoutMs: () => relaunchReadyTimeoutMs,
   getRelaunchPollMs: () => relaunchPollMs,

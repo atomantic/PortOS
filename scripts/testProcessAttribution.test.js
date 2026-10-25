@@ -15,7 +15,7 @@ vi.mock('node:fs', async importOriginal => {
 });
 
 const originalExit = process.exitCode;
-afterEach(() => { process.exitCode = originalExit; vi.restoreAllMocks(); });
+afterEach(() => { process.exitCode = originalExit; vi.useRealTimers(); vi.restoreAllMocks(); });
 
 // Regression: a suite-ended child must be attributed before the root disappears,
 // while a successful signal cannot remove that root until terminal identity exists.
@@ -90,4 +90,66 @@ it.each(['persisted', 'write-failed'])('pool-close preserves a %s pending identi
     expect(JSON.parse(readFileSync(reportPath, 'utf8'))).toMatchObject({ pendingVerified: false, unsettled: 1 });
     expect(verifyPendingTestProcesses(root, { read: () => [], probePid: () => false })).toBe(true);
   } finally { rmSync(host, { recursive: true, force: true }); }
+});
+
+// Regression: short Git commands must not each start an OS reader, while a
+// surviving child still retains its original suite and terminal lifecycle.
+it('batches surviving children and flushes recent spawns at teardown without inspecting closed commands', () => {
+  vi.useFakeTimers();
+  const root = mkdtempSync(join(tmpdir(), 'process-batched-'));
+  const records = [900001, 900002, 900003].map(pid => ({ pid, ppid: process.pid, start: `birth-${pid}` }));
+  const read = vi.fn(pids => records.filter(record => pids.includes(record.pid)));
+  let suite = fileURLToPath(import.meta.url);
+  const dispose = observeTestProcesses(() => suite, { root, read });
+  const launch = pid => {
+    const child = Object.assign(new EventEmitter(), { pid });
+    channel('child_process').publish({ process: child });
+    child.emit('spawn');
+    return child;
+  };
+  try {
+    for (let i = 0; i < 100; i++) {
+      const child = launch(910000 + i);
+      child.emit('exit');
+      child.emit('close');
+    }
+    vi.advanceTimersByTime(250);
+    expect(read).not.toHaveBeenCalled();
+    const first = launch(records[0].pid);
+    launch(records[1].pid);
+    suite = '/example/another.test.js';
+    vi.advanceTimersByTime(249);
+    expect(read).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(read.mock.calls).toEqual([[[records[0].pid, records[1].pid]]]);
+    expect(processAttribution(root, processIdentity(records[0]))).toMatchObject({ suite: 'scripts/testProcessAttribution.test.js', phase: 'suite-active', lifecycle: 'spawned' });
+    first.emit('exit');
+    expect(processAttribution(root, processIdentity(records[0])).lifecycle).toBe('exit-observed');
+    first.emit('close');
+    expect(processAttribution(root, processIdentity(records[0])).attribution).toBe('unavailable');
+    launch(records[2].pid);
+    dispose();
+    expect(read.mock.calls).toEqual([[[records[0].pid, records[1].pid]], [[records[2].pid]]]);
+    expect(processAttribution(root, processIdentity(records[1]))).toMatchObject({ suite: 'scripts/testProcessAttribution.test.js', phase: 'suite-ended', lifecycle: 'spawned' });
+    expect(processAttribution(root, processIdentity(records[2]))).toMatchObject({ phase: 'suite-ended', lifecycle: 'spawned' });
+    vi.advanceTimersByTime(1000);
+    expect(read).toHaveBeenCalledTimes(2);
+  } finally { dispose(); rmSync(root, { recursive: true, force: true }); }
+});
+
+it.each(['missing', 'terminal', 'different-parent', 'unreadable'])('does not attribute a deferred %s process identity', state => {
+  const root = mkdtempSync(join(tmpdir(), 'process-identity-gap-'));
+  const record = { pid: 900001, ppid: process.pid, start: 'original' };
+  const read = () => {
+    if (state === 'unreadable') throw Error('synthetic unavailable reader');
+    return state === 'missing' ? [] : [{ ...record, terminal: state === 'terminal', ppid: state === 'different-parent' ? 1 : process.pid }];
+  };
+  const dispose = observeTestProcesses(() => fileURLToPath(import.meta.url), { root, read });
+  try {
+    const child = Object.assign(new EventEmitter(), { pid: record.pid });
+    channel('child_process').publish({ process: child });
+    child.emit('spawn');
+    dispose();
+    expect(processAttribution(root, processIdentity(record)).attribution).toBe('unavailable');
+  } finally { dispose(); rmSync(root, { recursive: true, force: true }); }
 });

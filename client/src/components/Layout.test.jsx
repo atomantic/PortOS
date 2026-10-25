@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within, act, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, createMemoryRouter, RouterProvider, useLocation } from 'react-router';
 import { reloadOnceForStaleChunk } from '../utils/staleChunkReload';
-import { PINNED_KEY } from '../utils/navWorkingSet.js';
+import { PINNED_KEY, RECENT_KEY } from '../utils/navWorkingSet.js';
 import * as api from '../services/api';
 import socket from '../services/socket';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
@@ -235,6 +235,29 @@ afterEach(() => {
 });
 
 describe('Layout — pinned single nav rows', () => {
+  it('keeps destination icons in pinned and recent rows, including nested and dynamic pages', async () => {
+    const destinations = [
+      ['/devtools/usage', 'Usage', 'lucide-chart-column'],
+      ['/casting', 'Casting', 'lucide-drama'],
+      ['/pipeline/series/example-series', 'Example Series', 'lucide-workflow'],
+      ['/universes/example-universe', 'Example Universe', 'lucide-globe'],
+    ];
+    api.listPipelineSeriesNames.mockResolvedValue([{ id: 'example-series', name: 'Example Series' }]);
+    api.listUniverseNames.mockResolvedValue([{ id: 'example-universe', name: 'Example Universe' }]);
+    localStorage.setItem(PINNED_KEY, JSON.stringify(destinations.map(([path]) => path)));
+    localStorage.setItem(RECENT_KEY, JSON.stringify(destinations.map(([path]) => path)));
+    await renderLayout();
+
+    for (const [path, label, iconClass] of destinations) {
+      const link = within(pinnedSection()).getByRole('link', { name: label });
+      expect(link).toHaveAttribute('href', path);
+      expect(link.querySelector('svg')).toHaveClass(iconClass);
+      fireEvent.click(within(pinnedSection()).getByRole('button', { name: `Unpin ${label}` }));
+      const recentLink = within(screen.getByTestId('recent-section')).getByRole('link', { name: label });
+      expect(recentLink.querySelector('svg')).toHaveClass(iconClass);
+    }
+  });
+
   it('renders a pinned top-level single row (Dashboard) in the Pinned section', async () => {
     localStorage.setItem(PINNED_KEY, JSON.stringify(['/']));
     await renderLayout();
@@ -604,6 +627,37 @@ describe('Layout — dynamic third-level navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand Universes' }));
     expect(screen.getByRole('link', { name: 'Example Series' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Example Universe' })).toBeTruthy();
+  });
+
+  it('renders Casting, Environments, and Objects as 3rd-level sub-pages under Catalog in Create', async () => {
+    await renderLayout('/catalog');
+
+    const collapseCatalog = screen.getByRole('button', { name: 'Collapse Catalog' });
+    expect(collapseCatalog).toBeInTheDocument();
+
+    expect(screen.getByRole('link', { name: 'Casting' })).toHaveAttribute('href', '/casting');
+    expect(screen.getByRole('link', { name: 'Environments' })).toHaveAttribute('href', '/environments');
+    expect(screen.getByRole('link', { name: 'Objects' })).toHaveAttribute('href', '/objects');
+
+    fireEvent.click(collapseCatalog);
+    expect(screen.queryByRole('link', { name: 'Casting' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Environments' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Objects' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Catalog' }));
+    expect(screen.getByRole('link', { name: 'Casting' })).toHaveAttribute('href', '/casting');
+    expect(screen.getByRole('link', { name: 'Environments' })).toHaveAttribute('href', '/environments');
+    expect(screen.getByRole('link', { name: 'Objects' })).toHaveAttribute('href', '/objects');
+  });
+
+  it('auto-expands Create and Catalog when visiting a grandchild route', async () => {
+    await renderLayout('/casting');
+
+    expect(screen.getByRole('button', { name: 'Collapse Create' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Collapse Catalog' })).toBeInTheDocument();
+    const castingLink = screen.getByRole('link', { name: 'Casting' });
+    expect(castingLink).toHaveAttribute('href', '/casting');
+    expect(castingLink.className).toContain('text-port-accent');
   });
 
   it('updates dynamic apps navigation when apps:changed is emitted', async () => {

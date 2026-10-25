@@ -1567,6 +1567,7 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   if (interval.effort) {
     metadata.effort = interval.effort;
   }
+  if (interval.executionOptions !== undefined) metadata.executionOptions = interval.executionOptions;
 
   // repo-sync's install-wide sweep. This lane is what a global "Run Now" (no
   // app) hits, and sweeping EVERY managed app in one run is the shape the task
@@ -1711,6 +1712,7 @@ function initializePipelineMetadata(metadata) {
     metadata.providerId = stage0.providerId;
   }
   if (stage0.effort) metadata.effort = stage0.effort;
+  if (stage0.executionOptions !== undefined) metadata.executionOptions = stage0.executionOptions;
   // Save task-level defaults and apply stage 0 overrides in one pass
   // Read-only stages default flags to false to prevent worktree/PR/simplify on review-only stages
   metadata.pipeline.taskDefaults = {};
@@ -2015,7 +2017,9 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
   const appId = targetApp?.id || null;
   const parkInfo = await taskScheduleMod.getPerpetualParkInfo(request.taskType, appId).catch(() => null);
   const isDetectorDriven = taskConfig?.perpetual === true || request.taskType === 'branch-reconcile';
-  const outcome = parkInfo ? 'parked' : (isDetectorDriven ? 'transient' : 'idle');
+  const outcome = skip?.gate === 'reviewer-identity'
+    ? 'transient'
+    : parkInfo ? 'parked' : (isDetectorDriven ? 'transient' : 'idle');
 
   // Layered Intelligence skips (e.g. a provider that can't drive an agent) record
   // an actionable last-run reason. Surface it so a manual "Run" toasts WHY it
@@ -2023,6 +2027,7 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
   // generic "nothing to do". Read the freshest record — the skip's recordRun
   // landed after `targetApp` was loaded. Best-effort; a read failure just omits it.
   let reason = null;
+  if (skip?.gate === 'reviewer-identity') reason = skip.reason;
   if (outcome === 'idle' && appId && request.taskType === 'layered-intelligence') {
     const { getAppById } = await import('./apps.js');
     const app = await getAppById(appId).catch(() => null);
@@ -2048,7 +2053,9 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
   // way that won't self-clear, and pass the remedy through. No verdict, an
   // unprobeable CLI, or a healthy one all leave `forge` null and keep the
   // generic copy — the failure really was a blip, or at least not one we can name.
-  let forge = null;
+  let forge = skip?.gate === 'reviewer-identity'
+    ? { cli: 'reviewer identity', remedy: skip.reason }
+    : null;
   const verdict = outcome === 'transient' && skip?.gate === 'perpetual-work' ? skip : null;
   if (verdict?.remedy) {
     // The detector already knew the fault AND the way out — a per-repo permission
@@ -2472,14 +2479,19 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride, reques
   if (interval.effort) {
     metadata.effort = interval.effort;
   }
+  if (interval.executionOptions !== undefined) metadata.executionOptions = interval.executionOptions;
   applyOneProviderPin(metadata, appPin);
+  if (appPin?.executionOptions !== undefined) metadata.executionOptions = appPin.executionOptions;
   applyOneProviderPin(metadata, hookOverride);
+  if (hookOverride?.executionOptions !== undefined) metadata.executionOptions = hookOverride.executionOptions;
   // A pipeline's current stage is more specific than the whole-task defaults.
   // Stage 0 may already have advanced through a server-owned preflight.
   const stage = metadata.pipeline?.stages?.[metadata.pipeline.currentStage ?? 0];
   if (stage) {
     applyOneProviderPin(metadata, stage);
     if (stage.providerId) delete metadata.effort;
+    if (stage.providerId) delete metadata.executionOptions;
+    if (stage.executionOptions !== undefined) metadata.executionOptions = stage.executionOptions;
     if (stage.effort) metadata.effort = stage.effort;
   }
   // Most specific: an explicit per-request pin (e.g. one "PR review" click from
@@ -2488,6 +2500,8 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride, reques
   // eligible set at spawn time (resolveAgentProviderAndModel). An unsupported
   // pin blocks instead of granting permission to spend on another provider.
   applyOneProviderPin(metadata, { providerId: requestOverride?.provider || null, model: requestOverride?.model || null });
+  if (requestOverride?.provider) delete metadata.executionOptions;
+  if (requestOverride?.executionOptions !== undefined) metadata.executionOptions = requestOverride.executionOptions;
   if (requestOverride?.effort) {
     metadata.effort = requestOverride.effort;
   }
@@ -2732,22 +2746,36 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // Resolve completion before rendering reviewers, including claim flows that
   // own their PR while intentionally disabling CoS worktree provisioning.
   applyAppWorktreeDefault(metadata, app);
-  const baseDescription = await buildImprovementTaskDescription({
-    promptTemplate: applyAuditModeWrapper(applyDepfreeMode(applyReleaseOptions(promptTemplate, promptTaskType, metadata), promptTaskType, metadata), modeInstructions),
-    app, promptTaskType, metadata,
-    blocks: {
-      referenceData: referenceDataBlock,
-      trackerInstructions: trackerFiling.trackerInstructions,
-      modeInstructions,
-      prData: prDataBlock,
-      inFlightBranches: inFlightBranchesBlock,
-      zombieIssues: zombieIssuesBlock,
-      repoSyncReport: repoSyncReportBlock,
-      repoFullName: prRepoFullName,
-      defaultBranch: prDefaultBranch,
-      planConstraint: planConstraintBlock
-    }
-  });
+  let baseDescription;
+  try {
+    baseDescription = await buildImprovementTaskDescription({
+      promptTemplate: applyAuditModeWrapper(applyDepfreeMode(applyReleaseOptions(promptTemplate, promptTaskType, metadata), promptTaskType, metadata), modeInstructions),
+      app, promptTaskType, metadata,
+      reviewerTaskType: taskType, reviewerOverrideMetadata: appOverride?.taskMetadata,
+      blocks: {
+        referenceData: referenceDataBlock,
+        trackerInstructions: trackerFiling.trackerInstructions,
+        modeInstructions,
+        prData: prDataBlock,
+        inFlightBranches: inFlightBranchesBlock,
+        zombieIssues: zombieIssuesBlock,
+        repoSyncReport: repoSyncReportBlock,
+        repoFullName: prRepoFullName,
+        defaultBranch: prDefaultBranch,
+        planConstraint: planConstraintBlock
+      }
+    });
+  } catch (err) {
+    if (err.code !== 'REVIEWER_IDENTITY_NOT_FOUND') throw err;
+    emitLog('info', err.message, { appId: app.id, analysisType: taskType });
+    const { recordPreflightOutcome } = await import('./preflightTaskCard.js');
+    await recordPreflightOutcome({
+      requestId: preflightCardId?.replace(/^preflight-/, '') || `reviewer-identity-${app.id}-${taskType}-${Date.now().toString(36)}`,
+      taskType, appId: app.id, appName: app.name,
+      outcome: 'failed', reason: err.code, note: err.message,
+    });
+    return skipped('reviewer-identity', { reason: err.message, detail: err.context });
+  }
   const taskDataInputs = await resolveTaskDataInputs(interval.dataInputs, {
     app, taskMetadata: metadata, taskType: promptTaskType,
     trustedPullRequestData: prDataBlock,

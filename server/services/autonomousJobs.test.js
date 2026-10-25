@@ -42,6 +42,8 @@ vi.mock('fs', () => ({
   existsSync: vi.fn().mockReturnValue(false)
 }))
 
+vi.mock('./retirementAppScope.js', () => ({ resolveRetirementApp: vi.fn(async () => ({ app: { id: 'app-1', repoPath: '/mock/root' } })) }))
+
 vi.mock('./worktreeManager.js', () => ({
   reapMergedWorktrees: vi.fn().mockResolvedValue({ reaped: [] }),
   cleanupOrphanedWorktrees: vi.fn().mockResolvedValue(0)

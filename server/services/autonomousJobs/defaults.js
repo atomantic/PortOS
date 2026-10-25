@@ -11,6 +11,7 @@
 
 import { createHash } from 'crypto'
 import { DAY, WEEK, JOB_STRUCTURAL_FIELDS, JOB_ADDITIVE_FIELDS } from './constants.js'
+import { CLAIM_WORKFLOW_AUDIT_JOB } from './claimWorkflowAudit.js'
 import { PORTOS_CATALOG_REFRESH_JOB } from './portosCatalogRefresh.js'
 import { PORTOS_CLI_CATALOG_REFRESH_JOB } from './portosCliCatalogRefresh.js'
 
@@ -18,6 +19,7 @@ import { PORTOS_CLI_CATALOG_REFRESH_JOB } from './portosCliCatalogRefresh.js'
  * Default job definitions
  */
 const DEFAULT_JOBS = [
+  CLAIM_WORKFLOW_AUDIT_JOB,
   {
     id: 'job-github-repo-maintenance',
     name: 'GitHub Repo Maintenance',
@@ -532,6 +534,14 @@ function mergeWithDefaults(loaded) {
       if (Object.hasOwn(defaultJob, field) && existing[field] !== defaultJob[field]) {
         existing[field] = defaultJob[field]
         changed = true
+      }
+    }
+    if (defaultJob.portosOnly) {
+      for (const field of ['taskMetadata', 'formFields']) {
+        if (JSON.stringify(existing[field]) !== JSON.stringify(defaultJob[field])) {
+          existing[field] = defaultJob[field]
+          changed = true
+        }
       }
     }
     // Additive fields: snapshot-aware merge — propagates updates to untouched fields,

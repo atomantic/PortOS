@@ -28,11 +28,13 @@ function readJson(path) {
 export function inspectWorkspaceDependencies({ dir, label }) {
   const issues = [];
   let linked = false;
+  let directoryAvailable = false;
   let owner = dir;
   try {
     linked = hasLinkedDependencies(dir);
     if (linked) owner = join(resolve(dir, readlinkSync(join(dir, 'node_modules'))), '..');
     owner = join(realpathSync(join(dir, 'node_modules')), '..');
+    directoryAvailable = true;
   } catch (error) {
     issues.push(`node_modules ${error.code === 'ENOENT' ? 'missing' : 'unreadable'} (${error.code})${linked ? ' — linked target unavailable' : ''}`);
   }
@@ -61,7 +63,7 @@ export function inspectWorkspaceDependencies({ dir, label }) {
       }
     }
   }
-  return { label, linked, owner, issues };
+  return { label, linked, owner, directoryAvailable, issues };
 }
 
 /** Returns diagnostics only; never installs, patches, deletes or writes receipts. */

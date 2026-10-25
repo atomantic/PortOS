@@ -19,6 +19,13 @@ const render = (forgeCli = 'gh', reviewers = ['copilot']) => buildTuiCompletionS
 });
 
 describe('review-enabled completion merge gate', () => {
+  it('distinguishes an operator-parked claim attempt from resolving the open issue', () => {
+    const section = render();
+    expect(section).toContain('Use no-action-needed for this verified stand-down, not blocked');
+    expect(section).toContain('An operator-parked issue stays open for its documented unblock condition');
+    expect(section).toContain('clean checkout fully contained in the live default branch');
+  });
+
   it('waits for current-head CI and re-runs review after a changed head', () => {
     const section = render();
 

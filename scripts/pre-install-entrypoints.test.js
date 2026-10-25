@@ -17,15 +17,16 @@
  * imported by both pre-install entrypoints.
  */
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'fs';
-import { builtinModules } from 'module';
-import { dirname, join, relative, resolve, sep } from 'path';
-import { fileURLToPath } from 'url';
+import { readFileSync } from 'node:fs';
+import { builtinModules } from 'node:module';
+import { dirname, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Run by the CI `impact` job before any dependency install. */
 const PRE_INSTALL_ENTRYPOINTS = [
+  'scripts/ci-impact-diagnostics.js',
   'scripts/ci-dependabot-admission.js',
   'scripts/ci-base-sha.js',
   'scripts/ci-test-plan.js',
@@ -55,6 +56,7 @@ const BARE_CHECKOUT_SCRIPTS = [
   'scripts/ci-gate-report.js',
   'scripts/ci-nightly-report.js',
   'scripts/ci-retry-cancelled-run.js',
+  'scripts/ci-recover-superseded-gate.js',
   'scripts/doctor.js',
 ];
 
@@ -135,6 +137,7 @@ describe('scripts that run from a sparse checkout of scripts/', () => {
     'scripts/ci-gate-report.js',
     'scripts/ci-nightly-report.js',
     'scripts/ci-retry-cancelled-run.js',
+    'scripts/ci-recover-superseded-gate.js',
   ];
 
   it('the sparse jobs are exactly the ones claiming a sparse checkout', () => {
@@ -146,9 +149,8 @@ describe('scripts that run from a sparse checkout of scripts/', () => {
     // The `with:` key at the start of a line, not the literal anywhere: a
     // comment mentioning it must neither inflate the count nor evade it.
     const sparseJobs = (workflows.match(/^ +sparse-checkout: scripts$/gm) || []).length;
-    // ci.yml's two gate jobs both run ci-gate-report.js; the recovery workflow
-    // runs the other one.
-    expect(sparseJobs).toBe(3);
+    // CI's two gate jobs and two independent recovery jobs use scripts.
+    expect(sparseJobs).toBe(4);
     for (const entry of SPARSE_CHECKOUT_SCRIPTS) {
       expect(workflows, entry).toContain(`node ${entry}`);
     }

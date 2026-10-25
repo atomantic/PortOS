@@ -10,7 +10,7 @@ import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
 import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome } from '../htmlComposition/testBrowserCleanup.js';
-import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 const state = vi.hoisted(() => ({ html: '' }));
 let endpoint;
@@ -38,6 +38,7 @@ const { PATHS } = await import('../../lib/fileUtils.js');
 const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();
 const ffprobe = await findFfprobe();
+const canRun = browserSuiteCanRun('Code Animation frame-exact export', { Chrome: chrome, ffmpeg, ffprobe }, { onUnavailable: cleanupTempDataRoots });
 
 const WIDTH = 1280;
 const HEIGHT = 720;
@@ -114,7 +115,7 @@ const meanAbsDiff = (a, b) => {
   return sum / a.length;
 };
 
-describe.skipIf(!chrome || !ffmpeg || !ffprobe)('Code Animation frame-exact export with real Chrome and ffmpeg', () => {
+describe.skipIf(!canRun)('Code Animation frame-exact export with real Chrome and ffmpeg', () => {
   beforeAll(async () => {
     const profile = join(lazyTempDataRoot('portos-code-animation-export-'), 'chrome-test-profile');
     proc = spawn(chrome, ['--headless=new', '--mute-audio', '--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });

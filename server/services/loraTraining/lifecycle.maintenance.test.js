@@ -5,7 +5,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 
 const fixture = vi.hoisted(() => ({
   admission: null, child: null, run: null, queueJob: null,
-  release: vi.fn(), save: vi.fn(), saveDataset: vi.fn(),
+  release: vi.fn(), save: vi.fn(), saveDataset: vi.fn(), read: vi.fn(), adopt: vi.fn(), attach: vi.fn(), active: null,
 }));
 vi.mock('../../lib/fileUtils.js', async importOriginal =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('training-maintenance-') }));
@@ -18,15 +18,15 @@ vi.mock('../../lib/childProcess.js', async importOriginal => ({
   ...await importOriginal(), spawn: vi.fn(() => { throw new Error('Unexpected real child launch'); }),
 }));
 vi.mock('../../lib/detachedSpawn.js', () => ({
-  reattachDetached: async () => fixture.child, spawnDetached: vi.fn(), reapDetached: vi.fn(), isReattachable: vi.fn(),
+  reattachDetached: (...args) => fixture.attach(...args), spawnDetached: vi.fn(), reapDetached: vi.fn(), isReattachable: vi.fn(),
 }));
 vi.mock('../../lib/heavyJobClaim.js', () => ({
-  adoptHeavyLocalJob: async () => ({ ok: true, holder: { pid: fixture.child.pid },
-    handoffTo: async () => {}, release: () => fixture.release() }),
+  adoptHeavyLocalJob: (...args) => fixture.adopt(...args),
   claimHeavyLocalJob: vi.fn(),
 }));
 vi.mock('./db.js', () => ({
-  getRun: async () => fixture.run,
+  getRun: (...args) => fixture.read(...args),
+  listActiveRuns: async () => fixture.active || [fixture.run],
   updateRun: (...args) => fixture.save(...args), getRunRequired: vi.fn(), listRuns: vi.fn(), deleteRun: vi.fn(),
 }));
 vi.mock('../settings.js', () => ({ getSettings: async () => ({ loraTraining: { stallWatchdog: false } }) }));
@@ -36,8 +36,9 @@ vi.mock('../mediaJobQueue/index.js', () => ({
 }));
 vi.mock('./displayPower.js', () => ({ sleepDisplayForTraining: vi.fn(), wakeDisplay: vi.fn() }));
 
-const { runTraining, cancel, trainingEvents } = await import('./index.js');
+const { runTraining, initLoraTraining, cancel, trainingEvents } = await import('./index.js');
 const { createMaintenanceAdmission } = await import('../../lib/maintenanceAdmission.js');
+const { isReattachable, spawnDetached, reapDetached } = await import('../../lib/detachedSpawn.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
 let fixtureNumber = 0;
 beforeEach(() => {
@@ -47,6 +48,12 @@ beforeEach(() => {
     stdout: new EventEmitter(), stderr: new EventEmitter(), kill: vi.fn() });
   fixture.run = { id: 'example-run', jobId: 'example-job', datasetId: 'example-dataset', params: { steps: 10 }, runtime: 'mflux' };
   fixture.queueJob = {};
+  fixture.active = null;
+  fixture.read.mockReset().mockImplementation(async () => fixture.run);
+  fixture.attach.mockReset().mockImplementation(async () => fixture.child);
+  fixture.adopt.mockReset().mockImplementation(async () => ({ ok: true, holder: { pid: fixture.child.pid },
+    handoffTo: async () => {}, release: () => fixture.release() }));
+  vi.mocked(isReattachable).mockReset().mockResolvedValue(false);
   fixture.release.mockReset().mockResolvedValue();
   fixture.save.mockReset().mockResolvedValue();
   fixture.saveDataset.mockReset().mockResolvedValue();
@@ -167,4 +174,52 @@ describe('training physical settlement under maintenance', () => {
       await permit.finish();
     }
   });
+});
+
+it('observes an orphan survivor without spawning/reaping and settles explicit cancellation in retained history', async () => {
+  fixture.queueJob = null;
+  fixture.run.status = 'running';
+  vi.mocked(isReattachable).mockResolvedValue(true);
+  await initLoraTraining();
+  expect(spawnDetached).not.toHaveBeenCalled();
+  expect(reapDetached).not.toHaveBeenCalled();
+  expect(fixture.child.listenerCount('close')).toBeGreaterThan(0);
+  const { withRetiredDataRemoval } = await import('../../lib/retiredLoraTraining.js');
+  await expect(withRetiredDataRemoval(async () => {})).rejects.toMatchObject({ code: 'MAINTENANCE_BUSY' });
+  expect(cancel('example-job')).toBe(true);
+  const originalSave = fixture.save.getMockImplementation();
+  let finishRecord;
+  fixture.save.mockImplementationOnce(() => new Promise(resolve => { finishRecord = resolve; }));
+  fixture.child.emit('close', 1, 'SIGTERM');
+  await vi.waitFor(() => expect(finishRecord).toBeTypeOf('function'));
+  await expect(withRetiredDataRemoval(async () => {})).rejects.toMatchObject({ code: 'MAINTENANCE_BUSY' });
+  finishRecord();
+  fixture.save.mockImplementation(originalSave);
+  await new Promise(resolve => setImmediate(resolve));
+  await expect(withRetiredDataRemoval(async () => 'settled')).resolves.toBe('settled');
+  await vi.waitFor(() => expect(fixture.save).toHaveBeenCalledWith('example-run', expect.objectContaining({ status: 'canceled' })));
+});
+
+
+it.each(['database', 'attach', 'claim', 'refused claim'])('preserves a live orphan after %s failure and continues boot reconciliation', async failure => {
+  fixture.queueJob = null;
+  fixture.run.status = 'running';
+  fixture.active = [fixture.run, { id: 'next-run', status: 'queued' }];
+  vi.mocked(isReattachable).mockImplementation(async path => path.includes('example-run'));
+  if (failure === 'database') fixture.read.mockRejectedValueOnce(new Error('Database unavailable'));
+  if (failure === 'attach') fixture.attach.mockRejectedValueOnce(new Error('Observer unavailable'));
+  if (failure === 'claim') fixture.adopt.mockRejectedValueOnce(new Error('Claim unavailable'));
+  if (failure === 'refused claim') fixture.adopt.mockResolvedValueOnce({ ok: false, message: 'Accelerator occupied' });
+  const { mediaJobEvents } = await import('../mediaJobQueue/index.js');
+  const before = mediaJobEvents.listenerCount('canceled');
+  await expect(initLoraTraining()).resolves.toBeUndefined();
+  expect(fixture.save).not.toHaveBeenCalledWith('example-run', expect.anything());
+  expect(fixture.save).toHaveBeenCalledWith('next-run', expect.objectContaining({ status: 'failed' }));
+  expect(mediaJobEvents.listenerCount('canceled')).toBe(before + 1);
+  expect(fixture.release).not.toHaveBeenCalled();
+  expect(fixture.admission.status().blockers).toEqual(expect.arrayContaining([
+    expect.objectContaining({ resource: 'example-job' }),
+  ]));
+  expect(spawnDetached).not.toHaveBeenCalled();
+  expect(reapDetached).not.toHaveBeenCalled();
 });

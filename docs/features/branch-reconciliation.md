@@ -56,17 +56,23 @@ persisted inventory and a fresh Git read still matches it — a changed lock,
 HEAD or branch is an ownership change. It then requires merge evidence on the
 default branch and no live owner, claim binding or manual completion handoff.
 
-Before any mutation, every unique byte is archived under
-`data/cos/held-checkout-archives/`: a verified Git bundle of commits not on the
-default branch, the staged and unstaged diffs, raw bytes of tracked files that a
-clean filter or line-ending conversion hides from those diffs, verbatim copies
-of untracked and ignored files (all hash-verified), and symlink targets. A nested repository or
-submodule, unmerged or hidden index entries, an oversized file or a write during archiving fails the archive, which leaves the checkout, its lock and its
-branch untouched and removes the partial archive. The lock is released only
-after a second fresh match, and ownership, HEAD and content are rechecked
-immediately before removal; if that recheck refuses, the original lock is
-restored. A retired row leaves the inventory and appears under *Recently
-retired* with its archive path; only the next sweep can report convergence.
+A merged, clean checkout is removed at its original path after checking ignored
+payload too. `checkout-ignored-payload-unverified` retains the checkout and its
+branch until the wanted files have been recovered or their disposal explicitly
+resolved. Recognized disposable Vitest module caches and links whose target
+bytes remain outside the checkout keep their existing removal policy.
+Dirty, unmerged, protected, and live-owner checkouts stay where they are. Retirement does not
+copy the checkout, its ignored files, or its commit history. The lock is
+released only after a second fresh match, and ownership, HEAD and cleanliness
+are rechecked immediately before removal; if that recheck refuses, the original
+lock is restored. A retired row leaves the inventory and appears under
+*Recently retired*; only the next sweep can report convergence. Older copies
+under `data/cos/held-checkout-archives/`,
+`data/cos/branch-retirement-archives/`, and
+`data/cos/initialized-checkout-retirements/` are not written anymore. Setup
+migration 442 preserves those directories: they may contain the only unpublished
+files or originals held by unfinished recovery transactions. Existing restore
+and verification workflows remain available after setup.
 
 ### Explicit delivery reviews
 
@@ -90,11 +96,17 @@ manual-handoff completion policies, and changed evidence remain holds.
 Confirm through `checkouts/retire` with the same inventory tuple and
 `review: { prUrl, digest, kind: "source-supersession", acceptSuperseded: true }`.
 Explicit acceptance is required even when the affected file bytes now match.
-The existing full archive, private Git proof, ownership/content rechecks and
-persisted receipt remain prerequisites to removal. Initialized checkouts retain
-their separate workflow; this mode does not bypass its preservation guards.
+Ownership, content, and merge rechecks plus a persisted retirement receipt
+remain prerequisites to removal. The checkout is not copied into an archive.
+Initialized checkouts retain their separate workflow; this mode does not bypass
+its gates.
 
 ### Held archive work budgets
+
+Review fingerprints still apply these byte budgets and can refuse with
+`retirement-archive-limit-exceeded`. That refusal keeps the checkout and does
+not write an archive directory. Historical archives that already exist are
+checked with the same budgets.
 
 Patch capture preserves original Git output bytes, including non-UTF-8 content. Metadata names and symlink targets must round-trip losslessly through UTF-8; unsupported encodings refuse preservation before removal.
 
@@ -158,13 +170,29 @@ for that exact checkout generation or recover the original data from backup, the
 retry reconciliation. Failure never fabricates a retirement receipt or authorizes
 deletion of a checkout, branch or archive.
 
-## Explicit initialized-checkout preservation
+## Completing a merged job
+
+Normal merged-work cleanup belongs to the completing job. After durable signal
+ingestion and exact checkout capture, the server stops that job's finished
+writer, releases its execution binding, and awaits deterministic retirement and
+receipt verification. An already merged exact head does not create a cognitive
+review or cleanup job. A genuine delivery follow-up wakes its original parent
+directly when it completes; duplicate observations coalesce, and a pre-release
+audit cannot substitute its stale owner-active result for the post-release
+check. Scheduled reconciliation is a crash/restart and legacy fallback.
+
+Cognitive investigation is reserved for actual unexplained failures. Its contract
+includes resolving the affected work within original authority and budgets,
+repairing demonstrated root code defects with regression coverage and normal PR
+delivery, and reusing active fixes. External permission and transient causes are
+recorded accurately rather than turned into invented code defects.
+
+## Explicit initialized-checkout retirement
 
 Automatic cleanup continues to retain initialized submodules. The separate
 `/api/cos/schedule/branch-reconcile/initialized-checkouts` capability supports
 operator-reviewed private-module checkouts on macOS. Other platforms and unknown
-Git layouts fail closed. It never deinitializes a module, force-removes a checkout,
-or purges an archive.
+Git layouts fail closed. It does not deinitialize a module.
 
 1. `POST /review` accepts the exact inventory tuple (`appId`, `path`, `head`,
    `branch`, `locked`, `lockReason`) and `prUrl`. The response binds the merged PR,
@@ -173,11 +201,27 @@ or purges an archive.
    when its exact tip equals the merged PR head. Superseded work needs an explicit
    `acceptSuperseded` decision after reviewing the full comparison.
 2. `POST /retire` accepts that tuple plus `review: {prUrl, digest,
-   acceptSuperseded}`. It establishes a durable repository reservation and native
-   executor lock, repeats the review, archives the entire checkout and private
-   administration plus the parent common object store, and proves a standalone
-   restore before moving either original directory. Kernel no-replace renames
-   quarantine originals without unlinking them. Each intent/result is fsynced.
+   acceptSuperseded}`. It repeats the review. When the disposition is `integrated`
+   and `git status --porcelain` is empty, it also checks ignored files in the
+   parent checkout and each initialized module. Unverified ignored payload holds
+   the checkout and branch. Otherwise it requests `git worktree remove --force`;
+   a Git refusal preserves the directory and branch with `checkout-not-removed`.
+   After successful removal it deletes the local branch with the same exact-head
+   lease as other completed branches.
+   An exact merged PR head is integrated once freshly verified default history
+   contains the actual merge commit, even when later commits changed shared files.
+   This is deterministic delivery evidence and needs no manual supersession
+   acceptance or update of the primary checkout. It never covers a newer local
+   tip, replacement delivery or missing merge evidence. Other dispositions
+   return `not-merged-on-recheck` and leave the checkout. No transaction directory
+   is created.
+
+Journals already stored under `data/cos/initialized-checkout-retirements/` keep
+the historical quarantine restore path below. Setup migration 442 leaves the
+journals, quarantined originals and archives intact. An incomplete journal is a
+recovery obligation, never proof that its originals are disposable. The
+historical steps are:
+
 3. The successful phase is **quarantined**, not fully retired. The branch remains
    with reason `quarantined-checkout-rollback-ref`. `POST /review-branch` accepts
    `appId`, `transactionId` and the fresh status `journalDigest`; it verifies the
@@ -456,3 +500,75 @@ archive identity and timestamp so a newer checkout obligation cannot be satisfie
 by replaying an older retirement. Interrupted transactions outside the machine-verified continuation above
 require explicit status and recovery; ambiguous identities remain held. The
 private journal and all copies remain available after success or recovery.
+
+## Later deliveries on a captured checkout
+
+A later merged PR on the same captured checkout generation can satisfy an
+earlier completed review obligation. Explicit retirement review must prove that
+both PRs merged on this repository's default branch, the earlier PR head is an
+ancestor of the captured completion head, and that capture is an ancestor of the
+currently reviewed delivery. The captured pointer and private-administration
+generation must match exactly. Missing evidence, changed generations, active
+owners and human handoffs remain held. The original agent result and policy are
+never rewritten; the new proof is bound into the retirement review and removal receipt.
+Cleanup creates no checkout archive. Only that reviewed generation can finish branch retirement;
+a recreated checkout path or new branch holder still refuses.
+
+An incomplete multi-claim batch does not prevent cleanup of a separately
+verified merged checkout. Its completed execution must have a valid capture of
+that same generation, and the captured head must be included in the exact
+merged delivery. Failed execution or validation, missing captures and unmerged
+delivery remain held. Cleanup preserves the batch's incomplete result, every
+capture and unfinished sibling checkout; it does not reset or resume exhausted
+retry budgets.
+
+## Archive-era bookkeeping transition
+
+Migration 443 freezes existing retirement observations for reconciliation. A
+supported inventory refresh settles those observations only when no checkout,
+local branch, registered holder or active/human owner remains and a unique
+service receipt or verified merged delivery explains the old work. Squash and
+rebased deliveries use exact merged-head lineage or stable patch equivalence;
+an old SHA need not itself be an ancestor of main. Changed or unreadable
+evidence stays unresolved. New missing-checkout incidents are outside this
+frozen upgrade scope.
+
+The original observation and proof remain in `legacyRetirementTransition`
+audit history. Delivery-only settlement explicitly does not claim a verified
+deletion and creates no retirement receipt. Agent results, retry budgets and
+current worktrees are unchanged. A new sweep still establishes convergence.
+
+## Whole-checkout preservation
+
+For a reviewed checkout that exceeds the ordinary archive byte bounds, the
+explicit `POST /api/cos/schedule/branch-reconcile/whole-checkouts/review` and
+`whole-checkouts/retire` endpoints use the initialized-checkout transaction
+backend without requiring an initialized submodule. They accept the same exact
+inventory tuple, PR URL and review confirmation as the initialized endpoints.
+Their reviews are distinct: a digest from another preservation mode is refused.
+
+This path retains the backend's source-byte and writable-capacity bounds,
+ownership checks, complete metadata capture, standalone object proof, quarantine
+and branch-retirement receipt. Uninitialized gitlink paths may be absent or
+contain ordinary files; all present files are preserved. Actual embedded Git
+stores and external object dependencies retain their existing refusal rules.
+The ordinary archive limits and initialized-only endpoint remain unchanged.
+
+An initialized module may borrow objects through one absolute alternate naming
+its exact corresponding store under this repository's registered module
+administration. Preservation copies the entire dependency store, binds its
+identity and every byte, and rewrites the alternate only in the isolated restore
+copy. The raw archive retains the original pointer. Other roots, relative or
+chained alternates, symlinks and promisor dependencies remain held. Rollback
+additionally checks that the original live stores can still resolve the private
+refs and index; an independent archive never substitutes for that proof.
+
+Transactions with copied dependencies use version 4 manifests. Existing
+immutable version 1–3 archives are read in place, with their original hashes and
+verification rules; they are not rewritten or converted.
+
+Status, rollback, independent archive verification and later branch retirement
+use the existing `initialized-checkouts` transaction endpoints with the returned
+transaction ID and a fresh journal digest. A failed preservation attempt is
+unverified and retains its originals and partial evidence; it is not successful
+cleanup. No archive deletion or retention policy is added by these endpoints.

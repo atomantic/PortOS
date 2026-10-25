@@ -157,7 +157,7 @@ describe('manual maintenance run', () => {
 
   it('persists pending stage settings and dispatches them without changing other stages', async () => {
     const { run } = await start();
-    const settings = { providerId: 'codex', model: 'example-model', effort: null };
+    const settings = { providerId: 'codex', model: 'example-model', effort: null, executionOptions: { serviceTier: 'standard' } };
     const updated = await updateMaintenanceStep(run.id, run.steps[1].id, settings);
     expect(updated.steps[0]).toEqual(run.steps[0]);
     expect((await getMaintenanceRun(run.id)).steps[1].overrides).toEqual({ ...run.steps[1].overrides, ...settings });

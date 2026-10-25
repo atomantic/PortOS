@@ -75,6 +75,7 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(async () => ({ jobId: 'media-export', position: 1, status: 'queued' })),
   listJobs: vi.fn(() => []),
 }));
+vi.mock('../lib/beatGrid.js', () => ({ getBeatGrid: vi.fn(async () => null) }));
 
 vi.mock('../services/pipeline/musicGen.js', async (importOriginal) => ({
   ...await importOriginal(),
@@ -164,14 +165,14 @@ beforeEach(() => {
 });
 
 describe('Code Animation fast-export audio notes', () => {
-  it('distinguishes omitted procedural/upload audio from intentional silence without generating sound', async () => {
+  it('includes uploaded audio and distinguishes omitted procedural audio from intentional silence without generating sound', async () => {
     const id = '00000000-0000-4000-8000-000000000001';
     const job = { id, status: 'completed', frame: { width: 1920, height: 1080, fps: 24, durationSeconds: 15 } };
     codeAnimationHtml.set(id, '<!doctype html><html><head></head><body><canvas></canvas></body></html>');
     const app = makeApp();
-    for (const [fields, note] of [
+    for (const [fields, note, audio = {}] of [
       [{ input: { soundtrack: 'procedural' } }, /Procedural Web Audio.*export is silent/],
-      [{ audioUrl: '/api/uploads/example.wav' }, /Uploaded audio is not muxed.*export is silent/],
+      [{ audioUrl: '/api/uploads/abc12345-theme.mp3' }, null, { audioUpload: 'abc12345-theme.mp3' }],
       [{ input: { soundtrack: 'none' } }, /No soundtrack was requested.*intentionally silent/],
       [{}, null], // Unknown legacy intent is not declared intentional silence.
     ]) {
@@ -180,14 +181,23 @@ describe('Code Animation fast-export audio notes', () => {
       expect(response.status).toBe(202);
       expect(response.body).toMatchObject({ jobId: 'media-export', status: 'queued' });
       expect(response.body.notes).toEqual(note ? [expect.stringMatching(note)] : []);
-    }
-    expect(enqueueJob.mock.calls).toHaveLength(4);
-    for (const [queued] of enqueueJob.mock.calls) {
-      expect(queued).toEqual({ kind: 'html-composition', params: {
+      expect(enqueueJob).toHaveBeenLastCalledWith({ kind: 'html-composition', params: {
         directory: expect.stringMatching(new RegExp(`^code-animation-exports/${id}/[0-9a-f-]{36}$`)),
+        ...audio,
       } });
     }
+    expect(enqueueJob.mock.calls).toHaveLength(4);
     expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing uploaded soundtrack without queueing a silent export', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    codeAnimationRecords.set(id, { id, status: 'completed', audioUrl: '/api/uploads/missing.wav', frame: { width: 1920, height: 1080 } });
+    codeAnimationHtml.set(id, '<html><head></head><body><canvas></canvas></body></html>');
+    const response = await request(makeApp()).post(`/api/code-animation/${id}/export`);
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('AUDIO_NOT_FOUND');
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 });
 

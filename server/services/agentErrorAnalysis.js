@@ -24,6 +24,7 @@ import {
   INVESTIGATION_CIRCUIT_MAX_CREATIONS,
   INVESTIGATION_HEADLINE_PREFIX,
   INVESTIGATION_TASK_DELIVERY,
+  SUPERVISED_INVESTIGATION_DELIVERY,
   LOOP_REASON_PROSE,
   MAX_AUTO_RETRIES_PER_TASK,
   buildInvestigationFingerprint,
@@ -126,7 +127,7 @@ export const ERROR_PATTERNS = [
   // AGENTS.md).
   //
   // The rejected key can come from either side, and the fix text says which
-  // (see `extract`): PortOS injects only PORTOS_CLI_CONFIG_KEYS via `-c`, so
+  // (see `extract`): PortOS injects startup/effort keys and optional execution-speed keys via `-c`, so
   // any other key is already in the user's own config file. Second real
   // incident, 2026-08-18: the Codex desktop app wrote `service_tier =
   // "default"` into the shared `~/.codex/config.toml`, and the older
@@ -155,15 +156,11 @@ export const ERROR_PATTERNS = [
       const key = match[4] || null;
       const keyRef = key ? `\`${key}\`` : 'the rejected key';
       const accepts = expected ? ` This CLI version expects ${expected}.` : '';
-      // Provenance is the whole fix here. PortOS emits exactly two `-c` config
-      // keys (PORTOS_CLI_CONFIG_KEYS); anything else was already sitting in the
-      // user's own config file — commonly written there by a NEWER install of
-      // the same CLI sharing that file. Real incident 2026-08-18: the Codex
-      // desktop app wrote `service_tier = "default"` into `~/.codex/config.toml`
-      // and the older `codex` on PATH rejects that variant. Naming the wrong
-      // source costs a whole investigation cycle, so say which one it is.
+      // A rejection alone cannot identify the source of conditional speed overrides.
       const source = !key
         ? `Look first in the CLI's own config file — for codex that is \`~/.codex/config.toml\` — then in the \`-c <key>=<value>\` overrides PortOS builds in server/lib/providerModels.js.`
+        : ['service_tier', 'features.fast_mode'].includes(key)
+          ? `${keyRef} can come from an explicit PortOS execution-speed selection or the CLI configuration. Clear an unsupported speed selection or upgrade Codex; if no speed was selected, inspect provider args and \`~/.codex/config.toml\`. The rejection alone does not prove which source supplied it.`
         : isPortosSuppliedConfigKey(key)
           ? `PortOS supplies ${keyRef} itself as a \`-c <key>=<value>\` override, so the accepted values belong in that provider's ladder in server/lib/providerModels.js — editing the CLI config file will not help.`
           : `PortOS never supplies ${keyRef}, so it is already in the CLI's own config file — for codex that is \`~/.codex/config.toml\`. Edit or delete that line, or upgrade this CLI to a version that accepts the value; a second, newer install of the same CLI sharing one config file is the usual source.`;
@@ -825,6 +822,30 @@ function getFailureAnalysisWindow(output) {
   return windowed.length > FAILURE_WINDOW_MAX_CHARS ? windowed.slice(-FAILURE_WINDOW_MAX_CHARS) : windowed;
 }
 
+/** Remove complete supplied prompt echoes, including terminal line wrapping. */
+function excludeSuppliedPrompt(output, prompt) {
+  if (typeof prompt !== 'string' || !prompt.trim()) return output;
+  const compactPrompt = stripAnsi(prompt).replace(/\s/g, '');
+  const compactOutput = output.replace(/\s/g, '');
+  if (!compactPrompt) return output;
+  const ranges = [];
+  let from = 0;
+  let found;
+  while ((found = compactOutput.indexOf(compactPrompt, from)) !== -1) {
+    ranges.push([found, found + compactPrompt.length]);
+    from = found + compactPrompt.length;
+  }
+  if (!ranges.length) return output;
+  let index = 0;
+  let range = 0;
+  return [...output].filter(char => {
+    while (range < ranges.length && index >= ranges[range][1]) range++;
+    const excluded = range < ranges.length && index >= ranges[range][0];
+    if (!/\s/.test(char)) index += char.length;
+    return !excluded;
+  }).join('');
+}
+
 /**
  * Resolve the provenance origin for a matched ERROR_PATTERN (#2642). Returns the
  * pattern's structured `origin` (`'provider'`/`'runner'`) only when it is
@@ -1170,8 +1191,22 @@ function structuredPolicyRefusal(output, analysisOutput) {
  */
 export function analyzeAgentFailure(output, task, model, options = {}) {
   const completionReason = options?.completionReason || null;
-  const analysisOutput = getFailureAnalysisWindow(output || '');
-  const refusal = structuredPolicyRefusal(output || '', analysisOutput);
+  const provenance = options?.promptProvenance;
+  const cleanOutput = stripAnsi(output || '');
+  let diagnosticOutput = provenance?.submitted === true
+    ? cleanOutput : excludeSuppliedPrompt(cleanOutput, provenance?.suppliedPrompt);
+  // Sending Enter is an attempt, not proof of acceptance: Codex can still
+  // exit with an unsent composer. After submission, exclude that footer only
+  // when its entire body matches the supplied prompt, never a quoted phrase.
+  if (completionReason === 'shell-exit') {
+    diagnosticOutput = diagnosticOutput.replace(/(?:^|[\r\n])Unsent draft:[ \t]*(?:[\r\n]([\s\S]*)|$)/, (footer, draft = '') => {
+      if (provenance?.submitted !== true) return '';
+      const prompt = provenance?.suppliedPrompt;
+      return typeof prompt === 'string' && draft.replace(/\s/g, '') === stripAnsi(prompt).replace(/\s/g, '') ? '' : footer;
+    });
+  }
+  const analysisOutput = getFailureAnalysisWindow(diagnosticOutput);
+  const refusal = structuredPolicyRefusal(diagnosticOutput === cleanOutput ? output || '' : diagnosticOutput, analysisOutput);
   if (refusal) return refusal;
   // An idle-out whose transcript ends on an unanswered prompt gets that named as
   // the cause; every other reason passes through untouched.
@@ -1184,7 +1219,7 @@ export function analyzeAgentFailure(output, task, model, options = {}) {
   // Agent produced no meaningful output — likely failed to start. Measured on
   // the CLEANED window: a transcript that is nothing but cursor repaints carries
   // no more signal than an empty one.
-  if (analysisOutput.trim().length < 50) {
+  if (!analysisOutput.trim() || (analysisOutput.trim().length < 50 && !provenance)) {
     if (structuralDef) return structuralReasonAnalysis(structuralDef, completionReason, options?.completionError);
     return {
       category: 'startup-failure',
@@ -1195,6 +1230,8 @@ export function analyzeAgentFailure(output, task, model, options = {}) {
       message: 'Agent failed to start or produced no output',
       suggestedFix: 'Agent process exited immediately. Check system resources and provider availability.',
       snippet: analysisOutput.trim(),
+      ...(completionReason ? { completionReason } : {}),
+      ...(options?.completionError ? { completionError: options.completionError } : {}),
       escalation: null
     };
   }
@@ -1207,7 +1244,7 @@ export function analyzeAgentFailure(output, task, model, options = {}) {
       const origin = resolvePatternOrigin(errorDef, analysisOutput);
       // Keep scanning (not `break`) so a structured match later in the list can
       // still beat the runner's verdict — only the loose match is discarded.
-      if (structuralDef && origin === 'output-scan') continue;
+      if ((structuralDef || provenance?.submitted === false) && origin === 'output-scan') continue;
       const extracted = errorDef.extract(match, analysisOutput, task, model);
       return {
         category: errorDef.category,
@@ -1218,6 +1255,7 @@ export function analyzeAgentFailure(output, task, model, options = {}) {
         // Optional category-specific "what to approve" prose (may be undefined).
         escalation: errorDef.escalation || null,
         ...(completionReason ? { completionReason } : {}),
+        ...(options?.completionError ? { completionError: options.completionError } : {}),
         ...extracted
       };
     }
@@ -1247,6 +1285,7 @@ export function analyzeAgentFailure(output, task, model, options = {}) {
     snippet: contextLines.join(' ').slice(0, SNIPPET_RAW_MAX_CHARS),
     escalation: null,
     ...(completionReason ? { completionReason } : {}),
+    ...(options?.completionError ? { completionError: options.completionError } : {}),
     suggestedFix: 'Error did not match known patterns. Review the details or agent output logs.'
   };
 }
@@ -1344,6 +1383,16 @@ async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis) {
   const { approvalRequired, loopReason, approvalReason } = resolveInvestigationApproval({
     fingerprint, tasks: allTasks, recentCreations: recentInvestigationCreations(now), now
   });
+  // The blocked-system watcher owns durable backoff; a repeat failure must not
+  // allocate another blocked task asking the user to supervise machine recovery.
+  const systemRecovery = analysis.blockedSystemRecovery === true;
+  if (systemRecovery && approvalRequired) return null;
+  let targetInstanceId;
+  if (systemRecovery) {
+    const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
+    targetInstanceId = await getInstanceId();
+    if (!targetInstanceId || targetInstanceId === UNKNOWN_INSTANCE_ID) return null;
+  }
 
   // Every interpolated free-text field is redacted before it lands in the body —
   // this task is human-facing and may sync across federated peers, so no
@@ -1369,11 +1418,15 @@ async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis) {
         `## What to approve\n${remedy}`,
         `## Why this is held for you\n${LOOP_REASON_PROSE[loopReason]}`
       ].join('\n\n')
-    : `## What to do\nNo approval needed — this investigation runs unattended. Diagnose the failure above, apply the fix, and leave the task's findings in your summary. Do NOT un-block the original task by hand; completing this one does it.\n\n${remedy}`;
+    : systemRecovery
+      ? `## What to do\nResolve the affected work and investigate its root cause. Repair demonstrated code defects with regression tests, required PR review, CI and merge delivery; reuse an active fix rather than duplicate it. Record external permission or transient causes accurately without inventing a code defect. Preserve original work, approvals and retry/spawn budgets. Do not requeue or mark the original task complete by hand.\n\n${remedy}`
+      : `## What to do\nNo approval needed — this investigation runs unattended. Diagnose the failure above, apply the fix, and leave the task's findings in your summary. Do NOT un-block the original task by hand; completing this one does it.\n\n${remedy}`;
 
   // Completing this task revives every blocked task in `affectedTasks`
   // automatically (investigationRetry.js), so nobody has to go find them.
-  const unblocks = `${approvalRequired ? 'Approving and applying' : 'Applying'} the fix and completing this task automatically retries the original task \`${originalTask.id}\`; it will resume: ${originalDesc}. If the same cause blocks it again after ${MAX_AUTO_RETRIES_PER_TASK} automatic retries, it stays blocked for you.`;
+  const unblocks = systemRecovery
+    ? `This investigation does not refund or reset task \`${originalTask.id}\` budgets. Its existing delivery verifier may settle proven completion; unfinished work remains stopped under its existing limits. Report the actual remaining work or user-owned decision.`
+    : `${approvalRequired ? 'Approving and applying' : 'Applying'} the fix and completing this task automatically retries the original task \`${originalTask.id}\`; it will resume: ${originalDesc}. If the same cause blocks it again after ${MAX_AUTO_RETRIES_PER_TASK} automatic retries, it stays blocked for you.`;
 
   // The fingerprint rides in the headline so addTask's first-line dedup —
   // which sees no `metadata.app` on investigation tasks — tracks fingerprint
@@ -1396,7 +1449,8 @@ ${actionBlock}
 ${unblocks}`;
 
   const investigationTask = await addTask({
-    ...INVESTIGATION_TASK_DELIVERY,
+    ...(systemRecovery ? SUPERVISED_INVESTIGATION_DELIVERY : INVESTIGATION_TASK_DELIVERY),
+    ...(systemRecovery && { targetInstanceId, metadata: { preserveOriginalBudget: true, blockedSystemRecovery: true } }),
     description,
     priority: 'HIGH',
     context: `Auto-generated from agent ${agentId} failure`,

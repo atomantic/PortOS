@@ -502,6 +502,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/schedule/branch-reconcile/checkouts/review',
   'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/review',
   'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/retire',
+  'POST /api/cos/schedule/branch-reconcile/whole-checkouts/review',
+  'POST /api/cos/schedule/branch-reconcile/whole-checkouts/retire',
   'GET /api/cos/schedule/branch-reconcile/initialized-checkouts/status',
   'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/restore',
   'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/review-metadata-restore',
@@ -796,6 +798,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Providers: which binary runs, with which args, against which endpoint and
   // credentials; installing or launching runtimes; signing a CLI in or out.
   // `PUT /api/providers/:id` also matches `/active` and `/bootstraps`.
+  'GET /api/providers/:id/execution-options',
+  'POST /api/providers/:id/execution-options/selection',
   'POST /api/providers',
   'PUT /api/providers/:id',
   'POST /api/providers/:id/modes/tui',
@@ -1250,6 +1254,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // configured inference, like local-llm test and Pipeline TTS.
   'POST /api/continuous-video',
   'POST /api/lora-training/runs/:id/promote-checkpoint',
+  // Explicit retired-data removal uses the same operator authority as host maintenance.
+  'POST /api/data-maintenance/preview',
+  'POST /api/data-maintenance/execute',
   'POST /api/music/supercollider/render',
   'POST /api/media-jobs/holds/:holdId/resume',
   'POST /api/voice/piper/fetch',

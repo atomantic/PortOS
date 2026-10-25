@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OWNER_FILE, STALE_ROOT_AGE_MS, isOwnerAlive, sweepStaleRunRoots, writeOwnerFile } from './staleRunRoots.js';
@@ -54,6 +54,18 @@ describe.each(['pvt-', 'portos-vitest-'])('sweepStaleRunRoots (%s)', (prefix) =>
   it('preserves pid-less old roots when process inspection is unavailable', () => {
     const root = makeRoot(prefix + 'uninspected', { ageMs: STALE_ROOT_AGE_MS * 2 });
     sweepStaleRunRoots(host, { prefix, read: () => null });
+    expect(existsSync(root)).toBe(true);
+  });
+
+  it('retains an aged live owner whose birth time was unreadable when stamped', () => {
+    const root = makeRoot(prefix + 'unreadable-birth');
+    writeOwnerFile(root, { exec: () => { throw Error('identity unavailable'); } });
+    expect(readFileSync(join(root, OWNER_FILE), 'utf8')).toBe(`${process.pid} unknown\n`);
+    const aged = new Date(Date.now() - STALE_ROOT_AGE_MS * 2);
+    utimesSync(root, aged, aged);
+    // A later successful reader must not interpret missing birth evidence as
+    // PID reuse and reclaim the still-live owner.
+    sweepStaleRunRoots(host);
     expect(existsSync(root)).toBe(true);
   });
 

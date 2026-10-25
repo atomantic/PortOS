@@ -32,6 +32,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiCore.js` | `request()` and `uploadBody()` (stream File/Blob multipart; legacy base64 JSON) + stable PortOS-app id. Shared error / toast handling. |
 | `apiBatch.js` | `fetchByIds(path, ids, options)` — batch-fetch records through a list route's `?ids=a,b,c` filter (dedupe, empty-list short-circuit, `{ items }` envelope unwrap). |
 | `actionFeedback.js` | Marks the button whose click/submit started a `request()` as `data-pending` until it settles (never `aria-busy`, which stays component-owned) (styled in `index.css`), and counts those requests for `ActionActivityBar`. Installed once from `main.jsx`; no per-component opt-in. |
+| `executionSelectionCache.js` | Bounded client-local saved selection handoff from a successful save to model hooks while provider lists refresh; no HTTP calls. |
 | `socket.js` | Singleton Socket.IO client over relative path (Tailscale-friendly). |
 | `appUrls.js` | Compute candidate launch URLs for an app from page context. |
 
@@ -106,7 +107,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | File | Purpose |
 |---|---|
 | `apiImageVideo.js` | Image-gen local backend extras; bounded image/mixed gallery pages, global facets and collection summaries, exact-reference `getGalleryImages`, one image's original-vs-cleaned variant set via `listImageVariants`, plus models, LoRAs, cancel and delete. |
-| `apiLoraTraining.js` | Character LoRA training — datasets (CRUD, upload, generate, slice, caption), training runs (start/list/cancel + status), character→LoRA link lookup. |
+| `apiLoraTraining.js` | Retained checkpoint inspection and character→adapter lookup. Retired training/dataset mutation wrappers are removed. |
 | `apiMedia.js` | `importGalleryFile` dispatches image/video imports through the Prompt gallery upload endpoints; `assignImportedMedia` adds existing imports through idempotent bulk membership. Screenshots + media assets. Also owns the multi-file upload orchestration — `processScreenshotUploads` / `processAttachmentUploads` — moved from `utils/fileUpload.js` since they perform network I/O, not pure transforms. `utils/fileUpload.js` keeps only the pure helpers/constants and no longer re-exports these. |
 | `apiMediaJobs.js` | Media generation job tracking + `refineMediaPrompt` / `promptFromMedia` (vision reverse-prompt). |
 | `apiDecks.js` | Decks (playing-card / tarot designer) — deck + card CRUD, sample-design style analysis, universe casting + prompt generation (plus its SSE progress URL), single/batch card renders. |

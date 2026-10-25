@@ -471,6 +471,43 @@ describe('UsagePage mobile provider-card layout', () => {
       expect.arrayContaining(['grid-cols-1', 'sm:grid-cols-2'])
     );
   });
+
+  it('supports toggling imagegen render periods between 24h, week, and month', async () => {
+    const cardWithPeriods = {
+      family: 'imagegen',
+      label: 'Image Gen',
+      supported: true,
+      limits: [],
+      activity: [],
+      period: '24h',
+      metrics: [
+        {
+          key: 'imagegen-agy',
+          label: 'Agy · generate_image',
+          value: '2 renders · 24h',
+          detail: 'quota not reported by this CLI',
+          periods: {
+            '24h': { key: '24h', label: '24h', count: 2, failed: 0, value: '2 renders · 24h', detail: 'quota not reported by this CLI' },
+            '7d': { key: '7d', label: 'Week', count: 7, failed: 1, value: '7 renders · week', detail: '1 failed' },
+            '30d': { key: '30d', label: 'Month', count: 25, failed: 1, value: '25 renders · month', detail: '1 failed' },
+          },
+        },
+      ],
+    };
+
+    api.getProviderUsage.mockResolvedValue({ providers: [cardWithPeriods] });
+    // The report mounts other cards whose fetches settle after the quota heading.
+    await act(async () => { render(<MemoryRouter><UsagePage /></MemoryRouter>); });
+
+    await screen.findByRole('heading', { name: 'Image Gen' });
+    expect(screen.getByText('2 renders · 24h')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Week' }));
+    expect(screen.getByText('7 renders · week')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Month' }));
+    expect(screen.getByText('25 renders · month')).toBeInTheDocument();
+  });
 });
 
 describe('arrangeQuotaCells', () => {
@@ -731,5 +768,16 @@ describe('UsagePage image accounting', () => {
     const reads = api.getUsage.mock.calls.length;
     await act(async () => { socket.emit('image-gen:completed', { mode: 'codex' }); });
     await waitFor(() => expect(api.getUsage.mock.calls.length).toBe(reads + 1));
+  });
+
+  it('renders PageHeader with the BarChart3 icon', async () => {
+    api.getUsage.mockResolvedValue(usage);
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    const heading = screen.getByRole('heading', { level: 1, name: 'Subscription Usage' });
+    expect(heading).toBeInTheDocument();
+    const icon = heading.parentElement?.parentElement?.querySelector('svg');
+    expect(icon).toBeInTheDocument();
+    expect(icon).toHaveClass('lucide-chart-column');
+    await act(async () => {});
   });
 });

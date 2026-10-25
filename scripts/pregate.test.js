@@ -25,6 +25,7 @@ import {
   parseArgs,
   pregateWorkerEnv,
   stageSpawnEnv,
+  sweepStageGroup,
   suiteSelected,
   uncoveredSuites,
   UNCOVERED_SUITES,
@@ -60,6 +61,55 @@ const DEFAULT_OPTIONS = {
   base: null, full: false, skipLint: false, planOnly: false, help: false, guardsOnly: false, mergedWith: null,
   skipDb: false, skipBrowser: false, skipBuild: false, skipSmoke: false,
 };
+
+describe('owned stage group settlement', () => {
+  const pgid = 424242;
+  const fail = code => { throw Object.assign(new Error(code), { code }); };
+
+  it('waits through a zombie-only EPERM until a fresh exact-group probe returns ESRCH', async () => {
+    let elapsed = 0;
+    const calls = [];
+    const result = await sweepStageGroup(pgid, {
+      kill: (pid, signal) => {
+        calls.push([pid, signal]);
+        // Reproduce the held-zombie -> reaped transition without timing sleeps.
+        return fail(elapsed === 0 ? 'EPERM' : 'ESRCH');
+      },
+      now: () => elapsed,
+      wait: async ms => { elapsed += ms; },
+      inspect: group => { expect(group).toBe(pgid); return `${pgid}:Z`; },
+    });
+    expect(result).toEqual({ settled: true, lingered: true });
+    expect(calls).toEqual([[-pgid, 'SIGKILL'], [-pgid, 0], [-pgid, 0]]);
+    expect(elapsed).toBe(25);
+  });
+
+  it.each([
+    ['live', 'present', '424242:S'],
+    ['uninspectable', 'EPERM', 'unavailable (EACCES)'],
+    ['zombie-only', 'EPERM', '424242:Z'],
+    ['empty snapshot with denied probe', 'EPERM', 'none observed'],
+    ['failed probe', 'EIO', 'unavailable (EIO)'],
+  ])('refuses a %s group without a fresh ESRCH', async (_state, probe, members) => {
+    let elapsed = 0;
+    const signals = [];
+    const result = await sweepStageGroup(pgid, {
+      kill: (pid, signal) => {
+        expect(pid).toBe(-pgid);
+        signals.push(signal);
+        if (signal === 'SIGKILL') return fail('EPERM');
+        if (probe !== 'present') return fail(probe);
+      },
+      now: () => elapsed,
+      wait: async ms => { elapsed += ms; },
+      inspect: group => { expect(group).toBe(pgid); return members; },
+    });
+    expect(result).toEqual({ settled: false, reason: `group kill failed (EPERM); pgid=${pgid}; probe=${probe}; members=${members}` });
+    expect(signals[0]).toBe('SIGKILL');
+    expect(signals.slice(1).every(signal => signal === 0)).toBe(true);
+    expect(elapsed).toBe(probe === 'EIO' ? 0 : 5000);
+  });
+});
 
 describe('resolvePlanStages', () => {
   it('runs only the scopes the plan selected', () => {
@@ -115,6 +165,26 @@ describe('resolvePlanStages', () => {
       { skipLint: true },
     );
     expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'server tests']);
+  });
+
+  it('runs each focused structural guard once while retaining direct regressions in both workspaces', () => {
+    const plan = planWith({
+      server: { mode: 'files', files: ['server/guard.test.js', 'server/service.test.js'], sources: [] },
+      client: { mode: 'files', files: ['client/src/guard.test.js'], sources: [] }
+    });
+    const guardPlan = {
+      server: { files: ['server/guard.test.js'] },
+      client: { files: ['client/src/guard.test.js'] }
+    };
+    const stages = resolvePlanStages(plan, { guardPlan });
+    expect(stages.map(stage => stage.name)).toEqual([
+      'hidden-content scan', 'server structural guards', 'client structural guards', 'server tests'
+    ]);
+    for (const scope of ['server', 'client']) {
+      const files = stages.filter(stage => stage.suite === scope).flatMap(stage => JSON.parse(stage.env.CI_TEST_FILES));
+      expect(files).toEqual(plan[scope].files);
+    }
+    expect(plan.server.files).toEqual(['server/guard.test.js', 'server/service.test.js']);
   });
 
   it.each(['related', 'full'])('runs shared guards before every costly %s stage without changing the broad selection', (mode) => {
@@ -178,6 +248,7 @@ describe('pregate hidden-content invocation', () => {
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
+      'server/lib/workspaceTestCacheRoots.js',
     ]) {
       mkdirSync(dirname(join(root, path)), { recursive: true });
       copyFileSync(join(REPO_ROOT, path), join(root, path));
@@ -467,8 +538,12 @@ describe('pregate hidden-content invocation', () => {
 
   // This regression catches stale inherited packages before any lint/test child
   // can produce a misleading product failure or repair the shared source tree.
-  it.each(['matching', 'stale', 'missing-package', 'unreadable-package', 'dangling'])(
+  it.each(['matching', 'stale', 'missing-package', 'unreadable-package', 'dangling', 'missing-link', 'unlinked'])(
     'checks %s linked dependencies read-only before executing stages', (state) => {
+      const worktree = join(scratch, 'linked-worktree');
+      git('worktree', 'add', '--detach', worktree, base);
+      root = worktree;
+      for (const workspace of ['', 'client', 'server', 'autofixer']) mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
       const shared = join(scratch, 'source', 'server', 'node_modules');
       const installed = join(shared, 'express', 'package.json');
       const modules = join(root, 'server', 'node_modules');
@@ -488,7 +563,8 @@ describe('pregate hidden-content invocation', () => {
       writeFileSync(join(fakeBin, 'npm.cmd'), '@node "%~dp0npm" %*\r\n');
       rmSync(modules, { recursive: true });
       const target = state === 'dangling' ? join(scratch, 'absent-deps') : shared;
-      symlinkSync(target, modules, process.platform === 'win32' ? 'junction' : 'dir');
+      if (state === 'unlinked') mkdirSync(modules);
+      else if (state !== 'missing-link') symlinkSync(target, modules, process.platform === 'win32' ? 'junction' : 'dir');
       write('server/package-lock.json', JSON.stringify({ packages: {
         '': {}, 'node_modules/express': { version: '5.3.0' },
         'node_modules/optional-platform-package': { version: '1.0.0', optional: true },
@@ -505,19 +581,29 @@ describe('pregate hidden-content invocation', () => {
         expect(existsSync(join(root, 'unexpected-stage'))).toBe(true);
       } else {
         expect(result.status).toBe(1);
-        expect(result.stderr).toContain('server (linked node_modules)');
-        expect(result.stderr).toContain('owning source checkout');
-        expect(result.stderr).toContain('Never run npm install/ci through worktree links');
+        const needsLink = ['dangling', 'missing-link', 'unlinked'].includes(state);
+        expect(result.stderr).toContain(`server (${['missing-link', 'unlinked'].includes(state) ? 'owned' : 'linked'} node_modules)`);
+        if (needsLink) expect(result.stderr).toContain('Re-link with: node scripts/link-worktree-deps.js');
+        else {
+          expect(result.stderr).toContain('owning source checkout');
+          expect(result.stderr).toContain('separate clone with its own locked installs');
+          expect(result.stderr).toContain('Never run npm install/ci through worktree links');
+          expect(result.stderr).not.toContain('missing or unlinked');
+          expect(result.stderr).not.toContain('Re-link with:');
+        }
         const diagnostic = {
           stale: 'expected 5.3.0, installed 5.2.1',
           'missing-package': 'missing package.json (ENOENT)',
           'unreadable-package': 'unreadable package.json (invalid JSON)',
           dangling: 'linked target unavailable',
+          'missing-link': 'node_modules missing',
+          unlinked: 'missing package.json',
         }[state];
         expect(result.stderr).toContain(diagnostic);
         expect(existsSync(join(root, 'unexpected-stage'))).toBe(false);
       }
-      expect(lstatSync(modules).isSymbolicLink()).toBe(true);
+      if (state === 'missing-link') expect(existsSync(modules)).toBe(false);
+      else expect(lstatSync(modules).isSymbolicLink()).toBe(state !== 'unlinked');
       expect(sourceSnapshot()).toEqual(before);
       expect(existsSync(join(root, 'unexpected-npm'))).toBe(false);
       expect(readFileSync(sourceReceipt, 'utf8')).toBe('{"server":"legacy"}');
@@ -691,6 +777,36 @@ describe('pregate hidden-content invocation', () => {
     }
   });
 
+  // #13458: replay the kernel's exit/signal crossing at the CLI boundary.
+  // Only an actually absent group gets the injected refusal; the subsequent
+  // probe must still go to the kernel, and the receipt must remain truthful.
+  it.skipIf(process.platform === 'win32')('verifies exact group absence after an exit-crossing EPERM', () => {
+    const preload = join(scratch, 'exit-crossing.cjs');
+    writeFileSync(preload, `
+      const kill = process.kill.bind(process);
+      process.kill = (pid, signal) => {
+        if (pid < 0 && signal === 'SIGKILL') {
+          try { kill(pid, 0); } catch (error) {
+            if (error.code !== 'ESRCH') throw error;
+            console.log('fixture-exit-crossing pgid=' + -pid);
+            throw Object.assign(new Error('exit crossing'), { code: 'EPERM' });
+          }
+        }
+        return kill(pid, signal);
+      };
+    `);
+    write(trackedPath, `${clean}updated\n`);
+    const result = spawnSync(process.execPath, ['--require', preload, 'scripts/pregate.js', '--base', base, '--skip-lint'], {
+      cwd: root, encoding: 'utf8',
+    });
+    expect(result.stdout).toMatch(/fixture-exit-crossing pgid=\d+/);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Pregate passed');
+    const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    expect(report.passed).toBe(true);
+    expect(report.stages[0]).toMatchObject({ name: 'hidden-content scan', status: 'passed' });
+  });
+
   // run-ci-tests.js leaves npm and Vitest in pregate's stage group, so pregate
   // owns them on every exit path, not only on cancellation.
   it.skipIf(process.platform === 'win32')('kills a descendant still running in the stage group after the stage exits', () => {
@@ -710,7 +826,7 @@ describe('pregate hidden-content invocation', () => {
     expect(alive).toBe(false);
     // Later stages are not fixtures here; only the scan stage's outcome matters.
     expect(result.stdout).toContain('hidden-content scan passed');
-    expect(result.stderr).toContain('Stage "hidden-content scan" exited with processes still running in its group; killed them.');
+    expect(result.stderr).toContain('Stage "hidden-content scan" exited before its process group settled; verified group exit.');
   });
 
   // #12833: a stage's exit status is its only verdict; a failing provisioning
@@ -1071,7 +1187,7 @@ describe('the gate end to end', () => {
         'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/lib/pregateAttestation.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
-        'server/lib/textUtils.js',
+        'server/lib/textUtils.js', 'server/lib/workspaceTestCacheRoots.js',
       ]) {
         mkdirSync(dirname(join(root, path)), { recursive: true });
         copyFileSync(join(REPO_ROOT, path), join(root, path));

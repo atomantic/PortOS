@@ -7,15 +7,27 @@
  * failing the whole tour, and an unreadable marker file never silently reports
  * a settled world as brand new.
  */
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies } from '../lib/mockPathsDataRoot.js';
 import { eidoversePeerId } from '../lib/eidoverseWorldSignals.js';
+
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
 
 const dataRoot = () => lazyTempDataRoot('portos-eidoverse-observation-');
 
-vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot }));
+let beforeMarkerWrite = async () => {};
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return makePathsProxy(actual, { dataRoot, overrides: {
+    atomicWrite: async (...args) => {
+      await beforeMarkerWrite();
+      return actual.atomicWrite(...args);
+    },
+  } });
+});
 
 const collectSources = vi.fn();
 const listFoundations = vi.fn();
@@ -61,7 +73,9 @@ const peerSignal = () => ({
   id: ALPHA_ID, label: 'Federated peer', status: 'active', enabled: true, fullSync: true, travelAvailable: true,
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  await owned.drain();
+  beforeMarkerWrite = async () => {};
   rmSync(dataRoot(), { recursive: true, force: true });
   collectSources.mockReset().mockResolvedValue({ peers: [peerSignal()], agents: [], tasks: [] });
   listFoundations.mockReset().mockResolvedValue({ counts: { vernacular: 0, baseline: 1, candidates: 0, inherited: 1 }, foundations: [inherited('peer:alpha:one')] });
@@ -70,7 +84,10 @@ beforeEach(() => {
   listDestinations.mockReset().mockResolvedValue({ destinations: [{ peerId: ALPHA_ID, label: 'Peer' }] });
 });
 
-afterAll(cleanupTempDataRoots);
+afterAll(async () => {
+  await owned.drain();
+  cleanupTempDataRoots();
+});
 
 describe('the Eidoverse observation marker', () => {
   it('carries what is new across the wake boundary the marker exists for', async () => {
@@ -141,15 +158,41 @@ describe('the Eidoverse observation marker', () => {
     expect(observed.peers.map((peer) => peer.peerId)).toEqual([ALPHA_ID]);
   });
 
-  it('serializes concurrent observations so one marker write cannot lose the other', async () => {
-    const observations = await Promise.all([
-      observeEidoverseWorld({ now: () => '2026-09-16T12:00:00.000Z' }),
-      observeEidoverseWorld({ now: () => '2026-09-16T12:00:01.000Z' }),
-    ]);
-
-    // Whichever ran second must have SEEN the first, not raced past it.
-    expect(observations.filter((entry) => entry.changes.firstObservation)).toHaveLength(1);
-    expect(observations.filter((entry) => !entry.changes.firstObservation)).toHaveLength(1);
+  it('serializes concurrent observations so one marker write cannot lose the other', async ({ signal }) => {
+    const writing = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    const collected = Promise.withResolvers();
+    const observations = [];
+    const cancel = () => { writing.resolve(); collected.resolve(); release.resolve(); };
+    signal.addEventListener('abort', cancel, { once: true });
+    if (signal.aborted) cancel();
+    beforeMarkerWrite = () => { writing.resolve(); return release.promise; };
+    try {
+      observations.push(observeEidoverseWorld({ now: () => '2026-09-16T12:00:00.000Z' }));
+      await Promise.race([writing.promise, observations[0]]);
+      if (signal.aborted) return;
+      // Overlap the persistence boundary, after the first call's imports have
+      // settled. Vitest's manual mock callstack cannot isolate parallel dynamic
+      // imports: the second call otherwise reaches real host probes (#13477).
+      collectSources.mockImplementation(async () => {
+        collected.resolve();
+        return { peers: [peerSignal()], agents: [], tasks: [] };
+      });
+      observations.push(observeEidoverseWorld({ now: () => '2026-09-16T12:00:01.000Z' }));
+      await Promise.race([collected.promise, observations[1]]);
+      release.resolve();
+      const results = await Promise.all(observations);
+      expect(collectSources).toHaveBeenCalledTimes(2);
+      expect(listFoundations).toHaveBeenCalledTimes(2);
+      expect(listControllers).toHaveBeenCalledTimes(2);
+      expect(readRecipe).toHaveBeenCalledTimes(2);
+      expect(results.filter((entry) => entry.changes.firstObservation)).toHaveLength(1);
+      expect(results.filter((entry) => !entry.changes.firstObservation)).toHaveLength(1);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(observations);
+      signal.removeEventListener('abort', cancel);
+    }
   });
 });
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { MemoryRouter } from 'react-router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({
@@ -214,6 +215,20 @@ describe('TaskItem task source', () => {
 });
 
 describe('TaskItem blocked reason', () => {
+  it.each([
+    ['queued', 'An automatic investigation is queued.'],
+    ['investigating', 'An agent is investigating the cause.'],
+    ['investigation-blocked', 'The investigation stopped within its configured limits. Original work is preserved.'],
+  ])('shows actual %s recovery ownership while retaining the original failure', (phase, message) => {
+    const task = { id: 'system-recovery', description: 'Original work', status: 'blocked', metadata: {
+      blockedCategory: 'task-recovery-exhausted', blockedAt: '2026-01-01', blockedReason: 'Original incomplete delivery',
+      blockedInvestigation: { phase, taskId: 'investigator', sourceCategory: 'task-recovery-exhausted', sourceBlockedAt: '2026-01-01' } } };
+    render(<MemoryRouter><TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} /></MemoryRouter>);
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View automatic investigation' })).toHaveAttribute('href', '/cos/tasks?task=investigator');
+    expect(screen.getByText('Original incomplete delivery')).toBeInTheDocument();
+  });
+
   it('renders blockedReason when a blocked task has no user-set blocker', () => {
     // Every server-side auto-block (max-spawns, retries, provider-config, …) writes
     // metadata.blockedReason, never `blocker`, so the display must fall back to it.

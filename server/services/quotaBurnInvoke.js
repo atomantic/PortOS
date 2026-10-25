@@ -248,6 +248,7 @@ export function effectiveSettings(step, saved) {
     providerId: overrides.providerId ?? saved?.providerId ?? null,
     model: overrides.model ?? saved?.model ?? null,
     effort: overrides.effort ?? saved?.effort ?? null,
+    ...((overrides.executionOptions ?? saved?.executionOptions) !== undefined ? { executionOptions: overrides.executionOptions ?? saved.executionOptions } : {}),
     params: { ...(saved?.taskMetadata || {}), ...(overrides.params || {}) },
   };
 }
@@ -495,6 +496,7 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate, maintenan
         providerId: picked.provider.id,
         model: resolved.effective.model,
         effort: resolved.effective.effort,
+        ...(resolved.effective.executionOptions !== undefined ? { executionOptions: resolved.effective.executionOptions } : {}),
         // The step's run params, which the on-demand engines hand to the
         // generator as `runOverrides` — layered over the task's saved
         // `taskMetadata` BEFORE the mode banner and the prompt are built. This
@@ -535,6 +537,7 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate, maintenan
       providerId: picked.provider.id,
       model: resolved.effective.model,
       effort: resolved.effective.effort,
+      ...(resolved.effective.executionOptions !== undefined ? { executionOptions: resolved.effective.executionOptions } : {}),
     },
   };
 }
@@ -581,6 +584,7 @@ async function runCustomJobStep({ resolved, step, family, candidate, maintenance
     provider: picked.provider.id,
     model: resolved.effective.model || undefined,
     effort: resolved.effective.effort || undefined,
+    ...(resolved.effective.executionOptions !== undefined ? { executionOptions: resolved.effective.executionOptions } : {}),
     // The attribution keys the built-in lane stamps via its request, so
     // `isCooldownExemptTask`, the completion continuation and the denial ledger
     // cannot tell the two lanes apart. There is deliberately no
@@ -613,6 +617,7 @@ async function runCustomJobStep({ resolved, step, family, candidate, maintenance
       providerId: picked.provider.id,
       model: resolved.effective.model,
       effort: resolved.effective.effort,
+      ...(resolved.effective.executionOptions !== undefined ? { executionOptions: resolved.effective.executionOptions } : {}),
     },
   };
 }

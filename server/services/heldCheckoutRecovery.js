@@ -1,4 +1,8 @@
+import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
+import { WORKSPACE_TEST_CACHE_ROOTS } from '../lib/workspaceTestCacheRoots.js';
+import { isAgentScratchPath, matchesScratchRoot } from '../lib/agentScratchPaths.js';
+import { WORKTREE_NODE_MODULES_MARKER } from '../lib/worktreeNodeModules.js';
 /**
  * Operator-scoped retirement of a merged checkout that branch reconciliation
  * reported but cannot retire on its own (#12002): one outside the managed
@@ -10,19 +14,15 @@ import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObserva
  * matches it. A lock's age, an absent process or its prose never establish
  * release: a changed lock, HEAD or branch is an ownership change and refuses.
  *
- * Before any mutation every unique byte is archived under
- * `data/cos/held-checkout-archives/`: a standalone bundle of the original commit history, the staged and unstaged diffs, raw bytes of tracked files that differ
- * from their index blob, and verbatim copies of untracked AND ignored files
- * (symlinks as recorded targets). The archive is verified by hash against the
- * checkout, and the checkout's content hashes must not move between archive and
- * removal. A live owner, manual completion handoff, unreadable state or archive
- * failure leaves the checkout, its lock and its branch exactly as found.
+ * A merged, clean checkout is removed in place. Dirty, unmerged, protected,
+ * and live-owner checkouts stay where they are. Retirement does not copy the
+ * checkout, its ignored files, or its commit history.
  */
 
 import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { realpathSync, constants } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
-import { lstat, stat, realpath, readlink, readdir, opendir, readFile, chmod, open, mkdtemp } from 'node:fs/promises';
+import { lstat, stat, realpath, readlink, readdir, opendir, readFile, chmod, open, mkdtemp, unlink, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve, relative, sep } from 'node:path';
@@ -32,20 +32,52 @@ import { execGit } from '../lib/execGit.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { backupSlug } from './supersededBackup.js';
-import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch } from './worktreeManager.js';
-import { getDefaultBranch, hasBranchMergeEvidence } from './git.js';
+import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch, classifyWorktreeDirt } from './worktreeManager.js';
+import { getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence } from './git.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArchive } from './cosClaimOwnership.js';
+
+/** No archive is needed only when Git-ignored payload is independently disposable. */
+export async function releaseCheckoutWithoutArchive(context, prepare) {
+  const prepared = await prepare();
+  await assertNoUniqueIgnoredCheckoutPayload(context.path, execGit, context.ignoredPaths);
+  return prepared;
+}
+
+/** Git cleanliness alone omits ignored files. Links retain their target bytes. */
+export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGit, ignoredPaths = []) {
+  const present = await lstat(path).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!present) return;
+  const result = await runGit(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], path,
+    { maxBuffer: GIT_OUTPUT_BYTES, bufferOutput: true });
+  if ((result.exitCode !== undefined && result.exitCode !== 0)
+    || (!Buffer.isBuffer(result.stdout) && typeof result.stdout !== 'string')) throw new Error('worktree-status-unavailable');
+  const ignored = new Set(zLines(Buffer.isBuffer(result.stdout) ? archiveText(result.stdout) : result.stdout));
+  const work = archiveWork();
+  const verifiedCaches = new Map();
+  for (const listed of ignored) {
+    const { rel, info } = await listedContentEntry(path, listed, work);
+    if (info.isSymbolicLink() || isAgentScratchPath(rel) || matchesScratchRoot(rel, ignoredPaths)) continue;
+    if (rel === `node_modules/${WORKTREE_NODE_MODULES_MARKER}` && info.isFile() && info.size === 0) continue;
+    if (info.isFile() && await disposableModuleCache(path, rel, ignored, verifiedCaches, work)) continue;
+    throw new Error('checkout-ignored-payload-unverified');
+  }
+}
 
 export const heldCheckoutArchiveRoot = (cosDir = PATHS.cos) => join(cosDir, 'held-checkout-archives');
 
 const evidenceHash = value => createHash('sha256').update(value).digest('hex');
 const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
 
-function checkArchiveBudget(content, administration) {
-  // Creation and recovery share one byte budget across both snapshots.
+function checkArchiveBudget(content, administration, allowDisposableCache = false) {
+  // Historical creation/recovery share one byte budget across both snapshots.
+  // Only current no-archive review can exempt independently recognized caches.
   let total = 0;
   for (const snapshot of [content, administration]) for (const file of snapshot.files) {
     if (!Number.isSafeInteger(file.bytes) || file.bytes < 0) throw new Error('archive-file-proof-invalid');
+    if (allowDisposableCache && file.disposableCache === true) continue;
     checkArchiveSize('combined', file.bytes, total += file.bytes);
   }
   checkArchiveSize('combined', 0, total);
@@ -155,6 +187,7 @@ async function archiveBytes(path, work, limitBytes, reason = 'retirement-archive
   const { stream } = await archiveSource(path);
   for await (const chunk of stream) {
     work.check();
+    work.read?.(chunk.length);
     if ((size += chunk.length) > limitBytes) throw Object.assign(new Error(reason), {
       archiveLimit: { scope: 'metadata-read', kind: 'file', limitBytes, observedBytes: size },
     });
@@ -305,6 +338,34 @@ async function historicalCheckoutAbsent(release, trees) {
   return !present && trees.length > 0 && !trees.some(tree => tree.path === release.path || (release.branch && shortBranch(tree.branch) === release.branch));
 }
 
+/** Read existing no-archive service receipts, scoped to the original repository
+ * and physical checkout generation. Never infer removal from absence alone. */
+async function completedServiceRetirement(repoPath, release) {
+  if (!/^[a-f0-9]{64}$/.test(release.checkoutIdentity || '')) return null;
+  const [{ loadSchedule }, { getAppById }] = await Promise.all([
+    import('./taskScheduleStore.js'), import('./apps.js'),
+  ]);
+  const schedule = await loadSchedule();
+  const root = await realpath(repoPath).catch(() => null);
+  if (!root) return null;
+  const found = new Map();
+  for (const [appId, record] of Object.entries(schedule.executions?.['task:branch-reconcile']?.perApp || {})) {
+    const receipts = matchingRetirementReceipts(record.branchReconcileOutcome, release).filter(row => row.archiveDir == null
+      && row.checkoutIdentity === release.checkoutIdentity && Date.parse(row.retiredAt) >= Date.parse(release.createdAt));
+    if (!receipts.length) continue;
+    const app = await getAppById(appId);
+    if (!app?.repoPath || await realpath(app.repoPath).catch(() => null) !== root) continue;
+    for (const row of receipts) {
+      const key = JSON.stringify([row.branch, row.path, row.head, row.checkoutIdentity, row.retiredAt, row.branchDeleted]);
+      found.set(key, row);
+    }
+  }
+  if (found.size !== 1) return null;
+  const [key, receipt] = [...found][0];
+  return { kind: 'service-retirement-receipt', archiveDir: null, receipt,
+    evidenceDigest: createHash('sha256').update(key).digest('hex') };
+}
+
 /** Completion audits have a server-captured checkout generation, but may never
  * have entered the scheduled retirement queue. Reuse its archive verifier
  * without creating an obligation or inventing a branch-deletion receipt.
@@ -318,6 +379,12 @@ export async function findMissingCheckoutPreservation({ repoPath, release }, opt
     return ref.exitCode === 1 && await historicalCheckoutAbsent(release, trees);
   };
   if (!await absent()) return null;
+  const receipt = await completedServiceRetirement(repoPath, release).catch(() => null);
+  if (receipt) return { ...receipt, recheck: async () => {
+    if (!await absent()) return false;
+    const fresh = await completedServiceRetirement(repoPath, release).catch(() => null);
+    return fresh?.evidenceDigest === receipt.evidenceDigest;
+  } };
   const root = heldCheckoutArchiveRoot(opts.cosDir);
   const info = await lstat(root).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
   if (!info?.isDirectory()) return null;
@@ -337,6 +404,66 @@ export async function findMissingCheckoutPreservation({ repoPath, release }, opt
   return { ...proof, recheck: async () => await absent() && await proof.recheck() };
 }
 
+const RECOVERY_DETAIL_LIMIT = 20;
+const DISCOVERY_BYTE_LIMIT = 64 * 1024 * 1024;
+const archiveIdentityKey = row => row && [row.repoPath, row.path, row.head].every(value => typeof value === 'string')
+  && (typeof row.branch === 'string' || row.branch === null)
+  ? JSON.stringify([row.repoPath, row.branch, row.path, row.head]) : null;
+
+/** Metadata only selects work; every selected archive is independently verified. */
+async function discoverRecoveryArchives(cosDir, signal) {
+  const roots = [heldCheckoutArchiveRoot(cosDir), join(cosDir || PATHS.cos, 'initialized-checkout-retirements')];
+  const index = new Map();
+  const byDirectory = new Map();
+  const coverage = { entriesRead: 0, candidates: 0, indexed: 0, metadataBytes: 0, missingRoots: 0,
+    errors: 0, details: [], detailsOmitted: 0, complete: true, truncated: false };
+  const diagnose = (archiveDir, error) => {
+    coverage.complete = false;
+    coverage.errors++;
+    const refusal = archiveLimitRefusal(error);
+    const detail = { archiveDir, ...(refusal || { reason: /^[a-z][a-z-]+$/.test(error.message) ? error.message : 'archive-discovery-unavailable' }) };
+    if (coverage.details.length < RECOVERY_DETAIL_LIMIT) coverage.details.push(detail);
+    else coverage.detailsOmitted++;
+  };
+  const work = { ...archiveWork(signal), read: bytes => {
+    // Account before parsing, including partial, malformed and oversized reads.
+    coverage.metadataBytes += bytes;
+    if (coverage.metadataBytes > DISCOVERY_BYTE_LIMIT) throw new Error('archive-discovery-budget-exceeded');
+  } };
+  for (const root of roots) {
+    try {
+      const info = await lstat(root).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      if (!info) { coverage.missingRoots++; continue; }
+      if (!info.isDirectory()) throw new Error('archive-directory-invalid');
+      const directory = await opendir(root);
+      for await (const entry of directory) {
+        if (coverage.entriesRead >= 1000 || coverage.metadataBytes >= DISCOVERY_BYTE_LIMIT) {
+          coverage.truncated = true;
+          diagnose(root, new Error('archive-discovery-budget-exceeded'));
+          break;
+        }
+        coverage.entriesRead++;
+        if (!entry.isDirectory()) continue;
+        const candidate = { dir: join(root, entry.name), kind: root === roots[0] ? 'held' : 'initialized' };
+        coverage.candidates++;
+        byDirectory.set(candidate.dir, candidate);
+        try {
+          const { manifest } = await archiveManifest(candidate.dir, work);
+          const identity = candidate.kind === 'held' ? manifest : { repoPath: manifest.facts?.repoPath, ...manifest.facts?.release };
+          const key = archiveIdentityKey(identity);
+          if (!key) throw new Error('archive-identity-unreadable');
+          if (!index.has(key)) index.set(key, []);
+          index.get(key).push(candidate);
+          coverage.indexed++;
+        } catch (error) {
+          diagnose(candidate.dir, error);
+        }
+      }
+    } catch (error) { diagnose(root, error); }
+  }
+  return { index, byDirectory, coverage };
+}
+
 /** Read existing archives only. Verification stays outside both writer locks;
  * the final ownership/absence recheck and schedule compare-and-set are fenced.
  */
@@ -346,45 +473,46 @@ export async function recoverMissingCheckoutPreservations({ appId, repoPath, out
   if (!obligations.length) return outcome;
   const trees = await listWorktrees(repoPath).catch(() => null);
   if (!trees?.length) return outcome;
-  const roots = [heldCheckoutArchiveRoot(opts.cosDir), join(opts.cosDir || PATHS.cos, 'initialized-checkout-retirements')];
-  const candidates = [];
-  let discoveryReason = null;
-  for (const root of roots) {
-    try {
-      const info = await lstat(root).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-      if (!info) continue;
-      if (!info.isDirectory()) throw new Error('archive-directory-invalid');
-      const names = await readdir(root, { withFileTypes: true });
-      if (names.length + candidates.length > 1000) throw new Error('archive-discovery-budget-exceeded');
-      for (const name of names) if (name.isDirectory()) candidates.push({ dir: join(root, name.name), kind: root === roots[0] ? 'held' : 'initialized' });
-    } catch { discoveryReason = 'archive-discovery-unavailable'; }
-  }
+  const { index, byDirectory, coverage } = await discoverRecoveryArchives(opts.cosDir, opts.signal);
   const observations = [];
   const evidenceFences = [];
+  let details = 0;
+  const addEvidence = (row, detail) => {
+    if (details < RECOVERY_DETAIL_LIMIT) { row.evidence.push(detail); details++; }
+    else row.coverage.detailsOmitted++;
+  };
   try {
     for (const release of obligations) {
       if (!await historicalCheckoutAbsent(release, trees).catch(() => false)) continue;
-      const evidence = [];
       let proof = null;
+      let verified = 0;
+      const matching = index.get(archiveIdentityKey({ ...release, repoPath })) || [];
       const scopedCandidates = Object.hasOwn(release, 'preservationReceipt')
-        ? candidates.filter(candidate => release.preservationReceipt?.status === 'preserved'
+        ? [byDirectory.get(release.preservationReceipt?.archiveDir)].filter(candidate => candidate && release.preservationReceipt?.status === 'preserved'
           && JSON.stringify(release.preservationReceipt.incarnation) === JSON.stringify(release.checkoutIncarnation)
-          && candidate.dir === release.preservationReceipt.archiveDir) : candidates;
+          && candidate.dir === release.preservationReceipt.archiveDir) : matching;
+      const row = { release, proof: null, evidence: [], coverage: { matching: scopedCandidates.length,
+        unrelated: coverage.indexed - matching.length, attempted: 0, detailsOmitted: 0 },
+        reason: !coverage.complete ? 'archive-discovery-incomplete' : coverage.candidates ? 'archive-evidence-unverified' : 'archive-evidence-missing', nextAction: historicalNextAction };
       for (const candidate of scopedCandidates) {
+        row.coverage.attempted++;
         try {
-          proof = candidate.kind === 'held' ? await verifyHeldArchive(repoPath, candidate.dir, release, archiveWork(opts.signal))
+          const verifiedProof = candidate.kind === 'held' ? await verifyHeldArchive(repoPath, candidate.dir, release, archiveWork(opts.signal))
             : await (await import('./initializedCheckoutRecovery.js')).verifyMissingInitializedCheckoutPreservation({ appId, repoPath, release, archiveDir: candidate.dir });
-          if (proof.releaseFence) evidenceFences.push(proof.releaseFence);
-          evidence.push({ archiveDir: candidate.dir, reason: 'preservation-verified' });
-          break;
+          if (verifiedProof.releaseFence) evidenceFences.push(verifiedProof.releaseFence);
+          verified++;
+          proof = verifiedProof;
+          addEvidence(row, { archiveDir: candidate.dir, reason: 'preservation-verified' });
         } catch (error) {
           const refusal = archiveLimitRefusal(error);
-          evidence.push({ archiveDir: candidate.dir, ...(refusal ? { reason: refusal.reason,
+          addEvidence(row, { archiveDir: candidate.dir, ...(refusal ? { reason: refusal.reason,
             ...(refusal.archiveLimit && { archiveLimit: refusal.archiveLimit }), nextAction: refusal.nextAction,
           } : { reason: /^[a-z][a-z-]+$/.test(error.message) ? error.message : 'archive-unverifiable' }) });
         }
       }
-      observations.push({ release, proof, evidence, reason: discoveryReason || (candidates.length ? 'archive-evidence-unverified' : 'archive-evidence-missing'), nextAction: historicalNextAction });
+      row.proof = verified === 1 && (coverage.complete || Object.hasOwn(release, 'preservationReceipt')) ? proof : null;
+      if (verified > 1) row.reason = 'archive-preservation-ambiguous';
+      observations.push(row);
     }
     if (!observations.length) return outcome;
     const { recordRecoveredCheckoutPreservations } = await import('./taskSchedule.js');
@@ -395,13 +523,13 @@ export async function recoverMissingCheckoutPreservations({ appId, repoPath, out
       for (const row of observations) {
         if (!await historicalCheckoutAbsent(row.release, currentTrees)) return false;
         if (row.proof?.recheck && !await row.proof.recheck().catch(() => false)) {
-          row.evidence.push({ archiveDir: row.proof.archiveDir, reason: 'archive-changed-during-verification' });
+          addEvidence(row, { archiveDir: row.proof.archiveDir, reason: 'archive-changed-during-verification' });
           row.proof = null;
           row.reason = 'archive-changed-during-verification';
         }
       }
       return true;
-    }));
+    }, coverage));
   } finally {
     for (const releaseFence of evidenceFences) await releaseFence();
   }
@@ -510,7 +638,16 @@ async function retirementPolicy(repoPath, branch, opts, reviewIdentity = {}) {
       const scopes = [meta.worktreeBranch, meta.jiraBranch, meta.claimBranch, meta.branchCompletionPolicy?.branch,
         ...(Array.isArray(meta.claimBranches) ? meta.claimBranches : []),
         ...(Array.isArray(meta.claimReleasedBranches) ? meta.claimReleasedBranches : [])];
-      if (scopes.includes(branch) && isAbsolute(meta.workspacePath || '')) paths.add(meta.workspacePath);
+      if (scopes.includes(branch)) {
+        if (isAbsolute(meta.workspacePath || '')) paths.add(meta.workspacePath);
+        // Receipt capture canonicalizes filesystem names. Windows short names
+        // and other existing aliases need the same server-observed identity
+        // comparison as the current checkout, never textual guessing.
+        for (const row of Array.isArray(meta.completedCheckouts) ? meta.completedCheckouts : []) {
+          if (row?.version !== 2 || row.branch !== branch) continue;
+          for (const path of [row.repoPath, row.path]) if (isAbsolute(path || '')) paths.add(path);
+        }
+      }
     }
     // A failed identity read or excessive history cannot prove distinctness.
     // Missing paths resolve through their existing canonical ancestor, the same
@@ -525,7 +662,23 @@ async function retirementPolicy(repoPath, branch, opts, reviewIdentity = {}) {
       }
     }
   }
-  return reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...reviewIdentity, checkoutIdentities });
+  const initial = reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...reviewIdentity, checkoutIdentities });
+  if (initial.reason !== 'retirement-policy-not-legacy-completed' || !reviewIdentity.retirementForge) return initial;
+  let identity = reviewIdentity;
+  if (!identity.checkoutIncarnation) {
+    const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+    // The caller has already checked the released lock and registration. This
+    // fact-read grants no unlock authority; ordinary matching policies avoid it.
+    const generation = await readCompletedCheckoutIdentity({ repoPath, branch, path: identity.checkoutPath,
+      head: identity.tip, allowLocked: true }).catch(() => null);
+    if (!generation) return initial;
+    identity = { ...identity, checkoutIncarnation: generation.incarnation };
+  }
+  const resumed = reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...identity, checkoutIdentities });
+  if (!resumed.reason) return resumed;
+  const { readCheckoutDeliveryContinuations } = await import('./checkoutDeliveryContinuation.js');
+  const deliveryContinuations = await readCheckoutDeliveryContinuations({ repoPath, branch, ...identity }, policies, opts);
+  return reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...identity, checkoutIdentities, deliveryContinuations });
 }
 
 const policyReviewIdentity = (release, prUrl, forge) => ({
@@ -533,20 +686,27 @@ const policyReviewIdentity = (release, prUrl, forge) => ({
   verifiedPrHead: forge?.prUrl === prUrl ? forge.prHead : null,
 });
 
-async function integratedPolicyReviewIdentity(repoPath, release, prUrl, forge) {
-  if (!forge || !await execGit(['cat-file', '-e', `${forge.defaultHead}^{commit}`], repoPath).then(() => true, () => false)) return null;
-  return { ...policyReviewIdentity(release, prUrl, forge),
+async function integratedPolicyReviewIdentity(repoPath, release, prUrl, forge, archivedIncarnation = null) {
+  const targetHead = forge?.targetHead ?? forge?.defaultHead;
+  if (!forge || !await execGit(['cat-file', '-e', `${targetHead}^{commit}`], repoPath).then(() => true, () => false)) return null;
+  // Only the post-removal caller supplies a generation already bound into the
+  // verified archive/review. A recreated path is never an absent original.
+  const absent = archivedIncarnation && await lstat(release.path).then(() => false, error => error.code === 'ENOENT');
+  const checkoutIncarnation = absent ? archivedIncarnation : null;
+  return { ...policyReviewIdentity(release, prUrl, forge), retirementForge: forge,
+    ...(checkoutIncarnation && { checkoutIncarnation }),
     // Older pinned claims missed completion capture. Fresh inclusion of every
     // commit settles cleanup-only outcomes without manufacturing receipts.
-    integratedCleanupHead: forge?.prHead === release.head && await isAncestor(repoPath, release.head, forge.defaultHead)
-      ? forge.defaultHead : null };
+    integratedCleanupHead: forge?.prHead === release.head && await isAncestor(repoPath, release.head, targetHead)
+      ? targetHead : null };
 }
 
 const reviewForgeOptions = (release, kind, opts) => ({ forgeAccount: opts.forgeAccount,
+  ...(!kind && { exactDeliveredHead: release.head }),
   ...(!release.branch && { exactAliasHead: release.head }),
   ...(kind === 'source-supersession' && { sourceSupersessionHead: release.head }) });
 
-async function reviewCurrentCheckout({ repoPath, release, prUrl, kind, unlocked = false }, opts = {}) {
+async function matchReviewTarget({ repoPath, release, kind, unlocked = false }, opts) {
   if (kind && kind !== 'source-supersession') return { ok: false, reason: 'retirement-review-kind-unavailable' };
   if (kind && !release.branch) return { ok: false, reason: 'retirement-source-branch-required' };
   if (PROTECTED_BRANCHES.includes(release.branch)) return { ok: false, reason: 'protected-branch' };
@@ -555,7 +715,14 @@ async function reviewCurrentCheckout({ repoPath, release, prUrl, kind, unlocked 
   const owner = await ownerReason({ repoPath, tree: matched.tree, branch: release.branch,
     readAgents: opts.readAgents || readClaimOwnershipAgents, reviewed: true });
   if (owner) return { ok: false, reason: owner };
-  const { buildCheckoutRetirementReview, readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+  return { ok: true, tree: matched.tree };
+}
+
+async function readCheckoutReviewPrerequisites(input, opts) {
+  const { repoPath, release, prUrl, kind } = input;
+  const matched = await matchReviewTarget(input, opts);
+  if (!matched.ok) return matched;
+  const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
   const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl, reviewForgeOptions(release, kind, opts))
     .catch(error => ({ error }));
   if (forge?.error) return { ok: false, reason: /^retirement-[a-z-]+$/.test(forge.error.message) ? forge.error.message : 'retirement-forge-unavailable' };
@@ -567,13 +734,75 @@ async function reviewCurrentCheckout({ repoPath, release, prUrl, kind, unlocked 
   if (namedOwner) return { ok: false, reason: namedOwner };
   const identity = await integratedPolicyReviewIdentity(repoPath, release, prUrl, forge);
   if (!identity) return { ok: false, reason: 'retirement-local-objects-missing' };
+  if (!release.branch) {
+    identity.detachedCheckoutIdentity = await readRetirementCheckoutIdentity(release.path);
+    if (!identity.detachedCheckoutIdentity) return { ok: false, reason: 'checkout-identity-changed' };
+  }
   const policy = await retirementPolicy(repoPath, policyBranch, opts, identity);
   if (policy.reason) return { ok: false, reason: policy.reason };
-  return archiveSnapshots(matched.tree, repoPath, null, archiveWork(opts.signal))
-    .then(([content, administration]) => buildCheckoutRetirementReview({ repoPath, release, prUrl, kind,
-      contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge }))
+  return { ok: true, tree: matched.tree, forge, policy };
+}
+
+async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { tree, forge, policy }, opts, captureContent) {
+  const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
+  return archiveSnapshots(tree, repoPath, null, archiveWork(opts.signal), true)
+    .then(async ([content, administration]) => {
+      const review = await buildCheckoutRetirementReview({ repoPath, release, prUrl, kind,
+        contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge });
+      captureContent?.(content);
+      return review;
+    })
     .then(review => ({ ok: true, review }), error => archiveLimitRefusal(error) || ({ ok: false,
       reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-local-evidence-unavailable' }));
+}
+
+async function reviewCurrentCheckout(input, opts = {}, captureContent) {
+  const prerequisites = await readCheckoutReviewPrerequisites(input, opts);
+  return prerequisites.ok ? buildCurrentCheckoutReview(input, prerequisites, opts, captureContent) : prerequisites;
+}
+
+async function previewCheckoutIdentity(path) {
+  const pointer = await readRetirementCheckoutIdentity(path);
+  if (!pointer) return null;
+  const gitdir = await realpath((await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim());
+  const info = await lstat(gitdir, { bigint: true });
+  if (!info.isDirectory() || await readRetirementCheckoutIdentity(path) !== pointer) return null;
+  return JSON.stringify([pointer, gitdir, String(info.dev), String(info.ino), String(info.birthtimeNs)]);
+}
+
+/** Preview is evidence, never a retirement reservation or mutation grant. Keep
+ * forge calls, hashing and diff construction outside the process-wide queue. */
+async function previewCurrentCheckout(input, opts) {
+  const matched = await withClaimOwnershipLock(() => matchReviewTarget(input, opts));
+  if (!matched.ok) return matched;
+  const { repoPath, release, prUrl, kind } = input;
+  const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+  const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl,
+    reviewForgeOptions(release, kind, opts)).catch(error => ({ error }));
+  const localOptions = { ...opts, readForge: async () => forge };
+  const captured = await withClaimOwnershipLock(async () => {
+    const prerequisites = await readCheckoutReviewPrerequisites(input, localOptions);
+    if (!prerequisites.ok) return prerequisites;
+    const identity = await previewCheckoutIdentity(release.path).catch(() => null);
+    return identity && (!release.checkoutIdentity || await readRetirementCheckoutIdentity(release.path) === release.checkoutIdentity)
+      ? { ...prerequisites, identity }
+      : { ok: false, reason: 'checkout-identity-changed' };
+  });
+  if (!captured.ok) return captured;
+  const prepared = await buildCurrentCheckoutReview(input, captured, localOptions);
+  if (!prepared.ok) return prepared;
+  return withClaimOwnershipLock(async () => {
+    // Bind even legacy inventory rows to the generation captured before hashing.
+    const current = await readCheckoutReviewPrerequisites(input, localOptions);
+    if (!current.ok) return current;
+    if (await previewCheckoutIdentity(release.path).catch(() => null) !== captured.identity) {
+      return { ok: false, reason: 'checkout-identity-changed' };
+    }
+    if (JSON.stringify(current.policy) !== JSON.stringify(captured.policy)) {
+      return { ok: false, reason: 'retirement-review-changed' };
+    }
+    return prepared;
+  });
 }
 
 /** Host-control-gated preview of one inventory row; may fetch missing proof objects. */
@@ -585,7 +814,7 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
   release = bindInventoriedRelease(outcome, release);
   if (!release) return { ok: false, reason: 'release-not-in-inventory' };
   const reviewOptions = { ...opts, forgeAccount: app.forgeAccount ?? null };
-  const review = () => withClaimOwnershipLock(() => reviewCurrentCheckout({ repoPath: app.repoPath, release, prUrl, kind }, reviewOptions));
+  const review = () => previewCurrentCheckout({ repoPath: app.repoPath, release, prUrl, kind }, reviewOptions);
   let prepared = await review();
   if (prepared.reason === 'retirement-local-objects-missing') {
     // A remote default may advance while local refs stay put. Acquire only its
@@ -599,7 +828,7 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
     // merged exact-head proof. Never promote an orphan's execution to success.
     const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
     const forge = await (opts.readForge || readRetirementForgeEvidence)(app.repoPath, release.branch, prUrl,
-      { forgeAccount: app.forgeAccount ?? null }).catch(() => null);
+      reviewForgeOptions(release, kind, { ...opts, forgeAccount: app.forgeAccount ?? null })).catch(() => null);
     if (forge?.prUrl === prUrl && forge.prHead === release.head) {
       const [repoPath, checkoutPath] = await Promise.all([
         realpath(app.repoPath).catch(() => null), realpath(release.path).catch(() => null),
@@ -647,11 +876,48 @@ async function rawBlobId(source, size, format, work) {
  * on anything that cannot be archived faithfully, before any copy is made.
  * The fingerprint is compared again immediately before removal.
  */
-async function snapshotContent(path, work = archiveWork()) {
+const VITEST_CACHE_TAG = 'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.';
+const VITEST_MODULE_CACHE_ROOTS = Object.values(WORKSPACE_TEST_CACHE_ROOTS).map(cache => `${cache.workspace}/${cache.cacheDir}/modules`);
+const cacheInspectionFailure = error => {
+  if (['retirement-archive-cancelled', 'retirement-archive-work-limit-exceeded', 'archive-manifest-budget-exceeded'].includes(error.message)) throw error;
+  return false;
+};
+
+/** Recognize only ignored, tagged Vitest module artifacts, never arbitrary ignored files. */
+async function disposableModuleCache(path, rel, ignored, verified, work) {
+  if (!ignored.has(rel)) return false;
+  const root = VITEST_MODULE_CACHE_ROOTS.find(cache => rel.startsWith(`${cache}/`)
+    && /^(?:[a-f0-9]{40}|[a-f0-9]{64}|CACHEDIR\.TAG|_metadata\.json)$/.test(rel.slice(cache.length + 1)));
+  if (!root || !ignored.has(`${root}/CACHEDIR.TAG`) || !ignored.has(`${root}/_metadata.json`)) return false;
+  if (!verified.has(root)) verified.set(root, (async () => {
+    const tag = await archiveBytes(await archiveFile(path, join(path, root, 'CACHEDIR.TAG')), work, 2048);
+    const metadata = JSON.parse((await archiveBytes(await archiveFile(path, join(path, root, '_metadata.json')), work, 4096)).toString('utf8'));
+    return tag.toString('utf8').startsWith(VITEST_CACHE_TAG) && Object.keys(metadata).length === 1
+      && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(metadata.lockfileHash);
+  })().catch(cacheInspectionFailure));
+  if (!await verified.get(root)) return false;
+  // Check every directory component; a cache-shaped symlink is not cache evidence.
+  return archiveFile(path, join(path, rel)).then(() => true, cacheInspectionFailure);
+}
+
+// Git for Windows can enumerate junction descendants. Inspect components in
+// order so Node's lstat sees the link before hashing any target bytes.
+async function listedContentEntry(path, listed, work) {
+  const parts = listed.replace(/\/$/, '').split('/');
+  for (let i = 0; i < parts.length; i++) {
+    work.check();
+    const rel = parts.slice(0, i + 1).join('/');
+    const info = await lstat(join(path, rel));
+    if (info.isSymbolicLink() || i === parts.length - 1) return { rel, info };
+    if (!info.isDirectory()) throw new Error(`${rel} is not a directory`);
+  }
+}
+
+async function snapshotContent(path, work = archiveWork(), allowDisposableCache = false) {
   work.check();
   // These reads are independent and each Git spawn is mostly launch latency, so
   // they run together; every destructive boundary re-reads this snapshot anyway.
-  const [unmerged, stageOut, tagged, indexDiff, worktreeDiff, objectFormat, others] = await Promise.all([
+  const [unmerged, stageOut, tagged, indexDiff, worktreeDiff, objectFormat, others, ignoredFiles] = await Promise.all([
     git(['ls-files', '-u', '-z'], path),
     git(['ls-files', '--stage', '-z'], path),
     git(['ls-files', '-v', '-z'], path),
@@ -663,6 +929,7 @@ async function snapshotContent(path, work = archiveWork()) {
     git(['-c', 'diff.autoRefreshIndex=false', 'diff', '--binary', '--no-textconv', '--no-ext-diff'], path, true),
     git(['rev-parse', '--show-object-format'], path),
     git(['ls-files', '--others', '-z'], path),
+    allowDisposableCache ? git(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], path) : '',
   ]);
   if (unmerged.length) throw new Error('unmerged index entries cannot be archived');
   const stage = zLines(stageOut);
@@ -682,11 +949,18 @@ async function snapshotContent(path, work = archiveWork()) {
   if (hidden) throw new Error(`${hidden.slice(2)} hides working-tree changes from Git`);
 
   const files = [];
+  const ignored = new Set(zLines(ignoredFiles));
+  const verifiedCaches = new Map();
   let total = 0;
   const addFile = async (rel, info, extra = {}) => {
-    total += info.size;
-    checkArchiveSize('content', info.size, total);
-    const file = { path: rel, bytes: info.size, sha256: await archiveHash(join(path, rel), work), ...extra };
+    if (!extra.disposableCache) {
+      total += info.size;
+      checkArchiveSize('content', info.size, total);
+    }
+    // Current no-archive review still hashes every byte with bounded streaming,
+    // metadata and elapsed-work budgets. Historical archive limits stay intact.
+    const file = { path: rel, bytes: info.size,
+      sha256: await archiveHash(join(path, rel), work, extra.disposableCache ? Infinity : MAX_FILE_BYTES), ...extra };
     work.add(file);
     files.push(file);
   };
@@ -703,17 +977,23 @@ async function snapshotContent(path, work = archiveWork()) {
     if (await rawBlobId(join(path, rel), info.size, format, work) !== blob) await addFile(rel, info, { tracked: true });
   }
   const symlinks = [];
-  for (const rel of zLines(others)) {
-    work.check();
+  const links = new Set();
+  for (const listed of zLines(others)) {
+    const { rel, info } = await listedContentEntry(path, listed, work);
+    if (links.has(rel)) continue;
     // `ls-files --others` names a nested repository as `dir/` without its files.
-    if (rel.endsWith('/')) throw new Error(`nested repository at ${rel} cannot be archived`);
-    const info = await lstat(join(path, rel));
+    // A junction may also have a trailing slash; classify the link first.
+    if (!info.isSymbolicLink() && listed.endsWith('/')) throw new Error(`nested repository at ${rel} cannot be archived`);
     if (info.isSymbolicLink()) {
       const link = { path: rel, target: archiveText(await readlink(join(path, rel), { encoding: 'buffer' })) };
       work.add(link);
       symlinks.push(link);
+      links.add(rel);
     }
-    else if (info.isFile()) await addFile(rel, info);
+    else if (info.isFile()) {
+      const disposableCache = allowDisposableCache && await disposableModuleCache(path, rel, ignored, verifiedCaches, work);
+      await addFile(rel, info, disposableCache ? { disposableCache: true } : {});
+    }
     else throw new Error(`${rel} is not a regular file`);
   }
   const fingerprint = createHash('sha256').update(indexDiff).update('\0').update(worktreeDiff).update('\0')
@@ -780,14 +1060,14 @@ async function missingCheckoutAdministration(repoPath, path) {
   return roots[0];
 }
 
-async function archiveSnapshots(tree, repoPath, missingRoot, work = archiveWork()) {
+async function archiveSnapshots(tree, repoPath, missingRoot, work = archiveWork(), allowDisposableCache = false) {
   work = work.metadataScope();
   if (!missingRoot) {
-    const snapshots = await Promise.all([snapshotContent(tree.path, work), snapshotAdministration(tree.path, null, work)]);
+    const snapshots = await Promise.all([snapshotContent(tree.path, work, allowDisposableCache), snapshotAdministration(tree.path, null, work)]);
     work.check();
     // Capture already charged metadata; apply the reader's layout checks too.
     for (const snapshot of snapshots) validateArchiveEntries(snapshot, work, false);
-    checkArchiveBudget(...snapshots);
+    checkArchiveBudget(...snapshots, allowDisposableCache);
     return snapshots;
   }
   const present = await lstat(tree.path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
@@ -809,13 +1089,17 @@ async function archiveSnapshots(tree, repoPath, missingRoot, work = archiveWork(
  */
 export async function preserveMergedCheckout(repoPath, tree, defaultBranch, { cosDir, signal } = {}) {
   if (!tree?.head || (!tree.branch && tree.detached !== true) || tree.locked) throw new Error('checkout-identity-unavailable');
+  const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
   const branch = shortBranch(tree.branch);
   const missingRoot = await missingCheckoutAdministration(repoPath, tree.path);
   const archive = await archiveCheckout({ repoPath, tree, branch, defaultBranch, cosDir, missingRoot, work: archiveWork(signal) });
   return {
     archiveDir: archive.dir,
+    checkoutIdentity,
     async verify(holder) {
       if (!holder || holder.head !== tree.head || holder.branch !== tree.branch || Boolean(holder.detached) !== Boolean(tree.detached)) return 'worktree-holder-changed';
+      // Missing-root recovery archives Git administration without a live pointer.
+      if (checkoutIdentity && await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return 'checkout-identity-changed';
       const [content, administration] = await archiveSnapshots(tree, repoPath, missingRoot, archiveWork(signal));
       return content.fingerprint === archive.fingerprint && administration.fingerprint === archive.administrationFingerprint
         ? null : 'checkout-content-changed';
@@ -1121,26 +1405,26 @@ async function matchRelease(repoPath, release) {
 /** Shared live policy/owner check for the explicit whole-checkout transaction.
  * It does not archive, unlock or infer integration.
  */
-export async function inspectCheckoutRetirementOwnership({ repoPath, release, registration = true }, opts = {}) {
+export async function inspectCheckoutRetirementOwnership({ repoPath, release, registration = true, reviewIdentity = {}, forgeAccount = null }, opts = {}) {
   if (!release.branch || PROTECTED_BRANCHES.includes(release.branch)) return { ok: false, reason: 'protected-branch' };
   const matched = registration ? await matchRelease(repoPath, release) : { tree: release };
   if (!matched.tree) return { ok: false, reason: matched.reason };
   const reason = await ownerReason({ repoPath, tree: matched.tree, branch: release.branch,
     readAgents: opts.readAgents || readClaimOwnershipAgents, reviewed: true });
   if (reason) return { ok: false, reason };
-  const policy = await retirementPolicy(repoPath, release.branch, opts);
+  const policy = await retirementPolicy(repoPath, release.branch, { ...opts, forgeAccount: opts.forgeAccount ?? forgeAccount }, reviewIdentity);
   return policy.reason ? { ok: false, reason: policy.reason } : { ok: true, tree: matched.tree, policy };
 }
 
 /**
- * Archive and retire one held checkout under an operator's scoped release.
+ * Remove one held checkout under an operator's scoped release. Nothing is copied.
  *
  * @param {{ repoPath: string, release: { path: string, head: string, branch: string|null, locked: boolean, lockReason: string|null } }} input
  * @param {{ cosDir?: string, readAgents?: () => Promise<object[]|null> }} [opts]
- * @returns {Promise<{ ok: true, archiveDir: string, branchDeleted: boolean, branchRetainedReason?: string } | { ok: false, reason: string, detail?: string, archiveDir?: string }>}
+ * @returns {Promise<{ ok: true, branchDeleted: boolean, checkoutIdentity?: string, branchRetainedReason?: string } | { ok: false, reason: string, detail?: string }>}
  */
 async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
-  const { cosDir = PATHS.cos, readAgents = readClaimOwnershipAgents } = opts;
+  const { readAgents = readClaimOwnershipAgents } = opts;
   // Only the unattended merged-retirement caller sets this, and only without a review.
   const mergedObligationSettled = !review && opts.settleMergedReviewObligation === true;
   const branch = release.branch ?? null;
@@ -1162,100 +1446,166 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
       const { tree } = first;
       const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
       if (!checkoutIdentity || (release.checkoutIdentity && release.checkoutIdentity !== checkoutIdentity)) return refuse('checkout-identity-changed');
-      const merged = branch
+      // A reviewed checkout can be integrated on the forge while local main still
+      // lags (squash, or a reset default). Local ancestry remains the proof when
+      // no review was supplied. Supersession acceptance never covers that lag.
+      const locallyMerged = branch
         ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
         : await isAncestor(repoPath, tree.head, defaultBranch);
-      if (!merged && !review) return refuse('not-merged-on-recheck');
+      if (!locallyMerged && !review) return refuse('not-merged-on-recheck');
+      // Status must not refresh the private index bound into the review digest.
+      const porcelain = await getStatusPorcelain(tree.path).catch(() => null);
+      if (porcelain === null) return refuse('worktree-status-unavailable');
+      if (!classifyWorktreeDirt(porcelain).clean) return refuse('worktree-dirty');
       const reviewed = review ? await reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind }, opts) : null;
       if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed', reviewed.archiveLimit, reviewed.nextAction);
-      if (reviewed?.review.comparison.disposition === 'review-supersession' && review.acceptSuperseded !== true) return refuse('retirement-supersession-not-accepted');
+      const disposition = reviewed?.review.comparison.disposition;
+      if (disposition === 'review-supersession' && (!locallyMerged || review.acceptSuperseded !== true)) return refuse('retirement-supersession-not-accepted');
+      if (!locallyMerged && disposition !== 'integrated') return refuse('not-merged-on-recheck');
       const owner = await ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled });
       if (owner) return refuse(owner);
       return { fence: { repoPath, path: tree.path, branch }, tree, reviewed, checkoutIdentity };
     },
-    archive: async ({ tree, reviewed }) => {
-      const archive = await archiveCheckout({ repoPath, tree, branch, defaultBranch, release, cosDir, review: reviewed?.review, work: archiveWork(opts.signal) })
-        .catch(error => ({ error }));
-      if (!archive.error) return { archive };
-      const capacityRefusal = archiveLimitRefusal(archive.error);
-      if (capacityRefusal) return { result: capacityRefusal };
-      console.error(`❌ held-checkout recovery: archive failed for ${tree.path}, checkout kept: ${archive.error.message}`);
-      return { result: { ok: false, reason: 'archive-failed', detail: archive.error.message } };
+    archive: async ({ tree }) => {
+      try {
+        await releaseCheckoutWithoutArchive({ repoPath, path: tree.path, branch }, async () => {
+          if (opts.signal?.aborted) throw new Error('retirement-archive-cancelled');
+          const status = await getStatusPorcelain(tree.path).catch(() => null);
+          if (status === null) throw new Error('worktree-status-unavailable');
+          if (!classifyWorktreeDirt(status).clean) throw new Error('worktree-dirty');
+          const mergedNow = branch
+            ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
+            : await isAncestor(repoPath, tree.head, defaultBranch);
+          // Finish re-reads the review. A forge-integrated detached or lagging
+          // checkout is not an ancestor of local main yet.
+          if (!mergedNow && !review) throw new Error('not-merged-on-recheck');
+          return null;
+        });
+        return { archive: { disposable: true } };
+      } catch (error) {
+        const reason = ['worktree-dirty', 'not-merged-on-recheck', 'worktree-status-unavailable', 'retirement-archive-cancelled', 'checkout-ignored-payload-unverified'].includes(error.message)
+          ? error.message : 'checkout-not-disposable';
+        return { result: { ok: false, reason, ...(reason === 'checkout-not-disposable' && error.message && { detail: error.message }) } };
+      }
     },
-    finish: async ({ tree, reviewed, checkoutIdentity }, archive) => {
-      const result = await finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, archive, checkoutIdentity, mergedObligationSettled }, opts);
+    finish: async ({ tree, reviewed, checkoutIdentity }) => {
+      const result = await finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, defaultBranch, checkoutIdentity, mergedObligationSettled }, opts);
       return result.ok ? { ...result, checkoutIdentity } : result;
     },
   });
 }
 
-/** The second critical section: re-prove the release, ownership and archived bytes, then remove. */
-async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, archive, checkoutIdentity, mergedObligationSettled = false }, opts) {
+/** The second critical section: re-prove the release, ownership and a clean tree, then remove. */
+async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, defaultBranch, checkoutIdentity, mergedObligationSettled = false }, opts) {
   const { readAgents = readClaimOwnershipAgents } = opts;
-  // Archiving takes time; never unlock a lock that changed hands meanwhile.
-  if (opts.signal?.aborted) return { ok: false, reason: 'retirement-archive-cancelled', archiveDir: archive.dir };
+  if (opts.signal?.aborted) return { ok: false, reason: 'retirement-archive-cancelled' };
   const second = await matchRelease(repoPath, release);
-  if (!second.tree) return { ok: false, reason: second.reason, archiveDir: archive.dir };
-  if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return { ok: false, reason: 'checkout-identity-changed', archiveDir: archive.dir };
+  if (!second.tree) return { ok: false, reason: second.reason };
+  if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return { ok: false, reason: 'checkout-identity-changed' };
   await opts.beforeMutation?.();
   if (release.locked) {
     const unlocked = await execGit(['worktree', 'unlock', tree.path], repoPath).then(() => true, () => false);
-    if (!unlocked) return { ok: false, reason: 'worktree-unlock-failed', archiveDir: archive.dir };
+    if (!unlocked) return { ok: false, reason: 'worktree-unlock-failed' };
   }
   let capacityRefusal;
+  let reviewedLinks = [];
+  const removedLinks = [];
+  let linksPrepared = false;
   const verifyRemoval = async (holder) => {
     if (opts.signal?.aborted) return 'retirement-archive-cancelled';
     if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
     if (!await matchesObservedCheckoutIncarnation(repoPath, release)) return 'checkout-identity-changed';
     if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return 'checkout-identity-changed';
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
-    const [reason, fresh] = await Promise.all([
+    const [reason, fresh, porcelain] = await Promise.all([
       ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled }),
-      review ? reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind, unlocked: release.locked }, opts) : null,
+      review ? reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind, unlocked: release.locked }, opts,
+        content => { reviewedLinks = content.symlinks; }) : null,
+      getStatusPorcelain(tree.path).catch(() => null),
     ]);
     if (fresh && !fresh.ok) { capacityRefusal = fresh; return fresh.reason; }
     if (fresh && fresh.review.digest !== review.digest) return 'retirement-review-changed';
-    // The byte comparisons stay last so nothing else ages between them and removal.
-    const [current, administration] = await archiveSnapshots(tree, repoPath, null, archiveWork(opts.signal))
-      .catch(error => { capacityRefusal = archiveLimitRefusal(error); return []; });
-    if (!administration || !current) return capacityRefusal?.reason || 'checkout-content-changed';
-    if (administration.fingerprint !== archive.administrationFingerprint) return 'checkout-administration-changed';
+    if (porcelain === null || !classifyWorktreeDirt(porcelain).clean) return 'worktree-dirty';
+    const locallyMerged = branch
+      ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
+      : await isAncestor(repoPath, tree.head, defaultBranch);
+    const disposition = fresh?.review?.comparison?.disposition;
+    if (disposition === 'review-supersession' && (!locallyMerged || review.acceptSuperseded !== true)) return 'retirement-supersession-not-accepted';
+    if (!locallyMerged && disposition !== 'integrated') return 'not-merged-on-recheck';
     if (reason) return reason;
     if (opts.signal?.aborted) return 'retirement-archive-cancelled';
-    return current?.fingerprint === archive.fingerprint ? null : 'checkout-content-changed';
+    return null;
   };
   const removal = await forceRemoveWorktreeDir(repoPath, tree.path, {
-    label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval, beforeMutation: opts.beforeMutation,
+    label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval,
+    beforeMutation: async () => {
+      await opts.beforeMutation?.();
+      // The removal helper also calls this hook before pruning registration.
+      if (linksPrepared) return;
+      linksPrepared = true;
+      // Git for Windows leaves junctions behind (git-for-windows/git#6151).
+      // Unlink only freshly reviewed links after the final removal gate, never
+      // recursively delete their targets or use a fallback checkout remover.
+      const work = archiveWork(opts.signal);
+      for (const link of reviewedLinks) {
+        const { rel, info } = await listedContentEntry(tree.path, link.path, work);
+        if (rel !== link.path || !info.isSymbolicLink()
+          || archiveText(await readlink(join(tree.path, rel), { encoding: 'buffer' })) !== link.target) throw new Error('retirement-review-changed');
+        // Ordinary file links are already handled by Git. Only directory links
+        // need this preparation; inspect target metadata without reading bytes.
+        const target = await stat(join(tree.path, rel)).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+        if (!target?.isDirectory()) continue;
+        await unlink(join(tree.path, rel));
+        removedLinks.push(link);
+      }
+    },
   });
   if (!removal.removed) {
+    let linkRestoreFailed = false;
+    // A refused Git removal may leave the original generation intact. Restore
+    // its links without overwriting anything a concurrent writer created.
+    if (removedLinks.length && await readRetirementCheckoutIdentity(tree.path) === checkoutIdentity) {
+      for (const link of removedLinks) {
+        const parent = link.path.split('/').slice(0, -1).join('/');
+        const parentSafe = !parent || await listedContentEntry(tree.path, parent, archiveWork())
+          .then(entry => entry.rel === parent && entry.info.isDirectory(), () => false);
+        const restored = parentSafe && await symlink(link.target, join(tree.path, link.path), process.platform === 'win32' ? 'junction' : 'dir')
+          .then(() => true, () => false);
+        if (!restored) linkRestoreFailed = true;
+      }
+    }
     // Hand the lock back exactly as released. A lock someone took in the
     // meantime makes this fail, which is the outcome we want anyway.
     if (release.locked) {
       const args = ['worktree', 'lock', ...(release.lockReason != null ? ['--reason', release.lockReason] : []), tree.path];
       await execGit(args, repoPath).catch(err => console.warn(`⚠️ held-checkout recovery: could not restore lock on ${tree.path}: ${err.message}`));
     }
-    return { ...(capacityRefusal || { ok: false, reason: removal.reason || 'worktree-remove-failed' }), archiveDir: archive.dir };
+    if (linkRestoreFailed) return { ok: false, reason: 'retirement-link-restore-failed' };
+    return capacityRefusal || { ok: false, reason: removal.reason || 'worktree-remove-failed' };
   }
-  console.log(`🧹 held-checkout recovery: retired ${tree.path} (archive: ${archive.dir})`);
-  if (!branch) return { ok: true, archiveDir: archive.dir, branchDeleted: false };
+  console.log(`🧹 held-checkout recovery: retired ${tree.path}`);
+  if (!branch) return { ok: true, branchDeleted: false };
 
   const hold = await ownerReason({ repoPath, tree: { ...tree, path: null }, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled });
-  if (hold) return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: hold };
+  if (hold) return { ok: true, branchDeleted: false, branchRetainedReason: hold };
   if (review) {
     const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
     const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, branch, review.prUrl, reviewForgeOptions(release, review.kind, opts)).catch(() => null);
-    const identity = await integratedPolicyReviewIdentity(repoPath, release, review.prUrl, forge);
+    const policies = reviewed.review.policy?.policies || [];
+    const captured = policies.find(row => row.continuedDelivery)?.continuedDelivery.checkoutIncarnation
+      || policies.find(row => row.resumedCleanup)?.resumedCleanup.checkoutIncarnation;
+    const identity = await integratedPolicyReviewIdentity(repoPath, release, review.prUrl, forge, captured);
     const policy = identity ? await retirementPolicy(repoPath, branch, opts, identity) : null;
     if (JSON.stringify(policy) !== JSON.stringify(reviewed.review.policy) || JSON.stringify(forge) !== JSON.stringify(reviewed.review.forge)) {
-      return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: 'retirement-evidence-changed' };
+      return { ok: true, branchDeleted: false, branchRetainedReason: 'retirement-evidence-changed' };
     }
   }
   // A new checkout/commit cannot be deleted by a stale name-only operation.
   const holders = await listWorktrees(repoPath).catch(() => null);
-  if (!holders || holders.some(holder => shortBranch(holder.branch) === branch)) return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: 'branch-has-new-holder' };
+  if (!holders || holders.some(holder => shortBranch(holder.branch) === branch)) return { ok: true, branchDeleted: false, branchRetainedReason: 'branch-has-new-holder' };
   const deleted = await deleteCompletedLocalBranch(repoPath, branch, release.head, { beforeMutation: opts.beforeMutation });
-  if (!deleted) return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: 'branch-ref-changed-or-delete-failed' };
-  return { ok: true, archiveDir: archive.dir, branchDeleted: true };
+  if (!deleted) return { ok: true, branchDeleted: false, branchRetainedReason: 'branch-ref-changed-or-delete-failed' };
+  return { ok: true, branchDeleted: true };
 }
 
 const sameRelease = (entry, release) => entry.path === release.path && entry.head === release.head
@@ -1281,13 +1631,15 @@ export async function fetchRetirementProofObjects(repoPath, release, prUrl, expe
   const [{ readRetirementForgeEvidence }, { getOriginInfo }, { resolveForgeExecOptions }] = await Promise.all([
     import('./heldCheckoutReview.js'), import('../lib/gitRemote.js'), import('./forgeExecOptions.js'),
   ]);
-  const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl, opts).catch(() => null);
+  const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl, { ...opts, ...(!opts.sourceSupersessionHead && { exactDeliveredHead: release.head }) }).catch(() => null);
   const origin = await getOriginInfo(repoPath).catch(() => null);
   if (!origin || !forge || forge.repository !== `${origin.host}/${origin.fullName}` || forge.prUrl !== prUrl) {
     return { ok: false, reason: 'retirement-pr-repository-mismatch' };
   }
   if (expectedHeadSha !== null && forge.prHead !== expectedHeadSha) return { ok: false, reason: 'receipt-pr-head-changed' };
-  const heads = [...new Set([forge.prHead, forge.mergeCommit, forge.defaultHead, forge.changeBase, forge.firstCommit])];
+  const exactDelivery = forge.scopeProof === 'exact-delivered-head' && forge.prHead === release.head && !opts.sourceSupersessionHead;
+  const heads = [...new Set([forge.prHead, forge.mergeCommit, forge.targetHead ?? forge.defaultHead,
+    ...(exactDelivery ? [forge.defaultHead] : [forge.changeBase, forge.firstCommit])])];
   if (heads.some(head => typeof head !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head))) {
     return { ok: false, reason: 'retirement-forge-unreadable' };
   }
@@ -1330,9 +1682,17 @@ export async function retirePendingMergeCheckout({ repoPath, release, prUrl, exp
   if (!prepared.ok) return prepared;
   if (prepared.review.forge.prHead !== expectedHeadSha) return { ok: false, reason: 'receipt-pr-head-changed' };
   if (prepared.review.comparison.disposition !== 'integrated') return { ok: false, reason: 'retirement-supersession-not-accepted' };
-  return retireHeldCheckout({ repoPath, release,
+  const result = await retireHeldCheckout({ repoPath, release,
     review: { prUrl, digest: prepared.review.digest, acceptSuperseded: false },
   }, receiptOptions);
+  if (result.ok) {
+    const { recordWorkspaceCheckoutRetirement } = await import('./taskSchedule.js');
+    await recordWorkspaceCheckoutRetirement(repoPath, {
+      path: release.path, branch: release.branch ?? null, head: release.head,
+      branchDeleted: result.branchDeleted, ...(result.archiveDir && { archiveDir: result.archiveDir }), checkoutIdentity: result.checkoutIdentity,
+    });
+  }
+  return result;
 }
 
 /**
@@ -1359,7 +1719,8 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   }
   if (result.ok) {
     await taskSchedule.recordHeldCheckoutRetirement(appId, {
-      path: release.path, branch: release.branch ?? null, head: release.head, branchDeleted: result.branchDeleted, archiveDir: result.archiveDir, checkoutIdentity: result.checkoutIdentity,
+      path: release.path, branch: release.branch ?? null, head: release.head, branchDeleted: result.branchDeleted,
+      ...(result.archiveDir && { archiveDir: result.archiveDir }), checkoutIdentity: result.checkoutIdentity,
     });
   }
   return result;

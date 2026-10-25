@@ -44,6 +44,10 @@ Submit `POST /api/html-composition/render` with:
 shorter than the video, is trimmed to duration, and fades out over the final half
 second. A missing requested track fails the job.
 
+Use `audioUpload: "example.wav"` instead to include a file from `data/uploads/`
+with the same loop, trim and fade behavior. Choose one audio source per render;
+missing files and unsupported audio formats fail the job.
+
 For procedural music, submit `synthesizeMusic: true` instead of `musicTrack`.
 Define `async portosComposition.renderAudio({ sampleRate, durationSec })` to return
 an ordinary array containing exactly `Math.round(sampleRate * durationSec)` mono
@@ -60,7 +64,7 @@ write is required. Missing or invalid audio fails the job.
 ### Loudness mastering
 
 Audio PortOS itself produces or mixes, a `synthesizeMusic` score or a
-`musicTrack` bed, is mastered by default (#10249). The encode first runs an
+`musicTrack` or `audioUpload` bed, is mastered by default (#10249). The encode first runs an
 ffmpeg `loudnorm` measurement pass over the trimmed bed, then applies it in
 linear mode inside the same encode to **-14 LUFS integrated, -1.5 dBTP, LRA 11**
 (`MASTER_LOUDNESS` in `server/lib/ffmpeg.js`). A bed that measures below -50
@@ -183,7 +187,7 @@ silent contact sheet instead of a video. `proof.format` (`landscape`,
 a proof request cannot also carry `formats`. The renderer applies the same contract
 and launch-video gates, seeks one frame per interval (at most 60), and tiles
 them six across at phone size (360px wide, 240px for vertical) into one PNG.
-A proof is silent, so the request must omit `musicTrack` and
+A proof is silent, so the request must omit `musicTrack`, `audioUpload` and
 `synthesizeMusic`. Nothing is registered in Media History and no
 launch-video artifacts are delivered. The completed job's result carries
 `proof: { file, url, times, columns, width, height }` (plus `format` when one was requested), where `file` is
@@ -191,6 +195,13 @@ relative to the data directory (never an absolute host path) and `url` serves
 it under `/data/`; tile *n* shows `times[n]`.
 Launch runs write `proofs/contact-<jobId>.png` beside the run; other
 compositions write `data/composition-proofs/`. Both are excluded from backups. Code Animation exports stage `data/code-animation-exports/<job-id>/<export-id>/` (also excluded): the stored HTML with a shim that maps `ANIMATION_META`/`renderFrame(t)` onto `portosComposition`, stops the page's own `requestAnimationFrame` clock, and hides everything but the film canvas.
+
+Code Animation includes the saved audio automatically: Music-library and generated
+soundtrack files use `musicTrack`, while uploaded audio uses `audioUpload` (a
+filename in `data/uploads/`). Both loop and trim to the video length with the
+same half-second tail fade and loudness mastering. Missing or unsupported audio
+fails the export. Procedural Web Audio playback is still excluded from
+frame-exact exports; its export note explains how to attach a soundtrack.
 
 The 202 response contains the media queue's `jobId`. Subscribe to
 `GET /api/html-composition/:jobId/events` for the usual queued, started, progress,

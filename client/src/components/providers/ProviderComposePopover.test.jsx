@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { request } from '../../services/apiCore.js';
+vi.mock('../../services/apiCore.js', () => ({ request: vi.fn() }));
 import ProviderComposePopover from './ProviderComposePopover';
 
 afterEach(cleanup);
@@ -26,6 +28,7 @@ vi.mock('../../hooks/useProviderCatalog.js', () => ({ default: mocked.useProvide
 beforeEach(() => {
   mocked.useProviderCatalog.mockReturnValue(CATALOG);
   CATALOG.savePreset.mockReset();
+  request.mockReset().mockResolvedValue({ options: [] });
 });
 
 // Composes down harness -> method -> service, asserting each select only
@@ -39,6 +42,26 @@ async function composePiTui() {
 }
 
 describe('ProviderComposePopover', () => {
+  it('carries the server-advertised speed through a composed Codex selection', async () => {
+    mocked.useProviderCatalog.mockReturnValue({ ...CATALOG,
+      harnesses: [{ id: 'codex', label: 'Codex', enabled: true, detected: true, modes: ['cli'], executionOptionKeys: ['serviceTier'] }],
+      methodsFor: () => ['cli'],
+      compatiblePairs: () => [{ slug: 'chatgpt', label: 'ChatGPT', enabled: true, readiness: 'ready' }],
+      modelsFor: () => ['alpha'], effortLevelsFor: () => [],
+    });
+    request.mockResolvedValue({ options: [{ key: 'serviceTier', label: 'Speed', values: ['standard', 'fast'] }] });
+    const onCompose = vi.fn();
+    render(<ProviderComposePopover open onClose={vi.fn()} onCompose={onCompose} />);
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Harness'), { target: { value: 'codex' } });
+    });
+    await act(async () => { fireEvent.change(screen.getByLabelText('Method'), { target: { value: 'cli' } }); });
+    await act(async () => { fireEvent.change(screen.getByLabelText('Service'), { target: { value: 'chatgpt' } }); });
+    fireEvent.change(await screen.findByLabelText('Speed'), { target: { value: 'fast' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use once' }));
+    expect(onCompose).toHaveBeenCalledWith('codex.cli@chatgpt', expect.objectContaining({ executionOptions: { serviceTier: 'fast' } }));
+  });
+
   it('alphabetizes custom-combination model options by displayed name', async () => {
     const models = Object.freeze(['Zulu', { id: 'z-id', name: 'alpha' }, 'Beta']);
     mocked.useProviderCatalog.mockReturnValue({ ...CATALOG, modelsFor: () => models });

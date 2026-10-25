@@ -8,7 +8,7 @@
  * PortOS-managed roots are retired unattended. The Git page's merged-branch
  * action shares those ownership gates; external checkouts need scoped release.
  */
-import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, onTestFailed, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, utimes, writeFile, appendFile, unlink } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
@@ -19,16 +19,44 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/m
 import { captureCompletedCheckouts } from './completedCheckoutEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 
-// Retirement now preserves private Git and ignored evidence. Exercise the
-// real archive against a test-owned data root, never the install's data tree.
+// Keep retirement I/O inside a test-owned data root, never the install's data tree.
 vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-reconcile-own-archives-'),
 }));
-afterAll(cleanupTempDataRoots);
+const pendingPhases = new Set();
+afterAll(async () => {
+  await Promise.all(pendingPhases);
+  await cleanupTempDataRoots();
+});
 
-const injected = vi.hoisted(() => ({ statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], forge: {}, gitSpawns: [] }));
+const injected = vi.hoisted(() => ({ statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, failScheduleWrite: false, forge: {}, gitSpawns: [], gitInFlight: new Set(), phase: null }));
 vi.mock('../lib/execGit.js', async (importOriginal) => {
   const actual = await importOriginal();
+  const observe = run => async (args, cwd, options) => {
+    const phase = injected.phase;
+    if (!phase) return run(args, cwd, options);
+    phase.signal.throwIfAborted();
+    if (phase.closed) throw new Error(`Manual claim ${phase.name} already settled`);
+    const remaining = 30000 - (performance.now() - phase.started);
+    if (remaining <= 0) throw new Error(`Manual claim ${phase.name} exceeded its 30s deadline`);
+    const command = ['worktree', 'bundle', 'remote'].includes(args[0]) ? args.slice(0, 2).join(' ') : args[0];
+    const pending = { command, started: performance.now() };
+    phase.pending.add(pending);
+    try {
+      const operation = run(args, cwd, { ...options, timeout: Math.min(options?.timeout || 30000, remaining) });
+      pending.settled = operation.then(() => {}, () => {});
+      return await operation;
+    }
+    finally {
+      phase.pending.delete(pending);
+      const ms = performance.now() - pending.started;
+      const row = phase.commands.get(command) || { count: 0, ms: 0, maxMs: 0 };
+      row.count++;
+      row.ms += ms;
+      row.maxMs = Math.max(row.maxMs, ms);
+      phase.commands.set(command, row);
+    }
+  };
   return { ...actual, execGit: async (args, cwd, options) => {
     injected.gitSpawns.push({ args, cwd });
     // Git reports forward slashes even when path.join uses Windows separators.
@@ -42,15 +70,29 @@ vi.mock('../lib/execGit.js', async (importOriginal) => {
       await before();
       throw new Error('synthetic Git removal failure');
     }
-    return actual.execGit(args, cwd, options);
-  } };
+    const running = { args, startedAt: Date.now() };
+    injected.gitInFlight.add(running);
+    try {
+      return await observe(actual.execGit)(args, cwd, options);
+    } finally {
+      injected.gitInFlight.delete(running);
+    }
+  }, execGitSafe: observe(actual.execGitSafe) };
 });
+vi.mock('./apps.js', () => ({ getAllApps: async () => [injected.app], getAppById: async id => injected.app?.id === id ? injected.app : null }));
+vi.mock('./taskScheduleStore.js', async importOriginal => ({
+  ...await importOriginal(), loadSchedule: async () => injected.schedule,
+  updateSchedule: async mutate => {
+    if (injected.failScheduleWrite) throw new Error('synthetic receipt persistence failure');
+    return (await mutate(injected.schedule)).result;
+  },
+}));
 vi.mock('./cosState.js', () => ({
   readAgentsStateForSafetyCheck: async () => ({ trusted: injected.owners !== null,
     agents: injected.owners && Object.fromEntries(injected.owners.map(agent => [agent.id, agent])) }),
 }));
 
-// Keep archive I/O at the boundary; use the real completion-policy evaluator.
+// Use the real completion-policy evaluator with synthetic policy records.
 vi.mock('./branchCompletionPolicy.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, readBranchCompletionPolicies: async () => injected.policies, readBranchCompletionHold: input => actual.readBranchCompletionHold(input, {
@@ -80,27 +122,71 @@ vi.mock('./supersededLedger.js', async (importOriginal) => ({
 const { reconcile, gatherBranchState, classifyBranches, cleanupMerged, reapSupersededBranches, describeIdleReconcilePark } = await import('./branchReconcile.js');
 const { clearAgentDispatching, getActiveAgentIds, markAgentDispatching } = await import('./agentState.js');
 const { deleteMergedBranches } = await import('./git.js');
+const { PATHS } = await import('../lib/paths.js');
 
 const DAY = 24 * 60 * 60 * 1000;
+// A reconcile pass is ~55 sequential real-Git spawns plus fixture setup, all inside
+// Vitest's 30s test budget. A load-induced stall (#13459) otherwise surfaces as a bare
+// timeout; name the stalled Git command before the budget expires.
+const SLOW_REPORT_MS = 20_000;
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (real git)', () => {
   let scratch;
   let repo;
   let external;
+  let slowReport;
 
   beforeEach(async () => {
-    Object.assign(injected, { statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], forge: {}, gitSpawns: [] });
+    await Promise.all(pendingPhases);
+    Object.assign(injected, { statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, failScheduleWrite: false, forge: {}, gitSpawns: [], gitInFlight: new Set(), phase: null });
+    slowReport = setTimeout(() => {
+      const now = Date.now();
+      const running = [...injected.gitInFlight].map(({ args, startedAt }) => `git ${args.slice(0, 3).join(' ')} (${now - startedAt}ms)`).join('; ') || 'none';
+      console.log(`🐢 ownership test still running after ${SLOW_REPORT_MS}ms: ${injected.gitSpawns.length} git spawns, in flight: ${running}`);
+    }, SLOW_REPORT_MS).unref();
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-reconcile-own-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
     await materializeGitRepo(safeRepo, { identity: { email: 'test@example.com', name: 'Test' } });
     repo = (await execGit(['rev-parse', '--show-toplevel'], safeRepo)).stdout.trim() || safeRepo;
+    injected.app = { id: 'app-1', repoPath: repo };
     external = join(scratch, 'elsewhere');
     await mkdir(external);
   });
   afterEach(async () => {
+    clearTimeout(slowReport);
+    // Vitest timeouts do not settle the hook/body promise. Never erase a repo
+    // while a timed-out phase still has a Git command or continuation using it.
+    await Promise.all(pendingPhases);
     await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
+
+  function phaseSummary(phase) {
+    const commands = [...phase.commands].sort((a, b) => b[1].ms - a[1].ms);
+    return { phase: phase.name, ms: Math.round((phase.finished ?? performance.now()) - phase.started),
+      gitCalls: commands.reduce((sum, [, row]) => sum + row.count, 0),
+      commands: commands.slice(0, 5).map(([command, row]) => ({ command, count: row.count, ms: Math.round(row.ms), maxMs: Math.round(row.maxMs) })),
+      pending: [...phase.pending].slice(0, 5).map(row => ({ command: row.command, ms: Math.round(performance.now() - row.started) })) };
+  }
+
+  function runPhase(name, signal, work) {
+    const phase = { name, signal, started: performance.now(), commands: new Map(), pending: new Set() };
+    injected.phase = phase;
+    // stderr survives pregate's console suppression, including a hook timeout.
+    onTestFailed(() => process.stderr.write(`Manual claim diagnostic: ${JSON.stringify(phaseSummary(phase))}\n`));
+    const run = Promise.resolve().then(work).finally(async () => {
+      // A rejected Promise.all can leave sibling Git calls running. Close the
+      // phase to new spawns, then join those calls before releasing its fixture.
+      phase.closed = true;
+      await Promise.all([...phase.pending].map(row => row.settled));
+      phase.finished = performance.now();
+      process.stderr.write(`Manual claim diagnostic: ${JSON.stringify(phaseSummary(phase))}\n`);
+    });
+    const settled = run.then(() => {}, () => {});
+    pendingPhases.add(settled);
+    settled.then(() => pendingPhases.delete(settled));
+    return run;
+  }
 
   /** A clean checkout of a new branch at main — "merged" by ancestry alone. */
   async function addTree(path, branch, { ageMs = 0 } = {}) {
@@ -298,20 +384,36 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(await branches()).toEqual(expect.arrayContaining(held.map(claim => claim.branch)));
   };
 
-  it('retires a forge-merged manual claim without a run receipt while an actively owned sibling stays (#12849)', async () => {
-    const shipped = await addManualClaim(21);
-    const owned = await addManualClaim(24);
-    injected.owners = [{ id: 'agent-live-claim', status: 'running', sourceWorkspace: repo, workspacePath: repo,
-      metadata: { sourceWorkspace: repo, claimBranches: [owned.branch] } }];
+  describe('manual claim retirement with an active sibling', () => {
+    let shipped;
+    let owned;
+    // #13473 retained a 31.445s failure under three-worker pregate. Its single
+    // passing A/B did not diagnose the cause. Give fixture construction and the
+    // public action their existing, separate 30s hook/test budgets; per-command
+    // diagnostics and the remaining phase deadline keep a hang visible/bounded.
+    beforeEach(({ signal }) => runPhase('fixture', signal, async () => {
+      shipped = await addManualClaim(21);
+      owned = await addManualClaim(24);
+      injected.owners = [{ id: 'agent-live-claim', status: 'running', sourceWorkspace: repo, workspacePath: repo,
+        metadata: { sourceWorkspace: repo, claimBranches: [owned.branch] } }];
+    }));
 
-    const result = await reconcileManualClaims();
-    const context = JSON.stringify({ cleaned: result.cleaned, skipped: result.skipped });
-    expect(result.cleaned, context).toEqual([shipped.branch]);
-    expect(existsSync(shipped.path)).toBe(false);
-    expect(await branches()).not.toContain(shipped.branch);
-    expect((await execGit(['rev-parse', `refs/portos/completed/${shipped.head}`], repo)).stdout.trim()).toBe(shipped.head);
-    expect(result.skipped.find(row => row.branch === owned.branch)?.reason, context).toBe('claim-owner-active');
-    await expectHeld([owned]);
+    it('retires a forge-merged manual claim without a run receipt while an actively owned sibling stays (#12849)', ({ signal }) => runPhase('reconcile and preservation assertions', signal, async () => {
+      const result = await reconcileManualClaims();
+      const context = JSON.stringify({ cleaned: result.cleaned, skipped: result.skipped });
+      expect(result.cleaned, context).toEqual([shipped.branch]);
+      expect(existsSync(shipped.path)).toBe(false);
+      expect(await branches()).not.toContain(shipped.branch);
+      // #13519 replaced archival with archive-free merged cleanup. The exact
+      // completed ref still protects recovery inside the original repository.
+      for (const directory of ['held-checkout-archives', 'branch-retirement-archives', 'initialized-checkout-retirements']) {
+        expect(existsSync(join(PATHS.cos, directory))).toBe(false);
+      }
+      expect((await execGit(['rev-parse', `refs/portos/completed/${shipped.head}`], repo)).stdout.trim()).toBe(shipped.head);
+      expect(result.skipped.find(row => row.branch === owned.branch)?.reason, context).toBe('claim-owner-active');
+      await expectHeld([owned]);
+      expect((await execGit(['rev-parse', 'HEAD'], owned.path)).stdout.trim()).toBe(owned.head);
+    }));
   });
 
   it('holds a merged manual claim that is dirty or locked (#12849)', async () => {
@@ -583,6 +685,66 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(existsSync(join(unreadable, 'unfinished.txt'))).toBe(true);
     expect(existsSync(clean)).toBe(false);
     expect(result.cleaned).toContain(clean.replaceAll('\\', '/'));
+  });
+
+  describe('detached checkout receipts (#13405)', () => {
+    /** A clean managed detached checkout that a previous scan already inventoried. */
+    async function inventoriedDetached() {
+      const taskSchedule = await import('./taskSchedule.js');
+      const path = join(repo, '.claude', 'worktrees', 'clean-detached');
+      await execGit(['worktree', 'add', '--detach', path, 'main'], repo);
+      const gitPath = await gitCheckoutPath(path);
+      const head = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+      const release = { path: gitPath, head, detached: true, managed: true, checkoutIdentity: await readRetirementCheckoutIdentity(path) };
+      const unrelated = { branch: 'feature/unexplained', head, reason: 'branch-held' };
+      await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'checkout-retained' }, unrelated] });
+      return { taskSchedule, path, release, unrelated };
+    }
+    const sweep = (options = {}) => reconcile(repo, { activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] }, ...options });
+
+    it('settles a retired detached checkout before the next inventory without claiming a branch deletion', async () => {
+      const { taskSchedule, path, release, unrelated } = await inventoriedDetached();
+      const result = await sweep({ appId: 'app-1' });
+      expect(result.cleaned).toContain(release.path);
+      expect(existsSync(path)).toBe(false);
+      const first = await taskSchedule.getBranchReconcileOutcome('app-1');
+      expect(first.retired).toEqual([expect.objectContaining({ path: release.path, head: release.head, checkoutIdentity: release.checkoutIdentity,
+        branchDeleted: false, checkoutOnly: true, archiveDir: null })]);
+      expect(first.retired[0]).not.toHaveProperty('branch');
+      const next = await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+      expect(next.retired).toEqual(first.retired);
+      expect(next.retirementObligations).toEqual([expect.objectContaining({ branch: unrelated.branch })]);
+    });
+
+    it('leaves a removed detached checkout a missing-source obligation when its receipt cannot be stored', async () => {
+      const { taskSchedule, path, release, unrelated } = await inventoriedDetached();
+      injected.failScheduleWrite = true;
+      const result = await sweep({ appId: 'app-1' });
+      expect(existsSync(path)).toBe(false);
+      expect(result.cleaned).not.toContain(release.path);
+      expect(result.detachedWorktrees).toContainEqual(expect.objectContaining({ path: release.path, reason: 'retirement-receipt-unverified' }));
+      injected.failScheduleWrite = false;
+      expect((await taskSchedule.getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+      const next = await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+      expect(next.retirementObligations).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: release.path, reason: 'retirement-provenance-unverified' }),
+        expect.objectContaining({ branch: unrelated.branch }),
+      ]));
+    });
+
+    it('does not let a recreated same-path detached checkout borrow the old checkout-only receipt', async () => {
+      const { taskSchedule, path, release, unrelated } = await inventoriedDetached();
+      await sweep({ appId: 'app-1' });
+      const retired = (await taskSchedule.getBranchReconcileOutcome('app-1')).retired;
+      await execGit(['worktree', 'add', '--detach', path, 'main'], repo);
+      const recreated = { ...release, checkoutIdentity: await readRetirementCheckoutIdentity(path), reason: 'retirement-receipt-unverified' };
+      expect(recreated.checkoutIdentity).not.toBe(release.checkoutIdentity);
+      await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [recreated, unrelated] });
+      const next = await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+      expect(next.retired).toEqual(retired);
+      expect(next.retirementObligations).toContainEqual(expect.objectContaining({ path: recreated.path, checkoutIdentity: recreated.checkoutIdentity }));
+      expect(existsSync(path)).toBe(true);
+    });
   });
 
   it('preserves a prunable checkout whose missing pointer makes Git report the parent clean', async () => {

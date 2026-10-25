@@ -180,7 +180,7 @@ async function assertNoRunningRun(appId) {
  * The first evaluation runs before this returns, so the caller learns whether
  * step one actually went out (or why it is holding) in the same response.
  */
-export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, mode = 'file-issues', prCompletion = null, claimBetweenAudits = true, claimHandler = null, taskTypes = null, explicitCheck = false, auditDepth = 'quick' }) {
+export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, executionOptions, mode = 'file-issues', prCompletion = null, claimBetweenAudits = true, claimHandler = null, taskTypes = null, explicitCheck = false, auditDepth = 'quick' }) {
   const [{ getAppById }, { getProviderById }, { resolveBurnProvider }] = await Promise.all([
     import('./apps.js'), import('./providers.js'), import('./scheduledHandlers/providerPick.js'),
   ]);
@@ -207,7 +207,7 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
 
   const id = `maint-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const now = new Date().toISOString();
-  const pins = { providerId, model: model || null, effort: effort || null };
+  const pins = { providerId, model: model || null, effort: effort || null, ...(executionOptions !== undefined ? { executionOptions } : {}) };
   const run = await insertRun({
     id, appId, familyId, claimFamilyId, ...pins, prCompletion,
     taskTypes, ...(auditDepth === 'deep' ? { auditDepth, auditWorkflow: EXTENDED_AUDIT_WORKFLOW } : {}),
@@ -271,7 +271,7 @@ export function setMaintenanceRunArchived(id, { appId, archived }) {
 }
 
 /** Editing shares the dispatch queue: a stale browser cannot change a started step. */
-export function updateMaintenanceStep(id, stepId, { providerId, model, effort = null }) {
+export function updateMaintenanceStep(id, stepId, { providerId, model, effort = null, executionOptions }) {
   return perRun(id, async () => {
     const run = await getMaintenanceRun(id);
     const step = run?.steps.find(entry => entry.id === stepId);
@@ -290,7 +290,7 @@ export function updateMaintenanceStep(id, stepId, { providerId, model, effort = 
     // and `stepBurnFamily` reads a present-but-null key as that decision rather
     // than as "nothing recorded here, inherit the run's family".
     return patchRun(id, { steps: run.steps.map(entry => entry.id === stepId
-      ? { ...entry, familyId, overrides: { ...entry.overrides, providerId, model, effort } }
+      ? { ...entry, familyId, overrides: { ...entry.overrides, providerId, model, effort, ...(executionOptions !== undefined ? { executionOptions } : entry.overrides.executionOptions !== undefined ? { executionOptions: {} } : {}) } }
       : entry) });
   });
 }

@@ -81,6 +81,13 @@ export default function MoodBoardDetail() {
   return <MoodBoardEditor key={id} id={id} />;
 }
 
+function moodBoardAddErrorMessage(err) {
+  const details = Array.isArray(err?.context?.details)
+    ? err.context.details.map((entry) => entry?.message).filter((message) => typeof message === 'string' && message)
+    : [];
+  return details.join('; ') || err?.message || 'Failed to add item';
+}
+
 function MoodBoardEditor({ id }) {
   const navigate = useNavigate();
   const [board, setBoard] = useState(null);
@@ -306,10 +313,14 @@ function MoodBoardEditor({ id }) {
       payload.text = text.trim();
     }
     setAdding(true);
-    const item = await addMoodBoardItem(id, payload, { silent: true }).catch(() => null);
+    let addError = null;
+    const item = await addMoodBoardItem(id, payload, { silent: true }).catch((err) => {
+      addError = err;
+      return null;
+    });
     if (!mountedRef.current) return;
     setAdding(false);
-    if (!item) { toast.error('Failed to add item'); return; }
+    if (!item) { toast.error(moodBoardAddErrorMessage(addError)); return; }
     setBoard((prev) => (prev ? { ...prev, items: [...(prev.items || []).filter(existing => existing.id !== item.id), item] } : prev));
     resetAddForm();
   };
@@ -651,8 +662,7 @@ function MoodBoardEditor({ id }) {
               id="item-image-url"
               type="text"
               value={imageUrl}
-              maxLength={2048}
-              placeholder="https://… or /data/images/…"
+              placeholder="https://…, data:image/…, or /data/images/…"
               onChange={(e) => setImageUrl(e.target.value)}
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
             />

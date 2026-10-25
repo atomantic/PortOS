@@ -169,6 +169,13 @@ describe('configured provider reviewers', () => {
     });
   });
 
+  it('reports unsupported execution speed as a configuration refusal without a verdict', async () => {
+    callProviderAISimple.mockRejectedValue(Object.assign(new Error('Execution speed is unsupported on this API route.'), { code: 'EXECUTION_OPTIONS_UNSUPPORTED' }));
+    const result = await runLocalCodeReview({ backend, diff: 'example diff' });
+    expect(result).toMatchObject({ ok: false, code: 'EXECUTION_OPTIONS_UNSUPPORTED', error: expect.stringContaining('Execution speed') });
+    expect(result).not.toHaveProperty('findings');
+  });
+
   it('uses only this provider default when unpinned and returns provider failure without substitution', async () => {
     callProviderAISimple.mockResolvedValue({ error: 'Selected model is unavailable' });
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false, error: 'Selected model is unavailable' });

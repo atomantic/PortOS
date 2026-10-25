@@ -1,3 +1,4 @@
+import { EXECUTION_OPTIONS_ERROR, resolveExecutionOptions } from '../lib/executionOptions.js';
 import { isLoopbackEndpoint } from '../lib/localEndpoint.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
@@ -28,7 +29,7 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
  * stay honest about what the runner actually executed.
  */
 
-import { LOCAL_LLM_MAX_CONCURRENCY } from '../lib/localLlmConcurrency.js';
+import { LOCAL_LLM_MAX_CONCURRENCY, acquireLocalSlot, releaseLocalSlot } from '../lib/localLlmConcurrency.js';
 import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata, finalizeRunRecord } from './runner.js';
 import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
@@ -148,25 +149,6 @@ export function buildRequestCapabilities({ prompt, screenshots, outputReserveTok
 export const isLocalEndpoint = isLoopbackEndpoint;
 
 export { LOCAL_LLM_MAX_CONCURRENCY };
-const localEndpointGates = new Map(); // endpoint -> { active: number, queue: (()=>void)[] }
-
-function acquireLocalSlot(endpoint) {
-  let gate = localEndpointGates.get(endpoint);
-  if (!gate) { gate = { active: 0, queue: [] }; localEndpointGates.set(endpoint, gate); }
-  if (gate.active < LOCAL_LLM_MAX_CONCURRENCY) {
-    gate.active += 1;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => { gate.queue.push(resolve); });
-}
-
-function releaseLocalSlot(endpoint) {
-  const gate = localEndpointGates.get(endpoint);
-  if (!gate) return;
-  const next = gate.queue.shift();
-  if (next) next(); // hand the slot straight to the next waiter (active unchanged)
-  else gate.active = Math.max(0, gate.active - 1);
-}
 
 // Run `fn` under the local-endpoint gate when `provider` is a local API or TUI
 // backend; otherwise run it immediately (cloud / non-local CLI/TUI are
@@ -821,6 +803,8 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
 
   // Stops and caller spending ceilings carry no provider-health verdict.
   // Neither enters correction/fallback, benching, or fault investigation.
+  if (firstError?.code === EXECUTION_OPTIONS_ERROR) throw stripFallbackContext(firstError);
+
   if (isRunCanceledError(firstError) || isRuntimeBudgetError(firstError) || isContentRefusalError(firstError)) {
     throw stripFallbackContext(firstError);
   }
@@ -906,7 +890,7 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
 
     const investigation = createRecoveryInvestigationScope({ failed, failedModel, firstError });
     const stopOnTerminalRequest = async (error) => {
-      if (!isRuntimeBudgetError(error) && !isContentRefusalError(error)) return;
+      if (error?.code !== EXECUTION_OPTIONS_ERROR && !isRuntimeBudgetError(error) && !isContentRefusalError(error)) return;
       // Caller ceilings settle ownership without declaring a provider fault.
       await investigation.recoverAll();
       throw stripFallbackContext(error);
@@ -1077,6 +1061,7 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
         fallbackResult = await executeProviderRunOnce({
           ...args,
           provider: fallback,
+          executionOptions: resolveExecutionOptions({ source: 'provider', options: args.provider?.executionOptions }, { source: 'run', options: args.executionOptions }).requested,
           model: picked.model ?? undefined,
           // A step in the global fallback list may pin its own effort; the
           // primary's effort belongs to the primary's model, so it is not inherited.
@@ -1462,6 +1447,7 @@ async function executeProviderRunOnce({
   source,
   model,
   effort = null,
+  executionOptions,
   runId: callerRunId,
   onData: onDataCallback,
   onRunCreated,
@@ -1535,6 +1521,14 @@ async function executeProviderRunOnce({
   // unavailable provider while the run record claims the fallback ran)
   // and `effectiveModel` must be re-resolved against the fallback's
   // defaults so the response value reflects what actually ran.
+  let executionAttribution;
+  if (Object.keys(executionOptions || {}).length || Object.keys(effectiveProvider.executionOptions || {}).length) {
+    const { prepareExecutionOptions } = await import('../lib/providerExecutionOptions.js');
+    const prepared = await prepareExecutionOptions(effectiveProvider, effectiveModel, executionOptions, 'run', { cwd: effectiveCwd });
+    effectiveProvider = prepared.provider;
+    executionAttribution = prepared.attribution;
+    effectiveModel = prepared.attribution.model || effectiveModel;
+  }
   let runId = callerRunId;
   if (!runId) {
     const runResult = await createRun({
@@ -1545,7 +1539,7 @@ async function executeProviderRunOnce({
       workspacePath: effectiveCwd,
       effort,
       requestCapabilities,
-      allowFallback,
+      allowFallback: allowFallback && !Object.keys(executionAttribution?.requested || {}).length,
     });
     runId = runResult.runId;
     if (runResult.provider && runResult.provider.id !== provider.id) {
@@ -1570,6 +1564,8 @@ async function executeProviderRunOnce({
       }).catch(() => { /* best-effort; metadata patch is not load-bearing */ });
     }
   }
+
+  if (executionAttribution) await patchRunMetadata(runId, { executionOptions: executionAttribution });
 
   // Lifecycle hooks let a parent orchestrator expose and stop the concrete
   // provider run that is active inside a larger workflow. They fire for the

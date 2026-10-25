@@ -30,6 +30,7 @@ import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { join, extname } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
+import { REFERENCE_AUDIO_FIELDS } from './requestFields.js';
 import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded, assertFileNotMediaManifest } from '../../lib/fileUtils.js';
 import { probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
@@ -127,6 +128,21 @@ export async function validateVideoRetryParams(params = {}) {
     icReferences: params.icReferencePaths,
   });
   if (modeError) throw modeError;
+  // A retry replays persisted params past the route, so re-assert the ceilings.
+  const retryReferenceError = referenceCountError(model, 'extra reference images', params.referenceImagePaths?.length, extraReferenceImageLimit(model), 'VIDEO_REFERENCE_IMAGES_UNSUPPORTED')
+    || referenceCountError(model, 'reference clips', params.referenceVideoPaths?.length, model.maxReferenceVideos, 'VIDEO_REFERENCE_CLIPS_UNSUPPORTED')
+    || referenceCountError(model, 'voice clips', params.referenceAudioPaths?.length, model.maxReferenceAudios, 'VIDEO_REFERENCE_AUDIO_UNSUPPORTED');
+  if (retryReferenceError) throw retryReferenceError;
+  const retryTotalError = referenceTotalError(model, {
+    hasFirstImage: Boolean(params.sourceImagePath),
+    images: params.referenceImagePaths?.length, videos: params.referenceVideoPaths?.length, audios: params.referenceAudioPaths?.length,
+  });
+  if (retryTotalError) throw retryTotalError;
+  // Staged voice uploads belong to the job that staged them, so a chain's later
+  // chunks would reference files chunk zero's cleanup already removed.
+  if (Number(params.chunks || 1) > 1 && (params.referenceImagePaths?.length || params.referenceVideoPaths?.length || params.referenceAudioPaths?.length)) {
+    throw new ServerError(REFERENCE_CHUNKS_MESSAGE, { status: 400, code: 'VIDEO_REFERENCE_CHUNKS_CONFLICT' });
+  }
   // Reference-mode promise (#4874). A retry replays persisted params without
   // passing the route schema, so an entry written by a newer/edited install (or
   // a model swapped to a runtime that can't honor the mode) has to be caught
@@ -255,6 +271,8 @@ export function resolveRequestedVideoBackend({ body, uploads, settings, localOnl
     && !uploads.lastImage && !body.lastImageFile
     && !uploads.audioFile
     && !uploads.icReference && !body.icReferenceVideoIds?.length && !body.icReferenceImageFiles?.length
+    && !body.referenceImageFiles?.length && !body.referenceVideoIds?.length
+    && !REFERENCE_AUDIO_FIELDS.some((field) => uploads[field])
     && !body.extendFromVideoId
     && !body.keyframes?.length
     && !body.loraFilenames?.length
@@ -417,6 +435,18 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
     );
   }
 
+  // Reference inputs condition a local reference-to-video model only; a hosted
+  // lane would enqueue an ordinary render that silently ignores them.
+  if (backend !== VIDEO_GEN_MODE.LOCAL
+    && (body.referenceImageFiles?.length || body.referenceVideoIds?.length
+      || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]))) {
+    await cleanupMultipartTemp(uploads);
+    throw new ServerError(
+      'Reference images, clips and voice clips are only used by local reference-to-video models.',
+      { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' },
+    );
+  }
+
   // Track every durable file we've already copied into PATHS.uploads so a
   // *later* staging failure can roll them back. Without this, staging
   // sourceImage successfully then failing on lastImage would leave the
@@ -443,7 +473,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
 // try/catch so a permission/disk failure here still cleans up the
 // multipart temp uploads instead of leaking them in the OS temp dir.
 async function ensureUploadsDir({ uploads, cleanupStaged }) {
-  if (!(uploads.sourceImage || uploads.lastImage || uploads.audioFile || uploads.icReference || uploads.runwayVideo || uploads.runwayCharacterVideo)) return;
+  if (!(uploads.sourceImage || uploads.lastImage || uploads.audioFile || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]) || uploads.icReference || uploads.runwayVideo || uploads.runwayCharacterVideo)) return;
   try {
     await ensureDir(PATHS.uploads);
   } catch (err) {
@@ -577,6 +607,35 @@ async function prepareLocalAudio({ body, uploads, stageUploadDurable, stagedDura
   }
   return audioFilePath;
 }
+
+// A model declares how many of each reference kind it takes (absent = none).
+// Returns the refusal for `count` over that ceiling, else null.
+const REFERENCE_CHUNKS_MESSAGE = 'Reference images, clips and voice clips condition a single render and cannot be combined with chunks > 1.';
+
+const referenceCountError = (model, noun, count, max, code) => {
+  if (!count) return null;
+  const limit = Number(max) || 0;
+  if (count <= limit) return null;
+  return new ServerError(
+    limit
+      ? `${model?.name || 'This model'} takes at most ${limit} ${noun}; got ${count}.`
+      : `${model?.name || 'This model'} does not take ${noun}.`,
+    { status: 400, code },
+  );
+};
+// The runtime also caps ALL references together (`maxReferenceTotal`, 12 for Omni),
+// independent of the per-kind ceilings. `hasFirstImage` counts the input image.
+const referenceTotalError = (model, { hasFirstImage, images = 0, videos = 0, audios = 0 }) => {
+  const total = (hasFirstImage ? 1 : 0) + images + videos + audios;
+  const limit = Number(model?.maxReferenceTotal) || 0;
+  if (!limit || total <= limit) return null;
+  return new ServerError(
+    `${model?.name || 'This model'} takes at most ${limit} references in total; got ${total}.`,
+    { status: 400, code: 'VIDEO_REFERENCE_TOTAL_EXCEEDED' },
+  );
+};
+// `maxReferenceImages` counts the first-frame input as the first image.
+const extraReferenceImageLimit = (model) => Math.max(0, (Number(model?.maxReferenceImages) || 0) - 1);
 
 async function resolveAudioFrameCount({ body, audioFilePath, effectiveModel, effectiveNumFrames, cleanupStaged }) {
   // A direct-upload LTX-2.5 A2V request follows the whole audio file. The MLX
@@ -1086,6 +1145,82 @@ async function resolvePreparedParams({
     }
   }
 
+  // Extra reference stills for a reference-to-video model. Rejected up-front on
+  // a model that declares no `maxReferenceImages` (a silently dropped reference
+  // would render a clip that ignores what the user supplied) and past the
+  // model's ceiling, which counts the first-frame input as the first image.
+  let referenceImagePaths = null;
+  if (body.referenceImageFiles?.length) {
+    const imageCountError = referenceCountError(effectiveModel, 'extra reference images', body.referenceImageFiles.length, extraReferenceImageLimit(effectiveModel), 'VIDEO_REFERENCE_IMAGES_UNSUPPORTED');
+    if (imageCountError) {
+      await cleanupStaged();
+      throw imageCountError;
+    }
+    referenceImagePaths = [];
+    for (let i = 0; i < body.referenceImageFiles.length; i++) {
+      const file = body.referenceImageFiles[i];
+      const path = resolveGalleryImage(file);
+      if (!path) {
+        await cleanupStaged();
+        throw new ServerError(
+          `referenceImageFiles[${i}] not found in gallery: ${file}`,
+          { status: 400, code: 'VIDEO_REFERENCE_IMAGE_GALLERY_MISS' },
+        );
+      }
+      referenceImagePaths.push(path);
+    }
+  }
+
+  // Ordered clip and voice references, after the same per-model ceilings as the
+  // image rows. A history clip already lives under data/videos/ and must survive
+  // the render; an uploaded voice clip is staged durably and dropped with the job.
+  let referenceVideoPaths = null;
+  if (body.referenceVideoIds?.length) {
+    const clipCountError = referenceCountError(effectiveModel, 'reference clips', body.referenceVideoIds.length, effectiveModel?.maxReferenceVideos, 'VIDEO_REFERENCE_CLIPS_UNSUPPORTED');
+    if (clipCountError) {
+      await cleanupStaged();
+      throw clipCountError;
+    }
+    const history = await getHistory();
+    referenceVideoPaths = [];
+    for (const id of body.referenceVideoIds) {
+      referenceVideoPaths.push(await resolveHistoryVideoPath(id, {
+        history,
+        label: 'referenceVideoIds entry',
+        notFoundCode: 'VIDEO_REFERENCE_CLIP_NOT_FOUND',
+        missingFileCode: 'VIDEO_REFERENCE_CLIP_FILE_MISSING',
+      }));
+    }
+  }
+  let referenceAudioPaths = null;
+  const audioUploads = REFERENCE_AUDIO_FIELDS.map((field) => uploads[field]).filter(Boolean);
+  if (audioUploads.length) {
+    const voiceCountError = referenceCountError(effectiveModel, 'voice clips', audioUploads.length, effectiveModel?.maxReferenceAudios, 'VIDEO_REFERENCE_AUDIO_UNSUPPORTED');
+    if (voiceCountError) {
+      await cleanupStaged();
+      throw voiceCountError;
+    }
+    referenceAudioPaths = [];
+    for (const upload of audioUploads) {
+      const path = await stageUploadDurable(upload, 'ref-audio');
+      extraUploadedTempPaths.push(path);
+      referenceAudioPaths.push(path);
+    }
+  }
+
+  const hasAnyReference = Boolean(referenceImagePaths?.length || referenceVideoPaths?.length || referenceAudioPaths?.length);
+  const referenceConflict = (hasAnyReference && Number(body.chunks) > 1
+    ? new ServerError(REFERENCE_CHUNKS_MESSAGE, { status: 400, code: 'VIDEO_REFERENCE_CHUNKS_CONFLICT' })
+    : null)
+    || referenceTotalError(effectiveModel, {
+      hasFirstImage: Boolean(sourceImagePath),
+      images: referenceImagePaths?.length, videos: referenceVideoPaths?.length, audios: referenceAudioPaths?.length,
+    });
+  if (referenceConflict) {
+    await cleanupStaged();
+    throw referenceConflict;
+  }
+
   // Collapse the parallel loraFilenames/loraScales arrays into the internal
   // `[{ filename, scale }]` shape the service (resolveVideoLoras) and the
   // resume param echo consume. A defaulted scale keeps the worker contract
@@ -1166,6 +1301,9 @@ async function resolvePreparedParams({
     lastImagePath,
     audioFilePath,
     icReferencePaths,
+    referenceImagePaths,
+    referenceVideoPaths,
+    referenceAudioPaths,
     resolvedKeyframes,
     extendFromVideoPath,
     uploadedTempPath,

@@ -19,6 +19,8 @@ import { mkdir, readdir, rm, stat } from 'fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { atomicWrite } from '../../lib/fileUtils.js';
+import { isTopLevelEntryName, makePathResolver } from '../../lib/pathSafety.js';
+import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
 import { getCodeAnimationJobRecord, isCodeAnimationJobId, readCodeAnimationHtml } from './jobStore.js';
 import { CODE_ANIMATION_SONG_GLOBAL } from './prompt.js';
 import { importsThree, injectThreeImportMap, threeStagedFiles } from './threeVendor.js';
@@ -30,6 +32,7 @@ export const EXPORT_MAX_DURATION_SEC = 120;
 export const EXPORT_DIRECTORY_ROOT = 'code-animation-exports';
 // A staged export older than this has long since been snapshotted by its render.
 const STALE_STAGING_MS = 24 * 60 * 60 * 1000;
+const resolveAudioUpload = makePathResolver(() => PATHS.uploads, { extensions: UPLOAD_AUDIO_EXTENSIONS });
 
 // Remove this animation's earlier stagings, keeping any a queued render may
 // not have snapshotted yet.
@@ -105,12 +108,15 @@ export function injectExportShim(html, shim) {
   return `${html.slice(0, at)}${tag}${html.slice(at)}`;
 }
 
-// Only a Music-library track can be muxed; `/data/music/<file>` is the URL the
-// job stored for it.
-function musicTrackOf(job) {
-  const match = /^\/data\/music\/([^/]+)$/.exec(job.audioUrl || '');
-  const name = match ? decodeURIComponent(match[1]) : null;
-  return name && !/[/\\]/.test(name) && name !== '..' && name !== '.' ? name : null;
+function exportAudioOf(job) {
+  if (!job.audioUrl) return {};
+  const match = /^\/(data\/music|api\/uploads)\/([^/]+)$/.exec(job.audioUrl);
+  let name;
+  try { name = match ? decodeURIComponent(match[2]) : null; } catch { /* Invalid stored URL. */ }
+  if (!isTopLevelEntryName(name)) {
+    throw new ServerError('The animation\'s audio must be a Music-library track or uploaded audio file', { status: 400, code: 'AUDIO_NOT_FOUND' });
+  }
+  return { [match[1] === 'data/music' ? 'musicTrack' : 'audioUpload']: name };
 }
 
 /**
@@ -124,10 +130,10 @@ export async function startCodeAnimationExport(id, deps = {}) {
 async function startAdmittedExport(id, deps) {
   const {
     enqueueJob = (await import('../mediaJobQueue/index.js')).enqueueJob,
-    beatGrid = async (track) => {
+    beatGrid = async (track, source = 'music') => {
       const [{ resolveMusicTrackPath }, { getBeatGrid }] = await Promise.all([import('../pipeline/audioMux.js'), import('../../lib/beatGrid.js')]);
-      const path = await resolveMusicTrackPath(track);
-      if (!path) throw new ServerError('The animation\'s soundtrack is missing from the Music library', { status: 400, code: 'AUDIO_NOT_FOUND' });
+      const path = source === 'upload' ? resolveAudioUpload(track) : await resolveMusicTrackPath(track);
+      if (!path) throw new ServerError('The animation\'s soundtrack is missing or is not a supported audio file', { status: 400, code: 'AUDIO_NOT_FOUND' });
       return getBeatGrid(path).catch(() => null);
     },
   } = deps;
@@ -141,9 +147,8 @@ async function startAdmittedExport(id, deps) {
     throw new ServerError(`Frame-exact export supports ${EXPORT_FRAME_SIZES.join(', ')}; this animation is ${width}x${height} — use Record (real-time) instead`, { status: 400, code: 'EXPORT_SIZE_UNSUPPORTED' });
   }
   const html = await readCodeAnimationHtml(id);
-  const musicTrack = musicTrackOf(job);
+  const audio = exportAudioOf(job);
   const notes = [];
-  if (job.audioUrl && !musicTrack) notes.push('Uploaded audio is not muxed; the export is silent. Attach a Music-library track to include it.');
   if (!job.audioUrl && job.input?.soundtrack === 'procedural') {
     notes.push('Procedural Web Audio is not rendered offline; the frame-exact export is silent. Attach a Music-library track to include audio.');
   }
@@ -151,7 +156,8 @@ async function startAdmittedExport(id, deps) {
     notes.push('No soundtrack was requested; the export is intentionally silent.');
   }
   if (durationSeconds > EXPORT_MAX_DURATION_SEC) notes.push(`The export is capped at ${EXPORT_MAX_DURATION_SEC}s; this animation runs ${durationSeconds}s.`);
-  const song = musicTrack ? await beatGrid(musicTrack) : null;
+  const song = audio.musicTrack ? await beatGrid(audio.musicTrack)
+    : audio.audioUpload ? await beatGrid(audio.audioUpload, 'upload') : null;
   // One staging directory per export: a queued render snapshots its directory
   // only when it starts, so a later export must never rewrite an earlier one's.
   const directory = `${EXPORT_DIRECTORY_ROOT}/${id}/${randomUUID()}`;
@@ -168,7 +174,7 @@ async function startAdmittedExport(id, deps) {
     if (three) {
       for (const { rel, data } of await threeStagedFiles()) await atomicWrite(join(dir, rel), data);
     }
-    queued = await enqueueJob({ kind: 'html-composition', params: { directory, ...(musicTrack ? { musicTrack } : {}) } });
+    queued = await enqueueJob({ kind: 'html-composition', params: { directory, ...audio } });
   } catch (error) {
     // Nothing references this staging yet (the enqueue failed or never ran), so it is litter.
     await rm(dir, { recursive: true, force: true }).catch(() => {});

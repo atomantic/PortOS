@@ -155,6 +155,23 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
     expect(releaseRunRecord).toHaveBeenCalledWith(null);
   });
 
+  it('does not finish until post-release retirement settles, after stopping its own writer', async () => {
+    const { controller, releaseRunRecord, kill } = makeController();
+    let release;
+    releaseRunRecord.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+    controller.attachSession({ sessionId: 'session-abcdef12', pid: 4242 });
+    let settled = false;
+    const finishing = controller.handleExit({ exitCode: 0, killed: false }).then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(kill).toHaveBeenCalledWith('session-abcdef12');
+    expect(releaseRunRecord).toHaveBeenCalledOnce();
+    expect(kill.mock.invocationCallOrder[0]).toBeLessThan(releaseRunRecord.mock.invocationCallOrder[0]);
+    expect(settled).toBe(false);
+    release();
+    await finishing;
+    expect(controller.isTerminal()).toBe(true);
+  });
+
   it.each([
     ['drainLines', 'parsed output'],
     ['drainRaw', 'raw PTY spool'],
@@ -250,6 +267,28 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
     expect(closers[0], 'the replaced watcher already closed itself').not.toHaveBeenCalled();
     expect(closers[1]).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+
+  it('binds failure analysis to the raw byte boundary after the submission Enter', async () => {
+    const prompt = 'A failing guard leaves the PR open with its failing test named.';
+    const { controller, resolveErrorAnalysis, write } = makeController({
+      tuiConfig: { ...TUI_CONFIG, command: 'claude', spawnCommand: 'claude', promptDelayMs: 250 }, prompt,
+    });
+    controller.attachSession({ sessionId: 'session-test', pid: 4242 });
+    controller.markCommandInjected();
+    await controller.handleData('\x1b[?2004h');
+    await vi.advanceTimersByTimeAsync(300);
+    await controller.handleData(prompt);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(write).toHaveBeenCalledWith('session-test', '\r', { promptSubmission: true });
+    const emitted = '\nActual tool output 🌟\ntest failed';
+    await controller.handleData(emitted);
+    await controller.handleExit({ exitCode: 1, killed: false });
+    expect(resolveErrorAnalysis).toHaveBeenCalledWith(expect.objectContaining({
+      completionReason: 'shell-exit',
+      promptProvenance: { submitted: true, suppliedPrompt: prompt, bytesSinceSubmission: Buffer.byteLength(emitted) },
+    }));
   });
 
   it('sends Claude low-priority once after an opted-in session-limit banner', async () => {

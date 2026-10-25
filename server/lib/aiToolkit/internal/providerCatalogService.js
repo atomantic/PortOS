@@ -41,7 +41,8 @@ function waitForProbeGroupExit(pid) {
         process.kill(-pid, 0);
       } catch (err) {
         if (err?.code === 'ESRCH') return resolve(true);
-        return resolve(false);
+        // A just-signalled group can be temporarily uninspectable. Keep
+        // observing within the same deadline; unknown never confirms exit.
       }
       if (Date.now() >= deadline) return resolve(false);
       const timer = setTimeout(check, 25);
@@ -119,6 +120,35 @@ async function killOwnedProbe(child, killSignal, directExited = false) {
   return waitForProbeGroupExit(child.pid);
 }
 
+// execFile does not forward `detached` to spawn. A bounded probe must own
+// a real POSIX group, including descendants that retain its output pipes.
+function spawnProbe(file, args, { detached }, callback) {
+  const child = spawn(file, args, { detached, timeout: 0, windowsHide: true });
+  const output = { stdout: '', stderr: '' };
+  const sizes = { stdout: 0, stderr: 0 };
+  let completed = false;
+  const finish = error => {
+    if (completed) return;
+    completed = true;
+    callback(error, output.stdout, output.stderr);
+  };
+  for (const name of ['stdout', 'stderr']) {
+    child[name]?.setEncoding('utf8');
+    child[name]?.on('data', chunk => {
+      if (completed) return;
+      // Preserve execFile's default per-stream output budget.
+      sizes[name] += Buffer.byteLength(chunk);
+      if (sizes[name] > 1024 * 1024) {
+        finish(Object.assign(new Error('Probe output exceeded its buffer'), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }));
+      } else output[name] += chunk;
+    });
+  }
+  child.once('error', finish);
+  child.once('close', (code, signal) => finish(code === 0 && signal == null ? null
+    : Object.assign(new Error('Probe command failed'), { code, signal })));
+  return child;
+}
+
 function execFileBounded(file, args, { timeout, killSignal = 'SIGTERM' }) {
   return new Promise((resolve) => {
     let child = null;
@@ -147,13 +177,12 @@ function execFileBounded(file, args, { timeout, killSignal = 'SIGTERM' }) {
     timer.unref?.();
 
     try {
-      child = execFile(file, args, {
+      child = spawnProbe(file, args, {
         windowsHide: true,
         timeout: 0,
         ...(process.platform === 'win32' ? {} : { detached: true }),
       }, (error, stdout, stderr) => {
-        // execFile callbacks are asynchronous in Node. Deferring the handling
-        // also keeps synchronous test doubles from racing child assignment.
+        // Defer stream/error completion until child assignment is visible.
         queueMicrotask(() => {
           const timedOut = error?.code === 'ETIMEDOUT'
             || (error?.killed === true && error?.signal === killSignal);
@@ -162,12 +191,11 @@ function execFileBounded(file, args, { timeout, killSignal = 'SIGTERM' }) {
           else {
             // The executable can exit after daemonizing a helper that still
             // holds the probe's stdio pipes. Clean the owned process group/tree
-            // even when execFile reports a normal exit. On Windows, the direct
-            // process has already exited by this callback; taskkill against its
-            // PID could target a reused PID, so only confirm the direct child.
-            cleanupPromise ||= process.platform === 'win32'
+            // even after a normal exit. Windows may taskkill a still-live child
+            // on output overflow, but never reuse a PID after its exit event.
+            cleanupPromise ||= process.platform === 'win32' && directExited
               ? Promise.resolve(true)
-              : killOwnedProbe(child, killSignal, true);
+              : killOwnedProbe(child, killSignal, directExited);
             cleanupPromise.then(
               cleanupConfirmed => finish({ ...result, timedOut: false, cleanupConfirmed }),
               () => finish({ ...result, timedOut: false, cleanupConfirmed: false }),
@@ -217,13 +245,14 @@ export function createProviderCatalogService({
   sampleFile = null,
   defaultSamplePath,
   cliProbeTimeouts = {},
+  withProviderWrite = work => work(),
 }) {
   const lookupTimeoutMs = cliProbeTimeouts.lookup ?? CLI_COMMAND_LOOKUP_TIMEOUT_MS;
   const versionTimeoutMs = cliProbeTimeouts.version ?? CLI_VERSION_PROBE_TIMEOUT_MS;
   return {
     async testProvider(id) {
       const data = await loadProviders();
-      const provider = withGatewayApiKey(data.providers[id], data.providers);
+      const provider = data.providers[id]?.executionSourceProviderId ? await this.getProviderById(id) : withGatewayApiKey(data.providers[id], data.providers);
       if (!provider) return { success: false, error: 'Provider not found' };
 
       if (provider.type === 'cli' || provider.type === 'tui') {
@@ -351,7 +380,7 @@ export function createProviderCatalogService({
 
     async fetchProviderModelCatalog(id) {
       const data = await loadProviders();
-      const provider = withGatewayApiKey(data.providers[id], data.providers);
+      const provider = data.providers[id]?.executionSourceProviderId ? await this.getProviderById(id) : withGatewayApiKey(data.providers[id], data.providers);
       if (!provider) return null;
 
       let fetched = null;
@@ -398,10 +427,15 @@ export function createProviderCatalogService({
     },
 
     async refreshProviderModels(id) {
-      const catalog = await this.fetchProviderModelCatalog(id);
+      const data = await loadProviders();
+      const sourceId = data.providers[id]?.executionSourceProviderId || id;
+      const catalog = await this.fetchProviderModelCatalog(sourceId);
       if (catalog === null) return null;
-      const previous = (await this.getProviderById(id))?.modelContextWindows;
-      return this.updateProvider(id, modelCatalogUpdate(catalog, previous));
+      return withProviderWrite(async () => {
+        const previous = (await this.getProviderById(sourceId))?.modelContextWindows;
+        const updated = await this.updateProvider(sourceId, modelCatalogUpdate(catalog, previous));
+        return updated && sourceId !== id ? this.getProviderById(id) : updated;
+      });
     },
 
     async refreshProviderModelsBatch(ids) {
@@ -412,19 +446,20 @@ export function createProviderCatalogService({
       const groups = [];
       const byKey = new Map();
       for (const id of requested) {
-        const provider = data.providers[id];
+        const sourceId = data.providers[id]?.executionSourceProviderId || id;
+        const provider = data.providers[sourceId];
         if (!provider) {
-          groups.push({ ids: [id], leadId: id, status: 'missing' });
+          groups.push({ ids: [id], leadId: sourceId, status: 'missing' });
           continue;
         }
-        const key = ollamaRefreshGroupKey(provider);
-        const existing = key ? byKey.get(key) : null;
+        const key = ollamaRefreshGroupKey(provider) || `source:${sourceId}`;
+        const existing = byKey.get(key);
         if (existing) {
           existing.ids.push(id);
           continue;
         }
-        const group = { ids: [id], leadId: id, status: 'missing' };
-        if (key) byKey.set(key, group);
+        const group = { ids: [id], leadId: sourceId, status: 'missing' };
+        byKey.set(key, group);
         groups.push(group);
       }
 
@@ -447,23 +482,26 @@ export function createProviderCatalogService({
       const updated = groups.filter(group => group.status === 'updated');
       if (updated.length === 0) return groups;
 
-      const fresh = await loadProviders();
-      let changed = false;
-      for (const group of updated) {
-        for (const id of group.ids) {
-          const provider = fresh.providers[id];
-          if (!provider) continue;
-          const modes = providerModeGroups(Object.values(fresh.providers)).find(entries => entries.some(entry => entry.id === id));
-          for (const mode of modes || [provider]) {
-            fresh.providers[mode.id] = {
-              ...mode,
-              ...modelCatalogUpdate(group.catalog, mode.modelContextWindows),
-            };
+      await withProviderWrite(async () => {
+        const fresh = await loadProviders();
+        let changed = false;
+        for (const group of updated) {
+          const sourceIds = new Set(group.ids.map(id => fresh.providers[id]?.executionSourceProviderId || id));
+          for (const id of sourceIds) {
+            const provider = fresh.providers[id];
+            if (!provider) continue;
+            const modes = providerModeGroups(Object.values(fresh.providers)).find(entries => entries.some(entry => entry.id === id));
+            for (const mode of modes || [provider]) {
+              fresh.providers[mode.id] = {
+                ...mode,
+                ...modelCatalogUpdate(group.catalog, mode.modelContextWindows),
+              };
+            }
+            changed = true;
           }
-          changed = true;
         }
-      }
-      if (changed) await saveProviders(fresh);
+        if (changed) await saveProviders(fresh);
+      });
       return groups;
     },
 

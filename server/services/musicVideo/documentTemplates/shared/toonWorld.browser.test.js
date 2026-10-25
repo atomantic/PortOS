@@ -59,6 +59,7 @@ describe.skipIf(!canRun)('toon world headless dish proof', () => {
     // SwiftShader (forced above) rasterises the extra full-screen ink pass in software, so CI Linux measures ~1.6x
     // where a hardware GPU stays near 1.5x. Retain the original completed-frame budget.
     expect(results.ratio, diagnostics).toBeLessThanOrEqual(2);
+    expect(results.completionFailure, diagnostics).toBeNull();
     for (const sample of results.samples) {
       expect(sample.scenePasses, diagnostics).toBe(1);
       expect(sample.screenPasses, diagnostics).toBe(sample.ink ? 1 : 0);
@@ -76,6 +77,24 @@ describe.skipIf(!canRun)('toon world headless dish proof', () => {
       expect(sample.screenPasses, diagnostics).toBe(3);
     }
     expect(results.ratio, diagnostics).toBeGreaterThan(2);
+    expect(results.completionFailure, diagnostics).toBeNull();
+    expect(errors).toEqual([]);
+  }, 60000);
+
+  it('refuses unverified GPU completion without reading pixels and releases the failed fence', async () => {
+    const result = await page.evaluate(async () => {
+      const gl = document.getElementById('world').getContext('webgl2');
+      const original = { wait: gl.clientWaitSync, read: gl.readPixels, remove: gl.deleteSync };
+      let failed = false, readsAfterFailure = 0, removed = 0;
+      gl.clientWaitSync = () => { failed = true; return gl.WAIT_FAILED; };
+      gl.readPixels = function(...args) { if (failed) readsAfterFailure++; return original.read.apply(this, args); };
+      gl.deleteSync = function(sync) { removed++; return original.remove.call(this, sync); };
+      try {
+        const proof = await window.costProof();
+        return { failure: proof.completionFailure, samples: proof.completionSamples.length, readsAfterFailure, removed };
+      } finally { gl.clientWaitSync = original.wait; gl.readPixels = original.read; gl.deleteSync = original.remove; }
+    });
+    expect(result).toEqual({ failure: 'GPU completion fence failed', samples: 0, readsAfterFailure: 0, removed: 1 });
     expect(errors).toEqual([]);
   }, 60000);
 
@@ -103,8 +122,9 @@ function reportCost(label, results) {
     lines.push(`🎨 Toon ${label} sample ${index}: ink=${sample.ink} submit=${sample.submitMs.toFixed(2)}ms readback=${sample.readbackMs.toFixed(2)}ms total=${sample.totalMs.toFixed(2)}ms scene=${sample.scenePasses} screen=${sample.screenPasses} draws=${sample.drawCalls} triangles=${sample.triangles}`);
   }
   for (const [index, sample] of results.completionSamples.entries()) {
-    lines.push(`🎨 Toon ${label} completion ${index}: ink=${sample.ink} submit=${sample.submitMs.toFixed(2)}ms finish=${sample.finishMs.toFixed(2)}ms readback=${sample.readbackMs.toFixed(2)}ms`);
+    lines.push(`🎨 Toon ${label} completion ${index}: ink=${sample.ink} submit=${sample.submitMs.toFixed(2)}ms fence=${sample.fenceMs.toFixed(2)}ms verified=${sample.verified} polls=${sample.polls} readback=${sample.readbackMs.toFixed(2)}ms`);
   }
+  if (results.completionFailure) lines.push(`🎨 Toon ${label} completion failed: ${results.completionFailure}`);
   // CI silences console methods: retain the summary and attach all bounded
   // samples to failed assertions so the first failed run remains diagnosable.
   process.stdout.write(`${lines[0]}\n`);
@@ -200,12 +220,12 @@ window.proof=()=>{
   scene.remove(blocker);
   return {overlaps:kit.warnOverlaps(THREE,dishes),darkInkCount,bloomOverInk,inkChanged,hiddenChanged,flatChanged,views,postChanged,repeat};
 };
-window.costProof=(inkFrames=1)=>{
+window.costProof=async(inkFrames=1)=>{
   // Keep synchronous readPixels inside the original 15-sample total-cost window.
   // Submission includes CPU/driver time; readback includes pending GPU work and
   // scheduling. Neither is a GPU timer or proof of contention by itself.
   for(let i=0;i<4;i++){draw();draw({ink:true});}
-  const samples=[],completionSamples=[];
+  const samples=[],completionSamples=[];let completionFailure=null;
   const originalRender=renderer.render,autoReset=renderer.info.autoReset;
   let scenePasses=0,screenPasses=0;
   renderer.render=function(world,view){
@@ -213,31 +233,56 @@ window.costProof=(inkFrames=1)=>{
     return originalRender.call(this,world,view);
   };
   renderer.info.autoReset=false;
-  const measure=(enabled,complete=false)=>{
+  const submit=enabled=>{
     scenePasses=0;screenPasses=0;renderer.info.reset();
     const start=performance.now();
     for(let pass=0;pass<(enabled?inkFrames:1);pass++)post.render(scene,camera,enabled?{ink:true}:{},0);
-    const submitted=performance.now();
-    if(complete)renderer.getContext().finish();
-    const finished=complete?performance.now():submitted;
-    pixels();
+    return {start,submitted:performance.now()};
+  };
+  const measure=enabled=>{
+    const {start,submitted}=submit(enabled);pixels();
     const end=performance.now();
-    return {ink:enabled,submitMs:submitted-start,finishMs:finished-submitted,readbackMs:end-finished,totalMs:end-start,
+    return {ink:enabled,submitMs:submitted-start,readbackMs:end-submitted,totalMs:end-start,
       scenePasses,screenPasses,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles};
+  };
+  const complete=async enabled=>{
+    const gl=renderer.getContext(),{submitted,start}=submit(enabled);
+    const fence=gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE,0);
+    if(!fence)throw new Error('GPU completion fence unavailable');
+    let polls=0;
+    try{
+      gl.flush();
+      while(true){
+        const status=gl.clientWaitSync(fence,0,0);polls++;
+        if(status===gl.ALREADY_SIGNALED||status===gl.CONDITION_SATISFIED)break;
+        if(status!==gl.TIMEOUT_EXPIRED)throw new Error('GPU completion fence failed');
+        if(performance.now()-submitted>=1000)throw new Error('GPU completion fence deadline');
+        await new Promise(done=>setTimeout(done,0));
+      }
+      const finished=performance.now();pixels();
+      return {ink:enabled,submitMs:submitted-start,fenceMs:finished-submitted,
+        readbackMs:performance.now()-finished,verified:true,polls};
+    }finally{gl.deleteSync(fence);}
   };
   try{
     for(let i=0;i<15;i++){
       for(const enabled of (i%2?[true,false]:[false,true]))samples.push(measure(enabled));
     }
-    // Separate diagnostic probes drain GPU work before readback. They alter the
-    // synchronization boundary, so never substitute them into the 2x assertion.
-    for(let i=0;i<3;i++)for(const enabled of [false,true])completionSamples.push(measure(enabled,true));
+    // Require explicit fence settlement for these separate readback probes;
+    // elapsed time inside gl.finish() is not completion evidence.
+    // Keep their waits out of the original synchronous 2x measurement window.
+    try{
+      for(let i=0;i<3;i++)for(const enabled of [false,true])completionSamples.push(await complete(enabled));
+    }catch(error){
+      // Keep the original timing samples/ratio even if diagnostic settlement fails.
+      completionFailure=/^GPU completion fence (unavailable|failed|deadline)$/.test(error.message)?error.message:'GPU completion probe failed';
+    }
   }finally{
     renderer.render=originalRender;renderer.info.autoReset=autoReset;
   }
   const median=values=>values.sort((x,y)=>x-y)[Math.floor(values.length/2)];
   const baselineMs=median(samples.filter(s=>!s.ink).map(s=>s.totalMs));
   const inkMs=median(samples.filter(s=>s.ink).map(s=>s.totalMs));
-  return {baselineMs,inkMs,ratio:inkMs/baselineMs,samples,completionSamples};
+  return {baselineMs,inkMs,ratio:inkMs/baselineMs,samples,completionSamples,completionFailure};
 };
 `;

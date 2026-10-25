@@ -533,8 +533,16 @@ it('requests DB verification for every suite in the real canonical inventory wit
   for (const suite of dbTests) {
     const plan = buildCiTestPlan([suite], inputs);
     expect(plan, suite).toMatchObject({ full: false, db: true, server: { mode: 'files' } });
-    expect(plan.server.files, suite).toContain(suite);
+    expect(plan.server.files, suite).not.toContain(suite);
   }
+});
+
+it('keeps PostgreSQL tests out of ordinary server runner selection and routes them to the DB stage (#13455)', () => {
+  const dbSuite = 'server/services/githubNotifications.db.test.js';
+  const plan = buildCiTestPlan([dbSuite], { trackedFiles: [dbSuite] });
+  expect(plan.server.files).not.toContain(dbSuite);
+  expect(plan.server.mode).toBe('skip');
+  expect(plan.db).toBe(true);
 });
 
 it('requests DB verification for the real deck, model pin and backup source contracts', () => {
@@ -1799,6 +1807,8 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'server/lib/staticImportGraph.js',
       'server/services/agentImportCycles.test.js',
       'server/services/worktreeManager.js',
+      'server/services/heldCheckoutRecovery.js',
+      'server/services/heldCheckoutRecovery.test.js',
       'server/lib/shellCd.js',
       'server/lib/agentGuard/index.js',
       'server/cos-runner/index.js',
@@ -1838,6 +1848,18 @@ describe('Windows escalation on a full plan (#7440)', () => {
       // `windows: true` here is a direct consequence of WINDOWS_RISK_RULES.
       expect(plan(['server/services/auth.js']).windows).toBe(false);
       expect(plan(['server/lib/bufferedSpawn.js']).windows).toBe(true);
+    });
+
+    it.each(['js', 'test.js'])('runs checkout retirement %s changes on Windows (#13562)', extension => {
+      const source = 'server/services/heldCheckoutRecovery.js';
+      const test = 'server/services/heldCheckoutRecovery.test.js';
+      const selected = buildCiTestPlan([`server/services/heldCheckoutRecovery.${extension}`], {
+        trackedFiles: [...TRACKED, ...WINDOWS_CONTRACT_TESTS, source, test], clientDependencies: [],
+      });
+      expect(selected).toMatchObject({ full: false, windows: true,
+        windowsMode: extension === 'js' ? 'related' : 'files' });
+      expect(selected.windowsSources).toEqual(extension === 'js' ? [source] : []);
+      if (extension === 'test.js') expect(selected.windowsFiles).toContain(test);
     });
 
     it('routes native recycling source and both tests to real Windows coverage (#13251)', () => {
@@ -1965,6 +1987,7 @@ describe('cross-workspace browser suites (#10312)', () => {
     const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js', 'server/lib/musicVideoTitleCard.browser.test.js',
       'server/services/federatedMedia/sourceAudio.browser.test.js',
       'server/services/fableLoom/static-player/player.browser.test.js',
+      'server/services/codeAnimation/export.realBrowser.test.js',
       'server/services/htmlComposition/index.test.js'];
     expect(plan.full).toBe(false);
     expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => !runtimeOnly.includes(suite))));
@@ -2561,7 +2584,7 @@ describe('pregate attestation', () => {
     const jobs = workflowJobs(readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8'));
     // Reading statuses needs the scope; nothing in the impact job may write one.
     expect(jobs.impact).toMatch(/\n    permissions:\n      contents: read\n      statuses: read\n/);
-    const planStep = jobs.impact.slice(jobs.impact.indexOf('id: plan'), jobs.impact.indexOf('run: node scripts/ci-test-plan.js'));
+    const planStep = jobs.impact.slice(jobs.impact.indexOf('id: plan'), jobs.impact.indexOf('run: node scripts/ci-impact-diagnostics.js plan -- node scripts/ci-test-plan.js'));
     for (const line of [
       "CI_EVENT_NAME: ${{ github.event_name }}",
       'CI_REPOSITORY: ${{ github.repository }}',

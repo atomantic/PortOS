@@ -166,7 +166,11 @@ NUL-delimited arguments and selected test environment fields. No Python install
 is performed. If that optional reader is unavailable, macOS retains the legacy
 browser-profile cleanup only. Process identity, caller ancestry and run-owner
 liveness are rechecked before termination and escalation; unrelated process
-groups are never signalled. Unknown ownership is left alone.
+groups are never signalled. Unknown ownership is left alone. Owner stamps use
+OS-reported birth time rather than wall time minus uptime: a clock adjustment
+between process start and configuration must not make a live runner look like a
+reused PID. When birth time cannot be read, a signalable owner is retained; a
+proven dead owner still permits individually verified descendant cleanup.
 
 The npm Vite/Vitest commands, PM2's `portos-ui` launcher, and subprocess fixtures
 use `--configLoader runner` to load ESM configs without writing bundles into shared
@@ -301,10 +305,12 @@ the complete serial DB workload regardless of test-memo reuse, run
 `PORTOS_DB_PHASE_DIAGNOSTICS=1 npm run test:db` after the earlier validation
 stages finish. The observer reads only `portos_test` session state, waits,
 transaction ages and run-lock ownership: no query text, network addresses or
-record contents. It samples at most three times per phase, caps each snapshot
-at 16 sessions, and uses a separate connection with a 500 ms statement timeout.
+record contents. It samples about once a second while a phase is slow (fast
+phases need no SQL), at most 32 snapshots per phase, caps each snapshot at 16
+sessions, and uses a separate connection with a 500 ms statement timeout.
 Opt-in diagnostics add observation work; original test deadlines stay intact.
-Failure messages retain bounded phase evidence even with quiet reporting.
+Failure messages retain bounded phase evidence even with quiet reporting; without
+the opt-in they still name the active phase and per-phase elapsed time.
 A passing run without a reproduced slow phase does not resolve the timeout.
 
 For server watch mode, run this alternative from the repository root:

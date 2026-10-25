@@ -4,7 +4,7 @@ import { existsSync, lstatSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, uti
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
+import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepStaleRunRoots, verifyPendingTestProcesses, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { observeTestProcesses } from './lib/testProcessAttribution.js';
 import { processAncestors, readTestProcesses, testProcessRoot } from './lib/testOwnedProcesses.js';
 import { isProcessAlive } from '../server/test/processAlive.js';
@@ -100,6 +100,37 @@ describe('test process ownership boundaries', () => {
       }
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
+
+  it.each(['recovered', 'changed-root', 'reused', 'unreadable'])(
+    'rechecks withheld cleanup after a transient inspection without signaling changed ownership: %s', mode => {
+      const host = mkdtempSync(join(tmpdir(), 'recovery-transient-'));
+      const root = join(host, 'pvt-owned'); mkdirSync(root);
+      writeFileSync(join(root, '.owner.pid'), '999999 0\n');
+      const ancestors = [{ pid: process.pid, ppid: process.ppid }, { pid: process.ppid, ppid: 1 }];
+      const child = { pid: 900001, ppid: 1, start: 'original', args: ['node'],
+        env: { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: root } };
+      let reads = 0;
+      let time = 0;
+      let signaled = false;
+      const read = () => {
+        reads++;
+        if (reads === 1) return [...ancestors, child];
+        if (reads === 2) return [...ancestors, { ...child, env: {} }];
+        if (mode === 'unreadable') return null;
+        if (signaled) return ancestors;
+        return [...ancestors, { ...child,
+          start: mode === 'reused' ? 'replacement' : child.start,
+          env: mode === 'changed-root' ? { ...child.env, PORTOS_TEST_TEMP_ROOT: join(host, 'pvt-other') } : child.env }];
+      };
+      const kill = vi.fn(() => { signaled = true; });
+      try {
+        const result = killTestProcessesUnder(root, { read, probe: () => false, probePid: () => !signaled,
+          kill, now: () => time, wait: ms => { time += ms; }, settlementMs: 50 });
+        expect(result).toBe(mode === 'recovered' ? 1 : 0);
+        if (mode === 'recovered') expect(kill).toHaveBeenCalledExactlyOnceWith(child.pid, 'SIGKILL');
+        else expect(kill).not.toHaveBeenCalled();
+      } finally { rmSync(host, { recursive: true, force: true }); }
+    });
 
   it.each(['live', 'gone'])('requires terminal proof before ignoring an incomplete %s process row', mode => {
     const host = mkdtempSync(join(tmpdir(), 'recovery-unrelated-'));
@@ -239,8 +270,11 @@ describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', (
     try {
       const dead = join(host, 'pvt-dead'); const live = join(host, 'pvt-live');
       mkdirSync(dead); mkdirSync(live); writeOwnerFile(live);
-      const owner = spawnSync(process.execPath, ['-e', ''], { stdio: 'ignore' });
-      writeFileSync(join(dead, '.owner.pid'), `${owner.pid} 0\n`);
+      const owner = spawnSync(process.execPath, ['--input-type=module', '-e', `
+        import { writeOwnerFile } from ${JSON.stringify(new URL('./lib/vitestStaleRunRoots.js', import.meta.url).href)};
+        writeOwnerFile(${JSON.stringify(dead)});
+      `], { stdio: 'ignore' });
+      expect(owner.status).toBe(0);
       const environmentOnly = await launch([process.execPath, '-e', code], { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: dead });
       const script = join(dead, 'fixture.sh'); writeFileSync(script, 'echo ready\nread answer\n');
       const argumentOnly = await launch(['/bin/sh', script]);
@@ -249,17 +283,27 @@ describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', (
       let ownedLive;
       try { ownedLive = await launch([process.execPath, '-e', code], { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: live }); }
       finally { dispose(); }
-      const inspected = readTestProcesses([environmentOnly.pid, argumentOnly.pid, unrelated.pid]);
+      // Inspect every process launched by this fixture plus caller ancestry,
+      // using real OS metadata. Ambient unreadable host rows correctly retain
+      // roots; that separate refusal contract is covered above.
+      const fixturePids = [process.pid, process.ppid, ...children.map(child => child.pid)];
+      const read = pids => readTestProcesses(pids ?? fixturePids);
+      const inspected = read([environmentOnly.pid, argumentOnly.pid, unrelated.pid]);
       expect(inspected?.map(record => testProcessRoot(record, host, 'pvt-'))).toEqual([dead, dead, null]);
-      sweepStaleRunRoots(host);
+      sweepStaleRunRoots(host, { read });
+      expect(existsSync(dead)).toBe(true); // signal scheduling is not settlement
       await vi.waitFor(() => {
         expect(isProcessAlive(environmentOnly.pid)).toBe(false);
         expect(isProcessAlive(argumentOnly.pid)).toBe(false);
       }, { timeout: 5000 });
+      expect(verifyPendingTestProcesses(dead, { read })).toBe(true);
+      sweepStaleRunRoots(host, { read }); // both individually verified descendants have settled
+      expect(existsSync(dead)).toBe(false);
+      expect(existsSync(live)).toBe(true);
       expect(isProcessAlive(unrelated.pid)).toBe(true);
       expect(isProcessAlive(ownedLive.pid)).toBe(true);
       const outcomes = [];
-      expect(killTestProcessesUnder(live, { onOutcome: outcome => outcomes.push(outcome) })).toBe(1);
+      expect(killTestProcessesUnder(live, { read, onOutcome: outcome => outcomes.push(outcome) })).toBe(1);
       expect(outcomes).toEqual([expect.objectContaining({ suite: 'scripts/testOwnedProcessRecovery.test.js', phase: 'suite-ended', lifecycle: 'spawned', settlement: 'terminated' })]);
       await vi.waitFor(() => expect(isProcessAlive(ownedLive.pid)).toBe(false));
     } finally {

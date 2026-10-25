@@ -850,3 +850,28 @@ it('keeps one visible item when the gallery returns an already pinned asset', as
   expect(screen.getAllByRole('button', { name: 'Preview image' })).toHaveLength(1);
   expect(screen.getByLabelText('Item prompt')).toHaveAttribute('maxlength', '2000');
 });
+
+it('accepts a >2048-char data:image URL without input truncation and surfaces server error messages when pinning fails', async () => {
+  const longDataUrl = `data:image/webp;base64,${'A'.repeat(4000)}`;
+  const validationError = new Error('Validation failed');
+  validationError.context = { details: [{ path: 'imageUrl', message: 'Image data URL exceeds the 12MB limit' }] };
+  mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+  mockAddMoodBoardItem
+    .mockRejectedValueOnce(validationError)
+    .mockRejectedValueOnce(new Error('Image data URL is truncated — re-paste the full URL or upload the image'))
+    .mockResolvedValueOnce({ id: 'mbi-data', type: 'image', imageUrl: '/data/images/board-1234.webp', caption: null });
+  renderPage();
+  const input = await screen.findByLabelText('Image URL');
+  expect(input).not.toHaveAttribute('maxlength');
+  fireEvent.change(input, { target: { value: longDataUrl } });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Pin to board' })); });
+  expect(mockAddMoodBoardItem).toHaveBeenCalledWith('a', { type: 'image', imageUrl: longDataUrl, caption: null, source: null }, { silent: true });
+  expect(mockToastError).toHaveBeenCalledWith('Image data URL exceeds the 12MB limit');
+
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Pin to board' })); });
+  expect(mockToastError).toHaveBeenCalledWith('Image data URL is truncated — re-paste the full URL or upload the image');
+
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Pin to board' })); });
+  expect(screen.getByRole('button', { name: 'Preview image' })).toBeInTheDocument();
+  expect(input).toHaveValue('');
+});

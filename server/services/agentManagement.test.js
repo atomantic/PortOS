@@ -1265,6 +1265,14 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
     expect(updateTask).not.toHaveBeenCalled();
   });
 
+  it('carries an explicit Standard resume override and clears stale options when switching providers', async () => {
+    await resumeAgent('agent-paused-1', { executionOptions: { serviceTier: 'standard' } });
+    expect(reviveBlockedTask).toHaveBeenCalledWith('task-abc', { metadata: { executionOptions: { serviceTier: 'standard' } } }, 'user');
+    reviveBlockedTask.mockClear();
+    await resumeAgent('agent-paused-1', { provider: 'claude' });
+    expect(reviveBlockedTask).toHaveBeenCalledWith('task-abc', expect.objectContaining({ metadata: expect.objectContaining({ provider: 'claude', executionOptions: {} }) }), 'user');
+  });
+
   it('reports the branch the shared transition resumed on', async () => {
     reviveBlockedTask.mockResolvedValueOnce({ metadata: { existingBranch: 'cos/task-abc/agent-paused-1' } });
     await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({
@@ -1454,6 +1462,140 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
     getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, metadata: { ...PAUSED_AGENT.metadata, configClaimFlow } });
     getTaskById.mockResolvedValue(null);
     await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({ mode: 'new-task' });
+  });
+
+  it('keeps a missing coordinator task a coordinator when the task record is gone', async () => {
+    const assignment = {
+      appId: 'app-example',
+      repoPath: '/tmp/example-repo',
+      origin: { host: 'example.com', fullName: 'example/example' },
+      targets: [{ branch: 'claim/issue-1', merge: true, workspacePath: '/tmp/example-checkout' }],
+    };
+    getAgentRecord.mockResolvedValue({
+      ...PAUSED_AGENT,
+      metadata: {
+        ...PAUSED_AGENT.metadata,
+        configClaimFlow: false,
+        taskType: 'internal',
+        taskDescription: 'Drain finished branches',
+        taskApp: 'app-example',
+        taskAnalysisType: 'branch-reconcile',
+        worktreeChangesExpected: 'false',
+        taskOnDemand: true,
+        reconcileAssignment: assignment,
+        pauseReason: 'Paused by cleanup policy',
+        failureCount: '2',
+      },
+    });
+    getTaskById.mockResolvedValue(null);
+
+    await resumeAgent('agent-paused-1');
+
+    const [replacement, taskType] = addTask.mock.calls[0];
+    expect(taskType).toBe('internal');
+    expect(replacement.app).toBe('app-example');
+    expect(replacement.metadata).toMatchObject({
+      analysisType: 'branch-reconcile',
+      worktreeChangesExpected: 'false',
+      onDemand: true,
+      reconcileAssignment: assignment,
+      resumedFromAgentId: 'agent-paused-1',
+      taskDescription: 'Drain finished branches',
+    });
+    expect(replacement.metadata).not.toHaveProperty('pauseReason');
+    expect(replacement.metadata).not.toHaveProperty('failureCount');
+    expect(replacement.metadata).not.toHaveProperty('workspacePath');
+  });
+
+  it('drops a reconcile assignment when the resume points at a different app', async () => {
+    getTaskById.mockResolvedValue({
+      ...PAUSED_TASK,
+      status: 'completed',
+      taskType: 'internal',
+      metadata: { ...PAUSED_TASK.metadata, analysisType: 'branch-reconcile', app: 'app-example' },
+    });
+    getAgentRecord.mockResolvedValue({
+      ...PAUSED_AGENT,
+      metadata: {
+        ...PAUSED_AGENT.metadata,
+        taskType: 'internal',
+        taskApp: 'app-example',
+        taskAnalysisType: 'branch-reconcile',
+        reconcileAssignment: {
+          appId: 'app-example',
+          repoPath: '/tmp/example-repo',
+          origin: { host: 'example.com', fullName: 'example/example' },
+          targets: [{ branch: 'claim/issue-1', merge: true, workspacePath: '/tmp/example-checkout' }],
+        },
+      },
+    });
+
+    await resumeAgent('agent-paused-1', { app: 'app-other' });
+
+    const [replacement] = addTask.mock.calls[0];
+    expect(replacement.app).toBe('app-other');
+    expect(replacement.metadata.analysisType).toBe('branch-reconcile');
+    expect(replacement.metadata).not.toHaveProperty('reconcileAssignment');
+  });
+
+  it('does not attach an assignment the snapshot no longer validates', async () => {
+    getAgentRecord.mockResolvedValue({
+      ...PAUSED_AGENT,
+      metadata: {
+        ...PAUSED_AGENT.metadata,
+        configClaimFlow: false,
+        taskType: 'internal',
+        taskDescription: 'Drain finished branches',
+        taskApp: 'app-example',
+        taskAnalysisType: 'branch-reconcile',
+        taskOnDemand: 'true',
+        reconcileAssignment: {
+          appId: 'app-example',
+          repoPath: 'relative/repo',
+          origin: { host: 'example.com', fullName: 'example/example' },
+          targets: [{ branch: 'claim/issue-1', merge: true, workspacePath: '/tmp/example-checkout' }],
+        },
+      },
+    });
+    getTaskById.mockResolvedValue(null);
+
+    await resumeAgent('agent-paused-1');
+
+    const [replacement] = addTask.mock.calls[0];
+    expect(replacement.metadata.analysisType).toBe('branch-reconcile');
+    expect(replacement.metadata).not.toHaveProperty('reconcileAssignment');
+    expect(replacement.metadata).not.toHaveProperty('onDemand');
+  });
+
+  it('keeps the task record type when it still names one', async () => {
+    getTaskById.mockResolvedValue({
+      ...PAUSED_TASK,
+      status: 'completed',
+      taskType: 'internal',
+      metadata: { ...PAUSED_TASK.metadata, analysisType: 'issue-watcher', app: 'app-example' },
+    });
+    getAgentRecord.mockResolvedValue({
+      ...PAUSED_AGENT,
+      metadata: {
+        ...PAUSED_AGENT.metadata,
+        taskType: 'internal',
+        taskAnalysisType: 'branch-reconcile',
+        taskApp: 'app-example',
+        reconcileAssignment: {
+          appId: 'app-example',
+          repoPath: '/tmp/example-repo',
+          origin: { host: 'example.com', fullName: 'example/example' },
+          targets: [{ branch: 'claim/issue-1', merge: true, workspacePath: null }],
+        },
+      },
+    });
+
+    await resumeAgent('agent-paused-1');
+
+    const [replacement, taskType] = addTask.mock.calls[0];
+    expect(taskType).toBe('internal');
+    expect(replacement.metadata.analysisType).toBe('issue-watcher');
+    expect(replacement.metadata).not.toHaveProperty('reconcileAssignment');
   });
 
   it('falls back to agent metadata when the original task is missing', async () => {

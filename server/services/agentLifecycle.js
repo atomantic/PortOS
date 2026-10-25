@@ -1,3 +1,5 @@
+import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
+import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../lib/taskBlockCategories.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
@@ -119,14 +121,16 @@ async function runAdmittedAgentSpawn(task, permit) {
   } catch (err) {
     if (!context.setupCatchArmed || context.handedOff) throw err;
     const privateSecurity = isPrivateSecurityTask(task);
+    const optionRefusal = err.code === EXECUTION_OPTIONS_ERROR;
     const setupError = privateSecurity
       ? 'Private assessment setup failed. Verify its local model, isolated harness, and source access before retrying.'
       : err.message;
-    emitLog('error', `Agent spawn setup failed: ${setupError}`, { taskId: task.id, error: setupError });
+    emitLog(optionRefusal ? 'info' : 'error', `Agent spawn setup failed: ${setupError}`, { taskId: task.id, error: setupError });
     await context.blockAndBail({
       reason: setupError,
-      category: 'private-security-setup-failed',
-      persist: privateSecurity,
+      category: optionRefusal ? PROVIDER_CONFIG_BLOCKED_CATEGORY : 'private-security-setup-failed',
+      persist: privateSecurity || optionRefusal,
+      emit: optionRefusal ? null : 'agent:error',
     });
     if (task.metadata?.jobId) {
       cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId, reason: 'failed' });
@@ -506,15 +510,21 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
   if (completingAgents.has(agentId)) return;
   // Claim before admission's first await: the process may already be gone.
   completingAgents.add(agentId);
+  let retirementEligible = false;
   try {
     return await maintenance.withResource('agent', agentId, async () => {
+      // Capture before the pause router consumes its map entry. A paused job's
+      // checkout still belongs to its future resume, not completion retirement.
+      retirementEligible = !pausedAgents.has(agentId);
       try { return await handleAdmittedAgentCompletion(agentId, exitCode, success, duration); }
       catch (err) { maintenance.markResourceUnsettled('agent', agentId); throw err; }
     });
   } finally {
     completingAgents.delete(agentId);
-    void import('./agentRepoStateVerification.js').then(module => module.resumeAgentCompletionRetirement(agentId))
-      .catch(error => emitLog('warn', `Completion retirement deferred for ${agentId}: ${error.message}`, { agentId }));
+    if (retirementEligible) {
+      await import('./agentRepoStateVerification.js').then(module => module.resumeAgentCompletionRetirement(agentId))
+        .catch(error => emitLog('warn', `Completion retirement deferred for ${agentId}: ${error.message}`, { agentId }));
+    }
   }
 }
 

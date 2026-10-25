@@ -647,22 +647,23 @@ max_memory_restart: '500M'
 ### A merged checkout disappeared without an archive receipt
 
 `retirement-provenance-unverified` means a previously inventoried checkout or
-local ref is missing and its preservation has not been established. It is an
+local ref is missing and its removal has not been established. It is an
 unresolved obligation, not successful cleanup. The retirement API refuses this
 case, and the Schedule view retains the exact observed branch, path and head
 through later empty scans. A surviving branch, merged PR or integrated commit
-does not prove that ignored files, untracked work or private Git state survived.
+does not by itself prove the checkout was retired on purpose.
 
 Trace the deletion actor and command separately from the PR's merge actor.
-Inspect the original `data/cos/held-checkout-archives/` and
-`data/cos/branch-retirement-archives/` manifests and retained execution evidence.
-If an original archive exists, verify its complete contents and exact identity
-through the supported recovery service before recording a retirement receipt.
-Preserve recoverable objects and original archives. Do not reconstruct a partial
-checkout as proof, delete another checkout, or clear the obligation merely
-because the source is gone. If provenance cannot be recovered, retain the
-evidence and missing source identity in the owning issue; #13271 records such
-an unresolved case without attributing its local deletion to the merge actor.
+Current retirement does not copy the checkout. Older directories
+`data/cos/held-checkout-archives/` and `data/cos/branch-retirement-archives/`
+remain available after setup; migration 442 preserves historical recovery data.
+A new retirement will not leave a manifest there. Existing copies may be the
+only recovery source and must not be deleted merely because new copies are no
+longer written. Do not reconstruct a partial checkout as proof, delete another
+checkout, or clear the obligation merely because the source is gone. If
+provenance cannot be recovered, retain the evidence and missing source identity
+in the owning issue; #13271 records such an unresolved case without attributing
+its local deletion to the merge actor.
 
 ### "Another git process seems to be running" — but none is
 

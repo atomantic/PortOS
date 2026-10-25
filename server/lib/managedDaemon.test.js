@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDaemonWatcher, createOnDemandDaemon, createPm2ExitTail, reapIdleDaemons, _resetIdleDaemonsForTests } from './managedDaemon.js';
 
 const makeWatcher = (overrides = {}) => {
@@ -102,6 +102,10 @@ describe('createPm2ExitTail', () => {
 });
 
 describe('createOnDemandDaemon', () => {
+  beforeEach(() => {
+    _resetIdleDaemonsForTests();
+  });
+
   const makeOnDemand = (overrides = {}) => {
     let config = overrides.config ?? null;
     let section = overrides.section ?? {};

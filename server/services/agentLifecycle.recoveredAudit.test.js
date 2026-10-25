@@ -1,8 +1,8 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-const fixture = vi.hoisted(() => ({ records: new Map(), tasks: [], trace: [], quality: [], serial: 0 }));
+const fixture = vi.hoisted(() => ({ records: new Map(), tasks: [], trace: [], quality: [], serial: 0, completions: 0, retirements: [] }));
 vi.mock('../lib/fileUtils.js', async importOriginal => {
   const { makePathsProxy, lazyTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
   return makePathsProxy(await importOriginal(), {
@@ -103,6 +103,16 @@ vi.mock('./jira.js', () => ({}));
 vi.mock('./git.js', () => ({}));
 vi.mock('./brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn() }));
 vi.mock('./issueReconcile.js', () => ({ issueNumberFromRef: vi.fn() }));
+// handleAgentCompletion launches retirement from its finally block without
+// returning it; keep the real work but own the promise so teardown can drain it.
+vi.mock('./agentRepoStateVerification.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, resumeAgentCompletionRetirement: vi.fn(agentId => {
+    const run = actual.resumeAgentCompletionRetirement(agentId);
+    fixture.retirements.push(run);
+    return run;
+  }) };
+});
 
 import { PATHS } from '../lib/fileUtils.js';
 import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
@@ -131,7 +141,22 @@ beforeEach(async () => {
   activeAgents.clear();
   await mkdir(PATHS.cosAgents, { recursive: true });
 });
+afterEach(async () => {
+  // The deferred retirement is scheduled through a dynamic import, so wait for
+  // each completion's launch before awaiting the launched work: resetting the
+  // shared records or removing the temp root underneath it is what made a
+  // published completion payload vanish mid-read (#13461).
+  await vi.waitFor(() => expect(fixture.retirements).toHaveLength(fixture.completions));
+  await Promise.allSettled(fixture.retirements);
+  fixture.completions = 0;
+  fixture.retirements.length = 0;
+});
 afterAll(cleanupTempDataRoots);
+
+const complete = agentId => {
+  fixture.completions++;
+  return handleAgentCompletion(agentId, 0, true, 1000);
+};
 
 async function recoveredRun({ primary = false, missingPath = false, unreadable = false } = {}) {
   const agentId = `agent-example-${++fixture.serial}`;
@@ -164,7 +189,7 @@ describe('recovered runner audit completion (#11526)', () => {
     const run = await recoveredRun();
     if (mode === 'old entry without cwd') delete runnerAgents.get(run.agentId).workspacePath;
     if (mode === 'stale primary cwd') runnerAgents.get(run.agentId).workspacePath = run.primaryPath;
-    await handleAgentCompletion(run.agentId, 0, true, 1000);
+    await complete(run.agentId);
     expect(run.record.metadata.auditFindings).toMatchObject({ status: 'complete', report });
     expect(run.record.result).toMatchObject({ success: true, executionSuccess: true, taskOutcome: null, auditAssessment: { status: 'recorded' } });
     expect(fixture.quality).toEqual([{ category: 'observability', agentId: run.agentId, report: quality(82) }]);
@@ -178,7 +203,7 @@ describe('recovered runner audit completion (#11526)', () => {
 
   it('also records an explicitly registered primary-checkout audit', async () => {
     const run = await recoveredRun({ primary: true });
-    await handleAgentCompletion(run.agentId, 0, true, 1000);
+    await complete(run.agentId);
     expect(run.record.metadata.auditFindings).toMatchObject({ status: 'complete', report });
     expect(fixture.quality[0].report.score).toBe(82);
   });
@@ -188,13 +213,13 @@ describe('recovered runner audit completion (#11526)', () => {
     expect(runnerAgents.get(run.agentId).workspacePath).toBe(run.workspacePath);
     // The durable registration becomes readable again before completion.
     run.record.metadata.workspacePath = run.workspacePath;
-    await handleAgentCompletion(run.agentId, 0, true, 1000);
+    await complete(run.agentId);
     expect(run.record.metadata.auditFindings).toMatchObject({ status: 'complete', report });
   });
 
   it('does not borrow primary artifacts when neither registration nor runner knows the workspace', async () => {
     const run = await recoveredRun({ missingPath: true });
-    await handleAgentCompletion(run.agentId, 0, true, 1000);
+    await complete(run.agentId);
     expect(run.record.result).toMatchObject({ success: false, completionReason: 'audit-disposition-incomplete' });
     expect(run.record.metadata.auditFindings).toMatchObject({ status: 'incomplete', finalReportReceived: false, report: { version: 1, findings: [] } });
     expect(fixture.quality).toEqual([]);
@@ -208,7 +233,7 @@ describe('recovered runner audit completion (#11526)', () => {
     const donePath = join(run.workspacePath, `.agent-done-${run.agentId}`);
     if (kind === 'missing') await rm(donePath);
     else await writeFile(donePath, sentinel({ version: 1, findings: [{ invalid: true }] }));
-    await handleAgentCompletion(run.agentId, 0, true, 1000);
+    await complete(run.agentId);
     expect(run.record.result).toMatchObject({ success: false, completionReason: 'audit-disposition-incomplete' });
     expect(run.record.metadata.auditFindings).toMatchObject({ status: 'incomplete', finalReportReceived: false, report });
     expect(cleanupAgentWorktree).not.toHaveBeenCalled();

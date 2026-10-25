@@ -128,6 +128,20 @@ describe('navManifest — shape invariants', () => {
     const bad = NAV_COMMANDS.filter((c) => !ALLOWED_SECTIONS.has(c.section));
     expect(bad.map((c) => `${c.id}:${c.section}`)).toEqual([]);
   });
+
+  it('every parentPath references a declared command path', () => {
+    const commandPaths = new Set(NAV_COMMANDS.map((c) => c.path));
+    const parentPaths = NAV_COMMANDS.filter((c) => c.parentPath).map((c) => c.parentPath);
+    expect(parentPaths.length).toBeGreaterThan(0);
+    expect(parentPaths.every((p) => commandPaths.has(p))).toBe(true);
+
+    const casting = NAV_COMMANDS.find((c) => c.id === 'nav.create.casting');
+    const environments = NAV_COMMANDS.find((c) => c.id === 'nav.create.environments');
+    const objects = NAV_COMMANDS.find((c) => c.id === 'nav.create.objects');
+    expect(casting?.parentPath).toBe('/catalog');
+    expect(environments?.parentPath).toBe('/catalog');
+    expect(objects?.parentPath).toBe('/catalog');
+  });
 });
 
 describe('navManifest — persistent mind dashboard', () => {
@@ -167,7 +181,7 @@ describe('nav contract — generated section child navigation', () => {
     expect(getSectionNavGroups('Models').map(({ label, tabs }) => [label, tabs.map((tab) => tab.label)])).toEqual([
       ['Connect', ['AI Services', 'Fallbacks', 'Harnesses', 'Providers', 'Runtimes']],
       ['Evaluate', ['Comparison', 'Performance', 'Playground']],
-      ['Library', ['3D', 'Embeddings', 'LoRAs', 'Media', 'Model Library', 'Training']],
+      ['Library', ['3D', 'Embeddings', 'LoRAs', 'Media', 'Model Library']],
       ['Operate', ['Quota Burn', 'Status', 'Subscriptions', 'Usage']],
       ['Policies', ['Abuse Guard', 'Code Reviewers', 'Decision Classifiers']],
     ]);
@@ -176,7 +190,7 @@ describe('nav contract — generated section child navigation', () => {
   it('resolves a promoted drill-down as itself instead of its LLM parent', () => {
     expect(getSectionNavTabForPath('Models', '/models/llms/abuse')).toMatchObject({ id: 'abuse', label: 'Abuse Guard' });
     expect(getNavCommandForPath('/models/decision-classifiers/jev')).toMatchObject({ path: '/models/decision-classifiers/jev', label: 'Jev' });
-    expect(getSectionNavTabForPath('Models', '/models/training/dataset-abc')).toMatchObject({ id: 'training' });
+    expect(getSectionNavTabForPath('Models', '/models/training/dataset-abc')).toBeUndefined();
   });
 
   it.each([
@@ -381,12 +395,12 @@ describe('resolveNavCommand — fuzzy matching', () => {
   });
 
   it('resolves the moved model-management pages to their Models paths', () => {
-    // Media models, LoRAs, LoRA training and embeddings moved out of Create and
-    // Settings (#4728). Their command ids are unchanged (they are opaque and
-    // persisted), so only these paths prove the move actually landed.
+    // Media models, LoRAs and embeddings moved out of Create and
+    // Settings (#4728); retired training now lands in maintenance. Active command ids are opaque and
+    // persisted, so paths prove the move actually landed.
     expect(resolveNavCommand('media models')?.path).toBe('/models/media');
     expect(resolveNavCommand('loras')?.path).toBe('/models/loras');
-    expect(resolveNavCommand('lora training')?.path).toBe('/models/training');
+    expect(resolveNavCommand('lora training')?.path).toBe('/settings/data-maintenance');
     expect(resolveNavCommand('embeddings')?.path).toBe('/models/embeddings');
     expect(resolveNavCommand('prompt guard')?.path).toBe('/models/llms/abuse');
     expect(resolveNavCommand('abuse-guard')?.path).toBe('/models/llms/abuse');
@@ -751,11 +765,12 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
   // segment was a deep link into one record, so its redirect has to carry that
   // segment across — swapping the PrefixRedirect for a bare <Navigate to="/models/training">
   // still points at the right page and would pass the check above, while every
-  // bookmarked dataset quietly lands on the index instead.
+  // bookmarked record quietly lands on the index instead. Retired features may
+  // explicitly opt out because their destination no longer selects old records.
   it('preserves the record id when a parameterized previous path redirects', () => {
     const lossy = NAV_COMMANDS
-      .flatMap((c) => (c.previousPaths || []).map((from) => ({ from, id: c.id })))
-      .filter(({ from }) => from.split('/').some((seg) => seg.startsWith(':')))
+      .flatMap((c) => (c.previousPaths || []).map((from) => ({ from, id: c.id, preserveSuffix: c.preservePreviousPathSuffix !== false })))
+      .filter(({ from, preserveSuffix }) => preserveSuffix && from.split('/').some((seg) => seg.startsWith(':')))
       .map(({ from, id }) => ({ from, id, hit: byFrom.get(from) }))
       .filter(({ hit }) => !hit || !SUFFIX_PRESERVING_ELEMENTS.has(hit.element))
       .map(({ from, id, hit }) => `${id}: ${from} forwards via ${hit?.element ?? 'NO REDIRECT'}, which drops the trailing segment`);
@@ -773,11 +788,13 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
       '/media/models',         // #4728 — the rest of model management left Create/Settings/Dev Tools
       '/media/loras',
       '/media/training',
+      '/media/training/:datasetId',
+      '/models/training',
+      '/models/training/:recordId',
       '/settings/embeddings',
       '/system-resources/models',
       // The dataset workbench was its own deep-linkable path, and a bookmark into
       // one dataset breaks just as silently as the index.
-      '/media/training/:datasetId',
       // #7567 — /ai became /ai/presets and the Backend Connections drawer
       // became the Services view; a stored pin or bookmark on either must land.
       '/ai',

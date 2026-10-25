@@ -18,7 +18,7 @@ name: CI cancel recovery
 on:
   workflow_run:
     workflows: [CI]
-    types: [completed]
+    types: [requested, completed]
 
 permissions:
   contents: read
@@ -77,3 +77,33 @@ jobs:
           CI_RUN_HEAD_REPOSITORY_ID: ${{ github.event.workflow_run.head_repository.id }}
           CI_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: node scripts/ci-retry-cancelled-run.js
+
+  superseded-gate:
+    name: Release a superseded queued aggregate
+    if: >-
+      github.event.action == 'requested'
+      && github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    # Serialize observers for a PR without joining the blocked CI group.
+    concurrency:
+      group: ci-superseded-gate-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+      cancel-in-progress: false
+    steps:
+      # Deliberately the DEFAULT branch: never execute privileged PR source.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Recover the superseded aggregate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          CI_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
+          CI_RUN_HEAD_REPOSITORY_ID: ${{ github.event.workflow_run.head_repository.id }}
+          CI_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: node scripts/ci-recover-superseded-gate.js

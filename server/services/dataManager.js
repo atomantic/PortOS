@@ -204,7 +204,7 @@ export const CATEGORIES = {
   'telegram': { label: 'Telegram', description: 'Telegram bot data', archivable: true, deletable: true, purgeScope: 'category' },
   'templates': { label: 'Visual Templates', description: 'Shipped layout assets used as render anchors', archivable: false, deletable: false },
   'tools': { label: 'Tools', description: 'Tool execution data', archivable: true, deletable: true, purgeScope: 'category' },
-  'training-runs': { label: 'LoRA Training Runs', description: 'Training checkpoints, caches, and sample previews — the finished adapters live in LoRAs and survive a purge; run history in Postgres will point at missing artifacts', archivable: false, deletable: true, purgeScope: 'category', busyCheck: trainingRunsBusy },
+  'training-runs': { label: 'LoRA Training Runs', description: 'Retired training checkpoints and previews; use Settings → Data Maintenance for a fresh preview and confirmed removal. May contain unique adapters.', archivable: false, deletable: false, busyCheck: trainingRunsBusy },
   'universes': { label: 'Universes', description: 'Universe Builder records — bibles, canon, and style references', archivable: true, deletable: false },
   'update-detached': { label: 'Update Control', description: 'Control files for a detached self-update run — safe to purge when no update is running', archivable: false, deletable: true, purgeScope: 'category', busyCheck: updateDetachedBusy },
   'uploads': { label: 'Uploads', description: 'Files uploaded through the UI and referenced by records', archivable: true, deletable: false },

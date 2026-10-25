@@ -58,7 +58,7 @@ export async function settleBranchReconcileRun(agent) {
       await recordBranchReconcileOutcome(app.id, {
         status: 'incomplete', reason: agent.result?.success === false ? 'retirement-review-failed' : 'retirement-receipt-unverified',
         retirementObligations: missing.map(({ release, createdAt }) => ({ ...release, createdAt, reason: 'retirement-receipt-unverified' })),
-        nextAction: 'Inspect the scoped review task and retained checkout; retirement requires a verified archive receipt.',
+        nextAction: 'Inspect the scoped review task and retained checkout; retirement requires ok:true and branchDeleted:true with no archive directory.',
       });
       emitLog('warn', `Branch reconciliation retained ${missing.length} review obligation(s) without verified retirement receipts`, { appId: app.id, taskId: agent.taskId });
     }
@@ -85,26 +85,13 @@ export async function settleBranchReconcileRun(agent) {
 export async function settleRetirementReviewRun(agent) {
   if (agent?.metadata?.recoveryOrigin?.subsystem !== 'repository-cleanup') return null;
   const task = await getTaskById(agent.taskId);
-  const target = task?.metadata?.retirementReview;
-  const { recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
-  if (!target?.appId || !target.release?.branch || !target.release.path || !target.release.head) {
+  const { verifyRetirementRecoveryCompletion, recordRetirementRecoveryCompletion } = await import('./retirementRecoveryCompletion.js');
+  const verdict = await verifyRetirementRecoveryCompletion(task);
+  if (!verdict) {
+    const { recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
     await recordCleanupOutcome(agent.id, { status: 'blocked', reason: 'legacy-cleanup-receipt-unverified' });
     return { verified: false };
   }
-  const { getBranchReconcileOutcome, recordBranchReconcileOutcome } = await import('./taskSchedule.js');
-  const outcome = await getBranchReconcileOutcome(target.appId);
-  if (hasRetirementReceipt(outcome, { ...target.release, createdAt: target.createdAt })) {
-    await recordCleanupOutcome(agent.id, { status: 'verified', reason: 'retirement-receipt-verified', ...target.release });
-    return { verified: true };
-  }
-  await recordCleanupOutcome(agent.id, { status: 'blocked', reason: 'retirement-receipt-unverified', ...target.release });
-  await recordBranchReconcileOutcome(target.appId, {
-    status: 'incomplete', reason: 'retirement-receipt-unverified',
-    retirementObligations: [{ ...target.release, createdAt: target.createdAt, reason: 'retirement-receipt-unverified' }],
-    nextAction: 'Inspect the scoped cleanup recovery and archive evidence; an agent success report cannot release this obligation.',
-  });
-  emitLog('warn', 'Cleanup recovery completed without a verified retirement receipt; exact checkout obligation retained', {
-    appId: target.appId, taskId: agent.taskId, branch: target.release.branch,
-  });
-  return { verified: false };
+  await recordRetirementRecoveryCompletion(agent, verdict);
+  return { verified: verdict.status === 'verified' };
 }

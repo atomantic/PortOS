@@ -792,6 +792,8 @@ describe('fixture-owned CDP artifacts root', () => {
     }).catch(caught => caught);
 
     expect(error.message).toContain('Composition browser group identity unavailable');
+    expect(error.message).toContain('Test Chrome artifacts cleanup skipped; detached process group unsettled, root preserved');
+    expect(error.message).not.toContain('owned child exit unconfirmed');
     expect(error.message).toContain('Test Chrome temporary data cleanup skipped; detached process group unsettled, root preserved');
     expect(existsSync(artifacts.path)).toBe(true);
     expect(existsSync(dataRoot)).toBe(true);
@@ -943,5 +945,23 @@ describe('test Chrome startup retry', () => {
     await expect(_startTestChromeWithRetry({ launch: () => ({}), wait: exited, discard })).rejects.toThrow(/exited/);
     expect(exited).toHaveBeenCalledTimes(1);
     expect(discard).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the startup timeout when discarding its child also fails and does not launch a retry', async () => {
+    const startupError = timeout();
+    const discardError = new Error('Synthetic discard failure');
+    const launch = vi.fn(() => ({}));
+    const wait = vi.fn().mockRejectedValue(startupError);
+    const discard = vi.fn().mockRejectedValue(discardError);
+    const error = await _startTestChromeWithRetry({ launch, wait, discard }).catch(caught => caught);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.errors).toEqual([startupError, discardError]);
+    expect(error.cause).toBe(startupError);
+    expect(error.message).toContain(startupError.message);
+    expect(error.message).toContain(discardError.message);
+    expect(launch).toHaveBeenCalledOnce();
+    expect(wait).toHaveBeenCalledOnce();
+    expect(discard).toHaveBeenCalledExactlyOnceWith(launch.mock.results[0].value);
   });
 });

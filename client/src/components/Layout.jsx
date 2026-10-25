@@ -131,6 +131,7 @@ const navRowForPath = (path) => {
     section: command.section,
     feature: command.feature,
     ...(command.navGroup ? { navGroup: command.navGroup } : {}),
+    ...(command.parentPath ? { parentPath: command.parentPath } : {}),
     ...NAV_PRESENTATION[path],
   };
 };
@@ -149,7 +150,7 @@ const pathWithinRow = (pathname, rowPath) => {
 
 const sectionNavItem = (section) => {
   const children = presentedNavRows
-    .filter((row) => row.section === section && !row.single)
+    .filter((row) => row.section === section && !row.single && !row.parentPath)
     .concat(LOCAL_SECTION_ROWS[section] || [])
     .sort((a, b) => a.label.localeCompare(b.label));
   const sharedFeature = children[0]?.feature
@@ -405,6 +406,7 @@ export default function Layout() {
           to: `/pipeline/series/${s.id}`,
           label: s.name || '(untitled series)',
           title: s.name || '(untitled series)',
+          icon: child.icon,
           // Active-detection prefix — highlight while on the series page
           // OR any issue belonging to that series. The issue page itself
           // doesn't carry seriesId in its URL, so per-issue highlighting
@@ -421,9 +423,30 @@ export default function Layout() {
           to: `/universes/${u.id}`,
           label: u.name || '(untitled universe)',
           title: u.name || '(untitled universe)',
+          icon: child.icon,
           activePathPrefix: `/universes/${u.id}`,
         })),
       };
+    };
+    const decorateParentChild = (child) => {
+      if (!child.to) return child;
+      const parentGrandChildren = presentedNavRows
+        .filter((row) => row.parentPath === child.to)
+        .sort((a, b) => a.label.localeCompare(b.label))
+        .map((row) => ({
+          to: row.to,
+          label: row.label,
+          title: row.label,
+          icon: row.icon,
+          activePathPrefix: row.to,
+        }));
+      if (parentGrandChildren.length > 0) {
+        return {
+          ...child,
+          grandChildren: parentGrandChildren,
+        };
+      }
+      return child;
     };
     // Feature gate, applied before any decoration: a disabled feature drops its
     // whole section (POST) or just its tagged rows (DataDog, JIRA), and a
@@ -454,7 +477,7 @@ export default function Layout() {
         };
       }
       if (Array.isArray(item.children)) {
-        return { ...item, children: item.children.map((c) => decoratePipelineChild(decorateUniverseChild(c))) };
+        return { ...item, children: item.children.map((c) => decorateParentChild(decoratePipelineChild(decorateUniverseChild(c)))) };
       }
       return item;
     });
@@ -505,7 +528,11 @@ export default function Layout() {
     resolvedNavItems.forEach(item => {
       if (item.children) {
         const isChildActive = item.children.some(child =>
-          child.to && pathWithinRow(location.pathname, child.to)
+          (child.to && pathWithinRow(location.pathname, child.to)) ||
+          (Array.isArray(child.grandChildren) && child.grandChildren.some(gc => {
+            const prefix = gc.activePathPrefix || gc.to;
+            return location.pathname === prefix || location.pathname.startsWith(prefix + '/');
+          }))
         );
         if (isChildActive) {
           setExpandedSections(prev => ({ ...prev, [item.label]: true }));
@@ -558,7 +585,13 @@ export default function Layout() {
       return isActive(item.to);
     }
     if (item.children) {
-      return item.children.some(child => child.to && isActive(child.to));
+      return item.children.some(child =>
+        (child.to && isActive(child.to)) ||
+        (Array.isArray(child.grandChildren) && child.grandChildren.some(gc => {
+          const prefix = gc.activePathPrefix || gc.to;
+          return location.pathname === prefix || location.pathname.startsWith(prefix + '/');
+        }))
+      );
     }
     return false;
   };
@@ -898,7 +931,7 @@ export default function Layout() {
                 </div>
               )}
               {recent.length > 0 && (
-                <div className="mb-2">
+                <div className="mb-2" data-testid="recent-section">
                   <div className="px-4 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Recent</div>
                   {recent.map((entry) => (
                     <WorkingSetRow key={`recent-${entry.path}`} entry={entry} pinned={false} onTogglePin={() => pin(entry.path)} onNavigate={() => setMobileOpen(false)} isActive={entry.end ? location.pathname === entry.path : isActive(entry.path)} />
@@ -1042,6 +1075,30 @@ export default function Layout() {
                       <ChildIcon size={16} className="shrink-0 mt-0.5" aria-hidden="true" />
                       <span className="min-w-0 break-words leading-snug">{child.label}</span>
                     </NavLink>
+                    {child.grandChildren && child.grandChildren.length > 0 && (
+                      <ul className="ml-7 my-0.5 border-l border-port-border/50 pl-2">
+                        {child.grandChildren.map((gc) => {
+                          const prefix = gc.activePathPrefix || gc.to;
+                          const gcActive = location.pathname === prefix || location.pathname.startsWith(prefix + '/');
+                          return (
+                            <li key={`flyout-gc-${gc.to}`}>
+                              <NavLink
+                                to={gc.to}
+                                onClick={() => setFlyoutSection(null)}
+                                title={gc.title || gc.label}
+                                className={`block px-2 py-1 rounded text-xs transition-colors min-w-0 break-words leading-snug ${
+                                  gcActive
+                                    ? 'text-port-accent font-medium'
+                                    : 'text-gray-400 hover:text-white hover:bg-port-border/30'
+                                }`}
+                              >
+                                {gc.label}
+                              </NavLink>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
                   </li>
                 );
               })}

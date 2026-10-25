@@ -10,6 +10,7 @@ import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { readZipArchive } from '../../lib/zipArchive.js';
 import * as ffmpeg from '../../lib/ffmpeg.js';
+import * as jsonIo from '../../lib/jsonIo.js';
 import { findFfmpeg, findFfprobe, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import {
   FABLELOOM_EXPORT_LIMITS, inspectFableLoomExportCharacters,
@@ -43,9 +44,10 @@ import { listVoiceProfiles } from '../voice/profiles.js';
 import * as media from './exportMedia.js';
 import * as voiceReferences from './exportVoice.js';
 import {
-  __testing, startFableLoomExport, getFableLoomExport, getFableLoomExportDownload,
+  __testing, preflightFableLoomExport, startFableLoomExport, getFableLoomExport, getFableLoomExportDownload,
 } from './exports.js';
 import routes from '../../routes/fableLoom.js';
+import { fableLoomRunEvents } from './runEvents.js';
 
 const owned = ownTestBodies(vitestIt);
 const it = owned.it;
@@ -246,6 +248,8 @@ describe('portable FableLoom export boundary', () => {
     expect(manifest).toMatchObject({ schemaVersion: '1.0.0', runtimeVersion: '1.0.0',
       loom: { name: 'The quiet gate', episodes: [{ id: 'episode-two' }] } });
     expect(manifest.loom.episodes).toHaveLength(1);
+    const ordered = await archive(await begin({ episodeIds: ['episode-two', 'episode-one'] }));
+    expect(JSON.parse(ordered.files.get('manifest.json')).loom.episodes.map(e => e.id)).toEqual(['episode-two', 'episode-one']);
     expect(manifest.characters).toBeUndefined();
     expect([...first.files.keys()].some(name => name.startsWith('characters/'))).toBe(false);
     const defaultProvenance = JSON.parse(first.files.get('provenance.json'));
@@ -832,6 +836,50 @@ describe('portable FableLoom export boundary', () => {
     await rm(join(PATHS.images, 'escape.png'));
   });
 
+  it('retains the terminal path refusal when a persisted status read crosses worker release', async () => {
+    const sourceEntered = Promise.withResolvers();
+    const releaseSource = Promise.withResolvers();
+    const snapshotRead = Promise.withResolvers();
+    const releaseRead = Promise.withResolvers();
+    const readSource = media.readFableLoomExportSource;
+    vi.spyOn(media, 'readFableLoomExportSource').mockImplementation(async (...args) => {
+      sourceEntered.resolve();
+      await releaseSource.promise;
+      return readSource(...args);
+    });
+    const bad = 'https://example.com/movie.mp4';
+    loadHistory.mockResolvedValue([{ id: 'entry-record', filename: bad }]);
+    let pendingRead;
+    try {
+      const id = await begin({ episodeIds: ['episode-one'] });
+      await sourceEntered.promise;
+      const readJSONFile = jsonIo.readJSONFile;
+      vi.spyOn(jsonIo, 'readJSONFile').mockImplementationOnce(async (...args) => {
+        const snapshot = await readJSONFile(...args);
+        snapshotRead.resolve(snapshot);
+        await releaseRead.promise;
+        return snapshot;
+      });
+      pendingRead = getFableLoomExport(loom.id, id);
+      expect(await snapshotRead.promise).toMatchObject({ jobId: id, status: 'packing' });
+      releaseSource.resolve();
+      await __testing.drain();
+      const terminalRecord = JSON.parse(await readFile(recordFile(id), 'utf8'));
+      expect(terminalRecord).toMatchObject({ status: 'failed', error: { code: 'EXPORT_MEDIA_PATH' } });
+      releaseRead.resolve();
+      const result = await pendingRead;
+      expect(result).toMatchObject({
+        status: 'failed', revision: terminalRecord.revision, error: { code: 'EXPORT_MEDIA_PATH' },
+      });
+      expect(JSON.stringify(result)).not.toContain(bad);
+      expect(JSON.parse(await readFile(recordFile(id), 'utf8'))).toEqual(terminalRecord);
+    } finally {
+      releaseSource.resolve();
+      releaseRead.resolve();
+      await pendingRead;
+    }
+  });
+
   it('persists actionable interruption and expiry states without treating malformed state as missing', async () => {
     loom.episodes[0].nodes[0].image = null;
     const id = await begin();
@@ -936,4 +984,31 @@ describe('portable FableLoom export boundary', () => {
       await rm(pipe);
     }
   });
+});
+
+// Regression: a read-only preflight surfaces build gates without creating a job,
+// and the selected package order and persisted snapshots survive the authoring flow.
+it('preflights refusal and explicit draft gates without building, then streams selected job revisions', async () => {
+  loom.episodes[0].nodes[0].visualCanon.storyboardImageApproved = false;
+  const blocked = await request(app()).post(`/api/fableloom/${loom.id}/export/preflight`).send({ includePlayer: true });
+  expect(blocked.status).toBe(200);
+  expect(blocked.body.canBuild).toBe(false);
+  expect(blocked.body.findings).toEqual(expect.arrayContaining([expect.objectContaining({ gate: 'approval', severity: 'error' })]));
+  const allowed = await preflightFableLoomExport(loom.id, { allowDraft: true });
+  expect(allowed.findings).toEqual(expect.arrayContaining([expect.objectContaining({ gate: 'approval', severity: 'warning' })]));
+  const snapshots = [];
+  const accept = value => snapshots.push(value);
+  fableLoomRunEvents.on('export', accept);
+  try {
+    const id = await begin({ allowDraft: true });
+    await terminal(id);
+    await __testing.drain();
+    const selected = snapshots.filter(job => job.jobId === id);
+    expect(selected.length).toBeGreaterThan(1);
+    expect(selected.every(job => job.loomId === loom.id)).toBe(true);
+    expect(selected.map(job => job.revision)).toEqual([...selected.map(job => job.revision)].sort((a, b) => a - b));
+    expect(['completed', 'failed']).toContain(selected.at(-1).status);
+  } finally {
+    fableLoomRunEvents.off('export', accept);
+  }
 });

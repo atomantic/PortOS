@@ -1,3 +1,4 @@
+import { CLAIM_WORKFLOW_AUDIT_ID, CLAIM_WORKFLOW_AUDIT_JOB } from './claimWorkflowAudit.js';
 /**
  * Autonomous Jobs — CRUD and accessors.
  *
@@ -121,6 +122,7 @@ async function createJob(jobData) {
       // Optional reasoning-effort override (claude/codex). Null = provider
       // default. generateTaskFromJob forwards it into task metadata as `effort`.
       effort: jobData.effort || null,
+      ...(jobData.executionOptions !== undefined ? { executionOptions: jobData.executionOptions } : {}),
       command: jobData.command || null,
       triggerAction,
       config: jobData.config || null,
@@ -166,7 +168,7 @@ async function updateJob(jobId, updates) {
     const updatableFields = [
       'name', 'description', 'category', 'type', 'interval', 'intervalMs',
       'scheduledTime', 'cronExpression', 'cronSchedule', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate', 'dataInputs',
-      'command', 'triggerAction', 'config', 'appId', 'taskMetadata', 'providerId', 'model', 'effort',
+      'command', 'triggerAction', 'config', 'appId', 'taskMetadata', 'providerId', 'model', 'effort', 'executionOptions',
       // Separately updatable on purpose: re-aiming a job sends `formValues`
       // alone, which must not have to restate the whole field design to do it.
       'formFields', 'formValues'
@@ -176,6 +178,13 @@ async function updateJob(jobId, updates) {
       if (updates[field] !== undefined) {
         job[field] = updates[field]
       }
+    }
+
+    if (jobId === CLAIM_WORKFLOW_AUDIT_ID) {
+      job.appId = CLAIM_WORKFLOW_AUDIT_JOB.appId
+      job.type = 'agent'
+      job.taskMetadata = CLAIM_WORKFLOW_AUDIT_JOB.taskMetadata
+      job.formFields = CLAIM_WORKFLOW_AUDIT_JOB.formFields
     }
 
     // Recalculate intervalMs if interval changed

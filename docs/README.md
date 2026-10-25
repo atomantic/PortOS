@@ -8,6 +8,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 
 | Doc | Covers |
 |-----|--------|
+| [EXECUTION_OPTIONS.md](./EXECUTION_OPTIONS.md) | Capability-driven speed options, persistence, dispatch attribution and selector inventory |
 | [MOSS_IMAGE.md](./MOSS_IMAGE.md) | Optional pinned MOSS Swift/MLX image runtime, explicit installation, resource needs and Apple Silicon validation |
 | [HTML_COMPOSITIONS.md](./HTML_COMPOSITIONS.md) | Seekable HTML scenes rendered offline to MP4 through hidden managed-browser targets |
 | [CONTAINMENT.md](./CONTAINMENT.md) | Every containment profile (bubblewrap, Seatbelt, Docker) and which consumer uses which; the opt-in Docker containment profile for untrusted installs/tests, its engine policy, two-phase network and `contained-run.js` |
@@ -118,3 +119,5 @@ Comms & voice: [beeper](./features/beeper.md) · [messages-browser-send](./featu
 - [Tool-free model delegation](SANDBOX_DELEGATION.md) — approved API workers, context packets, and advisory fidelity evaluation for Persistent Mind.
 
 - [Runway model catalog](RUNWAY_MODELS.md) — supported operations, public schema source, caching, refresh and workflow limits.
+
+- [Data Maintenance](DATA_MAINTENANCE.md) — retained retired-feature storage, LoRA training retirement and explicit removal.

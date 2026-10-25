@@ -10,7 +10,7 @@ import { providerModeSelectionPolicy } from '../../../../utils/providers.js';
 // pinned to a local model that can't call tools narrates instead of working.
 export default function TaskModelQuickControls({ pins, providers, loading = false, disabled = false }) {
   const {
-    providerId, model, effort, effectiveProviderId, defaultProviderLabel,
+    providerId, model, effort, executionOptions, changeExecutionOptions, effectiveProviderId, defaultProviderLabel,
     availableModels, saving, changeProvider, changeModel, changeEffort, toolFree,
   } = pins;
 
@@ -24,6 +24,7 @@ export default function TaskModelQuickControls({ pins, providers, loading = fals
         availableModels={availableModels}
         onProviderChange={changeProvider}
         onModelChange={changeModel}
+        executionOptions={executionOptions} onExecutionOptionsChange={changeExecutionOptions}
         effort={effort}
         onEffortChange={changeEffort}
         emptyProviderOption={defaultProviderLabel}

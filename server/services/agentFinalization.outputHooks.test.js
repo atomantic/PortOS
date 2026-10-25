@@ -57,7 +57,7 @@ vi.mock('./taskTypeHooks.js', () => ({
 }));
 
 import { getAgent, getAgentRecord, updateAgent, completeAgent } from './cosAgentLifecycle.js';
-import { canRunTaskOutputHookWithoutPayload, getTaskOutputHook, isProgrammaticIoTaskType } from './taskTypeHooks.js';
+import { canRunTaskOutputHookWithoutPayload, declaresNoCommitCriterion, getTaskOutputHook, isProgrammaticIoTaskType } from './taskTypeHooks.js';
 import {
   finalizeAgent,
   retireDeadAgent,
@@ -68,6 +68,7 @@ import {
 
 vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn(async () => ({})),
+  getTaskById: vi.fn(async () => null),
   addTask: vi.fn(async () => ({ id: 'investigation-test' })),
 }));
 vi.mock('./investigationTaskProducer.js', () => ({
@@ -89,7 +90,7 @@ vi.mock('./taskSchedule.js', () => ({
   recordTaskTypeSuccess: vi.fn(async () => null),
   recordRecommendedAudits: vi.fn(async () => null),
 }));
-import { updateTask, addTask } from './cosTaskStore.js';
+import { updateTask, addTask, getTaskById } from './cosTaskStore.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { MAX_TASK_RETRIES, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
@@ -475,6 +476,83 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
+  it('persists the LI execution verdict in the same public completion task write', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { ...TASK, metadata: { ...TASK.metadata, liProposal: {
+      appId: 'app-example', slug: 'example-proposal', scope: 'repo',
+    } } };
+    await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0, outputBuffer: '' });
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({
+      liExecution: expect.objectContaining({ appId: 'app-example', slug: 'example-proposal', success: true }),
+    }) }), 'internal');
+  });
+
+  it.each(['normal', 'recovered'])('parks a runtime prerequisite through %s public completion without a provider retry', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: TASK.id, taskType: 'internal', status: 'in_progress', metadata: {
+      isInvestigation: true, totalSpawnCount: 3, failureCount: 1, lastSpawnedAt: '2026-09-10T00:00:00Z',
+    } };
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.completionTaskDispatch = { taskId: task.id, taskType: 'internal',
+      expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, task.metadata[key] ?? null]) };
+    getTaskById.mockResolvedValueOnce(task);
+    mergedTarget.getOriginInfo.mockResolvedValue({ isGithub: true, host: 'github.com', fullName: 'example/PortOS' });
+    const github = await import('./github.js');
+    const git = await import('../lib/execGit.js');
+    const forge = vi.spyOn(github, 'execGh').mockImplementation(async args => JSON.stringify(args[0] === 'pr'
+      ? { state: 'MERGED', url: 'https://github.com/example/PortOS/pull/123', headRefOid: 'a'.repeat(40), mergeCommit: { oid: 'c'.repeat(40) }, baseRefName: 'main' }
+      : { defaultBranchRef: { name: 'main' } }));
+    const gitRead = vi.spyOn(git, 'execGit').mockResolvedValue({ stdout: 'd'.repeat(40), exitCode: 0 });
+    const taskOutcome = { status: 'blocked', reason: 'Update preflight refuses this active investigation; boot is stale.',
+      recovery: { mode: 'runtime', prUrl: 'https://github.com/example/PortOS/pull/123', requiredCommit: 'a'.repeat(40) } };
+    try {
+      persistedAgent.metadata.taskOutcome = taskOutcome;
+      persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+      const order = [];
+      updateTask.mockImplementationOnce(async () => { order.push('prerequisite'); return {}; });
+      completeAgent.mockImplementationOnce(async () => { order.push('terminal'); return null; });
+      // The dispatcher increments counters after the agent receives this snapshot.
+      const staleTask = { ...task, status: 'pending', metadata: { ...task.metadata, totalSpawnCount: 2, lastSpawnedAt: undefined } };
+      const result = mode === 'normal'
+        ? await finalizeAgent({ agentId: persistedAgent.id, task: staleTask, success: true, exitCode: 0,
+          finalSummary: JSON.stringify({ summary: taskOutcome.reason, taskOutcome }) })
+        : await retireDeadAgent({ agent: persistedAgent, task: staleTask, success: true, exitCode: 0 });
+      expect(result).toMatchObject({ success: false, taskOutcome });
+      expect(order).toEqual(['prerequisite', 'terminal']);
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked', metadata: expect.objectContaining({
+        blockedCategory: 'runtime-verification', failureCount: 1, totalSpawnCount: 3,
+        runtimeVerification: expect.objectContaining({ taskId: task.id, agentId: persistedAgent.id, integratedCommit: 'c'.repeat(40) }),
+      }) }), 'internal', expect.objectContaining({ expectedStatus: 'in_progress' }));
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked' }), 'internal', {
+        expectedStatus: 'in_progress',
+        expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+        recoveryOwner: { id: persistedAgent.id, startedAt: persistedAgent.startedAt },
+        expectedMetadata: { claimedBy: task.metadata.claimedBy, claimedAt: task.metadata.claimedAt,
+          lastSpawnedAt: task.metadata.lastSpawnedAt, totalSpawnCount: task.metadata.totalSpawnCount },
+      });
+      expect(completeAgent).toHaveBeenCalledWith(persistedAgent.id, expect.objectContaining({ success: false, deliveryRecoveryOwned: true }));
+      expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
+    } finally { forge.mockRestore(); gitRead.mockRestore(); }
+  });
+
+  it('stops recovered runtime finalization when its conditional prerequisite write loses ownership', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: TASK.id, taskType: 'internal', status: 'in_progress', metadata: { totalSpawnCount: 1 } };
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.completionTaskDispatch = { taskId: task.id, taskType: 'internal',
+      expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, task.metadata[key] ?? null]) };
+    getTaskById.mockResolvedValueOnce(task);
+    persistedAgent.metadata.taskOutcome = { status: 'blocked', reason: 'The running fix remains unverified.',
+      recovery: { mode: 'runtime', prUrl: 'https://github.com/example/PortOS/pull/123', requiredCommit: 'a'.repeat(40) } };
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    updateTask.mockResolvedValueOnce({ statusChanged: true });
+    await expect(retireDeadAgent({ agent: persistedAgent, task,
+      success: true, exitCode: 0 })).rejects.toThrow('task ownership changed');
+    expect(completeAgent).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it.each(['worktree', 'pinned-claim'])('hands %s cleanup-only work to completion recovery without another agent or success claim', async mode => {
     const taskOutcome = { status: 'incomplete', reason: 'Verified delivery; owner still holds checkout.', recovery: { mode: 'cleanup' } };
     isProgrammaticIoTaskType.mockReturnValue(false);
@@ -526,11 +604,12 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it.each(['normal', 'restart'])('settles a selected claim no-op from the shared verifier during %s completion', async mode => {
+  it.each(['normal', 'restart'].flatMap(mode => ['not-planned', 'operator-closed'].map(disposition => [mode, disposition])))
+  ('settles a selected claim no-op during %s completion from a verified %s disposition', async (mode, disposition) => {
     isProgrammaticIoTaskType.mockReturnValue(false);
     const task = { id: 'claim-example', taskType: 'user', metadata: { app: 'app-example', claimFlow: true, claimTarget: '42' } };
     const taskOutcome = { status: 'no-action-needed', reason: 'Selected issue no longer requires a change.' };
-    const claimDisposition = { status: 'verified', taskId: task.id, issues: [{ issue: 42, disposition: 'not-planned' }] };
+    const claimDisposition = { status: 'verified', taskId: task.id, issues: [{ issue: 42, disposition }] };
     persistedAgent.taskId = task.id;
     persistedAgent.metadata.taskOutcome = taskOutcome;
     persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
@@ -544,6 +623,9 @@ describe('recovery output-hook dispatch (#3182)', () => {
       expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: true,
         validationPassed: true, taskOutcome, claimDisposition }));
       expect(hook).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
+      if (mode === 'normal') expect(updateTask).toHaveBeenLastCalledWith(task.id,
+        expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ taskOutcome }) }), task.taskType);
     } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
   });
 
@@ -566,6 +648,46 @@ describe('recovery output-hook dispatch (#3182)', () => {
     } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
   });
 
+  it.each(['normal', 'restart'])('settles an operator-parked claim during %s completion without retrying the blocked report', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: 'claim-example', taskType: 'user', metadata: { claimFlow: true, claimTarget: '42', failureCount: 0 } };
+    const reported = { status: 'blocked', reason: 'The selected issue awaits new evidence; no actionable work remains.' };
+    const claimDisposition = { status: 'verified', taskId: task.id, issues: [{ issue: 42, disposition: 'operator-blocked' }] };
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.taskOutcome = reported;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    claimVerifier.verifyClaimDisposition.mockResolvedValue(claimDisposition);
+    try {
+      if (mode === 'normal') await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+        finalSummary: JSON.stringify({ summary: reported.reason, taskOutcome: reported }) });
+      else await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: true,
+        validationPassed: true, taskOutcome: expect.objectContaining({ status: 'no-action-needed' }), claimDisposition }));
+      expect(persistedAgent.metadata).toMatchObject({ taskOutcomeSource: 'forge-verification', reportedTaskOutcome: reported });
+      expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
+      if (mode === 'normal') expect(updateTask).toHaveBeenLastCalledWith(task.id,
+        expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ failureCount: 0 }) }), task.taskType);
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
+  it.each(['normal', 'restart'])('preserves an unverified claim blocker during %s completion', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: 'claim-example', taskType: 'user', metadata: { claimFlow: true, claimTarget: '42' } };
+    const taskOutcome = { status: 'blocked', reason: 'The issue may be parked; independent evidence is missing.' };
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.taskOutcome = taskOutcome;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    claimVerifier.verifyClaimDisposition.mockResolvedValue({ status: 'unverified', reason: 'block-authority-unverified' });
+    try {
+      if (mode === 'normal') await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+        finalSummary: JSON.stringify({ summary: taskOutcome.reason, taskOutcome }) });
+      else await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: false, taskOutcome }));
+      expect(persistedAgent.metadata.taskOutcomeSource).not.toBe('forge-verification');
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
   it('preserves a failed delivery gate during claim no-op recovery', async () => {
     isProgrammaticIoTaskType.mockReturnValue(false);
     const task = { id: 'claim-example', taskType: 'user', metadata: { claimFlow: true, claimTarget: '42' } };
@@ -579,6 +701,47 @@ describe('recovery output-hook dispatch (#3182)', () => {
       expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: false,
         validationPassed: false, taskOutcome: { status: 'incomplete', reason: 'Delivery checks did not pass.' } }));
     } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
+  it('accepts a coordinator no-op whose commit criterion was never declared', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    declaresNoCommitCriterion.mockReturnValue(true);
+    const taskOutcome = { status: 'no-action-needed', reason: 'Inventory was already drained.' };
+    const task = { id: 'reconcile-example', taskType: 'internal', metadata: { analysisType: 'branch-reconcile', app: 'app-example' } };
+    try {
+      await finalizeAgent({ agentId: 'agent-example', task, success: true, exitCode: 0, outputBuffer: '',
+        finalSummary: JSON.stringify({ summary: 'Nothing left to reconcile.', taskOutcome }) });
+      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({
+        success: true, executionSuccess: true, validationPassed: null, taskOutcome,
+      }));
+      expect(updateTask).toHaveBeenLastCalledWith(task.id, expect.objectContaining({
+        status: 'completed', metadata: expect.objectContaining({ taskOutcome }),
+      }), 'internal');
+      expect(addTask).not.toHaveBeenCalled();
+    } finally {
+      isProgrammaticIoTaskType.mockReturnValue(true);
+      declaresNoCommitCriterion.mockReturnValue(false);
+    }
+  });
+
+  it('keeps a failed delivery gate ahead of a coordinator no-op', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    declaresNoCommitCriterion.mockReturnValue(true);
+    const task = { id: 'reconcile-example', taskType: 'internal', metadata: { analysisType: 'branch-reconcile' } };
+    persistedAgent.taskId = task.id;
+    persistedAgent.result = { validationPassed: false };
+    persistedAgent.metadata.taskOutcome = { status: 'no-action-needed', reason: 'Inventory was already drained.' };
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    try {
+      await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({
+        success: false, validationPassed: false,
+        taskOutcome: { status: 'incomplete', reason: 'Delivery checks did not pass.' },
+      }));
+    } finally {
+      isProgrammaticIoTaskType.mockReturnValue(true);
+      declaresNoCommitCriterion.mockReturnValue(false);
+    }
   });
 
   it('holds an unverified no-op', async () => {

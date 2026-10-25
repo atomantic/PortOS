@@ -538,6 +538,13 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'A creative commission changed after persistence.',
     payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
   }),
+  'fableloom:export:job': Object.freeze({
+    direction: 'server-to-client',
+    summary: 'Persisted export job snapshot scoped to its loom and job identifier.',
+    payloadSchema: { type: 'object', required: ['loomId', 'jobId', 'status', 'revision', 'progress', 'findings'],
+      properties: { loomId: { type: 'string' }, jobId: { type: 'string' }, status: { type: 'string' },
+        revision: { type: 'integer' }, progress: { type: 'object' }, findings: { type: 'array', items: { type: 'object' } } } },
+  }),
   'fableloom:editorial:run': loomRunSnapshot(false),
   'fableloom:production:run': loomRunSnapshot(true),
   'fableloom:shots:run': loomRunSnapshot(false),

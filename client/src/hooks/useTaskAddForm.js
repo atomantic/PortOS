@@ -135,6 +135,7 @@ export function createTaskAddFormState({ initialDraft, defaultApp = '', apps, qu
       model: '',
       provider: '',
       effort: '',
+      executionOptions: undefined,
       temperature: '',
       thinking: '',
       app: apps?.some((app) => app.id === initialDraft.app) ? initialDraft.app : (defaultApp || initialDraft.app),
@@ -529,7 +530,7 @@ export default function useTaskAddForm({
       ...state.newTask,
       description: template.description,
       ...(template.app ? { app: template.app } : {}),
-      ...(template.provider ? { provider: template.provider, model: seeded.model, effort: seeded.effort } : {}),
+      ...(template.provider ? { provider: template.provider, model: seeded.model, effort: seeded.effort, executionOptions: template.executionOptions } : {}),
     };
     const templatePlanOnly = template.slashdoCommand === 'plan-task';
     const patch = {
@@ -588,6 +589,7 @@ export default function useTaskAddForm({
       provider: state.newTask.provider,
       model: state.newTask.model || soleAvailableModel,
       effort: state.newTask.effort,
+      executionOptions: state.newTask.executionOptions,
       app: state.newTask.app,
       ...(state.planOnly ? {
         slashdoCommand: 'plan-task',
@@ -677,6 +679,7 @@ export default function useTaskAddForm({
       model: selectedModelOrSole || undefined,
       provider: state.newTask.provider || undefined,
       effort: state.newTask.effort || undefined,
+      executionOptions: state.newTask.executionOptions,
       orchestrationMode: state.orchestrationMode === 'orchestrated' ? 'orchestrated' : undefined,
       orchestrationProfile: state.orchestrationMode === 'orchestrated' ? state.orchestrationProfile : undefined,
       temperature: state.newTask.temperature === '' ? undefined : Number(state.newTask.temperature),

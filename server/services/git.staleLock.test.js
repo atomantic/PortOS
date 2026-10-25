@@ -202,7 +202,7 @@ describe('ensureLatest', () => {
     expect(commands()).not.toContain('rebase origin/main');
   });
 
-  it('clears an abandoned rebase lock, aborts the rebase, and does not retry', async () => {
+  it('clears an abandoned rebase lock without aborting or retrying', async () => {
     withGit({
       'merge --ff-only origin/main': fail('fatal: Not possible to fast-forward, aborting.'),
       'rebase origin/main': fail("fatal: Unable to create '/repo/.git/index.lock': File exists")
@@ -215,7 +215,7 @@ describe('ensureLatest', () => {
 
     expect(result).toMatchObject({ success: false, branch: 'main', conflict: true });
     expect(result.error).toContain('/repo/.git/index.lock');
-    expect(commands()).toContain('rebase --abort');
+    expect(commands()).not.toContain('rebase --abort');
   });
 
   it('reports a genuine rebase conflict unchanged when there is no lock', async () => {
@@ -227,7 +227,7 @@ describe('ensureLatest', () => {
     const result = await ensureLatest('/repo');
 
     expect(result).toMatchObject({ success: false, branch: 'main', conflict: true });
-    expect(result.error).toContain('diverged from origin and rebase has conflicts');
-    expect(commands()).toContain('rebase --abort');
+    expect(result.error).toContain('diverged from origin and rebase did not complete');
+    expect(commands()).not.toContain('rebase --abort');
   });
 });

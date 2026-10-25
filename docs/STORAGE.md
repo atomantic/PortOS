@@ -1197,31 +1197,20 @@ older cache writers. Ambiguous legacy matches are preserved rather than guessed.
 These fields do not add federation or a new store; older cache records remain
 readable and Gmail/API IDs retain their existing meaning.
 
-### Initialized checkout retirement evidence
+### Checkout retirement copies
 
-`data/cos/initialized-checkout-retirements/<transaction-id>/` is machine-local,
-file-primary operational recovery evidence, created only by explicit initialized
-checkout retirement. Version 1 immutable numbered JSON steps form a SHA-256
-linked journal; each step and containing directory is fsynced. The directory is
-0700 and journal/native manifests are 0600. `archive/` preserves original file
-bytes and metadata evidence, `restore/` holds a proven standalone checkout and
-Git stores, and `quarantine/` retains whole original directories. Native manifest
-version 3 records per-path hashes for OS-added or replaced `com.apple.provenance`
-on copies only. A replacement additionally stores the exact original attribute
-bytes as canonical base64, hash-checked against the source before copying; the
-source is checked again afterward. Each archive-to-restore replacement preserves
-its own prior value. These original bytes are retained evidence, not installed
-onto the standalone copy. Missing attributes and every other attribute change
-still refuse preservation. Copied attributes must keep their recorded hashes;
-source/quarantine metadata and the final standalone manifest remain exact. The
-preservation proof journals the SHA-256 of the exact manifest bytes; later native
-reads verify that binding, including when an edited manifest claims an older
-version. Version 1 remains strict and version 2 permits only recorded additions. `execution.lock` and
-`backend.lock` serialize service executors and surviving native commands. These
-are private archives, excluded from federation and never seeded, migrated into
-PostgreSQL, expired or automatically purged. No existing-record migration is
-needed for the new versioned store. See
-[branch reconciliation](./features/branch-reconciliation.md#explicit-initialized-checkout-preservation).
+PortOS no longer writes `data/cos/held-checkout-archives/`,
+`data/cos/branch-retirement-archives/`, or
+`data/cos/initialized-checkout-retirements/`. A merged, clean checkout is
+removed in place only after checking ignored payload as well as Git status.
+Unverified ignored files keep the checkout and branch in place; independently
+recognized disposable caches retain their existing policy.
+Migration 442 preserves all three historical roots and sibling checkouts such
+as `data/cos/worktrees/` and `data/cos/agents/`. Historical archives can contain
+the only unpublished bytes, quarantined originals or unfinished recovery
+journals. Stopping new archive writes does not authorize deleting that data;
+historical restore helpers remain available without a setup-time purge. See
+[branch reconciliation](./features/branch-reconciliation.md#retiring-a-held-checkout).
 
 `<canonical-common-git-dir>/portos-checkout-admission/` is a separate file-primary
 cross-process safety fence shared by linked checkouts and server/runner processes.
@@ -1299,3 +1288,5 @@ This also identifies additions made before a crash prevented the final journal
 update. Never restore an old `usage.json` over newer usage to undo this import.
 No migration or seed is required: this is a new optional ledger, absent until a
 live completion or an explicit import publishes its first receipt.
+
+LoRA training is retired; its existing datasets, run artifacts, configuration and PostgreSQL history remain intact. See [Data Maintenance](DATA_MAINTENANCE.md) for inventory and explicit removal. Installed adapters and shared inference runtimes remain supported.

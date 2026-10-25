@@ -61,6 +61,24 @@ describe('probeCodexModelsViaAppServer', () => {
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
   });
 
+  it('reads account and managed configuration, following catalog pages without starting a turn', async () => {
+    const child = fakeChild();
+    spawn.mockReturnValue(child);
+    const promise = probeCodexModelsViaAppServer('codex', ['app-server'], null, { includeDetails: true, cwd: '/tmp' });
+    const reply = (id, result) => child.stdout.emit('data', `${JSON.stringify({ id, result })}\n`);
+    expect(spawn.mock.calls.at(-1)[2]).toMatchObject({ cwd: '/tmp', env: { PWD: '/tmp' } });
+    reply(1, {});
+    reply(3, { account: { type: 'chatgpt' } });
+    reply(4, { requirements: { featureRequirements: { fast_mode: false } } });
+    reply(5, { config: { model_provider: 'openai' } });
+    reply(10, { data: [{ id: 'alpha', serviceTiers: [{ id: 'fast' }] }], nextCursor: 'page2' });
+    reply(11, { data: [{ id: 'beta', serviceTiers: [] }] });
+    await expect(promise).resolves.toMatchObject({ accountType: 'chatgpt', requirements: { featureRequirements: { fast_mode: false } }, models: [{ id: 'alpha' }, { id: 'beta' }] });
+    const requests = child.stdin.write.mock.calls.map(([line]) => JSON.parse(line));
+    expect(requests.map(request => request.method)).toEqual(['initialize', 'initialized', 'account/read', 'configRequirements/read', 'config/read', 'model/list', 'model/list']);
+    expect(requests.at(-1).params).toEqual({ cursor: 'page2' });
+  });
+
   it('rejects with the RPC error message when model/list answers one', async () => {
     const child = fakeChild();
     spawn.mockReturnValue(child);

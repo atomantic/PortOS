@@ -747,6 +747,7 @@ export default function AIProviders() {
     // The hardware veto is decided first: what this machine cannot run never
     // reaches the harness groups, so a card lands in exactly one section.
     const cards = providers.filter(provider => {
+      if (provider.executionSourceProviderId || provider.executionSelectionRoot) return false;
       const modes = provider.executionModes || [{ id: provider.id }];
       const representative = modes.find(mode => mode.id === activeProviderId) || modes[0];
       return provider.id === representative.id;

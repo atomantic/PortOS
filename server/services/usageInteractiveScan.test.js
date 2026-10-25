@@ -173,4 +173,31 @@ describe('refreshInteractiveUsage', () => {
     expect(records.reduce((sum, r) => sum + r.tokensOut, 0)).toBe(150);
     expect(records.reduce((sum, r) => sum + r.tokensIn, 0)).toBe(20);
   });
+
+  it('bills subagent turns inside a run reconciled before the sidechain fix, once, and leaves later runs alone', async () => {
+    const dir = join(home, '.claude', 'projects', '-example-workspace', 'sess-1', 'subagents');
+    await mkdir(dir, { recursive: true });
+    const line = (id, ms, output) => JSON.stringify({
+      type: 'assistant', timestamp: new Date(ms).toISOString(), cwd: CWD, requestId: `req-${id}`,
+      message: { id, model: 'example-claude-model', usage: { input_tokens: 10, output_tokens: output, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }
+    });
+    const SETTLED = NOW - 10 * HOUR;
+    const LATER = NOW - 2 * HOUR;
+    await writeFile(join(dir, 'agent-1.jsonl'), [line('old', SETTLED, 300), line('new', LATER, 700)].join('\n'));
+    const writeRun = async (name, at, reconciledAt) => {
+      await mkdir(join(runsDir, name), { recursive: true });
+      await writeFile(join(runsDir, name, 'metadata.json'), JSON.stringify({
+        workspacePath: CWD, startTime: new Date(at - 60_000).toISOString(), endTime: new Date(at + 60_000).toISOString(),
+        usageReconciled: true, usageReconciledAt: new Date(reconciledAt).toISOString()
+      }));
+    };
+    await writeRun('settled', SETTLED, NOW - 9 * HOUR);
+    // Reconciled after this process started, so the fixed run path already billed its sidechains.
+    await writeRun('fixed', LATER, NOW + HOUR);
+
+    const first = await refreshInteractiveUsage({ home, runsDir, providers: [CLAUDE], now: NOW });
+    expect(first.sidechainRepair.tokensOut).toBe(300);
+    const second = await refreshInteractiveUsage({ home, runsDir, providers: [CLAUDE], now: NOW + 10 * 60_000 });
+    expect(second.sidechainRepair).toBeUndefined();
+  });
 });

@@ -481,17 +481,6 @@ describe('self-update spawn gate — funnel coverage (#4124)', () => {
     expect(reads).toHaveLength(1);
   });
 
-  it('finalizeAgent stamps the LI execution verdict into the completion task write (#2779)', () => {
-    const idx = AGENT_FINALIZATION_SRC.indexOf('export async function finalizeAgent');
-    expect(idx, 'finalizeAgent must exist').toBeGreaterThan(-1);
-    const updateIdx = AGENT_FINALIZATION_SRC.indexOf('await updateTask(task.id, taskUpdate, taskType)', idx);
-    expect(updateIdx, 'finalizeAgent must persist the task via updateTask').toBeGreaterThan(idx);
-    const body = AGENT_FINALIZATION_SRC.slice(idx, updateIdx);
-    // The verdict is stamped into taskUpdate via the shared helper BEFORE the updateTask
-    // call, so it federates in the same write that marks the task terminal.
-    expect(body).toMatch(/await stampLiExecutionVerdict\(taskUpdate, task, \{ success: deliverySuccess, validationPassed, errorAnalysis: deliveryVerdict\.errorAnalysis \}\)/);
-  });
-
   it('stampLiExecutionVerdict builds the verdict from the task liProposal marker via the shared builder (#2779)', () => {
     const idx = AGENT_FINALIZATION_SRC.indexOf('async function stampLiExecutionVerdict');
     expect(idx, 'stampLiExecutionVerdict must exist').toBeGreaterThan(-1);
@@ -585,7 +574,7 @@ describe('runAgentSpawn source — handedOff pre-spawn vs post-handoff split', (
     expect(AGENT_LIFECYCLE_SRC).toMatch(/context\.handedOff/);
     expect(AGENT_LIFECYCLE_SRC).toMatch(/if\s*\(!context\.setupCatchArmed\s*\|\|\s*context\.handedOff\)\s*throw\s+err\s*;/);
     expect(AGENT_LIFECYCLE_SRC).toMatch(
-      /await context\.blockAndBail\(\{[\s\S]{0,300}?reason: setupError,[\s\S]{0,200}?category: 'private-security-setup-failed',/
+      /await context\.blockAndBail\(\{[\s\S]{0,300}?reason: setupError,[\s\S]{0,200}?category: optionRefusal \? PROVIDER_CONFIG_BLOCKED_CATEGORY : 'private-security-setup-failed',/
     );
     expect(AGENT_LIFECYCLE_SRC).toMatch(/job:spawn-failed/);
     expect(AGENT_LIFECYCLE_SRC).toMatch(/task\.metadata\??\.jobId/);

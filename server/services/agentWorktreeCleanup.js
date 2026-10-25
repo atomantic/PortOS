@@ -23,6 +23,7 @@ import { getAgents } from './cosAgentLifecycle.js';
 import * as git from './git.js';
 import { resolveTaskHookType } from './taskTypeHooks.js';
 import { removeWorktree, classifyWorktreeDirt, listWorktrees } from './worktreeManager.js';
+import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { claimContinuationPointer } from '../lib/claimContinuation.js';
 import { isTruthyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -169,6 +170,7 @@ const WORKTREE_DISPOSITIONS = Object.freeze({
   'stand-down': Object.freeze({}),
   'stand-down-uncertain': Object.freeze({}),
   'stranded-pr-handoff': Object.freeze({}),
+  'delivered-pr': Object.freeze({ merge: false }),
   'merge-or-preserve': Object.freeze({}),
 });
 
@@ -181,6 +183,8 @@ export function resolveWorktreeDisposition({ isWorktree, success, prCreation, di
     if (success) {
       if (prClaimVerdict?.category === PR_MISSING_CATEGORY) name = 'open-pr';
       else name = prClaimWasVerified(prClaimVerdict) ? 'stand-down' : 'stand-down-uncertain';
+    } else if (prClaimVerdict?.mergedExactHead === true) {
+      name = 'delivered-pr';
     } else if (prClaimVerdict?.status === 'found' && prClaimVerdict.url) {
       name = 'stranded-pr-handoff';
     }
@@ -208,6 +212,8 @@ async function worktreeCleanupContext(agentId, options) {
     discardWorktree: isTruthyMeta(normalized.originalTask?.metadata?.discardWorktree),
     worktreePath: metadata.workspacePath || join(PATHS.worktrees, agentId),
     publicationValidation: publicationHolds.get(agentId) || metadata.publicationValidation,
+    runtimeVerificationRequested: agentState?.result?.taskOutcome?.recovery?.mode === 'runtime',
+    taskId: agentState?.taskId || normalized.originalTask?.id,
     securityScan: metadata.securityScan,
     securityScanControl: metadata.securityScanControl,
     warnings: [],
@@ -231,12 +237,25 @@ async function probeWorktreePr(context, success) {
   const { findPullRequestForBranch } = await import('./github.js');
   const forge = await git.resolveForgeForRepo(worktreePath).catch(() => null);
   if (!forge) return { status: 'unavailable' };
-  return findPullRequestForBranch(worktreeBranch, { cwd: worktreePath, env: forge.env || null })
+  const found = await findPullRequestForBranch(worktreeBranch, { cwd: worktreePath, env: forge.env || null })
     .catch(() => ({ status: 'unavailable' }));
+  if (found.status === 'found' && String(found.detail).toUpperCase() === 'MERGED' && found.headRefOid
+    && !leavesPrForHuman(context.originalTask)) {
+    const tip = await execGit(['rev-parse', '--verify', `refs/heads/${worktreeBranch}`], context.sourceWorkspace,
+      { ignoreExitCode: true }).catch(() => null);
+    if (tip?.exitCode === 0 && tip.stdout.trim() === found.headRefOid) return { ...found, mergedExactHead: true };
+  }
+  return found;
 }
 
 async function runCleanupAgentWorktree(agentId, success, options = {}) {
   const context = await worktreeCleanupContext(agentId, options);
+  if (context.runtimeVerificationRequested) {
+    const { getTaskById } = await import('./cosTaskStore.js');
+    const held = context.taskId ? await getTaskById(context.taskId) : null;
+    if (held?.metadata?.runtimeVerificationId === `${held.id}:${agentId}`
+      && held.metadata.runtimeVerification?.agentId === agentId) return [];
+  }
   if (['running', 'blocked'].includes(context.publicationValidation?.status)) {
     return [`Publication validation ${context.publicationValidation.status} for ${context.worktreeBranch}; worktree preserved at ${context.worktreePath}. Resume the task after resolving the validation outcome.`];
   }
@@ -250,6 +269,9 @@ async function runCleanupAgentWorktree(agentId, success, options = {}) {
       return discardAgentWorktree(context);
     case 'open-pr':
       return openWorktreePullRequest(context);
+    case 'delivered-pr':
+      await mergeOrPreserveWorktree({ ...context, skipMerge: true }, disposition);
+      break;
     case 'stranded-pr-handoff': {
       const released = await mergeOrPreserveWorktree(context, disposition);
       if (released?.cleanupIncomplete) {
@@ -552,6 +574,7 @@ async function queueWorktreeMerge({ agentId, worktreeBranch, originalTask, descr
             providerId: originalTask.metadata.providerId,
             model: originalTask.metadata.model,
             effort: originalTask.metadata.effort,
+            executionOptions: originalTask.metadata.executionOptions,
           }
         }
       });
@@ -991,11 +1014,14 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
   });
   if (!persisted) return {};
 
-  if (persisted.status === 'blocked' && ['task-approval', 'task-recovery-exhausted'].includes(persisted.metadata?.blockedCategory)) {
+  if (persisted.status === 'blocked' && ['task-approval', 'task-recovery-exhausted', 'runtime-verification'].includes(persisted.metadata?.blockedCategory)) {
     if (persisted.metadata.deliveryDecisionAgentId !== agentId) return {};
     const metadata = agentMetadata === undefined ? (await getAgentRecord(agentId))?.metadata : agentMetadata;
-    const patch = await resolveTaskResumePatch({ task, agentId, agentMetadata: metadata });
-    const result = await updateTask(task.id, { metadata: patch }, task.taskType || persisted.taskType || 'user', {
+    const patch = persisted.metadata.blockedCategory === 'runtime-verification'
+      ? await runtimeResumePatch({ task: persisted, agentId, agentMetadata: metadata })
+      : await resolveTaskResumePatch({ task, agentId, agentMetadata: metadata });
+    const result = await updateTask(task.id, { metadata: { ...patch,
+      ...(persisted.metadata.blockedCategory === 'runtime-verification' ? { runtimeVerificationReadyAgentId: agentId } : {}) } }, task.taskType || persisted.taskType || 'user', {
       expectedStatus: 'blocked', expectedMetadata: { blockedCategory: persisted.metadata.blockedCategory, blockedAt: persisted.metadata.blockedAt, deliveryDecisionAgentId: agentId },
     });
     return result?.error || result?.statusChanged ? {} : patch;
@@ -1280,6 +1306,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
     if (sourceMeta.model) providerPins.model = sourceMeta.model;
   }
   if (sourceMeta.effort) providerPins.effort = sourceMeta.effort;
+  if (sourceMeta.executionOptions !== undefined) providerPins.executionOptions = sourceMeta.executionOptions;
 
   // Routing key, and the one field here that turns a serialization slip into a
   // dead PR: a follow-up whose `app` doesn't resolve is BLOCKED by
@@ -1484,4 +1511,19 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
   if (!pending) throw new Error('cleanup-warning-replay-unavailable');
   emitLog('info', 'Cleanup warning retained for deterministic completion recovery', { agentId, appName });
   return null;
+}
+
+// A verification continuation deliberately retains even an already-merged
+// branch. Ordinary failed-task retry correctly discards those resume pointers.
+async function runtimeResumePatch({ task, agentId, agentMetadata }) {
+  const claim = await resolveClaimContinuationPatch({ task, agentId, agentMetadata });
+  if (claim) return claim;
+  if (hasClaimFlowContract(task)) throw new Error('Runtime verification claim checkout identity is unavailable; retain the prerequisite');
+  if (!agentMetadata?.isWorktree || agentMetadata.isPersistentWorktree) return {};
+  const branch = agentMetadata.worktreeBranch;
+  const path = agentMetadata.workspacePath || join(PATHS.worktrees, agentId);
+  if (!branch || !existsSync(path) || await git.getBranch(path) !== branch) {
+    throw new Error('Runtime verification checkout identity is unavailable; retain the prerequisite');
+  }
+  return { existingBranch: branch, resumeWorktreePath: path, resumedFromAgentId: agentId };
 }

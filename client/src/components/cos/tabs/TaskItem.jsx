@@ -1,3 +1,4 @@
+import ExecutionOptionsSelect from '../../providers/ExecutionOptionsSelect.jsx';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   Clock,
@@ -37,6 +38,7 @@ import RelaunchAgentModal from './RelaunchAgentModal';
 import AgentCard from './AgentCard';
 import PreflightProgress from './PreflightProgress';
 import DeliveryStatus from '../DeliveryStatus';
+import BlockedSystemRecovery from '../BlockedSystemRecovery';
 import { isDeliveryCleanupHeld } from '../../../../../server/lib/taskRetryHold.js';
 
 const statusIcons = {
@@ -79,6 +81,7 @@ const getTaskEditData = (task, providers) => {
     model: seeded.model,
     provider,
     effort: seeded.effort,
+    executionOptions: task.metadata?.executionOptions,
     // '' = "Any instance" (#4520) — no pin, the opportunistic default.
     targetInstanceId: task.metadata?.targetInstanceId || ''
   };
@@ -329,6 +332,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
     editData.model !== savedEditData.model ||
     editData.provider !== savedEditData.provider ||
     editData.effort !== savedEditData.effort ||
+    JSON.stringify(editData.executionOptions) !== JSON.stringify(savedEditData.executionOptions) ||
     editData.targetInstanceId !== savedEditData.targetInstanceId;
 
   const handleCancelEdit = () => {
@@ -571,6 +575,9 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                   onChange={effort => setEditData(d => ({ ...d, effort }))}
                   className="w-full sm:w-36 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
+                <ExecutionOptionsSelect provider={editProvider} model={effectiveModelFor(editProvider, editData.model)}
+                  value={editData.executionOptions} onChange={executionOptions => setEditData(d => ({ ...d, executionOptions }))}
+                  className="w-full sm:w-36 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm" />
               </div>
               {canPinInstance && (
                 <InstancePicker
@@ -685,7 +692,15 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                   back to `blockedReason` — the field every server-side block
                   writes (max-spawns, retries, provider-config, terminated, …), so
                   without this fallback an auto-blocked task shows no reason at all. */}
-              {task.status === 'blocked' && (task.metadata?.blocker || task.metadata?.blockedReason) && (
+              {task.status === 'blocked' && !task.metadata?.blocker
+                && task.metadata?.blockedInvestigation?.sourceCategory === task.metadata?.blockedCategory
+                && task.metadata?.blockedInvestigation?.sourceBlockedAt === (task.metadata?.blockedAt || task.metadata?.lastSpawnedAt || 'legacy') ? <div className="mt-2">
+                <BlockedSystemRecovery recovery={task.metadata.blockedInvestigation} />
+                {task.metadata.blockedReason && <details className="mt-1">
+                  <summary className="cursor-pointer text-sm text-port-text-muted">Original failure details</summary>
+                  <CollapsibleText id={`task-blocker-${idScope}-${task.id}`} text={task.metadata.blockedReason} className="text-port-error/90" />
+                </details>}
+              </div> : task.status === 'blocked' && (task.metadata?.blocker || task.metadata?.blockedReason) && (
                 <div className="flex items-start gap-2 mt-2 px-2 py-1.5 bg-port-error/10 border border-port-error/20 rounded text-sm">
                   <AlertCircle size={14} className="text-port-error shrink-0 mt-0.5" aria-hidden="true" />
                   {/* Clamped: server-side auto-blocks write `blockedReason` from

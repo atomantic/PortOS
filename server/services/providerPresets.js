@@ -106,7 +106,7 @@ const mintPresetId = (parts, taken) =>
  * @param {{compositeId: string, id?: string, name?: string, model?: string|null, effort?: string|null}} input
  * @returns {Promise<object>} the created record
  */
-export async function createPresetFromComposite({ compositeId, id, name, model, effort }) {
+export async function createPresetFromComposite({ compositeId, id, name, model, effort, executionOptions }) {
   const verdict = await describeCompositeProvider(compositeId);
   if (!verdict.eligible) throw new ServerError(verdict.reason, { status: 400, code: verdict.code });
   const { record, parts } = verdict;
@@ -132,6 +132,7 @@ export async function createPresetFromComposite({ compositeId, id, name, model, 
     name: name ?? record.name,
     defaultModel,
     ...(effort ? { effort } : {}),
+    ...(executionOptions ? { executionOptions } : {}),
     ...(parts.bootstrapSlug ? { credentialBootstrapId: parts.bootstrapSlug } : {}),
   };
   delete body.servicePlan;

@@ -227,7 +227,6 @@ const MEDIA_CREATIVE_DIRECTOR_PREFIX = /^\/media\/creative-director/;
 const MEDIA_SPRITES_PREFIX = /^\/media\/sprites/;
 const MEDIA_MUSIC_VIDEO_PREFIX = /^\/media\/music-video/;
 const MEDIA_3D_PREFIX = /^\/media\/3d/;
-const MEDIA_TRAINING_PREFIX = /^\/media\/training/;
 // The annotator lives under the Media shell (/media/annotate). A bare /annotate
 // is what a bookmark, a typed URL, or a half-remembered path lands on — alias it
 // rather than letting the catch-all swallow it (issue #3793).
@@ -408,6 +407,8 @@ export default function App() {
           <Route path="voice/call-host" element={<VoiceCallHost />} />
           <Route path="api-reference" element={<Navigate to="/api-reference/catalog" replace />} />
           <Route path="api-reference/:tab" element={<ApiExplorer />} />
+          <Route path="models/training" element={<Navigate to="/settings/data-maintenance" replace />} />
+          <Route path="models/training/:recordId" element={<Navigate to="/settings/data-maintenance" replace />} />
           <Route path="models" element={<Navigate to="/models/llms" replace />} />
           {/* Runtimes was the LLMs page's default view until #7414 promoted it to
               its own tab. A literal segment outranks `models/:tab/:recordId`, so
@@ -538,8 +539,8 @@ export default function App() {
             <Route path="3d" element={<PrefixRedirect from={MEDIA_3D_PREFIX} to="/3d" />} />
             <Route path="3d/:id" element={<PrefixRedirect from={MEDIA_3D_PREFIX} to="/3d" />} />
             <Route path="loras" element={<RedirectWithSearch to="/models/loras" />} />
-            <Route path="training" element={<PrefixRedirect from={MEDIA_TRAINING_PREFIX} to="/models/training" />} />
-            <Route path="training/:datasetId" element={<PrefixRedirect from={MEDIA_TRAINING_PREFIX} to="/models/training" />} />
+            <Route path="training" element={<Navigate to="/settings/data-maintenance" replace />} />
+            <Route path="training/:datasetId" element={<Navigate to="/settings/data-maintenance" replace />} />
             {/* Universes live at /universes (Create sidebar link). These
                 redirects keep legacy /media/universe-builder bookmarks working
                 after the MediaGen tab was removed. */}

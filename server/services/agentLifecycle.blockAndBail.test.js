@@ -639,6 +639,18 @@ describe('runAgentSpawn gates — spawn setup failure', () => {
     expect(JSON.stringify(vi.mocked(cosEvents.emit).mock.calls)).not.toContain('synthetic sensitive source details');
   });
 
+  it('persists an unsupported execution option as configuration without starting an investigation', async () => {
+    vi.mocked(getConfig).mockRejectedValue(Object.assign(new Error('Execution speed is unsupported on this route.'), { code: 'EXECUTION_OPTIONS_UNSUPPORTED' }));
+    const task = { id: 'task-speed-refused', metadata: { app: APP } };
+    expect(await spawnAgentForTask(task)).toBeNull();
+    const { update, metadata } = soleBlockedWrite();
+    expect(update.status).toBe('blocked');
+    expect(metadata).toMatchObject({ blockedCategory: 'provider-config', blockedReason: 'Execution speed is unsupported on this route.' });
+    expect(agentErrors()).toEqual([]);
+    expect(markerReleasedFor(APP)).toBe(true);
+    expect(release).toHaveBeenCalled();
+  });
+
   // An ordinary task's setup failure is transient — it must stay pending and
   // retry rather than being blocked out of the queue.
   it('leaves an ordinary task unblocked on a setup failure but still cleans up', async () => {
