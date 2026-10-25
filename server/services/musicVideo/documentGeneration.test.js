@@ -196,6 +196,18 @@ async function threeRuntime(document, { reference = false, fontGate = Promise.re
 }
 
 describe('treatment-driven mixed-media document authoring', () => {
+  it('reads an older candidate manifest with overlays disabled so it can be revised', async () => {
+    const document = await threeCandidate();
+    const id = document.directory.split('/')[1];
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, lyricOverlayEnabled: false } }));
+    await writeFile(join(PATHS.data, document.directory, 'engine.js'), 'function drawWords() { /* legacy lyric pass */ }');
+    const calls = h.calls;
+    const candidate = await readMixedMediaCandidate(id);
+    expect(candidate.sections).toHaveLength(1);
+    expect(candidate.source.directory).toBe(document.directory);
+    expect(h.calls).toBe(calls);
+  });
+
   it('keeps authored Three text while hiding the spatial host lyric pass', async () => {
     const document = await threeCandidate();
     const shown = await threeRuntime(document);

@@ -593,17 +593,17 @@ export async function documentDirectoryForRender(project) {
 }
 
 /** Every file a document ships, read into memory (the preview builder). */
-export async function readDocumentFiles(project) {
+export async function readDocumentFiles(project, { requireLyricVisibility = true } = {}) {
   const dir = await requireDocument(project);
   const { files } = await collectTree(dir);
   await assertDocumentMediaPolicy(project, files);
   // Immutable documents retain their own runtime. Refuse an unsupported lyric
   // pass instead of claiming this project preference changed its output.
-  if (project.lyricOverlayEnabled === false) {
+  if (requireLyricVisibility && project.lyricOverlayEnabled === false) {
     const runtimes = files.filter((file) => ['lyricType.js', 'engine.js'].includes(file.rel));
-    const supported = (await Promise.all(runtimes.map(async (file) =>
-      /^\/\/ portos-lyric-overlay-visibility: 1$/m.test(await readFile(file.abs, 'utf8'))))).some(Boolean);
-    if (!supported) {
+    const marked = await Promise.all(runtimes.map(async (file) =>
+      /^\/\/ portos-lyric-overlay-visibility: 1$/m.test(await readFile(file.abs, 'utf8'))));
+    if (!marked.length || !marked.every(Boolean)) {
       throw new ServerError('Update the document lyric renderer to support automatic lyric overlays being disabled before rendering. Authored text remains independent.', {
         status: 422, code: 'DOCUMENT_LYRIC_VISIBILITY_UNSUPPORTED',
       });

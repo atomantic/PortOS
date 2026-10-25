@@ -31,6 +31,8 @@ describe('Song step', () => {
     expect(document.getElementById('mv-setup-advanced-audio')).toBeNull();
     expect(document.querySelector('details#mv-setup-song')).toBeNull();
     expect(within(steps[3]).getByText('Word timing verified against the current master.')).toBeTruthy();
+    expect(document.querySelectorAll('#mv-lyric-timing')).toHaveLength(1);
+    expect(within(document.getElementById('mv-lyric-timing')).getByRole('checkbox', { name: 'Show automatic lyric overlays' })).toBeTruthy();
   });
 
   it('marks every part to do for an empty project', () => {

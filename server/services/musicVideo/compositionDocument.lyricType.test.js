@@ -118,4 +118,9 @@ it('requires a visibility-aware runtime for a document with automatic lyrics dis
   await writeFile(join(root, 'lyricType.js'), 'export const legacyRuntime = true;');
   await expect(readDocumentFiles(project)).rejects.toMatchObject({ code: 'DOCUMENT_LYRIC_VISIBILITY_UNSUPPORTED', status: 422 });
   await expect(readDocumentFiles({ ...project, lyricOverlayEnabled: true })).resolves.toBeInstanceOf(Map);
+  await expect(readDocumentFiles(project, { requireLyricVisibility: false })).resolves.toBeInstanceOf(Map);
+  const current = await readFile(new URL('./documentTemplates/shared/lyricType.js', import.meta.url));
+  await writeFile(join(root, 'lyricType.js'), current);
+  await writeFile(join(root, 'engine.js'), 'function drawWords() { /* legacy lyric pass */ }');
+  await expect(readDocumentFiles(project)).rejects.toMatchObject({ code: 'DOCUMENT_LYRIC_VISIBILITY_UNSUPPORTED' });
 });
