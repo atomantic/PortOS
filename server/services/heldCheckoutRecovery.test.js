@@ -58,7 +58,7 @@ vi.mock('./cosClaimOwnershipState.js', async importOriginal => {
 
 const SYMLINKS = process.platform !== 'win32';
 const retirementFaults = vi.hoisted(() => ({ onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null }));
-const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [] }));
+const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null }));
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
@@ -84,6 +84,9 @@ vi.mock('../lib/execGit.js', async importOriginal => {
       if (injected.onPreviewEvidence && args[0] === '--literal-pathspecs' && args[1] === 'diff') await injected.onPreviewEvidence();
       if (injected.onArchiveRef && args[0] === 'update-ref' && args[1]?.startsWith('refs/portos/archive/')) await injected.onArchiveRef();
       if (injected.onProof && args.includes('--bare') && options?.env?.GIT_NO_REPLACE_OBJECTS === '1') await injected.onProof();
+      if (injected.onOtherFiles && args[0] === 'ls-files' && args[1] === '--others') {
+        return { ...result, stdout: Buffer.from(injected.onOtherFiles(result.stdout.toString())) };
+      }
       return result;
     }
     catch (error) {
@@ -137,7 +140,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       ? { entryPoint: task.name.endsWith('cleanupMerged') ? 'cleanupMerged' : 'early reaper', started: performance.now(), phases: {} } : null;
     await receiptTiming.run('fixture-setup', async () => {
       Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
-      Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null });
+      Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null, onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null });
       scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
       const safeRepo = join(scratch, 'repo');
       await mkdir(safeRepo);
@@ -1280,8 +1283,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it('never follows a cache directory link or removes the outside content', async () => {
-    const c = await reviewedCheckout('linked-cache');
+  async function cacheDirectoryLink(checkout) {
     await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
     const outside = join(scratch, 'wanted-outside-cache');
     await mkdir(outside);
@@ -1289,13 +1291,50 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await writeFile(wanted, 'wanted outside bytes');
     await truncate(wanted, 26 * 1024 * 1024);
     const before = await sha256File(wanted);
-    const root = join(c.path, 'server/.cache/vitest');
+    const root = join(checkout.path, 'server/.cache/vitest');
     await mkdir(root, { recursive: true });
-    await symlink(outside, join(root, 'modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    const link = join(root, 'modules');
+    await symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    return { wanted, before, link };
+  }
+
+  it.each(['native', 'traversed', 'directory'])('never follows a cache directory link or removes the outside content: %s listing', async listing => {
+    const c = await reviewedCheckout('linked-cache');
+    const { wanted, before } = await cacheDirectoryLink(c);
+    if (listing !== 'native') {
+      // Git for Windows can enumerate junction descendants as ordinary files.
+      // Reproduce that boundary on every OS while retaining a real link.
+      injected.onOtherFiles = output => [...output.split('\0').filter(rel => rel && !rel.startsWith('server/.cache/vitest/modules')),
+        ...(listing === 'directory' ? ['server/.cache/vitest/modules/']
+          : [`server/.cache/vitest/modules/${'a'.repeat(40)}`, 'server/.cache/vitest/modules/missing'])].join('\0') + '\0';
+    }
     const prepared = await c.prepare();
-    expect(prepared.ok).toBe(true);
-    expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true });
+    const retired = await c.confirm(prepared.review);
+    expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(c.path)).toBe(false);
+    expect(await registered(c.path)).toBe(false);
     expect(await sha256File(wanted)).toBe(before);
+    expect(await archives()).toEqual([]);
+  });
+
+  it('restores reviewed cache directory links when Git refuses removal', async () => {
+    const c = await reviewedCheckout('linked-cache-removal-refused');
+    const { wanted, before, link } = await cacheDirectoryLink(c);
+    const target = await readlink(link);
+    const prepared = await c.prepare();
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true });
+    retirementFaults.onRemove = vi.fn(async () => {
+      expect(existsSync(link)).toBe(false);
+      expect(await sha256File(wanted)).toBe(before);
+      throw new Error('synthetic Git removal refusal');
+    });
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false });
+    expect(retirementFaults.onRemove).toHaveBeenCalledTimes(1);
+    expect(await readlink(link)).toBe(target);
+    expect(await sha256File(wanted)).toBe(before);
+    expect(existsSync(c.path)).toBe(true);
+    expect(await registered(c.path)).toBe(true);
     expect(await archives()).toEqual([]);
   });
 
@@ -2109,12 +2148,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
           completedCheckouts: [{ version: 1, agentId: id, startedAt, capturedAt: startedAt, ...captured, path }] } };
     });
     injected.policies = attempts;
+    // Git and realpath can spell the same Windows path differently. Exercise
+    // equivalent receipt paths on every platform, retaining the real identity.
+    const receipt = attempts[2].metadata.completedCheckouts[0];
+    receipt.repoPath += '/.';
+    receipt.path += '/.';
     const original = structuredClone(attempts);
     // A missing link, a different task or physical generation, and a real
     // validation/human hold cannot be released by a later successful execution.
     for (const [target, key, value] of [[attempts[2].metadata, 'resumedFromAgentId', null],
       [attempts[0], 'taskId', 'other-task'], [attempts[0].result, 'validationPassed', false],
       [attempts[0].metadata, 'prCompletionPolicy', 'leave-open'],
+      [receipt, 'repoPath', join(scratch, 'unrelated-repo')],
+      [receipt, 'path', join(external, 'unrelated-checkout')],
       [attempts[0].metadata.completedCheckouts[0], 'head', 'b'.repeat(40)],
       [attempts[0].metadata.completedCheckouts[0], 'incarnation', { pointer: { ino: 'other' } }]]) {
       const prior = target[key]; target[key] = value;
