@@ -30,7 +30,7 @@ import { storeCompletionData, readCompletionData, completionReplayInput } from '
  * import it at top level.
  */
 
-import { resolveTaskHookType } from './taskTypeHooks.js';
+import { declaresNoCommitCriterion, resolveTaskHookType } from './taskTypeHooks.js';
 import { join, relative, resolve, sep } from 'path';
 import { unlink, rm } from 'fs/promises';
 import { emitLog } from './cosEvents.js';
@@ -42,7 +42,7 @@ import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, doneSentinelName, doneSentinelPath as resolveDoneSentinelPath } from '../lib/agentSentinel.js';
 import * as jiraService from './jira.js';
 import * as git from './git.js';
-import { isTruthyMeta } from './agentState.js';
+import { isFalsyMeta, isTruthyMeta } from './agentState.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask, releaseRetryHold } from './agentWorktreeCleanup.js';
 import { PR_COMPLETIONS, PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
@@ -267,10 +267,15 @@ export async function handlePipelineProgression(task, agentId, success) {
  * @returns {Promise<Object>} the third argument to `cleanupAgentWorktree`
  */
 async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, taskOpenPR, agentOpensOwnPr, prClaimVerified = false, branchProvenEmpty = false }) {
+  // Old tracker dispatches inherited openPR even though their deliverable was
+  // filed issues. Preserve their checkout through the ordinary cleanup gates;
+  // never validate, publish or merge source on that inherited instruction.
+  const noWorktreeOutput = isFalsyMeta(task?.metadata?.worktreeChangesExpected) && declaresNoCommitCriterion(task);
   // `if-missing` for an agent-owned PR that finalize did NOT verify: cleanup
   // asks the forge once and only stands down when a PR actually exists, so a
   // harness that skipped its completion workflow can't strand the branch.
-  const prCreation = resolvePrCreation({ taskOpenPR, agentOpensOwnPr, prClaimVerified, branchProvenEmpty });
+  const prCreation = noWorktreeOutput ? PR_CREATION.NEVER
+    : resolvePrCreation({ taskOpenPR, agentOpensOwnPr, prClaimVerified, branchProvenEmpty });
   // Merge per-task reviewer metadata with the user's Code Review Defaults
   // (Settings → Code Reviewers page). Settings I/O is cached inside the
   // resolver, so this is effectively free even when invoked from a tight CoS
@@ -290,7 +295,7 @@ async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, task
     // body — re-merging the worktree branch into the source workspace would
     // duplicate the squashed commits — and a harness that opens its own PR
     // lands it too; suppress the auto-merge fallback for both.
-    skipMerge: isTruthyMeta(task?.metadata?.reviewLoopFollowUp) || agentOpensOwnPr,
+    skipMerge: noWorktreeOutput || isTruthyMeta(task?.metadata?.reviewLoopFollowUp) || agentOpensOwnPr,
     description: task?.description,
     agentOutput: outputBuffer,
     originalTask: task,

@@ -549,6 +549,7 @@ describe('triggerReferenceAnalysis', () => {
     // leaves a CLEAN worktree — the idle-complete gate must be opted out of, or
     // the run is recorded as an `idle-no-changes` failure (#3102).
     expect(taskArg.metadata.worktreeChangesExpected).toBe(false);
+    expect(taskArg.metadata).toMatchObject({ noCodeOutput: true, openPR: false, useWorktree: false, simplify: false });
   });
 
   it.each([
