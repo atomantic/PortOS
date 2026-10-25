@@ -40,11 +40,15 @@ import { isObservedBlockActive, parseObservedReset } from '../lib/quotaReset.js'
 
 const STATE_FILE = () => join(PATHS.data, 'imagegen-quota.json');
 
-// Renders older than this drop out of the rolling activity window.
-const ACTIVITY_WINDOW_MS = 24 * 60 * 60 * 1000;
-// Cap the retained render log so a batch run can't grow the file without
-// bound. Both bounds do work: a batch can exceed this inside one 24h window.
-const MAX_RENDER_SAMPLES = 200;
+export const WINDOW_24H_MS = 24 * 60 * 60 * 1000;
+export const WINDOW_7D_MS = 7 * 24 * 60 * 60 * 1000;
+export const WINDOW_30D_MS = 30 * 24 * 60 * 60 * 1000;
+export const ACTIVITY_WINDOW_MS = WINDOW_24H_MS;
+
+// Retain up to 35 days so rolling 30-day (month) and 7-day (week) counts are preserved.
+const RETENTION_WINDOW_MS = 35 * 24 * 60 * 60 * 1000;
+// Cap the retained render log so a batch run can't grow the file without bound.
+const MAX_RENDER_SAMPLES = 2000;
 // How long a block whose refusal stated no reset time stays shown. Bounds an
 // otherwise-permanent block on an install that stops rendering (a successful
 // render clears it immediately, but nothing forces one to happen).
@@ -141,11 +145,16 @@ export async function recordImageGenOutcome({ mode, ok, error = '', at = Date.no
 
     // Epoch ms, not ISO: every read filters this array by a time window, and
     // storing strings means re-parsing each one on every pass.
-    entry.renders = [...(entry.renders || []), { at, ok: ok === true }].slice(-MAX_RENDER_SAMPLES);
+    const cutoff = at - RETENTION_WINDOW_MS;
+    const existing = (entry.renders || []).filter((r) => r.at >= cutoff);
+    entry.renders = [...existing, { at, ok: ok === true }].slice(-MAX_RENDER_SAMPLES);
 
     if (ok) {
       // A render that succeeded proves the backend is serving again — clear a
       // block that outlived its stated reset (providers round "approximately").
+      if (entry.blockedUntil && (!entry.lastResetAt || entry.blockedUntil > entry.lastResetAt)) {
+        entry.lastResetAt = entry.blockedUntil;
+      }
       entry.blockedAt = null;
       entry.blockedUntil = null;
     } else {
@@ -160,6 +169,9 @@ export async function recordImageGenOutcome({ mode, ok, error = '', at = Date.no
         // active block typically returns a bare 429 without restating the reset
         // the first one gave us, which would otherwise erase it.
         entry.blockedUntil = signal.resetsAt ?? entry.blockedUntil ?? null;
+        if (signal.resetsAt) {
+          entry.lastResetAt = signal.resetsAt;
+        }
       }
     }
     await atomicWrite(STATE_FILE(), ledger);
@@ -232,7 +244,7 @@ export async function __drainImageGenQuotaHookForTests() {
  *
  * @param {string[]} enabledModes - cloud image modes currently enabled
  */
-export async function getImageGenQuota({ enabledModes = [], now = Date.now() } = {}) {
+export async function getImageGenQuota({ enabledModes = [], now = Date.now(), period = '24h' } = {}) {
   const tracked = enabledModes.filter(isQuotaTrackedImageMode);
   if (!tracked.length) return null;
 
@@ -254,7 +266,19 @@ export async function getImageGenQuota({ enabledModes = [], now = Date.now() } =
       error: 'Could not read the observed image-quota ledger — render counts and any active limit are unavailable.',
     };
   }
-  const cutoff = now - ACTIVITY_WINDOW_MS;
+
+  const normalizedPeriod = (period === 'week' || period === '7d')
+    ? '7d'
+    : (period === 'month' || period === '30d')
+      ? '30d'
+      : period === 'reset'
+        ? 'reset'
+        : '24h';
+
+  const cutoff24h = now - WINDOW_24H_MS;
+  const cutoff7d = now - WINDOW_7D_MS;
+  const cutoff30d = now - WINDOW_30D_MS;
+
   const limits = [];
   const metrics = [];
   for (const mode of tracked) {
@@ -284,13 +308,78 @@ export async function getImageGenQuota({ enabledModes = [], now = Date.now() } =
       });
       continue;
     }
-    const recent = (entry.renders || []).filter((r) => r.at >= cutoff);
-    const failed = recent.filter((r) => !r.ok).length;
+
+    const allRenders = entry.renders || [];
+    const recent24h = allRenders.filter((r) => r.at >= cutoff24h);
+    const recent7d = allRenders.filter((r) => r.at >= cutoff7d);
+    const recent30d = allRenders.filter((r) => r.at >= cutoff30d);
+
+    const failed24h = recent24h.filter((r) => !r.ok).length;
+    const failed7d = recent7d.filter((r) => !r.ok).length;
+    const failed30d = recent30d.filter((r) => !r.ok).length;
+
+    const periods = {
+      '24h': {
+        key: '24h',
+        label: '24h',
+        count: recent24h.length,
+        failed: failed24h,
+        value: recent24h.length ? `${recent24h.length} render${recent24h.length === 1 ? '' : 's'} · 24h` : 'No renders · 24h',
+        detail: failed24h ? `${failed24h} failed` : 'quota not reported by this CLI',
+      },
+      '7d': {
+        key: '7d',
+        label: 'Week',
+        count: recent7d.length,
+        failed: failed7d,
+        value: recent7d.length ? `${recent7d.length} render${recent7d.length === 1 ? '' : 's'} · week` : 'No renders · week',
+        detail: failed7d ? `${failed7d} failed` : 'quota not reported by this CLI',
+      },
+      '30d': {
+        key: '30d',
+        label: 'Month',
+        count: recent30d.length,
+        failed: failed30d,
+        value: recent30d.length ? `${recent30d.length} render${recent30d.length === 1 ? '' : 's'} · month` : 'No renders · month',
+        detail: failed30d ? `${failed30d} failed` : 'quota not reported by this CLI',
+      },
+    };
+
+    const lastReset = entry.lastResetAt ?? (entry.blockedUntil && now >= entry.blockedUntil ? entry.blockedUntil : null);
+    if (lastReset && lastReset <= now) {
+      const recentReset = allRenders.filter((r) => r.at >= lastReset);
+      const failedReset = recentReset.filter((r) => !r.ok).length;
+      periods.reset = {
+        key: 'reset',
+        label: 'Reset',
+        count: recentReset.length,
+        failed: failedReset,
+        value: recentReset.length ? `${recentReset.length} render${recentReset.length === 1 ? '' : 's'} · reset` : 'No renders · reset',
+        detail: failedReset ? `${failedReset} failed` : 'since last reset',
+        resetsAt: new Date(lastReset).toISOString(),
+      };
+    }
+
+    const active = periods[normalizedPeriod] || periods['24h'];
+
     metrics.push({
       key,
       label,
-      value: recent.length ? `${recent.length} render${recent.length === 1 ? '' : 's'} · 24h` : 'No renders · 24h',
-      detail: failed ? `${failed} failed` : 'quota not reported by this CLI',
+      value: active.value,
+      detail: active.detail,
+      counts: {
+        day: recent24h.length,
+        week: recent7d.length,
+        month: recent30d.length,
+        ...(periods.reset ? { reset: periods.reset.count } : {}),
+      },
+      failed: {
+        day: failed24h,
+        week: failed7d,
+        month: failed30d,
+        ...(periods.reset ? { reset: periods.reset.failed } : {}),
+      },
+      periods,
     });
   }
 
@@ -305,6 +394,7 @@ export async function getImageGenQuota({ enabledModes = [], now = Date.now() } =
     limits,
     activity: [],
     metrics,
+    period: normalizedPeriod,
     approximate: true,
     fetchedAt: new Date(now).toISOString(),
     note: 'These image backends expose no quota API, so PortOS reports what it observes: a limit appears only after a render is actually refused. The CLI\'s own usage panel covers the agent model, not the image backend.',
