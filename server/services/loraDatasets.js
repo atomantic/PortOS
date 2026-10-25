@@ -1,3 +1,4 @@
+import { withRetiredDataAccess } from '../lib/retiredLoraTraining.js';
 /**
  * LoRA training datasets — collectionStore CRUD + image file management.
  *
@@ -77,7 +78,7 @@ const requireDataset = async (id) => {
  * lease through this record commit.
  */
 export async function updateDataset(id, mutate) {
-  return withBackupAssetPublication(() => loraDatasetStore.queueRecordWrite(id, async () => {
+  return withRetiredDataAccess(() => withBackupAssetPublication(() => loraDatasetStore.queueRecordWrite(id, async () => {
     const current = await loraDatasetStore.loadOne(id);
     if (!current) {
       throw new ServerError(`LoRA dataset not found: ${id}`, { status: 404, code: 'NOT_FOUND' });
@@ -88,7 +89,7 @@ export async function updateDataset(id, mutate) {
     await loraDatasetStore.saveOneNow(id, next);
     trainingEvents.emit('dataset:changed', { datasetId: id });
     return next;
-  }));
+  })));
 }
 
 const summarize = (dataset) => ({

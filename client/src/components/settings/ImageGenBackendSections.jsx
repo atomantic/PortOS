@@ -205,7 +205,7 @@ export default function ImageGenBackendSections({ mediaTab, form, credentials })
           <VideoKeyRow key={spec.id} spec={spec} row={credentials.rows[spec.id]} busy={credentials.busy} onSave={credentials.save} onClear={credentials.clear} />
         ))}
         <div className="space-y-3">
-          {RENDER_TARGET_OPTIONS.map(({ id, label, video }) => {
+          {RENDER_TARGET_OPTIONS.filter(option => !option.retired).map(({ id, label, video }) => {
             const entry = renderDefaults[id] || {};
             const pinnedMode = entry.imageMode && entry.imageMode !== RENDER_TARGET_BACKEND_AUTO ? entry.imageMode : '';
             const pinnedVideoMode = normalizeRenderPinValue(entry.videoMode) || '';

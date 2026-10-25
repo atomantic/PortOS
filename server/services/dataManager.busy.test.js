@@ -57,7 +57,6 @@ const busyWith = (reason) => () => Promise.resolve({ busy: true, reason });
 describe('purgeCategory — CATEGORY_BUSY refusal', () => {
   const cases = [
     ['image-clean-tmp', () => imageCleanTmpBusy, 'init-0000.png', 'an image render is in flight'],
-    ['training-runs', () => trainingRunsBusy, 'run-0001', 'a trainer is running'],
     ['update-detached', () => updateDetachedBusy, 'pid', 'an update is running'],
   ];
 
@@ -74,10 +73,8 @@ describe('purgeCategory — CATEGORY_BUSY refusal', () => {
     expect(existsSync(dataPath(key))).toBe(true);
   });
 
-  it('refuses a per-item purge while the category is busy', async () => {
-    trainingRunsBusy.mockImplementation(busyWith('a trainer is running'));
-    await expect(purgeCategory('training-runs', { subPath: 'run-0001' }))
-      .rejects.toMatchObject({ status: 409, code: 'CATEGORY_BUSY' });
+  it('refuses legacy training purge even while idle; maintenance requires its own preview', async () => {
+    await expect(purgeCategory('training-runs')).rejects.toMatchObject({ status: 403 });
     expect(existsSync(dataPath('training-runs', 'run-0001'))).toBe(true);
   });
 
@@ -90,20 +87,20 @@ describe('purgeCategory — CATEGORY_BUSY refusal', () => {
   // "Could not verify" and "nothing is running" must not collapse into the same
   // answer — the purge is irreversible.
   it('fails closed when the probe throws', async () => {
-    trainingRunsBusy.mockImplementation(() => Promise.reject(new Error('queue unavailable')));
-    await expect(purgeCategory('training-runs')).rejects.toMatchObject({ status: 409, code: 'CATEGORY_BUSY' });
-    expect(existsSync(dataPath('training-runs', 'run-0001'))).toBe(true);
+    imageCleanTmpBusy.mockImplementation(() => Promise.reject(new Error('queue unavailable')));
+    await expect(purgeCategory('image-clean-tmp')).rejects.toMatchObject({ status: 409, code: 'CATEGORY_BUSY' });
+    expect(existsSync(dataPath('image-clean-tmp', 'init-0000.png'))).toBe(true);
   });
 
   it('fails closed when the probe returns a shape it cannot read', async () => {
-    trainingRunsBusy.mockImplementation(() => Promise.resolve({ reason: 'no busy flag' }));
-    await expect(purgeCategory('training-runs')).rejects.toMatchObject({ code: 'CATEGORY_BUSY' });
-    expect(existsSync(dataPath('training-runs', 'run-0001'))).toBe(true);
+    imageCleanTmpBusy.mockImplementation(() => Promise.resolve({ reason: 'no busy flag' }));
+    await expect(purgeCategory('image-clean-tmp')).rejects.toMatchObject({ code: 'CATEGORY_BUSY' });
+    expect(existsSync(dataPath('image-clean-tmp', 'init-0000.png'))).toBe(true);
   });
 
   it('supplies a fallback reason when a busy probe names none', async () => {
-    trainingRunsBusy.mockImplementation(() => Promise.resolve({ busy: true }));
-    await expect(purgeCategory('training-runs')).rejects.toThrow(/Something is using data\/training-runs/);
+    imageCleanTmpBusy.mockImplementation(() => Promise.resolve({ busy: true }));
+    await expect(purgeCategory('image-clean-tmp')).rejects.toThrow(/Something is using data\/image-clean-tmp/);
   });
 });
 

@@ -56,7 +56,7 @@ function JobRow({ job, onCancel }) {
     : kind === 'video' ? '/media/video'
       : kind === 'image' ? '/media/image'
         : kind === 'audio' ? '/media/history?type=audio'
-          : kind === 'training' ? '/models/training' : '/media/history';
+          : kind === 'training' ? '/system-resources/queues' : '/media/history';
   const Icon = kind === 'video' ? Film : kind === 'audio' ? AudioLines : kind === 'training' ? Cpu : ImageIcon;
   const progress = Number.isFinite(job.progress) ? Math.max(0, Math.min(100, Math.round(job.progress * 100))) : null;
   return (

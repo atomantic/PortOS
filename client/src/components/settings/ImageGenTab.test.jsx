@@ -660,9 +660,9 @@ describe('ImageGenTab — Agy CLI section', () => {
   it('grok pins never show a model input — its backend has no model knob (#3231)', async () => {
     getSettings.mockResolvedValue({ imageGen: { mode: 'local' } });
     await renderTab(['/media/image?mediaTab=defaults']);
-    const select = await screen.findByLabelText('LoRA training datasets');
+    const select = await screen.findByLabelText('Sprite references & anchors');
     fireEvent.change(select, { target: { value: 'grok' } });
-    expect(screen.queryByLabelText('LoRA training datasets model')).toBeNull();
+    expect(screen.queryByLabelText('Sprite references & anchors model')).toBeNull();
   });
 
   it('names the fixed server-side image model as a read-only fact (#3231)', async () => {
@@ -794,3 +794,14 @@ describe('ImageGenTab local runtime card', () => {
 });
 
 vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
+
+it('hides the retired training default and leaves its saved pin untouched while editing a supported surface', async () => {
+  getSettings.mockResolvedValue({ imageGen: { mode: 'local' }, renderDefaults: { 'lora-dataset': { imageMode: 'grok' } } });
+  await renderTab(['/media/image?mediaTab=defaults']);
+  const live = await screen.findByLabelText('Universe Bible & canon renders');
+  expect(screen.queryByLabelText('LoRA training datasets')).toBeNull();
+  fireEvent.change(live, { target: { value: 'grok' } });
+  fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+  await awaitSave();
+  expect(sentSlices()).toEqual({ renderDefaults: { 'universe-bible': { imageMode: 'grok' } } });
+});

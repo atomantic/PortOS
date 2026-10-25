@@ -12,7 +12,6 @@ vi.mock('../services/loraTraining/index.js', () => ({
   clearDatasetForDeletedLora: vi.fn(),
   deleteRun: vi.fn(),
   getRunRequired: vi.fn(async (id) => ({ id, status: 'completed' })),
-  isMfluxTrainAvailable: () => false,
   listCheckpoints: vi.fn(),
   listRuns: vi.fn(),
   listSamples: vi.fn(),
@@ -22,7 +21,6 @@ vi.mock('../services/loraTraining/index.js', () => ({
   runSamplesDir: () => svc.samplesDir,
   startTrainingRun: vi.fn(),
 }));
-vi.mock('../services/loraTraining/runtimes.js', () => ({ TRAINING_DEFAULTS: {} }));
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
 vi.mock('../services/mediaJobQueue/index.js', () => ({
   attachSseClient: vi.fn(),
@@ -70,4 +68,15 @@ describe('lora-training sample serving', () => {
     expect(r.body.code).toBe('NOT_FOUND');
     expect(typeof r.body.timestamp).toBe('number');
   });
+});
+
+it('retires launch, resume and legacy deletion while retaining history controls', async () => {
+  const app = makeApp();
+  for (const [method, path] of [['post', '/runs'], ['post', '/runs/example/resume'], ['delete', '/runs/example']]) {
+    const response = await request(app)[method](`/api/lora-training${path}`).send({});
+    expect(response.status).toBe(410);
+    expect(response.body.code).toBe('LORA_TRAINING_RETIRED');
+  }
+  const status = await request(app).get('/api/lora-training/status');
+  expect(status.body).toMatchObject({ retired: true, runtimes: { mflux: { ready: false }, flux2: { ready: false } } });
 });
