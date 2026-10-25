@@ -73,6 +73,13 @@ describe('PortOS workflow audit job dispatch', () => {
     expect(results.find(result => result.status === 'rejected').reason).toMatchObject({ status: 409, code: 'AUDIT_ACTIVE' });
   });
 
+  it('releases the dispatch reservation when the normal spawn lifecycle takes ownership', async () => {
+    await generateTaskFromJob(configured());
+    audit.releaseClaimWorkflowAuditReservation(audit.CLAIM_WORKFLOW_AUDIT_ID);
+    // After that occurrence completes, a new explicit run is immediately valid.
+    await expect(generateTaskFromJob(configured())).resolves.toMatchObject({ metadata: { jobId: audit.CLAIM_WORKFLOW_AUDIT_ID } });
+  });
+
   it.each(['pending', 'in_progress', 'blocked'])('retains an interrupted or active %s occurrence instead of creating a recovery task', async status => {
     queue.tasks = [{ id: 'retained-audit', status, metadata: { jobId: audit.CLAIM_WORKFLOW_AUDIT_ID } }];
     await expect(generateTaskFromJob(configured())).rejects.toMatchObject({ status: 409, message: expect.stringContaining('retained-audit') });

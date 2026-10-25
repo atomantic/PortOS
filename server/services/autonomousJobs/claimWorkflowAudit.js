@@ -56,6 +56,10 @@ Persist a concise audit report in the run's final output: runtime version; sourc
 // retry task or user alert is needed if dispatch is interrupted before persistence.
 let reservedUntil = 0;
 let dependencies;
+export function releaseClaimWorkflowAuditReservation(jobId) {
+  if (jobId === CLAIM_WORKFLOW_AUDIT_ID) reservedUntil = 0;
+}
+
 const SOURCES = ['AGENTS.md', 'ETHOS.md', 'server/services/agentPromptBuilder.js', 'server/services/agentSpawnDispatch.js', 'server/services/promptSections/instructions.js', 'server/services/taskPromptDefaults/versions.js', 'server/services/autonomousJobs/claimWorkflowAudit.js'];
 
 export async function prepareClaimWorkflowAudit(job) {

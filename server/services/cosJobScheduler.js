@@ -1,3 +1,4 @@
+import { releaseClaimWorkflowAuditReservation } from './autonomousJobs/claimWorkflowAudit.js';
 import { maintenance, isMaintenanceHold } from '../lib/maintenanceAdmission.js';
 /**
  * CoS Job Scheduler Module
@@ -207,6 +208,7 @@ export function isJobFireInFlight(jobId, state) {
 }
 
 export function clearSpawningJob(jobId) {
+  releaseClaimWorkflowAuditReservation(jobId);
   spawningJobIds.delete(jobId);
   const timeout = spawningJobTimeouts.get(jobId);
   if (timeout) {
