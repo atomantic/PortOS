@@ -25,7 +25,9 @@ export async function capturePreviewFrame(root, { iframeImages = new Map() } = {
     ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
     return canvas.toDataURL('image/png');
   };
+  const capturedNodes = new Set();
   const freeze = (node) => {
+    capturedNodes.add(node);
     if (node.nodeType === Node.TEXT_NODE) return node.cloneNode();
     if (node.nodeType !== Node.ELEMENT_NODE || ['SCRIPT', 'STYLE', 'LINK', 'NOSCRIPT'].includes(node.tagName)) return null;
     const style = getComputedStyle(node);
@@ -74,28 +76,40 @@ export async function capturePreviewFrame(root, { iframeImages = new Map() } = {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width + 1}" height="${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="position:relative;width:${width + 1}px;height:${height}px">${markup}<div style="position:absolute;left:${width}px;bottom:0;width:1px;height:1px;background:rgb(13,231,97)"></div></div></foreignObject></svg>`;
   const image = new Image();
   image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  // Media is frozen synchronously, but resizing or a late filter/effect render
+  // during decode/PNG encoding must not upload a stale preview revision.
+  let changed = false;
+  // Hidden preload subtrees are omitted by freeze and cannot change the picture.
+  const affectsPicture = records => records.some(({ target }) => capturedNodes.has(target));
+  const observer = new MutationObserver(records => { changed ||= affectsPicture(records); });
+  observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
   let timer;
   try {
-    await Promise.race([image.decode(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Frame capture timed out')), 5000); })]);
-  } catch (error) { image.src = ''; throw error; }
-  finally { clearTimeout(timer); }
-  const canvas = document.createElement('canvas');
-  canvas.width = width + 1; canvas.height = height;
-  const ctx = canvas.getContext('2d', { colorSpace: 'srgb' });
-  if (!ctx) throw new Error('Frame capture unavailable');
-  ctx.drawImage(image, 0, 0);
-  const probe = ctx.getImageData(width, height - 1, 1, 1).data;
-  if (probe[0] !== 13 || probe[1] !== 231 || probe[2] !== 97 || probe[3] !== 255) throw new Error('This browser cannot capture the preview');
-  const output = document.createElement('canvas');
-  output.width = width; output.height = height;
-  const paint = output.getContext('2d', { colorSpace: 'srgb' });
-  if (!paint) throw new Error('Frame capture unavailable');
-  // The figure's black ground sits outside the film-look filter.
-  paint.fillStyle = '#000'; paint.fillRect(0, 0, width, height);
-  paint.drawImage(canvas, 0, 0);
-  const blob = await new Promise((resolve) => output.toBlob(resolve, 'image/png'));
-  if (!blob) throw new Error('Frame capture failed');
-  return blob;
+    try {
+      await Promise.race([image.decode(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Frame capture timed out')), 5000); })]);
+    } catch (error) { image.src = ''; throw error; }
+    finally { clearTimeout(timer); }
+    const canvas = document.createElement('canvas');
+    canvas.width = width + 1; canvas.height = height;
+    const ctx = canvas.getContext('2d', { colorSpace: 'srgb' });
+    if (!ctx) throw new Error('Frame capture unavailable');
+    ctx.drawImage(image, 0, 0);
+    const probe = ctx.getImageData(width, height - 1, 1, 1).data;
+    if (probe[0] !== 13 || probe[1] !== 231 || probe[2] !== 97 || probe[3] !== 255) throw new Error('This browser cannot capture the preview');
+    const output = document.createElement('canvas');
+    output.width = width; output.height = height;
+    const paint = output.getContext('2d', { colorSpace: 'srgb' });
+    if (!paint) throw new Error('Frame capture unavailable');
+    // The figure's black ground sits outside the film-look filter.
+    paint.fillStyle = '#000'; paint.fillRect(0, 0, width, height);
+    paint.drawImage(canvas, 0, 0);
+    const blob = await new Promise((resolve) => output.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('Frame capture failed');
+    const currentBox = root.getBoundingClientRect();
+    if (changed || affectsPicture(observer.takeRecords()) || !root.isConnected
+      || currentBox.width !== box.width || currentBox.height !== box.height) throw new Error('Preview changed during capture');
+    return blob;
+  } finally { observer.disconnect(); }
 }
 
 /** Capture-only bridge for the known canvas-based lyric overlay, including its title card. */

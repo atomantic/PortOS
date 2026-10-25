@@ -360,7 +360,7 @@ async function runCompletionCleanupSteps(context, { onStepError }) {
         // A delayed duplicate can arrive after the first replay left the
         // single-flight map. Re-read its durable stages inside this turn.
         const lifecycle = await import('./cosAgentLifecycle.js');
-        const current = await lifecycle.getAgent(context.agentId);
+        const current = await lifecycle.getAgentRecord(context.agentId);
         if (!current || current.startedAt !== context.agentState.startedAt) return;
         context = { ...context, agentState: current };
       }

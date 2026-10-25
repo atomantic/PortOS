@@ -7,6 +7,7 @@ image-generation paths below are useful entry points when tracing render jobs.
 | Module | Responsibility |
 | --- | --- |
 | `catalogPrimitives.js` | Explicit creative primitive ownership, safe universe membership, independent forks and durable retry receipts. |
+| `catalogDB/media.js` | Ingredient media associations, metadata-free profile covers (`getIngredientMediaCover`) and integrity checks that can reuse already-read media rows. |
 | `catalogPrimitiveUsage.js` | Indexed/derived creative usage aggregation and exact canon-pointer removal guards for FableLoom and local voice profiles. |
 | `deadOwnerReservations.js` | Boot and orphan-sweep reconcile for reservations whose admitting process died: stamps settled Output publication rows unsettled for receipt recovery, and releases only cli-run or mind-turn residue whose owning record proves completion. |
 | `branchReconcileRetirement.js` | Retires exact-head, integrated checkouts through fresh fenced archive proof; reserves bounded cognitive review only for source/history differences. |

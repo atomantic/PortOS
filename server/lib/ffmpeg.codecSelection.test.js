@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, chmodSync, utimesSync, statSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, utimesSync, statSync, mkdirSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { pinPlatform } from './testHelper.js';
+import { resolveBashBinary, toBashPath } from './bashResolver.js';
 import {
   findFfmpeg,
   _probeEncoderCapability as probeEncoderCapability,
@@ -16,6 +17,21 @@ import {
 import { padSourceForUpscale, finalizeUpscaleOutput } from '../services/videoGen/upscaleFfmpeg.js';
 import { stitchVideos } from '../services/videoGen/stitchVideos.js';
 import { spliceExtendSource } from '../services/videoGen/extendSplice.js';
+
+// Synthetic executables are POSIX scripts, which Windows cannot execFile
+// directly. Supply their interpreter while retaining real child execution,
+// timeout handling and on-disk binary identity/cache invalidation on every OS.
+vi.mock('./childProcess.js', async importOriginal => {
+  const actual = await importOriginal();
+  const { promisify } = await import('node:util');
+  const command = (bin, args) => String(bin).includes('portos-ffmpeg-codec-test-') && existsSync(bin)
+    ? [resolveBashBinary(), [toBashPath(bin), ...args.map(toBashPath)]] : [bin, args];
+  const execFile = Object.assign(
+    (bin, args, ...rest) => actual.execFile(...command(bin, args), ...rest),
+    { [promisify.custom]: (bin, args, ...rest) => actual.execFile[promisify.custom](...command(bin, args), ...rest) },
+  );
+  return { ...actual, execFile, spawn: (bin, args, ...rest) => actual.spawn(...command(bin, args), ...rest) };
+});
 
 describe('ffmpeg codec selection & required-encoder discovery (#13616)', () => {
   let tmpDir;

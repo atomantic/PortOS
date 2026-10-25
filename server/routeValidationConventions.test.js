@@ -213,7 +213,6 @@ const UNVALIDATED_QUERY_BASELINE = [
   'routes/calendar.js GET /review/history',
   'routes/catalog.js DELETE /types/:id',
   'routes/catalog.js GET /ingredients/:id',
-  'routes/catalog.js GET /ingredients/:id/details',
   'routes/catalog.js GET /scraps',
   'routes/catalog.js GET /sync',
   'routes/codeAnimation.js GET /accepted-assets',

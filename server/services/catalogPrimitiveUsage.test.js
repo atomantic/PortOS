@@ -4,25 +4,23 @@ const state = vi.hoisted(() => ({ stories: [], voices: [], universes: [], failur
 vi.mock('../lib/db.js', () => ({ query: vi.fn(async (sql, params) => {
   if (state.failure) throw state.failure;
   if (sql.startsWith('SELECT\n    EXISTS')) return { rows: [{ blocked: state.stories.some((story) => story.universeId === params[0]) }] };
-  if (sql.includes('FROM universes')) return { rows: state.universes.filter((universe) => params[0].includes(universe.id)) };
-  if (sql.includes('FROM fableloom_stories')) return { rows: state.stories.filter((story) => story.universeId === params[0]) };
-  if (sql.includes('FROM voice_profiles')) return { rows: state.voices.filter((voice) => voice.universeId === params[0] && voice.characterId === params[1]) };
+  if (sql.includes('FROM universes')) return { rows: state.universes.filter((universe) => params[0].includes(universe.id)).map((u) => ({ id: u.id, entries: (u.data.characters || []).map((e) => ({ ...e, kind: 'character' })) })) };
+  if (sql.includes('FROM fableloom_stories')) return { rows: state.stories.filter((story) => Array.isArray(params[0]) ? params[0].includes(story.universeId) : story.universeId === params[0]).map((story) => ({ ...story, universe_id: story.universeId })) };
+  if (sql.includes('FROM voice_profiles')) return { rows: state.voices.filter((voice) => Array.isArray(params[0]) ? params[0].includes(voice.universeId) && params[1].includes(voice.characterId) : voice.universeId === params[0] && voice.characterId === params[1]).map((voice) => ({ ...voice, universe_id: voice.universeId, character_id: voice.characterId })) };
+  if (sql.includes('FROM pipeline_series')) return { rows: [{ id: 'issue-1', name: 'Example issue', series_id: 'series-1', series_name: 'Example series', universe_id: 'world-1', corpus: 'Example courier returns.' }] };
   throw new Error('Unexpected query');
 }) }));
 vi.mock('./catalogDB/ingredients.js', () => ({ getIngredientIdentityIds: async () => ['canonical', 'retained-alias'] }));
-vi.mock('./canonUsage.js', () => ({ getUniverseCanonUsage: async () => ({
-  characters: { 'chr-1': [{ seriesId: 'series-1', seriesName: 'Example series', issueIds: ['issue-1'] }] },
-}) }));
 import { assertCanonRemovable, assertUniversePrimitivesRemovable, listPrimitiveUsages } from './catalogPrimitiveUsage.js';
 import { query } from '../lib/db.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  Object.assign(state, { failure: null, universes: [{ id: 'world-1', data: { characters: [{ id: 'chr-1', ingredientId: 'retained-alias' }] } }],
+  Object.assign(state, { failure: null, universes: [{ id: 'world-1', data: { characters: [{ id: 'chr-1', name: 'Example courier', ingredientId: 'retained-alias' }] } }],
     stories: [
-      { id: 'loom-1', name: 'Example story', universeId: 'world-1', data: { episodes: [{ nodes: [{ visualCanon: { characterAppearances: [{ characterId: 'chr-1' }] } }] }] } },
-      { id: 'loom-other', name: 'Same display name', universeId: 'world-1', data: { protagonistCharacterId: 'different-id', notes: 'chr-1' } },
-      { id: 'loom-foreign', universeId: 'world-2', data: { protagonistCharacterId: 'chr-1' } },
+      { id: 'loom-1', canon_ids: ['chr-1'], name: 'Example story', universeId: 'world-1', data: { episodes: [{ nodes: [{ visualCanon: { characterAppearances: [{ characterId: 'chr-1' }] } }] }] } },
+      { id: 'loom-other', canon_ids: ['different-id'], name: 'Same display name', universeId: 'world-1', data: { protagonistCharacterId: 'different-id', notes: 'chr-1' } },
+      { id: 'loom-foreign', canon_ids: ['chr-1'], universeId: 'world-2', data: { protagonistCharacterId: 'chr-1' } },
     ], voices: [{ id: 'voice-1', name: 'Example voice', universeId: 'world-1', characterId: 'chr-1', approval_status: 'approved',
       data: { providerId: 'local-config', consent: 'not-exported' } }] });
 });

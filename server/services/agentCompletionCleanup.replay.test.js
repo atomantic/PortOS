@@ -16,6 +16,7 @@ vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTa
 vi.mock('./cosTaskGenerator.js', () => ({ checkStagePrecondition: () => ({ passed: true }) }));
 vi.mock('./cosAgentLifecycle.js', () => ({
   getAgent: async () => JSON.parse(await readFile(fixture.recordPath, 'utf8')),
+  getAgentRecord: async () => JSON.parse(await readFile(fixture.recordPath, 'utf8')),
   updateAgent: vi.fn(),
   recordCompletionCleanup: async (_id, startedAt, patch) => {
     if (fixture.failWrite) throw new Error('synthetic durable write failure');

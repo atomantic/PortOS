@@ -25,6 +25,7 @@ vi.mock('./cosTaskGenerator.js', () => ({
 }));
 vi.mock('./cosAgentLifecycle.js', () => ({
   updateAgent: vi.fn(),
+  getAgentRecord: (...args) => getAgent(...args),
   getAgent: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('./jira.js', () => ({ getInstances: vi.fn(), addComment: vi.fn() }));

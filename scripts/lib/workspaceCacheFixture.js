@@ -122,18 +122,19 @@ const cachedModules = root => snapshot(join(root, 'modules')).filter(([name]) =>
 
 // Assertions are supplied by the owning Vitest workspace; this shared fixture
 // imports only Node builtins and dependency-free fixture support.
-export async function checkWorkspaceCacheIsolation(workspace, configName, cacheName, expect, signal) {
+export async function checkWorkspaceCacheIsolation(workspace, configName, cacheName, expect, signal, { phase = (_name, operation) => operation(), onHost = () => {} } = {}) {
   const contract = WORKSPACE_TEST_CACHE_ROOTS[configName === 'vitest.config.db.js' ? 'db' : workspace];
   expect(contract.workspace).toBe(workspace);
   expect(contract.cacheDir).toBe(`.cache/${cacheName}`);
     const host = mkdtempSync(join(tmpdir(), 'workspace-cache-'));
     try {
+      onHost(host);
       const dependencies = primaryDependencies(host, workspace);
       const primary = [snapshot(join(dependencies, '.vite')), snapshot(join(dependencies, '.vite-temp'))];
       const a = checkout(host, 'a', workspace, configName, dependencies);
       const b = checkout(host, 'b', workspace, configName, dependencies);
       const primaryModules = snapshot(join(dependencies, '.vitest-cache'));
-      await runTogether([a, b], signal);
+      await phase('cache-initial-publications', () => runTogether([a, b], signal));
       expect(snapshot(join(dependencies, '.vitest-cache'))).toEqual(primaryModules);
       const cacheA = join(a.root, '.cache', cacheName);
       const cacheB = join(b.root, '.cache', cacheName);
@@ -146,7 +147,7 @@ export async function checkWorkspaceCacheIsolation(workspace, configName, cacheN
       const modules = cachedModules(cacheA);
       const sibling = snapshot(cacheB);
       const names = snapshot(cacheA).map(([name]) => name);
-      await run(a, signal);
+      await phase('cache-reuse', () => run(a, signal));
       expect(cachedModules(cacheA)).toEqual(modules);
       expect(snapshot(cacheA).map(([name]) => name)).toEqual(names);
       expect(snapshot(cacheB)).toEqual(sibling);

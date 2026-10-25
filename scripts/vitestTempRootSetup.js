@@ -101,8 +101,9 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { c
   let total = 0;
   let unsettled = 0;
   let inspected = true;
+  let inspection;
   const processes = platform === 'win32' ? 0 : contain(root, {
-    onInspection: value => { inspected = value; if (!value) unsettled++; },
+    onInspection: (value, detail) => { inspected = value; inspection = detail; if (!value) unsettled++; },
     onOutcome: outcome => {
       total++;
       if (outcome.settlement !== 'terminated') unsettled++;
@@ -111,8 +112,8 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { c
   });
   const pendingVerified = platform === 'win32' || verifyPending(root);
   if (!pendingVerified) unsettled++;
-  if (total || !inspected || !pendingVerified) {
-    const report = { version: 1, inspected, pendingVerified, boundary: 'pool-closed', total, terminated: processes, unsettled, capped: total > outcomes.length, processes: outcomes };
+  if (total || !inspected || !pendingVerified || inspection?.attempts.some(attempt => attempt.outcome !== 'success')) {
+    const report = { version: 1, inspected, ...(inspection ? { inspection } : {}), pendingVerified, boundary: 'pool-closed', total, terminated: processes, unsettled, capped: total > outcomes.length, processes: outcomes };
     const retainedPath = join(fileURLToPath(new URL('../.cache/test-process-diagnostics/', import.meta.url)), `${randomUUID()}.json`);
     const destinations = reportPath ? [reportPath, ...(durable ? [retainedPath] : [])] : [retainedPath];
     let retained = true;
@@ -126,7 +127,7 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { c
       console.error('❌ owned test process evidence could not be persisted');
       unsettled++;
     }
-    console.warn(`⚠️ test process leak: signal/settlement evidence=${retained ? 'retained' : 'unavailable'} inspected=${inspected}; found=${total} terminated=${processes} unsettled=${unsettled}`);
+    console.warn(`⚠️ test process ${total || !inspected || !pendingVerified ? 'leak' : 'inspection fallback'}: signal/settlement evidence=${retained ? 'retained' : 'unavailable'} inspected=${inspected}; found=${total} terminated=${processes} unsettled=${unsettled}`);
     for (const outcome of outcomes) console.warn(`⚠️ owned test process: ${Object.entries(outcome).map(([key, value]) => `${key}=${value}`).join(' ')}`);
   }
   if (unsettled) {

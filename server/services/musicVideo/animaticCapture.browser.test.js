@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import express from 'express';
 import sharp from 'sharp';
@@ -52,8 +52,38 @@ describe.skipIf(!canRun)('saved storyboard pixels in a real browser', () => {
       await symlink(join(client, 'node_modules'), join(dir, 'node_modules'), 'dir');
       const entry = `import React,{useState} from 'react';import{createRoot}from'react-dom/client';import Animatic from ${JSON.stringify(join(client, 'src/components/musicVideo/StoryboardAnimatic.jsx'))};import toast,{Toaster}from ${JSON.stringify(join(client, 'src/components/ui/Toast.jsx'))};
 window.uploads=[];window.captureErrors=[];const report=toast.error;toast.error=(message,...args)=>{window.captureErrors.push(message);return report(message,...args)};const realFetch=window.fetch;window.fetch=async(url,options)=>{if(url==='/api/image-gen/upload'){window.uploads.push(Array.from(new Uint8Array(await options.body.get('file').arrayBuffer())));return Response.json({filename:'synthetic.png'});}return realFetch(url,options)};
-window.gateCaptureOnce=()=>{const decode=Image.prototype.decode;window.captureDecodePending=false;let release;const pending=new Promise(done=>{release=done});window.releaseCapture=release;Image.prototype.decode=function(){Image.prototype.decode=decode;window.captureDecodePending=true;return pending.then(()=>decode.call(this))}};
-function App(){const[state,setState]=useState(null);window.show=(project,t)=>{window.captureErrors=[];setState({project,seek:{t,n:(window.seq=(window.seq||0)+1)}})};return <><main style={{width:642}}>{state&&<Animatic project={state.project} audioUrl='/song.wav' seekRequest={state.seek}/>}</main><Toaster/></>};createRoot(document.getElementById('root')).render(<App/>);`;
+const filterRevision=root=>{const filter=root?.querySelector('filter');return filter?[filter,...filter.querySelectorAll('*')].map(el=>[el.localName,[...el.attributes].filter(a=>a.name!=='style'&&!a.name.startsWith('xmlns')).map(a=>[a.name,a.value]).sort()]):null};
+window.previewMetadata=()=>{
+  const root=document.querySelector('figure')?.firstElementChild;
+  const box=root?.getBoundingClientRect();
+  return {songTime:document.querySelector('audio')?.currentTime,songFrame:Math.round((document.querySelector('audio')?.currentTime||0)*24),
+    box:box&&[box.width,box.height],look:root?.dataset.filmLook,filterFrame:root?.dataset.filmLookFrame,
+    filterSize:[root?.dataset.filmLookWidth,root?.dataset.filmLookHeight],filter:filterRevision(root),
+    videos:[...document.querySelectorAll('video[data-preview-video]')].map(v=>({label:v.getAttribute('aria-label'),
+      source:new URL(v.currentSrc||v.src,location.href).pathname.split('/').pop(),time:v.currentTime,pausedFrame:v.dataset.pausedFrame,
+      seeking:v.seeking,readyState:v.readyState,opacity:getComputedStyle(v.parentElement).opacity,
+      canvasVisible:getComputedStyle(v.nextElementSibling).visibility,canvasSize:[v.nextElementSibling.width,v.nextElementSibling.height]}))};
+};
+window.gateCaptureOnce=(hold=true)=>{
+  const decode=Image.prototype.decode;
+  window.captureDecodePending=false;
+  window.captureFrozen=null;window.captureSerialized=null;
+  let release;
+  const pending=new Promise(done=>{release=done});
+  window.releaseCapture=release;
+  Image.prototype.decode=function(){
+    Image.prototype.decode=decode;
+    window.captureFrozen=window.previewMetadata();
+    const doc=new DOMParser().parseFromString(decodeURIComponent(this.src.slice(this.src.indexOf(',')+1)),'image/svg+xml');
+    const root=doc.querySelector('[data-film-look]');
+    window.captureSerialized={filter:filterRevision(doc),filterFrame:root?.dataset.filmLookFrame,
+      filterSize:[root?.dataset.filmLookWidth,root?.dataset.filmLookHeight]};
+    window.captureDecodePending=true;
+    if(!hold) release();
+    return pending.then(()=>decode.call(this));
+  };
+};
+function App(){const[state,setState]=useState(null);window.show=(project,t)=>{window.fixtureScenes=project.scenes;window.captureErrors=[];setState({project,seek:{t,n:(window.seq=(window.seq||0)+1)}})};return <><main style={{width:642}}>{state&&<Animatic project={state.project} audioUrl='/song.wav' seekRequest={state.seek}/>}</main><Toaster/></>};createRoot(document.getElementById('root')).render(<App/>);`;
       await writeFile(join(dir, 'entry.jsx'), `import ${JSON.stringify(join(client, 'src/index.css'))};\n${entry}`);
       await writeFile(join(dir, 'index.html'), '<html><head></head><body style="margin:0"><div id="root"></div><script type="module" src="/entry.jsx"></script></body></html>');
     });
@@ -122,8 +152,35 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     await phase('readiness', () => page.waitForFunction(() => typeof window.show === 'function'));
   }), 30000);
 
-  let phase;
-  beforeEach(({ onTestFailed }) => { phase = createTestPhaseDiagnostics(onTestFailed); });
+  let phase, captureEvidence, caseNumber = 0;
+  beforeEach(({ onTestFailed }) => {
+    phase = createTestPhaseDiagnostics(onTestFailed);
+    captureEvidence = null;
+    const number = ++caseNumber;
+    onTestFailed(async () => {
+      const root = process.env.PORTOS_CI_DIAGNOSTICS_PATH ? dirname(process.env.PORTOS_CI_DIAGNOSTICS_PATH) : process.env.PORTOS_CI_DIAGNOSTICS_DIR;
+      if (!root || !captureEvidence) return;
+      const destination = join(root, 'animatic-capture', `case-${number}`);
+      await mkdir(destination, { recursive: true });
+      const { saved, displayed, ...metadata } = captureEvidence;
+      // Only the synthetic fixture's frame, not a page screenshot, enters CI artifacts.
+      for (const [name, png] of Object.entries({ saved, displayed })) {
+        if (png && png.length <= 2 * 1024 * 1024) await writeFile(join(destination, `${name}.png`), png);
+      }
+      const filters = [];
+      for (const key of ['frozen', 'serialized', 'beforeScreenshot', 'afterScreenshot', 'afterUpload']) {
+        if (!metadata[key]) continue;
+        const { filter, ...snapshot } = metadata[key];
+        const signature = JSON.stringify(filter);
+        let revision = filters.findIndex(value => JSON.stringify(value) === signature);
+        if (revision < 0) { revision = filters.length; filters.push(filter); }
+        metadata[key] = { ...snapshot, filterRevision: revision };
+      }
+      const json = JSON.stringify({ ...metadata, filters });
+      if (Buffer.byteLength(json) > 65536) throw new Error('Capture diagnostics exceeded their bound');
+      await writeFile(join(destination, 'frame.json'), json);
+    });
+  });
 
   const show = async (value, t) => {
     await phase('show-render', () => page.evaluate(({ value, t }) => { window.uploads = []; window.show(value, t); }, { value, t }));
@@ -134,13 +191,25 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
   const capture = async (label = '') => {
     await phase('capture-reset', () => page.evaluate(() => { window.uploads = []; window.captureErrors = []; }));
     await phase('capture-video-ready', () => page.waitForFunction(() => [...document.querySelectorAll('video[data-preview-video]')].every(video => Number(getComputedStyle(video.parentElement).opacity) === 0 || (!video.seeking && video.dataset.pausedFrame === String(video.currentTime)))));
+    captureEvidence = { label, platform: process.platform, arch: process.arch, browser: fixture.browser.version(), ffmpegVersion };
+    // Observe serialization without delaying normal decode/upload timing. Only
+    // the mutation negative controls hold decode while changing the preview.
+    await phase('capture-observe', () => page.evaluate(() => window.gateCaptureOnce(false)));
     await phase('capture-click', () => page.getByRole('button', { name: 'Save frame', exact: true }).click());
     await phase('capture-upload-or-error', () => page.waitForFunction(() => window.uploads.length > 0 || window.captureErrors.length > 0));
-    expect(await phase('capture-read-errors', () => page.evaluate(() => window.captureErrors)), label).toEqual([]);
+    captureEvidence.frozen = await page.evaluate(() => window.captureFrozen);
+    captureEvidence.serialized = await page.evaluate(() => window.captureSerialized);
+    captureEvidence.afterUpload = await page.evaluate(() => window.previewMetadata());
+    captureEvidence.scenes = await page.evaluate(() => window.fixtureScenes);
+    captureEvidence.errors = await phase('capture-read-errors', () => page.evaluate(() => window.captureErrors));
+    expect(captureEvidence.errors, label).toEqual([]);
     const saved = Buffer.from(await phase('capture-read-upload', () => page.evaluate(() => window.uploads.at(-1))));
+    captureEvidence.saved = saved;
     const picture = page.getByLabel('Storyboard animatic', { exact: true }).locator(':scope > div').first();
-    // Global notification chrome is outside the video frame being saved.
-    const displayed = await phase('capture-screenshot', () => picture.screenshot({ style: '[data-toast-id]{visibility:hidden}' }));
+    captureEvidence.beforeScreenshot = await page.evaluate(() => window.previewMetadata());
+    captureEvidence.displayed = await phase('capture-screenshot', () => picture.screenshot({ style: '[data-toast-id]{visibility:hidden}' }));
+    captureEvidence.afterScreenshot = await page.evaluate(() => window.previewMetadata());
+    const displayed = captureEvidence.displayed;
     const a = await phase('capture-decode-saved', () => sharp(saved).ensureAlpha().raw().toBuffer({ resolveWithObject: true }));
     const b = await phase('capture-decode-displayed', () => sharp(displayed).ensureAlpha().raw().toBuffer({ resolveWithObject: true }));
     expect([a.info.width, a.info.height]).toEqual([b.info.width, b.info.height]);
@@ -149,7 +218,13 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
       difference += Math.abs(a.data[i] - b.data[i]);
       if (i % 4 === 3 && a.data[i] === 255) opaque += 1;
     }
-    expect(difference / a.data.length, label).toBeLessThan(1);
+    captureEvidence.meanDifference = difference / a.data.length;
+    expect(captureEvidence.serialized).toEqual({ filter: captureEvidence.frozen.filter, filterFrame: captureEvidence.frozen.filterFrame, filterSize: captureEvidence.frozen.filterSize });
+    const revision = ({ videos, ...rest }) => ({ ...rest, videos: videos.filter(video => Number(video.opacity) > 0) });
+    expect(revision(captureEvidence.beforeScreenshot), 'Preview revision at freeze').toEqual(revision(captureEvidence.frozen));
+    expect(revision(captureEvidence.afterScreenshot), 'Preview revision through screenshot').toEqual(revision(captureEvidence.frozen));
+    expect(revision(captureEvidence.afterUpload), 'Preview revision after upload').toEqual(revision(captureEvidence.frozen));
+    expect(captureEvidence.meanDifference, label).toBeLessThan(1);
     expect(opaque).toBe(a.info.width * a.info.height);
     return saved;
   };
@@ -394,6 +469,41 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     const saved = await capture();
     expect(Buffer.compare(saved, await capture())).toBe(0);
   });
+  it('rejects a late exact-filter resize while keeping the selected song and footage frames frozen', async () => {
+    await show(project([
+      { ...still, visualLayer: 'footage', videoHistoryId: 'smpte170m', cutEffect: { style: 'dissolve', enabled: true, overlapSec: 1 } },
+      { ...still, sceneId: 'incoming', order: 1, startSec: 4, endSec: 8, visualLayer: 'footage', videoHistoryId: 'bt709' },
+    ], { filmLook: filmLookPreset('vhs') }), 3.5);
+    const look = page.getByRole('button', { name: 'Film look', exact: true });
+    if (await look.getAttribute('aria-pressed') === 'false') await look.click();
+    await page.evaluate(() => { window.uploads = []; window.gateCaptureOnce(); });
+    await page.getByRole('button', { name: 'Save frame', exact: true }).click();
+    await page.waitForFunction(() => window.captureDecodePending);
+    await page.locator('video[data-preview-video][aria-hidden="true"]').first().evaluate(video => { video.dataset.ready = 'false'; });
+    await page.evaluate(() => window.releaseCapture());
+    await page.waitForFunction(() => window.uploads.length > 0 || window.captureErrors.length > 0);
+    expect(await page.evaluate(() => window.captureErrors)).toEqual([]);
+    expect(await page.evaluate(() => window.uploads.length)).toBe(1);
+    await page.evaluate(() => { window.uploads = []; window.gateCaptureOnce(); });
+    await page.getByRole('button', { name: 'Save frame', exact: true }).click();
+    await page.waitForFunction(() => window.captureDecodePending);
+    const frozen = await page.evaluate(() => window.captureFrozen);
+    // No audio seek or project edit: only the box and the size-dependent SVG
+    // change after the actual preview has already been serialized.
+    await page.locator('main').evaluate(el => { el.style.width = '602px'; });
+    await page.waitForFunction(() => document.querySelector('[data-film-look-width="600"]'));
+    const resized = await page.evaluate(() => window.previewMetadata());
+    expect(resized.songFrame).toBe(frozen.songFrame);
+    expect(resized.videos).toEqual(frozen.videos);
+    expect(resized.filter).not.toEqual(frozen.filter);
+    await page.evaluate(() => window.releaseCapture());
+    await page.waitForFunction(() => window.captureErrors.length > 0 || window.uploads.length > 0);
+    expect(await page.evaluate(() => window.uploads.length)).toBe(0);
+    expect(await page.evaluate(() => window.captureErrors.at(-1))).toContain('Preview changed during capture');
+    try { await capture(); }
+    finally { await page.locator('main').evaluate(el => { el.style.width = '642px'; }); }
+  });
+
   it('reports an unavailable paused color surface without uploading a different native-video image', async () => {
     await page.evaluate(() => {
       const original = HTMLCanvasElement.prototype.getContext;

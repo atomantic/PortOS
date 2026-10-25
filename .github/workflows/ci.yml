@@ -1009,6 +1009,18 @@ jobs:
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
         run: node scripts/ci-test-diagnostics.js
 
+      - name: Retain synthetic animatic mismatch pixels and frame metadata
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: animatic-capture-diagnostics
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/animatic-capture/case-*/saved.png
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/animatic-capture/case-*/displayed.png
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/animatic-capture/case-*/frame.json
+
   windows-server:
     # Sharded like the server job.
     name: Windows server unit tests (${{ matrix.shard }}/${{ strategy.job-total }})

@@ -1093,6 +1093,19 @@ select a style universe by list order. Derived FableLoom/Voice Studio uses are
 exact canon-pointer links; series/issue `prose-mention` uses are labeled inferred
 mentions. Derived uses are read-only and never confer export consent.
 
+The details endpoint defaults to `?view=full` for existing callers. Library
+editors use `?view=profile`: editable identity/payload, sources, relations and
+direct ownership/reference labels and small `coverMedia` keys, with `universeContext.usageComplete=false`.
+Media, missing-media checks and revision snapshots are omitted, rather than
+reported as empty. Fetch the universe-context endpoint for derived story/voice
+usage; it returns the context object with `usageComplete=true`. A failed or
+pending usage fetch does not mean the primitive is unused.
+
+`?view=media` returns only `{ media, missingMedia }`, deriving integrity from
+the same attachment read. History remains available through the existing
+paginated revisions endpoint. Library editors fetch media on its first visible
+tab and history on explicit request; full details retain their prior fields.
+
 `PUT /api/catalog/ingredients/:id/owner` accepts `{ universeId }`. It resolves
 unowned/ambiguous records explicitly and refuses to move an established owner.
 `POST /api/catalog/ingredients` accepts optional `universeId` and `operationKey`

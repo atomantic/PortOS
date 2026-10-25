@@ -25,12 +25,13 @@ async function refsFor(id, exec = query) {
   return rows;
 }
 
-export async function getPrimitiveContext(id) {
+export async function getPrimitiveContext(id, { includeDerived = true } = {}) {
   const directRefs = await describeCatalogRefs(await refsFor(id));
+  if (!includeDerived) return { ...catalogUniverseContext(directRefs), refs: directRefs, usageComplete: false };
   const { listPrimitiveUsages } = await import('./catalogPrimitiveUsage.js');
   const derived = await listPrimitiveUsages(id, directRefs);
   const refs = [...directRefs, ...await describeCatalogRefs(derived)];
-  return { ...catalogUniverseContext(refs), refs };
+  return { ...catalogUniverseContext(refs), refs, usageComplete: true };
 }
 
 async function requireUniverse(client, id) {

@@ -1,9 +1,9 @@
-import { readFileSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { checkWorkspaceCacheIsolation } from './lib/workspaceCacheFixture.js';
+import { createTestPhaseDiagnostics } from '../server/test/testPhaseDiagnostics.js';
 
 const REPO = fileURLToPath(new URL('../', import.meta.url));
 
@@ -23,18 +23,19 @@ describe('checkout-owned server Vite caches with shared dependencies', () => {
   });
 
   for (const [configName, cacheName] of [['vitest.config.js', 'vitest'], ['vitest.config.db.js', 'vitest-db']]) {
-    it(`server ${configName} keeps concurrent publications separate and reuses its owned cache`, async ({ signal }) => {
-      await checkWorkspaceCacheIsolation('server', configName, cacheName, expect, signal);
+    it(`server ${configName} keeps concurrent publications separate and reuses its owned cache`, async ({ signal, onTestFailed }) => {
+      await checkWorkspaceCacheIsolation('server', configName, cacheName, expect, signal, { phase: createTestPhaseDiagnostics(onTestFailed) });
     });
   }
 
   it('settles cancelled concurrent cache publishers before removing their shared host', async () => {
-    const before = readdirSync(tmpdir()).filter(name => name.startsWith('workspace-cache-'));
+    let host;
     const controller = new AbortController();
-    const pending = checkWorkspaceCacheIsolation('server', 'vitest.config.js', 'vitest', expect, controller.signal);
+    const pending = checkWorkspaceCacheIsolation('server', 'vitest.config.js', 'vitest', expect, controller.signal, { onHost: value => { host = value; } });
     // Both launches have started synchronously, before the first await.
     controller.abort();
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-    expect(readdirSync(tmpdir()).filter(name => name.startsWith('workspace-cache-'))).toEqual(before);
+    expect(host).toBeDefined();
+    expect(existsSync(host)).toBe(false);
   }, 15000);
 });

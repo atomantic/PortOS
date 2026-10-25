@@ -92,6 +92,18 @@ export async function listMediaForIngredient(ingredientId) {
   return byIngredient.get(ingredientId);
 }
 
+// Preserve the detail page's portrait/reference precedence without fetching
+// image metadata or checking every library file before the profile can render.
+export async function getIngredientMediaCover(ingredientId) {
+  const { rows } = await query(`SELECT DISTINCT ON (kind) kind, media_key
+    FROM catalog_identity_read_media
+    WHERE ingredient_id = ANY(catalog_identity_member_ids($1)) AND deleted = false
+      AND (kind = 'portrait' OR (kind = 'reference' AND (role IS NULL OR role NOT LIKE 'archive:%')))
+    ORDER BY kind, ingredient_id, created_at DESC`, [ingredientId]);
+  return { portraitKey: rows.find((row) => row.kind === 'portrait')?.media_key || null,
+    referenceKey: rows.find((row) => row.kind === 'reference')?.media_key || null };
+}
+
 // Batched `listMediaForIngredient` for bulk hydration paths (#3940) — ONE query
 // for N ingredients instead of N. Same live filter and same per-ingredient
 // ordering (portraits first, then newest-first); the outer `ingredient_id` sort
@@ -129,8 +141,8 @@ const RESOLVABLE_MEDIA_KINDS = new Set(['portrait', 'reference']);
 // rendering a broken <img>. `resolveImageInputPath` returns null when the key
 // isn't under any approved image root. Non-image kinds are excluded (no
 // resolver yet). Returns the list of missing `{ mediaKey, kind }`.
-export async function getMissingMediaForIngredient(ingredientId) {
-  const rows = await listMediaForIngredient(ingredientId);
+export async function getMissingMediaForIngredient(ingredientId, { media } = {}) {
+  const rows = media ?? await listMediaForIngredient(ingredientId);
   return rows
     .filter((m) => RESOLVABLE_MEDIA_KINDS.has(m.kind) && !resolveImageInputPath(m.mediaKey))
     .map((m) => ({ mediaKey: m.mediaKey, kind: m.kind }));
