@@ -28,6 +28,11 @@ vi.mock('../lib/asyncMutex.js', () => ({
 }));
 
 vi.mock('dns/promises', () => ({ default: { lookup: vi.fn() } }));
+// HTTPS must use the same per-test transport as HTTP, after real host admission.
+vi.mock('../lib/httpClient.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  insecureFetch: () => (...args) => fetch(...args)
+}));
 vi.mock('./instanceEvents.js', () => ({
   instanceEvents: {
     emit: vi.fn()
@@ -1596,16 +1601,129 @@ describe('instances.js', () => {
   });
 
   describe('handleAnnounce', () => {
+    let expectedUpdates;
+    let expectedProbes;
+    let expectedReplies;
+    let completedWrites;
+
+    const response = (body) => ({ ok: true, status: 200, json: async () => body });
+    const transport = async (url) => {
+      const { pathname } = new URL(url);
+      if (pathname === '/api/system/health/details') return response({ version: '1.7.0' });
+      if (pathname === '/api/apps') return response([]);
+      if (pathname === '/api/instances/sync-status') return response({});
+      if (pathname === '/api/instances/peers/announce') return response({});
+      throw new Error(`Unexpected announcement fixture endpoint: ${pathname}`);
+    };
+    const announce = (payload) => {
+      expectedUpdates++;
+      return handleAnnounce(payload);
+    };
+    const settleAnnouncements = () => vi.waitFor(() => {
+      expect(connectToPeer.mock.calls.length + disconnectFromPeer.mock.calls.length).toBe(expectedProbes);
+      expect(fetch.mock.calls.filter(([url]) => new URL(url).pathname === '/api/instances/peers/announce')).toHaveLength(expectedReplies);
+      // Registration/wake, probe persistence, then markDirection after a reply.
+      expect(completedWrites).toBe(expectedUpdates + expectedProbes + expectedReplies);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    beforeEach(() => {
+      expectedUpdates = 0;
+      expectedProbes = 1;
+      expectedReplies = 0;
+      completedWrites = 0;
+      fetch.mockImplementation(transport);
+      dns.lookup.mockResolvedValue([{ address: '192.0.2.10', family: 4 }]);
+      atomicWrite.mockImplementation(async () => { completedWrites++; });
+    });
+
+    afterEach(async () => {
+      await settleAnnouncements();
+      atomicWrite.mockResolvedValue(undefined);
+    });
+
+    it.each(['created', 'wake'])('waits for a delayed %s probe and its follow-on writes before fixture teardown', async (kind) => {
+      const waking = kind === 'wake';
+      expectedReplies = waking ? 1 : 0;
+      const peer = {
+        id: 'peer-delayed', instanceId: 'remote-delayed', address: '192.0.2.10', port: 5555,
+        status: 'offline', enabled: true, directions: ['inbound'],
+        syncSecret: 'synthetic-pair-secret-32-characters-long'
+      };
+      readJSONFile.mockResolvedValue({
+        self: { instanceId: 'local-instance', name: 'Example local' },
+        peers: waking ? [peer] : []
+      });
+      const healthStarted = Promise.withResolvers();
+      const healthBody = Promise.withResolvers();
+      const replyStarted = Promise.withResolvers();
+      const replyResponse = Promise.withResolvers();
+      const writeStarted = Promise.withResolvers();
+      const finishWrite = Promise.withResolvers();
+      const write = atomicWrite.getMockImplementation();
+      atomicWrite.mockImplementation(async (...args) => {
+        const stored = args[1].peers[0];
+        if (stored.lastProbe && (!waking || stored.directions.includes('outbound'))) {
+          writeStarted.resolve();
+          await finishWrite.promise;
+        }
+        await write(...args);
+      });
+      fetch.mockImplementation(async (url) => {
+        if (new URL(url).pathname === '/api/system/health/details') {
+          return { ...response({}), json: () => {
+            healthStarted.resolve();
+            return healthBody.promise;
+          } };
+        }
+        if (new URL(url).pathname === '/api/instances/peers/announce') {
+          replyStarted.resolve();
+          return replyResponse.promise;
+        }
+        return transport(url);
+      });
+
+      const result = await announce({ instanceId: peer.instanceId, address: peer.address, port: peer.port });
+      expect(result.created).toBe(!waking);
+      let settled = false;
+      const settlement = settleAnnouncements().then(() => { settled = true; });
+      try {
+        await healthStarted.promise;
+        expect(settled).toBe(false);
+        expect(connectToPeer).not.toHaveBeenCalled();
+        healthBody.resolve({ instanceId: peer.instanceId, version: '1.7.0' });
+        if (waking) {
+          await replyStarted.promise;
+          expect(settled).toBe(false);
+          expect(connectToPeer).toHaveBeenCalledWith(peer);
+          replyResponse.resolve(response({}));
+        }
+        await writeStarted.promise;
+        expect(settled).toBe(false);
+        expect(vi.isFakeTimers()).toBe(true);
+        expect(vi.isMockFunction(globalThis.fetch)).toBe(true);
+      } finally {
+        healthBody.resolve({ instanceId: peer.instanceId });
+        replyResponse.resolve(response({}));
+        finishWrite.resolve();
+        await settlement;
+      }
+      expect(settled).toBe(true);
+      expect(result.peer.lastProbe.ok).toBe(true);
+      expect(connectToPeer).toHaveBeenCalledWith(result.peer);
+      if (waking) expect(result.peer.directions).toContain('outbound');
+    });
+
     it('emits peer:online once per process when an announce marks a known peer online (#11750)', async () => {
       const peer = { id: 'peer-local', instanceId: 'peer-a', address: '192.0.2.10', port: 5555,
         name: 'Example peer', status: 'online', directions: ['outbound'] };
       readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
       const onlineEmits = () => instanceEvents.emit.mock.calls.filter(([name]) => name === 'peer:online').length;
 
-      await handleAnnounce({ instanceId: 'peer-a', address: '192.0.2.10', port: 5555 });
+      await announce({ instanceId: 'peer-a', address: '192.0.2.10', port: 5555 });
       expect(onlineEmits()).toBe(1);
 
-      await handleAnnounce({ instanceId: 'peer-a', address: '192.0.2.10', port: 5555 });
+      await announce({ instanceId: 'peer-a', address: '192.0.2.10', port: 5555 });
       expect(onlineEmits()).toBe(1);
     });
 
@@ -1613,23 +1731,26 @@ describe('instances.js', () => {
       const peer = { id: 'peer-local', instanceId: 'peer-a', address: '192.0.2.10', port: 5555,
         name: 'Example peer', status: 'online', directions: ['outbound'] };
       readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
-      await handleAnnounce({ instanceId: 'peer-a', address: '198.51.100.99', port: 5555 });
+      await announce({ instanceId: 'peer-a', address: '198.51.100.99', port: 5555 });
       expect(instanceEvents.emit).not.toHaveBeenCalledWith('peer:online', expect.anything());
     });
 
     it('keeps an admitted peer identity, callback endpoint and consent unchanged after forged discovery', async () => {
+      expectedProbes = 0;
       const peer = { id: 'peer-local', instanceId: 'peer-a', address: '192.0.2.10', port: 5555,
         host: 'configured.example.com', directions: ['inbound'], syncSecret: 'synthetic-pair-secret-32-characters-long',
         syncEnabled: false, syncCategories: { universe: false } };
       const before = structuredClone(peer);
       readJSONFile.mockResolvedValue({ self: { instanceId: 'local-instance' }, peers: [peer] });
-      await handleAnnounce({ instanceId: 'peer-forged', address: '192.0.2.10', port: 5555, host: 'attacker.example.com' });
+      await announce({ instanceId: 'peer-forged', address: '192.0.2.10', port: 5555, host: 'attacker.example.com' });
       expect(peer).toEqual(before);
+      expectedUpdates++;
       await applyReciprocalSync('peer-a', { universe: true }, { fullSync: true });
       expect(peer).toEqual(before);
     });
 
     it('ignores host/port/name/status from an announce whose address does not match the stored peer, even without a syncSecret', async () => {
+      expectedReplies = 1;
       // instanceId is public (GET /api/system/health, unauthenticated), so a caller
       // that only knows it — but isn't calling from the peer's real address — must
       // not be able to redirect this peer record to a host of their choosing.
@@ -1641,7 +1762,7 @@ describe('instances.js', () => {
       const before = structuredClone(peer);
       readJSONFile.mockResolvedValue({ self: { instanceId: 'local-instance' }, peers: [peer] });
 
-      const result = await handleAnnounce({
+      const result = await announce({
         instanceId: 'peer-a', address: '198.51.100.99', port: 443,
         host: 'attacker.example.com', name: 'attacker'
       });
@@ -1662,7 +1783,7 @@ describe('instances.js', () => {
       };
       readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
 
-      const result = await handleAnnounce({
+      const result = await announce({
         address: '192.0.2.10', port: 5555, host: 'peer.example.com',
         instanceId: 'remote-instance', name: 'Example peer'
       });
@@ -1678,19 +1799,19 @@ describe('instances.js', () => {
     it.each(['localhost', 'api.localhost', '127.0.0.1', '169.254.169.254'])(
       'stores no host for a new peer announcing %s, and adopts a *.ts.net host', async (badHost) => {
         readJSONFile.mockResolvedValue({ self: null, peers: [] });
-        const refused = await handleAnnounce({ address: '192.0.2.10', port: 5555, instanceId: 'bad', host: badHost });
+        const refused = await announce({ address: '192.0.2.10', port: 5555, instanceId: 'bad', host: badHost });
         expect(refused.peer.host).toBeNull();
+        await settleAnnouncements();
+        expectedProbes++;
         readJSONFile.mockResolvedValue({ self: null, peers: [] });
-        const ok = await handleAnnounce({ address: '192.0.2.11', port: 5555, instanceId: 'good', host: 'box.example-tailnet.ts.net' });
+        const ok = await announce({ address: '192.0.2.11', port: 5555, instanceId: 'good', host: 'box.example-tailnet.ts.net' });
         expect(ok.peer.host).toBe('box.example-tailnet.ts.net');
       });
 
     it('should create a new peer from announcement', async () => {
       readJSONFile.mockResolvedValue({ self: null, peers: [] });
-      // probePeer will call fetch
-      fetch.mockRejectedValue(new Error('offline'));
 
-      const result = await handleAnnounce({
+      const result = await announce({
         address: '10.0.0.5',
         port: 5555,
         instanceId: 'remote-instance',
@@ -1706,7 +1827,6 @@ describe('instances.js', () => {
         enabled: true,
         directions: ['inbound']
       });
-      // Note: status not asserted — handleAnnounce fires async probePeer which may change it
       expect(instanceEvents.emit).toHaveBeenCalledWith('peers:updated', expect.any(Array));
     });
 
@@ -1716,7 +1836,7 @@ describe('instances.js', () => {
         address: '127.0.0.1', port: 15555, host: null, hostManual: true,
         name: 'Example peer', directions: ['outbound'],
       }] });
-      const { peer } = await handleAnnounce({ address: '192.0.2.10', port: 5555,
+      const { peer } = await announce({ address: '192.0.2.10', port: 5555,
         instanceId: 'remote-example', host: 'peer.example.com' });
       expect(peer).toMatchObject({ address: '127.0.0.1', port: 15555, host: null });
     });
@@ -1733,7 +1853,7 @@ describe('instances.js', () => {
       };
       readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
 
-      const result = await handleAnnounce({
+      const result = await announce({
         address: '10.0.0.5',
         port: 5555,
         instanceId: 'remote-instance',
@@ -1759,7 +1879,7 @@ describe('instances.js', () => {
       };
       readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
 
-      const result = await handleAnnounce({
+      const result = await announce({
         address: '10.0.0.5',
         port: 5555,
         instanceId: 'remote-instance',
@@ -1783,7 +1903,7 @@ describe('instances.js', () => {
       };
       readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
 
-      const result = await handleAnnounce({
+      const result = await announce({
         address: '10.0.0.5',
         port: 5555,
         instanceId: 'new-id',
@@ -1807,7 +1927,7 @@ describe('instances.js', () => {
       };
       readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
 
-      const result = await handleAnnounce({
+      const result = await announce({
         address: '10.0.0.5',
         port: 5555,
         instanceId: 'remote',
@@ -1830,7 +1950,7 @@ describe('instances.js', () => {
       };
       readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
 
-      const result = await handleAnnounce({
+      const result = await announce({
         address: '10.0.0.5',
         port: 5555,
         instanceId: 'remote',
@@ -1843,9 +1963,8 @@ describe('instances.js', () => {
 
     it('should store host on a new peer announced over Tailscale', async () => {
       readJSONFile.mockResolvedValue({ self: null, peers: [] });
-      fetch.mockRejectedValue(new Error('offline'));
 
-      const result = await handleAnnounce({
+      const result = await announce({
         address: '100.64.0.50',
         port: 5555,
         instanceId: 'remote-instance',
@@ -1870,7 +1989,7 @@ describe('instances.js', () => {
       };
       readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
 
-      const result = await handleAnnounce({
+      const result = await announce({
         address: '100.64.0.50',
         port: 5555,
         instanceId: 'remote-instance',
@@ -1894,7 +2013,7 @@ describe('instances.js', () => {
       };
       readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
 
-      const result = await handleAnnounce({
+      const result = await announce({
         address: '100.64.0.50',
         port: 5555,
         instanceId: 'remote-instance',
@@ -1922,7 +2041,7 @@ describe('instances.js', () => {
       };
       readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
 
-      const result = await handleAnnounce({
+      const result = await announce({
         address: '100.64.0.50',
         port: 5555,
         instanceId: 'remote-instance',
@@ -1949,7 +2068,7 @@ describe('instances.js', () => {
       };
       readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
 
-      const result = await handleAnnounce({
+      const result = await announce({
         address: '100.64.0.50',
         port: 5555,
         instanceId: 'remote-instance',
@@ -1962,9 +2081,8 @@ describe('instances.js', () => {
 
     it('should drop invalid host strings via validHost', async () => {
       readJSONFile.mockResolvedValue({ self: null, peers: [] });
-      fetch.mockRejectedValue(new Error('offline'));
 
-      const result = await handleAnnounce({
+      const result = await announce({
         address: '100.64.0.50',
         port: 5555,
         instanceId: 'remote-instance',
@@ -1976,6 +2094,7 @@ describe('instances.js', () => {
     });
 
     it('probes a paired peer on the top backoff tier immediately when it announces, emits peer:online, and preserves host/port/name (#12621)', async () => {
+      expectedReplies = 1;
       const peer = {
         id: 'peer-paired',
         instanceId: 'remote-paired',
@@ -1999,12 +2118,12 @@ describe('instances.js', () => {
             json: async () => ({ instanceId: 'remote-paired', version: '1.7.0' }),
           };
         }
-        return { ok: false, status: 404 };
+        return transport(url);
       });
 
       const onlineEmits = () => instanceEvents.emit.mock.calls.filter(([name]) => name === 'peer:online');
 
-      const result = await handleAnnounce({
+      const result = await announce({
         instanceId: 'remote-paired',
         address: '192.0.2.10',
         port: 5555,
@@ -2052,7 +2171,7 @@ describe('instances.js', () => {
         return { ok: false, status: 500 };
       });
 
-      const result = await handleAnnounce({
+      const result = await announce({
         instanceId: 'remote-paired',
         address: '198.51.100.99', // forged IP
         port: 9999,
@@ -2066,7 +2185,7 @@ describe('instances.js', () => {
       expect(result.peer.host).toBeNull();
       expect(result.peer.name).toBe('Stored Box Name');
 
-      await vi.waitFor(() => expect(fetchedUrls.length).toBeGreaterThan(0));
+      await settleAnnouncements();
       for (const url of fetchedUrls) {
         expect(url).not.toContain('198.51.100.99');
         expect(url).not.toContain('9999');
@@ -2094,17 +2213,20 @@ describe('instances.js', () => {
       });
 
       // First announce wakes the probe
-      await handleAnnounce({ instanceId: 'remote-paired', address: '192.0.2.10', port: 5555 });
+      await announce({ instanceId: 'remote-paired', address: '192.0.2.10', port: 5555 });
       await vi.waitFor(() => expect(probeCount).toBe(1));
 
       // Second announce 5s later does not wake
       vi.advanceTimersByTime(5_000);
-      await handleAnnounce({ instanceId: 'remote-paired', address: '192.0.2.10', port: 5555 });
+      await announce({ instanceId: 'remote-paired', address: '192.0.2.10', port: 5555 });
       expect(probeCount).toBe(1);
 
+      await settleAnnouncements();
+
       // Third announce after 30s interval wakes again
+      expectedProbes++;
       vi.advanceTimersByTime(26_000); // 31s total
-      await handleAnnounce({ instanceId: 'remote-paired', address: '192.0.2.10', port: 5555 });
+      await announce({ instanceId: 'remote-paired', address: '192.0.2.10', port: 5555 });
       await vi.waitFor(() => expect(probeCount).toBe(2));
     });
   });
