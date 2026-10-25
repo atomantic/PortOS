@@ -447,6 +447,8 @@ function removalOutcome(worktreePath, { directory, registration }, failure = nul
  *   caller's fresh ownership/content gate, run before Git removal and rechecked
  *   after a refusal to report the current hold.
  *   Callers that share claim ownership hold its lock through this operation.
+ * @param {object[]} [opts.preservedFiles] - byte proofs already durably saved by
+ *   the caller; ignored files still require an exact content/hash match.
  * @returns {Promise<{removed: boolean, directory: string, registration: string, warning: string|null}>}
  *   `warning` is set exactly when `removed` is false.
  */
@@ -459,7 +461,7 @@ export async function forceRemoveWorktreeDir(repo, worktreePath, opts = {}) {
 // Hold reasons that mean the cleanup could not even decide, rather than a gate declining.
 const REMOVAL_FAULT_HOLDS = new Set(['worktree-ownership-unreadable', 'worktree-removal-refused']);
 
-async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval, ignoredPaths = [], beforeMutation = async () => {} } = {}) {
+async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval, ignoredPaths = [], preservedFiles = [], beforeMutation = async () => {} } = {}) {
   const logAll = label && log === 'all';
   let lastFailure = null;
   let heldReason = null;
@@ -471,7 +473,7 @@ async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log =
     const reason = verifyRemoval ? await verifyRemoval(holder, entries).catch(() => 'worktree-ownership-unreadable') : null;
     if (reason) return reason;
     const { assertNoUniqueIgnoredCheckoutPayload } = await import('./heldCheckoutRecovery.js');
-    const payloadHold = await assertNoUniqueIgnoredCheckoutPayload(worktreePath, execGit, ignoredPaths)
+    const payloadHold = await assertNoUniqueIgnoredCheckoutPayload(worktreePath, execGit, ignoredPaths, preservedFiles)
       .then(() => null, error => error.message || 'checkout-not-disposable');
     if (payloadHold) return payloadHold;
     // Ownership/content checks await I/O. Refresh their registration afterward;

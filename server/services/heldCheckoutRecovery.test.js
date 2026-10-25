@@ -1288,8 +1288,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     injected.schedule = JSON.parse(JSON.stringify(injected.schedule));
     expect(await recordSupersededCheckoutPreservation('app-1', c.release, prepared.review)).toBe(true);
     expect((await getBranchReconcileOutcome('app-1')).supersededSourceEvidence[review.digest].preservedAt).toBe(preservedAt);
-    expect(await retireInventoriedCheckout({ appId: input.appId, release: c.release, review }, c.opts))
-      .toMatchObject({ ok: true, branchDeleted: true });
+    const retirement = await retireInventoriedCheckout({ appId: input.appId, release: c.release, review }, c.opts);
+    expect(retirement, retirement.reason || retirement.detail).toMatchObject({ ok: true, branchDeleted: true });
     expect(existsSync(c.path)).toBe(false);
     const outcome = await getBranchReconcileOutcome('app-1');
     expect(outcome.retired).toContainEqual(expect.objectContaining({ head: c.release.head,
@@ -1299,7 +1299,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['changed-source', 'persistence-failure', 'preservation-capacity'])('preserves the original when supersession confirmation encounters %s', async scenario => {
+  it.each(['changed-source', 'persistence-failure', 'preservation-capacity', 'changed-private-evidence', 'changed-preservation'])('preserves the original when supersession confirmation encounters %s', async scenario => {
     const c = await reviewedCheckout(`prototype-confirm-${scenario}`, { superseded: true });
     c.forge.prHead = c.forge.mergeCommit;
     c.forge.firstCommit = c.forge.mergeCommit;
@@ -1307,11 +1307,25 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     c.forge.sourceSupersessionHead = c.release.head;
     c.forge.remoteHead = `${c.release.head}\trefs/heads/${c.release.branch}`;
     c.forge.sourcePreservation = { head: c.release.head, remoteRef: `refs/heads/${c.release.branch}`, prUrl: 'https://github.com/example/repo/pull/41' };
+    const mutateAfterPreservation = scenario === 'changed-private-evidence' || scenario === 'changed-preservation';
+    if (mutateAfterPreservation) await writeFile(join(c.path, 'ignored.txt'), 'original private evidence');
     const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release: c.release,
       prUrl: c.forge.prUrl, kind: 'preserved-supersession' }, c.opts);
     expect(prepared, prepared.reason).toMatchObject({ ok: true });
     if (scenario === 'changed-source') c.forge.remoteHead = null;
     else if (scenario === 'persistence-failure') retirementFaults.failScheduleWrite = retirementFaults.scheduleWrites + 1;
+    else if (mutateAfterPreservation) {
+      let mutations = 0;
+      c.opts.beforeMutation = async () => {
+        // Admission is first; the second boundary follows durable preservation.
+        if (++mutations !== 2) return;
+        const saved = (await getBranchReconcileOutcome('app-1')).supersededSourceEvidence[prepared.review.digest];
+        const file = saved.proof.source.files.find(entry => entry.scope === 'content' && entry.path === 'ignored.txt');
+        expect(file.data).toBe(Buffer.from('original private evidence').toString('base64'));
+        if (scenario === 'changed-private-evidence') await writeFile(join(c.path, 'ignored.txt'), 'changed private evidence');
+        else file.data = Buffer.from('changed saved evidence').toString('base64');
+      };
+    }
     else {
       const outcome = injected.schedule.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome;
       outcome.supersededSourceEvidence = { completed: { proof: { data: 'x'.repeat(1024 * 1024) } } };
@@ -1319,11 +1333,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     }
     const result = await retireInventoriedCheckout({ appId: 'app-1', release: c.release,
       review: { prUrl: c.forge.prUrl, kind: 'preserved-supersession', digest: prepared.review.digest, acceptSuperseded: true } }, c.opts);
-    expect(result).toMatchObject({ ok: false, reason: scenario === 'changed-source'
-      ? 'retirement-source-not-published' : 'checkout-not-disposable' });
+    const reasons = { 'changed-source': 'retirement-source-not-published', 'changed-private-evidence': 'retirement-review-changed',
+      'changed-preservation': 'retirement-source-preservation-unavailable' };
+    expect(result).toMatchObject({ ok: false, reason: reasons[scenario] || 'checkout-not-disposable' });
     expect(existsSync(c.path)).toBe(true);
     expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
     expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+    if (mutateAfterPreservation) {
+      expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe(scenario === 'changed-private-evidence'
+        ? 'changed private evidence' : 'original private evidence');
+      expect(await lockText(c.path)).toBe(c.release.lockReason);
+    }
     if (scenario === 'preservation-capacity') expect((await getBranchReconcileOutcome('app-1'))
       .supersededSourceEvidence.completed.proof.data).toHaveLength(1024 * 1024);
   });

@@ -37,15 +37,15 @@ import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch, clas
 import { getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence } from './git.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArchive } from './cosClaimOwnership.js';
 
-/** No archive is needed only when Git-ignored payload is independently disposable. */
+/** Ignored payload must be disposable or match bytes already durably preserved. */
 export async function releaseCheckoutWithoutArchive(context, prepare) {
   const prepared = await prepare();
-  await assertNoUniqueIgnoredCheckoutPayload(context.path, execGit, context.ignoredPaths);
+  await assertNoUniqueIgnoredCheckoutPayload(context.path, execGit, context.ignoredPaths, context.preservedFiles);
   return prepared;
 }
 
 /** Git cleanliness alone omits ignored files. Links retain their target bytes. */
-export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGit, ignoredPaths = []) {
+export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGit, ignoredPaths = [], preservedFiles = []) {
   const present = await lstat(path).catch(error => {
     if (error.code === 'ENOENT') return null;
     throw error;
@@ -63,6 +63,12 @@ export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGi
     if (info.isSymbolicLink() || isAgentScratchPath(rel) || matchesScratchRoot(rel, ignoredPaths)) continue;
     if (rel === `node_modules/${WORKTREE_NODE_MODULES_MARKER}` && info.isFile() && info.size === 0) continue;
     if (info.isFile() && await disposableModuleCache(path, rel, ignored, verifiedCaches, work)) continue;
+    const preserved = preservedFiles.find(file => file.scope === 'content' && file.path === rel);
+    if (info.isFile() && typeof preserved?.data === 'string') {
+      const bytes = Buffer.from(preserved.data, 'base64');
+      if (info.size === bytes.length && evidenceHash(bytes) === preserved.sha256
+        && await archiveHash(join(path, rel), work, bytes.length) === preserved.sha256) continue;
+    }
     throw new Error('checkout-ignored-payload-unverified');
   }
 }
@@ -1517,10 +1523,12 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
     },
     archive: async ({ tree, reviewed }) => {
       try {
-        if (acceptedPreservedSupersession(review, reviewed?.review)) {
+        const preservedSupersession = acceptedPreservedSupersession(review, reviewed?.review);
+        if (preservedSupersession) {
           if (!await opts.preserveSupersession?.(reviewed.review)) throw new Error('retirement-source-preservation-unavailable');
         }
-        await releaseCheckoutWithoutArchive({ repoPath, path: tree.path, branch }, async () => {
+        await releaseCheckoutWithoutArchive({ repoPath, path: tree.path, branch,
+          preservedFiles: preservedSupersession ? reviewed.review.preservedSource.files : [] }, async () => {
           if (opts.signal?.aborted) throw new Error('retirement-archive-cancelled');
           const status = await getStatusPorcelain(tree.path).catch(() => null);
           if (status === null) throw new Error('worktree-status-unavailable');
@@ -1581,6 +1589,8 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     ]);
     if (fresh && !fresh.ok) { capacityRefusal = fresh; return fresh.reason; }
     if (fresh && fresh.review.digest !== review.digest) return 'retirement-review-changed';
+    if (acceptedPreservedSupersession(review, fresh?.review)
+      && !await opts.preserveSupersession?.(fresh.review)) return 'retirement-source-preservation-unavailable';
     if (porcelain === null || !classifyWorktreeDirt(porcelain).clean) return 'worktree-dirty';
     const locallyMerged = branch
       ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
@@ -1595,6 +1605,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   };
   const removal = await forceRemoveWorktreeDir(repoPath, tree.path, {
     label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval,
+    preservedFiles: acceptedPreservedSupersession(review, reviewed?.review) ? reviewed.review.preservedSource.files : [],
     beforeMutation: async () => {
       await opts.beforeMutation?.();
       // The removal helper also calls this hook before pruning registration.
