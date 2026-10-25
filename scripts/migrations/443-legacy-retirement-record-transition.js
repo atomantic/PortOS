@@ -9,8 +9,8 @@ export default {
 		const path = join(rootDir, "data/cos/task-schedule.json");
 		const schedule = await readJSONFile(path, null, { strict: true });
 		if (!schedule) return { marked: 0 };
-    const policyChanged = schedule.retirementPolicyVersion !== 2;
-    schedule.retirementPolicyVersion = 2;
+		const policyChanged = schedule.retirementPolicyVersion !== 2;
+		schedule.retirementPolicyVersion = 2;
 		let marked = 0;
 		const execution = schedule.executions?.["task:branch-reconcile"];
 		for (const record of [
@@ -19,7 +19,7 @@ export default {
 		]) {
 			if (markLegacyRetirements(record?.branchReconcileOutcome)) marked++;
 		}
-    if (marked || policyChanged) await writeJsonAtomic(path, schedule);
+		if (marked || policyChanged) await writeJsonAtomic(path, schedule);
 		return { marked };
 	},
 };
