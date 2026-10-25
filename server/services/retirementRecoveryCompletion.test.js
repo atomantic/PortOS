@@ -204,6 +204,16 @@ describe('retirement recovery public completion flow', () => {
     expect(await verifyRetirementRecoveryCompletion(store.task)).toMatchObject({ status: 'unverified' });
   });
 
+  it('leaves a queued recovery with newly-added delivery work for a fresh dequeue', async () => {
+    await retire();
+    store.task.status = 'pending';
+    const queued = structuredClone(store.task);
+    store.task.metadata.recoveryMergeTarget = { branch: release.branch, url: 'https://github.com/example/repo/pull/1' };
+    expect(await prepareAgentSpawn(queued)).toBeNull();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(store.task.status).toBe('pending');
+  });
+
   it('does not spawn after the fenced task update loses to a concurrent edit', async () => {
     await retire();
     store.task.status = 'pending';

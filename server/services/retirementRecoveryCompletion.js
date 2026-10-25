@@ -114,7 +114,7 @@ export async function settleRetirementRecoveryBeforeSpawn(task) {
   return withClaimOwnershipLock(async () => {
     const { getTaskById, updateTask } = await import('./cosTaskStore.js');
     const fresh = await getTaskById(task.id);
-    if (!fresh || !['pending', 'approved'].includes(fresh.status)) return true;
+    if (!fresh || !['pending', 'approved'].includes(fresh.status) || !isRetirementOnlyRecovery(fresh)) return true;
     const proof = await verifyCurrentRetirement(fresh);
     if (proof?.status !== 'verified') return false;
     const { loadState } = await import('./cosState.js');
