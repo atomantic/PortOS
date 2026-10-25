@@ -392,7 +392,7 @@ async function resumeReleasedCompletion(agentId) {
 /** A completed delivery follow-up settles its original job immediately. No
  * schedule, provider, retry reset or fabricated completion is involved. */
 const completedDeliveryParents = createSingleFlight();
-export async function resumeCompletedDeliveryParent(task) {
+async function resumeCompletedDeliveryParent(task) {
   const m = task?.metadata;
   if (task?.status !== 'completed' || !isTruthyMeta(m?.reviewLoopFollowUp)
     || typeof m.sourceAgentId !== 'string' || !m.sourceAgentId || typeof m.sourceTaskId !== 'string') return;
@@ -410,7 +410,7 @@ export async function resumeCompletedDeliveryParent(task) {
 export function bindCompletionRetirementEvents(events) {
   const onChange = data => {
     if (data?.task?.status !== 'completed' || !data.task.metadata?.reviewLoopFollowUp) return;
-    resumeCompletedDeliveryParent(data.task)
+    return resumeCompletedDeliveryParent(data.task)
       .catch(error => emitLog('warn', `Parent completion deferred after delivery follow-up: ${error.message}`, { taskId: data.task.id }));
   };
   events.on('tasks:changed', onChange);

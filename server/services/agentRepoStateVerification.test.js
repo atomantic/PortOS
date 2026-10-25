@@ -84,7 +84,7 @@ import { readLocalBranchPresence, readCheckoutPathPresence } from './repoCleanup
 import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
-import { verifyAgentRepoState, sweepRepoStateVerifications, resumeCompletedDeliveryParent, bindCompletionRetirementEvents, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
+import { verifyAgentRepoState, sweepRepoStateVerifications, bindCompletionRetirementEvents, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
@@ -139,6 +139,13 @@ const openView = (patch = {}) => JSON.stringify({ number: 9, state: 'OPEN', isDr
 
 /** The `{user, cos}` shape `getAllTasks` really returns. Follow-ups land in `cos`. */
 const queuedTasks = (tasks) => getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks } });
+
+const observeCompletedTask = async task => {
+  const events = new EventEmitter();
+  const unbind = bindCompletionRetirementEvents(events);
+  try { return await events.listeners('tasks:changed')[0]({ task }); }
+  finally { unbind(); }
+};
 
 const run = (overrides = {}) => verifyAgentRepoState({
   agentId: 'agent-1',
@@ -288,7 +295,7 @@ describe('verifyAgentRepoState — clean runs', () => {
     getAllTasks.mockImplementationOnce(() => { entered(); return new Promise(resolve => { releaseFirst = resolve; }); });
     const preRelease = run({ agentState: state, success: false });
     await reached;
-    const afterRelease = resumeCompletedDeliveryParent(followUp);
+    const afterRelease = observeCompletedTask(followUp);
     releaseFirst({ user: { tasks: [] }, cos: { tasks: [{ ...followUp, status: 'pending', metadata: { ...followUp.metadata, app: 'demo-app' } }] } });
     expect(await preRelease).toMatchObject({ skipReason: 'follow-up-pending' });
     expect(await afterRelease).toMatchObject({ verified: true });
@@ -301,7 +308,7 @@ describe('verifyAgentRepoState — clean runs', () => {
     for (const state of [{ taskId: 'another-task', metadata: { instanceId: 'fixture-local' } },
       { taskId: 'task-1', metadata: { instanceId: 'another-instance' } }]) {
       getAgentRecord.mockResolvedValue(state);
-      await resumeCompletedDeliveryParent(followUp);
+      await observeCompletedTask(followUp);
     }
     expect(updateTask).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();
