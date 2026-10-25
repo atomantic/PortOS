@@ -56,6 +56,7 @@ export function buildTaskMetadata(taskData, taskType, { now = Date.now() } = {})
   if (taskData.model) metadata.model = taskData.model;
   if (taskData.provider) metadata.provider = taskData.provider;
   if (taskData.effort) metadata.effort = taskData.effort;
+  if (taskData.executionOptions !== undefined) metadata.executionOptions = taskData.executionOptions;
   // Orchestrated execution (#5992). Both keys are persisted only when they
   // survive normalization, so a mode with no usable profile — or a profile of
   // empty role objects — leaves the task in today's `direct` posture rather

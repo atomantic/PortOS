@@ -109,7 +109,7 @@ export { PAUSED_BLOCKED_CATEGORIES };
 // with the #4153 split so the task editor can edit the agent-facing payload the
 // same way it edits the human note — deliberately WITHOUT re-classification, so
 // a multi-line note edit can't overwrite the payload (see `splitTaskPromptFields`).
-const LEGACY_DIRECT_FIELDS = ['context', 'prompt', 'model', 'provider', 'effort', 'temperature', 'thinking', 'app', 'orchestrationMode', 'orchestrationProfile'];
+const LEGACY_DIRECT_FIELDS = ['context', 'prompt', 'model', 'provider', 'effort', 'executionOptions', 'temperature', 'thinking', 'app', 'orchestrationMode', 'orchestrationProfile'];
 
 // Equality for metadata values across a fresh markdown re-parse: primitives by
 // ===, arrays/objects (reviewers[], screenshots[], …) by JSON since the two
@@ -882,6 +882,15 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     && updates.status === 'in_progress' && typeof updates.metadata?.retryPendingCleanup === 'string') {
     for (const key of ['failureCount', 'lastErrorCategory', 'lastFailureAt']) {
       if (Object.hasOwn(updates.metadata, key)) updatedMetadata[key] = updates.metadata[key];
+    }
+  }
+  // Receipt-only completion is not a human revive. Keep the charged failure
+  // history when the original cleanup owner settles an exhausted dispatch.
+  if (preserveRetryBudget && expectedStatus === 'blocked' && expectedTask && recoveryOwner
+    && updates.status === 'completed' && current.metadata?.blockedCategory === 'task-recovery-exhausted'
+    && current.metadata.deliveryRecovery === 'cleanup' && current.metadata.deliveryRecoveryAgentId === recoveryOwner.id) {
+    for (const key of ['failureCount', 'lastErrorCategory', 'lastFailureAt']) {
+      if (Object.hasOwn(current.metadata, key)) updatedMetadata[key] = current.metadata[key];
     }
   }
 

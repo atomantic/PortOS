@@ -192,7 +192,7 @@ export const isProviderHardwareCompatible = (provider) =>
 export const selectableProviders = (providers, { selectedId = '', allowed = null } = {}) =>
   (Array.isArray(providers) ? providers : []).filter((provider) => (
     provider?.id === selectedId
-    || (provider?.enabled !== false && isProviderHardwareCompatible(provider) && (!allowed || allowed(provider)))
+    || (!(provider?.executionSourceProviderId || provider?.executionSelectionRoot) && provider?.enabled !== false && isProviderHardwareCompatible(provider) && (!allowed || allowed(provider)))
   ));
 
 export const isProviderModelHardwareCompatible = (provider, model) =>

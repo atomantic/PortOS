@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { createProviderService } from '../lib/aiToolkit/providers.js';
 import { join } from 'path';
-import { collectServerSources, readServerSource, SERVER_DIR } from '../lib/testHelper.js';
+import { collectServerSources, readServerSource } from '../lib/testHelper.js';
 
 /**
  * `getAllProviders()` resolves an ENVELOPE — `{ activeProvider, providers: [] }`
@@ -18,11 +20,19 @@ import { collectServerSources, readServerSource, SERVER_DIR } from '../lib/testH
  * from a mock, and points anyone who just wants the records at `listProviders`.
  */
 describe('getAllProviders returns an envelope, not a list', () => {
-  it('is documented as such at the definition', () => {
-    const src = readFileSync(join(SERVER_DIR, 'lib/aiToolkit/internal/providerCrudService.js'), 'utf8');
-    // The toolkit builds the envelope inline; if this shape ever changes, every
-    // `listProviders` consumer has to be revisited.
-    expect(src).toMatch(/return \{\s*activeProvider: data\.activeProvider,\s*providers: Object\.values\(data\.providers\)/);
+  it('returns the active provider and resolved record list as an envelope', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'provider-envelope-'));
+    try {
+      const service = createProviderService({ dataDir: directory, providersFile: 'providers.json' });
+      await service.createProvider({ id: 'example', name: 'Example', type: 'api', enabled: true });
+      await service.setActiveProvider('example');
+      const result = await service.getAllProviders();
+      expect(Array.isArray(result)).toBe(false);
+      expect(result).toMatchObject({ activeProvider: 'example', providers: [{ id: 'example' }] });
+      expect(Array.isArray(result.providers)).toBe(true);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('has a wrapper that unwraps it, so callers never need to know', async () => {

@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { __resetToolUseModelIdsCache } from '../../../hooks/useToolUseModelIds.js';
 
+vi.mock('../../../services/apiCore.js', () => ({ request: vi.fn().mockResolvedValue({ options: [] }) }));
 vi.mock('../../../services/api', () => ({
   relaunchCosAgent: vi.fn(),
 }));
@@ -74,7 +75,7 @@ describe('RelaunchAgentModal', () => {
     const user = userEvent.setup();
     const onDone = vi.fn();
     const onClose = vi.fn();
-    renderModal({ onDone, onClose });
+    renderModal({ onDone, onClose, agent: { ...STALLED_AGENT, metadata: { ...STALLED_AGENT.metadata, executionOptions: { serviceTier: 'fast' } } } });
 
     await user.selectOptions(screen.getByRole('combobox', { name: /provider/i }), 'codex');
     await user.click(screen.getByRole('button', { name: 'Relaunch Agent' }));
@@ -85,6 +86,7 @@ describe('RelaunchAgentModal', () => {
     // A model from the provider the user just left would be unrunnable; blank is
     // "server default", which is what clearing it means.
     expect(overrides.model).toBeUndefined();
+    expect(overrides.executionOptions).toEqual({});
     expect(onDone).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
   });

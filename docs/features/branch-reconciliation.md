@@ -56,8 +56,12 @@ persisted inventory and a fresh Git read still matches it — a changed lock,
 HEAD or branch is an ownership change. It then requires merge evidence on the
 default branch and no live owner, claim binding or manual completion handoff.
 
-A merged, clean checkout is removed at its original path. Dirty, unmerged,
-protected, and live-owner checkouts stay where they are. Retirement does not
+A merged, clean checkout is removed at its original path after checking ignored
+payload too. `checkout-ignored-payload-unverified` retains the checkout and its
+branch until the wanted files have been recovered or their disposal explicitly
+resolved. Recognized disposable Vitest module caches and links whose target
+bytes remain outside the checkout keep their existing removal policy.
+Dirty, unmerged, protected, and live-owner checkouts stay where they are. Retirement does not
 copy the checkout, its ignored files, or its commit history. The lock is
 released only after a second fresh match, and ownership, HEAD and cleanliness
 are rechecked immediately before removal; if that recheck refuses, the original
@@ -66,7 +70,9 @@ lock is restored. A retired row leaves the inventory and appears under
 under `data/cos/held-checkout-archives/`,
 `data/cos/branch-retirement-archives/`, and
 `data/cos/initialized-checkout-retirements/` are not written anymore. Setup
-migration 442 deletes those three directories.
+migration 442 preserves those directories: they may contain the only unpublished
+files or originals held by unfinished recovery transactions. Existing restore
+and verification workflows remain available after setup.
 
 ### Explicit delivery reviews
 
@@ -94,6 +100,39 @@ Ownership, content, and merge rechecks plus a persisted retirement receipt
 remain prerequisites to removal. The checkout is not copied into an archive.
 Initialized checkouts retain their separate workflow; this mode does not bypass
 its gates.
+
+### Preserved superseded prototypes
+
+A closed prototype can be replaced by different code without its original
+commits ever becoming ancestors of the replacement. Do not merge obsolete code
+or claim it was merged just to make cleanup eligible. An operator may instead
+request `kind: "preserved-supersession"` with the replacement merged PR, inspect
+the exact source/replacement differences, and confirm the returned digest with
+`acceptSuperseded: true` and that same kind.
+
+This narrower mode requires an exact same-repository published source ref and
+one closed, unmerged source PR at that head. Missing, advanced, reopened,
+ambiguous or foreign source evidence refuses removal. An index with resolve-undo conflict stages remains held. Every private recovery
+commit must be reachable from the published source head. Existing owner,
+completion-policy, inventory-generation and final content checks still apply.
+
+Before removal, the service durably retains at most 64 KiB of non-cache files
+and private Git evidence in the local schedule record. It also retains symlink
+metadata. Only independently recognized module cache artifacts and a clean,
+reconstructible index/checkout pointers are omitted. The aggregate encoded evidence store is bounded to 1 MiB. Stale, unconsumed
+preparations are pruned; completed preservation evidence is never evicted just
+to make room. Larger evidence or a full store remains
+in its original checkout; this mode does not copy a repository or create an
+archive directory. Preparation is replayable and does not settle an obligation
+or claim deletion. A completed service removal records
+`disposition: "superseded-preserved"`, bound to that preparation digest, instead
+of claiming merged delivery. Ordinary merged cleanup does not use this mode.
+
+To recover the prototype, fetch the recorded source ref, verify the exact head,
+and create a new checkout. Retained small files and symlink metadata are audit
+and recovery evidence; old Git registration pointers/locks must never be copied
+into a recreated checkout as if it were the previous incarnation. The published
+source branch is retained; local retirement does not delete it remotely.
 
 ### Held archive work budgets
 
@@ -196,10 +235,12 @@ Git layouts fail closed. It does not deinitialize a module.
    `acceptSuperseded` decision after reviewing the full comparison.
 2. `POST /retire` accepts that tuple plus `review: {prUrl, digest,
    acceptSuperseded}`. It repeats the review. When the disposition is `integrated`
-   and `git status --porcelain` is empty, it removes the checkout with
-   `git worktree remove --force`. If that fails, it removes the directory only
-   when `rev-parse --show-toplevel` resolves to the release path, then deletes
-   the local branch with the same exact-head lease as other completed branches.
+   and `git status --porcelain` is empty, it also checks ignored files in the
+   parent checkout and each initialized module. Unverified ignored payload holds
+   the checkout and branch. Otherwise it requests `git worktree remove --force`;
+   a Git refusal preserves the directory and branch with `checkout-not-removed`.
+   After successful removal it deletes the local branch with the same exact-head
+   lease as other completed branches.
    An exact merged PR head is integrated once freshly verified default history
    contains the actual merge commit, even when later commits changed shared files.
    This is deterministic delivery evidence and needs no manual supersession
@@ -209,9 +250,10 @@ Git layouts fail closed. It does not deinitialize a module.
    is created.
 
 Journals already stored under `data/cos/initialized-checkout-retirements/` keep
-the historical quarantine restore path below. Setup migration 442 deletes that
-directory, so those journals do not survive the next setup. The historical steps
-are:
+the historical quarantine restore path below. Setup migration 442 leaves the
+journals, quarantined originals and archives intact. An incomplete journal is a
+recovery obligation, never proof that its originals are disposable. The
+historical steps are:
 
 3. The successful phase is **quarantined**, not fully retired. The branch remains
    with reason `quarantined-checkout-rollback-ref`. `POST /review-branch` accepts

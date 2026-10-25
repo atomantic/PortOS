@@ -11,10 +11,10 @@
 
 import { spawn, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeSync } from 'fs';
-import { constants, tmpdir } from 'os';
+import { constants, homedir, tmpdir } from 'os';
 import { setTimeout as delay } from 'timers/promises';
 import { execFileSync } from 'child_process';
-import { dirname, join, resolve } from 'path';
+import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
 import { ALWAYS_RUN_TESTS, structuralTestsFor } from './ci-test-plan.js';
@@ -170,6 +170,7 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, 
     stages.push({ name: 'shipped prompt history', suite: 'prompt-history', script: 'migrations/check-shipped-prompt-history.js', args: [], env: {} });
   }
 
+  const guardedFiles = { server: new Set(), client: new Set() };
   const scopeEnv = { server: { PORTOS_CI_BROWSER_OWNER: 'unit', PORTOS_TEST_QUIET: '1' }, client: {} };
   if (guardPlan) {
     for (const scope of ['server', 'client']) {
@@ -177,6 +178,7 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, 
       const files = selected.mode === 'skip' ? [] : guardPlan[scope].files
         .filter(file => selected.mode === 'full' || selected.files.includes(file));
       if (files.length === 0) continue;
+      files.forEach(file => guardedFiles[scope].add(file));
       stages.push({
         name: `${scope} structural guards`, suite: scope, guard: true, files,
         script: 'run-ci-tests.js', args: [scope],
@@ -200,6 +202,13 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, 
   ['server', 'client'].forEach((scope) => {
     const scoped = plan[scope];
     if (scoped.mode === 'skip') return;
+    // Exact local file plans already ran these guards above. Do not depend on
+    // the memo to suppress a second invocation of tree-scanning tests. Broad
+    // related/full plans retain their original selection and CI semantics.
+    const files = scoped.mode === 'files'
+      ? scoped.files.filter(file => !guardedFiles[scope].has(file))
+      : scoped.files;
+    if (scoped.mode === 'files' && files.length === 0 && scoped.sources.length === 0) return;
     stages.push({
       name: `${scope} tests`,
       suite: scope,
@@ -208,7 +217,7 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, 
       env: {
         ...scopeEnv[scope],
         CI_TEST_MODE: scoped.mode,
-        CI_TEST_FILES: JSON.stringify(scoped.files),
+        CI_TEST_FILES: JSON.stringify(files),
         CI_TEST_SOURCES: JSON.stringify(scoped.sources),
         PORTOS_PREGATE_GUARDS: '',
         // Same base the planner just used. The import-growth guard fails
@@ -827,13 +836,15 @@ async function main() {
     }
 
     console.error('❌ Dependency consistency preflight failed; lint/tests have not run.');
-    for (const { label, linked, owner, issues } of dependencyProblems) {
+    for (const { label, linked, owner, directoryAvailable, issues } of dependencyProblems) {
       console.error(`  ${label} (${linked ? 'linked' : 'owned'} node_modules):\n${issues.map(issue => `    ${issue}`).join('\n')}`);
-      if (primaryCheckout && (linked || issues.some(i => i.includes('missing') || i.includes('unreadable')))) {
+      if (primaryCheckout && (!linked || !directoryAvailable)) {
         console.error(`    Worktree dependency dir is missing or unlinked for ${label}. Re-link with: node scripts/link-worktree-deps.js ${primaryCheckout} ${REPO_ROOT}`);
       } else {
+        const home = homedir();
+        const displayOwner = owner === home ? '~' : owner.startsWith(`${home}${sep}`) ? `~${owner.slice(home.length)}` : owner;
         console.error(linked
-          ? `    Reconcile dependencies in the owning source checkout (${owner}), with a full development install (npm ci --include=dev), or validate in a separate clone with its own locked installs. Never run npm install/ci through worktree links.`
+          ? `    Reconcile dependencies in the owning source checkout (${JSON.stringify(displayOwner)}), with a full development install (npm ci --include=dev), or validate in a separate clone with its own locked installs. Never run npm install/ci through worktree links.`
           : `    Reconcile this checkout's dependencies from its committed lockfiles (npm ci --include=dev in the owning workspace), then rerun pregate.`);
       }
     }

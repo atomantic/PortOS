@@ -45,10 +45,12 @@ export async function selectModelForRole(task, role, provider) {
       orchestrationRole: role,
       userProvider: assignment.provider || task.metadata?.provider || null,
       ...(assignment.effort ? { orchestrationEffort: assignment.effort } : {}),
+      ...(assignment.executionOptions !== undefined ? { orchestrationExecutionOptions: assignment.executionOptions } : {}),
     };
   }
   const selection = await selectModelForTask(task, provider);
-  return assignment ? { ...selection, orchestrationRole: role, ...(assignment.effort ? { orchestrationEffort: assignment.effort } : {}) } : selection;
+  return assignment ? { ...selection, orchestrationRole: role, ...(assignment.effort ? { orchestrationEffort: assignment.effort } : {}),
+      ...(assignment.executionOptions !== undefined ? { orchestrationExecutionOptions: assignment.executionOptions } : {}) } : selection;
 }
 
 /**

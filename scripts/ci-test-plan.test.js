@@ -1816,6 +1816,8 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'server/lib/staticImportGraph.js',
       'server/services/agentImportCycles.test.js',
       'server/services/worktreeManager.js',
+      'server/services/heldCheckoutRecovery.js',
+      'server/services/heldCheckoutRecovery.test.js',
       'server/lib/shellCd.js',
       'server/lib/agentGuard/index.js',
       'server/cos-runner/index.js',
@@ -1855,6 +1857,18 @@ describe('Windows escalation on a full plan (#7440)', () => {
       // `windows: true` here is a direct consequence of WINDOWS_RISK_RULES.
       expect(plan(['server/services/auth.js']).windows).toBe(false);
       expect(plan(['server/lib/bufferedSpawn.js']).windows).toBe(true);
+    });
+
+    it.each(['js', 'test.js'])('runs checkout retirement %s changes on Windows (#13562)', extension => {
+      const source = 'server/services/heldCheckoutRecovery.js';
+      const test = 'server/services/heldCheckoutRecovery.test.js';
+      const selected = buildCiTestPlan([`server/services/heldCheckoutRecovery.${extension}`], {
+        trackedFiles: [...TRACKED, ...WINDOWS_CONTRACT_TESTS, source, test], clientDependencies: [],
+      });
+      expect(selected).toMatchObject({ full: false, windows: true,
+        windowsMode: extension === 'js' ? 'related' : 'files' });
+      expect(selected.windowsSources).toEqual(extension === 'js' ? [source] : []);
+      if (extension === 'test.js') expect(selected.windowsFiles).toContain(test);
     });
 
     it('routes native recycling source and both tests to real Windows coverage (#13251)', () => {
@@ -1986,6 +2000,7 @@ describe('cross-workspace browser suites (#10312)', () => {
     const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js', 'server/lib/musicVideoTitleCard.browser.test.js',
       'server/services/federatedMedia/sourceAudio.browser.test.js',
       'server/services/fableLoom/static-player/player.browser.test.js',
+      'server/services/codeAnimation/export.realBrowser.test.js',
       'server/services/htmlComposition/index.test.js'];
     expect(plan.full).toBe(false);
     expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => !runtimeOnly.includes(suite))));

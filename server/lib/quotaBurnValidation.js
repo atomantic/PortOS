@@ -1,3 +1,4 @@
+import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 /**
  * Zod schemas for the Quota Burn routes.
  *
@@ -71,6 +72,7 @@ const quotaBurnOverridesSchema = z.object({
   providerId: z.string().max(B.labelLength.max).nullable().optional(),
   model: z.string().max(B.labelLength.max).nullable().optional(),
   effort: z.string().max(B.labelLength.max).nullable().optional(),
+  executionOptions: executionOptionsSchema.optional(),
   params: z.record(paramValueSchema).optional(),
 }).strict();
 
@@ -97,6 +99,7 @@ const quotaBurnJobSchema = z.object({
   model: z.string().max(B.labelLength.max).nullable().optional(),
   providerId: z.string().max(B.labelLength.max).nullable().optional(),
   effort: z.string().max(B.labelLength.max).nullable().optional(),
+  executionOptions: executionOptionsSchema.optional(),
   // One-shot work: dispatch this step at most once, then drop it out of the
   // rotation until the user re-arms it. Absent reads as `false`, so plans
   // written before this field keep repeating.

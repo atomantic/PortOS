@@ -1,3 +1,4 @@
+import { taskExecutionOptions } from '../lib/executionOptions.js';
 import { reconcileAssignmentForTask } from '../lib/claimContinuation.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { isFalsyMeta, isTruthyMeta } from '../lib/metadataFlags.js';
@@ -732,6 +733,7 @@ async function replacePausedTask({ agentId, agent, task, taskType, overrides }) 
   const provider = taskMeta.provider ?? agentMeta.providerId ?? agentMeta.provider;
   const model = taskMeta.model ?? agentMeta.model;
   const effort = taskMeta.effort ?? agentMeta.effort;
+  const executionOptions = taskMeta.executionOptions ?? taskExecutionOptions(agentMeta.executionOptions);
   const app = taskMeta.app ?? agentMeta.taskApp ?? agentMeta.app;
   const inheritedMetadata = { ...taskMeta };
   if (!task && agent?.metadata) {
@@ -749,7 +751,7 @@ async function replacePausedTask({ agentId, agent, task, taskType, overrides }) 
   });
   const created = await addTask({
     description,
-    context, prompt, provider, model, effort, app,
+    context, prompt, provider, model, effort, executionOptions, app,
     metadata: inheritedMetadata,
     ...overridesPatch
   }, taskType);
@@ -771,7 +773,7 @@ async function replacePausedTask({ agentId, agent, task, taskType, overrides }) 
  * NOTE, and folding a note into the agent-facing payload would make the two
  * indistinguishable again (#4153).
  */
-function resumeOverrideMetadata({ context, provider, model, effort, app, screenshots }, priorMetadata = {}) {
+function resumeOverrideMetadata({ context, provider, model, effort, executionOptions, app, screenshots }, priorMetadata = {}) {
   const patch = {};
   if (context) {
     patch.context = [priorMetadata?.context, context].filter(Boolean).join('\n\n');
@@ -779,6 +781,7 @@ function resumeOverrideMetadata({ context, provider, model, effort, app, screens
   if (provider) patch.provider = provider;
   if (model) patch.model = model;
   if (effort) patch.effort = effort;
+  if (executionOptions !== undefined) patch.executionOptions = executionOptions;
   if (app) patch.app = app;
   if (screenshots?.length) patch.screenshots = screenshots;
   // The one place blank does NOT mean unchanged: a provider SWITCH invalidates a
@@ -791,6 +794,7 @@ function resumeOverrideMetadata({ context, provider, model, effort, app, screens
   if (provider && provider !== priorMetadata?.provider) {
     if (!model) patch.model = '';
     if (!effort) patch.effort = '';
+    if (executionOptions === undefined) patch.executionOptions = {};
   }
   return patch;
 }

@@ -1688,7 +1688,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
             <Link
               to="/settings/data-maintenance"
               className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-port-success/15 text-port-success border border-port-success/30 hover:bg-port-success/25"
-              title="Trained in PortOS — open the training dataset"
+              title="Trained in PortOS — inspect retained training artifacts in Data Maintenance"
             >
               <Sparkles size={11} /> Character: {lora.character.name}
             </Link>

@@ -1575,7 +1575,7 @@ export async function init() {
     await recordJobExecution(jobId).catch(err =>
       console.error(`❌ Failed to record job execution for ${jobId}: ${err.message}`)
     );
-    clearSpawningJob(jobId);
+    clearSpawningJob(jobId, { spawned: true });
     // Re-register with updated lastRun so the next timer has the correct delay
     await registerSingleJobSchedule(jobId).catch(err =>
       console.error(`❌ Failed to re-register job schedule for ${jobId}: ${err.message}`)

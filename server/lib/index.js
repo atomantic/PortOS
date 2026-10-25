@@ -17,6 +17,7 @@
 // `digitalTwinValidation.X`. The catch-all `validation.js` stays flat — its
 // names are the canonical PortOS-wide schemas.
 export * from './appOperationErrorContext.js';
+export * from './workspaceTestCacheRoots.js';
 export * from './appPromptPlaceholders.js';
 export * from './appDeployFlags.js';
 export * from './apiContractSchemas.js';
@@ -979,3 +980,7 @@ export * from './realityStarterV1.js';
 export * from './universeStarters.js';
 
 export * from './retiredLoraTraining.js';
+
+export * from './executionOptions.js';
+
+export * from './providerExecutionOptions.js';

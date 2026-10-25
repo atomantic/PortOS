@@ -249,3 +249,19 @@ describe('completeAgentRun lifecycle ledger', () => {
     expect(appendRunEvent).not.toHaveBeenCalled();
   });
 });
+
+
+describe('CoS run execution attribution', () => {
+  it('persists the dispatched request without inventing an effective speed', async () => {
+    vi.resetModules();
+    const atomicWrite = vi.fn();
+    vi.doMock('../lib/fileUtils.js', async importOriginal => ({ ...await importOriginal(), atomicWrite, ensureDir: vi.fn() }));
+    vi.doMock('fs/promises', async importOriginal => ({ ...await importOriginal(), mkdir: vi.fn() }));
+    vi.doMock('./usage.js', () => ({ recordSession: vi.fn(async () => {}) }));
+    vi.doMock('../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: work => work() }));
+    const { createAgentRun } = await import('./agentRunTracking.js');
+    const executionOptions = { version: 1, requested: { serviceTier: 'fast' }, effective: {}, provenance: { serviceTier: 'task' }, confirmation: 'requested/unconfirmed' };
+    await createAgentRun({ agentId: 'example-agent', task: { id: 'example-task', description: 'Example request' }, provider: { id: 'example', name: 'Example' }, executionOptions });
+    expect(atomicWrite).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.objectContaining({ executionOptions }));
+  });
+});

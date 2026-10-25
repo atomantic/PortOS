@@ -133,6 +133,7 @@ export function normalizeQuotaBurnOverrides(raw, { maxParamLength, maxFieldLengt
     providerId: nullable(value.providerId, maxFieldLength),
     model: nullable(value.model, maxFieldLength),
     effort: nullable(value.effort, maxFieldLength),
+    ...(value.executionOptions !== undefined ? { executionOptions: value.executionOptions } : {}),
     params: normalizeQuotaBurnParams(value.params, maxParamLength),
   };
 }

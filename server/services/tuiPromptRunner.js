@@ -174,7 +174,12 @@ export async function executeTuiRun(options) {
   const lifecycle = { spawned: false, exited: false, cleaned: false,
     settle() { if (this.cleaned && (!this.spawned || this.exited)) return permit.finish(); } };
   try { return await permit.run(() => executeAdmittedTuiRun(options, lifecycle)); }
-  catch (err) { if (lifecycle.spawned) permit.markUnsettled(); throw err; }
+  catch (err) {
+    if (err.code === 'EXECUTION_OPTIONS_UNSUPPORTED') {
+      const { finalizeRunRecord } = await import('./runner.js');
+      await finalizeRunRecord({ runId: options.runId, output: '', exitCode: 1, success: false, error: err.message, startTime: Date.now(), reportFailure: false });
+    }
+    if (lifecycle.spawned) permit.markUnsettled(); throw err; }
   finally { lifecycle.cleaned = true; await lifecycle.settle(); }
 }
 
@@ -186,6 +191,13 @@ async function executeAdmittedTuiRun({ runId, provider, prompt, screenshots = []
     throw new Error('executeTuiRun: prompt must be a non-empty string');
   }
 
+  if (provider.executionOptions && !provider.executionOptionAttribution) {
+    const { prepareExecutionOptions } = await import('../lib/providerExecutionOptions.js');
+    const prepared = await prepareExecutionOptions(provider, provider.defaultModel, undefined, 'provider', { cwd: workspacePath });
+    provider = prepared.provider;
+    const { patchRunMetadata } = await import('./runner.js');
+    await patchRunMetadata(runId, { executionOptions: prepared.attribution, model: prepared.provider.defaultModel });
+  }
   const invocation = buildTuiInvocation(provider, provider.defaultModel);
   const { command } = invocation;
   const args = buildOneShotTuiArgs(command, invocation.args);

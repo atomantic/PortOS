@@ -33,7 +33,7 @@ export function StatTile({ label, value, detail }) {
 }
 
 export default function ProviderQuotaBody({ quota, showActivity = true, showNote = true }) {
-  const [selectedPeriod, setSelectedPeriod] = useState(quota?.period || '24h');
+  const [selectedPeriod, setSelectedPeriod] = useState(null);
 
   const hasPeriods = Boolean(
     quota?.metrics?.some((m) => m.periods && Object.keys(m.periods).length > 0)
@@ -56,6 +56,8 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
     };
     return order.filter((k) => keys.has(k)).map((k) => ({ key: k, label: labels[k] || k }));
   }, [hasPeriods, quota?.metrics]);
+  const effectivePeriod = [selectedPeriod, quota?.period, availablePeriods[0]?.key]
+    .find((period) => availablePeriods.some((available) => available.key === period));
 
   if (!quota) return null;
 
@@ -133,12 +135,13 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
           {availablePeriods.length > 1 && (
             <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Usage period">
               {availablePeriods.map((p) => {
-                const active = selectedPeriod === p.key;
+                const active = effectivePeriod === p.key;
                 return (
                   <button
                     key={p.key}
                     type="button"
                     onClick={() => setSelectedPeriod(p.key)}
+                    aria-pressed={active}
                     className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-xs font-medium transition-colors ${
                       active
                         ? 'bg-port-accent text-white shadow-xs'
@@ -154,7 +157,7 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {quota.metrics.map((m) => {
-              const periodData = m.periods?.[selectedPeriod];
+              const periodData = m.periods?.[effectivePeriod];
               const value = periodData?.value ?? m.value;
               const detail = periodData?.detail ?? m.detail;
               return (

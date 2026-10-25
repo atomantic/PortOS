@@ -109,7 +109,7 @@ it('does not promote historical cleanup process success to verified cleanup', ()
   expect(screen.getByText('Local cleanup is pending; preservation and removal are not yet confirmed.')).toBeInTheDocument();
   expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
   view.rerender(<AgentResultLine agent={{ ...agent, metadata: { ...agent.metadata, cleanupOutcome: { status: 'already-absent', reason: 'already-absent-preservation-unverified' } } }} />);
-  expect(screen.getByText('The local worktree is already gone, but PortOS has not verified its backup yet.')).toBeInTheDocument();
+  expect(screen.getByText('The local worktree is already gone; code delivery still needs verification.')).toBeInTheDocument();
   expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
   view.rerender(<AgentResultLine agent={{ ...agent, metadata: { ...agent.metadata, cleanupOutcome: { status: 'verified' } } }} />);
   expect(screen.getByText('Execution completed')).toBeInTheDocument();
@@ -150,7 +150,8 @@ it('separates merged delivery from pending, verified, absent and blocked cleanup
   expect(screen.queryByText('Historical cleanup queued.')).not.toBeInTheDocument();
   for (const [status, reason, message] of [
     ['verified', 'retirement-receipt-verified', 'Local cleanup confirmed; preservation verified.'],
-    ['already-absent', 'already-absent-preservation-unverified', 'The local worktree is already gone, but PortOS has not verified its backup yet.'],
+    ['verified', 'already-absent-merged', 'Local worktree already removed; merged delivery confirmed.'],
+    ['already-absent', 'already-absent-preservation-unverified', 'The local worktree is already gone; preservation still needs verification.'],
     ['blocked', 'retirement-review-unavailable', 'Local cleanup is blocked. PortOS has not confirmed safe removal.'],
   ]) {
     view.rerender(<MemoryRouter><AgentResultLine agent={{ ...record, metadata: { cleanupOutcome: { status, reason, committedIntegrationVerified: true } } }} /></MemoryRouter>);
@@ -175,15 +176,41 @@ it('does not infer merged delivery or backup existence from successful execution
 it('lets verified current cleanup supersede only a stale cleanup-only handoff', () => {
   const record = { result: { success: false, executionSuccess: true, cleanupPending: true,
     taskOutcome: { status: 'incomplete', reason: 'Historical cleanup queued.', recovery: { mode: 'cleanup' } } },
-    metadata: { cleanupOutcome: { status: 'verified', reason: 'retirement-receipt-verified', committedIntegrationVerified: true } } };
+    metadata: { cleanupOutcome: { status: 'verified', reason: 'already-absent-merged', committedIntegrationVerified: true } } };
   const view = render(<AgentResultLine agent={record} />);
   expect(screen.getByText('Completed successfully')).toBeInTheDocument();
   expect(screen.getByText('Code merged.')).toBeInTheDocument();
-  expect(screen.getByText('Local cleanup confirmed; preservation verified.')).toBeInTheDocument();
+  expect(screen.getByText('Local worktree already removed; merged delivery confirmed.')).toBeInTheDocument();
+  expect(screen.queryByText('Local cleanup confirmed; preservation verified.')).not.toBeInTheDocument();
   expect(screen.queryByText('Task incomplete')).not.toBeInTheDocument();
   view.rerender(<AgentResultLine agent={{ ...record, result: { ...record.result,
     taskOutcome: { status: 'blocked', reason: 'Choose whether to publish the release.', recovery: { mode: 'approval' } } } }} />);
   expect(screen.getByText('Task blocked')).toBeInTheDocument();
   expect(screen.getByText('Choose whether to publish the release.')).toBeInTheDocument();
+  expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+});
+
+it('does not settle other branch cleanup from one historical merged-and-absent branch', () => {
+  render(<AgentResultLine agent={{ result: { success: true, cleanupPending: true,
+    taskOutcome: { status: 'completed', reason: 'Code merged.' } }, metadata: {
+    cleanupOutcome: { status: 'already-absent', committedIntegrationVerified: true, total: 2, unresolved: 2 },
+  } }} />);
+  expect(screen.getByText('Execution completed')).toBeInTheDocument();
+  expect(screen.getByText('Other repository cleanup still needs verification.')).toBeInTheDocument();
+  expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+});
+
+it('retains a cleanup-only task hold when preservation or another obligation is unverified', () => {
+  const agent = { result: { success: true, executionSuccess: true, cleanupPending: true,
+    taskOutcome: { status: 'incomplete', reason: 'Cleanup verification remains pending.', recovery: { mode: 'cleanup' } } }, metadata: {
+    cleanupOutcome: { status: 'already-absent', reason: 'already-absent-preservation-unverified', committedIntegrationVerified: true },
+  } };
+  const view = render(<AgentResultLine agent={agent} />);
+  expect(screen.getByText('Task incomplete')).toBeInTheDocument();
+  expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+  view.rerender(<AgentResultLine agent={{ ...agent, metadata: { cleanupOutcome: {
+    status: 'verified', committedIntegrationVerified: true, total: 2, unresolved: 1,
+  } } }} />);
+  expect(screen.getByText('Task incomplete')).toBeInTheDocument();
   expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
 });

@@ -11,6 +11,7 @@
  */
 
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
+import { isDeepStrictEqual } from 'node:util';
 import { readFile, rm, stat, realpath } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -314,6 +315,35 @@ export async function recordCompletionCleanup(agentId, startedAt, patch) {
       delete completionCleanup.replay;
     }
     return { ...metadata, completionCleanup };
+  });
+  return saved && matched;
+}
+
+/** Commit receipt-backed verification and ledger settlement together. Removing
+ * replay proof before the verification write would strand a crash/restart. */
+export async function settleAbsentTaskCompletion(agentId, expected) {
+  let matched = false;
+  const saved = await updateCompletionReceipt(agentId, async (metadata, agent) => {
+    const { getTaskById } = await import('./cosTaskStore.js');
+    const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
+    const instanceId = await getInstanceId();
+    const keys = ['instanceId', 'completionCleanup', 'completionTaskDispatch', 'completedCheckouts', 'checkoutSeeds',
+      'worktreeBranch', 'workspacePath', 'sourceWorkspace', 'isWorktree', 'claimBranches', 'claimReleasedBranches'];
+    if (agent.startedAt !== expected.startedAt || agent.taskId !== expected.taskId || !agent.result?.cleanupPending
+      || !instanceId || instanceId === UNKNOWN_INSTANCE_ID || metadata.instanceId !== instanceId
+      || keys.some(key => !isDeepStrictEqual(metadata[key], expected.metadata?.[key]))
+      || await getTaskById(agent.taskId)) return metadata;
+    const prior = metadata.completionCleanup;
+    if (prior?.version !== 1 || !prior.replay || prior.status !== 'pending') return metadata;
+    const stages = { ...prior.stages, worktree: { status: 'done', retryable: false, value: [], verifiedBy: 'repository-state-verification' } };
+    if (['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].some(key => stages[key]?.status !== 'done')
+      || Object.values(stages).some(stage => stage.status !== 'done')) return metadata;
+    const { context: _context, replay: _replay, ...ledger } = prior;
+    const now = new Date().toISOString();
+    matched = true;
+    return { ...metadata, completionCleanup: { ...ledger, stages, status: 'completed', updatedAt: now },
+      repoStateVerification: { ...metadata.repoStateVerification, status: 'completed', checkedAt: now,
+        reasons: ['removed-task-delivery-and-retirement-verified'] } };
   });
   return saved && matched;
 }

@@ -287,6 +287,7 @@ export function normalizeQuotaBurnJob(raw, index = 0) {
     providerId: override('providerId'),
     model: override('model'),
     effort: override('effort'),
+    ...((raw.executionOptions ?? stored.executionOptions) !== undefined ? { executionOptions: raw.executionOptions ?? stored.executionOptions } : {}),
     params: Object.hasOwn(raw, 'params') ? normalizeParams(raw.params) : stored.params,
   };
 
@@ -318,6 +319,7 @@ export function normalizeQuotaBurnJob(raw, index = 0) {
     model: overrides.model,
     providerId: overrides.providerId,
     effort: overrides.effort,
+    ...(overrides.executionOptions !== undefined ? { executionOptions: overrides.executionOptions } : {}),
     params: overrides.params,
   };
 }

@@ -183,6 +183,7 @@ export default function useProviderCatalog(enabled = true) {
       name: label,
       type: ref.method,
       harnessId: ref.harnessId,
+      executionOptionKeys: harness.executionOptionKeys || [],
       method: ref.method,
       serviceSlug: ref.serviceSlug,
       bootstrapId: ref.bootstrapSlug,

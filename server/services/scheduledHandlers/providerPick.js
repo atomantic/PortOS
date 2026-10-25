@@ -70,7 +70,7 @@ export function providerForFamily(providers, { familyId, providerId, prefer = 't
     && (localRuntimeAllowed || (provider.ollamaBacked !== true && provider.lmstudioBacked !== true && provider.mtplxBacked !== true && provider.llamaBacked !== true && provider.vllmBacked !== true && provider.sglangBacked !== true))
     && isProcessProvider(provider));
   if (providerId) return available.find((provider) => provider.id === providerId) || null;
-  const inFamily = available.filter((provider) => matchesFamily(provider, familyId));
+  const inFamily = available.filter((provider) => !(provider.executionSourceProviderId || provider.executionSelectionRoot) && matchesFamily(provider, familyId));
   return inFamily.find((provider) => provider.type === prefer) || inFamily[0] || null;
 }
 

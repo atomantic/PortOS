@@ -187,6 +187,23 @@ class NativeArchive(unittest.TestCase):
             archive.inspect(self.request)
         self.assertEqual(list(self.txn.iterdir()), [])
 
+    def test_retirement_inspection_ignores_unrelated_refs_but_keeps_owned_state_and_legacy_proof(self):
+        self.request['retirementOnly'] = True
+        before = archive.inspect(self.request)
+        legacy = archive.inspect({k: v for k, v in self.request.items() if k != 'retirementOnly'})
+        other = self.git(self.repo, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'other worker')
+        self.git(self.repo, 'update-ref', 'refs/heads/unrelated-worker', other)
+        self.assertEqual(archive.inspect(self.request), before)
+        self.assertNotEqual(archive.inspect({k: v for k, v in self.request.items() if k != 'retirementOnly'}), legacy)
+        self.git(self.work, 'update-ref', 'refs/worktree/new-recovery', other)
+        self.assertNotEqual(archive.inspect(self.request)['fingerprint'], before['fingerprint'])
+        self.git(self.work, 'update-ref', '-d', 'refs/worktree/new-recovery')
+        (self.work / 'ignored').write_text('changed owned bytes\n')
+        self.assertNotEqual(archive.inspect(self.request)['fingerprint'], before['fingerprint'])
+        self.git(self.work, 'update-ref', 'refs/heads/feature/fixture', other)
+        with self.assertRaises(RuntimeError):
+            archive.inspect(self.request)
+
     def test_whole_checkout_preserves_uninitialized_gitlink_bytes_and_restores_offline(self):
         module_admin = archive.read_pointer(self.work / 'sub/.git', 'gitdir:')
         shutil.rmtree(self.work / 'sub')

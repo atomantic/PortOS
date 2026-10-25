@@ -40,10 +40,20 @@ describe('retirement forge verification', () => {
 
   it.each([
     { state: 'OPEN' }, { state: 'CLOSED' }, { headRefName: 'another-claim' },
-    { isCrossRepository: true }, { baseRefName: 'release' }, { mergeCommit: null },
+    { isCrossRepository: true }, { baseRefName: null }, { mergeCommit: null },
   ])('refuses a nonmatching merged PR: %j', async change => {
     Object.assign(pr, change);
     await expect(readRetirementForgeEvidence('/synthetic/repo', 'claim/42', prUrl)).rejects.toThrow('retirement-pr-not-matching-merged');
+  });
+
+  it('binds a merged release PR to its actual target and rejects inconsistent base evidence', async () => {
+    pr.baseRefName = 'release';
+    detail.base.ref = 'release';
+    const evidence = await readRetirementForgeEvidence('/synthetic/repo', 'claim/42', prUrl);
+    expect(evidence).toMatchObject({ defaultBranch: 'main', targetBranch: 'release', targetHead: 'c'.repeat(40) });
+    expect(mock.gh).toHaveBeenCalledWith(['api', '--hostname', 'github.com', 'repos/example/repo/git/ref/heads/release'], undefined, expect.any(Object));
+    detail.base.ref = 'another-target';
+    await expect(readRetirementForgeEvidence('/synthetic/repo', 'claim/42', prUrl)).rejects.toThrow('retirement-original-scope-unavailable');
   });
 
   it('accepts a local repair alias only with exact merged head proof', async () => {
@@ -83,6 +93,25 @@ describe('retirement forge verification', () => {
       expect(await review).toMatchObject({ sourceSupersessionHead: source, prHead: pr.headRefOid, publishedBranch: 'claim/42' });
     } else await expect(review).rejects.toThrow(state === 'open-original' ? 'retirement-source-delivery-open'
       : state === 'unreadable' ? 'retirement-forge-unavailable' : 'retirement-remote-head-changed');
+  });
+
+  it.each(['valid', 'missing-ref', 'wrong-head', 'foreign', 'ambiguous', 'unknown-merge-state'])('requires exact closed source delivery for preserved supersession: %s', async scenario => {
+    const source = 'e'.repeat(40);
+    const sourceRow = { state: 'closed', merged_at: null, html_url: 'https://github.com/example/repo/pull/41',
+      head: { sha: source, ref: 'original', repo: { full_name: 'example/repo' } }, base: { repo: { full_name: 'example/repo' } } };
+    if (scenario === 'wrong-head') sourceRow.head.sha = 'f'.repeat(40);
+    if (scenario === 'unknown-merge-state') delete sourceRow.merged_at;
+    if (scenario === 'foreign') sourceRow.head.repo.full_name = 'foreign/repo';
+    const read = mock.gh.getMockImplementation();
+    mock.gh.mockImplementation(async args => args.at(-1).includes('pulls?state=closed')
+      ? JSON.stringify(scenario === 'ambiguous' ? [sourceRow, sourceRow] : [sourceRow]) : read(args));
+    mock.git.mockImplementation(async args => ({ stdout: args.at(-1) === 'refs/heads/original' && scenario !== 'missing-ref'
+      ? `${source}\trefs/heads/original\n` : '', exitCode: 0 }));
+    const evidence = readRetirementForgeEvidence('/synthetic/repo', 'original', prUrl,
+      { sourceSupersessionHead: source, requirePublishedSupersession: true });
+    if (scenario === 'valid') expect(await evidence).toMatchObject({ sourcePreservation: { head: source, prUrl: sourceRow.html_url, remoteRef: 'refs/heads/original' } });
+    else await expect(evidence).rejects.toThrow(scenario === 'missing-ref'
+      ? 'retirement-source-not-published' : 'retirement-source-closed-delivery-unverified');
   });
 
   it.each(['file-count', 'commit-count', 'duplicate', 'missing-previous', 'ambiguous-base', 'wrong-tip', 'cap', 'bad-path', 'unpaginated'])('refuses incomplete or ambiguous original scope: %s', async change => {

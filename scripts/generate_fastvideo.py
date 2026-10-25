@@ -13,6 +13,9 @@ shape:
   fastmetal5b - Wan 2.2 through mlx_wan22_generate.py.
   fasth3    - FastH3 Preview and V2, via mlx_fasth3.py, which
               takes a pre-quantized MLX DiT and emits muxed video+audio.
+  fasth3omni - FastH3 Omni (Ref2VA), via mlx_fasth3_omniref.py: ordered image
+              references in, muxed video+audio out. Its model root is composed
+              from several separately downloaded pieces (see ensure_omni_checkpoint).
 
 `--family` is what selects between them. It is explicit rather than sniffed
 from the checkpoint, so a mis-tagged registry row fails on an argument the
@@ -145,7 +148,7 @@ def translate_line(line: str, *, conversion: bool = False) -> str:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PortOS FastVideo MLX helper")
     p.add_argument("--repo-dir", default=None, help="Path to cloned FastVideo repo")
-    p.add_argument("--family", choices=("fastmetal", "fastmetal5b", "fasth3"), default="fastmetal",
+    p.add_argument("--family", choices=("fastmetal", "fastmetal5b", "fasth3", "fasth3omni"), default="fastmetal",
                    help="Which FastVideo entry script and argv shape to use")
     p.add_argument("--model-root", required=True, help="HF model snapshot path")
     p.add_argument("--mlx-checkpoint", default=None, help="MLX checkpoint path (defaults to model-root)")
@@ -170,6 +173,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--enhance-prompt", action="store_true", help="Enable prompt enhancer")
     p.add_argument("--refine", action="store_true", help="Enable second-pass refinement")
     p.add_argument("--vsa", action="store_true", help="FastH3 V2: retain routing weights and use 80% sparse attention")
+    p.add_argument("--omni-base-root", default=None,
+                   help="FastH3 Omni: snapshot holding text_encoder/ tokenizer/ processor/ audio_vae/ vae/config.json")
+    p.add_argument("--vae-decoder", default=None, help="FastH3 Omni: standalone video decoder file")
+    p.add_argument("--vae-encoder", default=None, help="FastH3 Omni: standalone LightVAE reference encoder file")
+    p.add_argument("--reference-image", action="append", default=[],
+                   help="FastH3 Omni: an extra ordered image reference after --image (repeatable)")
+    p.add_argument("--reference-video", action="append", default=[],
+                   help="FastH3 Omni: an ordered video reference, read after the images (repeatable)")
+    p.add_argument("--reference-audio", action="append", default=[],
+                   help="FastH3 Omni: an ordered voice reference, read after the videos (repeatable)")
     return p.parse_args()
 
 
@@ -194,6 +207,10 @@ _ENTRY_SCRIPTS = {
             ("examples", "mlx_fasth3.py"),
         ],
         "mlx_fasth3.py",
+    ),
+    "fasth3omni": (
+        [("examples", "inference", "basic", "mlx_fasth3_omniref.py")],
+        "mlx_fasth3_omniref.py",
     ),
 }
 
@@ -292,6 +309,69 @@ def ensure_mlx_checkpoint(repo_dir: Path, model_root: Path, fmt: str, env: dict,
     return out_dir
 
 
+def ensure_omni_checkpoint(repo_dir: Path, entry_script: Path, model_root: Path, base_root: Path,
+                          fmt: str, env: dict, base: Path | None = None) -> tuple[Path, Path]:
+    """Return (composed model root, converted MLX DiT) for FastH3 Omni, building them once.
+
+    The BF16 export carries only transformer_ref/, the schedulers and the
+    inference contract. The upstream example composes it with the base snapshot's
+    text encoder / tokenizer / processor / audio VAE into one directory of
+    symlinks, then the DiT is converted to a packed MLX layout with the VSA gates
+    kept and the NVFP4 text encoder cached beside it. Keyed by BOTH snapshots so a
+    re-pinned base cannot reuse a stale composition.
+    """
+    digest = hashlib.sha256(f"{model_root}\n{base_root}".encode("utf-8")).hexdigest()[:12]
+    out_base = mlx_checkpoint_root(model_root, base) / f"omni-{digest}"
+    composed = out_base / "composed"
+    out_dir = out_base / fmt
+    encoder = out_base / "nvfp4-encoder"
+    if is_converted(out_dir) and encoder.is_dir() and (composed / "text_encoder").resolve() == encoder.resolve():
+        return composed, out_dir
+    converter = repo_dir.joinpath(*_CONVERTER_SCRIPT)
+    if not converter.is_file():
+        raise FileNotFoundError(f"Could not find {converter}")
+    out_base.mkdir(parents=True, exist_ok=True)
+    print(f"STATUS:composing the FastH3 Omni model directory in {composed}", file=sys.stderr, flush=True)
+    code = run_child([sys.executable, str(entry_script), "--compose-only", "--export", str(model_root),
+                      "--base-model-path", str(base_root), "--composed-dir", str(composed)],
+                     env, repo_dir, lambda line: translate_line(line, conversion=True))
+    if code != 0:
+        raise RuntimeError(f"FastH3 Omni composition exited with code {code}")
+    print(f"STATUS:converting the FastH3 Omni DiT to MLX {fmt} — one time, into {out_dir}", file=sys.stderr, flush=True)
+    code = run_child([sys.executable, str(converter), "--model-root", str(composed / "transformer_ref"),
+                      "--out", str(out_base), "--formats", fmt, "--include-vsa",
+                      "--nvfp4-conditioner-root", str(base_root / "text_encoder")],
+                     env, repo_dir, lambda line: translate_line(line, conversion=True))
+    if code != 0:
+        raise RuntimeError(f"FastH3 Omni MLX conversion exited with code {code}")
+    if not is_converted(out_dir) or not encoder.is_dir():
+        raise RuntimeError(f"FastH3 Omni MLX conversion finished but {out_base} is incomplete")
+    # The composition linked the BF16 text encoder; render with the NVFP4 cache.
+    text_encoder = composed / "text_encoder"
+    if text_encoder.is_symlink() or text_encoder.exists():
+        text_encoder.unlink()
+    text_encoder.symlink_to(encoder, target_is_directory=True)
+    print(f"STATUS:MLX {fmt} DiT ready — {model_root / 'transformer_ref'} is no longer needed to render and can be deleted",
+          file=sys.stderr, flush=True)
+    return composed, out_dir
+
+
+# Upstream's default 'auto' path (dequantize + dense GEMM for wide inputs) stalled
+# on the first DiT forward on mlx 0.32.2 / M5 Max: GPU idle, no further output.
+# mx.quantized_matmul completes. PORTOS_OMNI_QUANT_GEMM=auto retries upstream's
+# default once a fixed mlx is installed.
+OMNI_QUANT_GEMM = os.environ.get("PORTOS_OMNI_QUANT_GEMM", "qmm")
+
+
+def metal_wired_limit_gib() -> int:
+    """About two thirds of unified memory, capped at 64 GiB, as the upstream recipe advises."""
+    try:
+        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (OSError, ValueError):
+        return 0
+    return min(64, int(total / (1 << 30) * 0.66))
+
+
 def resolve_prompt_cache_dir(args) -> Path:
     """Where FastH3 caches its conditioning embeddings.
 
@@ -381,6 +461,36 @@ def build_command(args, entry_script: Path, model_root: Path, mlx_checkpoint: Pa
             if enabled:
                 cmd.append(flag)
         return cmd
+    if args.family == "fasth3omni":
+        if not args.image:
+            raise ValueError("FastH3 Omni needs at least one reference image: pass --image")
+        # --model-root / --mlx-checkpoint in `common` are the composed root and
+        # the converted DiT; the example takes repeatable ordered references.
+        cmd = common + [
+            "--vae-encoder", str(args.vae_encoder), "--vae-decoder", str(args.vae_decoder),
+            "--vae-dtype", "bf16", "--mlx-cache-limit-gib", "8",
+            "--quant-gemm", OMNI_QUANT_GEMM,
+            "--prompt-cache-dir", str(resolve_prompt_cache_dir(args)),
+        ] + tail
+        wired = metal_wired_limit_gib()
+        if wired:
+            cmd.extend(["--metal-wired-limit-gib", str(wired)])
+        if args.steps:
+            cmd.extend(["--steps", str(args.steps)])
+        # Upstream reads references in command-line order across kinds, so the
+        # order is fixed here: input image, extra images, clips, then voices.
+        for ref in [args.image, *args.reference_image]:
+            cmd.extend(["--image", str(ref)])
+        for ref in args.reference_video:
+            cmd.extend(["--video", str(ref)])
+        for ref in args.reference_audio:
+            cmd.extend(["--audio", str(ref)])
+        for label, unsupported in (("negative prompt", args.negative_prompt),
+                                   ("prompt enhancer", args.enhance_prompt),
+                                   ("refinement pass", args.refine), ("fast mode", args.fast)):
+            if unsupported:
+                print(f"STATUS:FastH3 Omni ignores the requested {label}", file=sys.stderr, flush=True)
+        return cmd
     if args.family != "fasth3":
         cmd = common + [
             "--num-inference-steps", str(args.steps),
@@ -464,7 +574,19 @@ def main() -> int:
     env = build_child_env(repo_dir)
     # Precedence: an explicit path always wins, so a row that ships a
     # pre-quantized DiT never triggers a conversion it does not need.
-    if args.mlx_checkpoint:
+    if args.family == "fasth3omni":
+        if not (args.omni_base_root and args.vae_decoder and args.vae_encoder and args.mlx_format):
+            print("❌ FastH3 Omni needs --omni-base-root, --vae-decoder, --vae-encoder and --mlx-format", file=sys.stderr)
+            return 1
+        try:
+            composed, mlx_checkpoint = ensure_omni_checkpoint(
+                repo_dir, entry_script, model_root, Path(args.omni_base_root).resolve(), args.mlx_format, env,
+                Path(args.mlx_checkpoint_cache_dir) if args.mlx_checkpoint_cache_dir else None)
+        except (FileNotFoundError, RuntimeError) as err:
+            print(f"❌ {err}", file=sys.stderr)
+            return 1
+        model_root = composed
+    elif args.mlx_checkpoint:
         mlx_checkpoint = Path(args.mlx_checkpoint).resolve()
     elif args.mlx_format:
         try:

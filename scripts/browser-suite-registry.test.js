@@ -11,7 +11,9 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 // Scans the tracked tree, so it is registered in ALWAYS_RUN_TESTS (#10312).
 describe('cross-workspace browser suite registry', () => {
   it('lists exactly the suites that guard canRun with the browser suite gate', () => {
-    const gated = execFileSync('git', ['grep', '-l', 'browserSuiteCanRun(', '--', 'server/**/*.browser.test.js', 'server/services/htmlComposition/index.test.js'], { cwd: root, encoding: 'utf8' })
+    // Real browser contracts also use legacy .test.js names. Discover every
+    // gated fixture, excluding only the gate's own unit tests.
+    const gated = execFileSync('git', ['grep', '-l', 'browserSuiteCanRun(', '--', 'server/**/*.test.js', ':!server/lib/browserSuiteGate*.test.js'], { cwd: root, encoding: 'utf8' })
       .split('\n').filter(Boolean).sort();
     expect(gated).toEqual([...BROWSER_SUITES].sort());
   });

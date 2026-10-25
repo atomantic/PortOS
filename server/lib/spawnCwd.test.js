@@ -307,6 +307,7 @@ describe('every cwd-passing spawn pins PWD', () => {
   // Files that pin by inlining the assignment instead of calling the shared
   // helper, with the reason they cannot call it.
   const INLINE_PIN = new Map([
+    ['lib/aiToolkit/internal/codexModelListProbe.js', 'vendored toolkit metadata probe — must not import host modules'],
     ['lib/aiToolkit/runner.js', 'vendored toolkit — must not import out to other PortOS modules'],
   ]);
 

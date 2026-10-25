@@ -18,6 +18,7 @@ vi.mock('./branchCompletionPolicy.js', async () => ({
  */
 
 vi.mock('./heldCheckoutRecovery.js', () => ({
+  assertNoUniqueIgnoredCheckoutPayload: async () => {},
   preserveSupersededCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null, recordRetirement: async () => {} })),
   preserveMergedCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null })),
   releaseCheckoutWithoutArchive: vi.fn(async (_context, prepare) => prepare()),

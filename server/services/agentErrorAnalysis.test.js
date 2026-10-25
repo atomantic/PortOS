@@ -157,17 +157,18 @@ describe('analyzeAgentFailure — ERROR_PATTERNS classification', () => {
   // PATH — the binary PortOS spawns — accepts only `fast` or `flex`. Every
   // codex agent on the machine died at config load. The first pass at this fix
   // text told the reader to check "the provider's ladder in providerModels.js",
-  // which for a key PortOS never emits is a dead end: the analysis has to name
+  // which was a dead end in that incident: the analysis must retain
   // the CLI's own config file as the source.
-  it('blames the user config for a key PortOS never supplies', () => {
+  it('keeps the historical config remedy without inventing the source of an optional speed override', () => {
     const line = 'Error loading config.toml: unknown variant `default`, expected `fast` or `flex`\nin `service_tier`';
     const analysis = analyzeAgentFailure(withLead(line), { id: 't' }, 'gpt-5.6-luna');
     expect(analysis.category).toBe('cli-config-invalid');
     expect(analysis.rejectedConfigKey).toBe('service_tier');
     expect(analysis.rejectedConfigValue).toBe('default');
-    expect(analysis.suggestedFix).toContain('PortOS never supplies `service_tier`');
+    expect(analysis.suggestedFix).toContain('explicit PortOS execution-speed selection');
+    expect(analysis.suggestedFix).toContain('does not prove which source');
     expect(analysis.suggestedFix).toContain('~/.codex/config.toml');
-    // Pointing at PortOS source for a key PortOS does not emit is the failure
+    // Pointing only at the effort ladder for optional speed config is the failure
     // mode this test exists to prevent.
     expect(analysis.suggestedFix).not.toContain('providerModels.js');
   });
@@ -1540,4 +1541,66 @@ it('retains a current provider banner over a later idle verdict', () => {
 it.each(['content-refusal', 'content-filtered'])('blocks %s without automatic retry or investigation', category => {
   expect(resolveFailedTaskDecision({ id: 'example-task', metadata: {} }, { category, actionable: false, message: 'Stopped' }))
     .toMatchObject({ status: 'blocked', investigationAnalysis: null, metadataUpdates: { blockedCategory: category } });
+});
+
+
+describe('TUI prompt provenance at the failure-analysis boundary (#13560)', () => {
+  const prompt = 'A failing guard leaves the PR open with its failing test named.\nCheck lint errors and build failed reports before merging.';
+  const options = { completionReason: 'shell-exit', completionError: 'Process exited with code 1' };
+
+  it('does not diagnose the legacy unsent draft as executed tests', () => {
+    const result = analyzeAgentFailure(`Unsent draft:\n${prompt}`, {}, null, options);
+    expect(result).toMatchObject({ category: 'startup-failure', completionReason: 'shell-exit', completionError: options.completionError });
+    expect(result.snippet).not.toContain('failing test');
+  });
+
+  it('excludes a wrapped supplied prompt and its repaint before submission', () => {
+    const wrapped = prompt.replaceAll(' ', ' \r\n');
+    const result = analyzeAgentFailure(`${wrapped}\nUnsent draft:\n${prompt}`, {}, null, {
+      ...options, promptProvenance: { submitted: false, suppliedPrompt: prompt },
+    });
+    expect(result.category).toBe('startup-failure');
+    expect(result.snippet).not.toContain('failing test');
+  });
+
+  it('retains a real startup diagnostic outside the echoed prompt', () => {
+    const result = analyzeAgentFailure(withLead(`Error loading config.toml: expected a value\n${prompt}`), {}, null, {
+      ...options, promptProvenance: { submitted: false, suppliedPrompt: prompt },
+    });
+    expect(result).toMatchObject({ category: 'cli-config-invalid', origin: 'runner', completionReason: 'shell-exit' });
+  });
+
+  it.each([
+    ['test failed: expected true to be false', 'test-failure'],
+    ['lint failed with 1 error', 'lint-error'],
+    ['build failed with 1 error', 'build-error'],
+  ])('retains genuine submitted output: %s', (failure, category) => {
+    const result = analyzeAgentFailure(withLead(`Tool fixture quotes Unsent draft: in an assertion.\n${failure}`), {}, null, {
+      ...options, promptProvenance: { submitted: true, suppliedPrompt: prompt },
+    });
+    expect(result).toMatchObject({ category, completionReason: 'shell-exit', completionError: options.completionError });
+  });
+});
+
+
+it('keeps submitted tool quotes even when they equal a short task prompt (#13560)', () => {
+  const failure = 'test failed';
+  const result = analyzeAgentFailure(withLead(`Unsent draft:\nQuoted fixture from a tool: ${failure}`), {}, null, {
+    completionReason: 'shell-exit', promptProvenance: { submitted: true, suppliedPrompt: failure },
+  });
+  expect(result.category).toBe('test-failure');
+});
+
+it('does not treat an attempted Enter followed by the exact unsent prompt as execution (#13560)', () => {
+  const prompt = 'A failing guard leaves the PR open with its failing test named.';
+  expect(analyzeAgentFailure(`Unsent draft:\n${prompt}`, {}, null, {
+    completionReason: 'shell-exit', promptProvenance: { submitted: true, suppliedPrompt: prompt },
+  }).category).toBe('startup-failure');
+});
+
+
+it('classifies short genuine tool failures without depending on a startup banner (#13560)', () => {
+  expect(analyzeAgentFailure('test failed', {}, null, {
+    completionReason: 'shell-exit', promptProvenance: { submitted: true, suppliedPrompt: 'Run the tests' },
+  })).toMatchObject({ category: 'test-failure', origin: 'output-scan' });
 });

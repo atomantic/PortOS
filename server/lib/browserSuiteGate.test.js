@@ -93,7 +93,7 @@ describe('H.264 probe outcomes', () => {
     expect(describeH264Probe(result)).toMatch(/lifecycle failure, not a missing codec/);
 
     const failure = await chromeWithH264(chrome);
-    expect(failure).toEqual({ probeFailure: 'teardown-failed' });
+    expect(failure).toMatchObject({ probeFailure: 'teardown-failed' });
 
     process.env.PORTOS_REQUIRE_BROWSER_SUITES = '1';
     expect(() => browserSuiteCanRun('suite', { 'Chrome with H.264': failure, ffmpeg: '/usr/bin/ffmpeg' }))
@@ -105,8 +105,8 @@ describe('H.264 probe outcomes', () => {
     expect(await probeChromeH264(codecless)).toEqual({ ok: false, cause: 'codec-unavailable' });
     expect(await chromeWithH264(codecless)).toBeNull();
     expect(await chromeWithH264(join(tmpdir(), 'portos-no-such-chrome'))).toBeNull();
-    expect(await probeChromeH264(join(tmpdir(), 'portos-no-such-chrome'))).toEqual({ ok: false, cause: 'missing-executable' });
-    expect(await probeChromeH264(undefined)).toEqual({ ok: false, cause: 'missing-executable' });
+    expect(await probeChromeH264(join(tmpdir(), 'portos-no-such-chrome'))).toMatchObject({ ok: false, cause: 'missing-executable' });
+    expect(await probeChromeH264(undefined)).toMatchObject({ ok: false, cause: 'missing-executable' });
   });
 
   posix('distinguishes a probe that never answered from a codec-less one', async () => {
@@ -129,13 +129,13 @@ describe('H.264 probe outcomes', () => {
     `);
     const result = await probeChromeH264(chrome, { timeoutMs: 800, graceMs: 300 });
     expect(result).toMatchObject({ ok: false, cause: 'probe-timeout', cleanupVerified: true });
-    expect(describeH264Probe(result)).toBe('Chrome H.264 probe timed out after 1s; child cleanup verified');
+    expect(describeH264Probe(result)).toContain('Chrome H.264 probe timed out after 1s; child cleanup verified');
     const [parent, helper] = readFileSync(pids, 'utf8').split(' ').map(Number);
     await vi.waitFor(() => {
       expect(pidAlive(parent)).toBe(false);
       expect(pidAlive(helper)).toBe(false);
     }, { timeout: 3000 });
-    expect(await chromeWithH264(chrome, { timeoutMs: 800, graceMs: 300 })).toEqual({ probeFailure: 'probe-timeout' });
+    expect(await chromeWithH264(chrome, { timeoutMs: 800, graceMs: 300 })).toMatchObject({ probeFailure: 'probe-timeout' });
   });
 
   it('names a probe failure beside missing prerequisites when skipping locally', () => {

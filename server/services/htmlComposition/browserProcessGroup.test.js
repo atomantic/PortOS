@@ -52,6 +52,21 @@ it('fails closed when process observation is unavailable without exposing output
   expect(signal).not.toHaveBeenCalled();
 });
 
+it('reports deadline exhaustion when the bounded process observation times out', async () => {
+  observation.read.mockImplementationOnce((_file, _args, { timeout }) => new Promise((_, reject) => {
+    setTimeout(() => reject(Object.assign(new Error('/private/command'), { killed: true, signal: 'SIGTERM' })), timeout);
+  }));
+  const verdict = expect(drainBrowserProcessGroup(group, 100, 25)).rejects.toThrow(
+    /^Composition browser group cleanup exceeded its deadline \(groupSignalError=none, groupFailedSignal=none, groupFailedPhase=none\)$/,
+  );
+  await vi.advanceTimersByTimeAsync(100);
+  await verdict;
+  expect(observation.read).toHaveBeenCalledExactlyOnceWith('ps', ['-A', '-o', 'pid=', '-o', 'pgid=', '-o', 'stat='],
+    expect.objectContaining({ timeout: 100 }));
+  expect(signal).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it('rejects within the retained deadline if accepted signals do not stop writers', async () => {
   observation.read.mockResolvedValue(snapshot(`23456 ${group} S`));
   const verdict = expect(drainBrowserProcessGroup(group, 100, 25)).rejects.toThrow(/exceeded its deadline/);
@@ -156,5 +171,17 @@ it('keeps failed or incomplete diagnostic reads distinct from an empty group', a
   expect(await observeBrowserProcessGroup(group, 500)).toBe('unavailable');
   observation.read.mockResolvedValueOnce({ stdout: '/private/output' });
   expect(await observeBrowserProcessGroup(group, 500)).toBe('unavailable');
+  expect(signal).not.toHaveBeenCalled();
+});
+
+it.skipIf(process.platform === 'win32')('keeps signed BSD UID rows observable and matches their unsigned Node credential identity', async () => {
+  vi.spyOn(process, 'geteuid').mockReturnValue(4294967294);
+  vi.spyOn(process, 'getuid').mockReturnValue(4294967294);
+  observation.read.mockResolvedValue({ stdout: [
+    `${process.pid} 1 1 -2 -2 S`,
+    `${group} ${process.pid} ${group} -2 -2 S`,
+    '23456 1 77777 -1 -1 R',
+  ].join('\n') });
+  expect(await observeBrowserProcessGroup(group, 500)).toBe('leader:sleeping|parent:same|group:same|uid:same|ruid:same|live:1|zombies:0|foreignUid:0|states:sleeping:1|capped:false');
   expect(signal).not.toHaveBeenCalled();
 });

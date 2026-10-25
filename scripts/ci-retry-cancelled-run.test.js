@@ -6,9 +6,9 @@
  * The API-base and repository validation live in lib/githubActionsApi.test.js,
  * shared with scripts/ci-gate-report.js.
  */
-import { readFileSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -605,8 +605,8 @@ describe('ci-cancel-recovery.yml wiring', () => {
     expect(timeoutMinutes * 60_000).toBeGreaterThan(MAX_RUNTIME_MS);
   });
 
-  it('triggers on a completed CI run and nothing else', () => {
-    expect(RECOVERY_WORKFLOW).toMatch(/on:\n {2}workflow_run:\n {4}workflows: \[CI\]\n {4}types: \[completed\]/);
+  it('observes only CI requests/completions while retry stays cancellation-scoped', () => {
+    expect(RECOVERY_WORKFLOW).toMatch(/on:\n {2}workflow_run:\n {4}workflows: \[CI\]\n {4}types: \[requested, completed\]/);
     // A `pull_request` trigger here would run with the PR's own code.
     expect(RECOVERY_WORKFLOW).not.toMatch(/^\s{2}pull_request:/m);
   });

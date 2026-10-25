@@ -177,7 +177,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
   const ownership = deps.ownership || (async input => (await import('./heldCheckoutRecovery.js')).inspectCheckoutRetirementOwnership(input));
   const admission = async () => deps.admission || await import('../lib/checkoutRetirementAdmission.js');
   const forge = deps.forge || (async (ctx, release, prUrl) => (await import('./heldCheckoutReview.js')).readRetirementForgeEvidence(
-    ctx.repoPath, release.branch, prUrl, { forgeAccount: ctx.forgeAccount, exactAliasHead: release.head }));
+    ctx.repoPath, release.branch, prUrl, { forgeAccount: ctx.forgeAccount, exactAliasHead: release.head, exactDeliveredHead: release.head }));
   const comparison = deps.comparison || (async (ctx, release, prUrl, snapshot, policy, forgeFacts) => {
     const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
     const run = () => buildCheckoutRetirementReview({ repoPath: ctx.repoPath, release, prUrl,
@@ -221,7 +221,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       checkoutIncarnation = generation.incarnation;
       return ensureOwner(ctx, release, true, { forge: { prUrl }, checkoutIncarnation });
     });
-    const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release, requireOwnership: true,
+    const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release, requireOwnership: true, retirementOnly: true,
       ...(wholeCheckout && { wholeCheckout: true }) });
     const facts = await forge(ctx, release, prUrl);
     const base = await comparison(ctx, release, prUrl, snapshot, policy, facts);
@@ -258,16 +258,16 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     const status = await runGit(['status', '--porcelain'], input.release.path, { ignoreExitCode: true }).catch(() => null);
     if (!status || status.exitCode !== 0) return { ok: false, reason: 'worktree-status-unavailable' };
     if (String(status.stdout || '').trim()) return { ok: false, reason: 'worktree-dirty' };
+    const { assertNoUniqueIgnoredCheckoutPayload } = await import('./heldCheckoutRecovery.js');
+    const paths = [input.release.path, ...(prepared.review.snapshot.modules || []).map(module => join(input.release.path, module.path))];
+    for (const path of paths) {
+      const hold = await assertNoUniqueIgnoredCheckoutPayload(path, runGit).then(() => null,
+        error => error.message || 'checkout-not-disposable');
+      if (hold) return { ok: false, reason: hold };
+    }
     const removed = await runGit(['worktree', 'remove', '--force', input.release.path], ctx.repoPath, { ignoreExitCode: true }).catch(() => null);
     if (!removed || removed.exitCode !== 0) {
-      const top = await runGit(['rev-parse', '--show-toplevel'], input.release.path, { ignoreExitCode: true }).catch(() => null);
-      const toplevel = String(top?.stdout || '').trim();
-      if (!top || top.exitCode !== 0 || !toplevel) return { ok: false, reason: 'checkout-not-removed' };
-      const { resolve } = await import('node:path');
-      const { rm } = await import('node:fs/promises');
-      if (resolve(toplevel) !== resolve(input.release.path)) return { ok: false, reason: 'checkout-not-removed' };
-      await rm(input.release.path, { recursive: true, force: false });
-      await runGit(['worktree', 'prune'], ctx.repoPath, { ignoreExitCode: true }).catch(() => null);
+      return { ok: false, reason: 'checkout-not-removed' };
     }
     let branchDeleted = false;
     if (input.release.branch) {

@@ -1,3 +1,4 @@
+import { rememberExecutionSelection } from './executionSelectionCache.js';
 import { request } from './apiCore.js';
 import socket from './socket.js';
 import toast from '../components/ui/Toast';
@@ -258,4 +259,12 @@ export const saveProviderFallbacks = (entries, options) => request('/provider-fa
   method: 'PUT',
   body: JSON.stringify({ entries }),
   ...options
+});
+
+export const saveExecutionOptionSelection = (id, model, executionOptions, options = {}) => request(`/providers/${encodeURIComponent(id)}/execution-options/selection`, {
+  ...options, method: 'POST', body: JSON.stringify({ model: model || undefined, executionOptions }),
+}).then((selection) => {
+  invalidateProviders();
+  rememberExecutionSelection(selection);
+  return selection;
 });

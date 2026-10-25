@@ -158,6 +158,7 @@ export async function createTemplate(templateData) {
       provider: templateData.provider || '',
       model: templateData.model || '',
       effort: templateData.effort || '',
+      ...(templateData.executionOptions !== undefined ? { executionOptions: templateData.executionOptions } : {}),
       app: templateData.app || '',
       isBuiltin: false,
       createdAt: new Date().toISOString()
@@ -262,6 +263,7 @@ export async function createTemplateFromTask(task, templateName) {
     provider: task.provider || '',
     model: task.model || '',
     effort: task.effort || '',
+    ...(task.executionOptions !== undefined ? { executionOptions: task.executionOptions } : {}),
     app: task.app || ''
   });
 }

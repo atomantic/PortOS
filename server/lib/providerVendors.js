@@ -1,3 +1,4 @@
+import { EXECUTION_OPTION_DEFINITIONS, validateExecutionOptions, executionOptionsError } from './executionOptions.js';
 /**
  * `PROVIDER_VENDORS` — one row per coding-agent CLI/TUI vendor, consumed by
  * every dispatch point that used to open-code its own vendor if-chain (#3618).
@@ -88,6 +89,7 @@ import {
 import {
   isCodexCommand,
   ensureCodexTuiArgs,
+  buildCodexExecutionOptionArgs,
   CODEX_COMMAND,
   CODEX_CLI_ID,
   buildCodexOssArgs,
@@ -301,11 +303,13 @@ const codexIgnoreUserConfigArgs = (provider, existingArgs = []) => (
 );
 
 function codexCliArgs(baseArgs, { model, effort, provider }) {
+  const executionArgs = buildCodexExecutionOptionArgs(provider, baseArgs);
   // Detect an existing leading `exec` in user/legacy args so we don't end up
   // running `codex exec --full-auto exec -` after migration of legacy
   // configs that already pinned an `exec` subcommand.
   const hasExec = baseArgs.includes('exec');
   const args = hasExec ? [...baseArgs] : [...baseArgs, 'exec'];
+  args.push(...executionArgs);
   args.push(...codexIgnoreUserConfigArgs(provider, args));
   args.push(...buildCodexAuthModeArgs(provider, baseArgs));
   args.push(...buildCodexStartupArgs(baseArgs));
@@ -328,6 +332,7 @@ function codexSpawnArgs(provider, { effectiveModel, effort, maxConcurrentThreads
   const args = [
     'exec',
     '--dangerously-bypass-approvals-and-sandbox',
+    ...buildCodexExecutionOptionArgs(provider, provider?.args || []),
     ...codexIgnoreUserConfigArgs(provider),
     ...buildCodexAuthModeArgs(provider),
     ...buildCodexStartupArgs(),
@@ -373,6 +378,8 @@ function codexPublicReviewArgs(provider, { effectiveModel, effort, maxConcurrent
     ...postureArgs,
     '--ephemeral',
     '--ignore-user-config',
+    ...buildCodexExecutionOptionArgs(provider, provider?.args || []),
+    ...(Object.keys(provider?.executionOptions || {}).length ? buildCodexAuthModeArgs(provider) : []),
     ...buildCodexStartupArgs(),
     // The backing is orthogonal to the posture: a local-backed record reviews
     // untrusted public code under the SAME sandbox ladder, with the tokens
@@ -1089,8 +1096,17 @@ export function inferTuiCommand(id) {
  * dispatcher exists (see the `injectTuiModelAndEffort` note below for what
  * happened the last time an argv rule lived in only one of them).
  */
+function assertExecutionOptionHarness(provider, harnessId) {
+  for (const key of Object.keys(validateExecutionOptions(provider?.executionOptions))) {
+    if (!EXECUTION_OPTION_DEFINITIONS[key].harnesses.includes(harnessId)) {
+      throw executionOptionsError(`Execution option ${key} is unsupported by this harness`);
+    }
+  }
+}
+
 export function applyCommandDefaults(command, args, provider = null) {
   const vendor = PROVIDER_VENDORS.find((v) => v.tuiArgs && v.matchCommand(command));
+  assertExecutionOptionHarness(provider, vendor?.id);
   if (!vendor) return args;
   // `provider` is optional and only some vendors read it (codex, for the
   // `ignoreUserConfig` pin and the local-runtime backing) — a vendor that
@@ -1118,6 +1134,7 @@ export function prepareCliPrompt(command, args, prompt, options = {}) {
 /** `buildCliArgs` (cliProviderArgs.js): headless one-shot argv per vendor. */
 export function buildVendorCliArgs(provider, baseArgs, { model, effort, toolFree = false }) {
   const vendor = PROVIDER_VENDORS.find((v) => v.cliArgs && matchesProvider(v, provider));
+  assertExecutionOptionHarness(provider, vendor?.id);
   return vendor.cliArgs(baseArgs, { model, effort, provider, toolFree });
 }
 
@@ -1248,6 +1265,7 @@ function providerLabel(provider) {
  * before this registry existed (see file header).
  */
 export function buildVendorSpawnConfig(provider, ctx) {
+  assertExecutionOptionHarness(provider, PROVIDER_VENDORS.find((v) => matchesProvider(v, provider))?.id);
   const posture = publicReviewPostureForProfile(ctx?.safetyProfile);
   if (posture) {
     const recipe = publicReviewRecipe(provider, posture);

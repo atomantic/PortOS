@@ -1473,3 +1473,32 @@ because it was no longer the current attempt; no further rerun was started.
 Preserve attempt 1. Future recurrence needs the fixed-stage evidence plus the
 runner's completion/queue/transport diagnostics, with sensitive fields redacted,
 before changing lifecycle behavior or attributing a GitHub incident.
+
+### Superseded queued aggregate recovery (#13591)
+
+A newly requested PR CI run can be pending without jobs because its older run
+still owns the CI concurrency slot. The default-branch `CI cancel recovery`
+workflow observes requests outside that group. It acts only when a fresh API
+read proves the same PR/workflow/repository, a different older head, the current
+PR head on the waiting successor, and exactly one unfinished old job: a queued,
+never-started `CI Gate`. All other jobs, including cleanup, must be terminal.
+Completed failed tests and their logs remain intact; recovery never publishes a
+passing gate or changes `always()` failure reporting.
+
+If the older run still has known live non-gate jobs when the successor is
+requested, the observer waits read-only and re-inspects every 15 seconds, for a
+single two-minute deadline that includes API work. Every poll verifies the same
+old attempt and current waiting successor. Missing job data, identity changes,
+or live work at the deadline stop recovery without cancellation. The queued,
+never-started aggregate must independently qualify after the live jobs finish.
+
+The observer then requests normal cancellation once, waits 45 seconds, and rechecks
+all identities, jobs and the current PR head. Only an accepted normal cancellation
+that still has not settled permits one force-cancel request. It reads back the
+outcome and distinguishes settlement, accepted-but-pending, and uncertainty; an
+uncertain write is never retried or escalated blindly. More than 100 jobs/runs,
+missing data, a permission refusal, live work, same-head reruns, and changed heads
+all stop recovery. The existing Actions write grant is reused without adding
+permissions. Private repositories that cannot read the PR with that grant remain
+held rather than expanding authority. No PR checkout or code executes in this
+privileged observer; both scripts run from the default branch's sparse checkout.

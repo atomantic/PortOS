@@ -72,7 +72,8 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       },
     });
   }
-  const { provider, selectedModel, modelSelection } = resolution;
+  const { provider, modelSelection } = resolution;
+  let { selectedModel } = resolution;
   const privateSecurity = isPrivateSecurityTask(task);
   const executionProfile = task.metadata?.executionProfile;
   const publicReviewPosture = publicReviewPostureForProfile(executionProfile);
@@ -170,7 +171,18 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       ? `${basePrompt}\n\n${formatPublicReviewInputPrompt(publicReviewPromptData)}`
       : basePrompt;
     const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
-    const requestedProvider = applyTaskGenerationOverrides(provider, task.metadata);
+    const executionOptions = modelSelection.orchestrationExecutionOptions ?? task.metadata?.executionOptions;
+    let requestedProvider = applyTaskGenerationOverrides(provider, { ...task.metadata, executionOptions });
+    let executionAttribution;
+    if (requestedProvider.executionOptions && Object.keys(requestedProvider.executionOptions).length) {
+      const { prepareExecutionOptions } = await import('../lib/providerExecutionOptions.js');
+      const prepared = await prepareExecutionOptions(provider, selectedModel, executionOptions, 'task', { cwd: workspacePath });
+      requestedProvider.executionOptions = prepared.provider.executionOptions;
+      requestedProvider.executionOptionSupport = prepared.provider.executionOptionSupport;
+      requestedProvider.executionOptionAttribution = prepared.attribution;
+      executionAttribution = prepared.attribution;
+      selectedModel = prepared.provider.defaultModel || selectedModel;
+    }
     if (notificationAuth.env) {
       // This copy exists only for this launch. The stored provider and agent/run
       // registration retain the original provider, with no inbox token added.
@@ -245,6 +257,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
         workspacePath,
         appName: resolvedAppName,
         injectedMemories,
+        executionOptions: executionAttribution,
       });
       await registerAgent(agentId, task.id, buildAgentRegistration({
         task,
@@ -321,6 +334,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     const securityScanGrant = dispatchUseRunner && resolveTaskHookType(task) === 'security' && isCodexProvider(runProvider)
       ? securityScanGrantFromArgs(cliConfig.args)
       : null;
+    if (executionAttribution) await updateAgent(agentId, { metadata: { executionOptions: executionAttribution } });
     if (securityScanGrant) await updateAgent(agentId, { metadata: { securityScanGrant, taskAnalysisType: 'security' } });
 
     emitLog('success', `Spawning agent for task ${task.id}`, {

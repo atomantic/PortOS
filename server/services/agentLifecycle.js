@@ -1,3 +1,5 @@
+import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
+import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../lib/taskBlockCategories.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
@@ -119,14 +121,16 @@ async function runAdmittedAgentSpawn(task, permit) {
   } catch (err) {
     if (!context.setupCatchArmed || context.handedOff) throw err;
     const privateSecurity = isPrivateSecurityTask(task);
+    const optionRefusal = err.code === EXECUTION_OPTIONS_ERROR;
     const setupError = privateSecurity
       ? 'Private assessment setup failed. Verify its local model, isolated harness, and source access before retrying.'
       : err.message;
-    emitLog('error', `Agent spawn setup failed: ${setupError}`, { taskId: task.id, error: setupError });
+    emitLog(optionRefusal ? 'info' : 'error', `Agent spawn setup failed: ${setupError}`, { taskId: task.id, error: setupError });
     await context.blockAndBail({
       reason: setupError,
-      category: 'private-security-setup-failed',
-      persist: privateSecurity,
+      category: optionRefusal ? PROVIDER_CONFIG_BLOCKED_CATEGORY : 'private-security-setup-failed',
+      persist: privateSecurity || optionRefusal,
+      emit: optionRefusal ? null : 'agent:error',
     });
     if (task.metadata?.jobId) {
       cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId, reason: 'failed' });

@@ -1,3 +1,4 @@
+import { prepareClaimWorkflowAudit } from './claimWorkflowAudit.js';
 import { newAuditMetadata } from '../../lib/auditWorkflow.js';
 /**
  * Autonomous Jobs — skill templates and effective-prompt assembly.
@@ -179,7 +180,7 @@ async function generateTaskFromJob(job) {
   const inputs = selectedInputs.length > 0
     ? await resolveTaskDataInputs(selectedInputs, { app, taskMetadata: job.taskMetadata })
     : []
-  const taskPrompt = appendTaskDataInputs(prompt, inputs)
+  const taskPrompt = appendTaskDataInputs(prompt, inputs) + await prepareClaimWorkflowAudit(job)
   const description = taskPrompt.split('\n').map(line => line.trim()).find(Boolean) || job.name
   const meta = newAuditMetadata(job.taskMetadata || {})
   return {
@@ -227,6 +228,7 @@ async function generateTaskFromJob(job) {
       // spawn builders emit `--effort`/`-c model_reasoning_effort=` (no-op for
       // non-effort providers). Absent = provider default.
       ...(job.effort ? { effort: job.effort } : {}),
+      ...(job.executionOptions !== undefined ? { executionOptions: job.executionOptions } : {}),
       // File-issues delivery, from the SAME catalog object a scheduled audit
       // stamps (`lib/auditCatalog.js`) rather than a second definition of the
       // mode. A custom job is user-authored, so there is no catalog default to

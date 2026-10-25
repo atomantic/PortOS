@@ -22,11 +22,12 @@ export default function AgentResultLine({ agent, className = '' }) {
   const cleanup = agent.metadata?.cleanupOutcome;
   const cleanupRecovery = agent.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup';
   const cleanupTracked = cleanupRecovery || cleanup || agent.result.cleanupPending === true;
-  const cleanupPending = cleanupTracked && cleanup?.status !== 'verified';
+  const cleanupComplete = isCleanupComplete(cleanup);
+  const cleanupPending = cleanupTracked && !cleanupComplete;
   const merged = cleanup?.committedIntegrationVerified === true;
   // A completed cleanup audit supersedes the old cleanup-only handoff, while
   // unrelated delivery decisions and execution failures keep their own verdict.
-  const cleanupResolved = cleanup?.status === 'verified' && merged && outcome?.recovery?.mode === 'cleanup';
+  const cleanupResolved = cleanupComplete && merged && outcome?.recovery?.mode === 'cleanup';
   const deliveryHeld = ['blocked', 'incomplete'].includes(outcome?.status) && !cleanupResolved;
   const deliveryComplete = isTaskDeliveryComplete(agent) || cleanupResolved;
   const incomplete = cleanupPending || interruption || scanIncomplete || assessmentUnverified || validationFailed || publicationIncomplete;
@@ -58,20 +59,26 @@ export default function AgentResultLine({ agent, className = '' }) {
   );
 }
 
+function isCleanupComplete(cleanup) {
+  return cleanup?.status === 'verified' && (cleanup.unresolved == null || cleanup.unresolved === 0);
+}
+
 function CleanupStatus({ cleanup, outcome }) {
-  const verified = cleanup?.status === 'verified';
+  const verified = isCleanupComplete(cleanup);
+  const mergedAbsent = cleanup?.reason === 'already-absent-merged'
+    || (cleanup?.status === 'already-absent' && cleanup.committedIntegrationVerified === true);
   const absent = cleanup?.status === 'already-absent';
   const blocked = cleanup?.status === 'blocked';
   const owners = Array.isArray(cleanup?.owners) && cleanup.owners.length > 0;
   return (
     <div>
-      <div>{verified ? 'Local cleanup confirmed; preservation verified.'
-        : absent ? 'The local worktree is already gone, but PortOS has not verified its backup yet.'
+      <div>{verified ? mergedAbsent ? 'Local worktree already removed; merged delivery confirmed.' : 'Local cleanup confirmed; preservation verified.'
+        : absent ? mergedAbsent ? cleanup.total > 1 ? 'Other repository cleanup still needs verification.' : 'The local worktree is already gone; preservation still needs verification.' : 'The local worktree is already gone; code delivery still needs verification.'
           : blocked ? 'Local cleanup is blocked. PortOS has not confirmed safe removal.'
             : 'Local cleanup is pending; preservation and removal are not yet confirmed.'}</div>
       {!verified && <div>{owners ? <>Next: wait for the current owner to finish.<CleanupHolders owners={cleanup.owners} /></>
         : cleanup?.taskId ? <>Next: the <Link className="underline" to={`/cos/tasks?task=${encodeURIComponent(cleanup.taskId)}&source=internal`}>cleanup recovery task</Link> must verify preservation and finish cleanup.</>
-          : absent ? 'Next: PortOS must verify the preservation evidence.'
+          : absent ? 'Next: PortOS must verify the remaining delivery and cleanup state.'
             : 'Next: PortOS must resolve the cleanup hold and verify preservation before removal.'}</div>}
       <details className="mt-1 text-port-text-muted">
         <summary className="cursor-pointer">Cleanup diagnostics</summary>

@@ -1,3 +1,4 @@
+import { executionOptionsError } from './executionOptions.js';
 /**
  * Per-CLI conventions for OpenAI's Codex CLI (binary: `codex`).
  *
@@ -67,7 +68,7 @@ function codexHasApprovalPolicy(args) {
 // so it rides even when a provider pins its own policy, while the bypass flag is
 // skipped when the argv already declares an approval/sandbox posture.
 export function ensureCodexTuiArgs(args, provider = null) {
-  const prefix = [];
+  const prefix = [...buildCodexExecutionOptionArgs(provider, args)];
   if (!codexHasApprovalPolicy(args)) {
     prefix.push('--dangerously-bypass-approvals-and-sandbox');
   }
@@ -123,4 +124,29 @@ export function buildCodexOssArgs(provider, existingArgs = []) {
   if (!localProvider) return [];
   if (argvHasFlag(existingArgs, ['--oss', '--local-provider'])) return [];
   return ['--oss', '--local-provider', localProvider];
+}
+
+/**
+ * Per-run tier config overrides user config without writing it. Standard is
+ * Codex's explicit `default` request value, not an absent setting. A pinned
+ * provider argv is refused rather than claiming a conflicting option applied.
+ * This builds requested syntax, including previews. Execution entrypoints must
+ * validate current account/model capabilities before launching it.
+ */
+export function buildCodexExecutionOptionArgs(provider, existingArgs = []) {
+  const options = provider?.executionOptions;
+  if (!options || Object.keys(options).length === 0) return [];
+  const tier = options.serviceTier;
+  if (Object.keys(options).some((key) => key !== 'serviceTier') || !['standard', 'fast'].includes(tier)) {
+    throw executionOptionsError('Unsupported Codex execution options');
+  }
+  if (!isCodexCommand(provider?.command) || !['cli', 'tui'].includes(provider?.type)
+      || (provider?.codexAuthMode && provider.codexAuthMode !== 'chatgpt') || codexOssLocalProvider(provider)) {
+    throw executionOptionsError('Codex speed requires a ChatGPT-authenticated Codex CLI or TUI route');
+  }
+  if (existingArgs.some((arg) => /(?:forced_login_method|model_provider|service_tier|features\.(?:fast_mode|ultrafast_mode)|fast_default_opt_out)/.test(arg))) {
+    throw executionOptionsError('Execution speed conflicts with provider args; remove the baked speed configuration');
+  }
+  return ['-c', `service_tier="${tier === 'standard' ? 'default' : 'fast'}"`,
+    ...(tier === 'fast' ? ['-c', 'features.fast_mode=true'] : [])];
 }

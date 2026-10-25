@@ -69,10 +69,13 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   getAgentRecord: vi.fn(),
 }));
 
-vi.mock('./cosEvents.js', () => ({
-  emitLog: vi.fn(),
-  cosEvents: { emit: (name, payload) => mock.events.push({ name, payload }) }
-}));
+vi.mock('./cosEvents.js', async () => {
+  const { EventEmitter } = await import('node:events');
+  const events = new EventEmitter();
+  const emit = events.emit.bind(events);
+  events.emit = (name, payload) => { mock.events.push({ name, payload }); return emit(name, payload); };
+  return { emitLog: vi.fn(), cosEvents: events };
+});
 
 vi.mock('./codeReview.js', () => ({
   runLocalCodeReview: vi.fn(async (opts) => { mock.reviewCalls.push(opts); return mock.review; }),
@@ -149,6 +152,29 @@ beforeEach(() => {
   mock.review = { ok: true, findings: 'No findings.' };
   mock.reviewDefaults = { lmstudioModel: 'default-lmstudio', ollamaModel: 'default-ollama' };
   mock.reviewCalls = [];
+});
+
+it('wakes the exact local parent from a persisted completed-follow-up edit', async () => {
+  const { cosEvents } = await import('./cosEvents.js');
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+  const identity = await import('./instanceIdentity.js');
+  const instanceId = 'fixture-local';
+  const localIdentity = vi.spyOn(identity, 'getInstanceId').mockResolvedValue(instanceId);
+  const { bindCompletionRetirementEvents } = await import('./agentRepoStateVerification.js');
+  getAgentRecord.mockClear();
+  getAgentRecord.mockResolvedValue({ id: 'original-agent', taskId: 'original-task', status: 'completed',
+    metadata: { instanceId } });
+  await seed('internal', [{ id: 'sys-delivery', description: 'Completed delivery', status: 'completed', priority: 'MEDIUM',
+    metadata: { reviewLoopFollowUp: true, sourceAgentId: 'original-agent', sourceTaskId: 'original-task' } }]);
+  const unbind = bindCompletionRetirementEvents(cosEvents);
+  try {
+    await updateTask('sys-delivery', { priority: 'MEDIUM' }, 'internal');
+    // The listener binds the parent, then the real resume entry reads it again.
+    // This completed no-cleanup record then safely stands down.
+    await vi.waitFor(() => expect(getAgentRecord).toHaveBeenCalledTimes(2));
+    expect(getAgentRecord.mock.calls).toEqual([['original-agent'], ['original-agent']]);
+    expect((await getTaskById('sys-delivery')).status).toBe('completed');
+  } finally { unbind(); localIdentity.mockRestore(); }
 });
 
 describe('forge maintenance queue recovery', () => {
@@ -277,6 +303,17 @@ describe('cosTaskStore.getUserTasks / getCosTasks', () => {
     expect(result.tasks).toHaveLength(1);
     expect(result.tasks[0].description).toBe('do a thing');
     expect(result.tasks[0].priority).toBe('HIGH');
+  });
+
+  it('round-trips explicit Standard across task persistence and retry without adding a default tier', async () => {
+    const created = await addTask({ description: 'Explicit execution request', provider: 'codex', executionOptions: { serviceTier: 'standard' } }, 'user');
+    __resetTaskCache();
+    expect((await getTaskById(created.id)).metadata.executionOptions).toEqual({ serviceTier: 'standard' });
+    await updateTask(created.id, { status: 'pending', metadata: { retryCount: 1 } }, 'user');
+    __resetTaskCache();
+    expect((await getTaskById(created.id)).metadata.executionOptions).toEqual({ serviceTier: 'standard' });
+    const ordinary = await addTask({ description: 'Existing default behavior' }, 'user');
+    expect(ordinary.metadata).not.toHaveProperty('executionOptions');
   });
 
   it('retains an inbox account binding through normal task intake and a fresh persisted read', async () => {
@@ -1392,6 +1429,25 @@ describe('cosTaskStore.addTask', () => {
     expect(results.filter(result => result.statusChanged)).toHaveLength(1);
     const resumed = await getTaskById(task.id);
     expect(resumed).toMatchObject({ status: 'pending', metadata: { totalSpawnCount: '2', reviewLoopPRBranch: 'feature' } });
+  });
+
+  it('preserves charged failure history when the original cleanup owner settles an exhausted task', async () => {
+    const task = await addTask({ id: 'sys-exhausted-cleanup', description: 'Retire verified delivery', metadata: {
+      totalSpawnCount: '3', failureCount: '3', lastErrorCategory: 'task-incomplete', lastFailureAt: '2026-03-01T00:00:00Z',
+    } }, 'internal', { raw: true });
+    await updateTask(task.id, { status: 'blocked', metadata: { blockedCategory: 'task-recovery-exhausted',
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'completed-owner' } }, 'internal');
+    const current = await getTaskById(task.id);
+    const options = { expectedStatus: 'blocked', expectedTask: { description: current.description, priority: current.priority, metadata: current.metadata },
+      recoveryOwner: { id: 'completed-owner', startedAt: '2026-03-01T00:00:00Z' }, preserveRetryBudget: true };
+    const finish = () => updateTask(task.id, { status: 'completed', metadata: { deliveryRecovery: undefined,
+      deliveryRecoveryAgentId: undefined, taskOutcome: { status: 'completed', reason: 'Verified retirement receipt' } } }, 'internal', options);
+    const results = await Promise.all([finish(), finish()]);
+    expect(results.filter(result => result.statusChanged)).toHaveLength(1);
+    expect(await getTaskById(task.id)).toMatchObject({ status: 'completed', metadata: {
+      totalSpawnCount: '3', failureCount: '3', lastErrorCategory: 'task-incomplete', lastFailureAt: '2026-03-01T00:00:00Z',
+    } });
+    expect((await getTaskById(task.id)).metadata.deliveryRecovery).toBeUndefined();
   });
 
   it('emits tasks:changed action "requeued" on an in_progress → pending flip (#3373)', async () => {

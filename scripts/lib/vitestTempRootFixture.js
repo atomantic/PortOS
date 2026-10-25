@@ -90,6 +90,7 @@ export function waitForFixtureReady(file, { signal } = {}) {
     signal?.addEventListener('abort', onAbort, { once: true });
     try {
       watcher = watch(dirname(file), seen);
+      watcher.on('error', finish);
     } catch (error) {
       finish(error);
       return;
