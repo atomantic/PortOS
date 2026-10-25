@@ -183,9 +183,13 @@ Git layouts fail closed. It does not deinitialize a module.
    `git worktree remove --force`. If that fails, it removes the directory only
    when `rev-parse --show-toplevel` resolves to the release path, then deletes
    the local branch with the same exact-head lease as other completed branches.
-   Any other disposition, including accepted supersession, returns
-   `not-merged-on-recheck` and leaves the checkout. No transaction directory is
-   created.
+   Explicitly accepted supersession also permits retirement when the checkout
+   is the exact merged PR head and the local default branch contains that PR's
+   actual merge commit. Later shared-file edits do not make that delivered head
+   unpublished again. This exception never covers a newer local tip, replacement
+   delivery, missing merge evidence or a lagging local default. Other dispositions
+   return `not-merged-on-recheck` and leave the checkout. No transaction directory
+   is created.
 
 Journals already stored under `data/cos/initialized-checkout-retirements/` keep
 the historical quarantine restore path below. Setup migration 442 deletes that
