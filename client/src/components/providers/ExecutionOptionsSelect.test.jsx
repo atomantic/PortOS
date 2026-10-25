@@ -12,12 +12,12 @@ describe('execution speed selection', () => {
     expect(screen.queryByLabelText('Speed')).not.toBeInTheDocument();
   });
 
-  it('keeps Standard separate from inheritance and explains Fast usage', async () => {
+  it('keeps Standard separate from inheritance without help text', async () => {
     request.mockResolvedValue({ options: [{ key: 'serviceTier', label: 'Speed', values: ['standard', 'fast'], help: 'Fast may consume more subscription usage or credits.' }] });
     const onChange = vi.fn();
     render(<ExecutionOptionsSelect provider={{ id: 'example' }} model="example-model" value={{ serviceTier: 'fast' }} onChange={onChange} />);
     const select = await screen.findByLabelText('Speed');
-    expect(screen.getByText(/consume more/)).toBeInTheDocument();
+    expect(screen.queryByText(/consume more/)).not.toBeInTheDocument();
     fireEvent.change(select, { target: { value: 'standard' } });
     expect(onChange).toHaveBeenLastCalledWith({ serviceTier: 'standard' });
     fireEvent.change(select, { target: { value: '' } });
