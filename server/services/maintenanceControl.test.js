@@ -2,6 +2,9 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { rmSync, watch } from 'node:fs';
 
 const gate = vi.hoisted(() => ({ root: null, admission: null, notify: null }));
+const resumeWork = vi.hoisted(() => ({ recover: vi.fn(async () => ({ checked: 0 })), queue: vi.fn(async () => {}), mind: vi.fn(async () => {}) }));
+vi.mock('./cos.js', () => ({ resumeDeferredCompletions: (...args) => resumeWork.recover(...args), dequeueNextTask: (...args) => resumeWork.queue(...args) }));
+vi.mock('./persistentMindSupervisor.js', () => ({ recheckPersistentMindSchedule: (...args) => resumeWork.mind(...args) }));
 // The contract is the service's response to journal invalidations, not native
 // filesystem delivery timing. Keep the real journal and inject only its watcher.
 vi.mock('node:fs', async original => {
@@ -24,7 +27,7 @@ vi.mock('../lib/maintenanceAdmission.js', async () => {
   gate.admission = actual.createMaintenanceAdmission(gate.root);
   return { ...actual, maintenance: gate.admission };
 });
-import { bindMaintenanceIo, _getMaintenanceWatcher } from './maintenanceControl.js';
+import { bindMaintenanceIo, _getMaintenanceWatcher, resumeMaintenance } from './maintenanceControl.js';
 
 afterAll(() => {
   _getMaintenanceWatcher()?.close();
@@ -34,7 +37,11 @@ afterAll(() => {
 const sent = [];
 const io = { emit: (name, payload) => sent.push({ name, payload }) };
 const count = name => sent.filter(e => e.name === name).length;
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  resumeWork.recover.mockReset().mockResolvedValue({ checked: 0 });
+  resumeWork.queue.mockClear(); resumeWork.mind.mockClear();
+});
 const notifyJournalChange = async () => {
   const previousCount = sent.length;
   gate.notify('rename', 'state.json');
@@ -99,5 +106,37 @@ describe('maintenance notifications', () => {
     // Re-arming through bindMaintenanceIo or emitChanges restores the watcher
     bindMaintenanceIo(io);
     expect(_getMaintenanceWatcher()).not.toBeNull();
+  });
+});
+
+
+describe('maintenance completion recovery wake-up', () => {
+  it('returns normal immediately, repairs before dequeue, and refuses duplicate stale resume without another attempt', async () => {
+    const operation = gate.admission.admit('runner', 'historical-fixture');
+    const { hold } = gate.admission.begin({ reason: 'fixture deployment', owner: 'fixture' });
+    let finish;
+    resumeWork.recover.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const status = await resumeMaintenance({ id: hold.id, revision: hold.revision });
+    expect(status.state).toBe('normal');
+    expect(status.blockers).toHaveLength(1);
+    expect(resumeWork.recover).toHaveBeenCalledOnce();
+    expect(resumeWork.queue).not.toHaveBeenCalled();
+    await expect(resumeMaintenance({ id: hold.id, revision: hold.revision })).rejects.toMatchObject({ code: 'MAINTENANCE_STALE' });
+    expect(resumeWork.recover).toHaveBeenCalledOnce();
+    finish({ checked: 3 });
+    await vi.waitFor(() => expect(resumeWork.queue).toHaveBeenCalledOnce());
+    expect(resumeWork.mind).toHaveBeenCalledOnce();
+    expect(gate.admission.status().blockers).toHaveLength(1);
+    await operation.finish();
+  });
+
+  it('reports a repair failure without holding maintenance or hiding the queue forever', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { hold } = gate.admission.begin({ reason: 'fixture deployment', owner: 'fixture' });
+    resumeWork.recover.mockRejectedValue(new Error('fixture replay failure'));
+    expect((await resumeMaintenance({ id: hold.id, revision: hold.revision })).state).toBe('normal');
+    await vi.waitFor(() => expect(resumeWork.queue).toHaveBeenCalledOnce());
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('fixture replay failure'));
+    warn.mockRestore();
   });
 });

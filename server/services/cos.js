@@ -590,6 +590,10 @@ async function bootDaemon(state) {
   cosEvents.emit('status', { running: true });
   emitLog('success', 'CoS daemon started');
 
+  // Recover durable completions from the previous process immediately. The
+  // periodic sweep remains crash fallback, not the first post-restart attempt.
+  void resumeDeferredCompletions().catch(error => emitLog('warn', `Completion recovery deferred after startup: ${error.message}`));
+
   // Queue due improvement tasks shortly after startup (not during initial eval
   // to avoid overwhelming fresh installs, but soon enough to not stall)
   setTimeout(() => {
@@ -603,6 +607,19 @@ async function bootDaemon(state) {
       scheduleDequeue();
     }).catch(err => emitLog('warn', `Post-startup improvement queuing failed: ${err.message}`));
   }, POST_STARTUP_QUEUE_DELAY_MS);
+}
+
+/** Replay the initial pending snapshot in bounded batches on a lifecycle wake-up.
+ * The verifier already coalesces concurrent callers and retains retry backoff.
+ * This never starts a paused/stopped daemon or grants investigation authority.
+ */
+export async function resumeDeferredCompletions() {
+  if (maintenance.held()) return { checked: 0, skipReason: 'maintenance-held' };
+  const reason = await pendingMergeSweepBlocked();
+  if (reason) return { checked: 0, skipReason: reason };
+  const { resumeDeferredRepoStateVerifications } = await import('./agentRepoStateVerification.js');
+  return resumeDeferredRepoStateVerifications(async () => maintenance.held()
+    ? 'maintenance-held' : pendingMergeSweepBlocked());
 }
 
 // Null when a pending-merge sweep may merge, else the skip reason.
