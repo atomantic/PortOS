@@ -997,12 +997,35 @@ export async function recordHeldCheckoutPreservation(appId, { path, branch, head
 
 const RETIRED_CHECKOUTS_KEPT = 20;
 
+/** Preserve bounded checkout-only evidence before an explicitly accepted,
+ * published supersession is removed. This is preparation, never a receipt or
+ * a claim that the source was merged. Existing inventory obligations stay. */
+export async function recordSupersededCheckoutPreservation(appId, release, review) {
+  if (review?.kind !== 'preserved-supersession' || !review.preservedSource
+    || !sameRetirementObservation(review.release, release) || review.preservedSource.head !== release.head
+    || !/^[a-f0-9]{64}$/.test(review.digest || '')) return false;
+  return updateSchedule(async schedule => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    const outcome = record.branchReconcileOutcome;
+    if (!outcome?.remaining?.some(row => sameRetirementCheckout(row, release))) return { result: false, changed: false };
+    const prior = outcome.supersededSourceEvidence?.[review.digest];
+    const proof = { release, source: review.preservedSource, replacement: { prUrl: review.forge.prUrl,
+      prHead: review.forge.prHead, mergeCommit: review.forge.mergeCommit },
+      contentFingerprint: review.contentFingerprint, administrationFingerprint: review.administrationFingerprint };
+    if (prior) return { result: JSON.stringify(prior.proof) === JSON.stringify(proof), changed: false };
+    record.branchReconcileOutcome = { ...outcome, supersededSourceEvidence: {
+      ...(outcome.supersededSourceEvidence || {}), [review.digest]: { proof, preservedAt: new Date().toISOString() },
+    } };
+    return { result: true, changed: true };
+  });
+}
+
 /**
  * Drop a retired checkout from the last inventory and keep a short record of
  * where its archive went. Status is untouched: only the next sweep can say the
  * repository converged.
  */
-export async function recordHeldCheckoutRetirement(appId, { path, branch, branchDeleted, head, archiveDir, checkoutIdentity, checkoutOnly = false }) {
+export async function recordHeldCheckoutRetirement(appId, { path, branch, branchDeleted, head, archiveDir, checkoutIdentity, checkoutOnly = false, supersessionDigest = null }) {
   // Only a branchless checkout can be settled without a deleted branch; the
   // receipt then records exactly that and never claims a deletion.
   const checkoutOnlyReceipt = checkoutOnly === true && !branch && branchDeleted !== true;
@@ -1048,7 +1071,9 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     }
     const retiredAt = new Date().toISOString();
     if (receiptId) receipts[receiptId] = retiredAt;
-    const receipt = { path, ...(branch && { branch }), head, branchDeleted: checkoutOnlyReceipt ? false : branchDeleted, archiveDir: recordedArchive, retiredAt,
+    const receipt = { path, ...(branch && { branch }), head,
+      ...(supersessionDigest && outcome.supersededSourceEvidence?.[supersessionDigest]
+        && { disposition: 'superseded-preserved', supersessionDigest }), branchDeleted: checkoutOnlyReceipt ? false : branchDeleted, archiveDir: recordedArchive, retiredAt,
       ...(checkoutOnlyReceipt && { checkoutOnly: true }), ...(checkoutIdentity && { checkoutIdentity }) };
     const retired = [receipt, ...(outcome.retired || [])].slice(0, RETIRED_CHECKOUTS_KEPT);
     if (receiptId) evidence[receiptId] = receipt;

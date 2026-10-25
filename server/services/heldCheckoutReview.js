@@ -60,7 +60,7 @@ export async function findMergedPullRequest(repoPath, branch, tip, { forgeAccoun
   return { url: historical[0].url, mergedAt: null };
 }
 
-export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { forgeAccount = null, exactAliasHead = null, sourceSupersessionHead = null, exactDeliveredHead = null } = {}) {
+export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { forgeAccount = null, exactAliasHead = null, sourceSupersessionHead = null, exactDeliveredHead = null, requirePublishedSupersession = false } = {}) {
   const origin = await getOriginInfo(repoPath);
   const parsed = parsePullRequestUrl(prUrl);
   if (!origin || !parsed || parsed.host !== origin.host || `${parsed.owner}/${parsed.repo}` !== origin.fullName) {
@@ -143,8 +143,24 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
   const publishedRemoteHead = alias || supersession ? (await git(['ls-remote', '--heads', 'origin', `refs/heads/${remote.headRefName}`], repoPath)
     .catch(() => { throw new Error('retirement-remote-ref-unreadable'); })).trim() : null;
   if (publishedRemoteHead && publishedRemoteHead !== `${remote.headRefOid}\trefs/heads/${remote.headRefName}`) throw new Error('retirement-remote-head-changed');
+  let sourcePreservation;
+  if (requirePublishedSupersession) {
+    if (!supersession || remoteHead !== `${sourceSupersessionHead}\trefs/heads/${branch}`) throw new Error('retirement-source-not-published');
+    // Preserve an exact closed source delivery, not a same-name remote branch
+    // alone. A moving, reopened, foreign or ambiguous source remains wanted.
+    const sources = await api(`repos/${origin.fullName}/pulls?state=closed&head=${encodeURIComponent(`${origin.fullName.split('/')[0]}:${branch}`)}&per_page=2`);
+    const source = Array.isArray(sources) && sources.length === 1 && sources[0];
+    const sourceUrl = source && parsePullRequestUrl(source.html_url);
+    if (!source || source.state !== 'closed' || source.merged_at !== null
+      || source.head?.sha !== sourceSupersessionHead || source.head?.ref !== branch
+      || source.head?.repo?.full_name !== origin.fullName || source.base?.repo?.full_name !== origin.fullName
+      || !sourceUrl || sourceUrl.host !== origin.host || `${sourceUrl.owner}/${sourceUrl.repo}` !== origin.fullName) {
+      throw new Error('retirement-source-closed-delivery-unverified');
+    }
+    sourcePreservation = { prUrl: source.html_url, head: sourceSupersessionHead, remoteRef: `refs/heads/${branch}` };
+  }
   return { repository: `${origin.host}/${origin.fullName}`, prUrl, prHead: remote.headRefOid,
-    mergeCommit: remote.mergeCommit.oid, ...scope, defaultBranch, defaultHead: target.object.sha,
+    mergeCommit: remote.mergeCommit.oid, ...scope, ...(sourcePreservation && { sourcePreservation }), defaultBranch, defaultHead: target.object.sha,
     ...(targetBranch !== defaultBranch && { targetBranch, targetHead: delivery.object.sha }), remoteHead: remoteHead || null,
     ...(alias || supersession ? { ...(alias && { exactAliasHead }), ...(supersession && { sourceSupersessionHead }),
       publishedBranch: remote.headRefName, publishedRemoteHead: publishedRemoteHead || null } : {}) };
@@ -153,7 +169,7 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
 /** Returned differences are review material, not executable instructions or an
  * automated supersession verdict. Every byte and identity participates in digest.
  */
-export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, kind, contentFingerprint, administrationFingerprint, policy }, {
+export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, kind, contentFingerprint, administrationFingerprint, policy, preservedSource = null }, {
   readForge = readRetirementForgeEvidence, forgeAccount = null,
 } = {}) {
   const forge = await readForge(repoPath, release.branch, prUrl, { forgeAccount, ...(!kind && { exactDeliveredHead: release.head }) });
@@ -205,9 +221,9 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
   // Exact delivered PR heads remain delivered after later changes to shared
   // files. Older/replacement heads still need content equivalence or review.
   const exactMergedDelivery = !kind && release.head === forge.prHead;
-  const mechanicallyEquivalent = (difference === '' || exactMergedDelivery) && kind !== 'source-supersession';
+  const mechanicallyEquivalent = (difference === '' || exactMergedDelivery) && !kind;
   const evidence = { repoPath, release, forge, contentFingerprint, administrationFingerprint, policy,
-    ...(kind && { kind }),
+    ...(kind && { kind }), ...(preservedSource && { preservedSource }),
     comparison: { base, paths, localPatch, difference, exactMergedDelivery, disposition: mechanicallyEquivalent ? 'integrated' : 'review-supersession' } };
   return { digest: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'), ...evidence };
 }
