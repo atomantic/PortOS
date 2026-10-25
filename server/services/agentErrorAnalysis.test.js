@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 // maybeCreateInvestigationTask → createInvestigationTask → addTask does real
 // store I/O; stub it so the skip-vs-create gate can be asserted in isolation.
 // getAllTasks feeds the fingerprint dedup scan (#2615).
+vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn().mockResolvedValue('fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./cosTaskStore.js', () => ({ addTask: vi.fn(), updateTask: vi.fn(), getAllTasks: vi.fn() }));
 
 import {
@@ -995,6 +996,22 @@ describe('createInvestigationTask approval wiring (#3714)', () => {
     updateTask.mockResolvedValue({});
     mockEmptyStore();
     __resetInvestigationCircuit();
+  });
+
+  it('creates local supervised diagnosis without refunding exhausted original work', async () => {
+    await createInvestigationTask('agent-original', { ...failedTask, taskType: 'internal' },
+      { ...analysis, blockedSystemRecovery: true });
+    expect(addTask.mock.calls[0][0]).toMatchObject({ targetInstanceId: 'fixture-local',
+      metadata: { preserveOriginalBudget: true, blockedSystemRecovery: true } });
+    expect(addTask.mock.calls[0][0].description).toContain('existing');
+  });
+
+  it('defers repeated system diagnosis instead of creating another blocked approval card', async () => {
+    getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [{ id: 'prior', status: 'completed', metadata: {
+      investigationFingerprint: 'startup-failure:internal:none', updatedAt: new Date().toISOString() } }] } });
+    expect(await createInvestigationTask('agent-original', { ...failedTask, taskType: 'internal' },
+      { ...analysis, blockedSystemRecovery: true })).toBeNull();
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('runs unattended up to the storm threshold, then holds and records the loop reason', async () => {

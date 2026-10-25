@@ -361,6 +361,7 @@ export function autoRetryCount(task) {
 export function couldReleaseBlockedTasks(investigation) {
   return isInvestigationTask(investigation)
     && investigation.status === 'completed'
+    && !isTruthyMeta(investigation.metadata?.preserveOriginalBudget)
     && investigation.metadata?.resolution !== 'auto-expired'
     && affectedTaskIds(investigation).length > 0;
 }
