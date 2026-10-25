@@ -177,4 +177,3 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
     comparison: { base, paths, localPatch, difference, exactMergedDelivery, disposition: mechanicallyEquivalent ? 'integrated' : 'review-supersession' } };
   return { digest: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'), ...evidence };
 }
-

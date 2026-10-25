@@ -1628,7 +1628,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['head', 'supersession'])('preserves a receipt checkout when merged evidence has changed: %s', async change => {
+  it.each(['head', 'supersession'])('binds receipt cleanup to the exact merged head despite later edits: %s', async change => {
     const c = await receiptCheckout('receipt-evidence', {
       superseded: change === 'supersession', multipleCommits: change === 'head',
     });
@@ -1638,9 +1638,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       c.forge.prHead = c.forge.firstCommit;
       c.forge.changedPaths = ['feature.txt'];
     }
-    expect(await c.retireReceipt()).toMatchObject({ ok: false,
-      reason: change === 'head' ? 'receipt-pr-head-changed' : 'retirement-supersession-not-accepted' });
-    expect(await registered(c.release.path)).toBe(true);
+    const result = await c.retireReceipt();
+    expect(result).toMatchObject(change === 'head' ? { ok: false, reason: 'receipt-pr-head-changed' }
+      : { ok: true, branchDeleted: true });
+    expect(await registered(c.release.path)).toBe(change === 'head');
     expect(await archives()).toEqual([]);
   });
 
@@ -1763,7 +1764,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
-    expect(prepared.review.comparison.disposition).toBe('review-supersession');
+    expect(prepared.review.comparison.disposition).toBe('integrated');
+    expect(prepared.review.comparison.exactMergedDelivery).toBe(true);
     expect(prepared.review.comparison.difference).toContain('+strengthened replacement');
     expect(prepared.review.comparison.difference).not.toContain('unrelated glob match');
   });
