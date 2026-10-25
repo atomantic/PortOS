@@ -123,7 +123,7 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
   }
 
   if (isRetirementOnlyRecovery(task) && await settleRetirementRecoveryBeforeSpawn(task)) {
-    await releaseAppReviewMarker(task.metadata?.app);
+    await context.cleanupOnError('retirement dispatch settled or changed');
     return null;
   }
 
