@@ -66,6 +66,9 @@ A CoS sweep resumes that same task once after verified boot ancestry and the
 original run's resume-pointer handoff. Concurrent sweeps use a conditional task
 write, and persisted evidence survives restart. This resumes verification; only
 its successful delivery can revive the investigation's affected tasks.
+A new runtime request for a fix already in the captured boot uses normal bounded
+delivery recovery instead of another budget-exempt continuation. Replaying an
+existing prerequisite after its update preserves the original request and budget.
 
 ## Features
 
@@ -189,6 +192,9 @@ digest, reads the complete original/current code comparison, and uses the live
 retirement endpoint only after review. That endpoint rechecks the digest and
 removes a merged clean checkout without copying it. A successful agent report without
 ok:true and branchDeleted:true remains incomplete across restarts and later empty inventory scans.
+Resumed claims may discover the merged PR during retirement rather than save a
+PR URL in each run. Their captured task lineage, checkout generation and exact
+head still bind every predecessor; a conflicting saved PR remains a hold.
 Repository-cleanup recovery uses the same scoped API review and additive obligation;
 its completion checks the persisted task identity and exact retirement receipt without
 starting another repository sweep. Intentional human handoffs, live owners,

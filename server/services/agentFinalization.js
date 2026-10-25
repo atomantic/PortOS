@@ -2482,7 +2482,7 @@ async function resolveDeliveryRecoveryUpdate(task, outcome, agentId) {
 }
 
 function runtimeRecoveryFence(update) {
-  if (update.metadata?.blockedCategory !== 'runtime-verification') return [];
+  if (update.metadata?.blockedCategory !== 'runtime-verification') return update.runtimeRecoveryContext ? [update.runtimeRecoveryContext] : [];
   const p = update.metadata.runtimeVerification;
   return [{ ...update.runtimeRecoveryContext, expectedStatus: p.dispatchStatus, expectedMetadata: {
     ...(p.dispatchStatus === 'blocked' ? { runtimeVerificationId: update.metadata.runtimeVerificationId } : {}),

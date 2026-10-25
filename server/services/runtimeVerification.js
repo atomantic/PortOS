@@ -3,6 +3,7 @@
  * Persist it on the original task and use the task store's compare-and-set to
  * release it once. Updating remains entirely with the configured idle updater.
  */
+import { resolveUndeliveredTaskUpdate } from './agentErrorAnalysis.js';
 import { clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
@@ -88,6 +89,15 @@ export async function resolveRuntimeVerificationUpdate(task, outcome, agentId) {
     const evidence = await integrationEvidence(prerequisite).catch(() => null);
     if (evidence) {
       prerequisite = { ...prerequisite, ...evidence };
+      // A request for code already running cannot mint another budget-exempt
+      // continuation. The remaining failure uses normal bounded recovery.
+      if (!same && await contains(evidence.integratedCommit, getBootCommit()).catch(() => false)) {
+        const { recovery: _recovery, ...remaining } = outcome;
+        const update = resolveUndeliveredTaskUpdate(task, { ...remaining,
+          reason: `The required fix is already running; runtime recovery cannot resolve the remaining blocker. ${outcome.reason}` }, agentId);
+        return { ...update, runtimeRecoveryContext, metadata: { ...update.metadata,
+          runtimeVerification: undefined, runtimeVerificationId: undefined, runtimeVerificationReadyAgentId: undefined } };
+      }
       reason = await prerequisiteReason(prerequisite);
     } else reason = 'Runtime prerequisite retained: merged-fix integration evidence is unreadable or invalid';
   }
