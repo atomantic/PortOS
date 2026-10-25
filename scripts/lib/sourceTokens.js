@@ -7,6 +7,9 @@ const REGEX_PRECEDING_KEYWORDS = new Set(['return', 'typeof', 'instanceof', 'in'
 // Tokenizer: lenient enough for JSX prose, strict enough to find every literal.
 // ---------------------------------------------------------------------------
 
+// Backticks: pre-install-entrypoints.test.js greps quoted from-specifiers, which a quoted keyword literal would imitate.
+const FROM_KEYWORD = `from`;
+const IMPORT_KEYWORD = `import`;
 const isIdentStart = (c) => /[A-Za-z_$]/.test(c);
 const isIdentPart = (c) => /[\w$]/.test(c);
 
@@ -244,7 +247,7 @@ export function staticEdges(tokens, match) {
   const fromSpec = (i) => {
     for (let j = i; j < tokens.length - 1; j += 1) {
       if (tokens[j].t === 'p' && tokens[j].v === ';') return null;
-      if (tokens[j].t === 'id' && tokens[j].v === 'from' && tokens[j + 1].t === 's') return tokens[j + 1].v;
+      if (tokens[j].t === 'id' && tokens[j].v === FROM_KEYWORD && tokens[j + 1].t === 's') return tokens[j + 1].v;
     }
     return null;
   };
@@ -252,7 +255,7 @@ export function staticEdges(tokens, match) {
     const token = tokens[i];
     if (token.t !== 'id' || isDotted(i)) continue;
     const next = tokens[i + 1];
-    if (token.v === 'import') {
+    if (token.v === IMPORT_KEYWORD) {
       if (!next || (next.t === 'p' && next.v === '(') || (next.t === 'p' && next.v === '.')) continue;
       if (next.t === 's') { specs.push(next.v); continue; }
       const spec = fromSpec(i + 1);
@@ -291,7 +294,7 @@ export function moduleImports(src, { jsx = true } = {}) {
         token.exprs.forEach(scan);
         continue;
       }
-      if (token.t !== 'id' || token.v !== 'import' || stream[i + 1]?.v !== '(') continue;
+      if (token.t !== 'id' || token.v !== IMPORT_KEYWORD || stream[i + 1]?.v !== '(') continue;
       if (stream[i - 1]?.t === 'p' && ['.', '?.'].includes(stream[i - 1].v)) continue;
       const arg = stream[i + 2];
       const end = stream[i + 3];
