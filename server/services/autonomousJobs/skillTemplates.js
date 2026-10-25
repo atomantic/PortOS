@@ -1,3 +1,4 @@
+import { prepareClaimWorkflowAudit } from './claimWorkflowAudit.js';
 import { newAuditMetadata } from '../../lib/auditWorkflow.js';
 /**
  * Autonomous Jobs — skill templates and effective-prompt assembly.
@@ -179,7 +180,7 @@ async function generateTaskFromJob(job) {
   const inputs = selectedInputs.length > 0
     ? await resolveTaskDataInputs(selectedInputs, { app, taskMetadata: job.taskMetadata })
     : []
-  const taskPrompt = appendTaskDataInputs(prompt, inputs)
+  const taskPrompt = appendTaskDataInputs(prompt, inputs) + await prepareClaimWorkflowAudit(job)
   const description = taskPrompt.split('\n').map(line => line.trim()).find(Boolean) || job.name
   const meta = newAuditMetadata(job.taskMetadata || {})
   return {

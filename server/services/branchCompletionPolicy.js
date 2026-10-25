@@ -246,6 +246,41 @@ function completedCleanupForRetirement(policy, input) {
       && row.head === input.tip && row.incarnation?.pointer && row.incarnation?.gitdir));
 }
 
+/** A retry moves the original checkout rather than creating another generation.
+ * A completed cleanup successor can settle its captured ancestors' retirement
+ * obligations; their execution failures and task budgets remain historical facts.
+ */
+function resumedCleanupPolicies(policies, input) {
+  if (!input.checkoutIncarnation || input.verifiedPrHead !== input.tip) return policies;
+  const byId = new Map(policies.map(policy => [policy.agent.id, policy]));
+  const proofs = new Map();
+  const receipt = policy => {
+    const agent = policy.agent;
+    if (agent.status !== 'completed' || !agent.taskId || agent.result?.validationPassed === false
+      || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE || retirementPr(policy) !== input.prUrl
+      || (policy.tip && policy.tip !== input.tip)) return null;
+    const rows = agent.metadata?.completedCheckouts?.filter(row => completedCheckoutReceiptValid(agent, row)
+      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && row.head === input.tip
+      && samePath(row.path, agent.metadata.workspacePath) && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation));
+    return rows?.length === 1 ? rows[0] : null;
+  };
+  for (const successor of policies) {
+    if (!completedCleanupForRetirement(successor, input) || !receipt(successor)) continue;
+    let child = successor;
+    const seen = new Set([child.agent.id]);
+    while (child.agent.metadata?.resumedFromAgentId) {
+      const parent = byId.get(child.agent.metadata.resumedFromAgentId);
+      if (!parent || seen.has(parent.agent.id) || parent.agent.taskId !== successor.agent.taskId
+        || !(Date.parse(parent.agent.completedAt) <= Date.parse(child.agent.startedAt)) || !receipt(parent)) break;
+      seen.add(parent.agent.id);
+      proofs.set(parent.agent.id, { successorAgentId: successor.agent.id, taskId: successor.agent.taskId,
+        checkoutIncarnation: input.checkoutIncarnation });
+      child = parent;
+    }
+  }
+  return policies.map(policy => proofs.has(policy.agent.id) ? { ...policy, resumedCleanup: proofs.get(policy.agent.id) } : policy);
+}
+
 /** Operator review settles successful completed review obligations. PR-bound
  * obligations additionally need a fresh exact-head, exact-checkout incarnation.
  * This is review evidence, never unattended consent or a saved policy rewrite.
@@ -255,11 +290,12 @@ export function reviewedRetirementPolicy(input) {
   // unrelated history; a current checkout's handoff must never be filtered out.
   const decision = completionDecision({ ...input, prUrl: undefined });
   if (decision.reason === unavailable) return { reason: decision.reason };
-  const incarnation = reviewedIncarnation(input, decision.policies || []);
-  const policies = incarnation?.current || decision.policies || [];
+  const resumed = resumedCleanupPolicies(decision.policies || [], input);
+  const incarnation = reviewedIncarnation(input, resumed);
+  const policies = incarnation?.current || resumed;
   if (policies.some(p => p.completion === PR_COMPLETIONS.LEAVE_OPEN)) return { reason: held };
   if (policies.some(p => p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input)
-    && !reviewedOrphanCheckout(p, input) && !completedOrphanSibling(p, input) && !continuedDelivery(p, input))
+    && !reviewedOrphanCheckout(p, input) && !completedOrphanSibling(p, input) && !continuedDelivery(p, input) && !p.resumedCleanup)
     || p.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
     || (retirementPr(p) && !continuedDelivery(p, input)
       && ((!incarnation && !completedOrphanSibling(p, input)) || retirementPr(p) !== input.prUrl))
@@ -270,6 +306,7 @@ export function reviewedRetirementPolicy(input) {
   return { reason: null, ...(input.integratedCleanupHead && { integratedCleanupHead: input.integratedCleanupHead }), policies: policies.map(p => ({
     id: p.agent.id || p.agent.agentId, startedAt: p.agent.startedAt,
     completedAt: p.agent.completedAt, status: p.agent.status, success: p.agent.result.success,
+    ...(p.resumedCleanup && { resumedCleanup: p.resumedCleanup }),
     ...(continuedDelivery(p, input) && { continuedDelivery: continuedDelivery(p, input) }),
     ...(reviewedOrphanCheckout(p, input) && { orphanedExecution: true }),
     ...(completedOrphanSibling(p, input) && { orphanedSibling: true, detachedCheckoutIdentity: input.detachedCheckoutIdentity }),

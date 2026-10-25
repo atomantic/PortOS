@@ -335,7 +335,7 @@ export async function settleAbsentTaskCompletion(agentId, expected) {
       || await getTaskById(agent.taskId)) return metadata;
     const prior = metadata.completionCleanup;
     if (prior?.version !== 1 || !prior.replay || prior.status !== 'pending') return metadata;
-    const stages = { ...prior.stages, worktree: { status: 'done', retryable: false, value: [], verifiedBy: 'repository-preservation-receipt' } };
+    const stages = { ...prior.stages, worktree: { status: 'done', retryable: false, value: [], verifiedBy: 'repository-state-verification' } };
     if (['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].some(key => stages[key]?.status !== 'done')
       || Object.values(stages).some(stage => stage.status !== 'done')) return metadata;
     const { context: _context, replay: _replay, ...ledger } = prior;

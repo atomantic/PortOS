@@ -116,6 +116,7 @@ import { schedule as scheduleEvent, cancel as cancelEvent, getEvent as getSchedu
 vi.mock('./taskSchedule.js', () => ({ getUpcomingTasks: vi.fn() }));
 import { getUpcomingTasks } from './taskSchedule.js';
 import { getJob } from './autonomousJobs.js';
+import { emitLog } from './cosEvents.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { canQueueImprovementTasks } from './cosState.js';
 
@@ -238,6 +239,16 @@ describe('executeScheduledJob — same-tick daily-action budget race (#984)', ()
 });
 
 describe('executeScheduledJob — execution failure advances schedule to avoid rapid loop', () => {
+  it('defers an active audit without emitting an incident or creating another occurrence', async () => {
+    emitLog.mockClear();
+    generateTaskFromJob.mockRejectedValueOnce(Object.assign(new Error('Audit already active'), { status: 409, code: 'AUDIT_ACTIVE' }));
+    await executeScheduledJob('job-fail');
+    expect(recordJobGateSkip).toHaveBeenCalledWith('job-fail');
+    expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('Autonomous job withheld'), expect.any(Object));
+    expect(emitLog.mock.calls.some(([level]) => level === 'error')).toBe(false);
+    expect(getScheduledActionReservations()).toBe(0);
+  });
+
   it('calls recordJobGateSkip when generateTaskFromJob throws', async () => {
     generateTaskFromJob.mockRejectedValueOnce(new Error('Prompt template broken'));
     await executeScheduledJob('job-fail');

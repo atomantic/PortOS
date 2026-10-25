@@ -84,12 +84,21 @@ export async function captureWorktreeDiff(workspacePath, agentDir) {
  *
  * @returns {Promise<object|null>} The error-analysis object, or null on success.
  */
-export async function resolveErrorAnalysis({ finalSuccess, rawFile, fallbackText, task, model, immediateFallbackAnalysis, completionReason, completionError }) {
+export async function resolveErrorAnalysis({ finalSuccess, rawFile, fallbackText, task, model, immediateFallbackAnalysis, completionReason, completionError, promptProvenance }) {
   if (immediateFallbackAnalysis?.category === 'content-refusal') return immediateFallbackAnalysis;
   if (finalSuccess) return null;
   // Short-circuit BEFORE the tail read: a mid-stream fallback signal already is
   // the verdict, so reading ~16KB of spool only to discard it is pure waste.
   if (immediateFallbackAnalysis) return immediateFallbackAnalysis;
   const rawAnalysisText = await readFileTail(rawFile, RAW_TAIL_ANALYSIS_BYTES);
-  return analyzeAgentFailure(rawAnalysisText ?? fallbackText, task, model, { completionReason, completionError });
+  // Raw spool rotation and the bounded tail read both retain a suffix, so the
+  // byte count since submit still selects the same suffix without a second spool.
+  const submittedBytes = promptProvenance?.bytesSinceSubmission;
+  const analysisText = rawAnalysisText !== null && Number.isSafeInteger(submittedBytes) && submittedBytes >= 0
+    ? (submittedBytes === 0 ? '' : Buffer.from(rawAnalysisText).subarray(-submittedBytes).toString('utf8'))
+    : rawAnalysisText ?? fallbackText;
+  return analyzeAgentFailure(analysisText, task, model, {
+    completionReason, completionError,
+    ...(promptProvenance ? { promptProvenance } : {}),
+  });
 }

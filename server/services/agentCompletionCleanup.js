@@ -417,7 +417,7 @@ async function performCompletionCleanupSteps(context, onStepError) {
     if (state?.metadata?.checkoutCapture?.status === 'pending') throw new Error('checkout-capture-pending');
     if (state?.result?.cleanupPending === true
       && (state.metadata?.repoStateVerification?.status !== 'completed'
-        || state.metadata?.completionCleanup?.stages?.worktree?.verifiedBy !== 'repository-preservation-receipt')) throw new Error('checkout-retirement-pending');
+        || !['repository-preservation-receipt', 'repository-state-verification'].includes(state.metadata?.completionCleanup?.stages?.worktree?.verifiedBy))) throw new Error('checkout-retirement-pending');
   };
   await runStep('pipeline', 'Pipeline progression', () => {
     if (context.task?.metadata?.pipeline?.status === 'running') waitForRepository();

@@ -826,6 +826,30 @@ function getFailureAnalysisWindow(output) {
   return windowed.length > FAILURE_WINDOW_MAX_CHARS ? windowed.slice(-FAILURE_WINDOW_MAX_CHARS) : windowed;
 }
 
+/** Remove complete supplied prompt echoes, including terminal line wrapping. */
+function excludeSuppliedPrompt(output, prompt) {
+  if (typeof prompt !== 'string' || !prompt.trim()) return output;
+  const compactPrompt = stripAnsi(prompt).replace(/\s/g, '');
+  const compactOutput = output.replace(/\s/g, '');
+  if (!compactPrompt) return output;
+  const ranges = [];
+  let from = 0;
+  let found;
+  while ((found = compactOutput.indexOf(compactPrompt, from)) !== -1) {
+    ranges.push([found, found + compactPrompt.length]);
+    from = found + compactPrompt.length;
+  }
+  if (!ranges.length) return output;
+  let index = 0;
+  let range = 0;
+  return [...output].filter(char => {
+    while (range < ranges.length && index >= ranges[range][1]) range++;
+    const excluded = range < ranges.length && index >= ranges[range][0];
+    if (!/\s/.test(char)) index += char.length;
+    return !excluded;
+  }).join('');
+}
+
 /**
  * Resolve the provenance origin for a matched ERROR_PATTERN (#2642). Returns the
  * pattern's structured `origin` (`'provider'`/`'runner'`) only when it is
@@ -1171,8 +1195,22 @@ function structuredPolicyRefusal(output, analysisOutput) {
  */
 export function analyzeAgentFailure(output, task, model, options = {}) {
   const completionReason = options?.completionReason || null;
-  const analysisOutput = getFailureAnalysisWindow(output || '');
-  const refusal = structuredPolicyRefusal(output || '', analysisOutput);
+  const provenance = options?.promptProvenance;
+  const cleanOutput = stripAnsi(output || '');
+  let diagnosticOutput = provenance?.submitted === true
+    ? cleanOutput : excludeSuppliedPrompt(cleanOutput, provenance?.suppliedPrompt);
+  // Sending Enter is an attempt, not proof of acceptance: Codex can still
+  // exit with an unsent composer. After submission, exclude that footer only
+  // when its entire body matches the supplied prompt, never a quoted phrase.
+  if (completionReason === 'shell-exit') {
+    diagnosticOutput = diagnosticOutput.replace(/(?:^|[\r\n])Unsent draft:[ \t]*(?:[\r\n]([\s\S]*)|$)/, (footer, draft = '') => {
+      if (provenance?.submitted !== true) return '';
+      const prompt = provenance?.suppliedPrompt;
+      return typeof prompt === 'string' && draft.replace(/\s/g, '') === stripAnsi(prompt).replace(/\s/g, '') ? '' : footer;
+    });
+  }
+  const analysisOutput = getFailureAnalysisWindow(diagnosticOutput);
+  const refusal = structuredPolicyRefusal(diagnosticOutput === cleanOutput ? output || '' : diagnosticOutput, analysisOutput);
   if (refusal) return refusal;
   // An idle-out whose transcript ends on an unanswered prompt gets that named as
   // the cause; every other reason passes through untouched.
@@ -1185,7 +1223,7 @@ export function analyzeAgentFailure(output, task, model, options = {}) {
   // Agent produced no meaningful output — likely failed to start. Measured on
   // the CLEANED window: a transcript that is nothing but cursor repaints carries
   // no more signal than an empty one.
-  if (analysisOutput.trim().length < 50) {
+  if (!analysisOutput.trim() || (analysisOutput.trim().length < 50 && !provenance)) {
     if (structuralDef) return structuralReasonAnalysis(structuralDef, completionReason, options?.completionError);
     return {
       category: 'startup-failure',
@@ -1196,6 +1234,8 @@ export function analyzeAgentFailure(output, task, model, options = {}) {
       message: 'Agent failed to start or produced no output',
       suggestedFix: 'Agent process exited immediately. Check system resources and provider availability.',
       snippet: analysisOutput.trim(),
+      ...(completionReason ? { completionReason } : {}),
+      ...(options?.completionError ? { completionError: options.completionError } : {}),
       escalation: null
     };
   }
@@ -1208,7 +1248,7 @@ export function analyzeAgentFailure(output, task, model, options = {}) {
       const origin = resolvePatternOrigin(errorDef, analysisOutput);
       // Keep scanning (not `break`) so a structured match later in the list can
       // still beat the runner's verdict — only the loose match is discarded.
-      if (structuralDef && origin === 'output-scan') continue;
+      if ((structuralDef || provenance?.submitted === false) && origin === 'output-scan') continue;
       const extracted = errorDef.extract(match, analysisOutput, task, model);
       return {
         category: errorDef.category,
@@ -1219,6 +1259,7 @@ export function analyzeAgentFailure(output, task, model, options = {}) {
         // Optional category-specific "what to approve" prose (may be undefined).
         escalation: errorDef.escalation || null,
         ...(completionReason ? { completionReason } : {}),
+        ...(options?.completionError ? { completionError: options.completionError } : {}),
         ...extracted
       };
     }
@@ -1248,6 +1289,7 @@ export function analyzeAgentFailure(output, task, model, options = {}) {
     snippet: contextLines.join(' ').slice(0, SNIPPET_RAW_MAX_CHARS),
     escalation: null,
     ...(completionReason ? { completionReason } : {}),
+    ...(options?.completionError ? { completionError: options.completionError } : {}),
     suggestedFix: 'Error did not match known patterns. Review the details or agent output logs.'
   };
 }

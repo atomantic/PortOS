@@ -101,6 +101,18 @@ describe('finalizeHelpers', () => {
   });
 
   describe('resolveErrorAnalysis', () => {
+    it('uses the exact post-submission byte suffix while retaining the raw transcript', async () => {
+      const p = join(dir, 'raw.txt');
+      const prompt = 'A failing guard leaves the PR open with its failing test named.';
+      const emitted = 'Real tool output 🌟\ntest failed: expected true to be false';
+      const raw = `${prompt}\n${emitted}`;
+      await writeFile(p, raw);
+      const promptProvenance = { submitted: true, suppliedPrompt: prompt, bytesSinceSubmission: Buffer.byteLength(emitted) };
+      await resolveErrorAnalysis({ finalSuccess: false, rawFile: p, fallbackText: '', task: {}, model: 'm', promptProvenance });
+      expect(analyzeAgentFailure).toHaveBeenCalledWith(emitted, {}, 'm', expect.objectContaining({ promptProvenance }));
+      expect(await readFile(p, 'utf8')).toBe(raw);
+    });
+
     it('returns null on success WITHOUT reading the spool or analyzing', async () => {
       const result = await resolveErrorAnalysis({
         finalSuccess: true, rawFile: join(dir, 'raw.txt'), fallbackText: 'buf', task: {}, model: 'm',

@@ -100,7 +100,7 @@ describe('durable post-ingestion cleanup replay', () => {
     expect((await execGit(['rev-parse', 'HEAD'], workspace)).stdout).toBe(head);
   });
 
-  it('holds pending repository delivery without throwing and advances configured chains once after verification', async () => {
+  it.each(['repository-preservation-receipt', 'repository-state-verification'])('holds pending repository delivery and advances configured chains once after %s', async verifiedBy => {
     const record = await saved();
     record.result = { success: false, cleanupPending: true, executionSuccess: true };
     record.metadata.repoStateVerification = { status: 'pending' };
@@ -121,7 +121,7 @@ describe('durable post-ingestion cleanup replay', () => {
     expect(handleCreativeDirectorCompletion).not.toHaveBeenCalled();
     const verified = await saved();
     verified.metadata.repoStateVerification = { status: 'completed' };
-    verified.metadata.completionCleanup.stages.worktree.verifiedBy = 'repository-preservation-receipt';
+    verified.metadata.completionCleanup.stages.worktree.verifiedBy = verifiedBy;
     await writeFile(fixture.recordPath, JSON.stringify(verified));
     await Promise.all([replayAgentCompletionCleanup(await saved()), replayAgentCompletionCleanup(await saved())]);
     expect(updateTask).toHaveBeenCalledTimes(1);
