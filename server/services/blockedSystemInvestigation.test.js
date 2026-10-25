@@ -1,10 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { _createBlockedSystemInvestigationRecovery } from './blockedSystemInvestigation.js';
 import { resolveUndeliveredTaskUpdate, MAX_TASK_RETRIES } from './agentErrorAnalysis.js';
 import { buildInvestigationFingerprint, couldReleaseBlockedTasks } from '../lib/investigationTasks.js';
+
+const identity = vi.hoisted(() => ({ agent: null }));
+vi.mock('./cosAgentLifecycle.js', () => ({ getAgentRecord: vi.fn(async () => identity.agent) }));
+vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 
 let root, path, time, created, calls, hold, failAfterCreate, race, failLink;
 const read = async () => JSON.parse(await readFile(path, 'utf8'));
@@ -44,8 +48,8 @@ const update = async (task, state) => {
   await write(queues);
   return current;
 };
-const factory = () => _createBlockedSystemInvestigationRecovery({ read, update, create, now: () => time,
-  ownerFor: async task => task.metadata?.foreign ? null : { agentId: 'agent-original', instanceId: 'fixture-local' },
+const factory = (realOwner = false) => _createBlockedSystemInvestigationRecovery({ read, update, create, now: () => time,
+  ...(!realOwner && { ownerFor: async task => task.metadata?.foreign ? null : { agentId: 'agent-original', instanceId: 'fixture-local' } }),
   permission: async () => hold });
 
 beforeEach(async () => {
@@ -139,6 +143,22 @@ describe('blocked system recovery persisted workflow', () => {
     await recovery.sweep();
     const originals = (await read()).cos.tasks.filter(task => task.id.startsWith('source-'));
     expect(originals.every(task => task.metadata.blockedInvestigation?.taskId === 'investigator-1')).toBe(true);
+    expect(created).toBe(1);
+  });
+
+  it('requires the actual completed local agent record before owning a historical blocked task', async () => {
+    const queues = await read();
+    queues.cos.tasks[0].metadata.deliveryDecisionAgentId = 'agent-original';
+    await write(queues);
+    const good = { status: 'completed', taskId: 'system-original', metadata: { instanceId: 'fixture-local' } };
+    for (const record of [null, { ...good, status: 'running' }, { ...good, taskId: 'other-task' },
+      { ...good, metadata: { instanceId: 'another-instance' } }]) {
+      identity.agent = record;
+      expect(await factory(true).recover('system-original')).toMatchObject({ handled: false, reason: 'local-owner-unverified' });
+      expect(created).toBe(0);
+    }
+    identity.agent = good;
+    expect(await factory(true).recover('system-original')).toMatchObject({ handled: true, taskId: 'investigator-1' });
     expect(created).toBe(1);
   });
 
