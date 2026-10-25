@@ -800,7 +800,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
       // and the tail window it cuts for chunk 1 are unaffected. Only a visible
       // render keeps an audio master: a hidden chunk is never extended again.
       extendSplice: mode === 'extend' && extendFromVideoPath && (!hidden || keepExtendSource) && !batch && supportsContextWindow(model)
-        ? { sourcePath: extendFromVideoPath, extendLatents: extendLatentFrames(parsedNumFrames), keepMaster: !hidden }
+        ? { runtime: model.runtime, sourcePath: extendFromVideoPath, extendLatents: extendLatentFrames(parsedNumFrames, model.runtime), keepMaster: !hidden }
         : null,
     },
   });

@@ -529,7 +529,7 @@ const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, hei
     // ExtendPipeline. Shared with the chain orchestrator, which needs the same
     // number to work out how much of the render is echoed source (see
     // `lib/videoContinuity.js`) — the two MUST agree or the trim is wrong.
-    args.push('--extend-frames', String(extendLatentFrames(numFrames)));
+    args.push('--extend-frames', String(extendLatentFrames(numFrames, model.runtime)));
     args.push('--extend-direction', 'after');
   }
   if (helperMode === 'a2v') {

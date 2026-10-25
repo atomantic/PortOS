@@ -8,7 +8,7 @@
  * whenever the layout doesn't verify.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, renameSync } from 'fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFile } from 'child_process';
@@ -49,14 +49,27 @@ beforeAll(async () => {
 afterAll(() => rmSync(tmpDir, { recursive: true, force: true }));
 
 describe('spliceExtendSource', () => {
-  it('delivers source frames before the seam and the render after it, at the render length', async () => {
+  it('preserves the source, render and existing audio master when runtime timing is unverified', async () => {
+    const source = join(tmpDir, 'unverified-source.mp4');
+    const output = join(tmpDir, 'unverified-render.mp4');
+    writeFileSync(source, 'original source');
+    writeFileSync(output, 'completed render');
+    const master = extendMasterPath(output);
+    writeFileSync(master, 'existing master');
+    const originals = [source, output, master].map((path) => readFileSync(path));
+    const result = await spliceExtendSource({ runtime: 'minimax_h3_cuda', sourcePath: source, outputPath: output, extendLatents: 2 });
+    expect(result).toEqual({ applied: false, reason: expect.stringContaining('H3 CUDA') });
+    expect([source, output, master].map((path) => readFileSync(path))).toEqual(originals);
+  });
+
+  it.each(['ltx2', 'ltx25'])('delivers source frames before the seam and new frames after it for %s', async (runtime) => {
     if (!ffmpeg) return;
     // 17 source frames (1 + 8*2) extended by 2 latents → a 33-frame render.
     const source = await makeClip('source.mp4', { color: 'black', frames: 17, tone: 440 });
     const output = await makeClip('render.mp4', { color: 'white', frames: 33, tone: 880 });
     if (!source || !output) return;
 
-    const result = await spliceExtendSource({ sourcePath: source, outputPath: output, extendLatents: 2 });
+    const result = await spliceExtendSource({ runtime, sourcePath: source, outputPath: output, extendLatents: 2 });
 
     expect(result).toMatchObject({ applied: true, keptFrames: 17, droppedSourceFrames: 0 });
     expect(await probeFrameCount(output)).toBe(33);
@@ -77,14 +90,14 @@ describe('spliceExtendSource', () => {
     if (!source || !output) return;
     const before = readFileSync(output);
 
-    const result = await spliceExtendSource({ sourcePath: source, outputPath: output, extendLatents: 2 });
+    const result = await spliceExtendSource({ runtime: 'ltx2', sourcePath: source, outputPath: output, extendLatents: 2 });
 
     expect(result.applied).toBe(false);
     expect(readFileSync(output).equals(before)).toBe(true);
   });
 
   it('declines without touching anything when the source file is gone', async () => {
-    const result = await spliceExtendSource({
+    const result = await spliceExtendSource({ runtime: 'ltx2',
       sourcePath: join(tmpDir, 'missing.mp4'), outputPath: join(tmpDir, 'render.mp4'), extendLatents: 2,
     });
     expect(result).toEqual({ applied: false, reason: 'source file missing' });
@@ -97,7 +110,7 @@ describe('spliceExtendSource', () => {
     if (!source || !output) return;
     const sourceHashes = await videoFrameHashes(source);
 
-    const result = await spliceExtendSource({ sourcePath: source, outputPath: output, extendLatents: 2 });
+    const result = await spliceExtendSource({ runtime: 'ltx2', sourcePath: source, outputPath: output, extendLatents: 2 });
 
     expect(result).toMatchObject({ applied: true, streamCopied: true });
     expect((await videoFrameHashes(output)).slice(0, 17)).toEqual(sourceHashes);
@@ -114,7 +127,7 @@ describe('spliceExtendSource', () => {
     const output = await makeClip('main-render.mp4', { color: 'white', frames: 33, tone: 880 });
     if (!source || !output) return;
 
-    const result = await spliceExtendSource({ sourcePath: source, outputPath: output, extendLatents: 2 });
+    const result = await spliceExtendSource({ runtime: 'ltx2', sourcePath: source, outputPath: output, extendLatents: 2 });
 
     expect(result).toMatchObject({ applied: true, streamCopied: false });
     expect(await probeFrameCount(output)).toBe(33);
@@ -128,14 +141,14 @@ describe('spliceExtendSource', () => {
     const source = await makeClip('round1-source.mp4', { color: 'black', frames: 17, tone: 440 });
     const roundOne = await makeClip('round1-render.mp4', { color: 'white', frames: 33, tone: 880 });
     if (!source || !roundOne) return;
-    expect((await spliceExtendSource({ sourcePath: source, outputPath: roundOne, extendLatents: 2 })).applied).toBe(true);
+    expect((await spliceExtendSource({ runtime: 'ltx2', sourcePath: source, outputPath: roundOne, extendLatents: 2 })).applied).toBe(true);
     // 33 frames extended by 2 latents → 49.
     const roundTwo = await makeClip('round2-render.mp4', { color: 'gray', frames: 49, tone: 660 });
     if (!roundTwo) return;
     const logs = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((line) => logs.push(String(line)));
 
-    const result = await spliceExtendSource({ sourcePath: roundOne, outputPath: roundTwo, extendLatents: 2 });
+    const result = await spliceExtendSource({ runtime: 'ltx2', sourcePath: roundOne, outputPath: roundTwo, extendLatents: 2 });
     spy.mockRestore();
 
     expect(result.applied).toBe(true);
@@ -150,7 +163,7 @@ describe('spliceExtendSource', () => {
     const roundOne = await makeClip('swap-render.mp4', { color: 'white', frames: 33, tone: 880 });
     const roundTwo = await makeClip('swap-render-2.mp4', { color: 'gray', frames: 49, tone: 660 });
     if (!source || !roundOne || !roundTwo) return;
-    expect((await spliceExtendSource({ sourcePath: source, outputPath: roundOne, extendLatents: 2 })).applied).toBe(true);
+    expect((await spliceExtendSource({ runtime: 'ltx2', sourcePath: source, outputPath: roundOne, extendLatents: 2 })).applied).toBe(true);
     const master = extendMasterPath(roundOne);
     expect(existsSync(master)).toBe(true);
     // Swap the soundtrack, keeping the picture and the length.
@@ -164,7 +177,7 @@ describe('spliceExtendSource', () => {
     renameSync(swapped, roundOne);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const result = await spliceExtendSource({ sourcePath: roundOne, outputPath: roundTwo, extendLatents: 2 });
+    const result = await spliceExtendSource({ runtime: 'ltx2', sourcePath: roundOne, outputPath: roundTwo, extendLatents: 2 });
     const warned = warn.mock.calls.some(([line]) => String(line).includes('does not match'));
     warn.mockRestore();
 
@@ -188,7 +201,7 @@ describe('spliceExtendSource', () => {
     if (!made.ok) return;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const result = await spliceExtendSource({ sourcePath: source, outputPath: output, extendLatents: 2, keepMaster: false });
+    const result = await spliceExtendSource({ runtime: 'ltx2', sourcePath: source, outputPath: output, extendLatents: 2, keepMaster: false });
     const warned = warn.mock.calls.some(([line]) => String(line).includes('does not match'));
     warn.mockRestore();
 

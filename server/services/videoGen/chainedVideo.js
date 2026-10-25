@@ -98,9 +98,9 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   // dispatch reaches here as null. Falling back keeps the chain's first chunk
   // the thing that reports it — generateVideo throws a 400 "Unknown video
   // model: X" — instead of a null-deref out of the dispatcher.
-  const chunkExtendLatents = extendLatentFrames(
-    rest.numFrames ?? chainModel?.defaultFrames ?? DEFAULT_NUM_FRAMES,
-  );
+  const chunkExtendLatents = continuity === 'window' ? extendLatentFrames(
+    rest.numFrames ?? chainModel?.defaultFrames ?? DEFAULT_NUM_FRAMES, chainModel.runtime,
+  ) : null;
 
   const chainState = { stopped: false };
   videoJobState.activeChain = chainState;
@@ -363,7 +363,7 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
         // what we handed in.
         let contextPrefix = 0;
         if (i > 0) {
-          contextPrefix = contextPrefixFrames({ totalFrames: frames, extendLatents: chunkExtendLatents });
+          contextPrefix = contextPrefixFrames({ runtime: chainModel.runtime, totalFrames: frames, extendLatents: chunkExtendLatents });
           if (contextPrefix <= 0) {
             console.log(`⚠️ Chunk ${i + 1}/${totalChunks} context prefix unmeasurable (frames=${frames ?? 'unknown'}), leaving it untrimmed`);
           }
