@@ -20,7 +20,7 @@ import { WORKSPACE_TEST_CACHE_ROOTS } from '../lib/workspaceTestCacheRoots.js';
 import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { realpathSync, constants } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
-import { lstat, stat, realpath, readlink, readdir, opendir, readFile, chmod, open, mkdtemp } from 'node:fs/promises';
+import { lstat, stat, realpath, readlink, readdir, opendir, readFile, chmod, open, mkdtemp, unlink, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve, relative, sep } from 'node:path';
@@ -715,18 +715,22 @@ async function readCheckoutReviewPrerequisites(input, opts) {
   return { ok: true, tree: matched.tree, forge, policy };
 }
 
-async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { tree, forge, policy }, opts) {
+async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { tree, forge, policy }, opts, captureContent) {
   const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
   return archiveSnapshots(tree, repoPath, null, archiveWork(opts.signal), true)
-    .then(([content, administration]) => buildCheckoutRetirementReview({ repoPath, release, prUrl, kind,
-      contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge }))
+    .then(async ([content, administration]) => {
+      const review = await buildCheckoutRetirementReview({ repoPath, release, prUrl, kind,
+        contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge });
+      captureContent?.(content);
+      return review;
+    })
     .then(review => ({ ok: true, review }), error => archiveLimitRefusal(error) || ({ ok: false,
       reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-local-evidence-unavailable' }));
 }
 
-async function reviewCurrentCheckout(input, opts = {}) {
+async function reviewCurrentCheckout(input, opts = {}, captureContent) {
   const prerequisites = await readCheckoutReviewPrerequisites(input, opts);
-  return prerequisites.ok ? buildCurrentCheckoutReview(input, prerequisites, opts) : prerequisites;
+  return prerequisites.ok ? buildCurrentCheckoutReview(input, prerequisites, opts, captureContent) : prerequisites;
 }
 
 async function previewCheckoutIdentity(path) {
@@ -1476,6 +1480,8 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     if (!unlocked) return { ok: false, reason: 'worktree-unlock-failed' };
   }
   let capacityRefusal;
+  let reviewedLinks = [];
+  const removedLinks = [];
   const verifyRemoval = async (holder) => {
     if (opts.signal?.aborted) return 'retirement-archive-cancelled';
     if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
@@ -1484,7 +1490,8 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
     const [reason, fresh, porcelain] = await Promise.all([
       ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled }),
-      review ? reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind, unlocked: release.locked }, opts) : null,
+      review ? reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind, unlocked: release.locked }, opts,
+        content => { reviewedLinks = content.symlinks; }) : null,
       getStatusPorcelain(tree.path).catch(() => null),
     ]);
     if (fresh && !fresh.ok) { capacityRefusal = fresh; return fresh.reason; }
@@ -1501,15 +1508,47 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     return null;
   };
   const removal = await forceRemoveWorktreeDir(repoPath, tree.path, {
-    label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval, beforeMutation: opts.beforeMutation,
+    label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval,
+    beforeMutation: async () => {
+      await opts.beforeMutation?.();
+      // Git for Windows leaves junctions behind (git-for-windows/git#6151).
+      // Unlink only freshly reviewed links after the final removal gate, never
+      // recursively delete their targets or use a fallback checkout remover.
+      const work = archiveWork(opts.signal);
+      for (const link of reviewedLinks) {
+        const { rel, info } = await listedContentEntry(tree.path, link.path, work);
+        if (rel !== link.path || !info.isSymbolicLink()
+          || archiveText(await readlink(join(tree.path, rel), { encoding: 'buffer' })) !== link.target) throw new Error('retirement-review-changed');
+        // Ordinary file links are already handled by Git. Only directory links
+        // need this preparation; inspect target metadata without reading bytes.
+        const target = await stat(join(tree.path, rel)).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+        if (!target?.isDirectory()) continue;
+        await unlink(join(tree.path, rel));
+        removedLinks.push(link);
+      }
+    },
   });
   if (!removal.removed) {
+    let linkRestoreFailed = false;
+    // A refused Git removal may leave the original generation intact. Restore
+    // its links without overwriting anything a concurrent writer created.
+    if (removedLinks.length && await readRetirementCheckoutIdentity(tree.path) === checkoutIdentity) {
+      for (const link of removedLinks) {
+        const parent = link.path.split('/').slice(0, -1).join('/');
+        const parentSafe = !parent || await listedContentEntry(tree.path, parent, archiveWork())
+          .then(entry => entry.rel === parent && entry.info.isDirectory(), () => false);
+        const restored = parentSafe && await symlink(link.target, join(tree.path, link.path), process.platform === 'win32' ? 'junction' : 'dir')
+          .then(() => true, () => false);
+        if (!restored) linkRestoreFailed = true;
+      }
+    }
     // Hand the lock back exactly as released. A lock someone took in the
     // meantime makes this fail, which is the outcome we want anyway.
     if (release.locked) {
       const args = ['worktree', 'lock', ...(release.lockReason != null ? ['--reason', release.lockReason] : []), tree.path];
       await execGit(args, repoPath).catch(err => console.warn(`⚠️ held-checkout recovery: could not restore lock on ${tree.path}: ${err.message}`));
     }
+    if (linkRestoreFailed) return { ok: false, reason: 'retirement-link-restore-failed' };
     return capacityRefusal || { ok: false, reason: removal.reason || 'worktree-remove-failed' };
   }
   console.log(`🧹 held-checkout recovery: retired ${tree.path}`);

@@ -1283,8 +1283,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['native', 'traversed', 'directory'])('never follows a cache directory link or removes the outside content: %s listing', async listing => {
-    const c = await reviewedCheckout('linked-cache');
+  async function cacheDirectoryLink(checkout) {
     await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
     const outside = join(scratch, 'wanted-outside-cache');
     await mkdir(outside);
@@ -1292,9 +1291,16 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await writeFile(wanted, 'wanted outside bytes');
     await truncate(wanted, 26 * 1024 * 1024);
     const before = await sha256File(wanted);
-    const root = join(c.path, 'server/.cache/vitest');
+    const root = join(checkout.path, 'server/.cache/vitest');
     await mkdir(root, { recursive: true });
-    await symlink(outside, join(root, 'modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    const link = join(root, 'modules');
+    await symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    return { wanted, before, link };
+  }
+
+  it.each(['native', 'traversed', 'directory'])('never follows a cache directory link or removes the outside content: %s listing', async listing => {
+    const c = await reviewedCheckout('linked-cache');
+    const { wanted, before } = await cacheDirectoryLink(c);
     if (listing !== 'native') {
       // Git for Windows can enumerate junction descendants as ordinary files.
       // Reproduce that boundary on every OS while retaining a real link.
@@ -1309,6 +1315,26 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(existsSync(c.path)).toBe(false);
     expect(await registered(c.path)).toBe(false);
     expect(await sha256File(wanted)).toBe(before);
+    expect(await archives()).toEqual([]);
+  });
+
+  it('restores reviewed cache directory links when Git refuses removal', async () => {
+    const c = await reviewedCheckout('linked-cache-removal-refused');
+    const { wanted, before, link } = await cacheDirectoryLink(c);
+    const target = await readlink(link);
+    const prepared = await c.prepare();
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true });
+    retirementFaults.onRemove = vi.fn(async () => {
+      expect(existsSync(link)).toBe(false);
+      expect(await sha256File(wanted)).toBe(before);
+      throw new Error('synthetic Git removal refusal');
+    });
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false });
+    expect(retirementFaults.onRemove).toHaveBeenCalledTimes(1);
+    expect(await readlink(link)).toBe(target);
+    expect(await sha256File(wanted)).toBe(before);
+    expect(existsSync(c.path)).toBe(true);
+    expect(await registered(c.path)).toBe(true);
     expect(await archives()).toEqual([]);
   });
 
