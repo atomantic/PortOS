@@ -714,7 +714,7 @@ async function integratedPolicyReviewIdentity(repoPath, release, prUrl, forge, a
 
 const reviewForgeOptions = (release, kind, opts) => ({ forgeAccount: opts.forgeAccount,
   ...(!kind && { exactDeliveredHead: release.head }),
-  ...(!release.branch && { exactAliasHead: release.head }),
+  ...(!release.branch && { exactAliasHead: release.head, detachedSourceHead: release.head }),
   ...(kind && { sourceSupersessionHead: release.head }),
   ...(kind === 'preserved-supersession' && { requirePublishedSupersession: true }) });
 
@@ -739,7 +739,7 @@ async function readCheckoutReviewPrerequisites(input, opts) {
     .catch(error => ({ error }));
   if (forge?.error) return { ok: false, reason: /^retirement-[a-z-]+$/.test(forge.error.message) ? forge.error.message : 'retirement-forge-unavailable' };
   if (kind && forge?.sourceSupersessionHead !== release.head) return { ok: false, reason: 'retirement-source-head-unverified' };
-  if (!release.branch && (forge?.prHead !== release.head || !forge.publishedBranch)) return { ok: false, reason: 'retirement-detached-head-unverified' };
+  if (!release.branch && ((forge?.prHead !== release.head && forge?.detachedRepresentation?.sourceHead !== release.head) || !forge.publishedBranch)) return { ok: false, reason: 'retirement-detached-head-unverified' };
   const policyBranch = release.branch || forge.publishedBranch;
   const namedOwner = !release.branch && await ownerReason({ repoPath, tree: matched.tree, branch: policyBranch,
     readAgents: opts.readAgents || readClaimOwnershipAgents, reviewed: true });
@@ -1790,6 +1790,7 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   if (result.ok) {
     await taskSchedule.recordHeldCheckoutRetirement(appId, {
       path: release.path, branch: release.branch ?? null, head: release.head, branchDeleted: result.branchDeleted,
+      ...(!release.branch && { checkoutOnly: true }),
       ...(result.archiveDir && { archiveDir: result.archiveDir }), checkoutIdentity: result.checkoutIdentity,
       ...(review?.kind === 'preserved-supersession' && { supersessionDigest: review.digest }),
     });
