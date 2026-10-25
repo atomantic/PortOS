@@ -1,6 +1,15 @@
+import { Sparkles, Drama, Mountain, Package } from 'lucide-react';
+
 // Casting, Environments and Objects: focused library pages over the catalog's
 // character, place and object ingredients. The catalog row stays the single
 // record; these entries only say which page owns a type and how to name it.
+
+export const CATALOG_NAV_TABS = Object.freeze([
+  Object.freeze({ id: 'catalog', label: 'Catalog', to: '/catalog', icon: Sparkles }),
+  Object.freeze({ id: 'casting', label: 'Casting', to: '/casting', icon: Drama }),
+  Object.freeze({ id: 'environments', label: 'Environments', to: '/environments', icon: Mountain }),
+  Object.freeze({ id: 'objects', label: 'Objects', to: '/objects', icon: Package }),
+]);
 
 // `detailTabs` are the record page's sections (`/casting/:id/:tab`); the
 // first is the default and an unknown tab falls back to it.

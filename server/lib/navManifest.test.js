@@ -128,6 +128,20 @@ describe('navManifest — shape invariants', () => {
     const bad = NAV_COMMANDS.filter((c) => !ALLOWED_SECTIONS.has(c.section));
     expect(bad.map((c) => `${c.id}:${c.section}`)).toEqual([]);
   });
+
+  it('every parentPath references a declared command path', () => {
+    const commandPaths = new Set(NAV_COMMANDS.map((c) => c.path));
+    const parentPaths = NAV_COMMANDS.filter((c) => c.parentPath).map((c) => c.parentPath);
+    expect(parentPaths.length).toBeGreaterThan(0);
+    expect(parentPaths.every((p) => commandPaths.has(p))).toBe(true);
+
+    const casting = NAV_COMMANDS.find((c) => c.id === 'nav.create.casting');
+    const environments = NAV_COMMANDS.find((c) => c.id === 'nav.create.environments');
+    const objects = NAV_COMMANDS.find((c) => c.id === 'nav.create.objects');
+    expect(casting?.parentPath).toBe('/catalog');
+    expect(environments?.parentPath).toBe('/catalog');
+    expect(objects?.parentPath).toBe('/catalog');
+  });
 });
 
 describe('navManifest — persistent mind dashboard', () => {
