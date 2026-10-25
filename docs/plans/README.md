@@ -27,3 +27,7 @@ and the topic docs elsewhere under `docs/`.
 - [2026-10-25 — creative catalog primitives](./2026-10-25-creative-primitives.md):
   explicit universe ownership, shared editing, usage labels and independent forks
   over the existing catalog model, with staged legacy ambiguity.
+
+- [2026-10-25 — Casting detail performance](./2026-10-25-casting-detail-performance.md):
+  measured payload/query scaling, lean first render and lazy secondary reads,
+  with explicit limits on live performance claims.

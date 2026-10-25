@@ -28,6 +28,7 @@ import {
   catalogMediaVoiceMemoSchema,
   catalogPortraitSetSchema,
   catalogIngredientQuerySchema,
+  catalogIngredientDetailQuerySchema,
   catalogTagQuerySchema,
   catalogScrapCommitSchema,
   catalogExtractRequestSchema,
@@ -272,50 +273,37 @@ router.get('/ingredients/:id', asyncHandler(async (req, res) => {
   });
 }));
 
-// Batched detail hydration: ONE round-trip for everything the detail page loads
-// on mount — refs + sources + relations + revisions + media + missing-media —
-// replacing five separate client requests. Post-mutation refreshes still hit the
-// granular endpoints (revisions / media) so a single attach or restore doesn't
-// re-pull the whole record. Embedding is stripped like the single-ingredient
-// route (opt in with `?includeEmbedding=true`).
+// Full detail remains the compatibility default. Profile and media projections
+// let library editors render before history, images and prose usage are read.
 router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
+  const projection = validateRequest(catalogIngredientDetailQuerySchema, req.query);
   const ing = await catalogDB.getIngredient(req.params.id);
   if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  if (projection.view === 'media') {
+    const media = await catalogDB.listMediaForIngredient(req.params.id);
+    return res.json({ media, missingMedia: await catalogDB.getMissingMediaForIngredient(req.params.id, { media }) });
+  }
+  const full = projection.view === 'full';
   const { getPrimitiveContext } = await import('../services/catalogPrimitives.js');
-  const [context, sources, relations, revisions, media, missingMedia, sharedIdentity] = await Promise.all([
-    // Missing references remain visible for cleanup, with resolved:false so
-    // the shared usage panel never deep-links to a deleted container.
-    getPrimitiveContext(req.params.id),
+  const [context, sources, relations, revisions, media, sharedIdentity, coverMedia] = await Promise.all([
+    getPrimitiveContext(req.params.id, { includeDerived: full }),
     catalogDB.listSourcesForIngredient(req.params.id),
     catalogDB.listRelationsForIngredient(req.params.id),
-    catalogDB.listIngredientRevisions(req.params.id, { limit: 50 }),
-    catalogDB.listMediaForIngredient(req.params.id),
-    catalogDB.getMissingMediaForIngredient(req.params.id),
+    full ? catalogDB.listIngredientRevisions(req.params.id, { limit: 50 }) : null,
+    full ? catalogDB.listMediaForIngredient(req.params.id) : null,
     getCatalogIdentityAccess(req.params.id),
+    full ? null : catalogDB.getIngredientMediaCover(req.params.id),
   ]);
-  // "From the same source" (#7617): sibling ingredients extracted from each of
-  // THIS ingredient's source scraps, batched in one query so the detail page
-  // needs no second round-trip to answer "what else came out of this piece?".
-  const siblingsByScrap = await catalogDB.listSiblingIngredientsBySource(
-    req.params.id,
-    sources.map((s) => s.scrapId),
-  );
-  const sourcesWithSiblings = sources.map((s) => ({
-    ...s,
-    siblings: siblingsByScrap.get(s.scrapId) || [],
-  }));
-  const includeEmbedding = req.query.includeEmbedding === 'true';
+  const siblingsByScrap = await catalogDB.listSiblingIngredientsBySource(req.params.id, sources.map((source) => source.scrapId));
+  const sourcesWithSiblings = sources.map((source) => ({ ...source, siblings: siblingsByScrap.get(source.scrapId) || [] }));
   const { embedding, ...rest } = ing;
   res.json({
-    ingredient: includeEmbedding ? { ...rest, embedding } : rest,
-    sharedIdentity,
-    refs: context.refs,
-    universeContext: context,
-    sources: sourcesWithSiblings,
-    relations,                                 // { outbound, inbound }
-    revisions: Array.isArray(revisions?.items) ? revisions.items : [],
-    media,                                      // array of attachments
-    missingMedia,                               // array of { mediaKey, ... }
+    ingredient: projection.includeEmbedding === 'true' ? { ...rest, embedding } : rest,
+    sharedIdentity, refs: context.refs, universeContext: context,
+    sources: sourcesWithSiblings, relations,
+    ...(!full ? { coverMedia } : {}),
+    ...(full ? { revisions: Array.isArray(revisions?.items) ? revisions.items : [], media,
+      missingMedia: await catalogDB.getMissingMediaForIngredient(req.params.id, { media }) } : {}),
   });
 }));
 
@@ -462,8 +450,11 @@ router.post('/ingredients/:id/revisions/:revisionId/restore', asyncHandler(async
 }));
 
 router.delete('/ingredients/:id', asyncHandler(async (req, res) => {
-  const refs = await resolveRefs(await catalogDB.listRefsForIngredient(req.params.id));
-  if (refs.some((ref) => ref.resolved && !(ref.refKind === 'universe' && ref.role === 'owner'))) {
+  const refs = await catalogDB.listRefsForIngredient(req.params.id);
+  const targets = await resolveRefs(refs);
+  // Resolution describes targets only. Keep the association's role for the
+  // ownership exemption rather than discarding it with the bounded projection.
+  if (refs.some((ref, index) => targets[index]?.resolved && !(ref.refKind === 'universe' && ref.role === 'owner'))) {
     throw new ServerError('Remove this primitive from its containers before deleting it. Ownership and media can be kept.', { status: 409, code: 'CATALOG_PRIMITIVE_IN_USE' });
   }
   await catalogDB.deleteIngredient(req.params.id);

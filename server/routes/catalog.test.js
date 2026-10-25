@@ -596,6 +596,9 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/details — batched hy
     createdIngredientIds.add(b.id);
     await catalogDB.linkIngredientRelation(a.id, b.id, 'lives-in');
     await catalogDB.updateIngredient(a.id, { payload: { physicalDescription: 'lead, edited' } }); // → a revision
+    await catalogDB.attachMedia(a.id, 'example-detail-cover.png', 'portrait');
+    await catalogDB.attachMedia(a.id, 'example-detail-reference.png', 'reference');
+    await catalogDB.attachMedia(a.id, 'example-detail-archive.png', 'reference', { role: 'archive:old' });
 
     const r = await request(makeApp()).get(`/api/catalog/ingredients/${a.id}/details`);
     expect(r.status).toBe(200);
@@ -609,6 +612,11 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/details — batched hy
     expect(r.body.revisions.length).toBeGreaterThan(0);          // the edit above
     // The relation A→B shows up as an outbound edge to B.
     expect(r.body.relations.outbound.some((e) => e.toId === b.id && e.kind === 'lives-in')).toBe(true);
+    const profile = await request(makeApp()).get(`/api/catalog/ingredients/${a.id}/details?view=profile`);
+    expect(profile.status).toBe(200);
+    expect(profile.body.coverMedia).toEqual({ portraitKey: 'example-detail-cover.png', referenceKey: 'example-detail-reference.png' });
+    expect(profile.body).not.toHaveProperty('media');
+    expect(profile.body).not.toHaveProperty('revisions');
   });
 
   it('404s for an unknown ingredient id', async () => {
@@ -650,6 +658,7 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/details — batched hy
     const ing = await catalogDB.createIngredient({ type: 'character', name: `Dangling Probe ${NONCE}` });
     createdIngredientIds.add(ing.id);
     await catalogDB.linkIngredientToRef(ing.id, 'universe', liveUni, 'cast-character');
+    await catalogDB.linkIngredientToRef(ing.id, 'universe', liveUni, 'owner');
     await catalogDB.linkIngredientToRef(ing.id, 'universe', deadUni, 'reference');
 
     const r = await request(makeApp()).get(`/api/catalog/ingredients/${ing.id}/details`);

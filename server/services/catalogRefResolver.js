@@ -55,6 +55,10 @@ export async function describeCatalogRefs(refs, exec = query) {
   const names = new Map();
   const byKind = new Map();
   for (const ref of refs) {
+    if (ref.resolved === true && typeof ref.refName === 'string' && ref.refName) {
+      names.set(JSON.stringify([ref.refKind, ref.refId]), ref.refName);
+      continue;
+    }
     if (!byKind.has(ref.refKind)) byKind.set(ref.refKind, new Set());
     byKind.get(ref.refKind).add(ref.refId);
   }

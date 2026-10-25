@@ -61,6 +61,7 @@ const { detailsOf } = vi.hoisted(() => ({
 
 vi.mock('../services/apiCatalog', () => ({
   getCatalogIngredientDetails: vi.fn(async () => detailsOf(CHAR_FIXTURE)),
+  getCatalogUniverseContext: vi.fn(async () => ({ ...detailsOf(CHAR_FIXTURE).universeContext, usageComplete: true })),
   listCatalogRelatedImages: vi.fn(async () => ({ items: [], total: 0, limit: 24, offset: 0 })),
   updateCatalogIngredient: vi.fn(),
   deleteCatalogIngredient: vi.fn(),
@@ -147,7 +148,7 @@ vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: v
 
 import CatalogIngredient, { buildGenerationPromptSeed } from './CatalogIngredient';
 import CatalogRelatedImages from '../components/catalog/CatalogRelatedImages';
-import { getCatalogIngredientDetails, listCatalogRelatedImages, unlinkCatalogIngredientRelation, updateCatalogIngredient, detachCatalogIngredientMedia, restoreCatalogIngredientRevision, uploadCatalogIngredientMediaFile } from '../services/apiCatalog';
+import { getCatalogIngredientDetails, getCatalogUniverseContext, listCatalogIngredientRevisions, listCatalogRelatedImages, unlinkCatalogIngredientRelation, updateCatalogIngredient, detachCatalogIngredientMedia, restoreCatalogIngredientRevision, uploadCatalogIngredientMediaFile } from '../services/apiCatalog';
 import toast from '../components/ui/Toast';
 import { getCatalogIdentity, acceptCatalogIdentity, abortCatalogIdentity } from '../services/apiCatalogIdentity';
 
@@ -167,6 +168,7 @@ const renderPage = async (path = '/catalog/character/cat-chr-1') => {
 
 beforeEach(() => {
   getCatalogIngredientDetails.mockImplementation(async () => detailsOf(CHAR_FIXTURE));
+  getCatalogUniverseContext.mockReset().mockResolvedValue({ ...detailsOf(CHAR_FIXTURE).universeContext, usageComplete: true });
   listCatalogRelatedImages.mockReset().mockResolvedValue({ items: [], total: 0, limit: 24, offset: 0 });
   updateCatalogIngredient.mockReset();
   unlinkCatalogIngredientRelation.mockReset();
@@ -1558,4 +1560,39 @@ describe('contextual unlock in Create libraries', () => {
       await waitFor(() => expect(api.renderCatalogSheet).toHaveBeenCalledTimes(1));
     },
   );
+});
+
+
+describe('Casting lean first render', () => {
+  it('edits the profile while usage is pending and loads history/media only when requested, preserving its draft', async () => {
+    const profile = detailsOf(CHAR_FIXTURE);
+    delete profile.revisions; delete profile.media; delete profile.missingMedia;
+    profile.universeContext = { ...profile.universeContext, usageComplete: false };
+    profile.coverMedia = { portraitKey: 'example-cover.png', referenceKey: null };
+    const usage = Promise.withResolvers();
+    const images = Promise.withResolvers();
+    getCatalogIngredientDetails.mockClear().mockImplementation((_id, options) => options?.view === 'media' ? images.promise : Promise.resolve(profile));
+    getCatalogUniverseContext.mockImplementation(() => usage.promise);
+    listCatalogIngredientRevisions.mockClear().mockResolvedValue({ items: [] });
+    const { router } = await renderPage('/casting/cat-chr-1/profile');
+    const description = await screen.findByDisplayValue(CHAR_FIXTURE.payload.physicalDescription);
+    expect(screen.getByAltText(`${CHAR_FIXTURE.name} cover`)).toHaveAttribute('src', '/data/image-thumbnails/example-cover.webp');
+    expect(getCatalogIngredientDetails.mock.calls.map(([, options]) => options.view)).toEqual(['profile']);
+    expect(listCatalogIngredientRevisions).not.toHaveBeenCalled();
+    expect(screen.queryByText('No revisions recorded yet.')).toBeNull();
+    fireEvent.change(description, { target: { value: 'Draft remains local.' } });
+    await act(async () => usage.resolve({ ...profile.universeContext, usageComplete: true }));
+    expect(screen.getByDisplayValue('Draft remains local.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Load revision history' }));
+    await screen.findByText('No revisions recorded yet.');
+    expect(listCatalogIngredientRevisions).toHaveBeenCalledTimes(1);
+    await act(async () => router.navigate('/casting/cat-chr-1/references'));
+    expect(getCatalogIngredientDetails.mock.calls.map(([, options]) => options.view)).toEqual(['profile', 'media']);
+    expect(screen.getByText('Loading media…')).toBeInTheDocument();
+    await act(async () => router.navigate('/casting/cat-chr-1/profile'));
+    await act(async () => images.resolve({ media: [], missingMedia: [] }));
+    expect(screen.getByDisplayValue('Draft remains local.')).toBeInTheDocument();
+    expect(screen.queryByAltText(`${CHAR_FIXTURE.name} cover`)).toBeNull();
+    expect(listCatalogIngredientRevisions).toHaveBeenCalledTimes(1);
+  });
 });

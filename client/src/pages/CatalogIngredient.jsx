@@ -27,8 +27,6 @@ import {
   unlinkCatalogIngredientRelation,
   listCatalogIngredientRevisions,
   restoreCatalogIngredientRevision,
-  listCatalogIngredientMedia,
-  listCatalogIngredientMissingMedia,
   attachCatalogIngredientMedia,
   setCatalogIngredientPortrait,
   detachCatalogIngredientMedia,
@@ -181,6 +179,7 @@ function IngredientEditor() {
   // there; otherwise to the catalog.
   const { pathname } = useLocation();
   const library = libraryForPathname(pathname);
+  const detailView = library ? 'profile' : undefined;
   const backPath = library?.path || '/catalog';
   // Merged type registry (system + user-defined). Falls back synchronously to
   // the static built-ins so the editor renders before the fetch resolves.
@@ -204,11 +203,21 @@ function IngredientEditor() {
   // the ingredient record so the panel can refresh independently after add/
   // remove without re-fetching the whole detail payload.
   const [relations, setRelations] = useState({ outbound: [], inbound: [] });
-  const [revisions, setRevisions] = useState([]);
+  const [revisions, setRevisions] = useState(null);
+  const [revisionsLoading, setRevisionsLoading] = useState(false);
+  const [revisionsError, setRevisionsError] = useState(null);
+  const historyRequested = useRef(false);
+  const historySequence = useRef(0);
   // Media attachments + the subset of their keys that don't resolve against the
   // local library (federated-in but asset not yet present). `missingMedia` is a
   // Set of media_keys driving the integrity badge on each thumbnail.
   const [media, setMedia] = useState([]);
+  const [mediaReady, setMediaReady] = useState(false);
+  const [mediaLoading, setMediaLoading] = useState(false);
+  const [mediaError, setMediaError] = useState(null);
+  const mediaSequence = useRef(0);
+  const mediaReadyRef = useRef(false);
+  mediaReadyRef.current = mediaReady;
   const [missingMedia, setMissingMedia] = useState(new Set());
   const [ownerUniverse, setOwnerUniverse] = useState(null);
   const [showCharacterEditor, setShowCharacterEditor] = useState(false);
@@ -225,12 +234,17 @@ function IngredientEditor() {
     setRecord((current) => current ? { ...current, universeContext: context, refs: context.refs } : current);
   }, []);
 
-  const refreshRevisions = useCallback(() => {
-    if (!id) return;
-    listCatalogIngredientRevisions(id, { limit: 50, silent: true })
-      .then((r) => setRevisions(Array.isArray(r?.items) ? r.items : []))
-      .catch(() => { /* history is non-critical — leave the panel empty */ });
-  }, [id]);
+  const refreshRevisions = useCallback((force = false) => {
+    if (!id || !force && !historyRequested.current) return;
+    historyRequested.current = true;
+    const sequence = ++historySequence.current;
+    setRevisionsLoading(true); setRevisionsError(null);
+    listCatalogIngredientRevisions(id, { limit: 50, silent: true }).then((result) => {
+      if (!Array.isArray(result?.items)) throw new Error('Revision history response is unavailable');
+      if (mountedRef.current && sequence === historySequence.current) setRevisions(result.items);
+    }).catch((error) => { if (mountedRef.current && sequence === historySequence.current) setRevisionsError(error.message); })
+      .finally(() => { if (mountedRef.current && sequence === historySequence.current) setRevisionsLoading(false); });
+  }, [id, mountedRef]);
 
   const [externalDetails, setExternalDetails] = useState(null);
   const editSnapshot = useRef(null);
@@ -239,7 +253,7 @@ function IngredientEditor() {
   )) };
   const applyDetails = useCallback((d) => {
     const r = d.ingredient;
-    setRecord({ ...r, refs: d.refs, universeContext: d.universeContext, sources: d.sources, sharedIdentity: d.sharedIdentity || null });
+    setRecord({ ...r, refs: d.refs, universeContext: d.universeContext, sources: d.sources, sharedIdentity: d.sharedIdentity || null, coverMedia: d.coverMedia || null });
     setName(r.name || '');
     setTags(Array.isArray(r.tags) ? r.tags : []);
     setPayload(r.payload && typeof r.payload === 'object' ? { ...r.payload } : {});
@@ -247,25 +261,23 @@ function IngredientEditor() {
       outbound: Array.isArray(d.relations?.outbound) ? d.relations.outbound : [],
       inbound: Array.isArray(d.relations?.inbound) ? d.relations.inbound : [],
     });
-    setRevisions(Array.isArray(d.revisions) ? d.revisions : []);
-    setMedia(Array.isArray(d.media) ? d.media : []);
-    setMissingMedia(new Set(Array.isArray(d.missingMedia) ? d.missingMedia.map((m) => m.mediaKey) : []));
+    if (Array.isArray(d.revisions)) { setRevisions(d.revisions); historyRequested.current = true; }
+    if (Array.isArray(d.media)) { setMedia(d.media); setMediaReady(true); }
+    if (Array.isArray(d.missingMedia)) setMissingMedia(new Set(d.missingMedia.map((m) => m.mediaKey)));
   }, []);
   useEffect(() => {
     if (externalDetails?.ingredient?.updatedAt && record?.updatedAt
       && Date.parse(externalDetails.ingredient.updatedAt) <= Date.parse(record.updatedAt)) setExternalDetails(null);
   }, [record?.updatedAt, externalDetails]);
 
-  // One batched request hydrates the whole page on mount: ingredient + refs +
-  // sources + relations + revisions + media + missing-media. Post-mutation
-  // updates still use the granular refreshRevisions / refreshMedia callbacks +
-  // optimistic relation state, so a single edit doesn't re-pull everything.
+  // Library profiles load the editable record and direct context first. Media,
+  // history and derived story usage have separate reads after first render.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setSaving(false);
     setUnlocking(false);
-    getCatalogIngredientDetails(id, { silent: true })
+    getCatalogIngredientDetails(id, { silent: true, view: detailView })
       .then((d) => {
         if (cancelled) return;
         if (!d?.ingredient) {
@@ -284,7 +296,7 @@ function IngredientEditor() {
         navigate(backPath);
       });
     return () => { cancelled = true; };
-  }, [id, navigate, backPath, mergeVersion, applyDetails]);
+  }, [id, navigate, backPath, mergeVersion, applyDetails, detailView]);
 
   // Keep ownership fences current without discarding an unsaved creative draft.
   // The original route ID is intentional: a retained-source URL must stay read-only.
@@ -292,14 +304,16 @@ function IngredientEditor() {
     let active = true;
     let request = 0;
     const refreshIdentity = () => {
+      if (mediaReadyRef.current) setMediaReady(false);
       const current = ++request;
-      getCatalogIngredientDetails(id, { silent: true }).then(details => {
+      getCatalogIngredientDetails(id, { silent: true, view: detailView }).then(details => {
         if (!active || current !== request || !details?.ingredient) return;
         setRecord(previous => previous ? { ...previous, sharedIdentity: details.sharedIdentity || null } : previous);
         if (details.ingredient.id === editSnapshot.current.id && details.ingredient.updatedAt
           && details.ingredient.updatedAt !== editSnapshot.current.updatedAt) {
           if (editSnapshot.current.dirty) setExternalDetails(details);
           else applyDetails(details);
+          refreshRevisions();
         }
       }).catch(() => { if (active) toast.error('Unable to refresh shared identity status. Reload before editing.'); });
     };
@@ -311,7 +325,7 @@ function IngredientEditor() {
     socket.on('catalog:identity-changed', changed);
     socket.on('connect', refreshIdentity);
     return () => { active = false; socket.off('catalog:identity-changed', changed); socket.off('catalog:primitive-changed', primitiveChanged); socket.off('connect', refreshIdentity); };
-  }, [id, applyDetails]);
+  }, [id, applyDetails, detailView, refreshRevisions]);
 
   // Add an outbound edge (this ingredient → picked target). Optimistically
   // appends to local state so the panel updates without a refetch.
@@ -351,20 +365,23 @@ function IngredientEditor() {
     }));
   };
 
-  // Load media attachments + the integrity (missing-key) overlay. Both refresh
-  // independently of the detail payload so attach/detach updates the panel
-  // without re-fetching the whole record.
+  // One secondary read supplies attachments and integrity together. Reusing its
+  // rows avoids a second media query and filesystem scan on every refresh.
   const refreshMedia = useCallback(() => {
     if (!id) return;
-    listCatalogIngredientMedia(id, { silent: true })
-      .then((rows) => setMedia(Array.isArray(rows) ? rows : []))
-      .catch(() => { /* media is non-critical — leave the panel empty */ });
-    listCatalogIngredientMissingMedia(id, { silent: true })
-      .then((r) => setMissingMedia(new Set(Array.isArray(r?.missing) ? r.missing.map((m) => m.mediaKey) : [])))
-      .catch(() => { /* integrity overlay is best-effort */ });
-  }, [id]);
-  // Initial media/relations/revisions are seeded by the batched details load
-  // above; refreshMedia / refreshRevisions only run after a mutation.
+    const sequence = ++mediaSequence.current;
+    setMediaLoading(true); setMediaError(null);
+    getCatalogIngredientDetails(id, { view: 'media', silent: true }).then((result) => {
+      if (!Array.isArray(result?.media) || !Array.isArray(result?.missingMedia)) throw new Error('Media response is unavailable');
+      if (!mountedRef.current || sequence !== mediaSequence.current) return;
+      setMedia(result.media); setMissingMedia(new Set(result.missingMedia.map((item) => item.mediaKey))); setMediaReady(true);
+    }).catch((error) => { if (mountedRef.current && sequence === mediaSequence.current) setMediaError(error.message); })
+      .finally(() => { if (mountedRef.current && sequence === mediaSequence.current) setMediaLoading(false); });
+  }, [id, mountedRef]);
+  const mediaTab = library && record?.type === library.type ? resolveDetailTab(library, tabParam) : 'references';
+  useEffect(() => {
+    if (record?.id && mediaTab !== 'profile' && !mediaReady) refreshMedia();
+  }, [record?.id, mediaTab, mediaReady, refreshMedia]);
 
   // Attach a media key (gallery filename) as a typed attachment. `kind` defaults
   // to 'reference' for drag-drop / picker; the "set portrait" path routes
@@ -505,7 +522,7 @@ function IngredientEditor() {
   const refreshSheetPointers = useCallback(() => {
     if (!id) return;
     const requestedId = id;
-    getCatalogIngredientDetails(id, { silent: true })
+    getCatalogIngredientDetails(id, { silent: true, view: detailView })
       .then((d) => {
         if (activeVisitRef.current.id !== requestedId || !d?.ingredient) return;
         const fresh = ingredientPayload(d.ingredient.payload);
@@ -520,7 +537,7 @@ function IngredientEditor() {
         toast.success('Reference sheet ready');
       })
       .catch(() => { toast.error('Reference sheet rendered — reload to see it'); });
-  }, [id]);
+  }, [id, detailView]);
 
   const handleSave = async () => {
     if (!record || identityReadOnly || unlocking) return;
@@ -671,9 +688,9 @@ function IngredientEditor() {
   const isReferenceTabRow = (m) => isReferenceTabMedia(m, liveLookIds);
   const coverUrl = ingredientCoverUrl({
     ...record,
-    thumbnailKey: media.find((m) => m.kind === 'portrait')?.mediaKey || record.thumbnailKey,
+    thumbnailKey: media.find((m) => m.kind === 'portrait')?.mediaKey || (!mediaReady && record.coverMedia?.portraitKey) || record.thumbnailKey,
     payload,
-  }) || ingredientCoverUrl({ thumbnailKey: media.find((m) => m.kind === 'reference' && !m.role?.startsWith('archive:'))?.mediaKey });
+  }) || ingredientCoverUrl({ thumbnailKey: media.find((m) => m.kind === 'reference' && !m.role?.startsWith('archive:'))?.mediaKey || (!mediaReady && record.coverMedia?.referenceKey) });
   const renderBlockedReason = (subject) => identityReason || (record.payload?.locked === true
     ? 'Unlock this record above before rendering.'
     : saving
@@ -878,7 +895,10 @@ function IngredientEditor() {
             }} />
         </div>
 
-        {activeTab === 'sheets' && (
+        {mediaTab !== 'profile' && (mediaError || !mediaReady) && <div role="status" className="text-sm text-gray-400">
+          {mediaError || 'Loading media…'}{mediaError && <button type="button" onClick={refreshMedia} disabled={mediaLoading} className="ml-2 text-port-accent underline">Retry media</button>}
+        </div>}
+        {activeTab === 'sheets' && mediaReady && (
           <CatalogSheetsPanel
             ingredientId={record.id}
             payload={payload}
@@ -893,7 +913,7 @@ function IngredientEditor() {
           />
         )}
 
-        {activeTab === 'looks' && (
+        {activeTab === 'looks' && mediaReady && (
           <CatalogLooksPanel
             key={record.id}
             ingredientId={record.id}
@@ -912,7 +932,7 @@ function IngredientEditor() {
           />
         )}
 
-        {activeTab === 'plates' && (
+        {activeTab === 'plates' && mediaReady && (
           <CatalogPlatesPanel
             plates={media.filter(isPlateMedia).map(protectMedia)}
             candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabRow(m)).map(protectMedia)}
@@ -922,7 +942,7 @@ function IngredientEditor() {
           />
         )}
 
-        {(activeTab === 'profile' ? !tabs : activeTab === 'references' || activeTab === 'images') && (
+        {mediaReady && (activeTab === 'profile' ? !tabs : activeTab === 'references' || activeTab === 'images') && (
           <MediaPanel
             readOnly={identityReadOnly}
             referenceLibrary={record.type === 'character' ? { ingredientId: record.id, forms: formsOf(record.payload), media: media.map(protectMedia), onChanged: refreshMedia } : null}
@@ -944,7 +964,7 @@ function IngredientEditor() {
           />
         )}
 
-        {(activeTab === 'references' || activeTab === 'images' || (!tabs && activeTab === 'profile')) && (
+        {mediaReady && (activeTab === 'references' || activeTab === 'images' || (!tabs && activeTab === 'profile')) && (
           <CatalogRelatedImages key={record.id} ingredientId={record.id} name={record.name}
             excludedFilenames={[
               payload.primaryImageRef,
@@ -968,7 +988,7 @@ function IngredientEditor() {
           <RevisionsPanel
             readOnly={identityReadOnly}
             retainedSourceId={record.sharedIdentity?.sourceId}
-            revisions={revisions}
+            revisions={revisions} loading={revisionsLoading} error={revisionsError} onLoad={() => refreshRevisions(true)}
             current={record}
             fields={fields}
             onRestore={handleRestore}
@@ -1863,7 +1883,7 @@ function diffRevisionAgainstCurrent(revision, current, fields) {
   return out;
 }
 
-function RevisionsPanel({ revisions, current, fields, onRestore, readOnly = false, retainedSourceId }) {
+function RevisionsPanel({ revisions, loading, error, onLoad, current, fields, onRestore, readOnly = false, retainedSourceId }) {
   const [openId, setOpenId] = useState(null);
   const [restoring, setRestoring] = useState(null);
   const [pendingRestore, setPendingRestore] = useState(null);
@@ -1885,7 +1905,9 @@ function RevisionsPanel({ revisions, current, fields, onRestore, readOnly = fals
         <History size={15} className="text-port-accent" aria-hidden="true" /> Revision history
         {list.length > 0 && <span className="text-xs text-gray-500 font-normal">({list.length})</span>}
       </h2>
-      {list.length === 0 ? (
+      {error && <p role="alert" className="text-xs text-port-error">{error} <button type="button" onClick={onLoad} disabled={loading} className="underline">Retry history</button></p>}
+      {loading && revisions !== null && <p role="status" className="text-xs text-gray-400">Refreshing history…</p>}
+      {revisions === null ? <button type="button" onClick={onLoad} disabled={loading} className="min-h-[44px] px-3 py-2 text-xs text-port-accent border border-port-border rounded">{loading ? 'Loading history…' : 'Load revision history'}</button> : list.length === 0 ? (
         <p className="text-xs text-gray-500">No revisions recorded yet.</p>
       ) : (
         <ul className="space-y-1.5">
