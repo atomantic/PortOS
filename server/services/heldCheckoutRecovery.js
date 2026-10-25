@@ -24,7 +24,7 @@ import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { realpathSync, constants } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { lstat, stat, realpath, readlink, readdir, opendir, readFile, chmod, open, mkdir, mkdtemp, unlink, symlink } from 'node:fs/promises';
-import { devNull, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve, relative, sep } from 'node:path';
 import { sameRetirementCheckout, unresolvedRetirements } from '../lib/reconcileRetirementEvidence.js';
@@ -649,21 +649,20 @@ async function retirementPolicy(repoPath, branch, opts, reviewIdentity = {}) {
     const candidates = policies.flatMap(agent => (agent.status === 'completed' && Array.isArray(agent.metadata?.completedCheckouts) ? agent.metadata.completedCheckouts : [])
       .filter(row => row?.branch === branch && completedCheckoutReceiptValid(agent, row))
       .map(row => ({ agent, row })));
-    const delivered = [];
+    const siblings = [];
     const repository = await realpath(repoPath).catch(() => null);
     const canonical = path => process.platform === 'win32' ? path?.toLowerCase() : path;
     if (candidates.length <= 25) for (const { agent, row } of candidates) {
       const capturedRepository = await realpath(row.repoPath).catch(() => null);
       if (!repository || !capturedRepository || canonical(repository) !== canonical(capturedRepository)) continue;
-      const ancestor = row.head === forge.prHead || await execGit(['--no-replace-objects', '-c', 'core.commitGraph=false',
-        'merge-base', '--is-ancestor', row.head, forge.prHead], repoPath,
-      { ignoreExitCode: true, timeout: 2000,
-        env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_GRAFT_FILE: devNull } })
-        .then(result => result.exitCode === 0, () => false);
-      if (ancestor) delivered.push({ agentId: agent.id, capturedHead: row.head, capturedAt: row.capturedAt,
+      // Delivery is established for the released detached head, not this
+      // other generation. Its rewritten or unfinished work remains untouched.
+      // The policy below still requires the exact valid capture and a distinct
+      // physical generation, and never grants deletion of its named branch.
+      siblings.push({ agentId: agent.id, capturedHead: row.head, capturedAt: row.capturedAt,
         path: row.path, incarnation: row.incarnation, detachedCheckoutIdentity: reviewIdentity.detachedCheckoutIdentity });
     }
-    reviewIdentity = { ...reviewIdentity, detachedDeliveredCaptures: delivered };
+    reviewIdentity = { ...reviewIdentity, detachedSiblingCaptures: siblings };
   }
   const checkoutIdentities = {};
   if (reviewIdentity.verifiedPrHead === reviewIdentity.tip && reviewIdentity.tip && Array.isArray(policies)) {
@@ -775,8 +774,10 @@ async function readCheckoutReviewPrerequisites(input, opts) {
   const identity = await integratedPolicyReviewIdentity(repoPath, release, prUrl, forge);
   if (!identity) return { ok: false, reason: 'retirement-local-objects-missing' };
   if (!release.branch) {
-    identity.detachedCheckoutIdentity = await readRetirementCheckoutIdentity(release.path);
-    if (!identity.detachedCheckoutIdentity) return { ok: false, reason: 'checkout-identity-changed' };
+    const observed = await observeReviewCheckoutIdentity(release.path);
+    if (!observed) return { ok: false, reason: 'checkout-identity-changed' };
+    identity.detachedCheckoutIdentity = observed.pointer;
+    identity.detachedCheckoutGitdir = observed.gitdir;
   }
   const policy = await retirementPolicy(repoPath, policyBranch, opts, identity);
   if (policy.reason) return { ok: false, reason: policy.reason };
@@ -881,13 +882,19 @@ async function reviewCurrentCheckout(input, opts = {}, captureContent) {
   return prerequisites.ok ? buildCurrentCheckoutReview(input, prerequisites, opts, captureContent) : prerequisites;
 }
 
-async function previewCheckoutIdentity(path) {
+async function observeReviewCheckoutIdentity(path) {
   const pointer = await readRetirementCheckoutIdentity(path);
   if (!pointer) return null;
   const gitdir = await realpath((await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim());
   const info = await lstat(gitdir, { bigint: true });
   if (!info.isDirectory() || await readRetirementCheckoutIdentity(path) !== pointer) return null;
-  return JSON.stringify([pointer, gitdir, String(info.dev), String(info.ino), String(info.birthtimeNs)]);
+  return { pointer, gitdir: { path: gitdir, dev: String(info.dev), ino: String(info.ino), birthtimeNs: String(info.birthtimeNs) } };
+}
+
+async function previewCheckoutIdentity(path) {
+  const observed = await observeReviewCheckoutIdentity(path);
+  return observed ? JSON.stringify([observed.pointer, observed.gitdir.path,
+    observed.gitdir.dev, observed.gitdir.ino, observed.gitdir.birthtimeNs]) : null;
 }
 
 /** Preview is evidence, never a retirement reservation or mutation grant. Keep
