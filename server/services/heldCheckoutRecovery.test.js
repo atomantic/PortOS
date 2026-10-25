@@ -2559,7 +2559,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner', 'normal-completed', 'normal-invalid-time'])('keeps an original sibling obligation separate from a detached copy: %s', async scenario => {
+  it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner', 'normal-completed', 'normal-invalid-time', 'normal-resumed-lineage'])('keeps an original sibling obligation separate from a detached copy: %s', async scenario => {
     const c = await reviewedCheckout(`orphan-sibling-${scenario}`);
     const namedPath = c.path;
     const namedBranch = c.release.branch;
@@ -2607,12 +2607,48 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const release = { path, branch: null, head: c.release.head, locked: false, lockReason: null };
     c.forge.publishedBranch = namedBranch; c.forge.exactAliasHead = release.head;
     injected.policies = [agent];
+    let lineageControls = [];
+    if (scenario === 'normal-resumed-lineage') {
+      agent.taskId = 'original-cleanup-task';
+      const ancestors = ['failed-first', 'failed-second'].map((id, index) => {
+        const startedAt = new Date(Date.parse(agent.startedAt) - (2 - index) * 60_000).toISOString();
+        const completedAt = new Date(Date.parse(startedAt) + 1000).toISOString();
+        const workspacePath = join(external, id);
+        return { id, taskId: agent.taskId, status: 'completed', startedAt, completedAt,
+          result: { success: false, executionSuccess: false, validationPassed: null },
+          metadata: { sourceWorkspace: repo, workspacePath, worktreeBranch: namedBranch,
+            prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { branch: namedBranch, url: c.forge.prUrl },
+            resumedFromAgentId: index ? 'failed-first' : null,
+            completedCheckouts: [{ ...agent.metadata.completedCheckouts[0], version: 1, agentId: id,
+              startedAt, capturedAt: completedAt, path: workspacePath }] } };
+      });
+      agent.metadata.resumedFromAgentId = 'failed-second';
+      injected.policies = [...ancestors, agent];
+      const differentGeneration = structuredClone(agent.metadata.completedCheckouts[0].incarnation);
+      differentGeneration.pointer.ino = String(BigInt(differentGeneration.pointer.ino) + 1n);
+      lineageControls = [[ancestors[0], 'taskId', 'unrelated-task'],
+        [ancestors[0].metadata.completedCheckouts[0], 'incarnation', differentGeneration],
+        [ancestors[0].metadata, 'prCompletionPolicy', 'leave-open'], [ancestors[0], 'status', 'running']];
+    }
     if (scenario === 'missing-receipt') agent.metadata.completedCheckouts = [];
     if (scenario === 'human-handoff') agent.metadata.prCompletionPolicy = 'leave-open';
     if (scenario === 'active-owner') { agent.status = 'running'; c.opts.readAgents = async () => [agent]; }
-    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'worktree-unmanaged-location' }] });
+    const originalRelease = scenario === 'normal-resumed-lineage'
+      ? { ...c.release, locked: false, lockReason: null, checkoutIdentity: await readRetirementCheckoutIdentity(namedPath) } : null;
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [
+      ...(scenario === 'normal-resumed-lineage' ? [{ ...originalRelease, reason: 'retirement-receipt-unverified' }] : []),
+      { ...release, reason: 'worktree-unmanaged-location' },
+    ] });
+    const originalPolicies = structuredClone(injected.policies);
+    for (const [target, key, value] of lineageControls) {
+      const prior = target[key]; target[key] = value;
+      const refused = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release, prUrl: c.forge.prUrl }, c.opts);
+      expect(refused, `${key}: ${JSON.stringify(refused)}`).toMatchObject({ ok: false });
+      expect(await registered(path)).toBe(true); expect(await registered(namedPath)).toBe(true);
+      target[key] = prior;
+    }
     const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release, prUrl: c.forge.prUrl }, c.opts);
-    if (!['confirmed', 'owner-alias', 'normal-completed'].includes(scenario)) {
+    if (!['confirmed', 'owner-alias', 'normal-completed', 'normal-resumed-lineage'].includes(scenario)) {
       const reason = scenario === 'human-handoff' ? 'pr-completion-human-handoff'
         : 'retirement-policy-not-legacy-completed';
       expect(prepared).toMatchObject({ ok: false, reason });
@@ -2620,7 +2656,16 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       return;
     }
     expect(prepared.reason).toBeUndefined();
-    expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, ...(scenario === 'normal-completed' ? { completedSibling: true } : { orphanedSibling: true }) }] } } });
+    if (scenario === 'normal-resumed-lineage') {
+      const detachedIdentity = await readRetirementCheckoutIdentity(path);
+      expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [
+        { id: 'failed-first', success: false, resumedCleanup: { successorAgentId: agent.id, detachedCheckoutIdentity: detachedIdentity,
+          checkoutIncarnation: agent.metadata.completedCheckouts[0].incarnation } },
+        { id: 'failed-second', success: false, resumedCleanup: { successorAgentId: agent.id, detachedCheckoutIdentity: detachedIdentity } },
+        { id: agent.id, success: false, completedSibling: true },
+      ] } } });
+    }
+    else expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, ...(scenario === 'normal-completed' ? { completedSibling: true } : { orphanedSibling: true }) }] } } });
     const result = await retireInventoriedCheckout({ appId: 'app-1', release,
       review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts);
     expect(result).toMatchObject({ ok: true, branchDeleted: false });
@@ -2629,6 +2674,16 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await registered(namedPath)).toBe(true);
     expect((await execGit(['rev-parse', namedBranch], repo)).stdout.trim()).toBe(release.head);
     expect(agent.result).toEqual(originalResult);
+    expect(injected.policies).toEqual(originalPolicies);
+    if (scenario === 'normal-resumed-lineage') {
+      const outcome = await getBranchReconcileOutcome('app-1');
+      expect(outcome.remaining).toContainEqual(expect.objectContaining({ path: namedPath, branch: namedBranch, reason: 'retirement-receipt-unverified' }));
+      const copyReceipt = outcome.retired.find(row => row.path === path);
+      expect(copyReceipt).toMatchObject({ head: release.head, branchDeleted: false,
+        checkoutIdentity: prepared.review.policy.policies.find(row => row.id === agent.id).detachedCheckoutIdentity });
+      expect(copyReceipt.branch ?? null).toBeNull();
+      expect(outcome.retired.some(row => row.path === namedPath)).toBe(false);
+    }
     expect(await archives()).toEqual([]);
   });
 

@@ -675,6 +675,7 @@ async function integratedPolicyReviewIdentity(repoPath, release, prUrl, forge, a
 }
 
 const reviewForgeOptions = (release, kind, opts) => ({ forgeAccount: opts.forgeAccount,
+  ...(!kind && { exactDeliveredHead: release.head }),
   ...(!release.branch && { exactAliasHead: release.head }),
   ...(kind === 'source-supersession' && { sourceSupersessionHead: release.head }) });
 
@@ -800,7 +801,7 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
     // merged exact-head proof. Never promote an orphan's execution to success.
     const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
     const forge = await (opts.readForge || readRetirementForgeEvidence)(app.repoPath, release.branch, prUrl,
-      { forgeAccount: app.forgeAccount ?? null }).catch(() => null);
+      reviewForgeOptions(release, kind, { ...opts, forgeAccount: app.forgeAccount ?? null })).catch(() => null);
     if (forge?.prUrl === prUrl && forge.prHead === release.head) {
       const [repoPath, checkoutPath] = await Promise.all([
         realpath(app.repoPath).catch(() => null), realpath(release.path).catch(() => null),
@@ -1603,13 +1604,15 @@ export async function fetchRetirementProofObjects(repoPath, release, prUrl, expe
   const [{ readRetirementForgeEvidence }, { getOriginInfo }, { resolveForgeExecOptions }] = await Promise.all([
     import('./heldCheckoutReview.js'), import('../lib/gitRemote.js'), import('./forgeExecOptions.js'),
   ]);
-  const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl, opts).catch(() => null);
+  const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl, { ...opts, ...(!opts.sourceSupersessionHead && { exactDeliveredHead: release.head }) }).catch(() => null);
   const origin = await getOriginInfo(repoPath).catch(() => null);
   if (!origin || !forge || forge.repository !== `${origin.host}/${origin.fullName}` || forge.prUrl !== prUrl) {
     return { ok: false, reason: 'retirement-pr-repository-mismatch' };
   }
   if (expectedHeadSha !== null && forge.prHead !== expectedHeadSha) return { ok: false, reason: 'receipt-pr-head-changed' };
-  const heads = [...new Set([forge.prHead, forge.mergeCommit, forge.targetHead ?? forge.defaultHead, forge.changeBase, forge.firstCommit])];
+  const exactDelivery = forge.scopeProof === 'exact-delivered-head' && forge.prHead === release.head && !opts.sourceSupersessionHead;
+  const heads = [...new Set([forge.prHead, forge.mergeCommit, forge.targetHead ?? forge.defaultHead,
+    ...(exactDelivery ? [forge.defaultHead] : [forge.changeBase, forge.firstCommit])])];
   if (heads.some(head => typeof head !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head))) {
     return { ok: false, reason: 'retirement-forge-unreadable' };
   }
