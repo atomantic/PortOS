@@ -48,7 +48,7 @@ vi.mock('../ui/Toast', () => ({
 
 import UniverseCanonSection from './UniverseCanonSection';
 import {
-  removeUniverseCanonEntry, removeUniverseCanonImageRef, updateUniverse, getUniverseCanonUsage,
+  removeUniverseCanonEntry, updateUniverse, getUniverseCanonUsage,
 } from '../../services/apiUniverseBuilder';
 import { unlinkCatalogIngredient } from '../../services/apiCatalog';
 
