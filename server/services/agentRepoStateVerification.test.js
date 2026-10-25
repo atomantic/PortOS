@@ -305,11 +305,14 @@ describe('verifyAgentRepoState — clean runs', () => {
 
   it.each(['OPEN', 'CLOSED'])('transfers a definitive %s undelivered PR out of the cleanup hold', async prState => {
     updateTask.mockResolvedValueOnce({ status: 'in_progress' });
+    const pending = { ...task({ openPR: false, claimFlow: true }), status: 'in_progress' };
+    pending.metadata = { ...pending.metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' };
+    getTaskById.mockResolvedValue(pending);
     localBranch(true);
     existsSync.mockReturnValue(true);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: prState, url: 'https://github.com/example/repo/pull/7' });
     const state = { ...agentState(), result: { success: false, cleanupPending: true } };
-    expect(await run({ success: false, agentState: state })).toMatchObject({ skipReason: 'cleanup-transferred-to-recovery' });
+    expect(await run({ task: pending, prExpected: false, success: false, agentState: state })).toMatchObject({ skipReason: 'cleanup-transferred-to-recovery' });
     expect(releaseRetryHold).toHaveBeenCalledOnce();
     expect(addTask).not.toHaveBeenCalled();
   });
@@ -516,6 +519,42 @@ describe('verifyAgentRepoState — clean runs', () => {
 });
 
 describe('verifyAgentRepoState — divergent runs', () => {
+  it.each(['task', 'registration'])('retires a resumed claim with openPR disabled using its %s contract', async contract => {
+    const pending = { ...task({ openPR: false, ...(contract === 'task' ? { claimFlow: true } : {}) }), status: 'in_progress' };
+    pending.metadata = { ...pending.metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' };
+    getTaskById.mockResolvedValue(pending);
+    const state = { ...agentState(contract === 'registration' ? { configClaimFlow: true } : {}),
+      result: { success: false, executionSuccess: true, cleanupPending: true } };
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    listWorktrees.mockResolvedValue([RELEASE]);
+    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
+
+    expect(await run({ task: pending, agentState: state, success: false, prExpected: false })).toMatchObject({ verified: true });
+    expect(retireInventoriedCheckout).toHaveBeenCalledWith(expect.objectContaining({
+      release: RELEASE, review: { prUrl: 'https://github.com/example/repo/pull/1', digest: 'a'.repeat(64), acceptSuperseded: false },
+    }), expect.objectContaining({ beforeMutation: expect.any(Function) }));
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
+    expect(releaseRetryHold).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unreadable claim PR pending instead of treating the skipped lookup as no delivery', async () => {
+    const pending = { ...task({ openPR: false, claimFlow: true }), status: 'in_progress' };
+    pending.metadata = { ...pending.metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' };
+    getTaskById.mockResolvedValue(pending);
+    localBranch(true);
+    findPullRequestForBranch.mockResolvedValue({ status: 'unavailable' });
+    const result = await run({ task: pending, prExpected: false, success: false,
+      agentState: { ...agentState(), result: { cleanupPending: true } } });
+    expect(result).toMatchObject({ verified: false, skipReason: 'cleanup-delivery-unverified', observed: { unreadable: ['pull-request'] } });
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(releaseRetryHold).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it('retires a clean merged branch deterministically instead of queuing an agent', async () => {
     existsSync.mockReturnValue(true);
     localBranch(true);
