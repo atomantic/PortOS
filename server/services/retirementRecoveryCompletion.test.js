@@ -82,8 +82,15 @@ beforeEach(async () => {
   const branch = 'fix/receipt-example';
   await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
   originalHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
-  release = { branch, path, head: originalHead, locked: false, lockReason: null,
-    checkoutIdentity: await readRetirementCheckoutIdentity(path), observedAt: new Date().toISOString() };
+  // Production inventory persists Git's path spelling, which can differ from
+  // a native Windows path. Prove it names the requested physical checkout.
+  const registered = (await listWorktrees(repo)).find(tree => tree.branch === `refs/heads/${branch}`);
+  const checkoutIdentity = await readRetirementCheckoutIdentity(path);
+  expect(Boolean(registered && checkoutIdentity
+    && await readRetirementCheckoutIdentity(registered.path) === checkoutIdentity),
+  'Git inventory must identify the fixture checkout').toBe(true);
+  release = { branch, path: registered.path, head: originalHead, locked: false, lockReason: null,
+    checkoutIdentity, observedAt: new Date().toISOString() };
   Object.assign(store, { app: { id: 'example-app', repoPath: repo }, schedule: { tasks: {}, executions: {} }, owners: [], unreadable: false });
   await recordBranchReconcileOutcome(store.app.id, { status: 'incomplete',
     worktreeInventory: [{ ...release, managed: false }],
