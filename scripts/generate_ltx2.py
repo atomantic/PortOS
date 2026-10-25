@@ -994,7 +994,7 @@ def _lora_report():
     return _LORA_REPORT
 
 
-def _install_adapters(pipe, specs: list[tuple[str, float]], *, ic: bool) -> None:
+def _install_adapters(pipe, specs: list[tuple[str, float]], *, ic: bool = False, user_stage_strengths=None):
     """Apply user (and, for IC, reference) adapters at inference time (#12262).
 
     Every pipeline builds its DiT through _load_transformer_with_optional_streaming,
@@ -1006,12 +1006,13 @@ def _install_adapters(pipe, specs: list[tuple[str, float]], *, ic: bool) -> None
     attach once, before stage 1 (see install_pipeline_adapters).
     """
     if not specs and not ic:
-        return
+        return lambda: None
     from ltx_runtime_lora import install_pipeline_adapters
     if specs:
         names = ", ".join(f"{Path(p).name}@{s:g}" for p, s in specs)
         emit_status(f"Applying {len(specs)} user LoRA(s): {names}")
-    install_pipeline_adapters(pipe, list(specs or []), report=_lora_report(), status=emit_status, ic=ic)
+    return install_pipeline_adapters(pipe, list(specs or []), report=_lora_report(), status=emit_status,
+                                     ic=ic, user_stage_strengths=user_stage_strengths)
 
 
 def _apply_user_loras(pipe, specs: list[tuple[str, float]]) -> None:
@@ -1914,7 +1915,7 @@ def run_a2v(args: argparse.Namespace) -> str:
     AudioToVideoPipeline = _resolve_pipeline("A2VidPipelineTwoStage", "AudioToVideoPipeline")
     if not args.audio:
         raise SystemExit("--audio is required for a2v mode")
-    from ltx_runtime_lora import install_pipeline_adapters, release_pipeline_adapters, validate_stage_strengths
+    from ltx_runtime_lora import release_pipeline_adapters, validate_stage_strengths
     strengths = validate_stage_strengths(getattr(args, "a2v_lora_stage_strengths", None))
     if strengths != (1.0, 1.0):
         if not args.user_lora_specs:
@@ -1934,10 +1935,7 @@ def run_a2v(args: argparse.Namespace) -> str:
     try:
         _prefer_distilled_lora(pipe, args.distilled_lora)
         _refuse_if_streaming_distilled_adapter_missing(pipe, streaming_policy["active"])
-        restore_adapters = install_pipeline_adapters(
-            pipe, args.user_lora_specs, report=_lora_report(), status=emit_status,
-            user_stage_strengths=strengths,
-        )
+        restore_adapters = _install_adapters(pipe, args.user_lora_specs, user_stage_strengths=strengths)
         emit_stage(1, 1, 1, "Loaded")
         emit_status(f"Generating A2V from {Path(args.audio).name}…")
         stage1_steps = args.steps if args.steps is not None else 30

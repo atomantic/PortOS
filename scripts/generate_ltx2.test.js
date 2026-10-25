@@ -48,7 +48,7 @@ describe.skipIf(!pyBin)('generate_ltx2.py', () => {
 import ltx_runtime_lora as adapters
 import tempfile
 from unittest.mock import patch
-for error in (RuntimeError, KeyboardInterrupt):
+for error, specs in ((RuntimeError, []), (KeyboardInterrupt, [("example.safetensors", 0.7)])):
     captured = []
     class Pipeline:
         def __init__(self, **kwargs):
@@ -63,9 +63,10 @@ for error in (RuntimeError, KeyboardInterrupt):
             raise error("injected failure")
     sys.argv = ["bridge", "--mode", "a2v", "--prompt", "  A paper singer.  ", "--model", "example", "--output", "example.mp4", "--audio", "synthetic.wav"]
     args = runner.parse_args()
-    args.user_lora_specs = []
+    args.user_lora_specs = specs
     restored = []
-    with patch.object(runner, "_resolve_pipeline", return_value=Pipeline), \
+    statuses = []
+    with patch.object(runner, "emit_status", side_effect=statuses.append), patch.object(runner, "_resolve_pipeline", return_value=Pipeline), \
          patch.object(runner, "configure_streaming_policy", return_value={"active": False}), \
          patch.object(runner, "_pipeline_optional_kwargs", return_value={}), \
          patch.object(runner, "_prefer_distilled_lora"), \
@@ -79,6 +80,7 @@ for error in (RuntimeError, KeyboardInterrupt):
         except error:
             pass
     assert restored == [True]
+    assert ("Applying 1 user LoRA(s): example.safetensors@0.7" in statuses) == bool(specs)
     assert captured[0].dit is None and captured[0]._loaded is False
     assert "_pending_loras" not in captured[0].__dict__
     assert "_load_transformer_with_optional_streaming" not in captured[0].__dict__
