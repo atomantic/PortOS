@@ -495,7 +495,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     const resized = await page.evaluate(() => window.previewMetadata());
     expect(resized.songFrame).toBe(frozen.songFrame);
     expect(resized.videos).toEqual(frozen.videos);
-    expect(resized.filter).not.toBe(frozen.filter);
+    expect(resized.filter).not.toEqual(frozen.filter);
     await page.evaluate(() => window.releaseCapture());
     await page.waitForFunction(() => window.captureErrors.length > 0 || window.uploads.length > 0);
     expect(await page.evaluate(() => window.uploads.length)).toBe(0);
