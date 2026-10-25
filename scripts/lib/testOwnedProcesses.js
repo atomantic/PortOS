@@ -6,21 +6,21 @@ import { fileURLToPath } from 'node:url';
 const ownershipKeys = new Set(['PORTOS_TEST_TEMP_ROOT', 'TMPDIR', 'VITEST', 'NODE_ENV']);
 
 function legacyBrowserProcesses(pids, exec) {
-  try {
-    const output = exec('ps', [...(pids ? ['-p', pids.join(',')] : ['-A']), '-ww', '-o', 'pid=,ppid=,uid=,stat=,lstart=,args='], {
-      encoding: 'utf8', timeout: 5000, maxBuffer: 16 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, LC_ALL: 'C' },
-    });
-    return output.split('\n').flatMap(line => {
-      const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/.exec(line);
-      if (!match || Number(match[3]) !== process.getuid()) return [];
-      // Compatibility only: this is the pre-existing browser flag rule. Flat
-      // ps text is never used to infer generic argv or environment ownership.
-      const profile = /(?:^|\s)--user-data-dir=(\S+)/.exec(match[6])?.[1];
-      return [{ pid: Number(match[1]), ppid: Number(match[2]), start: `legacy:${match[5]}`, terminal: match[4].startsWith('Z'),
-        args: profile ? [`--user-data-dir=${profile}`] : [], env: {}, ownershipComplete: Boolean(profile) }];
-    });
-  } catch { return null; }
+  const output = exec('ps', [...(pids ? ['-p', pids.join(',')] : ['-A']), '-ww', '-o', 'pid=,ppid=,uid=,stat=,lstart=,args='], {
+    encoding: 'utf8', timeout: 5000, maxBuffer: 16 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, LC_ALL: 'C' },
+  });
+  if (typeof output !== 'string') throw new SyntaxError('invalid process output');
+  return output.split('\n').filter(line => line.trim()).flatMap(line => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/.exec(line);
+    if (!match) throw new SyntaxError('invalid process row');
+    if (Number(match[3]) !== process.getuid()) return [];
+    // Compatibility only: this is the pre-existing browser flag rule. Flat
+    // ps text is never used to infer generic argv or environment ownership.
+    const profile = /(?:^|\s)--user-data-dir=(\S+)/.exec(match[6])?.[1];
+    return [{ pid: Number(match[1]), ppid: Number(match[2]), start: `legacy:${match[5]}`, terminal: match[4].startsWith('Z'),
+      args: profile ? [`--user-data-dir=${profile}`] : [], env: {}, ownershipComplete: Boolean(profile) }];
+  });
 }
 
 function linuxIdentity(pid) {
@@ -54,24 +54,60 @@ function linuxProcess(pid) {
   } catch { return unavailable(); }
 }
 
+// Error text, command arguments and arbitrary error codes never leave the reader.
+function inspectionFailure(error) {
+  if (error?.code === 'ETIMEDOUT') return 'timeout';
+  if (['EACCES', 'EPERM'].includes(error?.code)) return 'permission-denied';
+  if (['ENOENT', 'ENOEXEC', 'EAGAIN'].includes(error?.code)) return 'spawn-failed';
+  if (error instanceof SyntaxError || error?.code === 'ENOBUFS') return 'invalid-output';
+  return 'reader-failed';
+}
+
+function validProcessRecords(records) {
+  return Array.isArray(records) && records.every(record => record && Number.isSafeInteger(record.pid) && record.pid > 0
+    && (record.args === undefined || (Array.isArray(record.args) && record.args.every(arg => typeof arg === 'string')))
+    && (record.env === undefined || (record.env !== null && typeof record.env === 'object' && !Array.isArray(record.env)
+      && Object.values(record.env).every(value => typeof value === 'string'))));
+}
+
 // The Darwin reader uses the existing system Python, with no installation or
 // cache. Missing capabilities fail closed; raw metadata never reaches a log.
-export function readTestProcesses(pids = null, { platform = process.platform, exec } = {}) {
-  try {
-    const execute = exec ?? execFileSync;
-    if (platform === 'darwin') {
-      try {
-        const reader = join(dirname(fileURLToPath(import.meta.url)), 'darwinTestProcesses.py');
-        return JSON.parse(execute('/usr/bin/python3', ['-I', '-S', reader], {
-          input: JSON.stringify(pids), encoding: 'utf8', timeout: 5000,
-          maxBuffer: 16 * 1024 * 1024, stdio: ['pipe', 'pipe', 'ignore'],
-        }));
-      } catch { return legacyBrowserProcesses(pids, execute); }
+export function readTestProcesses(pids = null, { platform = process.platform, exec, onInspection = () => {}, now = () => performance.now() } = {}) {
+  const attempts = [];
+  const attempt = (reader, read) => {
+    const started = now();
+    let outcome = 'success';
+    try {
+      const records = read();
+      if (!validProcessRecords(records)) throw new SyntaxError('invalid process inventory');
+      return records;
+    } catch (error) {
+      outcome = inspectionFailure(error);
+      return null;
+    } finally {
+      const elapsed = now() - started;
+      attempts.push({ reader, outcome, elapsedMs: Number.isFinite(elapsed) ? Math.min(600000, Math.max(0, Math.round(elapsed))) : 0 });
     }
-    if (platform !== 'linux') return null;
-    const ids = pids ?? readdirSync('/proc').filter(name => /^\d+$/.test(name)).map(Number);
-    return ids.map(linuxProcess).filter(Boolean);
-  } catch { return null; }
+  };
+  const execute = exec ?? execFileSync;
+  let records = null;
+  if (platform === 'darwin') {
+    records = attempt('darwin-python', () => {
+      const reader = join(dirname(fileURLToPath(import.meta.url)), 'darwinTestProcesses.py');
+      return JSON.parse(execute('/usr/bin/python3', ['-I', '-S', reader], {
+        input: JSON.stringify(pids), encoding: 'utf8', timeout: 5000,
+        maxBuffer: 16 * 1024 * 1024, stdio: ['pipe', 'pipe', 'ignore'],
+      }));
+    });
+    if (records === null) records = attempt('legacy-ps', () => legacyBrowserProcesses(pids, execute));
+  } else if (platform === 'linux') {
+    records = attempt('linux-proc', () => {
+      const ids = pids ?? readdirSync('/proc').filter(name => /^\d+$/.test(name)).map(Number);
+      return ids.map(linuxProcess).filter(Boolean);
+    });
+  }
+  onInspection({ reason: records === null ? (attempts.length ? 'reader-unavailable' : 'unsupported-platform') : 'available', attempts });
+  return records;
 }
 
 function rootUnder(path, parent, prefix) {
