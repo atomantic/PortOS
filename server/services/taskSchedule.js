@@ -1000,6 +1000,8 @@ const RETIRED_CHECKOUTS_KEPT = 20;
 /** Preserve bounded checkout-only evidence before an explicitly accepted,
  * published supersession is removed. This is preparation, never a receipt or
  * a claim that the source was merged. Existing inventory obligations stay. */
+const SUPERSEDED_SOURCE_EVIDENCE_BYTES = 1024 * 1024;
+
 export async function recordSupersededCheckoutPreservation(appId, release, review) {
   if (review?.kind !== 'preserved-supersession' || !review.preservedSource
     || !sameRetirementObservation(review.release, release) || review.preservedSource.head !== release.head
@@ -1013,9 +1015,17 @@ export async function recordSupersededCheckoutPreservation(appId, release, revie
       prHead: review.forge.prHead, mergeCommit: review.forge.mergeCommit },
       contentFingerprint: review.contentFingerprint, administrationFingerprint: review.administrationFingerprint };
     if (prior) return { result: JSON.stringify(prior.proof) === JSON.stringify(proof), changed: false };
-    record.branchReconcileOutcome = { ...outcome, supersededSourceEvidence: {
-      ...(outcome.supersededSourceEvidence || {}), [review.digest]: { proof, preservedAt: new Date().toISOString() },
-    } };
+    const retiredDigests = new Set([...(outcome.retired || []), ...Object.values(outcome.retirementReceiptEvidence || {})]
+      .map(receipt => receipt.supersessionDigest).filter(Boolean));
+    const currentRows = [...outcome.remaining, ...(outcome.retirementObligations || [])];
+    const retained = Object.fromEntries(Object.entries(outcome.supersededSourceEvidence || {}).filter(([digest, saved]) =>
+      retiredDigests.has(digest) || currentRows.some(row => sameRetirementObservation(row, saved.proof?.release || {}))));
+    const next = { ...retained, [review.digest]: { proof, preservedAt: new Date().toISOString() } };
+    // Never evict completed evidence that may contain the only private bytes.
+    // Bound the whole encoded store instead; a full store retains the original
+    // checkout. Stale, unconsumed preparations are safely pruned on success.
+    if (Buffer.byteLength(JSON.stringify(next)) > SUPERSEDED_SOURCE_EVIDENCE_BYTES) return { result: false, changed: false };
+    record.branchReconcileOutcome = { ...outcome, supersededSourceEvidence: next };
     return { result: true, changed: true };
   });
 }

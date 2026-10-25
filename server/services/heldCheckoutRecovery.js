@@ -731,6 +731,9 @@ async function preservePublishedSourceReview(repoPath, tree, forge, content, adm
   if (!source || source.head !== tree.head || source.remoteRef !== tree.branch
     || forge.remoteHead !== `${tree.head}\t${tree.branch}`) throw new Error('retirement-source-not-published');
   if (content.indexDiff.length || content.worktreeDiff.length) throw new Error('retirement-source-dirty');
+  // A clean index can still retain resolve-undo conflict stages that cannot be
+  // reconstructed from HEAD. Do not omit that private recovery evidence.
+  if ((await git(['ls-files', '--resolve-undo', '-z'], tree.path)).length) throw new Error('retirement-source-index-recovery-unpublished');
   const work = archiveWork(signal);
   const roots = await recoveryObjectHeads(administration, { repoPath, tree }, work);
   // Saved private refs/reflogs may name work beyond the published tip. Do not

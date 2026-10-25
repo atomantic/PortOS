@@ -106,14 +106,16 @@ the exact source/replacement differences, and confirm the returned digest with
 
 This narrower mode requires an exact same-repository published source ref and
 one closed, unmerged source PR at that head. Missing, advanced, reopened,
-ambiguous or foreign source evidence refuses removal. Every private recovery
+ambiguous or foreign source evidence refuses removal. An index with resolve-undo conflict stages remains held. Every private recovery
 commit must be reachable from the published source head. Existing owner,
 completion-policy, inventory-generation and final content checks still apply.
 
 Before removal, the service durably retains at most 64 KiB of non-cache files
 and private Git evidence in the local schedule record. It also retains symlink
 metadata. Only independently recognized module cache artifacts and a clean,
-reconstructible index/checkout pointers are omitted. Larger evidence remains
+reconstructible index/checkout pointers are omitted. The aggregate encoded evidence store is bounded to 1 MiB. Stale, unconsumed
+preparations are pruned; completed preservation evidence is never evicted just
+to make room. Larger evidence or a full store remains
 in its original checkout; this mode does not copy a repository or create an
 archive directory. Preparation is replayable and does not settle an obligation
 or claim deletion. A completed service removal records
