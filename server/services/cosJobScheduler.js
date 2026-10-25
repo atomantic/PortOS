@@ -207,8 +207,8 @@ export function isJobFireInFlight(jobId, state) {
     .some((agent) => agent?.status === 'running' && agent?.metadata?.jobId === jobId);
 }
 
-export function clearSpawningJob(jobId) {
-  releaseClaimWorkflowAuditReservation(jobId);
+export function clearSpawningJob(jobId, { spawned = false } = {}) {
+  if (spawned) releaseClaimWorkflowAuditReservation(jobId);
   spawningJobIds.delete(jobId);
   const timeout = spawningJobTimeouts.get(jobId);
   if (timeout) {
