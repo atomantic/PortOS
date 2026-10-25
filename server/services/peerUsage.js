@@ -68,7 +68,14 @@ const MONTH_KEY_RE = /^\d{4}-\d{2}$/;
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const str = (v, max) => (isNonBlankStr(v) ? v.slice(0, max) : null);
 
-const COUNT_FIELDS = ['sessions', 'messages', 'tokens', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
+// The media units and long-context subsets are priced at read time (usage.js
+// countFields), so a peer's digest has to carry them or its Grok/Antigravity
+// images, video seconds and 200k-context premium vanish from the fleet report.
+const COUNT_FIELDS = [
+  'sessions', 'messages', 'tokens', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens',
+  'longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens',
+  'images', 'videoSeconds', 'inputImages'
+];
 
 function takeCounts(source, target) {
   for (const field of COUNT_FIELDS) {

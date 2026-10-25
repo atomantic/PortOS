@@ -93,7 +93,7 @@ function splitByUtcDay(from, to) {
 }
 
 /** Every PortOS run's `[start, end]` (slack applied) by workspace, for runs touching `[from, now]`. */
-async function loadRunWindows(runsDir, from, now) {
+async function loadRunWindows(runsDir, from, now, pick = () => true) {
   const byCwd = new Map();
   for (const name of await listSubdirs(runsDir)) {
     const dir = join(runsDir, name);
@@ -102,7 +102,7 @@ async function loadRunWindows(runsDir, from, now) {
     if (!info || info.mtimeMs < from - DAY_MS) continue;
     const metadata = await readJSONFile(join(dir, 'metadata.json'), null);
     const start = Date.parse(metadata?.startTime || '');
-    if (!metadata?.workspacePath || Number.isNaN(start)) continue;
+    if (!metadata?.workspacePath || Number.isNaN(start) || !pick(metadata)) continue;
     // No endTime yet: the run is still going, so its window is open-ended.
     const end = Date.parse(metadata.endTime || '');
     const window = [start - WINDOW_SLACK_MS, (Number.isNaN(end) ? now : end) + WINDOW_SLACK_MS];
@@ -218,7 +218,7 @@ function parseSlice(family, entries, slice, seen) {
 }
 
 /** One session file's billed buckets per `{ day, model }` inside `[from, to]`, minus run windows. */
-async function parseSession(family, session, from, to, byCwd, seen) {
+async function parseSession(family, session, from, to, byCwd, seen, regionsOf = (lo, hi, cwd) => subtractWindows(lo, hi, windowsFor(byCwd, cwd))) {
   const text = await tryReadFile(session.path);
   if (!text) return [];
   // Parsed once and windowed per day slice: re-splitting a multi-MB file per
@@ -231,7 +231,7 @@ async function parseSession(family, session, from, to, byCwd, seen) {
   const lo = session.birthMs <= session.mtimeMs ? Math.max(from, session.birthMs - DAY_MS) : from;
   const hi = Math.min(to, session.mtimeMs + WINDOW_SLACK_MS);
   const results = [];
-  for (const [a, b] of subtractWindows(lo, hi, windowsFor(byCwd, cwd))) {
+  for (const [a, b] of regionsOf(lo, hi, cwd)) {
     for (const slice of splitByUtcDay(a, b)) {
       const parsed = parseSlice(family, entries, slice, seen);
       let attachedIds = false;
@@ -244,6 +244,61 @@ async function parseSession(family, session, from, to, byCwd, seen) {
     }
   }
   return results;
+}
+
+const isSidechainPath = (path) => path.includes('/subagents/');
+
+/**
+ * One-time repair for Claude runs reconciled before the run path read subagent
+ * sidechains (`<session>/subagents/*.jsonl`). Those runs billed their parent
+ * transcript only, and this scan skips every run window, so the sidechain turns
+ * inside them were never billed by anything. Bills them once: sidechain messages
+ * inside the windows of runs reconciled before `cutoff`. Runs reconciled since
+ * (or not yet) read sidechains themselves, so their windows are carved out.
+ */
+async function repairSettledSidechains({ home, runsDir, providerList, now, cutoff, to }) {
+  const from = now - FIRST_SCAN_LOOKBACK_DAYS * DAY_MS;
+  const settledBefore = (metadata) => metadata.usageReconciled === true
+    && Date.parse(metadata.usageReconciledAt || '') < cutoff;
+  const settled = await loadRunWindows(runsDir, from, now, settledBefore);
+  const others = await loadRunWindows(runsDir, from, now, (metadata) => !settledBefore(metadata));
+  const regionsOf = (lo, hi, cwd) => {
+    const outside = subtractWindows(lo, hi, windowsFor(settled, cwd));
+    const inside = outside.reduce((pieces, [a, b]) => pieces.flatMap(([x, y]) => subtractWindows(x, y, [[a, b]])), [[lo, hi]]);
+    return inside.flatMap(([a, b]) => subtractWindows(a, b, windowsFor(others, cwd)));
+  };
+  const perDay = new Map();
+  const seen = new Set();
+  const sessions = (await listSessions('claude', home, from)).filter((session) => isSidechainPath(session.path));
+  for (const session of sessions) {
+    for (const { day, model, buckets } of await parseSession('claude', session, from, to, settled, seen, regionsOf)) {
+      if (!perDay.has(day)) perDay.set(day, { byModel: {} });
+      const dayTotals = perDay.get(day);
+      addBuckets(dayTotals, buckets);
+      dayTotals.byModel[model] ??= {};
+      addBuckets(dayTotals.byModel[model], buckets);
+    }
+    await yieldToEventLoop();
+  }
+  const corrections = [];
+  for (const [day, totals] of perDay) {
+    const measured = { ...totals, source: 'measured', model: null };
+    const provider = resolveFamilyProvider(providerList, 'claude', measured);
+    if (!provider) continue;
+    corrections.push({
+      runId: `sidechain-repair:${day}`,
+      day,
+      providerId: provider.id,
+      siblings: recordsFromMeasured(provider.id, provider.defaultModel ?? null, measured, 'sibling'),
+      siblingScanned: true,
+      repairIds: [],
+    });
+  }
+  if (corrections.length) {
+    await applyHistoricalUsageCorrections(corrections);
+    await forgetSiblingReconciledUsageRuns(corrections.map((c) => c.runId));
+  }
+  return corrections.reduce((sum, c) => sum + c.siblings.reduce((n, r) => n + (r.tokensOut || 0), 0), 0);
 }
 
 /**
@@ -266,6 +321,16 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
     const providerList = providers ?? await import('./providers.js').then((m) => m.listProviders());
     const summary = { families: {} };
     const byCwd = await loadRunWindows(runsDir, now - FIRST_SCAN_LOOKBACK_DAYS * DAY_MS, now);
+
+    let sidechainRepairedAt = state?.sidechainRepairedAt ?? null;
+    if (!sidechainRepairedAt && resolveFamilyProvider(providerList, 'claude')) {
+      // Process start, not `now`: a run reconciled after boot already ran the fixed reader.
+      const cutoff = now - process.uptime() * 1000;
+      const outputTokens = await repairSettledSidechains({ home, runsDir, providerList, now, cutoff, to });
+      sidechainRepairedAt = new Date(now).toISOString();
+      summary.sidechainRepair = { tokensOut: outputTokens };
+      if (outputTokens > 0) console.log(`💸 Settled Claude subagent usage billed: ${outputTokens} output tokens`);
+    }
 
     for (const family of FAMILIES) {
       if (!resolveFamilyProvider(providerList, family)) continue;
@@ -319,7 +384,7 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
       if (tokens > 0) console.log(`💸 Interactive ${family} usage billed: ${tokens} tokens over ${corrections.length} day(s)`);
     }
 
-    await atomicWrite(INTERACTIVE_SCAN_FILE, { watermarks, updatedAt: new Date(now).toISOString() });
+    await atomicWrite(INTERACTIVE_SCAN_FILE, { watermarks, sidechainRepairedAt, updatedAt: new Date(now).toISOString() });
     return summary;
   })
 );

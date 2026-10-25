@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 
 vi.mock('./usage.js', () => ({
   markUsageRunReconciled: vi.fn().mockResolvedValue(undefined),
@@ -50,6 +50,7 @@ const claudeAssistant = ({ id, timestamp, input = 10, cacheWrite = 100, cacheRea
 const writeClaudeSession = async (file, lines, slug = PROJECT_SLUG) => {
   const dir = join(home, '.claude', 'projects', slug);
   await mkdir(dir, { recursive: true });
+  await mkdir(dirname(join(dir, file)), { recursive: true });
   await writeFile(join(dir, file), lines.join('\n'));
 };
 
@@ -199,6 +200,25 @@ describe('readMeasuredUsage', () => {
       cacheWriteTokens: 200,
       model: 'claude-opus-5'
     });
+  });
+
+  it('bills subagent sidechain transcripts nested under the session directory', async () => {
+    await writeClaudeSession('a.jsonl', [
+      claudeAssistant({ id: 'parent', timestamp: '2026-07-01T10:05:00.000Z' })
+    ]);
+    await writeClaudeSession('sess-1/subagents/agent-1.jsonl', [
+      claudeAssistant({ id: 'child', timestamp: '2026-07-01T10:06:00.000Z', output: 400 })
+    ]);
+
+    const result = await readMeasuredUsage({
+      workspacePath: WORKSPACE,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z',
+      family: 'claude',
+      home
+    });
+
+    expect(result).toMatchObject({ sessions: 2, tokensOut: 450 });
   });
 
   it('excludes sessions outside the run window', async () => {
