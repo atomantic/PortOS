@@ -112,6 +112,7 @@
 import { request } from '../services/apiCore.js';
 import { saveExecutionOptionSelection } from '../services/apiProviders.js';
 import { useAsyncAction } from '../hooks/useAsyncAction.js';
+import useMounted from '../hooks/useMounted.js';
 import { useEffect, useId, useRef, useState } from 'react';
 import {
   COMPOSE_OPTION_VALUE,
@@ -195,8 +196,8 @@ export default function ProviderModelSelector({
   // A composed/minted route's model and effort, waiting for the caller to
   // reflect its provider id (see `selectRoute`).
   const [pendingRoute, setPendingRoute] = useState(null);
-  const callbacksRef = useRef({ onModelChange, onEffortChange, onExecutionOptionsChange });
-  callbacksRef.current = { onModelChange, onEffortChange, onExecutionOptionsChange };
+  const callbacksRef = useRef({ onProviderChange, onModelChange, onEffortChange, onExecutionOptionsChange });
+  callbacksRef.current = { onProviderChange, onModelChange, onEffortChange, onExecutionOptionsChange };
   const providerAllowed = selectionPolicy?.provider;
   const modelAllowed = selectionPolicy?.model;
   const effortAllowed = selectionPolicy?.effort;
@@ -237,6 +238,20 @@ export default function ProviderModelSelector({
   // model (explicit selection, else the provider default) for the warning — and
   // for the effort ladder, which is per-model on Antigravity.
   const effectiveModel = effectiveModelFor(selectedProvider, selectedModel);
+  const mounted = useMounted();
+  // Saving a derived selection must not retarget a newer controlled value,
+  // including a model/effort edit that keeps the same provider. Retain a new
+  // scope for every change so switching away and back cannot revive a save.
+  const selectionKey = JSON.stringify([selectedProviderId, lookupId, selectedModel, effectiveModel, effort, executionOptions, Boolean(onExecutionOptionsChange)]);
+  const selectionScope = useRef({ key: selectionKey });
+  if (selectionScope.current.key !== selectionKey) selectionScope.current = { key: selectionKey };
+  const beginSelection = () => {
+    const scope = { key: selectionKey };
+    selectionScope.current = scope;
+    setPendingRoute(null);
+    return scope;
+  };
+  const selectionStillCurrent = (scope) => mounted.current && selectionScope.current === scope;
   // Authoritative tool-use capability from the backends themselves, unioned into
   // the id regex so a tool-capable family the regex predates isn't mislabelled.
   // Gated on `highlightToolUse`, so the many non-agent pickers never pay for the
@@ -325,6 +340,7 @@ export default function ProviderModelSelector({
   // state with no UI left to change it and every submit still sends it. Owned here
   // rather than by each caller so the rule can't be forgotten by the next picker.
   const handleModelChange = (value) => {
+    beginSelection();
     onModelChange?.(value);
     if (!onEffortChange || !effort) return;
     const surviving = effortSurvivingModel(selectedProvider, value, effort);
@@ -342,6 +358,7 @@ export default function ProviderModelSelector({
       setComposeOpen(true);
       return;
     }
+    beginSelection();
     onProviderChange(value);
   };
   // A composed route lands in the caller's existing provider field through
@@ -356,8 +373,9 @@ export default function ProviderModelSelector({
   // model) run first and then be overridden by the explicit choice. A caller
   // that never reflects the id simply never gets the model/effort.
   const selectRoute = (id, model, routeEffort, options) => {
+    beginSelection();
     setPendingRoute({ id, model: model || '', effort: routeEffort || '', options });
-    onProviderChange(id);
+    callbacksRef.current.onProviderChange(id);
   };
   useEffect(() => {
     if (!pendingRoute || pendingRoute.id !== selectedProviderId) return;
@@ -370,8 +388,10 @@ export default function ProviderModelSelector({
   // preset (whose defaults are the composed model and effort) after carrying
   // it locally until the caller's list catches up.
   const [handleCompose, composingSelection] = useAsyncAction(async (compositeId, { model, effort: composedEffort, executionOptions: options }) => {
+    const scope = beginSelection();
     if (!onExecutionOptionsChange && Object.keys(options || {}).length) {
       const preset = await saveExecutionOptionSelection(compositeId, model, options, { silent: true });
+      if (!selectionStillCurrent(scope)) return;
       setSavedPresets((previous) => [...previous.filter((entry) => entry.id !== preset.id), preset]);
       selectRoute(preset.id, model, composedEffort);
     } else selectRoute(compositeId, model, composedEffort, options);
@@ -381,9 +401,11 @@ export default function ProviderModelSelector({
     selectRoute(preset.id, preset.defaultModel, preset.effort);
   };
   const [changeExecutionOptions, executionOptionsSaving] = useAsyncAction(async (options) => {
+    const scope = beginSelection();
     if (onExecutionOptionsChange) return onExecutionOptionsChange(options);
     if (!selectedProvider) return;
     const selection = await saveExecutionOptionSelection(selectedProvider.id, effectiveModel, options, { silent: true });
+    if (!selectionStillCurrent(scope)) return;
     setSavedPresets((previous) => [...previous.filter((preset) => preset.id !== selection.id), selection]);
     selectRoute(selection.id, selectedModel, effort);
   }, { errorMessage: 'Could not save execution options' });
@@ -500,7 +522,7 @@ export default function ProviderModelSelector({
             provider={selectedProvider}
             model={effectiveModel}
             value={effort || ''}
-            onChange={onEffortChange}
+            onChange={(value) => { beginSelection(); onEffortChange(value); }}
             disabled={disabled || loading}
             optionFilter={effortAllowed}
             className={selectClass}

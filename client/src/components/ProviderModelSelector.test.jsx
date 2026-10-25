@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 // The tool-use annotation unions the server's authoritative capability list into
 // the client id regex, so the picker fetches it whenever `highlightToolUse` is on.
@@ -12,6 +12,7 @@ import { request } from '../services/apiCore.js';
 import ProviderModelSelector from './ProviderModelSelector';
 import { providerModeSelectionPolicy } from '../utils/providers.js';
 import { __resetToolUseModelIdsCache } from '../hooks/useToolUseModelIds.js';
+import { __resetProviderCatalogCache } from '../hooks/useProviderCatalog.js';
 import SHIPPED_PROVIDERS from '../../../data.reference/providers.json';
 import { COMPOSE_OPTION_VALUE } from '../utils/providerSelection.js';
 
@@ -56,6 +57,95 @@ describe('ProviderModelSelector', () => {
     expect(onEffortChange).toHaveBeenLastCalledWith('high');
     expect(screen.getByLabelText('Speed').value).toBe('fast');
     request.mockResolvedValue({ options: [] });
+  });
+
+  describe('pending execution selection saves', () => {
+    const providers = [
+      { id: 'codex', name: 'Codex', type: 'cli', command: 'codex', executionOptionKeys: ['serviceTier'] },
+      { id: 'other', name: 'Other' },
+    ];
+    const preset = { id: 'selection-pending', name: 'Fast selection', type: 'cli', command: 'codex', executionSourceProviderId: 'codex', executionOptions: { serviceTier: 'fast' } };
+    const catalog = {
+      harnesses: [{ id: 'codex', label: 'Codex', modes: ['cli'], enabled: true, executionOptionKeys: ['serviceTier'] }],
+      services: [{ slug: 'openai', label: 'OpenAI', enabled: true, credentialVia: 'stored', catalog: { models: ['m1', 'm2'] } }],
+      bootstraps: [], compatibility: { codex: ['openai'] }, effortLevels: { codex: ['low', 'high'] },
+      effortLevelsByModel: {}, presets: providers,
+    };
+
+    beforeEach(() => {
+      __resetProviderCatalogCache();
+      request.mockReset();
+    });
+    afterEach(() => { request.mockReset().mockResolvedValue({ options: [] }); });
+
+    async function startSave(action = 'speed') {
+      let finish;
+      const saved = new Promise((resolve) => { finish = resolve; });
+      request.mockImplementation((url, options) => {
+        if (options?.method === 'POST') return saved;
+        return Promise.resolve(url === '/providers/catalog' ? catalog : { options: [{ key: 'serviceTier', label: 'Speed', values: ['standard', 'fast'] }] });
+      });
+      const handlers = { onProviderChange: vi.fn(), onModelChange: vi.fn(), onEffortChange: vi.fn() };
+      const props = { providers, selectedProviderId: 'codex', selectedModel: 'm1', effort: 'high', availableModels: ['m1', 'm2'], ...handlers };
+      let view;
+      await act(async () => { view = renderSelector(props); });
+      if (action === 'compose') {
+        fireEvent.change(screen.getByLabelText('Provider'), { target: { value: COMPOSE_OPTION_VALUE } });
+        const dialog = within(await screen.findByRole('dialog'));
+        await waitFor(() => expect(dialog.getByLabelText('Harness').disabled).toBe(false));
+        fireEvent.change(dialog.getByLabelText('Harness'), { target: { value: 'codex' } });
+        fireEvent.change(dialog.getByLabelText('Method'), { target: { value: 'cli' } });
+        await act(async () => { fireEvent.change(dialog.getByLabelText('Service'), { target: { value: 'openai' } }); });
+        await act(async () => { fireEvent.change(dialog.getByLabelText('Model'), { target: { value: 'm1' } }); });
+        await act(async () => { fireEvent.change(dialog.getByLabelText('Speed'), { target: { value: 'fast' } }); });
+        await act(async () => { fireEvent.click(dialog.getByRole('button', { name: 'Use once' })); });
+      } else await act(async () => { fireEvent.change(screen.getByLabelText('Speed'), { target: { value: 'fast' } }); });
+      expect(request).toHaveBeenCalledWith(expect.stringContaining('/execution-options/selection'), expect.objectContaining({ method: 'POST' }));
+      return { ...handlers, props, ...view, finish: () => act(async () => { finish(preset); await saved; }) };
+    }
+
+    it.each([
+      ['provider', { selectedProviderId: 'other' }],
+      ['model', { selectedModel: 'm2' }],
+      ['effort', { effort: 'low' }],
+    ])('preserves an external %s edit made while saving speed', async (_field, changed) => {
+      const { props, rerender, finish, onProviderChange, onModelChange, onEffortChange } = await startSave();
+      rerender(<ProviderModelSelector {...props} {...changed} />);
+      await finish();
+      expect(onProviderChange).not.toHaveBeenCalled();
+      expect(onModelChange).not.toHaveBeenCalled();
+      expect(onEffortChange).not.toHaveBeenCalled();
+      expect(screen.getByLabelText('Provider').value).toBe(changed.selectedProviderId || props.selectedProviderId);
+    });
+
+    it.each([
+      ['Model', 'm2', 'onModelChange'],
+      ['Thinking effort', 'low', 'onEffortChange'],
+    ])('preserves a newer %s pick before the caller reflects it', async (label, value, callback) => {
+      const run = await startSave();
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+      expect(run[callback]).toHaveBeenCalledWith(value);
+      await run.finish();
+      expect(run.onProviderChange).not.toHaveBeenCalled();
+    });
+
+    it('preserves a provider chosen while a composed execution selection is saving', async () => {
+      const run = await startSave('compose');
+      fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'other' } });
+      await run.finish();
+      expect(run.onProviderChange.mock.calls).toEqual([['other']]);
+      expect(run.onModelChange).not.toHaveBeenCalled();
+      expect(run.onEffortChange).not.toHaveBeenCalled();
+    });
+
+    it.each(['speed', 'compose'])('does not select a saved %s route after unmount', async (action) => {
+      const run = await startSave(action);
+      run.unmount();
+      await run.finish();
+      expect(run.onProviderChange).not.toHaveBeenCalled();
+      expect(run.onModelChange).not.toHaveBeenCalled();
+      expect(run.onEffortChange).not.toHaveBeenCalled();
+    });
   });
 
   it('alphabetizes string and named model options without changing the selected model or catalog', () => {
