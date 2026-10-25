@@ -23,7 +23,7 @@ import { WORKTREE_NODE_MODULES_MARKER } from '../lib/worktreeNodeModules.js';
 import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { realpathSync, constants } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
-import { lstat, stat, realpath, readlink, readdir, opendir, readFile, chmod, open, mkdtemp, unlink, symlink } from 'node:fs/promises';
+import { lstat, stat, realpath, readlink, readdir, opendir, readFile, chmod, open, mkdir, mkdtemp, unlink, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve, relative, sep } from 'node:path';
@@ -801,13 +801,51 @@ async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { 
     .then(async ([content, administration]) => {
       const preservedSource = kind === 'preserved-supersession'
         ? await preservePublishedSourceReview(repoPath, tree, forge, content, administration, opts.signal) : null;
-      const review = await buildCheckoutRetirementReview({ repoPath, release, prUrl, kind, preservedSource,
+      // A validation receipt is meaningful local evidence, not disposable cache.
+      // Bound its exact bytes into explicit exact-delivery review; unknown files
+      // and larger payloads continue to retain their original checkout.
+      const receipt = !kind && forge.prHead === tree.head
+        ? content.files.find(file => file.path === '.cache/pregate/report.json' && file.bytes <= 64 * 1024) : null;
+      const validationReceipt = receipt ? { scope: 'content', path: receipt.path, sha256: receipt.sha256,
+        data: (await archiveBytes(join(tree.path, receipt.path), archiveWork(opts.signal), 64 * 1024)).toString('base64') } : null;
+      if (validationReceipt && evidenceHash(Buffer.from(validationReceipt.data, 'base64')) !== receipt.sha256) throw new Error('retirement-review-changed');
+      const review = await buildCheckoutRetirementReview({ repoPath, release, prUrl, kind, preservedSource, validationReceipt,
         contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge });
       captureContent?.(content);
       return review;
     })
     .then(review => ({ ok: true, review }), error => archiveLimitRefusal(error) || ({ ok: false,
       reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-local-evidence-unavailable' }));
+}
+
+/** Keep a small validation record in the repository's persistent common Git
+ * administration, outside the retiring worktree. No repository snapshot or
+ * history copy is made. Content-addressed publication is durable and replayable. */
+async function retainValidationReceipt(repoPath, review, verifyOnly = false) {
+  const receipt = review?.validationReceipt;
+  if (!receipt) return null;
+  if (review.kind || review.comparison.disposition !== 'integrated' || review.release.head !== review.forge.prHead
+    || receipt.path !== '.cache/pregate/report.json' || receipt.scope !== 'content') throw new Error('retirement-validation-preservation-unavailable');
+  const bytes = Buffer.from(receipt.data, 'base64');
+  if (bytes.length > 64 * 1024 || evidenceHash(bytes) !== receipt.sha256) throw new Error('retirement-validation-preservation-unavailable');
+  const common = await realpath(resolve(repoPath, (await git(['rev-parse', '--git-common-dir'], repoPath)).trim()));
+  const directory = join(common, 'portos-retirement-validation');
+  if (!verifyOnly) await mkdir(directory, { mode: 0o700 }).catch(error => { if (error.code !== 'EEXIST') throw error; });
+  const info = await lstat(directory);
+  if (!info.isDirectory() || info.isSymbolicLink() || (process.platform !== 'win32'
+    && ((info.mode & 0o077) || info.uid !== process.getuid()))) throw new Error('retirement-validation-preservation-unavailable');
+  const proof = { version: 1, release: review.release, prUrl: review.forge.prUrl, prHead: review.forge.prHead,
+    mergeCommit: review.forge.mergeCommit, receipt };
+  const encoded = JSON.stringify(proof);
+  if (Buffer.byteLength(encoded) > 96 * 1024) throw new Error('retirement-validation-preservation-unavailable');
+  const digest = evidenceHash(encoded);
+  const file = join(directory, `${digest}.json`);
+  const existing = await lstat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  if (existing && (!existing.isFile() || existing.isSymbolicLink() || existing.size > 96 * 1024)) throw new Error('retirement-validation-preservation-unavailable');
+  if (!existing && !verifyOnly) { await atomicWrite(file, encoded); await chmod(file, 0o600); }
+  if (!existing && verifyOnly) throw new Error('retirement-validation-preservation-unavailable');
+  if (await readFile(file, 'utf8') !== encoded) throw new Error('retirement-validation-preservation-unavailable');
+  return { digest, sha256: receipt.sha256, bytes: bytes.length };
 }
 
 async function reviewCurrentCheckout(input, opts = {}, captureContent) {
@@ -1494,6 +1532,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
   // Every ownership check queues behind the claim-ownership lock with a short
   // budget, so the archive runs between two critical sections (#12682).
   const refuse = (reason, archiveLimit, nextAction) => ({ result: { ok: false, reason, ...(archiveLimit && { archiveLimit }), ...(nextAction && { nextAction }) } });
+  let validationEvidence = null;
   return retireWithUnlockedArchive({
     busy: () => ({ ok: false, reason: 'checkout-retirement-reserved' }),
     admit: async () => {
@@ -1531,8 +1570,10 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
         if (preservedSupersession) {
           if (!await opts.preserveSupersession?.(reviewed.review)) throw new Error('retirement-source-preservation-unavailable');
         }
+        if (reviewed?.review.validationReceipt) validationEvidence = await retainValidationReceipt(repoPath, reviewed.review);
         await releaseCheckoutWithoutArchive({ repoPath, path: tree.path, branch,
-          preservedFiles: preservedSupersession ? reviewed.review.preservedSource.files : [] }, async () => {
+          preservedFiles: preservedSupersession ? reviewed.review.preservedSource.files
+            : reviewed?.review.validationReceipt ? [reviewed.review.validationReceipt] : [] }, async () => {
           if (opts.signal?.aborted) throw new Error('retirement-archive-cancelled');
           const status = await getStatusPorcelain(tree.path).catch(() => null);
           if (status === null) throw new Error('worktree-status-unavailable');
@@ -1554,7 +1595,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
     },
     finish: async ({ tree, reviewed, checkoutIdentity }) => {
       const result = await finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, defaultBranch, checkoutIdentity, mergedObligationSettled }, opts);
-      return result.ok ? { ...result, checkoutIdentity } : result;
+      return result.ok ? { ...result, checkoutIdentity, ...(validationEvidence && { validationEvidence }) } : result;
     },
   });
 }
@@ -1593,6 +1634,10 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     ]);
     if (fresh && !fresh.ok) { capacityRefusal = fresh; return fresh.reason; }
     if (fresh && fresh.review.digest !== review.digest) return 'retirement-review-changed';
+    if (fresh?.review.validationReceipt) {
+      const retained = await retainValidationReceipt(repoPath, fresh.review, true).then(() => true, () => false);
+      if (!retained) return 'retirement-validation-preservation-unavailable';
+    }
     if (acceptedPreservedSupersession(review, fresh?.review)
       && !await opts.preserveSupersession?.(fresh.review)) return 'retirement-source-preservation-unavailable';
     if (porcelain === null || !classifyWorktreeDirt(porcelain).clean) return 'worktree-dirty';
@@ -1609,7 +1654,8 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   };
   const removal = await forceRemoveWorktreeDir(repoPath, tree.path, {
     label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval,
-    preservedFiles: acceptedPreservedSupersession(review, reviewed?.review) ? reviewed.review.preservedSource.files : [],
+    preservedFiles: acceptedPreservedSupersession(review, reviewed?.review) ? reviewed.review.preservedSource.files
+      : reviewed?.review.validationReceipt ? [reviewed.review.validationReceipt] : [],
     beforeMutation: async () => {
       await opts.beforeMutation?.();
       // The removal helper also calls this hook before pruning registration.
@@ -1762,6 +1808,7 @@ export async function retirePendingMergeCheckout({ repoPath, release, prUrl, exp
     await recordWorkspaceCheckoutRetirement(repoPath, {
       path: release.path, branch: release.branch ?? null, head: release.head,
       branchDeleted: result.branchDeleted, ...(result.archiveDir && { archiveDir: result.archiveDir }), checkoutIdentity: result.checkoutIdentity,
+      ...(result.validationEvidence && { validationEvidence: result.validationEvidence }),
     });
   }
   return result;
@@ -1794,6 +1841,7 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   if (result.ok) {
     await taskSchedule.recordHeldCheckoutRetirement(appId, {
       path: release.path, branch: release.branch ?? null, head: release.head, branchDeleted: result.branchDeleted,
+      ...(result.validationEvidence && { validationEvidence: result.validationEvidence }),
       ...(!release.branch && { checkoutOnly: true }),
       ...(result.archiveDir && { archiveDir: result.archiveDir }), checkoutIdentity: result.checkoutIdentity,
       ...(review?.kind === 'preserved-supersession' && { supersessionDigest: review.digest }),

@@ -1432,6 +1432,51 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
+  // A successful job's meaningful validation record must survive its checkout,
+  // without either declaring it disposable or archiving the whole repository.
+  it.each(['preserved', 'changed-source', 'changed-copy', 'store-symlink', 'sidecar', 'oversized'])(
+    'preserves exact reviewed validation bytes before removal: %s', async scenario => {
+      const c = await reviewedCheckout(`validation-evidence-${scenario}`);
+      await writeFile(join(repo, '.git', 'info', 'exclude'), '.cache/\n');
+      const dir = join(c.path, '.cache/pregate'); await mkdir(dir, { recursive: true });
+      const receipt = join(dir, 'report.json');
+      const bytes = scenario === 'oversized' ? 'x'.repeat(64 * 1024 + 1) : '{"meaningful":"exact local validation evidence"}';
+      await writeFile(receipt, bytes);
+      if (scenario === 'sidecar') await writeFile(join(dir, 'wanted.txt'), 'unique unrelated work');
+      const store = join(repo, '.git', 'portos-retirement-validation');
+      if (scenario === 'store-symlink') await symlink(c.path, store, process.platform === 'win32' ? 'junction' : 'dir');
+      const prepared = await c.prepare(); expect(prepared.ok).toBe(true);
+      if (['changed-source', 'changed-copy', 'preserved'].includes(scenario)) {
+        let mutations = 0;
+        c.opts.beforeMutation = async () => {
+          if (++mutations !== 2) return;
+          const names = await readdir(store); expect(names).toHaveLength(1);
+          const saved = JSON.parse(await readFile(join(store, names[0]), 'utf8'));
+          expect(Buffer.from(saved.receipt.data, 'base64').toString('utf8')).toBe(bytes);
+          expect(saved.release.head).toBe(c.release.head);
+          expect(await registered(c.path)).toBe(true);
+          if (scenario === 'changed-source') await writeFile(receipt, 'changed evidence');
+          if (scenario === 'changed-copy') await writeFile(join(store, names[0]), '{}');
+        };
+      }
+      const result = await c.confirm(prepared.review);
+      if (scenario !== 'preserved') {
+        expect(result.ok).toBe(false);
+        expect(await registered(c.path)).toBe(true);
+        expect(await readFile(receipt, 'utf8')).toBe(scenario === 'changed-source' ? 'changed evidence' : bytes);
+        return;
+      }
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, branchDeleted: true,
+        validationEvidence: { bytes: Buffer.byteLength(bytes), sha256: createHash('sha256').update(bytes).digest('hex') } });
+      expect(await registered(c.path)).toBe(false);
+      const saved = JSON.parse(await readFile(join(store, `${result.validationEvidence.digest}.json`), 'utf8'));
+      expect(Buffer.from(saved.receipt.data, 'base64').toString('utf8')).toBe(bytes);
+      expect((await getBranchReconcileOutcome('app-1')).retired).toEqual(expect.arrayContaining([
+        expect.objectContaining({ validationEvidence: result.validationEvidence }),
+      ]));
+      expect(await archives()).toEqual([]);
+    });
+
   it('retains an ignored validation receipt beside a verified disposable module cache', async () => {
     const c = await reviewedCheckout('cache-with-receipt');
     await moduleCache(c, { bytes: 32 });
