@@ -2513,7 +2513,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner'])('keeps an orphan sibling obligation separate from a detached copy: %s', async scenario => {
+  it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner', 'normal-completed', 'normal-invalid-time'])('keeps an original sibling obligation separate from a detached copy: %s', async scenario => {
     const c = await reviewedCheckout(`orphan-sibling-${scenario}`);
     const namedPath = c.path;
     const namedBranch = c.release.branch;
@@ -2531,6 +2531,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     agent.result = { success: false, executionSuccess: false, orphaned: true, validationPassed: null };
     agent.metadata.completedCheckouts = await evidence.captureSeededCompletionCheckouts(agent);
     expect(agent.metadata.completedCheckouts).toHaveLength(1);
+    if (scenario.startsWith('normal-')) {
+      agent.result = { success: false, executionSuccess: true, validationPassed: true, cleanupPending: true,
+        taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
+      agent.metadata.completedCheckouts = agent.metadata.completedCheckouts.map(row => ({ ...row, version: 1,
+        capturedAt: scenario === 'normal-invalid-time' ? new Date(Date.parse(agent.completedAt) + 1000).toISOString() : agent.completedAt }));
+    }
+    const originalResult = structuredClone(agent.result);
     if (scenario === 'owner-alias') {
       const alias = join(external, 'canonical-owner-alias');
       await symlink(namedPath, alias, 'junction');
@@ -2559,7 +2566,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     if (scenario === 'active-owner') { agent.status = 'running'; c.opts.readAgents = async () => [agent]; }
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'worktree-unmanaged-location' }] });
     const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release, prUrl: c.forge.prUrl }, c.opts);
-    if (!['confirmed', 'owner-alias'].includes(scenario)) {
+    if (!['confirmed', 'owner-alias', 'normal-completed'].includes(scenario)) {
       const reason = scenario === 'human-handoff' ? 'pr-completion-human-handoff'
         : 'retirement-policy-not-legacy-completed';
       expect(prepared).toMatchObject({ ok: false, reason });
@@ -2567,7 +2574,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       return;
     }
     expect(prepared.reason).toBeUndefined();
-    expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, orphanedSibling: true }] } } });
+    expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, ...(scenario === 'normal-completed' ? { completedSibling: true } : { orphanedSibling: true }) }] } } });
     const result = await retireInventoriedCheckout({ appId: 'app-1', release,
       review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts);
     expect(result).toMatchObject({ ok: true, branchDeleted: false });
@@ -2575,7 +2582,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await registered(path)).toBe(false);
     expect(await registered(namedPath)).toBe(true);
     expect((await execGit(['rev-parse', namedBranch], repo)).stdout.trim()).toBe(release.head);
-    expect(agent.result).toEqual({ success: false, executionSuccess: false, orphaned: true, validationPassed: null });
+    expect(agent.result).toEqual(originalResult);
     expect(await archives()).toEqual([]);
   });
 
