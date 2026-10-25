@@ -62,7 +62,7 @@ export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGi
     const { rel, info } = await listedContentEntry(path, listed, work);
     if (info.isSymbolicLink() || isAgentScratchPath(rel) || matchesScratchRoot(rel, ignoredPaths)) continue;
     if (rel === `node_modules/${WORKTREE_NODE_MODULES_MARKER}` && info.isFile() && info.size === 0) continue;
-    if (info.isFile() && await disposableModuleCache(path, rel, ignored, verifiedCaches, work)) continue;
+    if (info.isFile() && await disposableTestCache(path, rel, ignored, verifiedCaches, work)) continue;
     const preserved = preservedFiles.find(file => file.scope === 'content' && file.path === rel);
     if (info.isFile() && typeof preserved?.data === 'string') {
       const bytes = Buffer.from(preserved.data, 'base64');
@@ -975,9 +975,43 @@ const cacheInspectionFailure = error => {
   return false;
 };
 
-/** Recognize only ignored, tagged Vitest module artifacts, never arbitrary ignored files. */
-async function disposableModuleCache(path, rel, ignored, verified, work) {
+const cacheRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const cacheFields = (value, fields) => cacheRecord(value) && Object.keys(value).every(key => fields.includes(key));
+const cacheMap = (value, check) => cacheRecord(value) && Object.values(value).every(check);
+const cacheNumber = value => Number.isFinite(value) && value >= 0;
+
+// Vitest 5 ResultsCache/DependenciesCache write version 1 in the SHA-1 project
+// directory returned by resolveTestCacheDir. Never follow referenced paths.
+function testStateCacheSchema(value, filename) {
+  if (!cacheFields(value, ['version', 'projects']) || value.version !== 1 || !cacheRecord(value.projects)) return false;
+  if (filename === 'results.json') return cacheMap(value.projects, project => cacheFields(project, ['files', 'typecheck'])
+    && Object.values(project).every(files => cacheMap(files, result => cacheFields(result, ['failed', 'duration', 'lastRun'])
+      && typeof result.failed === 'boolean' && cacheNumber(result.duration)
+      && (result.lastRun === undefined || cacheNumber(result.lastRun)))));
+  return cacheMap(value.projects, project => cacheFields(project, ['modules', 'globalSetup', 'files'])
+    && Array.isArray(project.modules) && project.modules.every(file => typeof file === 'string' && !file.includes('\0'))
+    && Array.isArray(project.globalSetup) && cacheRecord(project.files)
+    && [project.globalSetup, ...Object.values(project.files)].every(indices => Array.isArray(indices)
+      && indices.every(index => Number.isSafeInteger(index) && index >= 0 && index < project.modules.length)));
+}
+
+async function disposableStateCache(path, rel, ignored, verified, work) {
+  const root = Object.values(WORKSPACE_TEST_CACHE_ROOTS).map(cache => `${cache.workspace}/${cache.cacheDir}/vitest`)
+    .find(cache => rel.startsWith(`${cache}/`) && /^(?:CACHEDIR\.TAG|[a-f0-9]{40}\/(?:results|dependencies)\.json)$/.test(rel.slice(cache.length + 1)));
+  if (!root || !ignored.has(`${root}/CACHEDIR.TAG`)) return false;
+  if (!verified.has(root)) verified.set(root, archiveBytes(await archiveFile(path, join(path, root, 'CACHEDIR.TAG')), work, 2048)
+    .then(tag => tag.toString('utf8') === `${VITEST_CACHE_TAG}\n# For information about cache directory tags see https://bford.info/cachedir/\n`)
+    .catch(cacheInspectionFailure));
+  if (!await verified.get(root)) return false;
+  if (rel === `${root}/CACHEDIR.TAG`) return true;
+  const value = JSON.parse((await archiveBytes(await archiveFile(path, join(path, rel)), work, MAX_MANIFEST_BYTES)).toString('utf8'));
+  return testStateCacheSchema(value, basename(rel));
+}
+
+/** Recognize only ignored, tagged producer-shaped test caches, never arbitrary ignored files. */
+async function disposableTestCache(path, rel, ignored, verified, work) {
   if (!ignored.has(rel)) return false;
+  if (await disposableStateCache(path, rel, ignored, verified, work).catch(cacheInspectionFailure)) return true;
   const root = VITEST_MODULE_CACHE_ROOTS.find(cache => rel.startsWith(`${cache}/`)
     && /^(?:[a-f0-9]{40}|[a-f0-9]{64}|CACHEDIR\.TAG|_metadata\.json)$/.test(rel.slice(cache.length + 1)));
   if (!root || !ignored.has(`${root}/CACHEDIR.TAG`) || !ignored.has(`${root}/_metadata.json`)) return false;
@@ -1087,7 +1121,7 @@ async function snapshotContent(path, work = archiveWork(), allowDisposableCache 
       links.add(rel);
     }
     else if (info.isFile()) {
-      const disposableCache = allowDisposableCache && await disposableModuleCache(path, rel, ignored, verifiedCaches, work);
+      const disposableCache = allowDisposableCache && await disposableTestCache(path, rel, ignored, verifiedCaches, work);
       await addFile(rel, info, disposableCache ? { disposableCache: true } : {});
     }
     else throw new Error(`${rel} is not a regular file`);
