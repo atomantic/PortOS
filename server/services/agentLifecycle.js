@@ -513,7 +513,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     });
   } finally {
     completingAgents.delete(agentId);
-    void import('./agentRepoStateVerification.js').then(module => module.resumeAgentCompletionRetirement(agentId))
+    await import('./agentRepoStateVerification.js').then(module => module.resumeAgentCompletionRetirement(agentId))
       .catch(error => emitLog('warn', `Completion retirement deferred for ${agentId}: ${error.message}`, { agentId }));
   }
 }

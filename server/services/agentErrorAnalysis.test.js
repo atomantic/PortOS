@@ -1003,7 +1003,13 @@ describe('createInvestigationTask approval wiring (#3714)', () => {
       { ...analysis, blockedSystemRecovery: true });
     expect(addTask.mock.calls[0][0]).toMatchObject({ targetInstanceId: 'fixture-local',
       metadata: { preserveOriginalBudget: true, blockedSystemRecovery: true } });
-    expect(addTask.mock.calls[0][0].description).toContain('existing');
+    const body = addTask.mock.calls[0][0].description;
+    expect(body).toContain('Resolve the affected work');
+    expect(body).toContain('regression tests');
+    expect(body).toContain('PR review, CI and merge delivery');
+    expect(body).toContain('reuse an active fix');
+    expect(body).toContain('without inventing a code defect');
+    expect(body).toContain('original work, approvals and retry/spawn budgets');
   });
 
   it('defers repeated system diagnosis instead of creating another blocked approval card', async () => {

@@ -1159,7 +1159,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return { path, release, admin, opts, forge, prepare, confirm };
   }
 
-  it.each(['accepted', 'unaccepted', 'unpublished-tip', 'lagging-default'])(
+  it.each(['delivered', 'unpublished-tip', 'lagging-local-default', 'merge-not-in-default'])(
     'keeps exact squash delivery retirement scoped when shared files change: %s', async scenario => {
       const c = await reviewedCheckout(`exact-squash-${scenario}`, { multipleCommits: true, superseded: true });
       if (scenario === 'unpublished-tip') {
@@ -1169,15 +1169,22 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         c.release.head = (await execGit(['rev-parse', 'HEAD'], c.path)).stdout.trim();
         await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
       }
-      if (scenario === 'lagging-default') {
+      if (scenario === 'lagging-local-default') {
         await execGit(['checkout', '--detach', 'main'], repo);
         await execGit(['branch', '-f', 'main', c.forge.changeBase], repo);
       }
+      if (scenario === 'merge-not-in-default') c.forge.defaultHead = c.forge.changeBase;
       const prepared = await c.prepare();
-      expect(prepared).toMatchObject({ ok: true, review: { comparison: { disposition: 'review-supersession' } } });
+      if (scenario === 'merge-not-in-default') {
+        expect(prepared).toMatchObject({ ok: false, reason: 'retirement-merge-not-in-default' });
+        expect(await registered(c.path)).toBe(true);
+        expect(existsSync(c.path)).toBe(true);
+        return;
+      }
+      expect(prepared).toMatchObject({ ok: true, review: { comparison: { disposition: scenario === 'unpublished-tip' ? 'review-supersession' : 'integrated' } } });
       const result = await retireInventoriedCheckout({ appId: 'app-1', release: c.release,
-        review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: scenario !== 'unaccepted' } }, c.opts);
-      if (scenario === 'accepted') {
+        review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts);
+      if (scenario !== 'unpublished-tip') {
         expect(result).toMatchObject({ ok: true, branchDeleted: true });
         expect(await registered(c.path)).toBe(false);
         expect(existsSync(c.path)).toBe(false);
@@ -1208,16 +1215,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
     const prepared = await c.prepare();
     expect(prepared).toMatchObject({ ok: true, review: { comparison: { paths: ['feature.txt'],
-      disposition: scenario === 'changed-delivery' ? 'review-supersession' : 'integrated' } } });
+      disposition: 'integrated' } } });
     const result = await c.confirm(prepared.review);
-    if (scenario === 'changed-delivery') {
-      expect(result).toMatchObject({ ok: false, reason: 'retirement-supersession-not-accepted' });
-      expect(await registered(c.path)).toBe(true);
-    } else {
-      expect(result).toMatchObject({ ok: true, branchDeleted: true });
-      expect(await registered(c.path)).toBe(false);
-      expect(await archives()).toEqual([]);
-    }
+    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(await registered(c.path)).toBe(false);
+    expect(await archives()).toEqual([]);
     expect(await readFile(join(repo, scenario === 'changed-delivery' ? 'feature.txt' : 'upstream.txt'), 'utf8')).toBe('later upstream change\n');
   });
 
@@ -1743,19 +1745,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(agent.result).toEqual(originalResult);
   });
 
-  it('requires supersession acceptance after an ancestral merged tip is later changed', async () => {
+  it('does not require manual supersession acceptance for an exact delivered head after later edits', async () => {
     const c = await reviewedCheckout('ancestral', { normalMerge: true, superseded: true });
     const prepared = await c.prepare();
-    expect(prepared.ok).toBe(true);
-    expect(prepared.review.comparison.disposition).toBe('review-supersession');
-    expect(prepared.review.comparison.localPatch).toContain('+original feature');
-    expect(prepared.review.comparison.difference).toContain('+strengthened replacement');
+    expect(prepared).toMatchObject({ ok: true, review: { comparison: { disposition: 'integrated', exactMergedDelivery: true } } });
+    expect(prepared.review.comparison.difference).toContain('strengthened replacement');
     expect(await retireInventoriedCheckout({ appId: 'app-1', release: c.release,
       review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts))
-      .toMatchObject({ ok: false, reason: 'retirement-supersession-not-accepted' });
-    expect(await registered(c.path)).toBe(true);
-    expect(await lockText(c.path)).toBe(c.release.lockReason);
-    expect(await archives()).toEqual([]);
+      .toMatchObject({ ok: true, branchDeleted: true });
   });
 
   it('compares pathspec glob filenames literally', async () => {
@@ -1786,7 +1783,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       .toMatchObject({ ok: false, reason: 'pr-completion-review-required' });
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
-    expect(prepared.review.comparison.disposition).toBe(superseded ? 'review-supersession' : 'integrated');
+    expect(prepared.review.comparison.disposition).toBe('integrated');
     const result = await c.confirm(prepared.review);
     expect(result).toMatchObject({ ok: true, branchDeleted: true });
     expect(result.archiveDir).toBeUndefined();

@@ -1275,10 +1275,8 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
       const reviewed = review ? await reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind }, opts) : null;
       if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed', reviewed.archiveLimit, reviewed.nextAction);
       const disposition = reviewed?.review.comparison.disposition;
-      const { acceptedExactMergedHeadReview } = await import('./heldCheckoutReview.js');
-      const exactDelivered = reviewed && await acceptedExactMergedHeadReview({ repoPath, review: reviewed.review, accepted: review });
-      if (disposition === 'review-supersession' && ((!locallyMerged && !exactDelivered) || review.acceptSuperseded !== true)) return refuse('retirement-supersession-not-accepted');
-      if (!locallyMerged && disposition !== 'integrated' && !exactDelivered) return refuse('not-merged-on-recheck');
+      if (disposition === 'review-supersession' && (!locallyMerged || review.acceptSuperseded !== true)) return refuse('retirement-supersession-not-accepted');
+      if (!locallyMerged && disposition !== 'integrated') return refuse('not-merged-on-recheck');
       const owner = await ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled });
       if (owner) return refuse(owner);
       return { fence: { repoPath, path: tree.path, branch }, tree, reviewed, checkoutIdentity };
@@ -1343,10 +1341,8 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
       ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
       : await isAncestor(repoPath, tree.head, defaultBranch);
     const disposition = fresh?.review?.comparison?.disposition;
-    const { acceptedExactMergedHeadReview } = await import('./heldCheckoutReview.js');
-    const exactDelivered = fresh && await acceptedExactMergedHeadReview({ repoPath, review: fresh.review, accepted: review });
-    if (disposition === 'review-supersession' && ((!locallyMerged && !exactDelivered) || review.acceptSuperseded !== true)) return 'retirement-supersession-not-accepted';
-    if (!locallyMerged && disposition !== 'integrated' && !exactDelivered) return 'not-merged-on-recheck';
+    if (disposition === 'review-supersession' && (!locallyMerged || review.acceptSuperseded !== true)) return 'retirement-supersession-not-accepted';
+    if (!locallyMerged && disposition !== 'integrated') return 'not-merged-on-recheck';
     if (reason) return reason;
     if (opts.signal?.aborted) return 'retirement-archive-cancelled';
     return null;

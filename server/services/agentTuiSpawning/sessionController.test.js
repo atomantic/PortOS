@@ -155,6 +155,23 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
     expect(releaseRunRecord).toHaveBeenCalledWith(null);
   });
 
+  it('does not finish until post-release retirement settles, after stopping its own writer', async () => {
+    const { controller, releaseRunRecord, kill } = makeController();
+    let release;
+    releaseRunRecord.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+    controller.attachSession({ sessionId: 'session-abcdef12', pid: 4242 });
+    let settled = false;
+    const finishing = controller.handleExit({ exitCode: 0, killed: false }).then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(kill).toHaveBeenCalledWith('session-abcdef12');
+    expect(releaseRunRecord).toHaveBeenCalledOnce();
+    expect(kill.mock.invocationCallOrder[0]).toBeLessThan(releaseRunRecord.mock.invocationCallOrder[0]);
+    expect(settled).toBe(false);
+    release();
+    await finishing;
+    expect(controller.isTerminal()).toBe(true);
+  });
+
   it.each([
     ['drainLines', 'parsed output'],
     ['drainRaw', 'raw PTY spool'],

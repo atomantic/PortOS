@@ -168,28 +168,13 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
   const paths = [...new Set(release.head === forge.prHead && !kind
     ? forge.changedPaths : [...forge.changedPaths, ...localPaths])].sort();
   const difference = paths.length ? await git(['--literal-pathspecs', 'diff', '--binary', '--no-ext-diff', '--no-textconv', release.head, forge.defaultHead, '--', ...paths], repoPath) : '';
-  // Historical ancestry/cherry equivalence does not establish that current
-  // code still implements the original work (it may have been strengthened or
-  // reverted). Exact affected-file equality is the mechanical case; differences
-  // require the operator's explicit supersession judgment on the displayed diff.
-  const mechanicallyEquivalent = difference === '' && kind !== 'source-supersession';
+  // Exact delivered PR heads remain delivered after later changes to shared
+  // files. Older/replacement heads still need content equivalence or review.
+  const exactMergedDelivery = !kind && release.head === forge.prHead;
+  const mechanicallyEquivalent = (difference === '' || exactMergedDelivery) && kind !== 'source-supersession';
   const evidence = { repoPath, release, forge, contentFingerprint, administrationFingerprint, policy,
     ...(kind && { kind }),
-    comparison: { base, paths, localPatch, difference, disposition: mechanicallyEquivalent ? 'integrated' : 'review-supersession' } };
+    comparison: { base, paths, localPatch, difference, exactMergedDelivery, disposition: mechanicallyEquivalent ? 'integrated' : 'review-supersession' } };
   return { digest: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'), ...evidence };
 }
 
-/** Explicit acceptance may retire an exact delivered PR head after later edits
- * to shared files. It never covers unpublished tips, replacement delivery, or
- * a default checkout that has not incorporated the actual merge commit. The
- * caller must already have re-read and digest-checked the complete review. */
-export async function acceptedExactMergedHeadReview({ repoPath, review, accepted, runGit = execGit }) {
-  const forge = review?.forge;
-  if (review?.kind || accepted?.kind || accepted?.acceptSuperseded !== true
-    || review?.comparison?.disposition !== 'review-supersession'
-    || !oid(review?.release?.head) || review.release.head !== forge?.prHead
-    || !oid(forge?.mergeCommit) || typeof forge.defaultBranch !== 'string' || !forge.defaultBranch) return false;
-  const result = await runGit(['merge-base', '--is-ancestor', forge.mergeCommit, `refs/heads/${forge.defaultBranch}`],
-    repoPath, { ignoreExitCode: true }).catch(() => null);
-  return result?.exitCode === 0;
-}
