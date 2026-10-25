@@ -1,3 +1,4 @@
+import { releaseClaimWorkflowAuditReservation } from './autonomousJobs/claimWorkflowAudit.js';
 import { maintenance, isMaintenanceHold } from '../lib/maintenanceAdmission.js';
 /**
  * CoS Job Scheduler Module
@@ -206,7 +207,8 @@ export function isJobFireInFlight(jobId, state) {
     .some((agent) => agent?.status === 'running' && agent?.metadata?.jobId === jobId);
 }
 
-export function clearSpawningJob(jobId) {
+export function clearSpawningJob(jobId, { spawned = false } = {}) {
+  if (spawned) releaseClaimWorkflowAuditReservation(jobId);
   spawningJobIds.delete(jobId);
   const timeout = spawningJobTimeouts.get(jobId);
   if (timeout) {
@@ -465,7 +467,13 @@ export async function executeScheduledJob(jobId) {
         return;
       } catch (err) {
         clearSpawningJob(jobId);
-        emitLog('error', `Failed to fire autonomous job: ${job.name} - ${err?.message || err}`, { jobId, category: job.category });
+        // Configuration/refusal holds are expected, not incidents for the
+        // error-driven investigator. Keep the next normal occurrence armed.
+        if (err?.status === 400 || err?.status === 409) {
+          emitLog('info', `Autonomous job withheld: ${job.name} - ${err.message}`, { jobId, category: job.category });
+        } else {
+          emitLog('error', `Failed to fire autonomous job: ${job.name} - ${err?.message || err}`, { jobId, category: job.category });
+        }
         await recordJobGateSkip(jobId).catch(skipErr =>
           console.error(`❌ Failed to record failure-skip for ${jobId}: ${skipErr.message}`)
         );

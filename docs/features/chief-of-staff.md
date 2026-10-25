@@ -561,3 +561,9 @@ Storage, retention and the privacy posture are in [STORAGE.md](../STORAGE.md).
 - [Self-Improvement](./cos-enhancement.md)
 - [Error Handling](./error-handling.md)
 - Scheduled Scripts — see the Schedule system (`server/services/taskSchedule.js`, `/api/cos/jobs`)
+
+### PortOS claim workflow audit
+
+`/cos/jobs` includes **PortOS Claim Workflow Audit**, fixed to PortOS rather than a managed app. It ships disabled and on demand. Choose an entitled provider/model, optional effort, investigation minutes, recent-run count and finding count before running; select a recurrence separately if wanted. The shared CoS daily action/minute budgets still apply. Investigation limits bound audit scope, not monetary cost or delivery waits; the job never purchases access or changes service tier.
+
+Each occurrence inspects its saved delivered prompt and recent workflow evidence, distinguishes observed phases from historical or unexercised phases, and records source hashes, runtime/model/settings, findings and delivery links in its retained CoS run output. Generator source hashes are a starting inventory, not proof of delivery. Queued, running and interrupted blocked audits retain their occurrence; a short reservation covers dispatch before persistence. Reuse existing finding issues and delivery PRs. A verified empty branch with a substantive no-change report is successful; changed work still requires normal review, CI, admission and retirement. Transient failures retain the existing recovery path without creating user Brain tasks.

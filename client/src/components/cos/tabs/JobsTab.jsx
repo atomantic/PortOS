@@ -358,6 +358,8 @@ export default function JobsTab() {
         <div className="space-y-2">
           {jobs.map(job => (
             <JobCard
+              fixedAppId={job.portosOnly ? job.appId : undefined}
+              fixedType={job.portosOnly ? 'agent' : undefined}
               key={job.id}
               job={job}
               apps={apps}
