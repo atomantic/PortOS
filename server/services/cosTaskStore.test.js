@@ -69,10 +69,13 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   getAgentRecord: vi.fn(),
 }));
 
-vi.mock('./cosEvents.js', () => ({
-  emitLog: vi.fn(),
-  cosEvents: { emit: (name, payload) => mock.events.push({ name, payload }) }
-}));
+vi.mock('./cosEvents.js', async () => {
+  const { EventEmitter } = await import('node:events');
+  const events = new EventEmitter();
+  const emit = events.emit.bind(events);
+  events.emit = (name, payload) => { mock.events.push({ name, payload }); return emit(name, payload); };
+  return { emitLog: vi.fn(), cosEvents: events };
+});
 
 vi.mock('./codeReview.js', () => ({
   runLocalCodeReview: vi.fn(async (opts) => { mock.reviewCalls.push(opts); return mock.review; }),
@@ -149,6 +152,29 @@ beforeEach(() => {
   mock.review = { ok: true, findings: 'No findings.' };
   mock.reviewDefaults = { lmstudioModel: 'default-lmstudio', ollamaModel: 'default-ollama' };
   mock.reviewCalls = [];
+});
+
+it('wakes the exact local parent from a persisted completed-follow-up edit', async () => {
+  const { cosEvents } = await import('./cosEvents.js');
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+  const identity = await import('./instanceIdentity.js');
+  const instanceId = 'fixture-local';
+  const localIdentity = vi.spyOn(identity, 'getInstanceId').mockResolvedValue(instanceId);
+  const { bindCompletionRetirementEvents } = await import('./agentRepoStateVerification.js');
+  getAgentRecord.mockClear();
+  getAgentRecord.mockResolvedValue({ id: 'original-agent', taskId: 'original-task', status: 'completed',
+    metadata: { instanceId } });
+  await seed('internal', [{ id: 'sys-delivery', description: 'Completed delivery', status: 'completed', priority: 'MEDIUM',
+    metadata: { reviewLoopFollowUp: true, sourceAgentId: 'original-agent', sourceTaskId: 'original-task' } }]);
+  const unbind = bindCompletionRetirementEvents(cosEvents);
+  try {
+    await updateTask('sys-delivery', { priority: 'MEDIUM' }, 'internal');
+    // The listener binds the parent, then the real resume entry reads it again.
+    // This completed no-cleanup record then safely stands down.
+    await vi.waitFor(() => expect(getAgentRecord).toHaveBeenCalledTimes(2));
+    expect(getAgentRecord.mock.calls).toEqual([['original-agent'], ['original-agent']]);
+    expect((await getTaskById('sys-delivery')).status).toBe('completed');
+  } finally { unbind(); localIdentity.mockRestore(); }
 });
 
 describe('forge maintenance queue recovery', () => {

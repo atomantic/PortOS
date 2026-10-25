@@ -1176,6 +1176,30 @@ describe('completion after its originating task was removed', () => {
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
   });
 
+  it.each(['verified', 'other-dispatch', 'other-run', 'duplicate-dispatch', 'missing-handoff', 'missing-replay', 'surviving-checkout'])('settles a pre-dispatch replay only through its exact durable handoff: %s', async mode => {
+    const { state, original } = fixture();
+    state.metadata.completionCleanup.taskHandoff = { version: 1, taskId: state.taskId,
+      taskType: 'user', startedAt: state.startedAt,
+      expected: state.metadata.completionTaskDispatch.expected.map(([key, value]) =>
+        [key, key === 'totalSpawnCount' ? String(value) : value]) };
+    readCompletionData.mockResolvedValue({ task: { ...original, metadata: {
+      ...original.metadata, claimedAt: 'earlier-lease', lastSpawnedAt: undefined, totalSpawnCount: undefined } } });
+    if (mode === 'other-dispatch') state.metadata.completionCleanup.taskHandoff.expected[1][1] = 'another-dispatch';
+    if (mode === 'other-run') state.metadata.completionCleanup.taskHandoff.startedAt = 'another-run';
+    if (mode === 'duplicate-dispatch') state.metadata.completionCleanup.taskHandoff.expected.push(['claimedAt', CREATED_AT]);
+    if (mode === 'missing-handoff') delete state.metadata.completionCleanup.taskHandoff;
+    if (mode === 'missing-replay') readCompletionData.mockRejectedValue(new Error('completion-data-changed'));
+    if (mode === 'surviving-checkout') readCheckoutPathPresence.mockResolvedValue(true);
+    const result = await resumeAgentCompletionRetirement('agent-1');
+    expect(result.verified).toBe(mode === 'verified');
+    if (mode === 'verified') expect(settleAbsentTaskCompletion).toHaveBeenCalledWith('agent-1', state);
+    else expect(settleAbsentTaskCompletion).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    expect(replayAgentCompletionCleanup).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+  });
+
   it('keeps merged absent work pending when its completion settlement races', async () => {
     fixture();
     settleAbsentTaskCompletion.mockResolvedValue(false);
