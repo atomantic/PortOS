@@ -7,6 +7,7 @@
  */
 
 import { withMediaFileSizes } from '../lib/mediaFileInfo.js';
+import { clearMetalBufferProfiles } from '../services/videoGen/metalBufferProfiles.js';
 import { historyListQuerySchema, isHistoryListQuery, listVideoHistoryQuery } from '../services/videoGen/historyList.js';
 import { Router } from 'express';
 import { updateVideoPoster, createSharingCopy } from '../services/videoGen/poster.js';
@@ -637,6 +638,10 @@ router.get('/status', asyncHandler(async (_req, res) => {
 // prompt through (queued jobs, pipeline stages, agent runs).
 router.get('/model-terms', asyncHandler(async (_req, res) => {
   res.json({ accepted: acceptedVideoModelTerms(await getSettings()) });
+}));
+
+router.post('/metal-buffer-profiles/clear', asyncHandler(async (_req, res) => {
+  res.json(await clearMetalBufferProfiles());
 }));
 
 router.post('/model-terms', asyncHandler(async (req, res) => {

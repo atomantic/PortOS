@@ -867,6 +867,7 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
           thumbnail,
           ...timing,
           ...(job.runtime ? { runtime: job.runtime } : {}),
+          ...(job.metalBufferPolicy ? { metalBufferPolicy: job.metalBufferPolicy } : {}),
           // What the speed profile actually resolved to at render time (#4875).
           // `meta.speedProfileId` above is the REQUEST; this is the outcome, so a
           // render whose TeaCache or distilled adapter was unavailable reads back

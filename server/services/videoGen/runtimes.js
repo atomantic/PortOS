@@ -746,6 +746,15 @@ async function probeRuntimeFingerprint(runtimeId) {
   return inFlight;
 }
 
+// Reuse needs current evidence, rather than the status page's process-lifetime
+// observation. Missing/unverified runtime evidence leaves reactive recovery intact.
+export async function currentMetalProfileFingerprint(runtimeId) {
+  if (!BYOV_RUNTIME_INFO[runtimeId]?.expectedRevision || !await isByovRuntimeCurrent(runtimeId)) return null;
+  invalidateRuntimeFingerprintCache(runtimeId);
+  const fingerprint = await probeRuntimeFingerprint(runtimeId);
+  return fingerprint?.error ? null : fingerprint;
+}
+
 // Host runtime fingerprint computed in Node — cheap, always present (no python).
 // chip/os/arch are useful even before any BYOV runtime is installed.
 export function hostRuntimeFingerprint() {

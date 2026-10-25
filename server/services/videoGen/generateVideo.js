@@ -755,6 +755,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
       ffprobePath: ffprobe,
     },
     watchParams: {
+      encoder: resolvedTextEncoder,
       // Keeps this render's ETA samples in its own cost bucket — a speed profile
       // changes the slope, not just the step count.
       speedProfileId: speedProfile?.id ?? null,

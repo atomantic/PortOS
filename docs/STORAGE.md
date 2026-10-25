@@ -457,6 +457,18 @@ goal data together; interrupted intents remain retryable after restore.
 
 ## `ephemeral-file` — queues / uploads / transient state
 
+- Metal buffer recovery profiles — `data/cache/video-gen/metal-buffer-profiles.json`
+  is a versioned machine-local execution cache, never federated. It holds only
+  SHA-256 execution-profile signatures and successful-recovery timestamps (128
+  entries, 24-hour TTL), with serialized atomic writes. It contains no prompts,
+  paths, credentials, environments or media. Only verified, fully published,
+  cleanly exited reactive recoveries with settled ownership can teach it. Missing
+  fingerprints, unreadable/unknown-version caches and explicit operator buffer
+  caps disable reuse without disabling renders. The operator-only
+  `POST /api/video-gen/metal-buffer-profiles/clear` action fences older in-flight
+  learning without changing active children. No seed or migration; absence is
+  the initial state and `/cache/` is already excluded from backups.
+
 - FableLoom portable exports — `data/cache/fableloom-exports/<jobId>/` holds
   atomic job status, temporary media snapshots and the derived ZIP. The authored
   loom remains db-primary; these jobs are regenerable, keyed downloads with no
