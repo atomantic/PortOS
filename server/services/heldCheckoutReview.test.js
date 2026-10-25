@@ -40,10 +40,20 @@ describe('retirement forge verification', () => {
 
   it.each([
     { state: 'OPEN' }, { state: 'CLOSED' }, { headRefName: 'another-claim' },
-    { isCrossRepository: true }, { baseRefName: 'release' }, { mergeCommit: null },
+    { isCrossRepository: true }, { baseRefName: null }, { mergeCommit: null },
   ])('refuses a nonmatching merged PR: %j', async change => {
     Object.assign(pr, change);
     await expect(readRetirementForgeEvidence('/synthetic/repo', 'claim/42', prUrl)).rejects.toThrow('retirement-pr-not-matching-merged');
+  });
+
+  it('binds a merged release PR to its actual target and rejects inconsistent base evidence', async () => {
+    pr.baseRefName = 'release';
+    detail.base.ref = 'release';
+    const evidence = await readRetirementForgeEvidence('/synthetic/repo', 'claim/42', prUrl);
+    expect(evidence).toMatchObject({ defaultBranch: 'main', targetBranch: 'release', targetHead: 'c'.repeat(40) });
+    expect(mock.gh).toHaveBeenCalledWith(['api', '--hostname', 'github.com', 'repos/example/repo/git/ref/heads/release'], undefined, expect.any(Object));
+    detail.base.ref = 'another-target';
+    await expect(readRetirementForgeEvidence('/synthetic/repo', 'claim/42', prUrl)).rejects.toThrow('retirement-original-scope-unavailable');
   });
 
   it('accepts a local repair alias only with exact merged head proof', async () => {

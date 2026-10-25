@@ -659,7 +659,8 @@ const policyReviewIdentity = (release, prUrl, forge) => ({
 });
 
 async function integratedPolicyReviewIdentity(repoPath, release, prUrl, forge, archivedIncarnation = null) {
-  if (!forge || !await execGit(['cat-file', '-e', `${forge.defaultHead}^{commit}`], repoPath).then(() => true, () => false)) return null;
+  const targetHead = forge?.targetHead ?? forge?.defaultHead;
+  if (!forge || !await execGit(['cat-file', '-e', `${targetHead}^{commit}`], repoPath).then(() => true, () => false)) return null;
   // Only the post-removal caller supplies a generation already bound into the
   // verified archive/review. A recreated path is never an absent original.
   const absent = archivedIncarnation && await lstat(release.path).then(() => false, error => error.code === 'ENOENT');
@@ -668,8 +669,8 @@ async function integratedPolicyReviewIdentity(repoPath, release, prUrl, forge, a
     ...(checkoutIncarnation && { checkoutIncarnation }),
     // Older pinned claims missed completion capture. Fresh inclusion of every
     // commit settles cleanup-only outcomes without manufacturing receipts.
-    integratedCleanupHead: forge?.prHead === release.head && await isAncestor(repoPath, release.head, forge.defaultHead)
-      ? forge.defaultHead : null };
+    integratedCleanupHead: forge?.prHead === release.head && await isAncestor(repoPath, release.head, targetHead)
+      ? targetHead : null };
 }
 
 const reviewForgeOptions = (release, kind, opts) => ({ forgeAccount: opts.forgeAccount,
@@ -1545,7 +1546,7 @@ export async function fetchRetirementProofObjects(repoPath, release, prUrl, expe
     return { ok: false, reason: 'retirement-pr-repository-mismatch' };
   }
   if (expectedHeadSha !== null && forge.prHead !== expectedHeadSha) return { ok: false, reason: 'receipt-pr-head-changed' };
-  const heads = [...new Set([forge.prHead, forge.mergeCommit, forge.defaultHead, forge.changeBase, forge.firstCommit])];
+  const heads = [...new Set([forge.prHead, forge.mergeCommit, forge.targetHead ?? forge.defaultHead, forge.changeBase, forge.firstCommit])];
   if (heads.some(head => typeof head !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head))) {
     return { ok: false, reason: 'retirement-forge-unreadable' };
   }

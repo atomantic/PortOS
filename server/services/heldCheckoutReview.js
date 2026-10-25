@@ -72,12 +72,18 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
   const remote = await read(['pr', 'view', prUrl, '--json', 'url,state,headRefName,headRefOid,isCrossRepository,mergeCommit,baseRefName']);
   const repository = await api(`repos/${origin.fullName}`);
   const defaultBranch = repository.default_branch;
+  // The merged PR records its delivery target; default is repository metadata,
+  // not a requirement that release work also be delivered to main.
+  const targetBranch = remote.baseRefName;
+  if (typeof targetBranch !== 'string' || !targetBranch || targetBranch.startsWith('-')
+    || /[\x00-\x20~^:?*\[\\]/.test(targetBranch) || targetBranch.includes('..')
+    || targetBranch.includes('@{')) throw new Error('retirement-pr-not-matching-merged');
   const supersession = typeof branch === 'string' && oid(sourceSupersessionHead);
   // Explicit whole-checkout review may name a local repair alias, but only
   // when its exact tip is the merged PR head. Similar names are never evidence.
   const alias = remote.headRefName !== branch && oid(exactAliasHead) && exactAliasHead === remote.headRefOid;
   if (remote.url !== prUrl || remote.state !== 'MERGED' || (remote.headRefName !== branch && !alias && !supersession)
-    || remote.isCrossRepository !== false || remote.baseRefName !== defaultBranch || !oid(remote.headRefOid) || !oid(remote.mergeCommit?.oid)) {
+    || remote.isCrossRepository !== false || !oid(remote.headRefOid) || !oid(remote.mergeCommit?.oid)) {
     throw new Error('retirement-pr-not-matching-merged');
   }
   if (supersession) {
@@ -91,7 +97,7 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
   // Use complete original PR metadata, and refuse API caps or ambiguous roots.
   const pullPath = `repos/${origin.fullName}/pulls/${parsed.number}`;
   const detail = await api(pullPath);
-  if (detail.head?.sha !== remote.headRefOid || detail.base?.ref !== defaultBranch || detail.merged !== true
+  if (detail.head?.sha !== remote.headRefOid || detail.base?.ref !== targetBranch || detail.merged !== true
     || !Number.isInteger(detail.changed_files) || detail.changed_files < 1 || detail.changed_files > 3000
     || !Number.isInteger(detail.commits) || detail.commits < 1 || detail.commits > 250) {
     throw new Error('retirement-original-scope-unavailable');
@@ -116,6 +122,9 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
   const firstCommit = commits[0].sha;
   const target = await api(`repos/${origin.fullName}/git/ref/heads/${encodeURIComponent(defaultBranch)}`);
   if (!oid(target.object?.sha)) throw new Error('retirement-default-unreadable');
+  const delivery = targetBranch === defaultBranch ? target
+    : await api(`repos/${origin.fullName}/git/ref/heads/${encodeURIComponent(targetBranch)}`);
+  if (!oid(delivery.object?.sha)) throw new Error('retirement-target-unreadable');
   // ls-remote returns an empty successful result only for actual ref absence.
   const remoteHead = branch ? (await git(['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], repoPath)
     .catch(() => { throw new Error('retirement-remote-ref-unreadable'); })).trim() : '';
@@ -124,7 +133,8 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
     .catch(() => { throw new Error('retirement-remote-ref-unreadable'); })).trim() : null;
   if (publishedRemoteHead && publishedRemoteHead !== `${remote.headRefOid}\trefs/heads/${remote.headRefName}`) throw new Error('retirement-remote-head-changed');
   return { repository: `${origin.host}/${origin.fullName}`, prUrl, prHead: remote.headRefOid,
-    mergeCommit: remote.mergeCommit.oid, changedPaths, changeBase, firstCommit, defaultBranch, defaultHead: target.object.sha, remoteHead: remoteHead || null,
+    mergeCommit: remote.mergeCommit.oid, changedPaths, changeBase, firstCommit, defaultBranch, defaultHead: target.object.sha,
+    ...(targetBranch !== defaultBranch && { targetBranch, targetHead: delivery.object.sha }), remoteHead: remoteHead || null,
     ...(alias || supersession ? { ...(alias && { exactAliasHead }), ...(supersession && { sourceSupersessionHead }),
       publishedBranch: remote.headRefName, publishedRemoteHead: publishedRemoteHead || null } : {}) };
 }
@@ -137,24 +147,26 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
 } = {}) {
   const forge = await readForge(repoPath, release.branch, prUrl, { forgeAccount });
   if (!forge || !oid(forge.prHead) || !oid(forge.mergeCommit) || !oid(forge.defaultHead)) throw new Error('retirement-forge-unreadable');
-  if (release.branch === forge.defaultBranch) throw new Error('protected-branch');
+  const targetHead = forge.targetHead ?? forge.defaultHead;
+  if (!oid(targetHead) || (forge.targetHead && (typeof forge.targetBranch !== 'string' || !forge.targetBranch))) throw new Error('retirement-forge-unreadable');
+  if (release.branch === forge.defaultBranch || release.branch === forge.targetBranch) throw new Error('protected-branch');
   if (!oid(forge.changeBase) || !oid(forge.firstCommit) || !Array.isArray(forge.changedPaths)
     || !forge.changedPaths.length || !forge.changedPaths.every(safePath)) throw new Error('retirement-original-scope-unavailable');
   // Independent reads run together (each Git spawn is mostly launch latency);
   // the verdicts keep their original precedence.
-  await Promise.all([...new Set([forge.prHead, forge.mergeCommit, forge.defaultHead, forge.changeBase, forge.firstCommit])]
+  await Promise.all([...new Set([forge.prHead, forge.mergeCommit, targetHead, forge.changeBase, forge.firstCommit])]
     .map(head => git(['cat-file', '-e', `${head}^{commit}`], repoPath).catch(() => { throw new Error('retirement-local-objects-missing'); })));
-  const [inDefault, parents, inPr] = await Promise.allSettled([
-    git(['merge-base', '--is-ancestor', forge.mergeCommit, forge.defaultHead], repoPath),
+  const [inTarget, parents, inPr] = await Promise.allSettled([
+    git(['merge-base', '--is-ancestor', forge.mergeCommit, targetHead], repoPath),
     git(['rev-list', '--parents', '-n', '1', forge.firstCommit], repoPath),
     git(['merge-base', '--is-ancestor', forge.firstCommit, forge.prHead], repoPath),
   ]);
-  if (inDefault.status === 'rejected') throw new Error('retirement-merge-not-in-default');
+  if (inTarget.status === 'rejected') throw new Error(forge.targetBranch ? 'retirement-merge-not-in-target' : 'retirement-merge-not-in-default');
   if (parents.status === 'rejected') throw parents.reason;
   const parent = parents.value.trim().split(/\s+/);
   if (parent.length !== 2 || parent[1] !== forge.changeBase) throw new Error('retirement-original-scope-unavailable');
   if (inPr.status === 'rejected') throw new Error('retirement-original-scope-unavailable');
-  const base = (await git(['merge-base', release.head, kind ? forge.defaultHead : forge.changeBase], repoPath)).trim();
+  const base = (await git(['merge-base', release.head, kind ? targetHead : forge.changeBase], repoPath)).trim();
   if (base === release.head && !kind) throw new Error('retirement-original-scope-unavailable');
   const [localPathsOut, localPatch] = await Promise.all([
     git(['diff', '--name-only', '-z', base, release.head], repoPath),
@@ -167,7 +179,7 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
   // complete local patch comparison so unpublished work cannot disappear.
   const paths = [...new Set(release.head === forge.prHead && !kind
     ? forge.changedPaths : [...forge.changedPaths, ...localPaths])].sort();
-  const difference = paths.length ? await git(['--literal-pathspecs', 'diff', '--binary', '--no-ext-diff', '--no-textconv', release.head, forge.defaultHead, '--', ...paths], repoPath) : '';
+  const difference = paths.length ? await git(['--literal-pathspecs', 'diff', '--binary', '--no-ext-diff', '--no-textconv', release.head, targetHead, '--', ...paths], repoPath) : '';
   // Exact delivered PR heads remain delivered after later changes to shared
   // files. Older/replacement heads still need content equivalence or review.
   const exactMergedDelivery = !kind && release.head === forge.prHead;
