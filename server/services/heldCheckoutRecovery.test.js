@@ -159,7 +159,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       injected.app.repoPath = repo;
     });
   });
-  afterEach(({ task }) => {
+  afterEach(({ task, signal }) => {
     return owned.cleanup(async () => {
       const report = state => {
         const trace = receiptTiming.current;
@@ -168,7 +168,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
           `${phase}=${Math.round(row.ms)}ms/${row.count} max=${Math.round(row.maxMs)}ms active=${row.active}`).join('; ');
         process.stderr.write(`⏱️ merged-receipt ${trace.entryPoint} ${state}: ${Math.round(performance.now() - trace.started)}ms; ${phases}\n`);
       };
-      const failed = Boolean(task.result?.errors?.length);
+      const failed = Boolean(task.result?.errors?.length || signal.aborted);
       // CI's quiet setup replaces console methods, including on failed tests.
       const fixtureReport = () => process.stderr.write(`⏱️ retirement fixture: ${owned.summary()}\n`);
       if (failed) { report('before-settlement'); fixtureReport(); }
