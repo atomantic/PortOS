@@ -1304,7 +1304,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     }
     const prepared = await c.prepare();
     expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true });
-    expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
+    const retired = await c.confirm(prepared.review);
+    expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
     expect(existsSync(c.path)).toBe(false);
     expect(await registered(c.path)).toBe(false);
     expect(await sha256File(wanted)).toBe(before);
