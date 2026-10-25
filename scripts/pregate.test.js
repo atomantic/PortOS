@@ -538,8 +538,12 @@ describe('pregate hidden-content invocation', () => {
 
   // This regression catches stale inherited packages before any lint/test child
   // can produce a misleading product failure or repair the shared source tree.
-  it.each(['matching', 'stale', 'missing-package', 'unreadable-package', 'dangling'])(
+  it.each(['matching', 'stale', 'missing-package', 'unreadable-package', 'dangling', 'missing-link', 'unlinked'])(
     'checks %s linked dependencies read-only before executing stages', (state) => {
+      const worktree = join(scratch, 'linked-worktree');
+      git('worktree', 'add', '--detach', worktree, base);
+      root = worktree;
+      for (const workspace of ['', 'client', 'server', 'autofixer']) mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
       const shared = join(scratch, 'source', 'server', 'node_modules');
       const installed = join(shared, 'express', 'package.json');
       const modules = join(root, 'server', 'node_modules');
@@ -559,7 +563,8 @@ describe('pregate hidden-content invocation', () => {
       writeFileSync(join(fakeBin, 'npm.cmd'), '@node "%~dp0npm" %*\r\n');
       rmSync(modules, { recursive: true });
       const target = state === 'dangling' ? join(scratch, 'absent-deps') : shared;
-      symlinkSync(target, modules, process.platform === 'win32' ? 'junction' : 'dir');
+      if (state === 'unlinked') mkdirSync(modules);
+      else if (state !== 'missing-link') symlinkSync(target, modules, process.platform === 'win32' ? 'junction' : 'dir');
       write('server/package-lock.json', JSON.stringify({ packages: {
         '': {}, 'node_modules/express': { version: '5.3.0' },
         'node_modules/optional-platform-package': { version: '1.0.0', optional: true },
@@ -576,19 +581,29 @@ describe('pregate hidden-content invocation', () => {
         expect(existsSync(join(root, 'unexpected-stage'))).toBe(true);
       } else {
         expect(result.status).toBe(1);
-        expect(result.stderr).toContain('server (linked node_modules)');
-        expect(result.stderr).toContain('owning source checkout');
-        expect(result.stderr).toContain('Never run npm install/ci through worktree links');
+        const needsLink = ['dangling', 'missing-link', 'unlinked'].includes(state);
+        expect(result.stderr).toContain(`server (${['missing-link', 'unlinked'].includes(state) ? 'owned' : 'linked'} node_modules)`);
+        if (needsLink) expect(result.stderr).toContain('Re-link with: node scripts/link-worktree-deps.js');
+        else {
+          expect(result.stderr).toContain('owning source checkout');
+          expect(result.stderr).toContain('separate clone with its own locked installs');
+          expect(result.stderr).toContain('Never run npm install/ci through worktree links');
+          expect(result.stderr).not.toContain('missing or unlinked');
+          expect(result.stderr).not.toContain('Re-link with:');
+        }
         const diagnostic = {
           stale: 'expected 5.3.0, installed 5.2.1',
           'missing-package': 'missing package.json (ENOENT)',
           'unreadable-package': 'unreadable package.json (invalid JSON)',
           dangling: 'linked target unavailable',
+          'missing-link': 'node_modules missing',
+          unlinked: 'missing package.json',
         }[state];
         expect(result.stderr).toContain(diagnostic);
         expect(existsSync(join(root, 'unexpected-stage'))).toBe(false);
       }
-      expect(lstatSync(modules).isSymbolicLink()).toBe(true);
+      if (state === 'missing-link') expect(existsSync(modules)).toBe(false);
+      else expect(lstatSync(modules).isSymbolicLink()).toBe(state !== 'unlinked');
       expect(sourceSnapshot()).toEqual(before);
       expect(existsSync(join(root, 'unexpected-npm'))).toBe(false);
       expect(readFileSync(sourceReceipt, 'utf8')).toBe('{"server":"legacy"}');
