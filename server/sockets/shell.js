@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
 import * as shellService from '../services/shell.js';
 import { getProviderById } from '../services/providers.js';
@@ -23,7 +24,7 @@ export const registerShellHandlers = (socket, _io) => {
     const options = validateSocketData(shellStartSchema, rawOptions, socket, 'shell:start');
     if (options === null) return;
     try {
-      const cwd = options?.cwd || undefined;
+      const cwd = options?.cwd || homedir();
       const providerId = typeof options?.providerId === 'string' ? options.providerId : null;
       let initialCommand = options?.initialCommand || undefined;
       let env;
