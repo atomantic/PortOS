@@ -139,7 +139,8 @@ function continuedDelivery(policy, input) {
   if (policy.agent.status !== 'completed'
     || (policy.agent.result?.success !== true && policy.agent.result?.executionSuccess !== true)
     || policy.agent.result?.executionSuccess === false || policy.agent.result?.validationPassed === false
-    || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE || input.verifiedPrHead !== input.tip) return null;
+    || ![PR_COMPLETIONS.REVIEW_THEN_MERGE, PR_COMPLETIONS.MERGE_ON_GREEN].includes(policy.completion)
+    || input.verifiedPrHead !== input.tip) return null;
   return input.deliveryContinuations?.find(proof => proof.agentId === policy.agent.id
     && proof.originalPrUrl === (retirementPr(policy) ?? null)
     && proof.prUrl === input.prUrl && proof.tip === input.tip
@@ -308,7 +309,8 @@ export function reviewedRetirementPolicy(input) {
   if (policies.some(p => p.completion === PR_COMPLETIONS.LEAVE_OPEN)) return { reason: held };
   if (policies.some(p => p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input)
     && !reviewedOrphanCheckout(p, input) && !completedDetachedSibling(p, input) && !continuedDelivery(p, input) && !p.resumedCleanup)
-    || p.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
+    || (p.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
+      && !(p.completion === PR_COMPLETIONS.MERGE_ON_GREEN && continuedDelivery(p, input)))
     || (retirementPr(p) && !continuedDelivery(p, input)
       && ((!incarnation && !completedDetachedSibling(p, input)
         && !(input.detachedCheckoutIdentity && p.resumedCleanup?.detachedCheckoutIdentity === input.detachedCheckoutIdentity)) || retirementPr(p) !== input.prUrl))
