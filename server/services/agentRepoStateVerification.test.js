@@ -220,6 +220,61 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(recordRepoStateVerification).not.toHaveBeenCalled();
   });
 
+  it('settles an exhausted original cleanup owner only after receipt verification without another dispatch', async () => {
+    const blocked = { ...task(), status: 'blocked', metadata: { ...task().metadata,
+      blockedCategory: 'task-recovery-exhausted', deliveryDecisionAgentId: 'agent-1',
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1', failureCount: '3', totalSpawnCount: '3', lastSpawnedAt: CREATED_AT } };
+    const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE,
+      head: HEAD, startedAt: CREATED_AT, capturedAt: CREATED_AT, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const state = { ...agentState({ completedCheckouts: [completed], completionCleanup: { version: 1, status: 'pending' },
+      reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7', branch: BRANCH },
+      completionTaskDispatch: { taskId: 'task-1', taskType: 'user', expected: [['lastSpawnedAt', CREATED_AT], ['totalSpawnCount', 3]] } }),
+      id: 'agent-1', taskId: 'task-1', status: 'completed',
+      result: { success: false, executionSuccess: true, cleanupPending: true } };
+    const original = structuredClone(blocked);
+    getTaskById.mockResolvedValue(blocked);
+    state.metadata.isPersistentWorktree = true;
+    expect(await run({ success: false, agentState: state, task: blocked })).toMatchObject({ verified: false });
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(releaseRetryHold).not.toHaveBeenCalled();
+    delete state.metadata.isPersistentWorktree;
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/7', detail: { state: 'MERGED' } });
+    // An absent checkout alone proves nothing. Missing receipts retain the
+    // exhausted task without requeueing or scheduling another investigator.
+    expect(await run({ success: false, agentState: state, task: blocked })).toMatchObject({ verified: false });
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    listWorktrees.mockResolvedValue([RELEASE]);
+    readCompletedCheckoutIdentity.mockResolvedValue(completed);
+    expect(await run({ success: false, agentState: state, task: blocked })).toMatchObject({ skipReason: 'cleanup-budget-exhausted' });
+    expect(addTask).not.toHaveBeenCalled();
+    existsSync.mockReturnValue(false);
+    localBranch(false);
+    listWorktrees.mockResolvedValue([]);
+    findMissingCheckoutPreservation.mockResolvedValue({ archiveDir: null, evidenceDigest: 'a'.repeat(64), recheck: async () => true });
+    for (const [key, value] of [['blocker', 'operator hold'], ['blockedCategory', 'task-approval'], ['totalSpawnCount', '4'],
+      ['deliveryRecoveryAgentId', 'another-owner']]) {
+      const prior = blocked.metadata[key]; blocked.metadata[key] = value;
+      expect(await run({ success: false, agentState: state, task: blocked })).toMatchObject({ skipReason: 'cleanup-owner-changed' });
+      expect(updateTask).not.toHaveBeenCalled();
+      if (prior === undefined) delete blocked.metadata[key]; else blocked.metadata[key] = prior;
+    }
+    updateTask.mockResolvedValueOnce({ statusChanged: true });
+    expect(await run({ success: false, agentState: state, task: blocked })).toMatchObject({ skipReason: 'cleanup-task-settlement-unverified' });
+    expect(await run({ success: false, agentState: state, task: blocked })).toMatchObject({ verified: true });
+    expect(updateTask).toHaveBeenLastCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', {
+      expectedStatus: 'blocked', expectedTask: { description: blocked.description, priority: blocked.priority, metadata: blocked.metadata },
+      recoveryOwner: { id: 'agent-1', startedAt: CREATED_AT }, preserveRetryBudget: true,
+    });
+    expect(blocked).toEqual(original);
+    expect(state.result).toEqual({ success: false, executionSuccess: true, cleanupPending: true });
+    expect(addTask).not.toHaveBeenCalled();
+    expect(releaseRetryHold).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+  });
+
   it('transfers a cleanup handoff that cannot retire a human leave-open branch', async () => {
     updateTask.mockResolvedValueOnce({ status: 'in_progress' });
     const pending = { ...task({ prCompletion: 'leave-open' }), status: 'in_progress', metadata: {

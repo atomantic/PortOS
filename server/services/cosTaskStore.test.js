@@ -1394,6 +1394,25 @@ describe('cosTaskStore.addTask', () => {
     expect(resumed).toMatchObject({ status: 'pending', metadata: { totalSpawnCount: '2', reviewLoopPRBranch: 'feature' } });
   });
 
+  it('preserves charged failure history when the original cleanup owner settles an exhausted task', async () => {
+    const task = await addTask({ id: 'sys-exhausted-cleanup', description: 'Retire verified delivery', metadata: {
+      totalSpawnCount: '3', failureCount: '3', lastErrorCategory: 'task-incomplete', lastFailureAt: '2026-03-01T00:00:00Z',
+    } }, 'internal', { raw: true });
+    await updateTask(task.id, { status: 'blocked', metadata: { blockedCategory: 'task-recovery-exhausted',
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'completed-owner' } }, 'internal');
+    const current = await getTaskById(task.id);
+    const options = { expectedStatus: 'blocked', expectedTask: { description: current.description, priority: current.priority, metadata: current.metadata },
+      recoveryOwner: { id: 'completed-owner', startedAt: '2026-03-01T00:00:00Z' }, preserveRetryBudget: true };
+    const finish = () => updateTask(task.id, { status: 'completed', metadata: { deliveryRecovery: undefined,
+      deliveryRecoveryAgentId: undefined, taskOutcome: { status: 'completed', reason: 'Verified retirement receipt' } } }, 'internal', options);
+    const results = await Promise.all([finish(), finish()]);
+    expect(results.filter(result => result.statusChanged)).toHaveLength(1);
+    expect(await getTaskById(task.id)).toMatchObject({ status: 'completed', metadata: {
+      totalSpawnCount: '3', failureCount: '3', lastErrorCategory: 'task-incomplete', lastFailureAt: '2026-03-01T00:00:00Z',
+    } });
+    expect((await getTaskById(task.id)).metadata.deliveryRecovery).toBeUndefined();
+  });
+
   it('emits tasks:changed action "requeued" on an in_progress → pending flip (#3373)', async () => {
     // The retry-hold release and the orphan sweep both requeue this way, long
     // after the completion dequeue ran — without a wake signal the retry would
