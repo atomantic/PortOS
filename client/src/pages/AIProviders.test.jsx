@@ -54,6 +54,10 @@ const toast = vi.hoisted(() => ({
   warning: vi.fn(),
 }));
 
+vi.mock('../services/apiCore.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, request: (url, options) => url.includes('/execution-options') ? Promise.resolve({ options: [] }) : actual.request(url, options) };
+});
 vi.mock('../services/api', () => api);
 vi.mock('../services/apiProviders', () => ({
   getFleetLlmHost: vi.fn(() => new Promise(() => {})),
@@ -951,7 +955,7 @@ describe('provider reasoning defaults', () => {
     await renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
-    await openEditorTab('Models');
+    await act(async () => { await openEditorTab('Models'); });
 
     const effort = await screen.findByLabelText('Default Effort');
     expect(effort).toHaveValue('');

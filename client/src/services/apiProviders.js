@@ -1,3 +1,4 @@
+import { rememberExecutionSelection } from './executionSelectionCache.js';
 import { request } from './apiCore.js';
 import socket from './socket.js';
 import toast from '../components/ui/Toast';
@@ -260,13 +261,10 @@ export const saveProviderFallbacks = (entries, options) => request('/provider-fa
   ...options
 });
 
-const executionSelections = new Map();
-export const getCreatedExecutionSelection = (id) => executionSelections.get(id);
 export const saveExecutionOptionSelection = (id, model, executionOptions, options = {}) => request(`/providers/${encodeURIComponent(id)}/execution-options/selection`, {
   ...options, method: 'POST', body: JSON.stringify({ model: model || undefined, executionOptions }),
 }).then((selection) => {
   invalidateProviders();
-  executionSelections.set(selection.id, selection);
-  if (executionSelections.size > 200) executionSelections.delete(executionSelections.keys().next().value);
+  rememberExecutionSelection(selection);
   return selection;
 });

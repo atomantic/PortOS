@@ -1,3 +1,4 @@
+import { getCreatedExecutionSelection } from '../services/executionSelectionCache.js';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as api from '../services/api';
 import {
@@ -182,7 +183,7 @@ export default function useProviderModels({ filter, allowDefault = false, presel
   const catalog = useProviderCatalog(compositeSelected);
   const providersWithSelection = useMemo(() => {
     if (!compositeSelected) {
-      const created = api.getCreatedExecutionSelection?.(selectedProviderId);
+      const created = getCreatedExecutionSelection(selectedProviderId);
       return created && !providers.some((provider) => provider.id === selectedProviderId) ? [...providers, created] : providers;
     }
     const resolved = catalog.resolveRef(selectedProviderId);
@@ -251,7 +252,7 @@ export default function useProviderModels({ filter, allowDefault = false, presel
       setSelectedModel('');
       return;
     }
-    const p = providers.find(pr => pr.id === id) || api.getCreatedExecutionSelection?.(id);
+    const p = providers.find(pr => pr.id === id) || getCreatedExecutionSelection(id);
     setSelectedModel(pickInitialModel(p));
   }, [providers, allowDefault, pickInitialModel]);
 
