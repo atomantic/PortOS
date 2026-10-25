@@ -9,6 +9,12 @@ const unverified = reason => ({ status: 'unverified', reason });
 const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 const positiveIssue = value => /^[1-9]\d*$/.test(String(value ?? '')) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
 
+async function trustedGithubClosure(closed, target, run) {
+  const { createGithubActorTrust } = await import('./forgeActorTrust.js');
+  const trust = await createGithubActorTrust({ runGh: run, host: target.apiHost, repoFullName: target.fullName });
+  return trust.isTrusted(closed.actor?.login);
+}
+
 function selectedIssues(task, agent) {
   const branches = agent?.metadata?.claimBranches;
   if (Array.isArray(branches) && branches.length) {
@@ -62,9 +68,7 @@ async function githubDisposition({ number, target, run }) {
   if (issue.stateReason === 'NOT_PLANNED') {
     // A typed stand-down is distinct from delivery. Only a repository operator
     // may invalidate work: arbitrary contributor labels/comments grant nothing.
-    const { createGithubActorTrust } = await import('./forgeActorTrust.js');
-    const trust = await createGithubActorTrust({ runGh: run, host: target.apiHost, repoFullName: target.fullName });
-    if (!await trust.isTrusted(closed.actor?.login)) return unverified('closure-authority-unverified');
+    if (!await trustedGithubClosure(closed, target, run)) return unverified('closure-authority-unverified');
     return { status: 'verified', disposition: 'not-planned', issue: number, closedAt: closed.createdAt };
   }
   if (issue.stateReason !== 'COMPLETED') return unverified('closure-reason-unverified');
@@ -72,9 +76,16 @@ async function githubDisposition({ number, target, run }) {
   if (typeof defaultBranch !== 'string' || !defaultBranch) return unverified('default-branch-unavailable');
   const candidates = [closed.closer, ...events.map(event => event?.source)];
   const pr = candidates.find(candidate => deliveredPr(candidate, number, target, defaultBranch, closed.createdAt));
-  return pr ? { status: 'verified', disposition: 'delivered', issue: number, closedAt: closed.createdAt,
-    changeRequest: pr.number, mergeCommit: pr.mergeCommit.oid, defaultBranch }
-    : unverified('merged-delivery-unverified');
+  if (pr) return { status: 'verified', disposition: 'delivered', issue: number, closedAt: closed.createdAt,
+    changeRequest: pr.number, mergeCommit: pr.mergeCommit.oid, defaultBranch };
+  // Revalidation can find a fix shipped without a closing-keyword link, or
+  // superseding work. A trusted manual closure settles the selected task; it
+  // does not prove a particular PR delivered code. An automatic PR closure
+  // still needs the exact merged/default-branch evidence above.
+  if (closed.closer != null) return unverified('merged-delivery-unverified');
+  if (!await trustedGithubClosure(closed, target, run)) return unverified('closure-authority-unverified');
+  return { status: 'verified', disposition: 'operator-closed', issue: number,
+    closedAt: closed.createdAt, closedBy: closed.actor.login };
 }
 
 async function gitlabDisposition({ number, target, run }) {
@@ -100,9 +111,15 @@ async function gitlabDisposition({ number, target, run }) {
         changeRequest: mr.iid, mergeCommit: mr.merge_commit_sha, defaultBranch: repository.default_branch };
     }
   }
-  // GitLab has no equivalent typed NOT_PLANNED closure in this API. Closed
-  // without a proven merged relationship stays unverified, even with labels.
-  return unverified('merged-delivery-unverified');
+  // GitLab has no typed NOT_PLANNED reason. Verify the actual closer's project
+  // write authority rather than treating labels or agent prose as a disposition.
+  const closerId = issue.closed_by?.id;
+  if (!Number.isSafeInteger(closerId) || closerId < 1) return unverified('closure-authority-unverified');
+  const member = await read(`${project}/members/all/${closerId}`);
+  if (member?.id !== closerId || !Number.isInteger(member.access_level) || member.access_level < 30) {
+    return unverified('closure-authority-unverified');
+  }
+  return { status: 'verified', disposition: 'operator-closed', issue: number, closedAt: issue.closed_at };
 }
 
 /**
