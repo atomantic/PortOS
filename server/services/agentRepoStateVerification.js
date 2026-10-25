@@ -393,7 +393,7 @@ export async function verifyAgentRepoState(input) {
       const { recordCompletionCleanup } = await import('./cosAgentLifecycle.js');
       if (input.agentState.metadata?.completionCleanup?.version === 1) {
         const recorded = await recordCompletionCleanup(input.agentId, input.agentState.startedAt, {
-          stages: { worktree: { status: 'done', retryable: false, value: [], verifiedBy: 'repository-preservation-receipt' } } });
+          stages: { worktree: { status: 'done', retryable: false, value: [], verifiedBy: 'repository-state-verification' } } });
         if (!recorded) return { ...result, verified: false, skipReason: 'cleanup-ledger-settlement-unverified' };
       }
       const settlementFence = input.task.status === 'blocked' ? {
@@ -402,7 +402,7 @@ export async function verifyAgentRepoState(input) {
       } : { expectedStatus: 'in_progress', expectedMetadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: input.agentId } };
       const updated = await updateTask(input.task.id, { status: 'completed', metadata: {
         deliveryRecovery: undefined, deliveryRecoveryAgentId: undefined,
-        taskOutcome: { status: 'completed', reason: 'Delivery and repository preservation were verified by completion recovery.' },
+        taskOutcome: { status: 'completed', reason: 'Delivery and repository cleanup were verified by completion recovery.' },
       } }, input.task.taskType || 'user', settlementFence);
       if (updated?.status !== 'completed' || updated?.error || updated?.statusChanged) return { ...result, verified: false, skipReason: 'cleanup-task-settlement-unverified' };
     }
@@ -665,7 +665,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
   if (!observed) return blockWith('probe-incomplete', { skipReason: REPO_STATE_SKIPS.PROBE_INCOMPLETE });
 
   if (observed.worktreePresent === false && observed.localBranchPresent === false) {
-    return settleAbsentCheckout({ agentId, agentState, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen: expectation.staysOpen });
+    return settleAbsentCheckout({ metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen: expectation.staysOpen });
   }
   if (originTaskAbsent) return skipped('removed-task-checkout-still-present');
   const issues = classifyRepoStateIssues(expectation, { ...observed, branchName });
@@ -704,7 +704,7 @@ async function resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchNam
   // Git porcelain uses forward slashes on Windows; registration spelling is
   // not an incarnation change. Resolve only native lexical path syntax here;
   // the persisted pointer/private-administration identity is still checked below.
-  const samePath = tree => resolve(tree.path) === resolve(worktreePath);
+  const samePath = tree => !!worktreePath && resolve(tree.path) === resolve(worktreePath);
   const pathHolder = inventory.find(samePath);
   if (holders.some(tree => !samePath(tree))
     || (pathHolder && pathHolder.branch?.replace(/^refs\/heads\//, '') !== branchName)) {
@@ -726,46 +726,29 @@ async function resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchNam
   return owner ? { reason: owner.reason, record: { owners: owner.owners } } : null;
 }
 
-/**
- * Missing originals are an accounting gap, not a reason to hire an agent
- * to rediscover absence. Never invent a preservation receipt.
- */
-async function settleAbsentCheckout({ agentId, agentState, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen }) {
+/** Already removed checkouts need delivery proof, not a retroactive backup. */
+async function settleAbsentCheckout({ metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen }) {
   const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
   const proofUrl = originalPrUrl || observed.prUrl;
   const forge = proofUrl && observed.prState === 'MERGED' ? await readRetirementForgeEvidence(sourceWorkspace, branchName, proofUrl,
     { forgeAccount: app?.forgeAccount ?? null }).catch(() => null) : null;
   const integrated = forge && (await execGit(['merge-base', '--is-ancestor', forge.mergeCommit, forge.targetHead ?? forge.defaultHead], sourceWorkspace,
     { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
-  const completed = metadata.completedCheckouts?.find(row => [1, 2].includes(row.version) && row.agentId === agentId
-    && row.startedAt === agentState.startedAt
-    && row.repoPath === sourceWorkspace && row.branch === branchName && row.path === worktreePath
-    && Number.isFinite(Date.parse(row.startedAt)) && Date.parse(row.capturedAt) >= Date.parse(row.startedAt));
-  if (completed?.version === 2) {
-    const { completedCheckoutReceiptValid } = await import('./completedCheckoutEvidence.js');
-    if (!completedCheckoutReceiptValid(agentState, completed)) return skipped('checkout-capture-unverified');
+  if (!staysOpen && integrated) {
+    const { withClaimOwnershipLock } = await import('./cosClaimOwnership.js');
+    const verified = await withClaimOwnershipLock(async () => {
+      if (await resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchName, worktreePath })
+        || (worktreePath && await readCheckoutPathPresence(worktreePath) !== false)
+        || await readLocalBranchPresence(sourceWorkspace, branchName) !== false) return false;
+      return await record('verified', 'already-absent-merged', { prUrl: proofUrl, committedIntegrationVerified: true }) === true;
+    }).catch(() => false);
+    if (verified) return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
+    const reason = 'absent-checkout-settlement-unverified';
+    await record('blocked', reason, { prUrl: proofUrl, committedIntegrationVerified: true });
+    return skipped(reason);
   }
-  if (!staysOpen && integrated && completed && completed.head === forge.prHead && observed.remoteBranchPresent === false) {
-    const { findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
-    const checkoutIdentity = retirementCheckoutIdentityFromPointer(completed.incarnation?.pointer);
-    const release = { branch: branchName, path: worktreePath, head: completed.head,
-      locked: false, lockReason: null, createdAt: completed.capturedAt, ...(checkoutIdentity && { checkoutIdentity }) };
-    const proof = await findMissingCheckoutPreservation({ repoPath: sourceWorkspace, release }).catch(() => null);
-    if (proof) {
-      const { withClaimOwnershipLock } = await import('./cosClaimOwnership.js');
-      const verified = await withClaimOwnershipLock(async () => {
-        if (await resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchName, worktreePath }) || !await proof.recheck()) return false;
-        const { recheck: _recheck, ...evidence } = proof;
-        const saved = await record('verified', 'already-absent-preservation-verified', { head: completed.head,
-          prUrl: proofUrl, committedIntegrationVerified: true,
-          preservation: { ...evidence, capturedAt: completed.capturedAt, verifiedAt: new Date().toISOString() } });
-        return saved === true;
-      }).catch(() => false);
-      if (verified) return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
-    }
-  }
-  const reason = integrated ? 'already-absent-preservation-unverified' : 'absent-checkout-integration-unverified';
-  await record(integrated ? 'already-absent' : 'blocked', reason, { prUrl: originalPrUrl, committedIntegrationVerified: !!integrated });
+  const reason = 'absent-checkout-integration-unverified';
+  await record('blocked', reason, { prUrl: proofUrl, committedIntegrationVerified: !!integrated });
   return skipped(reason);
 }
 
