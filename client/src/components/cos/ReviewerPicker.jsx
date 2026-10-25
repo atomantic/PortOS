@@ -1,7 +1,7 @@
 import ExecutionOptionsSelect from '../providers/ExecutionOptionsSelect.jsx';
 import { saveExecutionOptionSelection } from '../../services/apiProviders.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Plus, X, ChevronUp, ChevronDown } from 'lucide-react';
 import Pill from '../ui/Pill';
 import ProviderModelSelector from '../ProviderModelSelector';
@@ -384,16 +384,37 @@ export default function ReviewerPicker({
     onChange?.(partial);
   };
 
+  const mountGeneration = useRef(null);
+  useEffect(() => {
+    mountGeneration.current = {};
+    return () => { mountGeneration.current = null; };
+  }, []);
+  const latestConfiguration = useRef(null);
+  const selectionVersions = new Map(selected.map((token) => {
+    const provider = providerRecords.find((record) => `provider:${record.id}` === token);
+    const signature = JSON.stringify([models.get(token), efforts.get(token), provider?.defaultModel,
+      provider?.executionOptions, provider?.executionSelectionOptions]);
+    const previous = latestConfiguration.current?.selectionVersions.get(token);
+    return [token, previous?.signature === signature ? previous : { signature }];
+  }));
+  latestConfiguration.current = { selected, optionalTokens, modelsMap, effortsMap, maxRoundsMap, selectionVersions, emit };
+
   const [changeReviewerExecutionOptions, changingExecutionOptions] = useAsyncAction(async (token, options) => {
     const provider = providerRecords.find((record) => `provider:${record.id}` === token);
     if (!provider) return;
+    const requestedGeneration = mountGeneration.current;
+    const requestedSelection = latestConfiguration.current.selectionVersions.get(token);
     const selection = await saveExecutionOptionSelection(provider.id, models.get(token) || provider.defaultModel, options, { silent: true });
+    if (!requestedGeneration || mountGeneration.current !== requestedGeneration) return;
+    const current = latestConfiguration.current;
+    // A removed/reselected reviewer or changed model/effort supersedes this save.
+    if (current.selectionVersions.get(token) !== requestedSelection) return;
     setCreatedSelections((previous) => [...previous.filter((entry) => entry.id !== selection.id), selection]);
     const nextToken = `provider:${selection.id}`;
     const remap = (map) => Object.fromEntries(Object.entries(map).map(([key, value]) => [key.toLowerCase() === token.toLowerCase() ? nextToken : key, value]));
-    emit({ reviewers: [...new Set(selected.map((reviewer) => reviewer === token ? nextToken : reviewer))],
-      optionalReviewers: optionalTokens.map((reviewer) => reviewer === token ? nextToken : reviewer),
-      reviewerModels: remap(modelsMap), reviewerEfforts: remap(effortsMap), reviewerMaxRounds: remap(maxRoundsMap) });
+    current.emit({ reviewers: [...new Set(current.selected.map((reviewer) => reviewer === token ? nextToken : reviewer))],
+      optionalReviewers: current.optionalTokens.map((reviewer) => reviewer === token ? nextToken : reviewer),
+      reviewerModels: remap(current.modelsMap), reviewerEfforts: remap(current.effortsMap), reviewerMaxRounds: remap(current.maxRoundsMap) });
   }, { errorMessage: 'Could not save reviewer execution options' });
   const renderExecutionOptions = (token) => {
     const provider = providerRecords.find((record) => `provider:${record.id}` === token);
