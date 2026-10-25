@@ -313,6 +313,8 @@ export const WINDOWS_RISK_RULES = [
   /^server\/lib\/staticImportGraph(?:\.test)?\.js$/,
   /^server\/services\/(?:agent|twin)ImportCycles\.test\.js$/,
   /^server\/services\/worktree(?:Manager|Reap)\b/,
+  // Git enumerates NTFS junctions differently from Node lstat (#13562).
+  /^server\/services\/heldCheckoutRecovery(?:\.test)?\.js$/,
   /^server\/lib\/shell(?:Cd|Exit|LivenessProbe|ReadinessProbe)(?:\.test)?\.js$/,
   /^server\/lib\/agentGuard\//,
   /^server\/cos-runner\//,
