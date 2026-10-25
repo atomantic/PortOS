@@ -530,7 +530,9 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const detachedSuffix = countSuffix(result.detachedWorktrees, 'detached worktree(s) held back', (d) => d.reason);
   // Publish the exact release rows before preparing the live preview. Proof
   // objects may be fetched, but only a reviewed digest authorizes retirement.
-  const previousOutcome = await taskSchedule.getBranchReconcileOutcome(app.id);
+  const observedOutcome = await taskSchedule.getBranchReconcileOutcome(app.id);
+  const { reconcileLegacyRetirementRecords } = await import('./legacyRetirementReconciliation.js');
+  const previousOutcome = await reconcileLegacyRetirementRecords(app.id, observedOutcome).catch(() => observedOutcome);
   const unresolved = unresolvedRetirements(previousOutcome);
   const absentObligations = unresolved.filter(release => !result.worktreeInventory?.some(tree => sameRetirementCheckout(tree, release)));
   let retirementReviews = { candidates: [], held: [] };

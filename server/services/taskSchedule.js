@@ -21,6 +21,8 @@
 
 import { scheduleExecutionFieldsSchema } from '../lib/scheduleExecutionFieldsValidation.js';
 import { unresolvedRetirements, retainRetirementObligations, sameRetirementCheckout, sameRetirementObservation, matchingRetirementReceipts, hasRetirementReceipt } from '../lib/reconcileRetirementEvidence.js';
+import { applyLegacyRetirementResolutions } from '../lib/legacyRetirementTransition.js';
+import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 import { isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { findGoneInventoryRows, isObligationRow } from './branchReconcileInventoryPrune.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -775,12 +777,24 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
     const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
     const now = new Date().toISOString();
     const previous = record.branchReconcileOutcome;
+    const transition = schedule.retirementPolicyVersion === 2 && !previous?.legacyRetirementTransition
+      ? { version: 1, observations: [], resolutions: [] } : previous?.legacyRetirementTransition;
     const existing = unresolvedRetirements(previous);
     const admitted = [];
     const rejected = [];
     for (const row of [...(remaining || []), ...additionalObligations]) {
       if (!isObligationRow(row)) continue;
       if (existing.some(entry => sameRetirementObservation(entry, row))) continue;
+      const resolved = previous?.legacyRetirementTransition?.resolutions?.some(entry => sameRetirementObservation(entry.observation, row)
+        && (!row.createdAt || row.createdAt === entry.observation.createdAt));
+      if (resolved) {
+        const app = await getAppById(appId);
+        if (app?.repoPath && (!row.path || await readCheckoutPathPresence(row.path) === false)
+          && row.branch && await readLocalBranchPresence(app.repoPath, row.branch) === false) {
+          rejected.push(row);
+          continue;
+        }
+      }
       const previousIncarnation = existing.some(entry => sameRetirementCheckout(entry, row));
       const receipts = matchingRetirementReceipts(previous, row);
       // Legacy rows without observation identity cannot claim to be recreations.
@@ -809,6 +823,7 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
     const retained = retirementObligations.filter(obligation => !current?.some(row => sameRetirementObservation(row, obligation)));
     record.branchReconcileOutcome = {
       ...previous, status, reason, nextAction, updatedAt: now, retirementObligations,
+      ...(transition && { legacyRetirementTransition: transition }),
       ...(remoteInventory !== undefined && { remoteInventory }),
       remaining: retained.length ? [...(current || []), ...retained] : current,
       observedAt: remaining === undefined ? record.branchReconcileOutcome?.observedAt ?? null : now,
@@ -819,11 +834,29 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
   if (!appId || !unresolvedRetirements(outcome).length) return outcome;
   const app = await getAppById(appId).catch(() => null);
   if (!app?.repoPath) return outcome;
-  // Keep the expensive archive verifier off ordinary live-checkout writes.
-  const missing = await findGoneInventoryRows(app.repoPath, unresolvedRetirements(outcome), { includeObligations: true }).catch(() => []);
-  if (!missing.length) return outcome;
-  const { recoverMissingCheckoutPreservations } = await import('./heldCheckoutRecovery.js');
-  return recoverMissingCheckoutPreservations({ appId, repoPath: app.repoPath, outcome });
+  // Compatibility for stores that have not yet run migration 443. Upgraded and
+  // fresh stores always have the transition marker and never require archives.
+  if (!outcome.legacyRetirementTransition) {
+    const missing = await findGoneInventoryRows(app.repoPath, unresolvedRetirements(outcome), { includeObligations: true }).catch(() => []);
+    if (!missing.length) return outcome;
+    const { recoverMissingCheckoutPreservations } = await import('./heldCheckoutRecovery.js');
+    return recoverMissingCheckoutPreservations({ appId, repoPath: app.repoPath, outcome });
+  }
+  // Writers are also called while a checkout retirement owns the claim lock.
+  // The scan entry points run historical proof work after that lock is released.
+  return outcome;
+}
+
+export async function recordLegacyRetirementResolutions(appId, expected, resolutions, stillAbsent) {
+  return updateSchedule(async schedule => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    if (JSON.stringify(record.branchReconcileOutcome) !== JSON.stringify(expected) || !await stillAbsent()) {
+      return { result: record.branchReconcileOutcome, changed: false };
+    }
+    const outcome = applyLegacyRetirementResolutions(expected, resolutions, new Date().toISOString());
+    record.branchReconcileOutcome = outcome;
+    return { result: outcome, changed: outcome !== expected };
+  });
 }
 
 /** Compare the whole observed inventory and its generation inside the schedule
@@ -896,7 +929,10 @@ export async function getBranchReconcileOutcome(appId) {
 }
 
 export async function getBranchReconcileInventory(appId) {
-  return reconcileMissingInventory(appId, await getBranchReconcileOutcome(appId));
+  const outcome = await getBranchReconcileOutcome(appId);
+  const { reconcileLegacyRetirementRecords } = await import('./legacyRetirementReconciliation.js');
+  const current = await reconcileLegacyRetirementRecords(appId, outcome).catch(() => outcome);
+  return reconcileMissingInventory(appId, current);
 }
 
 const missingPreservationObligation = row => ({ ...row, reason: 'retirement-provenance-unverified' });
