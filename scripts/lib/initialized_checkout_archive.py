@@ -614,16 +614,26 @@ def inspect(request, full=False):
         for current, _, files in os.walk(admin / 'modules', followlinks=False):
             if 'HEAD' in files and 'config' in files and str(Path(current)) not in allowed_admin:
                 fail('unregistered-private-module')
+    common_parts = ('config', 'info/attributes', 'info/exclude') if request.get('retirementOnly') is True else COMMON_PARTS
     sources = {'working': manifest(work), 'administration': manifest(admin, True),
-               'common': {name: manifest(common / name, True) for name in COMMON_PARTS if (common / name).exists()}}
+               'common': {name: manifest(common / name, True) for name in common_parts if (common / name).exists()}}
     if dependencies:
         sources['dependencies'] = {key: manifest(Path(value['path']), True) for key, value in dependencies.items()}
     if request.get('requireOwnership') is True:
         for rows in [sources['working'], sources['administration'], *sources['common'].values(), *sources.get('dependencies', {}).values()]:
             preflight_copy_ownership(rows)
+    if request.get('retirementOnly') is True:
+        # No-archive retirement never removes the common repository. Bind the
+        # owned branch and per-worktree refs, not unrelated workers' shared refs.
+        owned_ref = 'refs/heads/' + release['branch'] if release.get('branch') else None
+        parent['refs'] = '\n'.join(row for row in parent['refs'].splitlines()
+                                 if row.split(' ', 1)[0] == owned_ref
+                                 or row.startswith(('refs/worktree/', 'refs/bisect/', 'refs/rewritten/')))
     facts = {'identity': {'working': identity(work), 'administration': identity(admin), 'common': identity(common)},
              'privateGitDir': str(admin), 'commonGitDir': str(common), 'modules': modules, 'parent': parent,
              'repoPath': request['repoPath'], 'release': release}
+    if request.get('retirementOnly') is True:
+        facts['retirementOnly'] = True
     if whole_checkout:
         facts['wholeCheckout'] = True
     if dependencies:

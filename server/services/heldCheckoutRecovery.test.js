@@ -2185,6 +2185,47 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     }));
   });
 
+  it.each(['captured', 'legacy-capture', 'missing-capture', 'failed-validation', 'failed-execution', 'human-handoff', 'changed-generation'])(
+    'retires captured merge-on-green delivery without promoting its aggregate outcome: %s', async scenario => {
+      const c = await reviewedCheckout(`merge-on-green-${scenario}`);
+      await execGit(['worktree', 'unlock', c.path], repo);
+      Object.assign(c.release, { locked: false, lockReason: null });
+      await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
+      const evidence = await import('./completedCheckoutEvidence.js');
+      const agent = { id: 'completed-automatic-owner', status: 'running', startedAt: new Date(Date.now() - 60_000).toISOString(),
+        metadata: { isWorktree: true, sourceWorkspace: repo, workspacePath: c.path, worktreeBranch: c.release.branch,
+          prCompletionPolicy: 'merge-on-green' } };
+      agent.metadata.checkoutSeeds = await evidence.captureCheckoutSeeds(agent);
+      agent.metadata.completedCheckouts = await evidence.captureSeededCompletionCheckouts(agent, { preterminal: true });
+      expect(agent.metadata.completedCheckouts).toHaveLength(1);
+      agent.status = 'completed'; agent.completedAt = new Date().toISOString();
+      agent.result = { success: false, executionSuccess: true, validationPassed: true,
+        taskOutcome: { status: 'blocked', recovery: { mode: 'runtime', prUrl: c.forge.prUrl, requiredCommit: c.forge.defaultHead } } };
+      if (scenario === 'legacy-capture') agent.metadata.completedCheckouts = agent.metadata.completedCheckouts.map(row =>
+        ({ ...row, version: 1, capturedAt: agent.completedAt }));
+      if (scenario === 'missing-capture') agent.metadata.completedCheckouts = [];
+      if (scenario === 'failed-validation') agent.result.validationPassed = false;
+      if (scenario === 'failed-execution') agent.result.executionSuccess = false;
+      if (scenario === 'human-handoff') agent.metadata.prCompletionPolicy = 'leave-open';
+      if (scenario === 'changed-generation') agent.metadata.completedCheckouts[0].incarnation.pointer.ino = '1';
+      injected.policies = [agent];
+      const original = structuredClone(agent);
+      const prepared = await c.prepare();
+      if (!['captured', 'legacy-capture'].includes(scenario)) {
+        expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: false });
+        expect(await registered(c.path)).toBe(true);
+      } else {
+        expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { policy: { policies: [
+          { id: agent.id, success: false, completion: 'merge-on-green', continuedDelivery: { kind: 'captured-merged-delivery' } },
+        ] } } });
+        const retired = await c.confirm(prepared.review);
+        expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+        expect(await registered(c.path)).toBe(false);
+      }
+      expect(agent).toEqual(original);
+      expect(await archives()).toEqual([]);
+    });
+
   it.each([false, true])('retires legacy pinned cleanup with lagging main and missing remote proof=%s', async missingProof => {
     const c = await reviewedCheckout('pinned-cleanup', { normalMerge: true });
     injected.policies[0].result = { success: false, executionSuccess: true,
