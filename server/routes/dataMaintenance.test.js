@@ -1,5 +1,5 @@
 import { beforeEach, afterAll, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, symlinkSync, realpathSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import express from 'express';
@@ -118,4 +118,17 @@ it('reports newly appearing files as retained instead of falsely reporting an em
   expect(result.status).toBe(200);
   expect(result.body).toMatchObject({ status: 'retained', remainingFiles: 1, remainingBytes: 10 });
   expect(existsSync(join(root, 'training-runs/new.bin'))).toBe(true);
+});
+
+it('refuses a linked data root instead of following it into another location', async () => {
+  const moved = `${root}-moved`;
+  renameSync(root, moved);
+  try {
+    symlinkSync(moved, root, process.platform === 'win32' ? 'junction' : 'dir');
+    expect((await preview()).body.code).toBe('MAINTENANCE_UNSAFE');
+    expect(existsSync(join(moved, 'training-runs/run-example/checkpoint.bin'))).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    renameSync(moved, root);
+  }
 });

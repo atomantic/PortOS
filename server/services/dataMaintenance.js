@@ -2,7 +2,7 @@ import { getNavPageForPath } from '../lib/navManifest.js';
 import { withRetiredDataRemoval } from '../lib/retiredLoraTraining.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, readdir, realpath } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { PATHS, renameGuarded, rmGuarded } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createMutex } from '../lib/asyncMutex.js';
@@ -23,11 +23,24 @@ const previews = new Map();
 const withLock = createMutex();
 const PREVIEW_TTL = 5 * 60_000;
 
+async function dataRootSnapshot() {
+  let cursor = resolve(PATHS.data);
+  for (;;) {
+    const info = await lstat(cursor);
+    if (info.isSymbolicLink()) throw fail('Data root contains a symbolic link; removal is unavailable.');
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  // Native canonicalization also expands Windows short names/casing. A changed
+  // spelling is not evidence of a link; lstat above establishes that boundary.
+  const root = await realpath(PATHS.data);
+  const info = await lstat(root);
+  return { root, identity: [info.dev, info.ino] };
+}
+
 async function inspect(directory, logicalDirectory = directory) {
-  const root = resolve(PATHS.data);
-  if (await realpath(root) !== root) throw fail('Data root contains a symbolic link; removal is unavailable.');
-  const rootInfo = await lstat(root);
-  const rootIdentity = [rootInfo.dev, rootInfo.ino];
+  const { root, identity: rootIdentity } = await dataRootSnapshot();
   const hash = createHash('sha256');
   let identity = null;
   let bytes = 0;
@@ -42,7 +55,7 @@ async function inspect(directory, logicalDirectory = directory) {
     else for (const name of (await readdir(path)).sort()) await walk(join(path, name), `${relative}/${name}`);
   }
   await walk(join(root, directory), logicalDirectory);
-  return { rootIdentity, bytes, files, present: identity !== null, fingerprint: hash.digest('hex'), identity };
+  return { canonicalRoot: root, rootIdentity, bytes, files, present: identity !== null, fingerprint: hash.digest('hex'), identity };
 }
 
 async function assertIdle() {
@@ -89,9 +102,9 @@ export async function executeMaintenance({ token, confirmation }) {
     await assertIdle();
     const current = await inspect(preview.directory);
     if (current.fingerprint !== preview.inventory.fingerprint || JSON.stringify(current.rootIdentity) !== JSON.stringify(preview.inventory.rootIdentity)) throw fail('Files changed since preview. Refresh and preview again.', 'MAINTENANCE_STALE');
-    const source = join(PATHS.data, preview.directory);
+    const source = join(current.canonicalRoot, preview.directory);
     const stagedName = `.maintenance-${preview.token}`;
-    const staged = join(PATHS.data, stagedName);
+    const staged = join(current.canonicalRoot, stagedName);
     await renameGuarded(source, staged);
     // Renaming first detaches the exact inspected directory from normal writers.
     // Revalidate identity and contents before removing anything. On uncertainty,
@@ -100,9 +113,8 @@ export async function executeMaintenance({ token, confirmation }) {
       const detached = await inspect(stagedName, preview.directory);
       if (JSON.stringify(detached.rootIdentity) !== JSON.stringify(current.rootIdentity) || JSON.stringify(detached.identity) !== JSON.stringify(current.identity) || detached.fingerprint !== current.fingerprint) throw fail('Files changed while preparing deletion.');
       await assertIdle();
-      const finalRoot = await realpath(PATHS.data);
-      const finalRootInfo = await lstat(PATHS.data);
-      if (finalRoot !== resolve(PATHS.data) || JSON.stringify([finalRootInfo.dev, finalRootInfo.ino]) !== JSON.stringify(current.rootIdentity)) throw fail('Data root changed while preparing deletion.');
+      const finalRoot = await dataRootSnapshot();
+      if (finalRoot.root !== current.canonicalRoot || JSON.stringify(finalRoot.identity) !== JSON.stringify(current.rootIdentity)) throw fail('Data root changed while preparing deletion.');
       if (await lstat(source).catch(missing)) throw fail('The source directory was recreated while preparing deletion.');
       await rmGuarded(staged, { recursive: true, force: false });
     } catch (error) {
