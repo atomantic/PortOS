@@ -31,6 +31,7 @@ import { commitScrap } from './catalogDB/commit.js';
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.withTransaction.mockImplementation((fn) => fn(mocks.client));
+  mocks.client.query.mockResolvedValue({ rows: [{ id: 'universe-1' }] });
   // clearAllMocks resets call history but not a prior mockRejectedValue —
   // reset the default resolution so one test's induced failure can't bleed
   // into the next.
@@ -153,8 +154,9 @@ describe('commitScrap', () => {
       universeRef: 'universe-1',
     });
 
-    expect(mocks.linkIngredientToRef).toHaveBeenNthCalledWith(1, 'cat-chr-example', 'universe', 'universe-1', 'canon-character', { client: mocks.client });
-    expect(mocks.linkIngredientToRef).toHaveBeenNthCalledWith(2, 'cat-idea-example', 'universe', 'universe-1', 'reference', { client: mocks.client });
+    expect(mocks.linkIngredientToRef).toHaveBeenCalledWith('cat-chr-example', 'universe', 'universe-1', 'owner', { client: mocks.client });
+    expect(mocks.linkIngredientToRef).toHaveBeenNthCalledWith(2, 'cat-chr-example', 'universe', 'universe-1', 'canon-character', { client: mocks.client });
+    expect(mocks.linkIngredientToRef).toHaveBeenNthCalledWith(4, 'cat-idea-example', 'universe', 'universe-1', 'reference', { client: mocks.client });
   });
 
   it('an explicit role overrides the type-derived default', async () => {

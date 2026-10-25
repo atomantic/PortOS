@@ -23,3 +23,7 @@ Index of plans other docs point at:
 These are point-in-time design records, not living docs — they are not updated
 to track implementation drift. For current behavior, see the code, `CLAUDE.md`,
 and the topic docs elsewhere under `docs/`.
+
+- [2026-10-25 — creative catalog primitives](./2026-10-25-creative-primitives.md):
+  explicit universe ownership, shared editing, usage labels and independent forks
+  over the existing catalog model, with staged legacy ambiguity.

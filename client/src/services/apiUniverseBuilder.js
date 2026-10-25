@@ -464,6 +464,11 @@ export const removeUniverseCanonEntry = (universeId, kind, entryId, options = {}
     ...options,
   }));
 
+export const removeUniverseCanonImageRef = (universeId, kind, entryId, filename, options = {}) =>
+  trackUniverseWrite(universeId, request(`/universe-builder/${encodeURIComponent(universeId)}/canon/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}/image-refs/${encodeURIComponent(filename)}`, {
+    method: 'DELETE', ...options,
+  }));
+
 // Bulk lock/unlock every canon entry of a single kind. Returns
 // `{ universe, kind, locked, changed, total }`.
 export const setUniverseCanonLockAll = (universeId, kind, locked, options = {}) =>

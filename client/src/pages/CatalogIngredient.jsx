@@ -45,8 +45,6 @@ import { composeStyledPrompt, stylePromptAdditions } from '../lib/composeStyledP
 import { universeStylePreset, withUniverseLabel } from '../lib/universeStylePreset';
 import { useModelInputPreview } from '../hooks/useModelInputPreview';
 import ModelInputPreview from '../components/media/ModelInputPreview';
-import { threadRefLabel, threadRefUrl } from '../lib/threadRefKinds.js';
-import ThreadRefChip from '../components/brain/ThreadRefChip';
 import AddToThreadButton from '../components/threads/AddToThreadButton';
 import { getUniverse } from '../services/apiUniverseBuilder';
 import useMounted from '../hooks/useMounted';
@@ -60,7 +58,11 @@ import CatalogSheetsPanel, { ReferenceSheetPanel } from '../components/catalog/C
 import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
 import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
 import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
+import CharacterDetailEditor from '../components/universe/CharacterDetailEditor';
+import { RevealTimingField } from '../components/pipeline/CanonCard';
 import CatalogCharacterCanon from '../components/catalog/CatalogCharacterCanon';
+import ObjectAttachmentsEditor from '../components/universe/ObjectAttachmentsEditor';
+import CatalogUniversePanel from '../components/catalog/CatalogUniversePanel';
 import CatalogFormsEditor from '../components/catalog/CatalogFormsEditor';
 import CatalogMergePanel from '../components/catalog/CatalogMergePanel';
 import CatalogIdentityPanel from '../components/catalog/CatalogIdentityPanel';
@@ -83,15 +85,6 @@ import { formsOf } from '../lib/catalogForms';
 // Per-type editor field list + badge color now come from the shared registry
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
 // where `kind` is 'text' (single line) or 'textarea' (multi-line).
-
-// Ref chips are the SHARED `ThreadRefChip`, deep-linking through the shared
-// kind→route registry (`client/src/lib/threadRefKinds.js`, a re-export of the
-// server leaf), not a switch local to this page — one table, so a kind added for a Brain thread and
-// a kind stored on a catalog ingredient can never disagree about where it goes
-// (#7664). Same contract this page always had: `threadRefUrl` returns null for a
-// kind we can't deep-link (the chip renders unlinked) and `threadRefLabel` falls
-// back to the raw kind, so a ref synced from a newer peer still renders. The
-// legacy `writersRoom` spelling is aliased inside the registry.
 
 // Build the image-generation prompt source from the (live, editable) payload:
 // the type's primary content field first, then a curated set of *visual*
@@ -217,6 +210,20 @@ function IngredientEditor() {
   // Set of media_keys driving the integrity badge on each thumbnail.
   const [media, setMedia] = useState([]);
   const [missingMedia, setMissingMedia] = useState(new Set());
+  const [ownerUniverse, setOwnerUniverse] = useState(null);
+  const [showCharacterEditor, setShowCharacterEditor] = useState(false);
+  const ownerUniverseId = record?.universeContext?.owner?.refId || null;
+  useEffect(() => {
+    let active = true;
+    setOwnerUniverse(null);
+    if (!ownerUniverseId || !showCharacterEditor && record?.type !== 'object') return;
+    getUniverse(ownerUniverseId, { silent: true }).then((universe) => { if (active) setOwnerUniverse(universe); })
+      .catch(() => { if (active) toast.error('Could not load the owning universe’s character context.'); });
+    return () => { active = false; };
+  }, [ownerUniverseId, showCharacterEditor, record?.type]);
+  const applyUniverseContext = useCallback((context) => {
+    setRecord((current) => current ? { ...current, universeContext: context, refs: context.refs } : current);
+  }, []);
 
   const refreshRevisions = useCallback(() => {
     if (!id) return;
@@ -224,6 +231,30 @@ function IngredientEditor() {
       .then((r) => setRevisions(Array.isArray(r?.items) ? r.items : []))
       .catch(() => { /* history is non-critical — leave the panel empty */ });
   }, [id]);
+
+  const [externalDetails, setExternalDetails] = useState(null);
+  const editSnapshot = useRef(null);
+  editSnapshot.current = { id: record?.id, updatedAt: record?.updatedAt, dirty: saving || lookSaving || Boolean(record && (
+    name !== (record.name || '') || !sameValue(tags, record.tags || []) || !sameValue(payload, ingredientPayload(record.payload))
+  )) };
+  const applyDetails = useCallback((d) => {
+    const r = d.ingredient;
+    setRecord({ ...r, refs: d.refs, universeContext: d.universeContext, sources: d.sources, sharedIdentity: d.sharedIdentity || null });
+    setName(r.name || '');
+    setTags(Array.isArray(r.tags) ? r.tags : []);
+    setPayload(r.payload && typeof r.payload === 'object' ? { ...r.payload } : {});
+    setRelations({
+      outbound: Array.isArray(d.relations?.outbound) ? d.relations.outbound : [],
+      inbound: Array.isArray(d.relations?.inbound) ? d.relations.inbound : [],
+    });
+    setRevisions(Array.isArray(d.revisions) ? d.revisions : []);
+    setMedia(Array.isArray(d.media) ? d.media : []);
+    setMissingMedia(new Set(Array.isArray(d.missingMedia) ? d.missingMedia.map((m) => m.mediaKey) : []));
+  }, []);
+  useEffect(() => {
+    if (externalDetails?.ingredient?.updatedAt && record?.updatedAt
+      && Date.parse(externalDetails.ingredient.updatedAt) <= Date.parse(record.updatedAt)) setExternalDetails(null);
+  }, [record?.updatedAt, externalDetails]);
 
   // One batched request hydrates the whole page on mount: ingredient + refs +
   // sources + relations + revisions + media + missing-media. Post-mutation
@@ -243,18 +274,7 @@ function IngredientEditor() {
           navigate(backPath);
           return;
         }
-        const r = d.ingredient;
-        setRecord({ ...r, refs: d.refs, sources: d.sources, sharedIdentity: d.sharedIdentity || null });
-        setName(r.name || '');
-        setTags(Array.isArray(r.tags) ? r.tags : []);
-        setPayload(r.payload && typeof r.payload === 'object' ? { ...r.payload } : {});
-        setRelations({
-          outbound: Array.isArray(d.relations?.outbound) ? d.relations.outbound : [],
-          inbound: Array.isArray(d.relations?.inbound) ? d.relations.inbound : [],
-        });
-        setRevisions(Array.isArray(d.revisions) ? d.revisions : []);
-        setMedia(Array.isArray(d.media) ? d.media : []);
-        setMissingMedia(new Set(Array.isArray(d.missingMedia) ? d.missingMedia.map((m) => m.mediaKey) : []));
+        applyDetails(d);
         setLoading(false);
       })
       .catch((err) => {
@@ -264,7 +284,7 @@ function IngredientEditor() {
         navigate(backPath);
       });
     return () => { cancelled = true; };
-  }, [id, navigate, backPath, mergeVersion]);
+  }, [id, navigate, backPath, mergeVersion, applyDetails]);
 
   // Keep ownership fences current without discarding an unsaved creative draft.
   // The original route ID is intentional: a retained-source URL must stay read-only.
@@ -276,15 +296,22 @@ function IngredientEditor() {
       getCatalogIngredientDetails(id, { silent: true }).then(details => {
         if (!active || current !== request || !details?.ingredient) return;
         setRecord(previous => previous ? { ...previous, sharedIdentity: details.sharedIdentity || null } : previous);
+        if (details.ingredient.id === editSnapshot.current.id && details.ingredient.updatedAt
+          && details.ingredient.updatedAt !== editSnapshot.current.updatedAt) {
+          if (editSnapshot.current.dirty) setExternalDetails(details);
+          else applyDetails(details);
+        }
       }).catch(() => { if (active) toast.error('Unable to refresh shared identity status. Reload before editing.'); });
     };
     const changed = event => {
       if ([event?.sourceId, event?.survivorId].includes(id)) refreshIdentity();
     };
+    const primitiveChanged = (event) => { if (event?.ingredientId === editSnapshot.current.id) refreshIdentity(); };
+    socket.on('catalog:primitive-changed', primitiveChanged);
     socket.on('catalog:identity-changed', changed);
     socket.on('connect', refreshIdentity);
-    return () => { active = false; socket.off('catalog:identity-changed', changed); socket.off('connect', refreshIdentity); };
-  }, [id]);
+    return () => { active = false; socket.off('catalog:identity-changed', changed); socket.off('catalog:primitive-changed', primitiveChanged); socket.off('connect', refreshIdentity); };
+  }, [id, applyDetails]);
 
   // Add an outbound edge (this ingredient → picked target). Optimistically
   // appends to local state so the panel updates without a refetch.
@@ -608,7 +635,11 @@ function IngredientEditor() {
   // Grouped "character sheet" sections for the rich canon types
   // (character/place/object); light types (idea/scene/concept) have none and
   // fall back to the flat field list below.
-  const sections = typeDef.editorSections || null;
+  const coreCharacterFields = new Set(['role', 'physicalDescription', 'personality', 'background', 'notes']);
+  const sections = record.type === 'character' && showCharacterEditor
+    ? (typeDef.editorSections || []).map((section) => ({ ...section, fields: section.fields.filter(([key]) => coreCharacterFields.has(key)) })).filter((section) => section.fields.length)
+    : typeDef.editorSections || null;
+  const editableLists = (typeDef.editableListFields || []).filter((field) => !showCharacterEditor || record.type !== 'character' || field.key === 'aliases');
   // A user-defined type has no hardcoded editor sections and carries
   // generically-shaped editorFields ({ key, label, widget }); render the
   // generic field renderer for it. System types keep their existing branches.
@@ -620,20 +651,9 @@ function IngredientEditor() {
   // user can still edit the composed prompt before generating (#1809).
   const genDescription = buildGenerationPromptSeed(payload, typeDef, tags);
 
-  // Group refs by kind for the "Appears in" panel. Tolerates either an array
-  // of `{ refKind, refId, role }` or a server-grouped shape.
-  const refs = Array.isArray(record.refs) ? record.refs : [];
-  const refsByKind = refs.reduce((acc, r) => {
-    const k = r.refKind || r.kind || 'other';
-    (acc[k] ||= []).push(r);
-    return acc;
-  }, {});
-
-  // First universe this ingredient belongs to — drives the "render reference
-  // sheet" deep-link (the renderer needs the universe's full style data, which
-  // lives on the Universe Builder surface). null when the ingredient isn't a
-  // canon entry of any universe.
-  const universeRef = (refsByKind.universe || [])[0] || null;
+  // Ownership, rather than usage-list order, supplies the style context.
+  const universeRef = record.universeContext?.owner || null;
+  const ownerCharacter = ownerUniverse?.characters?.find((entry) => entry.ingredientId === record.id);
 
   // Library routes split the page into the library's tabs; the plain
   // /catalog/:type/:id route (and a record opened under the wrong library)
@@ -696,7 +716,7 @@ function IngredientEditor() {
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
             {isDirty && <span className="text-xs text-port-warning" role="status">Unsaved changes</span>}
-            <button type="button" onClick={handleSave} disabled={saving || lookSaving || unlocking || mergeBusy || identityReadOnly}
+            <button type="button" onClick={handleSave} disabled={saving || lookSaving || unlocking || mergeBusy || identityReadOnly || !!externalDetails}
               className="inline-flex items-center gap-1.5 min-h-[40px] px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white text-sm font-medium">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
             </button>
@@ -745,6 +765,13 @@ function IngredientEditor() {
       <div className="flex-1 min-h-0 overflow-y-auto p-4 md:p-6">
       <div className="w-full min-w-0 space-y-5">
         <CatalogIdentityNotice identity={record.sharedIdentity} type={record.type} />
+        {externalDetails && <div role="status" className="rounded border border-port-warning/40 bg-port-warning/10 p-3 text-sm text-gray-300">
+          This primitive changed in another view. Your draft is preserved; inspect the latest version before saving.
+          <button type="button" onClick={() => { applyDetails(externalDetails); setExternalDetails(null); }}
+            className="ml-2 text-port-accent hover:underline">Discard local edits and load latest</button>
+        </div>}
+        <CatalogUniversePanel key={`universe-${record.id}`} ingredient={record} context={record.universeContext}
+          onContextChange={applyUniverseContext} readOnly={identityReadOnly} unsaved={isDirty || saving || lookSaving} />
 
         {activeTab === 'profile' && (
           <>
@@ -791,7 +818,7 @@ function IngredientEditor() {
                   same durable catalog row the Universe Builder canon surface edits.
                   Light/user types declare none and skip this entirely. */}
               {!isUserType && Array.isArray(typeDef.editableListFields) && typeDef.editableListFields.length > 0 && (
-                <fieldset disabled={identityReadOnly}><EditableListFields fields={typeDef.editableListFields} payload={payload} onChange={updatePayload} /></fieldset>
+                <fieldset disabled={identityReadOnly}><EditableListFields fields={editableLists} payload={payload} onChange={updatePayload} /></fieldset>
               )}
             </div>
 
@@ -800,10 +827,18 @@ function IngredientEditor() {
                 <CatalogFormsEditor type={record.type} payload={payload} onChange={updatePayload} />
               </fieldset>
             )}
+            {FORM_TYPES.has(record.type) && <RevealTimingField entry={{ ...payload, id: record.id }}
+              editable={!identityReadOnly && payload.locked !== true} onPatch={(patch) => setPayload((previous) => ({ ...previous, ...patch }))} />}
 
             {record.type === 'character' && (
               <>
-                <CatalogCharacterCanon payload={payload} />
+                <button type="button" onClick={() => setShowCharacterEditor((shown) => !shown)}
+                  className="px-3 py-2 rounded border border-port-accent text-port-accent text-sm">{showCharacterEditor ? 'Close character sheet' : 'Edit full character sheet'}</button>
+                {showCharacterEditor ? <CharacterDetailEditor entry={{ ...payload, id: ownerCharacter?.id || record.id, name }}
+                  universeId={ownerCharacter ? ownerUniverseId : null} characters={ownerUniverse?.characters || []}
+                  onPatch={(patch) => setPayload((previous) => ({ ...previous, ...patch }))}
+                  disabled={identityReadOnly || payload.locked === true} saveHint="Use Save to save your character edits" />
+                  : <CatalogCharacterCanon payload={payload} />}
                 {!tabs && <ReferenceSheetPanel payload={payload} universeRef={universeRef} />}
                 {/* Trained-LoRA link + dataset entry point. The catalog id IS the
                     ingredientId the trained sidecars carry; the universe entryId
@@ -816,9 +851,11 @@ function IngredientEditor() {
               </>
             )}
 
+            {record.type === 'object' && <ObjectAttachmentsEditor entry={{ ...payload, id: record.id, name }}
+              characters={ownerUniverse?.characters || []} disabled={identityReadOnly || payload.locked === true}
+              onPatch={(patch) => setPayload((previous) => ({ ...previous, ...patch }))} />}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <SourcesPanel sources={record.sources} evidence={payload?.evidence} />
-              <RefsPanel refsByKind={refsByKind} />
             </div>
 
             <RelationsPanel
@@ -860,7 +897,7 @@ function IngredientEditor() {
           <CatalogLooksPanel
             key={record.id}
             ingredientId={record.id}
-            initialUniverseId={refsByKind.universe?.length === 1 ? universeRef?.refId : ''}
+            initialUniverseId={universeRef?.refId || ''}
             wardrobes={wardrobes}
             lookMedia={media.filter((m) => liveLookIds.has(lookIdOf(m))).map(protectMedia)}
             candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabRow(m)).map(protectMedia)}
@@ -954,7 +991,12 @@ function SheetField({ fieldKey, label, kind, value, onChange }) {
   return (
     <div>
       <label htmlFor={inputId} className="block text-xs uppercase tracking-wider text-gray-500 mb-1">{label}</label>
-      {kind === 'textarea'
+      {['intExt', 'timeOfDay'].includes(kind)
+        ? <select id={inputId} value={value || ''} onChange={(event) => onChange(fieldKey, event.target.value || null)} className={shared}>
+            <option value="">Not specified</option>
+            {(kind === 'intExt' ? ['INT', 'EXT'] : ['dawn', 'day', 'dusk', 'night']).map((option) => <option key={option} value={option}>{option}</option>)}
+          </select>
+        : kind === 'textarea'
         ? <textarea id={inputId} rows={3} value={value} onChange={(e) => onChange(fieldKey, e.target.value)} className={shared} />
         : <input id={inputId} type="text" value={value} onChange={(e) => onChange(fieldKey, e.target.value)} className={shared} />}
     </div>
@@ -1777,39 +1819,6 @@ function SourcesPanel({ sources, evidence }) {
   );
 }
 
-function RefsPanel({ refsByKind }) {
-  const kinds = Object.keys(refsByKind);
-  return (
-    <section className="bg-port-card border border-port-border rounded-lg p-4">
-      <h2 className="text-sm font-semibold text-white mb-2">Appears in</h2>
-      {kinds.length === 0 ? (
-        <p className="text-xs text-gray-500">Not yet linked to any universe, series, or issue.</p>
-      ) : (
-        <div className="space-y-3">
-          {kinds.map((kind) => (
-            <div key={kind}>
-              <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">
-                {threadRefLabel(kind)}
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {refsByKind[kind].map((r, i) => (
-                  <ThreadRefChip
-                    key={`${kind}-${r.refId}-${i}`}
-                    kind={kind}
-                    id={r.refId}
-                    label={`${r.refName || r.refId || '(unnamed)'}${r.role ? ` · ${r.role}` : ''}`}
-                    url={threadRefUrl(kind, r.refId)}
-                    showKind={false}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
 
 const SOURCE_BADGE = {
   user:    'bg-port-accent/20 text-port-accent border-port-accent/40',

@@ -14,7 +14,7 @@ import MediaImage from '../MediaImage';
 import { imageThumbnailSrc } from '../../lib/imageThumbnailSrc';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { payloadSnippet } from '../../lib/catalogTypes';
-import { ingredientPath, ingredientCoverUrl } from '../../lib/creativeLibraries';
+import { ingredientPath, ingredientCoverUrl, usageSummary } from '../../lib/creativeLibraries';
 
 function TypeBadge({ type, getType }) {
   const meta = getType(type);
@@ -106,6 +106,8 @@ export default function CatalogCard({
         <CardThumb src={ingredientCoverUrl(it)} alt={name} />
         <span className="flex flex-col gap-2 min-w-0 flex-1">
           <span className="block text-white font-medium truncate">{name}</span>
+          <span className="text-xs text-gray-400 break-words">{it.owningUniverse ? `Universe: ${it.owningUniverse.name}` : 'Ownership needs review'}</span>
+          {usageSummary(it.usage) && <span className="text-xs text-gray-500">Used in {usageSummary(it.usage)}</span>}
           <span className="flex items-center gap-1.5 flex-wrap">
             <TypeBadge type={it.type} getType={getType} />
             {(it.tags || []).slice(0, 4).map((tag) => (

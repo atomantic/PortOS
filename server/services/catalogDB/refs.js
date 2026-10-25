@@ -14,6 +14,7 @@ import { query } from '../../lib/db.js';
 import { resolveRefs } from '../catalogRefResolver.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable, assertCatalogRelationRemovable } from './identityAccess.js';
 import { rowToRef, rowToSource, rowToIngredient } from './shared.js';
+import { catalogReferenceRole } from '../../lib/catalogTypes.js';
 import { toPgJson } from '../../lib/pgJson.js';
 
 // Canonical detail views omit local-merge originals; original-ID user exports
@@ -107,12 +108,7 @@ export async function linkIngredientToRef(ingredientId, refKind, refId, role, { 
 // map (idea/scene/user-defined types) links as a generic 'mentioned' ref.
 // Lives here, next to the link primitive, so every remix target that attaches
 // ingredients to a series shares one role vocabulary instead of inlining its own.
-const SERIES_REF_ROLE_BY_TYPE = Object.freeze({
-  character: 'cast',
-  place: 'canon-place',
-  object: 'canon-object',
-});
-export const seriesRefRoleForType = (type) => SERIES_REF_ROLE_BY_TYPE[type] || 'mentioned';
+export const seriesRefRoleForType = (type) => catalogReferenceRole(type, 'series');
 
 // Link a batch of already-resolved catalog ingredients to a series via
 // catalog_ingredient_refs (#1761) — the convergence contract's single data
@@ -132,13 +128,7 @@ export async function linkIngredientsToSeries(seriesId, ingredients = []) {
 // outside this map (idea/concept/user-defined types) links as a generic
 // 'reference'. Lives next to seriesRefRoleForType so every remix target shares
 // one role-vocabulary home.
-const CD_REF_ROLE_BY_TYPE = Object.freeze({
-  character: 'cast',
-  place: 'location',
-  object: 'prop',
-  scene: 'scene',
-});
-export const cdRefRoleForType = (type) => CD_REF_ROLE_BY_TYPE[type] || 'reference';
+export const cdRefRoleForType = (type) => catalogReferenceRole(type, 'creative-director');
 
 // Catalog ingredient `type` → universe ref role (#7615). The `canon-<kind>`
 // convention is what catalogCanonProjection.js and catalogUniverseTags.js
@@ -146,21 +136,11 @@ export const cdRefRoleForType = (type) => CD_REF_ROLE_BY_TYPE[type] || 'referenc
 // concept and user-defined types) links as a generic 'reference'. Lives next
 // to seriesRefRoleForType/cdRefRoleForType so every remix target shares one
 // role-vocabulary home.
-const UNIVERSE_REF_ROLE_BY_TYPE = Object.freeze({
-  character: 'canon-character',
-  place: 'canon-place',
-  object: 'canon-object',
-});
-export const universeRefRoleForType = (type) => UNIVERSE_REF_ROLE_BY_TYPE[type] || 'reference';
+export const universeRefRoleForType = (type) => catalogReferenceRole(type, 'universe');
 
 // Music video subject kind → ref role. A music video casts characters and
 // films in sets with props; the subject kind is the catalog type.
-const MUSIC_VIDEO_REF_ROLE_BY_TYPE = Object.freeze({
-  character: 'cast',
-  place: 'set',
-  object: 'prop',
-});
-export const musicVideoRefRoleForType = (type) => MUSIC_VIDEO_REF_ROLE_BY_TYPE[type] || 'reference';
+export const musicVideoRefRoleForType = (type) => catalogReferenceRole(type, 'music-video');
 
 
 // Link a batch of already-resolved catalog ingredients to a Creative Director

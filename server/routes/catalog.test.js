@@ -267,6 +267,19 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps — chunking', () => {
 });
 
 describe.skipIf(!runDb)('POST /api/catalog/bulk-import — export-bundle ref recreation', () => {
+  it('stages an exported owner as provenance instead of silently adopting its world', async () => {
+    const universeId = `imported-universe-${NONCE}`;
+    const bundle = { version: 1, ref: { kind: 'universe', id: universeId }, ingredients: [
+      { type: 'idea', name: `Imported owner ${NONCE}`, payload: {}, roleForExportedRef: 'owner' },
+    ] };
+    const result = await request(makeApp()).post('/api/catalog/bulk-import').send({ format: 'json', payload: JSON.stringify(bundle) });
+    expect(result.status).toBe(201);
+    const ingredient = result.body.created[0];
+    createdIngredientIds.add(ingredient.id);
+    expect(await catalogDB.listRefsForIngredient(ingredient.id)).toEqual([
+      expect.objectContaining({ refKind: 'universe', refId: universeId, role: 'imported-owner' }),
+    ]);
+  });
   it('recreates the bundle ref link from `bundleRef` and honors per-row role', async () => {
     const seriesId = `test-series-${NONCE}`;
     const bundle = {

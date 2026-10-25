@@ -243,6 +243,8 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/catalog/import/music-videos', RECORDS],
   ['POST /api/catalog/ingredient-merges/:id/recover', RECORDS],
   ['POST /api/catalog/ingredients', RECORDS],
+  ['POST /api/catalog/ingredients/:id/fork', RECORDS],
+  ['PUT /api/catalog/ingredients/:id/owner', RECORDS],
   ['DELETE /api/catalog/ingredients/:id', REMOVES_RECORD],
   ['PATCH /api/catalog/ingredients/:id', RECORDS],
   ['DELETE /api/catalog/ingredients/:id/link', REMOVES_RECORD],

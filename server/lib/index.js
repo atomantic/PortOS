@@ -984,3 +984,4 @@ export * from './retiredLoraTraining.js';
 export * from './executionOptions.js';
 
 export * from './providerExecutionOptions.js';
+export * from './catalogUniverseContext.js';

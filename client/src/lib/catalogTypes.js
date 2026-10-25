@@ -22,6 +22,7 @@
 import { CATALOG_TYPES as SERVER_CATALOG_TYPES } from '../../../server/lib/catalogTypes.js';
 
 export {
+  catalogReferenceRole,
   MEDIA_KINDS,
   RELATION_KINDS,
   USER_TYPE_FIELD_KINDS,
@@ -115,6 +116,8 @@ const PLACE_SECTIONS = [
     fields: [
       ['slugline', 'Slugline', 'text'],
       ['era',      'Era',      'text'],
+      ['intExt',   'Interior / exterior', 'intExt'],
+      ['timeOfDay', 'Time of day', 'timeOfDay'],
       ['weather',  'Weather',  'text'],
     ],
   },

@@ -175,7 +175,7 @@ const LIST_SECTIONS = Object.freeze([
 
 // Buffered text input — wraps useFieldDraft, commits to onCommit on blur.
 function DraftField({ field, value, onCommit, disabled, idPrefix }) {
-  const draft = useFieldDraft(value, onCommit);
+  const draft = useFieldDraft(typeof value === 'string' ? value : '', onCommit);
   // idPrefix scopes the field id to one editor instance so two open
   // character cards don't render duplicate `chr-field-pronouns` DOM ids
   // and break the label/input association.
@@ -269,7 +269,8 @@ function BoxedSection({ icon: Icon, label, summary, children }) {
 // `<kind>-<uuid>` under its own convention — see usePendingListRows.js for
 // the trade-off this strip implies for sibling drafts.
 function ListSectionEditor({ section, entry, onPatchList, disabled }) {
-  const rawPersisted = Array.isArray(entry[section.field]) ? entry[section.field] : [];
+  const rawPersisted = (Array.isArray(entry[section.field]) ? entry[section.field] : []).filter((item) => section.stringList
+    ? typeof item === 'string' : item && typeof item === 'object' && typeof item[section.columns[0].name] === 'string');
   // A `stringList` section (e.g. `secrets`) persists a plain string[] on the
   // server, but the generic row editor works on objects keyed by the single
   // column name. Marshal string → { [col]: string } on the way in and back to
@@ -1357,7 +1358,7 @@ const SHEET_PAGES = [
 ];
 const SHEET_PAGE_IDS = SHEET_PAGES.map((page) => page.id);
 
-export default function CharacterDetailEditor({ entry, universeId = null, onPatch, onExpand, expanding = false, disabled = false, characters = [], portrait = null, children }) {
+export default function CharacterDetailEditor({ entry, universeId = null, onPatch, onExpand, expanding = false, disabled = false, characters = [], portrait = null, saveHint = 'Edits save when you leave a field', children }) {
   const [activePage, setActivePage] = useDrawerTab(`castSheet-${entry?.id}`, 'attributes', SHEET_PAGE_IDS);
   // Keep visited pages mounted so pending list rows and local voice drafts survive
   // navigation. Unvisited production tools do not load until explicitly opened.
@@ -1374,7 +1375,7 @@ export default function CharacterDetailEditor({ entry, universeId = null, onPatc
   ));
   const proseSection = (key) => {
     const section = SECTIONS.find((item) => item.key === key);
-    const filled = section.fields.filter((field) => (entry[field.name] || '').trim()).length;
+    const filled = section.fields.filter((field) => typeof entry[field.name] === 'string' && entry[field.name].trim()).length;
     return <BoxedSection icon={section.icon} label={section.label} summary={`${filled}/${section.fields.length} filled`}>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{renderFields(section.fields)}</div>
     </BoxedSection>;
@@ -1407,9 +1408,9 @@ export default function CharacterDetailEditor({ entry, universeId = null, onPatc
             {portrait ? <div className="flex justify-center">{portrait}</div> : null}
             <div className="space-y-3">
               <div className="xl:text-center">
-                <p className="text-[10px] uppercase tracking-widest text-port-accent">Universe cast</p>
+                <p className="text-[10px] uppercase tracking-widest text-port-accent">Character primitive</p>
                 <p className="text-lg font-semibold text-white">Identity</p>
-                <p className="text-xs text-gray-500">{disabled ? 'Locked character' : 'Edits save when you leave a field'}</p>
+                <p className="text-xs text-gray-500">{disabled ? 'Locked character' : saveHint}</p>
               </div>
               {renderFields(SECTIONS[0].fields.slice(0, 3))}
             </div>

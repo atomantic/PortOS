@@ -174,6 +174,8 @@ describe('Catalog page', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^New$/i }));
     fireEvent.change(screen.getByLabelText(/^Name$/i), { target: { value: 'New Idea' } });
+    await screen.findByRole('option', { name: 'Echo Saints' });
+    fireEvent.change(screen.getByLabelText(/Owning universe/), { target: { value: 'u-1' } });
 
     await act(async () => {
       fireEvent.submit(screen.getByLabelText(/^Name$/i).closest('form'));
@@ -481,12 +483,12 @@ describe('Catalog page', () => {
     const item = await screen.findByRole('button', { name: 'Echo Saints' });
     await act(async () => { fireEvent.click(item); });
 
-    // character → cast-character, place → cast-place.
+    // Universe membership uses the canonical bible role vocabulary.
     expect(linkCatalogIngredient).toHaveBeenCalledWith(
-      'i-1', { refKind: 'universe', refId: 'u-1', role: 'cast-character' }, { silent: true },
+      'i-1', { refKind: 'universe', refId: 'u-1', role: 'canon-character' }, { silent: true },
     );
     expect(linkCatalogIngredient).toHaveBeenCalledWith(
-      'i-2', { refKind: 'universe', refId: 'u-1', role: 'cast-place' }, { silent: true },
+      'i-2', { refKind: 'universe', refId: 'u-1', role: 'canon-place' }, { silent: true },
     );
     expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Added 2 ingredients to Echo Saints/i));
   });

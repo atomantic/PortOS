@@ -1,0 +1,173 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import express from 'express';
+import { request } from '../lib/testHelper.js';
+import { errorMiddleware } from '../lib/errorHandler.js';
+
+const db = vi.hoisted(() => ({ state: null, failMedia: false }));
+vi.mock('../lib/db.js', () => {
+  const query = async (sql, params = []) => {
+    const state = db.state;
+    if (sql.includes('INSERT INTO catalog_commit_receipts')) {
+      if (state.receipts[params[0]]) return { rows: [], rowCount: 0 };
+      state.receipts[params[0]] = { fingerprint: params[1], ingredients: null };
+      return { rows: [{ operation_key: params[0] }], rowCount: 1 };
+    }
+    if (sql.includes('SELECT fingerprint, ingredients')) return { rows: [structuredClone(state.receipts[params[0]])] };
+    if (sql.includes('UPDATE catalog_commit_receipts')) {
+      state.receipts[params[0]].ingredients = JSON.parse(params[1]);
+      return { rows: [] };
+    }
+    if (sql.includes('FROM catalog_identity_read_refs')) return { rows: state.refs.filter((ref) => ref.ingredientId === params[0] && !ref.deleted)
+      .map((ref) => ({ ...ref, resolved: !!state.universes[ref.refId] })) };
+    if (sql.includes('SELECT id FROM universes')) return { rows: state.universes[params[0]] ? [{ id: params[0] }] : [] };
+    if (sql.includes('SELECT id, name AS name FROM universes')) return { rows: params[0].filter((id) => state.universes[id]).map((id) => ({ id, name: state.universes[id] })) };
+    if (sql.includes('SELECT id FROM catalog_ingredients')) return { rows: state.ingredients[params[0]] ? [{ id: params[0] }] : [] };
+    if (sql.includes('UPDATE catalog_ingredient_refs')) {
+      state.refs = state.refs.map((ref) => ref.ingredientId === params[0] && ref.role === params[1] && ref.refId !== params[2] ? { ...ref, deleted: true } : ref);
+      return { rows: [] };
+    }
+    if (sql.includes('INSERT INTO catalog_ingredient_relations')) {
+      state.relations.push({ fromId: params[0], toId: params[1], kind: 'forked-from' });
+      return { rows: [] };
+    }
+    if (sql.includes('INSERT INTO catalog_ingredient_media')) {
+      if (db.failMedia) throw new Error('Attachment write failed');
+      state.media.push(...state.media.filter((media) => media.ingredientId === params[1] && ['portrait', 'reference'].includes(media.kind))
+        .map((media) => ({ ...structuredClone(media), ingredientId: params[0], role: 'fork-reference', library: {} })));
+      return { rows: [] };
+    }
+    throw new Error(`Unexpected test query: ${sql.slice(0, 80)}`);
+  };
+  return { query, withTransaction: async (work) => {
+    const before = structuredClone(db.state);
+    return work({ query }).catch((error) => { db.state = before; throw error; });
+  } };
+});
+vi.mock('../services/catalogDB/ingredients.js', async () => {
+  const { sanitizeBiblePayload } = await import('../services/catalogDB/shared.js');
+  return {
+    getIngredient: async (id) => structuredClone(db.state.ingredients[id] || null),
+    getIngredientIdentityIds: async (id) => [id],
+    createIngredient: async (input, options) => {
+      const ingredient = { ...structuredClone(input), id: input.id || `cat-${input.type}-new`,
+        payload: sanitizeBiblePayload(input.type, input.name, input.payload), syncSequence: '1' };
+      db.state.ingredients[ingredient.id] = ingredient;
+      db.state.revisions.push({ ingredientId: ingredient.id, actor: options.actor, payload: structuredClone(ingredient.payload) });
+      return ingredient;
+    },
+  };
+});
+vi.mock('../services/catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: async (id) => id }));
+vi.mock('../services/catalogDB/refs.js', () => ({
+  linkIngredientToRef: async (ingredientId, refKind, refId, role) => {
+    const existing = db.state.refs.find((ref) => ref.ingredientId === ingredientId && ref.refKind === refKind && ref.refId === refId && ref.role === role);
+    if (existing) existing.deleted = false;
+    else db.state.refs.push({ ingredientId, refKind, refId, role });
+  },
+  unlinkIngredientFromRef: async () => {},
+}));
+vi.mock('../services/catalogPrimitiveUsage.js', () => ({ listPrimitiveUsages: async () => [] }));
+
+import router from './catalogPrimitives.js';
+import { assertPrimitiveUniverse, createOwnedPrimitive } from '../services/catalogPrimitives.js';
+
+const app = express();
+app.use(express.json());
+app.use('/api/catalog/ingredients/:id', router);
+app.use(errorMiddleware);
+const path = '/api/catalog/ingredients/cat-chr-source';
+const operationKey = 'd48e7a1a-3f88-42a7-93ab-a2650562a290';
+
+beforeEach(() => {
+  db.failMedia = false;
+  db.state = { universes: { first: 'First universe', second: 'Second universe' }, receipts: {}, relations: [], revisions: [],
+    refs: [{ ingredientId: 'cat-chr-source', refKind: 'universe', refId: 'first', role: 'owner' }],
+    ingredients: { 'cat-chr-source': { id: 'cat-chr-source', type: 'character', name: 'Example courier', tags: [], syncSequence: '72',
+      payload: { physicalDescription: 'A blue coat.', locked: true, voiceId: 'local-voice', voiceCanon: { description: 'Quiet', approved: true },
+        identityPack: { assets: [{ role: 'neutral', imageRef: 'coat.png', approved: true }] }, imageRefs: ['coat.png'], primaryImageRef: 'coat.png',
+        props: [{ id: 'prop-1', name: 'Satchel', imageRef: 'satchel.png' }],
+        forms: [{ id: 'older', label: 'Older' }], wardrobes: [{ id: 'outfit', name: 'Winter' }],
+        relationshipLinks: [{ targetCharacterId: 'other', type: 'ally' }], sourceSeriesId: 'source-series',
+        referenceSheets: { standard: 'sheet.png' }, referenceSheetRequests: { standard: 'running' },
+        exportConsent: true, sessionId: 'session', providerId: 'provider' } } },
+    media: [{ ingredientId: 'cat-chr-source', mediaKey: 'coat.png', kind: 'portrait', role: 'approved', library: { guide: true } },
+      { ingredientId: 'cat-chr-source', mediaKey: 'voice.wav', kind: 'audio' }],
+  };
+});
+
+describe('creative primitive ownership and forks', () => {
+  it('stages ambiguous legacy uses, explicitly resolves ownership, and preserves existing identities and links', async () => {
+    db.state.refs[0].role = 'canon-character';
+    db.state.refs.push({ ingredientId: 'cat-chr-source', refKind: 'universe', refId: 'second', role: 'reference' });
+    const before = structuredClone(db.state.ingredients);
+    const preview = await request(app).get(`${path}/universe-context`);
+    expect(preview.body).toMatchObject({ status: 'needs-review', owner: null, candidates: expect.any(Array) });
+    const result = await request(app).put(`${path}/owner`).send({ universeId: 'second' });
+    expect(result.status).toBe(200);
+    expect(result.body.owner).toMatchObject({ refId: 'second', refName: 'Second universe' });
+    expect(db.state.ingredients).toEqual(before);
+    expect(db.state.refs.filter((ref) => ref.role !== 'owner')).toHaveLength(2);
+  });
+
+  it('refuses an implicit ownership move and a new cross-universe mutable link', async () => {
+    const result = await request(app).put(`${path}/owner`).send({ universeId: 'second' });
+    expect(result.status).toBe(409);
+    expect(db.state.refs).toHaveLength(1);
+    await expect(assertPrimitiveUniverse('cat-chr-source', 'second')).rejects.toMatchObject({ code: 'CATALOG_UNIVERSE_CONFLICT' });
+  });
+
+  it('forks independent identity and image associations, resets approvals/bindings, and replays the original result', async () => {
+    const before = structuredClone(db.state.ingredients['cat-chr-source']);
+    const input = { universeId: 'second', copyImages: true, operationKey };
+    const result = await request(app).post(`${path}/fork`).send(input);
+    expect(result.status).toBe(201);
+    const fork = result.body;
+    expect(fork.id).not.toBe(before.id);
+    expect(fork.payload.voiceCanon.approved).toBe(false);
+    expect(fork.payload.identityPack.assets[0].approved).toBe(false);
+    expect(fork.payload.forms[0].id).not.toBe('older');
+    expect(fork.payload.wardrobes[0].id).not.toBe('outfit');
+    for (const field of ['voiceId', 'sourceSeriesId', 'exportConsent', 'sessionId', 'providerId']) expect(fork.payload[field]).toBeFalsy();
+    expect(fork.payload.referenceSheets).toEqual({});
+    expect(fork.payload.referenceSheetRequests).toEqual({});
+    expect(fork.payload.relationshipLinks).toEqual([]);
+    expect(db.state.ingredients[before.id]).toEqual(before);
+    expect(db.state.relations).toEqual([{ fromId: fork.id, toId: before.id, kind: 'forked-from' }]);
+    expect(db.state.revisions[0].actor).toBe('fork:cat-chr-source@72');
+    expect(db.state.media.filter((media) => media.ingredientId === fork.id)).toEqual([
+      expect.objectContaining({ mediaKey: 'coat.png', kind: 'portrait', library: {} }),
+    ]);
+    db.state.ingredients[before.id].payload.physicalDescription = 'Later source edit';
+    const replay = await request(app).post(`${path}/fork`).send(input);
+    expect(replay.body).toEqual(fork);
+    expect(Object.keys(db.state.ingredients)).toHaveLength(2);
+    const mismatch = await request(app).post(`${path}/fork`).send({ ...input, name: 'Different submission' });
+    expect(mismatch.status).toBe(409);
+  });
+
+  it('copies no assets by default and rolls back a failed attachment operation', async () => {
+    const textOnly = await request(app).post(`${path}/fork`).send({ universeId: 'second', operationKey });
+    expect(textOnly.body.payload.imageRefs).toEqual([]);
+    expect(textOnly.body.payload.props[0].imageRef).toBeFalsy();
+    expect(textOnly.body.payload.props[0].id).not.toBe('prop-1');
+    expect(db.state.media).toHaveLength(2);
+    const before = structuredClone(db.state);
+    db.failMedia = true;
+    const failed = await request(app).post(`${path}/fork`).send({ universeId: 'second', copyImages: true, operationKey: 'b0d52efa-a06a-47b8-81aa-393ea39c83f4' });
+    expect(failed.status).toBe(500);
+    expect(db.state).toEqual(before);
+  });
+
+  it('validates the public request before any write and requires a real destination', async () => {
+    const before = structuredClone(db.state);
+    expect((await request(app).post(`${path}/fork`).send({ universeId: 'second' })).status).toBe(400);
+    expect((await request(app).post(`${path}/fork`).send({ universeId: 'missing', operationKey })).status).toBe(404);
+    expect(db.state).toEqual(before);
+  });
+
+  it('uses the same explicit ownership contract for a non-bible creative type', async () => {
+    const idea = await createOwnedPrimitive({ type: 'idea', name: 'Example premise', payload: { summary: 'A small idea.' }, tags: [] }, 'second', operationKey);
+    expect(idea.payload.summary).toBe('A small idea.');
+    expect(db.state.refs).toContainEqual({ ingredientId: idea.id, refKind: 'universe', refId: 'second', role: 'owner' });
+  });
+});

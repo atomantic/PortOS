@@ -195,6 +195,29 @@ describe.skipIf(!ready)('listIngredients identity read views (#12989)', () => {
     expect(byId.get(id('op-survivor'))).toEqual({ id: id('op-survivor'), thumbnailKey: `${P}-op-portrait`, usage: { universe: 1, series: 1 } });
   });
 
+  it('separates explicit ownership from usage without assigning legacy refs', async () => {
+    await insertIngredient('owned', 0);
+    try {
+      await insertRef('owned', 'universe', UNI, { role: 'owner' });
+      let result = await listIngredients({ tag: TAG, limit: 200 });
+      let row = result.items.find((item) => item.id === id('owned'));
+      expect(row.owningUniverse).toEqual({ id: UNI, name: 'Example Universe' });
+      expect(row.ownershipStatus).toBe('owned');
+      expect(row.usage).toEqual({});
+      expect(result.items.find((item) => item.id === id('linked')).owningUniverse).toBeNull();
+      await insertRef('owned', 'universe', UNI, { role: 'canon-character' });
+      result = await listIngredients({ tag: TAG, limit: 200 });
+      row = result.items.find((item) => item.id === id('owned'));
+      expect(row.usage).toEqual({ universe: 1 });
+      await insertRef('owned', 'universe', DEAD_UNI, { role: 'owner' });
+      row = (await listIngredients({ tag: TAG, limit: 200 })).items.find((item) => item.id === id('owned'));
+      expect(row.owningUniverse).toBeNull();
+      expect(row.ownershipStatus).toBe('conflict');
+    } finally {
+      await query('DELETE FROM catalog_ingredients WHERE id = $1', [id('owned')]);
+    }
+  });
+
   it('pages without changing order and decorates only the returned page', async () => {
     const all = project(await listIngredients({ tag: TAG, limit: 200 }));
     const pages = [];
