@@ -1482,6 +1482,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   let capacityRefusal;
   let reviewedLinks = [];
   const removedLinks = [];
+  let linksPrepared = false;
   const verifyRemoval = async (holder) => {
     if (opts.signal?.aborted) return 'retirement-archive-cancelled';
     if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
@@ -1511,6 +1512,9 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval,
     beforeMutation: async () => {
       await opts.beforeMutation?.();
+      // The removal helper also calls this hook before pruning registration.
+      if (linksPrepared) return;
+      linksPrepared = true;
       // Git for Windows leaves junctions behind (git-for-windows/git#6151).
       // Unlink only freshly reviewed links after the final removal gate, never
       // recursively delete their targets or use a fallback checkout remover.
