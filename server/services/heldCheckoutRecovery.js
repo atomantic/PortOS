@@ -24,7 +24,7 @@ import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { realpathSync, constants } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { lstat, stat, realpath, readlink, readdir, opendir, readFile, chmod, open, mkdir, mkdtemp, unlink, symlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { devNull, tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve, relative, sep } from 'node:path';
 import { sameRetirementCheckout, unresolvedRetirements } from '../lib/reconcileRetirementEvidence.js';
@@ -637,6 +637,30 @@ async function retirementPolicy(repoPath, branch, opts, reviewIdentity = {}) {
   const policies = await (opts.readPolicies || (() => readBranchCompletionPolicies({ repairIndex: false })))().catch(() => null);
   if (opts.mergedReceipt) return mergedReceiptRetirementPolicy({ repoPath, branch, agents: policies,
     tip: opts.mergedReceipt.expectedHeadSha });
+  // A detached copy does not inherit another physical checkout's unfinished
+  // obligation. Bind that distinction to captured generations and fresh delivery,
+  // without changing those owners' outcomes or retiring their originals.
+  const forge = reviewIdentity.retirementForge;
+  if (reviewIdentity.detachedCheckoutIdentity && forge?.prUrl === reviewIdentity.prUrl
+    && forge.scopeProof === 'represented-detached-head' && forge.detachedRepresentation?.sourceHead === reviewIdentity.tip
+    && forge.detachedRepresentation.deliveredHead === forge.prHead
+    && Array.isArray(policies)) {
+    const { completedCheckoutReceiptValid } = await import('./completedCheckoutEvidence.js');
+    const candidates = policies.flatMap(agent => (agent.status === 'completed' ? agent.metadata?.completedCheckouts || [] : [])
+      .filter(row => row.branch === branch && row.repoPath === repoPath && completedCheckoutReceiptValid(agent, row))
+      .map(row => ({ agent, row })));
+    const delivered = [];
+    if (candidates.length <= 25) for (const { agent, row } of candidates) {
+      const ancestor = row.head === forge.prHead || await execGit(['--no-replace-objects', '-c', 'core.commitGraph=false',
+        'merge-base', '--is-ancestor', row.head, forge.prHead], repoPath,
+      { ignoreExitCode: true, timeout: 2000,
+        env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_GRAFT_FILE: devNull } })
+        .then(result => result.exitCode === 0, () => false);
+      if (ancestor) delivered.push({ agentId: agent.id, capturedHead: row.head, capturedAt: row.capturedAt,
+        path: row.path, incarnation: row.incarnation, detachedCheckoutIdentity: reviewIdentity.detachedCheckoutIdentity });
+    }
+    reviewIdentity = { ...reviewIdentity, detachedDeliveredCaptures: delivered };
+  }
   const checkoutIdentities = {};
   if (reviewIdentity.verifiedPrHead === reviewIdentity.tip && reviewIdentity.tip && Array.isArray(policies)) {
     const paths = new Set([reviewIdentity.checkoutPath, repoPath]);
