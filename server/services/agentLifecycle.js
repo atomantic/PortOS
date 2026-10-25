@@ -506,15 +506,21 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
   if (completingAgents.has(agentId)) return;
   // Claim before admission's first await: the process may already be gone.
   completingAgents.add(agentId);
+  let retirementEligible = false;
   try {
     return await maintenance.withResource('agent', agentId, async () => {
+      // Capture before the pause router consumes its map entry. A paused job's
+      // checkout still belongs to its future resume, not completion retirement.
+      retirementEligible = !pausedAgents.has(agentId);
       try { return await handleAdmittedAgentCompletion(agentId, exitCode, success, duration); }
       catch (err) { maintenance.markResourceUnsettled('agent', agentId); throw err; }
     });
   } finally {
     completingAgents.delete(agentId);
-    await import('./agentRepoStateVerification.js').then(module => module.resumeAgentCompletionRetirement(agentId))
-      .catch(error => emitLog('warn', `Completion retirement deferred for ${agentId}: ${error.message}`, { agentId }));
+    if (retirementEligible) {
+      await import('./agentRepoStateVerification.js').then(module => module.resumeAgentCompletionRetirement(agentId))
+        .catch(error => emitLog('warn', `Completion retirement deferred for ${agentId}: ${error.message}`, { agentId }));
+    }
   }
 }
 
