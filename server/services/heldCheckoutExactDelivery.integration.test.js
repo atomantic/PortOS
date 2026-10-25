@@ -49,14 +49,19 @@ beforeEach(async () => {
   await owned.prepare();
   scratch = null;
 });
-afterEach(({ task }) => {
+afterEach(({ task, signal }) => {
   return owned.cleanup(async () => {
-    const report = () => console.log(`⏱️ exact-delivery fixture: ${owned.summary()}`);
-    if (task.result?.errors?.length) report();
+    // CI's quiet setup replaces console methods, including on failed tests.
+    const report = () => process.stderr.write(`⏱️ exact-delivery fixture: ${owned.summary()}\n`);
+    const failed = Boolean(task.result?.errors?.length || signal.aborted);
+    if (failed) report();
     try { await owned.drain(); }
     finally {
-      if (task.result?.errors?.length || process.env.PORTOS_PROFILE_RETIREMENT_FIXTURE === '1') report();
-      if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 3 });
+      if (failed || process.env.PORTOS_PROFILE_RETIREMENT_FIXTURE === '1') report();
+      if (scratch) {
+        try { await owned.run('scratch-removal', () => rm(scratch, { recursive: true, force: true, maxRetries: 3 })); }
+        catch (error) { await owned.drain(); report(); throw error; }
+      }
     }
   });
 });
