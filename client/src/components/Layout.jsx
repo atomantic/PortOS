@@ -406,6 +406,7 @@ export default function Layout() {
           to: `/pipeline/series/${s.id}`,
           label: s.name || '(untitled series)',
           title: s.name || '(untitled series)',
+          icon: child.icon,
           // Active-detection prefix — highlight while on the series page
           // OR any issue belonging to that series. The issue page itself
           // doesn't carry seriesId in its URL, so per-issue highlighting
@@ -422,11 +423,13 @@ export default function Layout() {
           to: `/universes/${u.id}`,
           label: u.name || '(untitled universe)',
           title: u.name || '(untitled universe)',
+          icon: child.icon,
           activePathPrefix: `/universes/${u.id}`,
         })),
       };
     };
     const decorateParentChild = (child) => {
+      if (!child.to) return child;
       const parentGrandChildren = presentedNavRows
         .filter((row) => row.parentPath === child.to)
         .sort((a, b) => a.label.localeCompare(b.label))
@@ -434,6 +437,7 @@ export default function Layout() {
           to: row.to,
           label: row.label,
           title: row.label,
+          icon: row.icon,
           activePathPrefix: row.to,
         }));
       if (parentGrandChildren.length > 0) {
@@ -927,7 +931,7 @@ export default function Layout() {
                 </div>
               )}
               {recent.length > 0 && (
-                <div className="mb-2">
+                <div className="mb-2" data-testid="recent-section">
                   <div className="px-4 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Recent</div>
                   {recent.map((entry) => (
                     <WorkingSetRow key={`recent-${entry.path}`} entry={entry} pinned={false} onTogglePin={() => pin(entry.path)} onNavigate={() => setMobileOpen(false)} isActive={entry.end ? location.pathname === entry.path : isActive(entry.path)} />
