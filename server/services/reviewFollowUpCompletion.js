@@ -25,6 +25,8 @@ export async function verifyMergedReviewFollowUp(task, workspacePath) {
 /** Settle only the assigned review/merge work before allocating another agent.
  * A saved cleanup/delivery/resume target is independent work, not discharged by
  * the PR being merged. Its existing proof/retirement path remains authoritative.
+ * Only `completed` means this call persisted a terminal transition; `skip` also
+ * stops stale dispatches but must not wake the queue as a new completion.
  */
 export async function settleMergedReviewFollowUpBeforeSpawn(input) {
   const meta = input?.metadata;
@@ -37,7 +39,7 @@ export async function settleMergedReviewFollowUpBeforeSpawn(input) {
   const fresh = await getTaskById(input.id);
   if (!fresh || !['pending', 'approved'].includes(fresh.status)
     || fresh.taskType !== input.taskType || !isDeepStrictEqual(fresh.metadata, meta)
-    || fresh.description !== input.description || fresh.priority !== input.priority) return true;
+    || fresh.description !== input.description || fresh.priority !== input.priority) return 'skip';
   const expectedTask = structuredClone({ description: fresh.description, priority: fresh.priority, metadata: fresh.metadata });
   const { getAppById } = await import('./apps.js');
   const app = await getAppById(meta.app);
@@ -51,12 +53,12 @@ export async function settleMergedReviewFollowUpBeforeSpawn(input) {
   return withClaimOwnershipLock(async () => {
     const current = await getTaskById(fresh.id);
     if (!current || current.status !== fresh.status || current.taskType !== fresh.taskType
-      || Object.entries(expectedTask).some(([key, value]) => !isDeepStrictEqual(current[key], value))) return true;
+      || Object.entries(expectedTask).some(([key, value]) => !isDeepStrictEqual(current[key], value))) return 'skip';
     const currentApp = await getAppById(meta.app);
-    if (currentApp?.id !== meta.app || currentApp.repoPath !== repoPath) return true;
+    if (currentApp?.id !== meta.app || currentApp.repoPath !== repoPath) return 'skip';
     const { loadState } = await import('./cosState.js');
     const { hasActiveTaskOwner } = await import('./agentState.js');
-    if (hasActiveTaskOwner(fresh.id, (await loadState()).agents)) return true;
+    if (hasActiveTaskOwner(fresh.id, (await loadState()).agents)) return 'skip';
     const result = await updateTask(fresh.id, { status: 'completed', metadata: {
       taskOutcome: { status: 'no-action-needed', reason: 'The assigned review/merge target is verified merged.' },
       mergedReviewFollowUp: proof, reviewLoopRetiredReason: 'pull-request-merged-before-follow-up',
@@ -64,6 +66,6 @@ export async function settleMergedReviewFollowUpBeforeSpawn(input) {
     if (!result || result.error) throw new Error('merged-review-task-settlement-unavailable');
     // A stale write refusal also stops this stale dispatch, without completing
     // the edited/claimed task or altering any original attempt/spawn budget.
-    return true;
+    return result.statusChanged || result.status !== 'completed' ? 'skip' : 'completed';
   });
 }

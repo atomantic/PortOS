@@ -128,8 +128,12 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     return null;
   }
 
-  if (await settleMergedReviewFollowUpBeforeSpawn(task)) {
+  const reviewSettlement = await settleMergedReviewFollowUpBeforeSpawn(task);
+  if (reviewSettlement) {
     await context.cleanupOnError('review follow-up settled or changed');
+    // No agent:completed follows this path. Wake normal gated dequeue after
+    // this dispatch unwinds and releases its dedup/capacity reservations.
+    if (reviewSettlement === 'completed') setImmediate(() => cosEvents.emit('cos:dequeue-requested'));
     return null;
   }
 

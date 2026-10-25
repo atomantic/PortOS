@@ -2,11 +2,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
+import { setImmediate as flushImmediate } from 'node:timers/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({ loadState: vi.fn(), owner: vi.fn(), read: vi.fn(), update: vi.fn(),
-  app: vi.fn(), origin: vi.fn(), probe: vi.fn(), lane: vi.fn(), execution: vi.fn() }));
-vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
+  app: vi.fn(), origin: vi.fn(), probe: vi.fn(), lane: vi.fn(), execution: vi.fn(), emit: vi.fn(), releaseMarker: vi.fn() }));
+vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: m.emit }, emitLog: vi.fn() }));
 vi.mock('./cosState.js', () => ({ loadState: m.loadState }));
 vi.mock('./agentState.js', () => ({ hasActiveTaskOwner: m.owner }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: m.read, updateTask: m.update }));
@@ -17,7 +18,7 @@ vi.mock('./toolStateMachine.js', () => ({ createToolExecution: m.execution, star
 vi.mock('./executionLanes.js', () => ({ determineLane: () => 'default', acquire: m.lane, release: vi.fn() }));
 vi.mock('./agentPromptBuilder.js', () => ({ getAppWorkspace: vi.fn() }));
 vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: async () => 'local-instance' }));
-vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: async () => {} }));
+vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: m.releaseMarker }));
 vi.mock('./retirementRecoveryCompletion.js', () => ({ isRetirementOnlyRecovery: () => false, settleRetirementRecoveryBeforeSpawn: vi.fn() }));
 
 const queued = () => ({ id: 'sys-rl-example', taskType: 'internal', status: 'pending', priority: 'MEDIUM',
@@ -43,7 +44,7 @@ beforeEach(() => {
       || (options.expectedTask && Object.entries(options.expectedTask).some(([key, value]) => !isDeepStrictEqual(current[key], value)))) return { statusChanged: true, task: current };
     const next = { ...current, ...patch, metadata: { ...current.metadata, ...patch.metadata } }; save(next); return next;
   });
-  m.loadState.mockResolvedValue({ agents: {} }); m.owner.mockReturnValue(false);
+  m.loadState.mockResolvedValue({ agents: {} }); m.owner.mockReturnValue(false); m.releaseMarker.mockResolvedValue();
   m.app.mockResolvedValue({ id: 'local-app', repoPath: '/synthetic/local-project' });
   m.origin.mockResolvedValue({ host: 'github.com', fullName: 'example/project' });
   m.probe.mockResolvedValue({ readable: true, prState: 'MERGED' });
@@ -53,7 +54,18 @@ afterEach(() => rmSync(directory, { recursive: true, force: true }));
 
 describe('saved review follow-up at the pre-provider spawn boundary', () => {
   it('settles the exact merged target before agent/lane/workspace allocation and survives restart replay', async () => {
-    const snapshot = readSaved(); expect(await prepare(snapshot)).toBeNull();
+    const cleanupStarted = Promise.withResolvers();
+    const cleanupFinished = Promise.withResolvers();
+    m.releaseMarker.mockImplementationOnce(() => { cleanupStarted.resolve(); return cleanupFinished.promise; });
+    const snapshot = readSaved(); const dispatch = prepare(snapshot);
+    await cleanupStarted.promise;
+    await flushImmediate();
+    expect(readSaved().status).toBe('completed');
+    expect(m.emit).not.toHaveBeenCalled();
+    cleanupFinished.resolve();
+    expect(await dispatch).toBeNull();
+    await flushImmediate();
+    expect(m.emit).toHaveBeenCalledExactlyOnceWith('cos:dequeue-requested');
     expect(readSaved()).toMatchObject({ status: 'completed', metadata: {
       taskOutcome: { status: 'no-action-needed' }, reviewLoopRetiredReason: 'pull-request-merged-before-follow-up',
       totalSpawnCount: '2', retryCount: '1', mergedReviewFollowUp: { status: 'verified', prUrl: snapshot.metadata.reviewLoopPRUrl },
@@ -62,7 +74,9 @@ describe('saved review follow-up at the pre-provider spawn boundary', () => {
     expect(m.lane).not.toHaveBeenCalled(); expect(m.execution).not.toHaveBeenCalled(); expect(m.update).toHaveBeenCalledOnce();
     vi.resetModules();
     expect(await prepare(snapshot)).toBeNull(); expect(await prepare(readSaved())).toBeNull();
+    await flushImmediate();
     expect(m.update).toHaveBeenCalledOnce(); expect(m.probe).toHaveBeenCalledOnce(); expect(m.lane).not.toHaveBeenCalled();
+    expect(m.emit).toHaveBeenCalledExactlyOnceWith('cos:dequeue-requested');
   });
   it.each(['OPEN', null])('does not complete an open or unreadable PR (%s)', async prState => {
     m.probe.mockResolvedValue({ readable: prState !== null, prState });
@@ -88,6 +102,8 @@ describe('saved review follow-up at the pre-provider spawn boundary', () => {
     beforeWrite = () => { const current = readSaved(); current.status = 'in_progress'; current.metadata.reviewLoopPRUrl = 'https://github.com/example/project/pull/99'; save(current); };
     expect(await prepare(readSaved())).toBeNull();
     expect(readSaved()).toMatchObject({ status: 'in_progress', metadata: { reviewLoopPRUrl: 'https://github.com/example/project/pull/99' } });
+    await flushImmediate();
+    expect(m.emit).not.toHaveBeenCalled();
     expect(readSaved().metadata.taskOutcome).toBeUndefined(); expect(m.lane).not.toHaveBeenCalled();
   });
   it('leaves a new active owner intact after an awaited forge read', async () => {
