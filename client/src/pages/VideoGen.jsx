@@ -1570,7 +1570,7 @@ export default function VideoGen() {
             />
           )}
 
-          {Number(currentModel?.maxReferenceImages) > 1 && (
+          {!rendersOffMachine && Number(currentModel?.maxReferenceImages) > 1 && (
             <ReferenceImagesPanel
               maxImages={Number(currentModel.maxReferenceImages)}
               files={referenceImageFiles}

@@ -254,6 +254,8 @@ const FASTH3_OMNI_ENTRY = {
   maxReferenceImages: FASTH3_OMNI_MAX_IMAGES,
   maxReferenceVideos: FASTH3_OMNI_MAX_VIDEOS,
   maxReferenceAudios: FASTH3_OMNI_MAX_AUDIOS,
+  // The runtime's validate_references also rejects more than 12 references in total.
+  maxReferenceTotal: 12,
   requiredWeights: [
     {
       role: 'base',

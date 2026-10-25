@@ -133,6 +133,16 @@ export async function validateVideoRetryParams(params = {}) {
     || referenceCountError(model, 'reference clips', params.referenceVideoPaths?.length, model.maxReferenceVideos, 'VIDEO_REFERENCE_CLIPS_UNSUPPORTED')
     || referenceCountError(model, 'voice clips', params.referenceAudioPaths?.length, model.maxReferenceAudios, 'VIDEO_REFERENCE_AUDIO_UNSUPPORTED');
   if (retryReferenceError) throw retryReferenceError;
+  const retryTotalError = referenceTotalError(model, {
+    hasFirstImage: Boolean(params.sourceImagePath),
+    images: params.referenceImagePaths?.length, videos: params.referenceVideoPaths?.length, audios: params.referenceAudioPaths?.length,
+  });
+  if (retryTotalError) throw retryTotalError;
+  // Staged voice uploads belong to the job that staged them, so a chain's later
+  // chunks would reference files chunk zero's cleanup already removed.
+  if (Number(params.chunks || 1) > 1 && (params.referenceImagePaths?.length || params.referenceVideoPaths?.length || params.referenceAudioPaths?.length)) {
+    throw new ServerError(REFERENCE_CHUNKS_MESSAGE, { status: 400, code: 'VIDEO_REFERENCE_CHUNKS_CONFLICT' });
+  }
   // Reference-mode promise (#4874). A retry replays persisted params without
   // passing the route schema, so an entry written by a newer/edited install (or
   // a model swapped to a runtime that can't honor the mode) has to be caught
@@ -425,6 +435,18 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
     );
   }
 
+  // Reference inputs condition a local reference-to-video model only; a hosted
+  // lane would enqueue an ordinary render that silently ignores them.
+  if (backend !== VIDEO_GEN_MODE.LOCAL
+    && (body.referenceImageFiles?.length || body.referenceVideoIds?.length
+      || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]))) {
+    await cleanupMultipartTemp(uploads);
+    throw new ServerError(
+      'Reference images, clips and voice clips are only used by local reference-to-video models.',
+      { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' },
+    );
+  }
+
   // Track every durable file we've already copied into PATHS.uploads so a
   // *later* staging failure can roll them back. Without this, staging
   // sourceImage successfully then failing on lastImage would leave the
@@ -588,6 +610,8 @@ async function prepareLocalAudio({ body, uploads, stageUploadDurable, stagedDura
 
 // A model declares how many of each reference kind it takes (absent = none).
 // Returns the refusal for `count` over that ceiling, else null.
+const REFERENCE_CHUNKS_MESSAGE = 'Reference images, clips and voice clips condition a single render and cannot be combined with chunks > 1.';
+
 const referenceCountError = (model, noun, count, max, code) => {
   if (!count) return null;
   const limit = Number(max) || 0;
@@ -597,6 +621,17 @@ const referenceCountError = (model, noun, count, max, code) => {
       ? `${model?.name || 'This model'} takes at most ${limit} ${noun}; got ${count}.`
       : `${model?.name || 'This model'} does not take ${noun}.`,
     { status: 400, code },
+  );
+};
+// The runtime also caps ALL references together (`maxReferenceTotal`, 12 for Omni),
+// independent of the per-kind ceilings. `hasFirstImage` counts the input image.
+const referenceTotalError = (model, { hasFirstImage, images = 0, videos = 0, audios = 0 }) => {
+  const total = (hasFirstImage ? 1 : 0) + images + videos + audios;
+  const limit = Number(model?.maxReferenceTotal) || 0;
+  if (!limit || total <= limit) return null;
+  return new ServerError(
+    `${model?.name || 'This model'} takes at most ${limit} references in total; got ${total}.`,
+    { status: 400, code: 'VIDEO_REFERENCE_TOTAL_EXCEEDED' },
   );
 };
 // `maxReferenceImages` counts the first-frame input as the first image.
@@ -1171,6 +1206,19 @@ async function resolvePreparedParams({
       extraUploadedTempPaths.push(path);
       referenceAudioPaths.push(path);
     }
+  }
+
+  const hasAnyReference = Boolean(referenceImagePaths?.length || referenceVideoPaths?.length || referenceAudioPaths?.length);
+  const referenceConflict = (hasAnyReference && Number(body.chunks) > 1
+    ? new ServerError(REFERENCE_CHUNKS_MESSAGE, { status: 400, code: 'VIDEO_REFERENCE_CHUNKS_CONFLICT' })
+    : null)
+    || referenceTotalError(effectiveModel, {
+      hasFirstImage: Boolean(sourceImagePath),
+      images: referenceImagePaths?.length, videos: referenceVideoPaths?.length, audios: referenceAudioPaths?.length,
+    });
+  if (referenceConflict) {
+    await cleanupStaged();
+    throw referenceConflict;
   }
 
   // Collapse the parallel loraFilenames/loraScales arrays into the internal
