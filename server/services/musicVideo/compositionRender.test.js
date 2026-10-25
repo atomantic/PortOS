@@ -5,13 +5,13 @@ import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
-import { findFfmpeg, probeVideoDuration } from '../../lib/ffmpeg.js';
+import { findFfmpeg, findFfprobe, probeVideoDuration } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome } from '../htmlComposition/testBrowserCleanup.js';
 import { beatSnapClips, buildMusicVideoFfmpegArgs, resolveSceneClips } from './render.js';
 import { composedLyricWindows, projectTypographyPlan, renderableCues, sectionCardCues } from './composition.js';
 import { COMPOSITION_SCRATCH_DIR, removeCompositionScratch, renderTypographyOverlays } from './compositionRender.js';
-import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
@@ -21,10 +21,11 @@ vi.mock('../../lib/fileUtils.js', async importOriginal => makePathsProxy(await i
 
 const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();
+const ffprobe = await findFfprobe();
 // Vitest runs no hooks for a file whose every test is skipped, so on a runner
-// without Chrome or ffmpeg the afterAll below never fires — yet importing
+// without Chrome or the media tools the afterAll below never fires — yet importing
 // compositionRender.js above already minted the lazy root (#9045).
-if (!chrome || !ffmpeg) cleanupTempDataRoots();
+const canRun = browserSuiteCanRun('music-video typography overlay', { Chrome: chrome, ffmpeg, ffprobe }, { onUnavailable: cleanupTempDataRoots });
 let proc;
 let browser;
 let artifacts;
@@ -53,7 +54,7 @@ function assertInsideSafeArea(path, width, height) {
   return drawn;
 }
 
-describe.skipIf(!chrome || !ffmpeg)('music-video typography overlay with real Chrome and ffmpeg (#8984)', () => {
+describe.skipIf(!canRun)('music-video typography overlay with real Chrome and ffmpeg (#8984)', () => {
   beforeAll(async () => {
     // A per-run profile: a fixed path can be locked by an earlier run, and Chrome's exit must not hide behind a timeout.
     await mkdir(PATHS.data, { recursive: true });
