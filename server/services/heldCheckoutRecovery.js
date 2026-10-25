@@ -946,8 +946,12 @@ async function disposableModuleCache(path, rel, ignored, verified, work) {
   if (!verified.has(root)) verified.set(root, (async () => {
     const tag = await archiveBytes(await archiveFile(path, join(path, root, 'CACHEDIR.TAG')), work, 2048);
     const metadata = JSON.parse((await archiveBytes(await archiveFile(path, join(path, root, '_metadata.json')), work, 4096)).toString('utf8'));
+    const lockfileHash = metadata.lockfileHash;
+    // Vitest's getLockfileHash writes the first eight hex characters of a
+    // SHA-256 digest. Keep previously accepted long hashes compatible too.
     return tag.toString('utf8').startsWith(VITEST_CACHE_TAG) && Object.keys(metadata).length === 1
-      && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(metadata.lockfileHash);
+      && typeof lockfileHash === 'string' && [8, 40, 64].includes(lockfileHash.length)
+      && !/[^a-f0-9]/.test(lockfileHash);
   })().catch(cacheInspectionFailure));
   if (!await verified.get(root)) return false;
   // Check every directory component; a cache-shaped symlink is not cache evidence.

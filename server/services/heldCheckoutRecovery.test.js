@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vites
 import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
+import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { execFile } from '../lib/childProcess.js';
 import { dirname, join } from 'path';
@@ -1381,7 +1382,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   });
 
   async function moduleCache(checkout, { count = 1, bytes = 26 * 1024 * 1024, ignored = true,
-    tagged = true, name = 'a'.repeat(40), metadata = { lockfileHash: 'b'.repeat(40) } } = {}) {
+    tagged = true, name = 'a'.repeat(40),
+    // Match Vitest's producer: SHA-256(lockfile contents), truncated to eight.
+    metadata = { lockfileHash: createHash('sha256').update('synthetic lockfile').digest('hex').slice(0, 8) } } = {}) {
     if (ignored) await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
     const root = join(checkout.path, 'server/.cache/vitest/modules');
     await mkdir(root, { recursive: true });
@@ -1411,9 +1414,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['file', 'total'])('retires a reviewed checkout with verified disposable module cache beyond the archive %s budget', async limit => {
-    const c = await reviewedCheckout(`disposable-cache-${limit}`);
-    await moduleCache(c, limit === 'total' ? { count: 12, bytes: 22 * 1024 * 1024 } : {});
+  it.each([
+    { kind: 'oversized-file', cache: {} },
+    { kind: 'oversized-total', cache: { count: 12, bytes: 22 * 1024 * 1024 } },
+    { kind: 'compatible-long-hash-40', cache: { bytes: 32, metadata: { lockfileHash: 'b'.repeat(40) } } },
+    { kind: 'compatible-long-hash-64', cache: { bytes: 32, metadata: { lockfileHash: 'b'.repeat(64) } } },
+  ])('retires a reviewed checkout with verified disposable module cache: $kind', async ({ kind, cache }) => {
+    const c = await reviewedCheckout(`disposable-cache-${kind}`);
+    await moduleCache(c, cache);
     const prepared = await c.prepare();
     expect(prepared).toMatchObject({ ok: true, review: { comparison: { disposition: 'integrated' } } });
     const retired = await c.confirm(prepared.review);
@@ -1440,12 +1448,20 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['untagged', 'unique-file', 'untracked', 'unknown-metadata'])(
+  it.each(['untagged', 'unique-file', 'untracked', 'unknown-metadata', 'wrong-hash-width', 'nonhex-hash', 'non-string-hash', 'newline-hash', 'extra-metadata'])(
     'retains large content that only resembles disposable module cache: %s', async kind => {
       const c = await reviewedCheckout(`unverified-cache-${kind}`);
+      const metadata = {
+        'unknown-metadata': { wanted: 'unique user data' },
+        'wrong-hash-width': { lockfileHash: 'b'.repeat(7) },
+        'nonhex-hash': { lockfileHash: 'not-hex!' },
+        'non-string-hash': { lockfileHash: 12345678 },
+        'newline-hash': { lockfileHash: '12345678\n' },
+        'extra-metadata': { lockfileHash: '12345678', wanted: 'unique user data' },
+      }[kind];
       const root = await moduleCache(c, { tagged: kind !== 'untagged', ignored: kind !== 'untracked',
         name: kind === 'unique-file' ? 'wanted-dataset.bin' : 'a'.repeat(40),
-        metadata: kind === 'unknown-metadata' ? { wanted: 'unique user data' } : undefined });
+        metadata });
       expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-archive-limit-exceeded' });
       expect(await registered(c.path)).toBe(true);
       expect((await stat(join(root, kind === 'unique-file' ? 'wanted-dataset.bin' : 'a'.repeat(40)))).size).toBe(26 * 1024 * 1024);
