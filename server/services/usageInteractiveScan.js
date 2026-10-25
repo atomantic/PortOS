@@ -246,7 +246,8 @@ async function parseSession(family, session, from, to, byCwd, seen, regionsOf = 
   return results;
 }
 
-const isSidechainPath = (path) => path.includes('/subagents/');
+// Windows lists backslash-separated paths; compare on forward slashes.
+const isSidechainPath = (path) => path.replaceAll('\\', '/').includes('/subagents/');
 
 /**
  * One-time repair for Claude runs reconciled before the run path read subagent
