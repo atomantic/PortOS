@@ -57,10 +57,13 @@ describe('PortOS workflow audit job dispatch', () => {
   });
 
   it('carries real source provenance and the existing verified no-change/changed-delivery posture into the queued task', async () => {
-    const task = await generateTaskFromJob(configured());
+    const job = configured();
+    job.formValues.unused = 'not a declared budget';
+    const task = await generateTaskFromJob(job);
     expect(task.metadata).toMatchObject({ jobId: audit.CLAIM_WORKFLOW_AUDIT_ID, app: 'portos-default', provider: 'chosen-provider', model: 'chosen-model', effort: 'high', useWorktree: true, openPR: true, noChangeSuccess: true });
     const snapshot = JSON.parse(task.metadata.prompt.split('Audit generator source snapshot (not a delivered-instruction manifest):\n')[1]);
     expect(snapshot).toMatchObject({ runtimeVersion: expect.any(String), budgets: { recentRuns: 3, maxFindings: 2, minutes: 15 } });
+    expect(snapshot.budgets).not.toHaveProperty('unused');
     expect(snapshot.sources).toContainEqual({ path: 'AGENTS.md', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
   });
 

@@ -81,5 +81,5 @@ export async function prepareClaimWorkflowAudit(job) {
     Promise.all(SOURCES.map(async path => ({ path, sha256: createHash('sha256').update(await readFile(join(PATHS.root, path))).digest('hex') }))),
     readFile(join(PATHS.root, 'package.json'), 'utf8').then(JSON.parse)
   ]).catch(error => { reservedUntil = 0; throw error; });
-  return `\n\nAudit generator source snapshot (not a delivered-instruction manifest):\n${JSON.stringify({ runtimeVersion: runtime.version, provider: job.providerId, model: job.model, effort: job.effort || null, budgets: job.formValues, sources })}`;
+  return `\n\nAudit generator source snapshot (not a delivered-instruction manifest):\n${JSON.stringify({ runtimeVersion: runtime.version, provider: job.providerId, model: job.model, effort: job.effort || null, budgets: Object.fromEntries(Object.keys(limits).map(key => [key, Number(job.formValues[key])])), sources })}`;
 }
