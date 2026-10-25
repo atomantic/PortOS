@@ -318,13 +318,14 @@ export default function Sprites() {
   // card write — so a note typed on either surface applies to whichever
   // Generate the user clicks. The key is walk-namespaced, so an anchor
   // (still-image) note can never leak into the video prompt.
-  const generateWalk = useCallback((direction) => submitRender(
+  const generateWalk = useCallback((direction, { returnToIdleAnchor = false } = {}) => submitRender(
     walkBegin, walkResolve, walkCancel, direction,
     () => generateSpriteWalk(id, {
       direction,
       duration,
       provider: animationProvider,
-      ...correctionPromptPayload(corrections, walkCorrectionKey(direction)),
+      ...(animationProvider === 'local' ? { returnToIdleAnchor } : {}),
+      ...correctionPromptPayload(corrections, walkCorrectionKey(direction), { verbatim: animationProvider === 'local' }),
     }, { silent: true }),
     `Failed to queue ${direction} walk`,
     // Refetch immediately so the server's 'rendering' run lands before the
@@ -349,12 +350,13 @@ export default function Sprites() {
   // there keeps this handler dependency-light and therefore stable across the 4s
   // detail refresh, which replaces `detail` wholesale and would otherwise churn
   // every memoized track section.
-  const generateTrack = useCallback(async (trackId, { direction, correctionKey }) => {
+  const generateTrack = useCallback(async (trackId, { direction, correctionKey, returnToIdleAnchor = false }) => {
     try {
       await generateSpriteTrack(id, trackId, {
         ...(direction ? { direction } : {}),
         provider: animationProvider,
-        ...correctionPromptPayload(corrections, correctionKey),
+        ...(animationProvider === 'local' ? { returnToIdleAnchor } : {}),
+        ...correctionPromptPayload(corrections, correctionKey, { verbatim: animationProvider === 'local' }),
       }, { silent: true });
       onWorkflowChanged();
     } catch (err) {

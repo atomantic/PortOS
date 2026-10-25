@@ -1,3 +1,4 @@
+import LocalLoopConditioning, { useLoopConditioning } from './LocalLoopConditioning.jsx';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import {
@@ -209,7 +210,7 @@ function DirectionCard({
   recordId, direction, anchorLocked, anchorPath, run, approved, finalized, pending,
   onOpenTrimmer, onGenerate, onApprove, onRetry, onReprocess, onReopen,
   reprocessing, retrying, cycleLabel, drift, targetSaving, imported,
-  corrections, onCorrectionChange,
+  corrections, onCorrectionChange, provider, conditioning, onConditioningChange, conditioningSupported,
 }) {
   const [confirming, setConfirming] = useState(false);
   const [reopening, setReopening] = useState(false);
@@ -276,6 +277,11 @@ function DirectionCard({
 
       {hasWalkPreview && (
         <StripLoop recordId={recordId} stripPreview={run.stripPreview} />
+      )}
+      {run?.conditioningMode && (
+        <p className="text-[10px] text-gray-500">
+          Rendered: {run.conditioningMode === 'fflf' ? 'paired idle anchors' : 'first idle anchor'}
+        </p>
       )}
       {!hasWalkPreview && anchorLocked && anchorPath && (
         <div className="flex items-end gap-2">
@@ -400,6 +406,17 @@ function DirectionCard({
               asset-collection walk card writes, so a note typed on either
               surface is visible on both and rides whichever Generate fires.
               Hidden when this direction can't be rendered at all. */}
+          {provider === 'local' && (
+            <LocalLoopConditioning
+              recordId={recordId}
+              direction={direction}
+              anchor={{ path: anchorPath }}
+              enabled={conditioning}
+              onChange={onConditioningChange}
+              disabled={busy || !anchorLocked}
+              supported={conditioningSupported}
+            />
+          )}
           {anchorLocked && onCorrectionChange && (
             <CorrectionNoteToggle
               noteKey={walkCorrectionKey(direction)}
@@ -410,8 +427,9 @@ function DirectionCard({
             />
           )}
           <button
-            onClick={() => onGenerate(direction)}
-            disabled={!anchorLocked || busy}
+            onClick={() => provider === 'local'
+              ? onGenerate(direction, { returnToIdleAnchor: conditioning }) : onGenerate(direction)}
+            disabled={!anchorLocked || busy || (provider === 'local' && conditioning && !conditioningSupported)}
             title={anchorLocked ? undefined : 'Lock this direction\'s reference anchor first'}
             className="flex items-center gap-1 w-full justify-center px-2 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50"
           >
@@ -548,6 +566,8 @@ export default function WalkWorkflow({
   providersError = null, onRetryProviders = null,
 }) {
   const recordId = record.id;
+  const loopConditioning = useLoopConditioning(recordId, 'walk');
+  const conditioningSupported = providers?.find((row) => row.id === 'local')?.returnToIdleAnchorSupported === true;
   // The cycle target is server-resolved (app contract → set pin → first approved
   // direction → default) so the client never re-derives the precedence chain.
   // The fallback only covers a walk state fetched by an older client/peer.
@@ -799,6 +819,10 @@ export default function WalkWorkflow({
             drift={driftByDirection[anchor.direction] || null}
             imported={isImportedDirection(anchor.direction)}
             onOpenTrimmer={onOpenTrimmer}
+            provider={provider}
+            conditioning={loopConditioning.selected(anchor.direction, latestRunByDirection[anchor.direction])}
+            onConditioningChange={(value) => loopConditioning.change(anchor.direction, value)}
+            conditioningSupported={conditioningSupported}
             onGenerate={onGenerate}
             onApprove={approve}
             onRetry={retryPostprocess}

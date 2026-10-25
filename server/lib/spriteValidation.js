@@ -306,6 +306,7 @@ export const spriteWalkGenerateSchema = z.object({
   // local MiniMax H3 one. Omitted → grok, so an older client and every persisted
   // retry render exactly where they did before the local lane existed.
   provider: z.enum(ANIMATION_PROVIDER_IDS).optional(),
+  returnToIdleAnchor: z.boolean().optional(),
 
   // Clip length in seconds; the service defaults to 6s when omitted. Only
   // affects how much source footage the packer can choose from — the cycle's
@@ -342,6 +343,7 @@ const buildSpriteTrackGenerateSchema = (track) => z.object({
   // local MiniMax H3 one. Omitted → grok, so an older client and every persisted
   // retry render exactly where they did before the local lane existed.
   provider: z.enum(ANIMATION_PROVIDER_IDS).optional(),
+  returnToIdleAnchor: z.boolean().optional(),
 
   duration: grokVideoDurationSchema.optional(),
   frameCount: spriteTrackFrameCountSchema(track).optional(),

@@ -88,6 +88,7 @@ const H3_MLX = Object.freeze({
   runtime: 'minimax_h3',
   defaultFrames: 124,
   frameOptions: [107, 124, 141, 158, 175],
+  supportedModes: ['text', 'image', 'fflf'],
   fpsOptions: [24],
   defaultWidth: 1344,
   defaultHeight: 768,
@@ -280,6 +281,7 @@ describe('the CUDA bucket (Windows / Linux installs)', () => {
     // The diffusers integration refuses 107 (under its 5s floor) and anything
     // past 345, so the same 6s request must land inside a different window.
     frameOptions: [124, 141, 158, 175],
+    supportedModes: ['text', 'image', 'fflf'],
     fpsOptions: [24],
     defaultWidth: 1344,
     defaultHeight: 768,
@@ -353,6 +355,8 @@ describe('localRenderManifest', () => {
     const plan = { model: H3_MLX, numFrames: 141, fps: 24 };
     expect(localRenderManifest(plan, { width: 768, height: 1344 })).toEqual({
       provider: LOCAL_VIDEO_PROVIDER_ID,
+      returnToIdleAnchor: false, conditioningMode: 'image',
+      conditioningInputs: { first: null, last: null },
       videoModelId: 'minimax_h3_8bit',
       videoRuntime: 'minimax_h3',
       renderFrames: 141,

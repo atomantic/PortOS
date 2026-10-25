@@ -836,6 +836,16 @@ describe('sprites routes', () => {
     expect(bad.status).toBe(400);
   });
 
+  it.each(['walk/generate', 'tracks/scanner/generate'])('validates the opt-in boolean on %s without changing user text', async (route) => {
+    const body = { direction: 'east', provider: 'local', returnToIdleAnchor: true, correctionPrompt: '  lift feet!\n  ' };
+    const response = await request(app).post(`/api/sprites/pioneer/${route}`).send(body);
+    expect(response.status).toBe(200);
+    const start = route.startsWith('walk') ? walk.startWalkGeneration : trackWorkflow.startTrackGeneration;
+    expect(start.mock.calls.at(-1).at(-1)).toEqual(body);
+    const invalid = await request(app).post(`/api/sprites/pioneer/${route}`).send({ ...body, returnToIdleAnchor: 'true' });
+    expect(invalid.status).toBe(400);
+  });
+
   it('POST /:id/walk/generate validates direction and duration', async () => {
     const r = await request(app).post('/api/sprites/pioneer/walk/generate')
       .send({ direction: 'east', duration: 10 });

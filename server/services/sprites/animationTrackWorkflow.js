@@ -49,7 +49,7 @@ import { GROK_TUI_ID } from '../../lib/grok.js';
 import { resolveGrokDuration } from '../../lib/grokVideoClip.js';
 import {
   planLocalAnimationRender, enqueueLocalAnimationRender, localRenderManifest,
-  normalizeStaleAnimationRun,
+  normalizeStaleAnimationRun, verifyLocalAnimationAnchor, localAnimationPrompt,
 } from './localAnimationRender.js';
 import { getSettings } from '../settings.js';
 import { getRecord, listRecords } from './records.js';
@@ -303,16 +303,28 @@ async function startTrackGenerationImpl(trackId, recordId, body) {
   const fps = clampTrackFps(body.fps, row.id, effectiveTracks);
   // Optional re-roll note (#3134) — blank leaves the prompt and the run record
   // exactly as a blind regenerate would.
-  const correctionPrompt = typeof body.correctionPrompt === 'string' ? body.correctionPrompt.trim() : '';
+  const correctionPrompt = typeof body.correctionPrompt === 'string'
+    ? (body.provider === 'local' ? body.correctionPrompt : body.correctionPrompt.trim()) : '';
   // WHICH lane renders the clip (#4876) — same contract the walk lane uses, so a
   // track never needs its own provider rules. Absent → grok.
   const provider = resolveAnimationProvider(body.provider);
+  if (body.returnToIdleAnchor && provider !== 'local') {
+    throw new ServerError('Return to idle anchor requires a local render', { status: 400, code: 'LOCAL_VIDEO_REQUIRED' });
+  }
   const duration = resolveGrokDuration(body.duration);
   // Readiness first: an install with no runnable local model 409s here, before a
   // run record exists.
   const localPlan = provider === 'local'
-    ? await planLocalAnimationRender({ durationSeconds: duration })
+    ? await planLocalAnimationRender({ durationSeconds: duration, returnToIdleAnchor: body.returnToIdleAnchor === true })
     : null;
+  const sourceAbs = resolveSpriteAssetPath(recordId, source.locked.path);
+  if (!await pathExists(sourceAbs)) {
+    throw new ServerError(
+      `Locked ${source.label} file is missing on disk`,
+      { status: 500, code: source.missingCode },
+    );
+  }
+  if (localPlan) await verifyLocalAnimationAnchor(source.locked, sourceAbs);
   // Run ids stay in the clones' shapes: `<track>-<direction>-<uuid8>` for a
   // directional track, `<track>-<uuid8>` for a single-row one.
   const runId = row.directional
@@ -321,22 +333,17 @@ async function startTrackGenerationImpl(trackId, recordId, body) {
   const runRel = runRelPath(runId);
   const generatedAbs = join(spriteDir(recordId), runRel, 'generated');
   await ensureDir(generatedAbs);
-  const sourceAbs = resolveSpriteAssetPath(recordId, source.locked.path);
-  if (!await pathExists(sourceAbs)) {
-    throw new ServerError(
-      `Locked ${source.label} file is missing on disk`,
-      { status: 500, code: source.missingCode },
-    );
-  }
   const inputAbs = join(generatedAbs, source.inputName);
   const [{ preparation, sha256: inputSha256, canvas }, settings] = await Promise.all([
     prepareWalkAnchorChromaInput(sourceAbs, inputAbs, chromaKey, localPlan?.chooseCanvas || null),
     getSettings(),
   ]);
   const videoAbs = join(generatedAbs, SOURCE_CLIP_NAME);
-  const prompt = buildTrackVideoPrompt(row.id, {
-    name: record.name, kind: record.kind, direction, chromaKey, correctionPrompt,
+  const basePrompt = buildTrackVideoPrompt(row.id, {
+    name: record.name, kind: record.kind, direction, chromaKey,
+    correctionPrompt: localPlan ? undefined : correctionPrompt,
   });
+  const prompt = localPlan ? localAnimationPrompt(basePrompt, correctionPrompt) : basePrompt;
   const run = {
     schemaVersion: 1,
     kind: 'grok-game-animation-frames-run',
@@ -364,7 +371,9 @@ async function startTrackGenerationImpl(trackId, recordId, body) {
     // Spread LAST so the local lane's provider/geometry provenance wins over the
     // grok defaults above. A local render is a queued media job, not a PTY, so it
     // carries `jobId` in place of an attachable `shellSession`.
-    ...(localPlan ? { ...localRenderManifest(localPlan, canvas), shellSession: null } : {}),
+    ...(localPlan ? { ...localRenderManifest(localPlan, canvas, {
+      path: `${runRel}/generated/${source.inputName}`, sha256: inputSha256, prompt,
+    }), shellSession: null } : {}),
   };
   await saveRun(recordId, run);
   if (localPlan) {
@@ -376,7 +385,7 @@ async function startTrackGenerationImpl(trackId, recordId, body) {
     // `rendering` with no job to finish it — and this lane's in-flight guard
     // would then refuse every retry — so settle it as an error first.
     const jobId = await enqueueLocalAnimationRender({
-      plan: localPlan, canvas, prompt, inputAbs, recordId, runId, track: row.id, direction,
+      plan: localPlan, canvas, prompt, inputAbs, inputSha256, recordId, runId, track: row.id, direction,
     }).catch(async (err) => {
       Object.assign(run, { status: 'error', postprocessError: err.message, completedAt: new Date().toISOString() });
       await saveRun(recordId, run);

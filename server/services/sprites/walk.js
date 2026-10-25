@@ -66,7 +66,7 @@ import {
 } from './animationTracks.js';
 import {
   planLocalAnimationRender, enqueueLocalAnimationRender, localRenderManifest,
-  normalizeStaleAnimationRun,
+  normalizeStaleAnimationRun, verifyLocalAnimationAnchor, localAnimationPrompt,
 } from './localAnimationRender.js';
 // #3152 — the anchor-invalidation sweep below must cover a USER-DEFINED track too:
 // a stored row seeded from a directional anchor holds approvals descended from the
@@ -1002,6 +1002,9 @@ async function startWalkGenerationImpl(recordId, body) {
   // client, persisted retry, and test renders exactly where it did before the
   // local lane existed.
   const provider = resolveAnimationProvider(body.provider);
+  if (body.returnToIdleAnchor && provider !== 'local') {
+    throw new ServerError('Return to idle anchor requires a local render', { status: 400, code: 'LOCAL_VIDEO_REQUIRED' });
+  }
   // Clip length grok will actually deliver — a request it does not offer falls
   // back to its shortest (see lib/grokVideoClip.js). The walk's look comes from
   // frameCount/fps below, not from how much footage the packer had to pick from.
@@ -1013,8 +1016,10 @@ async function startWalkGenerationImpl(recordId, body) {
   // An empty run directory is not inert — the run scan reads it back, finds no
   // record, and (before this) took getWalkState down with it.
   const localPlan = provider === 'local'
-    ? await planLocalAnimationRender({ durationSeconds: duration })
+    ? await planLocalAnimationRender({ durationSeconds: duration, returnToIdleAnchor: body.returnToIdleAnchor === true })
     : null;
+
+  if (localPlan) await verifyLocalAnimationAnchor(anchor, anchorAbs);
 
   const runId = `walk-${direction}-${randomUUID().slice(0, 8)}`;
   const runRel = runRelPath(runId);
@@ -1041,8 +1046,12 @@ async function startWalkGenerationImpl(recordId, body) {
   // render can be told what the first got wrong. Trimmed here and stamped on the
   // run record below only when non-empty, so a blank note leaves both the prompt
   // and the persisted run byte-identical to a blind regenerate.
-  const correctionPrompt = typeof body.correctionPrompt === 'string' ? body.correctionPrompt.trim() : '';
-  const prompt = buildWalkVideoPrompt({ name: record.name, direction, chromaKey, correctionPrompt });
+  const correctionPrompt = typeof body.correctionPrompt === 'string'
+    ? (body.provider === 'local' ? body.correctionPrompt : body.correctionPrompt.trim()) : '';
+  const basePrompt = buildWalkVideoPrompt({
+    name: record.name, direction, chromaKey, correctionPrompt: localPlan ? undefined : correctionPrompt,
+  });
+  const prompt = localPlan ? localAnimationPrompt(basePrompt, correctionPrompt) : basePrompt;
   const videoAbs = join(generatedAbs, 'source-video.mp4');
   const grokPath = settings.imageGen?.grok?.grokPath;
   // Run record BEFORE the job is queued: the completion hook finds the run by
@@ -1079,7 +1088,9 @@ async function startWalkGenerationImpl(recordId, body) {
     createdAt: now,
     // Spread LAST so the local lane's provider/geometry provenance overrides the
     // grok defaults above rather than being silently overwritten by them.
-    ...(localPlan ? { ...localRenderManifest(localPlan, canvas), shellSession: null } : {}),
+    ...(localPlan ? { ...localRenderManifest(localPlan, canvas, {
+      path: `${runRel}/generated/input-anchor-chroma.png`, sha256: inputSha256, prompt,
+    }), shellSession: null } : {}),
   };
   await saveRunRecord(recordId, run);
 
@@ -1090,7 +1101,7 @@ async function startWalkGenerationImpl(recordId, body) {
     // A refused admission (#8325) must not strand the run at `rendering`
     // with no job behind it — settle it as an error before surfacing.
     const jobId = await enqueueLocalAnimationRender({
-      plan: localPlan, canvas, prompt, inputAbs, recordId, runId, track: WALK_TRACK, direction,
+      plan: localPlan, canvas, prompt, inputAbs, inputSha256, recordId, runId, track: WALK_TRACK, direction,
     }).catch(async (err) => {
       Object.assign(run, { status: 'error', postprocessError: err.message, completedAt: new Date().toISOString() });
       await saveRunRecord(recordId, run);

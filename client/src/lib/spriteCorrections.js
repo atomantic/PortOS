@@ -55,7 +55,8 @@ export const AMBIENT_REFERENCE_CORRECTION_KEY = 'ambient-reference';
  * send identical payloads — the single source guarantee at the request layer,
  * not just the input layer.
  */
-export function correctionPromptPayload(corrections, key) {
-  const note = corrections?.[key]?.trim();
+export function correctionPromptPayload(corrections, key, { verbatim = false } = {}) {
+  const raw = corrections?.[key];
+  const note = verbatim ? raw : raw?.trim();
   return note ? { correctionPrompt: note } : {};
 }

@@ -90,6 +90,7 @@ const prepareWalkAnchorChromaInput = vi.fn(async (_anchorAbs, destAbs, _chromaKe
       ? 'composited-over-solid-chroma-matte-padded-to-render-canvas'
       : 'composited-over-solid-chroma-matte',
     canvas,
+    sha256: createHash('sha256').update('stub-chroma-anchor').digest('hex'),
   };
 });
 const runWalkPostprocess = vi.fn(async ({
@@ -157,6 +158,7 @@ const H3_MODEL = {
   runtime: 'minimax_h3',
   defaultFrames: 124,
   frameOptions: [107, 124, 141, 158, 175],
+  supportedModes: ['text', 'image', 'fflf'],
   fpsOptions: [24],
   defaultWidth: 1344,
   defaultHeight: 768,
@@ -666,12 +668,71 @@ describe('startWalkGeneration — local render lane (#4876)', () => {
     expect(run.jobId).toBeUndefined();
   });
 
+  for (const runtime of ['minimax_h3', 'minimax_h3_cuda']) {
+    it(`pins both endpoints through ${runtime} and persists the exact inputs/prompt`, async () => {
+      const originalRuntime = H3_MODEL.runtime;
+      H3_MODEL.runtime = runtime;
+      try {
+        const id = await characterWithLockedAnchors(newId(), ['east']);
+        const correctionPrompt = '  lift both feet.\nKeep the hat!  ';
+        const { runId } = await startWalkGeneration(id, {
+          direction: 'east', provider: 'local', returnToIdleAnchor: true, correctionPrompt,
+        });
+        const params = enqueuedVideoJobs[0].params;
+        expect(params.mode).toBe('fflf');
+        expect(params.lastImagePath).toBe(params.sourceImagePath);
+        expect(params.prompt.endsWith(correctionPrompt)).toBe(true);
+        expect(prepareWalkAnchorChromaInput).toHaveBeenCalledOnce();
+        const stored = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, 'runs', runId, 'animation-run.json'), 'utf8'));
+        const reloaded = (await getWalkState(id)).runs.find((run) => run.id === runId);
+        expect(reloaded).toMatchObject({
+          conditioningMode: 'fflf', returnToIdleAnchor: true, direction: 'east',
+          renderPrompt: params.prompt, correctionPrompt,
+        });
+        expect(stored.conditioningInputs.first).toEqual(stored.conditioningInputs.last);
+        expect(stored.conditioningInputs.first).toEqual({
+          path: stored.animationInputPath,
+          sha256: createHash('sha256').update(await readFile(params.sourceImagePath)).digest('hex'),
+        });
+        expect(executeTuiRun).not.toHaveBeenCalled();
+      } finally {
+        H3_MODEL.runtime = originalRuntime;
+      }
+    });
+
+  }
+
+  it('refuses unsupported endpoint mode before queue admission or any run record', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const modes = H3_MODEL.supportedModes;
+    H3_MODEL.supportedModes = ['image'];
+    try {
+      await expect(startWalkGeneration(id, { direction: 'east', provider: 'local', returnToIdleAnchor: true }))
+        .rejects.toMatchObject({ code: 'LOCAL_VIDEO_MODE_UNSUPPORTED' });
+      expect(enqueuedVideoJobs).toHaveLength(0);
+      expect((await getWalkState(id)).runs).toHaveLength(0);
+    } finally {
+      H3_MODEL.supportedModes = modes;
+    }
+  });
+
+  it('refuses an anchor changed behind its lock without queueing a render', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const reference = await loadManifest(id);
+    const anchor = reference.anchors.find((item) => item.direction === 'east');
+    await writeFile(join(TEST_ROOT, 'sprites', id, anchor.path), 'changed after lock');
+    await expect(startWalkGeneration(id, { direction: 'east', provider: 'local', returnToIdleAnchor: true }))
+      .rejects.toMatchObject({ code: 'ANCHOR_STALE' });
+    expect(enqueuedVideoJobs).toHaveLength(0);
+  });
+
   it('queues a MEDIA JOB instead of a TUI session when provider is local', async () => {
     const id = await characterWithLockedAnchors(newId());
     executeTuiRun.mockClear();
     const res = await startWalkGeneration(id, { direction: 'east', provider: 'local', duration: 6 });
     expect(executeTuiRun).not.toHaveBeenCalled();
     expect(res.provider).toBe('local');
+    expect(enqueuedVideoJobs[0].params).not.toHaveProperty('lastImagePath');
     expect(res.jobId).toBe('mjob-1');
     // No PTY exists, so the card must not offer a Shell deep-link.
     expect(res.shellSession).toBeUndefined();
@@ -825,7 +886,7 @@ describe('startWalkGeneration — local render lane (#4876)', () => {
 
   it('runs the SAME deterministic postprocess on a local clip as on a grok one', async () => {
     const id = await characterWithLockedAnchors(newId());
-    const { runId } = await startWalkGeneration(id, { direction: 'east', provider: 'local' });
+    const { runId } = await startWalkGeneration(id, { direction: 'east', provider: 'local', returnToIdleAnchor: true });
     const videoAbs = join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', 'source-video.mp4');
     await writeFile(videoAbs, 'local-rendered-clip');
     runWalkPostprocess.mockClear();
@@ -845,6 +906,8 @@ describe('startWalkGeneration — local render lane (#4876)', () => {
     expect(runWalkPostprocess).toHaveBeenCalledTimes(1);
     const stored = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, 'runs', runId, 'animation-run.json'), 'utf8'));
     expect(stored.status).toBe('candidate');
+    expect(stored.conditioningMode).toBe('fflf');
+    expect(stored.conditioningInputs.first).toEqual(stored.conditioningInputs.last);
     // Provenance survives packaging, so an approved frame set still names the
     // model that produced it.
     expect(stored.provider).toBe('minimax-h3-local');
