@@ -2,12 +2,13 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
 import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
+import { listWorktrees } from './worktreeManager.js';
 
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-retirement-completion-') }));
 afterAll(cleanupTempDataRoots);
@@ -108,7 +109,19 @@ async function retire() {
   const result = await retireInventoriedCheckout({ appId: store.app.id, release }, {
     cosDir: join(scratch, 'cos'), readAgents: async () => [],
   });
-  expect(result, JSON.stringify(result)).toMatchObject({ ok: true, branchDeleted: true });
+  // Keep native registration failures actionable without publishing temporary paths.
+  const diagnostics = result.ok ? null : await listWorktrees(repo).then(trees => ({
+    checkoutExists: existsSync(release.path),
+    registrations: trees.map(tree => ({
+      branchMatches: tree.branch === `refs/heads/${release.branch}`,
+      headMatches: tree.head === release.head,
+      pathExists: existsSync(tree.path),
+      resolvedPathMatches: resolve(tree.path) === resolve(release.path),
+      caseFoldedPathMatches: resolve(tree.path).toLowerCase() === resolve(release.path).toLowerCase(),
+      quotedPath: tree.path.startsWith('"'),
+    })),
+  }), error => ({ registrationError: error.code || error.name }));
+  expect(result, JSON.stringify({ result, diagnostics })).toMatchObject({ ok: true, branchDeleted: true });
   expect(existsSync(release.path)).toBe(false);
   expect(existsSync(join(scratch, 'cos', 'held-checkout-archives'))).toBe(false);
 }
