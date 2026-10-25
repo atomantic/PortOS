@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { spawn } from '../lib/childProcess.js';
 import { execGit } from '../lib/execGit.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
+import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
 import { legacyRetirementKey } from '../lib/legacyRetirementTransition.js';
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
@@ -17,11 +18,24 @@ const branches = agent => {
   return [m.worktreeBranch, m.claimBranch, m.jiraBranch, m.branchCompletionPolicy?.branch,
     ...(m.claimBranches || []), ...(m.claimReleasedBranches || [])];
 };
-const protectedOwner = (agents, row) => agents.some(agent => {
-  const m = agent.metadata || {};
-  const bound = branches(agent).includes(row.branch) || samePath(m.workspacePath, row.path);
-  return bound && (agent.status !== 'completed' || ['leave-open', 'review-only', 'draft'].includes(m.prCompletionPolicy));
-});
+async function protectedOwner(agents, row, repoPath, identities) {
+  const identity = path => {
+    if (!identities.has(path)) identities.set(path, readGitCommonDirectory(path));
+    return identities.get(path);
+  };
+  for (const agent of agents) {
+    const m = agent.metadata || {};
+    if (!(branches(agent).includes(row.branch) || samePath(m.workspacePath, row.path))
+      || !(agent.status !== 'completed' || ['leave-open', 'review-only', 'draft'].includes(m.prCompletionPolicy))) continue;
+    const source = m.sourceWorkspace || m.primaryCheckoutBaseline?.path;
+    if (source && !samePath(source, repoPath)) {
+      const [local, owner] = await Promise.all([identity(repoPath), identity(source)]);
+      if (local && owner && local !== owner) continue;
+    }
+    return true;
+  }
+  return false;
+}
 const proofEnv = () => ({ ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.toUpperCase().startsWith('GIT_'))), GIT_OPTIONAL_LOCKS: '0', GIT_NO_REPLACE_OBJECTS: '1',
   GIT_NO_LAZY_FETCH: '1', GIT_GRAFT_FILE: devNull });
 const git = (repo, args) => execGit(['--no-replace-objects', '-c', 'core.commitGraph=false', ...args], repo,
@@ -45,8 +59,8 @@ async function patchId(repo, from, to) {
   });
 }
 
-async function absent(repoPath, row, trees, agents) {
-  if (!row.branch || protectedOwner(agents, row)
+async function absent(repoPath, row, trees, agents, identities = new Map()) {
+  if (!row.branch || await protectedOwner(agents, row, repoPath, identities)
     || trees.some(tree => tree.branch === `refs/heads/${row.branch}` || samePath(tree.path, row.path))) return false;
   if (row.path && await readCheckoutPathPresence(row.path) !== false) return false;
   return await readLocalBranchPresence(repoPath, row.branch) === false;
@@ -82,10 +96,11 @@ export async function planLegacyRetirementReconciliation({ repoPath, outcome, ag
     .filter(row => transition.observations.includes(legacyRetirementKey(row)))
     .map(row => [legacyRetirementKey(row), row])).values()];
   const resolutions = [];
+  const identities = new Map();
   let forgeReads = 0;
   for (const observation of rows) {
     const bound = targetFor(outcome, observation, repoPath, agents);
-    if (!bound || !await absent(repoPath, bound.target, trees, agents)) continue;
+    if (!bound || !await absent(repoPath, bound.target, trees, agents, identities)) continue;
     const { target, receipt } = bound;
     let evidence = receipt ? { kind: 'existing-service-receipt', receipt } : null;
     if (!evidence && await ancestor(repoPath, target.head, defaultHead)) evidence = { kind: 'merged-ancestry', head: target.head, defaultHead };

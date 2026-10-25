@@ -49,16 +49,21 @@ async function delivered({ rebased = false, changed = false } = {}) {
 }
 
 describe('legacy retirement transition at the persisted reconciliation boundary', () => {
-  it.each(['squash', 'rebased', 'changed-patch', 'active-owner', 'live-checkout', 'new-incident'])(
+  it.each(['squash', 'rebased', 'changed-patch', 'active-owner', 'foreign-owner', 'live-checkout', 'new-incident'])(
     'reconciles historical delivery without asserting unrecorded removal: %s', async scenario => {
       const { row, forge } = await delivered({ rebased: ['rebased', 'changed-patch'].includes(scenario), changed: scenario === 'changed-patch' });
       const outcome = { status: 'incomplete', retirementObligations: [row], remaining: [row], retired: [] };
       if (scenario !== 'new-incident') markLegacyRetirements(outcome);
       const owners = scenario === 'active-owner' ? [{ id: 'current-owner', status: 'running', metadata: { claimBranches: [row.branch] } }] : [];
+      if (scenario === 'foreign-owner') {
+        const other = join(root, 'independent-clone');
+        await mkdir(other); await execGit(['init'], other);
+        owners.push({ id: 'foreign-owner', status: 'running', metadata: { sourceWorkspace: other, claimBranches: [row.branch] } });
+      }
       if (scenario === 'live-checkout') { await mkdir(row.path); await writeFile(join(row.path, 'unfinished.txt'), 'new owner work\n'); }
       const input = { repoPath: repo, outcome, agents: owners, trees: [], defaultHead: forge.mergeCommit };
       const plans = await planLegacyRetirementReconciliation(input, { readMergedDelivery: async () => forge });
-      const expected = ['squash', 'rebased'].includes(scenario);
+      const expected = ['squash', 'rebased', 'foreign-owner'].includes(scenario);
       expect(plans).toHaveLength(expected ? 1 : 0);
       if (!expected) return;
       expect(plans[0].removalVerified).toBe(false);
