@@ -75,11 +75,11 @@ const operations = [
   ['post', '/api/media-jobs/example-job/retry', retryBody, effects.enqueue, 200],
   ['post', '/api/media-jobs/example-job/run-now', {}, effects.runNow, 200],
   ['post', '/api/lora-datasets/example-dataset/generate',
-    { count: 1, poses: ['Example pose'], outfits: ['Example outfit'] }, effects.generate, 202],
+    { count: 1, poses: ['Example pose'], outfits: ['Example outfit'] }, effects.generate, 410],
   ['post', '/api/lora-datasets/example-dataset/slice-reference-sheet',
-    { captionProviderId: 'example-vision-cli' }, effects.slice, 201],
+    { captionProviderId: 'example-vision-cli' }, effects.slice, 410],
   ['post', '/api/lora-datasets/example-dataset/caption',
-    { providerId: 'example-vision-cli' }, effects.caption, 202],
+    { providerId: 'example-vision-cli' }, effects.caption, 410],
 ];
 const appFor = (address = '192.0.2.10') => {
   const app = express();
@@ -145,7 +145,7 @@ describe('auxiliary media agent dispatch authority (#9672)', () => {
         const before = operation[3].mock.calls.length;
         const response = await call(appFor(address), operation, headers);
         expect(response.status, `${operation[1]}: ${JSON.stringify(response.body)}`).toBe(operation[4]);
-        expect(operation[3]).toHaveBeenCalledTimes(before + 1);
+        expect(operation[3]).toHaveBeenCalledTimes(before + (operation[4] === 410 ? 0 : 1));
       }
     }
     // Retry keeps the original agent backend while taking the new prompt.

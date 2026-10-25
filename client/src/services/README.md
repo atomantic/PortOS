@@ -106,7 +106,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | File | Purpose |
 |---|---|
 | `apiImageVideo.js` | Image-gen local backend extras; bounded image/mixed gallery pages, global facets and collection summaries, exact-reference `getGalleryImages`, one image's original-vs-cleaned variant set via `listImageVariants`, plus models, LoRAs, cancel and delete. |
-| `apiLoraTraining.js` | Character LoRA training — datasets (CRUD, upload, generate, slice, caption), training runs (start/list/cancel + status), character→LoRA link lookup. |
+| `apiLoraTraining.js` | Retained checkpoint inspection and character→adapter lookup. Retired training/dataset mutation wrappers are removed. |
 | `apiMedia.js` | `importGalleryFile` dispatches image/video imports through the Prompt gallery upload endpoints; `assignImportedMedia` adds existing imports through idempotent bulk membership. Screenshots + media assets. Also owns the multi-file upload orchestration — `processScreenshotUploads` / `processAttachmentUploads` — moved from `utils/fileUpload.js` since they perform network I/O, not pure transforms. `utils/fileUpload.js` keeps only the pure helpers/constants and no longer re-exports these. |
 | `apiMediaJobs.js` | Media generation job tracking + `refineMediaPrompt` / `promptFromMedia` (vision reverse-prompt). |
 | `apiDecks.js` | Decks (playing-card / tarot designer) — deck + card CRUD, sample-design style analysis, universe casting + prompt generation (plus its SSE progress URL), single/batch card renders. |

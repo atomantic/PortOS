@@ -1682,11 +1682,11 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
         </div>
 
         {/* Trained-in-PortOS lineage: character chip links back to the
-            training dataset that produced this adapter. */}
+            retained training artifacts in Data Maintenance. */}
         {lora.source === 'trained' && lora.character && (
           <div className="mb-2">
             <Link
-              to={lora.trainedFromDatasetId ? `/models/training/${lora.trainedFromDatasetId}` : '/models/training'}
+              to="/settings/data-maintenance"
               className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-port-success/15 text-port-success border border-port-success/30 hover:bg-port-success/25"
               title="Trained in PortOS — open the training dataset"
             >

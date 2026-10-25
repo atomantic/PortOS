@@ -177,31 +177,23 @@ const loraTrainingParamsSchema = z.object({
   // latent-cache spill. `null` is the form's "Auto": a deliberate clear that
   // forces the deriveMfluxMemoryConfig tier even when a saved default exists
   // (distinct from absent, which lets the saved default merge through). An
-  // explicit value still cannot exceed the LORA_TRAIN_MAX_QUANT_BITS cap.
+  // values remain accepted as historical configuration after retirement.
   baseQuant: z.union([z.literal(4), z.literal(8), z.literal(16)]).nullable().optional(),
   lowRam: z.boolean().nullable().optional(),
 });
 
-// LoRA training settings slice (`settings.loraTraining`) — vision-caption
-// provider pick + training parameter defaults. Code-level defaults live in
-// `services/loraTraining/runtimes.js` so an absent slice needs no migration.
+// Retired settings remain accepted for older installs and clients. They no
+// longer authorize launch/resume; recovery still honors display and stall settings.
 export const loraTrainingConfigSchema = z.object({
   // Both nullable — the caption-model picker clears them to null on "Auto"
   // (defer to the server's vision-model auto-pick).
   captionProviderId: z.string().max(128).nullable().optional(),
   captionModel: z.string().max(256).nullable().optional(),
   defaults: loraTrainingParamsSchema.optional(),
-  // Segmented mflux training (watchdog-panic mitigation, default ON in
-  // services/loraTraining/runtimes.js). Setting this false runs the trainer as
-  // one sustained process again — flip it once a macOS/mflux update resolves
-  // the GPU-driver hang. Cooldown is the GPU idle gap (seconds) between segments.
+  // Historical parameters are inert and preserved, not rewritten on upgrade.
   segmentation: z.boolean().optional(),
   segmentCooldownSec: z.number().int().min(0).max(3600).optional(),
-  // Phase-aware soft-hang stall watchdog (issue #1330, default ON in
-  // services/loraTraining/index.js). Detects a wedged GPU mid-training (steps
-  // stop arriving within a step-rate-derived budget) and SIGKILLs + auto-resumes
-  // from the newest checkpoint. Set false to fall back to only the flat 30-min
-  // idle watchdog (e.g. if a future driver fix makes soft hangs impossible).
+  // Surviving trainers retain stall detection; automatic resumes are retired.
   stallWatchdog: z.boolean().optional(),
   // Auto display-sleep during training on Apple Silicon (default ON — the
   // `!== false` read lives in services/loraTraining/displayPower.js
@@ -211,17 +203,6 @@ export const loraTrainingConfigSchema = z.object({
   // contend for the GPU, which hard-reboots the box during heavy sustained
   // training. Set false if you drive the display some other way (SSH headless).
   displaySleep: z.boolean().optional(),
-});
-
-// POST /api/lora-training/runs — start a training run for a dataset.
-export const startTrainingRunSchema = z.object({
-  datasetId: z.string().min(1).max(128),
-  baseModelId: z.string().min(1).max(128),
-  name: z.string().trim().max(120).optional(),
-  params: loraTrainingParamsSchema.optional(),
-  // Override the caption identity-leak gate (see validateDatasetReady) and train
-  // anyway — the UI sends this from the explicit "Train anyway" action.
-  acknowledgeCaptionLeak: z.boolean().optional(),
 });
 
 // === Local LLM backends (Ollama / LM Studio) ===

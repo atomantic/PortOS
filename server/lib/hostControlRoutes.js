@@ -1252,6 +1252,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // configured inference, like local-llm test and Pipeline TTS.
   'POST /api/continuous-video',
   'POST /api/lora-training/runs/:id/promote-checkpoint',
+  // Explicit retired-data removal uses the same operator authority as host maintenance.
+  'POST /api/data-maintenance/preview',
+  'POST /api/data-maintenance/execute',
   'POST /api/music/supercollider/render',
   'POST /api/media-jobs/holds/:holdId/resume',
   'POST /api/voice/piper/fetch',

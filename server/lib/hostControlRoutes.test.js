@@ -413,16 +413,8 @@ describe('auxiliary media mutation inventory (#9672)', () => {
   // Reviewed as record CRUD, cancellation/pruning or deterministic work that
   // never hands caller text to an agent. A new mutation needs a new decision.
   const recordOrContained = [
-    'DELETE /api/lora-datasets/:id',
-    'DELETE /api/lora-datasets/:id/images/:imageId',
     'DELETE /api/media-jobs/:id',
-    'PATCH /api/lora-datasets/:id',
-    'PATCH /api/lora-datasets/:id/images/:imageId',
-    'POST /api/lora-datasets',
     'POST /api/lora-datasets/:id/caption-runs/:runId/cancel',
-    'POST /api/lora-datasets/:id/import-gallery',
-    'POST /api/lora-datasets/:id/images',
-    'POST /api/lora-datasets/:id/strip-shared-fragments',
     'POST /api/media-jobs/:id/cancel',
     'POST /api/media-jobs/cancel-queued',
   ];

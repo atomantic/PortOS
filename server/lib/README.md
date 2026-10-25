@@ -31,6 +31,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `reconcileRetirementEvidence.js` | Matches exact checkout receipts and recovered-preservation receipts, preserves observation identity across delayed scans, and retains each unresolved checkout incarnation. Legacy observations keep their original generation timestamps. A recreated checkout at the same branch, path and head starts after every older receipt; verified historical preservation does not assert branch deletion. |
 | `legacyRetirementTransition.js` | Freezes archive-era observations for evidence-based reconciliation and retains their original diagnoses and delivery/receipt proofs as audit history, without manufacturing deletion receipts or changing task outcomes. |
 | `retirementCheckoutObservation.js` | Reads a checkout's filesystem identity and verifies its live branch/head before the schedule writer admits a recreated checkout's obligation. |
+| `retiredLoraTraining.js` | Retirement refusal and short-lived admission for retained training data access/removal. |
 | `backupSharedAdmission.js` | Durable cross-process backup cuts and publication leases, with fail-closed owner recovery. |
 | `runtimeFilePublication.js` | Admitted runtime recording updates with rollback of the prior file pair on failure. |
 | `maintenanceAdmission.js` | Durable machine-local workflow drain, cross-process admission permits, continuation ownership and stale-resume fencing. |

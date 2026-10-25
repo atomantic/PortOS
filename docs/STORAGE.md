@@ -1284,3 +1284,5 @@ This also identifies additions made before a crash prevented the final journal
 update. Never restore an old `usage.json` over newer usage to undo this import.
 No migration or seed is required: this is a new optional ledger, absent until a
 live completion or an explicit import publishes its first receipt.
+
+LoRA training is retired; its existing datasets, run artifacts, configuration and PostgreSQL history remain intact. See [Data Maintenance](DATA_MAINTENANCE.md) for inventory and explicit removal. Installed adapters and shared inference runtimes remain supported.

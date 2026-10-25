@@ -98,10 +98,10 @@ vi.mock('../services/games/index.js', () => ({
 }));
 vi.mock('../services/dataManager.js', () => ({ archiveCategory: effects.archive }));
 vi.mock('../services/loraTraining/index.js', () => ({
+  cancel: vi.fn(() => false),
   getRunRequired: effects.getRun,
   promoteCheckpoint: effects.promote,
 }));
-vi.mock('../services/loraTraining/runtimes.js', () => ({ TRAINING_DEFAULTS: {} }));
 vi.mock('../lib/pythonSetup.js', () => ({}));
 vi.mock('../services/signalSync.js', () => ({ checkSetup: effects.signalSetup, runSync: effects.signalSync }));
 vi.mock('../services/dataSync.js', () => ({ applyRemote: effects.applyRemote }));

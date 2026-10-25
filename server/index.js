@@ -181,6 +181,7 @@ import imageVideoModelsRoutes from './routes/imageVideoModels.js';
 import lorasRoutes from './routes/loras.js';
 import loraDatasetsRoutes from './routes/loraDatasets.js';
 import loraTrainingRoutes from './routes/loraTraining.js';
+import dataMaintenanceRoutes from './routes/dataMaintenance.js';
 import sdapiRoutes from './routes/sdapi.js';
 import openclawRoutes from './routes/openclaw.js';
 import sharingRoutes from './routes/sharing.js';
@@ -500,6 +501,7 @@ app.use('/api/importer', importerRoutes);
 app.use('/api/story-builder', storyBuilderRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 app.use('/api/loras', lorasRoutes);
+app.use('/api/data-maintenance', dataMaintenanceRoutes);
 app.use('/api/lora-datasets', loraDatasetsRoutes);
 app.use('/api/lora-training', loraTrainingRoutes);
 // AUTOMATIC1111-compatible surface for tailnet clients — gated by
