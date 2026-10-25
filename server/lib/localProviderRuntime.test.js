@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { trackedFiles } from '../../scripts/lib/trackedFiles.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -319,10 +321,48 @@ describe('shipped copy names a Models page by route, never by literal (#7419)', 
       .map((match) => match[0]);
   }
 
-  const trackedSources = () => [
-    ...execFileSync('git', ['ls-files', 'server/**/*.js'], { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n'),
-    ...execFileSync('git', ['ls-files', 'client/src/**/*.js', 'client/src/**/*.jsx'], { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n'),
-  ].filter((f) => f && !f.includes('.test.'));
+  const trackedSources = (repoRoot = REPO_ROOT) => trackedFiles(repoRoot, [
+    'server/**/*.js', 'client/src/**/*.js', 'client/src/**/*.jsx',
+  ]).filter((f) => !f.includes('.test.'));
+
+  const scanBreadcrumbs = (repoRoot = REPO_ROOT, readSource = readFileSync) => trackedSources(repoRoot)
+    .filter((file) => !ALLOWLISTED_FILES.has(file))
+    .flatMap((file) => breadcrumbOffenders(readSource(join(repoRoot, file), 'utf8')).map((text) => `${file}: ${text}`));
+
+  let fixture;
+  afterEach(() => {
+    if (fixture) rmSync(fixture, { recursive: true, force: true });
+    fixture = undefined;
+  });
+
+  function sourceFixture() {
+    fixture = mkdtempSync(join(tmpdir(), 'breadcrumb-scan-'));
+    mkdirSync(join(fixture, 'client/src/components'), { recursive: true });
+    writeFileSync(join(fixture, 'client/src/components/deleted.jsx'), 'export default null;');
+    writeFileSync(join(fixture, 'client/src/components/present source.jsx'), 'const msg = "Start it from Models → Runtimes.";');
+    execFileSync('git', ['init', '--quiet'], { cwd: fixture });
+    execFileSync('git', ['add', '.'], { cwd: fixture });
+    unlinkSync(join(fixture, 'client/src/components/deleted.jsx'));
+    return fixture;
+  }
+
+  it('scans present sources after an unstaged deletion and still detects prohibited copy', () => {
+    const root = sourceFixture();
+    expect(execFileSync('git', ['ls-files', '--deleted'], { cwd: root, encoding: 'utf8' }))
+      .toContain('client/src/components/deleted.jsx');
+    expect(scanBreadcrumbs(root)).toEqual(['client/src/components/present source.jsx: Models → Runtimes']);
+    writeFileSync(join(root, 'client/src/components/present source.jsx'), 'const msg = "Open Models → LLMs → Abuse Guard to repair it.";');
+    expect(scanBreadcrumbs(root)).toEqual([]);
+  });
+
+  it('propagates read failures for a present tracked source', () => {
+    const root = sourceFixture();
+    const denied = Object.assign(new Error('source read denied'), { code: 'EACCES' });
+    expect(() => scanBreadcrumbs(root, () => { throw denied; })).toThrow(denied);
+    unlinkSync(join(root, 'client/src/components/present source.jsx'));
+    mkdirSync(join(root, 'client/src/components/present source.jsx'));
+    expect(() => scanBreadcrumbs(root)).toThrow();
+  });
 
   it('scans the whole tree', () => {
     // A broken `git ls-files` (wrong cwd, detached checkout) would otherwise let
@@ -344,9 +384,7 @@ describe('shipped copy names a Models page by route, never by literal (#7419)', 
   });
 
   it('flags a hardcoded breadcrumb outside the allowlist', () => {
-    const offenders = trackedSources()
-      .filter((file) => !ALLOWLISTED_FILES.has(file))
-      .flatMap((file) => breadcrumbOffenders(readFileSync(join(REPO_ROOT, file), 'utf8')).map((text) => `${file}: ${text}`));
+    const offenders = scanBreadcrumbs();
     expect(offenders).toEqual([]);
   });
 });

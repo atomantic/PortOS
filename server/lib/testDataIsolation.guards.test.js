@@ -55,6 +55,7 @@
  * A test that genuinely needs a data root uses `createTempDataRoot()` +
  * `makePathsProxy()` from `lib/mockPathsDataRoot.js`.
  */
+import { trackedFiles } from '../../scripts/lib/trackedFiles.js';
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from './childProcess.js';
@@ -124,11 +125,7 @@ const REAL_DATA_ROOT_RE = new RegExp([
 // Scope to the test files the server runner globs (`server/vitest.config.js`).
 // Client tests run in jsdom and have no filesystem to leak into. Computed once —
 // the inputs are immutable for the run.
-const SCOPED_TESTS = execFileSync('git', ['ls-files', '*.test.js'], {
-  cwd: REPO_ROOT,
-  encoding: 'utf8',
-})
-  .split('\n')
+const SCOPED_TESTS = trackedFiles(REPO_ROOT, ['*.test.js'])
   .filter((p) => /^(server|scripts|lib|autofixer)\//.test(p))
   .filter((p) => !p.startsWith('lib/slashdo/') && p !== SELF && !ALLOWED.has(p));
 

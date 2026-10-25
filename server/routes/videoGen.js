@@ -1,3 +1,4 @@
+import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from '../lib/videoLoraStageValidation.js';
 /**
  * Video Generation Routes — local LTX backend.
  *
@@ -258,6 +259,10 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
     (v) => (v == null || v === '' ? undefined : v),
     z.enum(I2V_REFERENCE_MODES).optional(),
   ),
+  [VIDEO_GEN_LOCAL_ONLY_FIELDS.A2V_LORA_STAGE_STRENGTHS]: z.preprocess((v) => {
+    if (typeof v !== 'string') return v;
+    try { return JSON.parse(v); } catch { return v; }
+  }, a2vLoraStageStrengthsSchema.optional().transform((v) => isDefaultA2vLoraStages(v) ? undefined : v)),
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.TILING]: z.enum(VIDEO_TILING_MODES).optional(),
   // Which prompt conditioner reads the prompt (lib/videoTextEncoders.js).
   // Validated loosely here and resolved against the MODEL's own option list in
@@ -1105,7 +1110,7 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   // Block-streaming request (#6499) — a closed enum with no path, safe to
   // echo so a reloading page restores the picker instead of snapping back to
   // Auto.
-  'streamingMode',
+  'streamingMode', 'a2vLoraStageStrengths',
   'audioStartSec',
   // Grok jobs (#2859 phase 2): the semantic t2v/i2v mode ('mode' holds the
   // 'grok' discriminator for them) and the clip duration — both plain

@@ -112,6 +112,24 @@ export const listCatalogIngredientsByIds = async (ids = [], options) => {
 export const getCatalogIngredientDetails = (id, { view, ...options } = {}) =>
   request(`/catalog/ingredients/${enc(id)}/details${view ? `?view=${enc(view)}` : ''}`, options);
 
+export const getCatalogIngredientCards = async (ids = [], options) => {
+  const list = normalizeIds(ids);
+  const items = [];
+  for (let offset = 0; offset < list.length; offset += 50) {
+    const batch = list.slice(offset, offset + 50);
+    const response = await request(`/catalog/ingredient-cards?${new URLSearchParams({ ids: batch.join(',') })}`, options);
+    if (!Array.isArray(response?.items) || response.items.some(item => !item || !batch.includes(item.id)
+      || !item.payload || typeof item.payload !== 'object' || Array.isArray(item.payload))) {
+      throw new Error('Catalog card context response is unavailable');
+    }
+    items.push(...response.items);
+  }
+  return items;
+};
+
+export const setCatalogIngredientLock = (id, locked, options) =>
+  request(`/catalog/ingredients/${enc(id)}/lock`, { method: 'PATCH', body: JSON.stringify({ locked }), ...options });
+
 export const getCatalogUniverseContext = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}/universe-context`, options);
 

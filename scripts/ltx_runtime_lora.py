@@ -10,8 +10,9 @@ exactly as loaded and adds the delta in activation space instead:
 
     quantized_linear(x) + (x @ A.T) @ (strength * B).T
 
-Float (unquantized) projections keep fusion: adding the delta to a float
-weight retains it, and that is the runtime's own high-precision path.
+Float (unquantized) projections keep fusion on the legacy path. An explicit
+A2V stage schedule instead uses reversible activation-space deltas for every
+user target, so changing stages never subtracts/re-fuses a float or packed base.
 
 Why a class swap instead of a wrapper module (the MiniMax H3 precedent in
 ``minimax_h3_lora.py``): the LTX pipelines flatten ``dit.parameters()`` AFTER
@@ -45,9 +46,12 @@ importable by a stdlib-only interpreter.
 
 from __future__ import annotations
 
+import ast
+import inspect
 import json
 import math
 import sys
+import textwrap
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -62,6 +66,7 @@ _B_SUFFIX = ".lora_B.weight"
 _IGNORED_SUFFIXES = (".alpha",)
 
 _ADAPTERS_ATTR = "_portos_runtime_lora"
+_STAGED_ATTR = "_portos_staged_lora"
 _BASE_CLASS_ATTR = "_portos_runtime_lora_base"
 _RUNTIME_CLASSES: dict[type, type] = {}
 
@@ -203,10 +208,10 @@ def _plan(model, label: str, tensors: dict, strength: float) -> list[tuple]:
     return planned
 
 
-def _runtime_pair(down, up, strength: float, dtype) -> tuple:
+def _runtime_pair(down, up, strength: float, dtype, multiplier: float = 1.0) -> tuple:
     """``(A, strength * B)`` in the quantized kernel's activation dtype."""
     mx, _nn = _mlx()
-    return down.astype(dtype), (up.astype(mx.float32) * strength).astype(dtype)
+    return down.astype(dtype), (up.astype(mx.float32) * (strength * multiplier)).astype(dtype)
 
 
 def _fused_weight(weight, pairs) -> Any:
@@ -218,20 +223,24 @@ def _fused_weight(weight, pairs) -> Any:
     return fused.astype(weight.dtype)
 
 
-def _apply(module, quantized: bool, down, up, strength: float) -> None:
-    if quantized:
+def _apply(module, quantized: bool, down, up, strength: float, stage_policy=None) -> None:
+    if quantized or stage_policy is not None:
         # The quantized kernel's scales carry the activation dtype the base
         # projection computes in; hold the delta in it so nothing promotes.
-        entry = _runtime_pair(down, up, strength, module.scales.dtype)
+        dtype = module.scales.dtype if quantized else module.weight.dtype
+        entry = list(_runtime_pair(down, up, strength, dtype,
+                                  stage_policy["multiplier"] if stage_policy else 1.0))
         if _ADAPTERS_ATTR not in module.__dict__:
             module.__class__ = _runtime_class(type(module))
             object.__setattr__(module, _ADAPTERS_ATTR, [])
         module.__dict__[_ADAPTERS_ATTR].append(entry)
+        if stage_policy is not None:
+            module.__dict__.setdefault(_STAGED_ATTR, []).append((entry, down, up, strength, dtype))
         return
     module.weight = _fused_weight(module.weight, [(down, up, strength)])
 
 
-def attach_adapters(model, adapters: Iterable[tuple[str, dict, float]], *, tag: str | None = None) -> list[dict]:
+def attach_adapters(model, adapters: Iterable[tuple[str, dict, float]], *, tag: str | None = None, stage_policy=None) -> list[dict]:
     """Attach ``(label, renamed_tensors, strength)`` adapters to ``model`` in place.
 
     Every adapter is validated before any module changes, so a malformed file
@@ -245,20 +254,21 @@ def attach_adapters(model, adapters: Iterable[tuple[str, dict, float]], *, tag: 
     summaries = []
     for label, strength, planned in plans:
         if streaming:
-            _attach_streaming(model, planned, tag)
+            _attach_streaming(model, planned, tag, stage_policy)
         else:
             for _target, module, quantized, down, up, scale, _block in planned:
-                _apply(module, quantized, down, up, scale)
+                _apply(module, quantized, down, up, scale, stage_policy)
         quantized_targets = sum(int(quantized) for _t, _m, quantized, *_rest in planned)
-        fused_targets = len(planned) - quantized_targets
+        fused_targets = 0 if stage_policy is not None else len(planned) - quantized_targets
         strategy = (STRATEGY_MIXED if quantized_targets and fused_targets
-                    else STRATEGY_RUNTIME if quantized_targets else STRATEGY_FUSED)
+                    else STRATEGY_RUNTIME if quantized_targets or stage_policy is not None else STRATEGY_FUSED)
         summaries.append({
             "name": Path(label).name,
-            "strength": float(strength),
+            "strength": float(strength) * (stage_policy["multiplier"] if stage_policy else 1.0),
             "strategy": strategy,
             "quantizedTargets": quantized_targets,
             "fusedTargets": fused_targets,
+            **({"runtimeTargets": len(planned)} if stage_policy is not None else {}),
         })
     return summaries
 
@@ -315,7 +325,8 @@ def _bind_streamed_block(state: dict, shared, index: int) -> None:
         for slot, source in zip(slots, state["slot_sources"][path]):
             pair = source["blocks"].get(index)
             slot[0], slot[1] = (source["zero"] if pair is None
-                                else _runtime_pair(*pair, source["strength"], source["dtype"]))
+                                else _runtime_pair(*pair, source["strength"], source["dtype"],
+                                                   source["policy"]["multiplier"] if source.get("policy") else 1.0))
     for path, sources in state["fused"].items():
         pairs = [(*source["blocks"][index], source["strength"]) for source in sources if index in source["blocks"]]
         if pairs:
@@ -349,20 +360,20 @@ def _recompile(model) -> None:
     state["compiled"] = mx.compile(shared, inputs=[shared, state["slots"]])
 
 
-def _attach_streaming(model, planned: list[tuple], tag: str | None) -> None:
+def _attach_streaming(model, planned: list[tuple], tag: str | None, stage_policy=None) -> None:
     mx, _nn = _mlx()
     state = _streaming_state(model)
     sources: dict[str, dict] = {}
     for _target, module, quantized, down, up, strength, block in planned:
         if block is None:
-            state["outside"].append(_attach_outside_blocks(module, quantized, down, up, strength, tag))
+            state["outside"].append(_attach_outside_blocks(module, quantized, down, up, strength, tag, stage_policy))
             continue
         index, path = block
         source = sources.get(path)
         if source is None:
-            source = sources[path] = {"tag": tag, "strength": strength, "blocks": {}}
-            if quantized:
-                dtype = module.scales.dtype
+            source = sources[path] = {"tag": tag, "strength": strength, "blocks": {}, "policy": stage_policy}
+            if quantized or stage_policy is not None:
+                dtype = module.scales.dtype if quantized else module.weight.dtype
                 source["dtype"] = dtype
                 # A block this adapter does not address keeps the slot layout
                 # (and so the compiled trace) and adds nothing.
@@ -381,13 +392,14 @@ def _attach_streaming(model, planned: list[tuple], tag: str | None) -> None:
     _recompile(model)
 
 
-def _attach_outside_blocks(module, quantized: bool, down, up, strength: float, tag: str | None) -> dict:
+def _attach_outside_blocks(module, quantized: bool, down, up, strength: float, tag: str | None, stage_policy=None) -> dict:
     """Apply a non-block target as ``_apply`` does, recording what a drop must undo."""
-    if not quantized:
+    runtime_delta = quantized or stage_policy is not None
+    if not runtime_delta:
         module.__dict__.setdefault(_FUSED_BASE_ATTR, module.weight)
-    _apply(module, quantized, down, up, strength)
-    record = {"module": module, "quantized": quantized, "tag": tag, "delta": (down, up, strength)}
-    if quantized:
+    _apply(module, quantized, down, up, strength, stage_policy)
+    record = {"module": module, "quantized": runtime_delta, "tag": tag, "delta": (down, up, strength)}
+    if runtime_delta:
         record["entry"] = module.__dict__[_ADAPTERS_ATTR][-1]
     return record
 
@@ -453,6 +465,7 @@ def drop_streaming_adapters(model, tag: str | None = None) -> int:
 def _restore_class(module) -> None:
     module.__class__ = getattr(type(module), _BASE_CLASS_ATTR)
     del module.__dict__[_ADAPTERS_ATTR]
+    module.__dict__.pop(_STAGED_ATTR, None)
 
 
 def runtime_adapter_targets(model) -> list[str]:
@@ -490,7 +503,7 @@ class AdapterReport:
 
     def record(self, role: str, stage: str, source: str, summary: dict) -> bool:
         """Returns True the first time this application is recorded."""
-        key = (role, str(source), summary["strength"])
+        key = (role, str(source), summary["strength"], summary.get("selectedStrength"), summary.get("multiplier"))
         entry = self._index.get(key)
         if entry is not None:
             if stage not in entry["stages"]:
@@ -507,6 +520,35 @@ class AdapterReport:
         print(f"LORASTRATEGY:{json.dumps({'adapters': self.entries})}", file=stream or sys.stderr, flush=True)
 
 
+def validate_stage_strengths(value) -> tuple[float, float]:
+    if value is None:
+        return (1.0, 1.0)
+    if (not isinstance(value, (list, tuple)) or len(value) != 2
+            or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                   or not math.isfinite(v) or not 0 <= v <= 1 for v in value)):
+        raise ValueError("A2V LoRA stage strengths must be two finite multipliers in [0, 1]")
+    return tuple(float(v) for v in value)
+
+
+def validate_a2v_stage_seams(pipeline_class) -> None:
+    """Validate the inspected motion → distilled-refine seam without loading weights."""
+    for name in ("_denoise_stage1", "_fuse_distilled_lora", "_load_transformer_with_optional_streaming"):
+        if not callable(getattr(pipeline_class, name, None)):
+            raise ValueError(f"A2V stage LoRAs unsupported: missing {name}")
+    if list(inspect.signature(pipeline_class._fuse_distilled_lora).parameters) != ["self", "dit"]:
+        raise ValueError("A2V stage LoRAs unsupported: distilled-refine signature changed")
+    generate = getattr(pipeline_class, "generate_and_save", None)
+    if generate is None:
+        raise ValueError("A2V stage LoRAs unsupported: no inspected generate boundary")
+    tree = ast.parse(textwrap.dedent(inspect.getsource(generate)))
+    calls = sorted((node.lineno, node.func.attr) for node in ast.walk(tree)
+                   if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                   and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
+                   and node.func.attr in ("_denoise_stage1", "_fuse_distilled_lora"))
+    if [name for _line, name in calls] != ["_denoise_stage1", "_fuse_distilled_lora"]:
+        raise ValueError("A2V stage LoRAs unsupported: motion/refine order changed")
+
+
 def install_pipeline_adapters(
     pipe,
     user_specs: list[tuple[str, float]],
@@ -515,7 +557,8 @@ def install_pipeline_adapters(
     status: Callable[[str], None],
     ic: bool = False,
     load_adapter: Callable[[str], dict] = load_ltx_adapter,
-) -> None:
+    user_stage_strengths=None,
+) -> Callable[[], None]:
     """Route a pipeline's adapters through inference-time application.
 
     User adapters attach on EVERY transformer load (the runtime's
@@ -531,25 +574,77 @@ def install_pipeline_adapters(
     Paths must already be local files: `parse_user_loras` requires that, and
     the IC constructor resolves its repo ids before this runs.
     """
+    strengths = validate_stage_strengths(user_stage_strengths)
+    policy = None if strengths == (1.0, 1.0) else {
+        "stage": "stage-1", "multiplier": strengths[0],
+    }
+    if policy is not None:
+        validate_a2v_stage_seams(type(pipe))
+    names = ("_pending_loras", "_load_transformer_with_optional_streaming", "_denoise_stage1", "_fuse_distilled_lora",
+             "_fuse_loras", "_reload_clean_transformer")
+    original = {name: pipe.__dict__[name] for name in names if name in pipe.__dict__}
     pipe._pending_loras = None
     load_transformer = pipe._load_transformer_with_optional_streaming
 
+    applications = {}
+
     def attach(dit, role: str, stage: str, specs) -> None:
         loaded = [(path, load_adapter(path), strength) for path, strength in specs]
-        for (path, _tensors, _strength), summary in zip(loaded, attach_adapters(dit, loaded, tag=role)):
+        for (path, _tensors, _strength), summary in zip(loaded, attach_adapters(dit, loaded, tag=role, stage_policy=policy if role == "user" else None)):
+            if role == "user" and policy is not None:
+                summary["selectedStrength"] = _strength
+                summary["multiplier"] = policy["multiplier"]
+                applications[(path, _strength)] = dict(summary)
             if report.record(role, stage, path, summary):
+                counts = (f"{summary['runtimeTargets']} runtime projections" if "runtimeTargets" in summary
+                          else f"{summary['quantizedTargets']} quantized, {summary['fusedTargets']} float projection(s)")
                 status(
                     f"{role} LoRA {summary['name']}: {summary['strategy']} "
-                    f"({summary['quantizedTargets']} quantized, {summary['fusedTargets']} float projection(s))"
+                    f"({counts})"
                 )
 
     def load_with_user_adapters(transformer_path):
         dit = load_transformer(transformer_path)
         if user_specs:
-            attach(dit, "user", "all", user_specs)
+            attach(dit, "user", policy["stage"] if policy else "all", user_specs)
         return dit
 
     pipe._load_transformer_with_optional_streaming = load_with_user_adapters
+
+    def set_stage(index):
+        policy["stage"] = f"stage-{index + 1}"
+        policy["multiplier"] = strengths[index]
+        dit = getattr(pipe, "dit", None)
+        if dit is not None:
+            for _name, module in dit.named_modules():
+                for entry, down, up, strength, dtype in module.__dict__.get(_STAGED_ATTR, []):
+                    entry[:] = _runtime_pair(down, up, strength, dtype, policy["multiplier"])
+        # Reuse the application summaries; reporting never retains tensors/models.
+        for (path, _strength), application in applications.items():
+            summary = {**application, "strength": application["selectedStrength"] * policy["multiplier"],
+                       "multiplier": policy["multiplier"]}
+            report.record("user", policy["stage"], path, summary)
+
+    if policy is not None:
+        denoise_stage1, fuse_distilled = pipe._denoise_stage1, pipe._fuse_distilled_lora
+
+        def stage1(*args, **kwargs):
+            set_stage(0)
+            return denoise_stage1(*args, **kwargs)
+
+        def stage2(*args, **kwargs):
+            result = fuse_distilled(*args, **kwargs)
+            set_stage(1)
+            return result
+
+        pipe._denoise_stage1, pipe._fuse_distilled_lora = stage1, stage2
+
+    def restore():
+        for name in names:
+            if name in original:
+                setattr(pipe, name, original[name])
+            else:
+                pipe.__dict__.pop(name, None)
 
     if ic:
         def attach_ic_adapters() -> None:
@@ -568,6 +663,8 @@ def install_pipeline_adapters(
                     drop_streaming_adapters(pipe.dit, "ic")
 
             pipe._reload_clean_transformer = reload_clean_without_ic
+
+    return restore
 
 
 def release_pipeline_adapters(pipe) -> None:

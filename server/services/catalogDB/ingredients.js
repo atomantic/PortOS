@@ -31,8 +31,28 @@ import {
   liveHomingTargetSql,
 } from './shared.js';
 import { normalizeTags } from './tags.js';
-import { assertCatalogIdentityWritable } from './identityAccess.js';
+import { assertCatalogIdentityWritable, getCatalogIdentityAccessForIds } from './identityAccess.js';
 import { toPgJson } from '../../lib/pgJson.js';
+import { ServerError } from '../../lib/errorHandler.js';
+
+// Lock only the stored flag under the row lock: a card must never write a
+// stale payload, sanitize legacy fields away, or spend an embedding call.
+export async function setIngredientLock(id, locked) {
+  return withTransaction(async client => {
+    await assertCatalogIdentityWritable(id, { client });
+    const { rows: [current] } = await client.query(`SELECT * FROM catalog_ingredients
+      WHERE id = catalog_canonical_ingredient_id($1) AND deleted = false FOR UPDATE`, [id]);
+    if (!current) return null;
+    if (!BIBLE_SANITIZERS[current.type]) throw new ServerError('This ingredient type has no canon lock', { status: 400 });
+    if (current.payload?.locked === locked) return rowToIngredient(current);
+    const { rows: [row] } = await client.query(`UPDATE catalog_ingredients
+      SET payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{locked}', $2::jsonb, true)
+      WHERE id = $1 RETURNING *`, [current.id, toPgJson(locked)]);
+    const updated = rowToIngredient(row);
+    await recordIngredientRevision(updated, { client });
+    return updated;
+  });
+}
 
 // `{ client }` is optional — when supplied, SQL runs on the caller's transaction
 // client (so the write rolls back if a later step in the same `withTransaction`
@@ -516,14 +536,39 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
     params,
   );
   const decorations = includeEmbedding ? new Map() : await decorateIngredientPage(result.rows.map((row) => row.id));
+  const access = includeEmbedding ? new Map() : await getCatalogIdentityAccessForIds(result.rows.map(row => row.id));
   return {
     items: result.rows.map((row) => {
       const decoration = decorations.get(row.id);
       return { ...rowToIngredient(row), thumbnailKey: decoration?.thumbnail_key ?? null, usage: decoration?.ref_usage ?? {},
-        owningUniverse: decoration?.owning_universe ?? null, ownershipStatus: decoration?.ownership_status ?? 'needs-review' };
+        owningUniverse: decoration?.owning_universe ?? null, ownershipStatus: decoration?.ownership_status ?? 'needs-review',
+        sharedIdentity: access.get(row.id) || null };
     }),
     nextOffset: offset + result.rows.length,
   };
+}
+
+// Preserve requested IDs (including retained originals) while hydrating an
+// entire visible card collection in bounded queries, without media/history.
+export async function getIngredientCards(ids) {
+  if (!ids.length) return [];
+  const columns = INGREDIENT_LIGHT_COLS.split(', ').map(column => column === 'payload'
+    ? `jsonb_strip_nulls(jsonb_build_object('role', left(i.payload->>'role', 300), 'physicalDescription', left(i.payload->>'physicalDescription', 1000),
+        'description', left(i.payload->>'description', 1000), 'locked', i.payload->'locked', 'primaryImageRef', i.payload->'primaryImageRef',
+        'imageRefs', jsonb_build_array(i.payload->'imageRefs'->0))) AS payload` : `i.${column}`).join(', ');
+  const { rows } = await query(`SELECT requested.id AS requested_key, ${columns}
+    FROM unnest($1::text[]) WITH ORDINALITY requested(id, position)
+    JOIN catalog_ingredients i ON i.id = catalog_canonical_ingredient_id(requested.id) AND i.deleted = false
+    ORDER BY requested.position`, [ids]);
+  const decorations = await decorateIngredientPage([...new Set(rows.map(row => row.id))]);
+  const access = await getCatalogIdentityAccessForIds(ids);
+  return rows.map(row => {
+    const decoration = decorations.get(row.id);
+    return { ...rowToIngredient(row), id: row.requested_key, canonicalId: row.id,
+      thumbnailKey: decoration?.thumbnail_key ?? null, usage: decoration?.ref_usage ?? {},
+      owningUniverse: decoration?.owning_universe ?? null, ownershipStatus: decoration?.ownership_status ?? 'needs-review',
+      sharedIdentity: access.get(row.requested_key) || null };
+  });
 }
 
 /**

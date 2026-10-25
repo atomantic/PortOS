@@ -1,3 +1,4 @@
+import { a2vLoraStageStrengthsSchema } from '../lib/videoLoraStageValidation.js';
 /**
  * Media Job Queue Routes — read + cancel access to the unified image/video
  * render queue. The actual enqueueing happens in /api/video-gen and
@@ -302,6 +303,7 @@ const RETRY_OVERRIDE_SCHEMA = z.object({
   chunks: z.number().int().min(1).max(8).optional(),
   chunkPrompts: z.array(z.string().max(8000)).max(8).optional(),
   contextFrames: z.number().int().min(0).max(64).optional(),
+  a2vLoraStageStrengths: a2vLoraStageStrengthsSchema.nullable().optional(),
   loras: z.array(z.object({
     filename: z.string().min(1).max(255).regex(/^[^/\\]+\.safetensors$/i, 'filename must be a bare .safetensors basename'),
     name: z.string().max(200).optional(),
@@ -371,7 +373,7 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     const bounds = VIDEO_RETRY_BOUNDS_SCHEMA.safeParse(rawOverrides);
     if (!bounds.success) throw new ServerError('Video retry settings are outside the supported range', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  for (const key of ['seed', 'steps', 'guidanceScale', 'imageStrength', 'i2vReferenceMode', 'speedProfileId', 'draftDecode', 'streamingMode']) {
+  for (const key of ['seed', 'steps', 'guidanceScale', 'imageStrength', 'i2vReferenceMode', 'speedProfileId', 'draftDecode', 'streamingMode', 'a2vLoraStageStrengths']) {
     if (rawOverrides[key] === null) delete params[key];
   }
   if (rawOverrides.chunks === 1) delete params.chunkPrompts;

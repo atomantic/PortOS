@@ -14,8 +14,8 @@
  * chain that introduced it. It scans the tracked tree, so nothing imports it and
  * CI's import-graph selection cannot reach it — it rides `ALWAYS_RUN_TESTS`.
  */
+import { trackedFiles } from './lib/trackedFiles.js';
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -45,11 +45,7 @@ export const clientImportedServerLibModules = (source) => [
   ...source.matchAll(/from\s*['"](?:\.\.\/)+server\/lib\/([\w./-]+\.js)['"]/g),
 ].map((match) => match[1]);
 
-const trackedClientSources = execFileSync(
-  'git',
-  ['ls-files', 'client/src/*.js', 'client/src/*.jsx', 'client/src/**/*.js', 'client/src/**/*.jsx'],
-  { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
-).split('\n').filter(Boolean);
+const trackedClientSources = trackedFiles(REPO_ROOT, ['client/src/*.js', 'client/src/*.jsx', 'client/src/**/*.js', 'client/src/**/*.jsx']);
 
 const entryModules = [...new Set(trackedClientSources.flatMap((rel) => (
   clientImportedServerLibModules(readFileSync(join(REPO_ROOT, rel), 'utf8'))

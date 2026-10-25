@@ -17,8 +17,8 @@
  * This scans the tracked tree, so no import edge reaches it — it rides
  * `ALWAYS_RUN_TESTS`.
  */
+import { trackedFiles } from './lib/trackedFiles.js';
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -61,11 +61,7 @@ const LEGACY_TEST_CROSS_IMPORTS = new Set([
   'server/services/rounds.test.js',
 ]);
 
-const trackedServerSources = execFileSync(
-  'git',
-  ['ls-files', 'server/*.js', 'server/**/*.js'],
-  { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
-).split('\n').filter(Boolean);
+const trackedServerSources = trackedFiles(REPO_ROOT, ['server/*.js', 'server/**/*.js']);
 
 const crossImporters = trackedServerSources.filter(
   (rel) => importsClientSource(readFileSync(join(REPO_ROOT, rel), 'utf8')),

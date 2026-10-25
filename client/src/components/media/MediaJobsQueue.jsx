@@ -1,3 +1,5 @@
+import A2vLoraStageControls from '../videoGen/A2vLoraStageControls';
+import { isDefaultA2vLoraStages } from '../../lib/videoLoraStages';
 import { useMemo, useState, useEffect } from 'react';
 import { ListOrdered, Image as ImageIcon, Film, Cpu, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap, Pencil } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
@@ -825,6 +827,7 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
   // Keep a recorded explicit memory request editable until the catalog loads;
   // only the render bridge decides whether its pinned pipeline can honor it.
   const [streamingMode, setStreamingMode] = useState(videoStreamingModeFromRecord(p.streamingMode));
+  const [a2vLoraStageStrengths, setA2vLoraStageStrengths] = useState(p.a2vLoraStageStrengths ?? [1, 1]);
   const [availableLoras, setAvailableLoras] = useState([]);
   const [selectedLoras, setSelectedLoras] = useState(Array.isArray(p.loras) ? p.loras : []);
 
@@ -980,6 +983,9 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     if (textChanged(modelId, p.modelId) || draftDecode !== originalDraftDecode) {
       overrides.draftDecode = isFullDecodeId(draftDecode) ? null : draftDecode;
     }
+    if (JSON.stringify(a2vLoraStageStrengths) !== JSON.stringify(p.a2vLoraStageStrengths ?? [1, 1])) {
+      overrides.a2vLoraStageStrengths = isDefaultA2vLoraStages(a2vLoraStageStrengths) ? null : a2vLoraStageStrengths;
+    }
     if (streamingMode !== videoStreamingModeFromRecord(p.streamingMode)) {
       overrides.streamingMode = isDefaultVideoStreamingMode(streamingMode) ? null : streamingMode;
     }
@@ -1042,6 +1048,11 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
           disableAudio={disableAudio} onDisableAudioChange={setDisableAudio}
           idPrefix={`retry-video-${job.id}`}
         />
+      )}
+      {((!isHosted && p.mode === 'a2v' && currentModel?.a2vLoraStageCapable && selectedLoras.length > 0)
+        || !isDefaultA2vLoraStages(a2vLoraStageStrengths)) && (
+        <A2vLoraStageControls value={a2vLoraStageStrengths} onChange={setA2vLoraStageStrengths}
+          supported={!isHosted && p.mode === 'a2v' && currentModel?.a2vLoraStageCapable && selectedLoras.length > 0} loras={selectedLoras} />
       )}
       <div className="flex items-center justify-end gap-2 pt-1">
         <button type="button" onClick={onCancel} className="px-3 py-1 text-xs text-port-text-muted hover:text-white">Cancel</button>

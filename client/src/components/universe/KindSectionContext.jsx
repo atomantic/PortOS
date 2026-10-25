@@ -21,7 +21,7 @@
  *   refiningId, expandingId, togglingLockId, bulkLocking, renderingAll,
  *   catalogLinking, creating,
  *   onRender, onRenderAll, onRenderCleanPlate, onJobCompleted, onJobFailed,
- *   onPreview, onRefine, onExpandCharacter, onSheetCompleted, onSheetDeleted,
+ *   onPreview, onRefine, onExpandCharacter, onCatalogLockChanged,
  *   onToggleLock, onBulkLock, onPatchEntry, onDescribeImages,
  *   onCorrectFromImage, onPickFromCatalog, onAddEntry, onRemoveEntry
  */

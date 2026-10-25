@@ -365,3 +365,15 @@ describe('MediaLightbox compact preview item', () => {
   await waitFor(() => expect(onPosterChange).toHaveBeenCalledWith(videoItem, null));
   expect(screen.getByRole('button', { name: 'Download for sharing' })).toBeInTheDocument();
 });
+
+
+it('discloses requested and effective user-adapter stages from the saved render report', () => {
+  render(<MediaLightbox item={{ ...videoItem, raw: { a2vLoraStageStrengths: [0, 1],
+    loraStrategyApplied: { adapters: [
+      { role: 'user', name: 'example.safetensors', stages: ['stage-1'], strength: 0 },
+      { role: 'user', name: 'example.safetensors', stages: ['stage-2'], strength: 0.7 },
+    ] },
+  } }} onClose={() => {}} />);
+  expect(screen.getByText('motion ×0, detail ×1')).toBeInTheDocument();
+  expect(screen.getByText('example.safetensors: stage-1 = 0; example.safetensors: stage-2 = 0.7')).toBeInTheDocument();
+});

@@ -5,7 +5,7 @@ import { existsSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, sep } from 'path';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
-import { createTempDataRoot, makePathsProxy, mockNoPeers, mockNoPeerSync, mockPathsDataRoot, ownTestBodies } from './mockPathsDataRoot.js';
+import { createTempDataRoot, makePathsProxy, mockNoPeers, mockNoPeerSync, mockPathsDataRoot, ownTestBodies, ownFixtureWork } from './mockPathsDataRoot.js';
 
 describe('ownTestBodies cancellation ordering (#11641)', () => {
   // These controls also write real fixtures: own their outer Vitest bodies,
@@ -96,6 +96,50 @@ describe('ownTestBodies cancellation ordering (#11641)', () => {
       release.resolve();
       await Promise.allSettled([observed, cleanup]);
       await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// Uniquely catches a late callback error skipping final data-root cleanup or
+// poisoning the next case after its scratch teardown has already settled.
+describe('owned fixture cleanup failures (#13651)', () => {
+  const controls = ownTestBodies(it);
+  afterAll(() => controls.drain());
+  controls.it('retains cancellation failures while the next fixture and final cleanup still run', async () => {
+    const fixture = ownFixtureWork();
+    const root = createTempDataRoot('portos-owned-fixture-');
+    const next = createTempDataRoot('portos-next-fixture-');
+    const controller = new AbortController();
+    const entered = Promise.withResolvers(), release = Promise.withResolvers();
+    const failure = new Error('synthetic late setup failure');
+    const setup = fixture.wrap('setup', async () => {
+      entered.resolve();
+      await release.promise;
+      throw failure;
+    })({ signal: controller.signal });
+    const observed = setup.catch(error => error);
+    let cleanup;
+    try {
+      await entered.promise;
+      controller.abort();
+      cleanup = fixture.cleanup(async () => {
+        try { await fixture.drain(); }
+        finally { await rm(root, { recursive: true, force: true }); }
+      });
+      const rejected = expect(cleanup).rejects.toMatchObject({ errors: [failure] });
+      release.resolve();
+      expect(await observed).toBe(failure);
+      await rejected;
+      await fixture.prepare();
+      expect(existsSync(root)).toBe(false);
+      expect(existsSync(next)).toBe(true);
+      await expect(fixture.finish(() => rm(next, { recursive: true, force: true })))
+        .rejects.toMatchObject({ message: 'Fixture cleanup failed', errors: [{ errors: [failure] }] });
+      expect(existsSync(next)).toBe(false);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([observed, cleanup]);
+      await Promise.all([root, next].map(path => rm(path, { recursive: true, force: true })));
     }
   });
 });

@@ -1,3 +1,4 @@
+import { isDefaultA2vLoraStages } from '../../lib/videoLoraStageValidation.js';
 /**
  * Hosted preparation policy and provider-specific queue fields. Configuration
  * is read from this submission's live settings; fal/Reactor credentials never
@@ -18,6 +19,9 @@ import { validateRunwayVideoInput } from './runwayVideoInputs.js';
 // refuses it up front (prepareParams); a retry replays persisted params past
 // that gate, so the same refusal has to be stated here (#4874).
 const assertAnchoredReference = (backend, params) => {
+  if (!isDefaultA2vLoraStages(params.a2vLoraStageStrengths)) {
+    throw new ServerError('Hosted video cannot honor per-stage user LoRA strengths.', { status: 400, code: 'A2V_LORA_STAGES_UNSUPPORTED' });
+  }
   if (isDefaultI2vReferenceMode(params.i2vReferenceMode)) return;
   throw new ServerError(
     `The ${backend} backend always anchors a reference image as frame one — retry this job with the Anchor reference mode, or render it locally on LTX-2.5.`,

@@ -29,6 +29,8 @@ import {
   catalogPortraitSetSchema,
   catalogIngredientQuerySchema,
   catalogIngredientDetailQuerySchema,
+  catalogIngredientCardsQuerySchema,
+  catalogIngredientLockSchema,
   catalogTagQuerySchema,
   catalogScrapCommitSchema,
   catalogExtractRequestSchema,
@@ -253,6 +255,20 @@ router.get('/ingredients', asyncHandler(async (req, res) => {
 // counts, in one round-trip. Live universes/series only.
 router.get('/facets', asyncHandler(async (_req, res) => {
   res.json(await catalogDB.getCatalogFacets());
+}));
+
+router.get('/ingredient-cards', asyncHandler(async (req, res) => {
+  const { ids } = validateRequest(catalogIngredientCardsQuerySchema, req.query);
+  res.json({ items: await catalogDB.getIngredientCards(ids) });
+}));
+
+router.patch('/ingredients/:id/lock', asyncHandler(async (req, res) => {
+  const { locked } = validateRequest(catalogIngredientLockSchema, req.body);
+  const updated = await catalogDB.setIngredientLock(req.params.id, locked);
+  if (!updated) throw new ServerError('Ingredient not found', { status: 404 });
+  await projectToCanon(updated.id, updated);
+  catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
+  res.json(updated);
 }));
 
 router.get('/ingredients/:id', asyncHandler(async (req, res) => {

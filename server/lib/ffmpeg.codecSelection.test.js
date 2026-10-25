@@ -379,7 +379,7 @@ exit 0
       writeFileSync(src, 'dummy');
       writeFileSync(out, 'dummy');
 
-      const res = await spliceExtendSource({ sourcePath: src, outputPath: out, extendLatents: 1 });
+      const res = await spliceExtendSource({ runtime: 'ltx2', sourcePath: src, outputPath: out, extendLatents: 1 });
       expect(res.applied).toBe(false);
       expect(res.reason).toMatch(/libx264/);
     });

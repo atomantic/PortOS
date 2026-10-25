@@ -777,6 +777,17 @@ describe('useVideoGenForm', () => {
     expect(payload.icReferenceVideoIds).toBe('');
   });
 
+  it.each(['applyRemix', 'applyResumedParams'])('%s preserves stage multipliers and clears them for a legacy record', async (restore) => {
+    const { result } = render();
+    await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
+    act(() => result.current[restore]({ modelId: MLX.id, mode: 'a2v', a2vLoraStageStrengths: [0.2, 0.8] }));
+    expect(result.current.a2vLoraStageStrengths).toEqual([0.2, 0.8]);
+    act(() => result.current.handleModelChange(LTX2.id));
+    expect(result.current.buildGeneratePayload().a2vLoraStageStrengths).toBe('[0.2,0.8]');
+    act(() => result.current[restore]({ modelId: MLX.id }));
+    expect(result.current.a2vLoraStageStrengths).toEqual([1, 1]);
+  });
+
   it('only sends LoRAs on a runtime that can fuse them', async () => {
     const loras = [{ filename: 'v.safetensors', name: 'V', loraCompatKey: 'ltx-video' }];
     const { result } = render({ availableLoras: loras });

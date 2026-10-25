@@ -64,6 +64,8 @@ vi.mock('../services/apiCatalog', () => ({
   getCatalogUniverseContext: vi.fn(async () => ({ ...detailsOf(CHAR_FIXTURE).universeContext, usageComplete: true })),
   listCatalogRelatedImages: vi.fn(async () => ({ items: [], total: 0, limit: 24, offset: 0 })),
   updateCatalogIngredient: vi.fn(),
+  setCatalogIngredientLock: vi.fn(),
+  getCatalogIngredientCards: vi.fn(async () => []),
   deleteCatalogIngredient: vi.fn(),
   linkCatalogIngredientRelation: vi.fn(),
   unlinkCatalogIngredientRelation: vi.fn(),
@@ -151,7 +153,7 @@ import { getCatalogIngredientDetails, getCatalogUniverseContext, listCatalogIngr
 import toast from '../components/ui/Toast';
 import { getCatalogIdentity, acceptCatalogIdentity, abortCatalogIdentity } from '../services/apiCatalogIdentity';
 
-const renderPage = async (path = '/catalog/character/cat-chr-1') => {
+const renderPage = async (path = '/catalog/character/cat-chr-1?castSheet-cat-chr-1=appearance') => {
   const router = createMemoryRouter([
     { path: '/catalog', element: <div>Catalog index</div> },
     { path: '/catalog/:type/:id', element: <CatalogIngredient /> },
@@ -427,6 +429,7 @@ describe('CatalogIngredient — character sheet', () => {
     it('saves an added age or look as payload.forms', async () => {
       updateCatalogIngredient.mockImplementation(async (_id, body) => ({ ...CHAR_FIXTURE, ...body }));
       await renderPage();
+      fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
       fireEvent.click(await screen.findByRole('button', { name: /Add age or look/ }));
       fireEvent.change(screen.getAllByLabelText('Name')[1], { target: { value: 'Age 7' } });
       fireEvent.change(screen.getByLabelText('How it looks'), { target: { value: 'yellow raincoat' } });
@@ -530,15 +533,19 @@ describe('CatalogIngredient — character sheet', () => {
     });
   });
 
-  it('renders grouped sheet sections with the enriched canon scalar fields', async () => {
-    await renderPage();
-    await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
-    expect(screen.getByText('Identity')).toBeTruthy();
-    expect(screen.getByText('Appearance')).toBeTruthy();
-    expect(screen.getByText('Goals & Drives')).toBeTruthy();
-    expect(screen.getByDisplayValue('she/her')).toBeTruthy();
-    expect(screen.getByDisplayValue('Decode the machine.')).toBeTruthy();
-    expect(screen.getByDisplayValue('Being underestimated.')).toBeTruthy();
+  it('opens one compact sheet with identity beside Attributes and lazy Story/Appearance/Voice pages', async () => {
+    const { getUniverse } = await import('../services/apiUniverseBuilder');
+    getUniverse.mockClear();
+    await renderPage('/casting/cat-chr-1');
+    expect(screen.getByLabelText('Pronouns')).toHaveValue('she/her');
+    expect(screen.getByDisplayValue('Decode the machine.')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Being underestimated.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Physical Description')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit full character sheet' })).not.toBeInTheDocument();
+    expect(getUniverse).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
+    expect(screen.getByLabelText('Physical Description')).toHaveValue('Sharp eyes, ink-stained cuffs.');
+    expect(screen.getByLabelText('Pronouns')).toHaveValue('she/her');
   });
 
   it('edits the full shared character sheet and preserves unedited legacy fields', async () => {
@@ -546,8 +553,7 @@ describe('CatalogIngredient — character sheet', () => {
     getCatalogIngredientDetails.mockResolvedValue(detailsOf(character));
     updateCatalogIngredient.mockImplementation(async (_id, patch) => ({ ...character, ...patch }));
     await renderPage('/casting/cat-chr-1');
-    fireEvent.click(screen.getByRole('button', { name: 'Edit full character sheet' }));
-    fireEvent.click(screen.getByRole('tab', { name: 'Story' }));
+    await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Story' })));
     const ghost = screen.getByLabelText(/^Ghost/);
     fireEvent.change(ghost, { target: { value: 'Lost the first dispatch.' } });
     fireEvent.blur(ghost);
@@ -571,40 +577,28 @@ describe('CatalogIngredient — character sheet', () => {
     expect(getUniverse).not.toHaveBeenCalled();
   });
 
-  it('shows additional stored canon read-only on a locked character and preserves it on an unrelated save', async () => {
-    const character = {
-      ...CHAR_FIXTURE, name: 'Example courier',
-      payload: {
-        ...CHAR_FIXTURE.payload, locked: true,
-        ghost: 'Lost the first dispatch.', want: 'Deliver the final letter.', arcType: 'positive',
-        secrets: ['Keeps a duplicate map.'], sliders: { proactivity: 0, competence: null },
-        psychology: { assessment: 'unknown', assessmentNote: 'The narrator cannot read this mind.',
-          drives: { connection: { desire: 'A place at the table.' } } },
-        props: [{ name: 'Compass', purpose: 'Find the route.', materials: 'Brass', notes: 'One dent.' }],
-        expressions: [{ name: 'Alert', description: 'Eyes follow every doorway.' }],
-        handGestures: [{ name: 'Wait', description: 'Palm held forward.' }],
-        relationshipLinks: [{ targetCharacterId: 'chr-example-guide', type: 'ally', description: 'Shared a crossing.' }],
-        voiceCanon: { description: 'Low and steady.', approved: false, pronunciations: [{ term: 'Example', pronunciation: 'ig-ZAM-pul' }] },
-        firstAppearance: 'Opening chapter', missingFromProse: ['The compass origin.'],
-        futureCanon: { retained: true },
-      },
-    };
+  it('retains the union of story, appearance, voice and evidence while a lock protects creative actions', async () => {
+    const character = { ...CHAR_FIXTURE, payload: { ...CHAR_FIXTURE.payload, locked: true,
+      ghost: 'Lost the first dispatch.', background: 'Raised by cartographers.', notes: 'Long form notes.',
+      psychology: { assessment: 'unknown', assessmentNote: 'The narrator cannot read this mind.' },
+      props: [{ name: 'Compass', notes: 'One dent.' }],
+      voiceCanon: { description: 'Low and steady.', approved: false },
+      firstAppearance: 'Opening chapter', missingFromProse: ['The compass origin.'], futureCanon: { retained: true } } };
     getCatalogIngredientDetails.mockResolvedValue(detailsOf(character));
     updateCatalogIngredient.mockImplementation(async (_id, patch) => ({ ...character, ...patch }));
-    await renderPage('/casting/cat-chr-1/profile');
-    const panel = screen.getByRole('region', { name: 'Additional character canon' });
-    const canon = within(panel);
-    for (const value of ['Lost the first dispatch.', 'Deliver the final letter.', 'Keeps a duplicate map.', '0',
-      'unknown', 'The narrator cannot read this mind.', 'A place at the table.', 'Compass',
-      'Eyes follow every doorway.', 'Palm held forward.', 'chr-example-guide', 'Low and steady.',
-      'Candidate', 'ig-ZAM-pul', 'Opening chapter', 'The compass origin.']) {
-      expect(canon.getByText(value)).toBeInTheDocument();
-    }
-    expect(canon.getByText(/Materials: Brass/)).toBeInTheDocument();
-    expect(canon.queryByRole('textbox')).not.toBeInTheDocument();
-    expect(canon.queryByText('Competence')).not.toBeInTheDocument();
-    expect(canon.queryByText(/futureCanon|retained/)).not.toBeInTheDocument();
-    expect(updateCatalogIngredient).not.toHaveBeenCalled();
+    await renderPage('/casting/cat-chr-1');
+    expect(screen.getByRole('button', { name: /Unlock Ada/ })).toBeEnabled();
+    expect(screen.getByLabelText('Name')).toBeEnabled();
+    await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Story' })));
+    expect(screen.getByLabelText(/^Ghost/)).toHaveValue('Lost the first dispatch.');
+    expect(screen.getByLabelText('Background')).toHaveValue('Raised by cartographers.');
+    expect(screen.getByLabelText('Notes', { exact: true })).toHaveValue('Long form notes.');
+    expect(screen.getByText(/First appearance: Opening chapter/)).toBeInTheDocument();
+    expect(screen.getByText('The compass origin.')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('The Countess')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
+    expect(screen.getByDisplayValue('Compass')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('One dent.')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Example route keeper' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
     await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledWith(character.id,
@@ -612,34 +606,25 @@ describe('CatalogIngredient — character sheet', () => {
   });
 
   it('preserves an explicit not-applicable assessment and safely skips malformed optional canon', async () => {
-    getCatalogIngredientDetails.mockResolvedValue(detailsOf({
-      ...CHAR_FIXTURE,
-      payload: { ...CHAR_FIXTURE.payload, ghost: { invalid: true }, secrets: [null, {}],
-        props: [null, {}, { name: { invalid: true } }], expressions: 'invalid', handGestures: [false],
-        relationshipLinks: [null], voiceCanon: [], sliders: { competence: false },
-        psychology: { assessment: 'not-applicable', drives: { survival: null } } },
-    }));
-    await renderPage();
-    const canon = within(screen.getByRole('region', { name: 'Additional character canon' }));
-    expect(canon.getByText('not-applicable')).toBeInTheDocument();
-    expect(canon.queryByRole('button', { name: 'Props' })).not.toBeInTheDocument();
-    expect(canon.queryByText(/\[object Object\]|false|invalid/)).not.toBeInTheDocument();
+    const malformed = { ...CHAR_FIXTURE, payload: { ...CHAR_FIXTURE.payload, ghost: { invalid: true }, secrets: [null, {}],
+      props: [null, {}, { name: { invalid: true } }], expressions: 'invalid', handGestures: [false],
+      relationshipLinks: [null], psychology: { assessment: 'not-applicable', drives: { survival: null } } } };
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf(malformed));
+    await renderPage('/casting/cat-chr-1');
+    await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Story' })));
+    expect(screen.getByRole('option', { name: 'not-applicable' })).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Ghost/)).toHaveValue('');
+    fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
+    expect(screen.getByText('No props yet.')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('[object Object]')).not.toBeInTheDocument();
   });
 
-  it('does not invent additional canon for an unfilled legacy character', async () => {
+  it('shows a stored production prompt on Appearance without copying it into an editable field', async () => {
+    const prompt = 'An example courier in a blue coat, standing beside a milestone.';
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf({ ...CHAR_FIXTURE, payload: { prompt } }));
     await renderPage();
-    expect(screen.queryByRole('region', { name: 'Additional character canon' })).not.toBeInTheDocument();
-  });
-
-  it('shows a stored generation prompt for a legacy character with no other canon details', async () => {
-    getCatalogIngredientDetails.mockResolvedValue(detailsOf({
-      ...CHAR_FIXTURE, payload: { prompt: 'An example courier in a blue coat, standing beside a milestone.' },
-    }));
-    await renderPage();
-    const canon = within(screen.getByRole('region', { name: 'Additional character canon' }));
-    expect(canon.getByText('Generation prompt')).toBeInTheDocument();
-    expect(canon.getByText('An example courier in a blue coat, standing beside a milestone.')).toBeInTheDocument();
-    expect(canon.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.getByText(prompt)).toBeInTheDocument();
+    expect(screen.queryByDisplayValue(prompt)).not.toBeInTheDocument();
   });
 
   it.each([
@@ -713,11 +698,12 @@ describe('CatalogIngredient — character sheet', () => {
 
   it('renders EDITABLE array editors (color palette + stats + aliases) seeded from payload', async () => {
     await renderPage();
-    await waitFor(() => expect(screen.getByRole("button", { name: /Add color/i })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: /Add swatch/i })).toBeTruthy());
     // Editors render their values as inputs now (editable), not static text.
     expect(screen.getByDisplayValue('Brass')).toBeTruthy();
     expect(screen.getByDisplayValue('Logic')).toBeTruthy();      // stat .label
     expect(screen.getByDisplayValue('9')).toBeTruthy();          // stat .value
+    await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Story' })));
     expect(screen.getByDisplayValue('The Countess')).toBeTruthy(); // alias
   });
 
@@ -725,25 +711,27 @@ describe('CatalogIngredient — character sheet', () => {
     const { updateCatalogIngredient } = await import('../services/apiCatalog');
     updateCatalogIngredient.mockResolvedValue({ ...CHAR_FIXTURE, name: 'Ada Lovelace' });
     await renderPage();
-    await waitFor(() => expect(screen.getByRole("button", { name: /Add color/i })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: /Add swatch/i })).toBeTruthy());
 
     // Add one of each list type.
+    await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Story' })));
     fireEvent.click(screen.getByRole('button', { name: /Add alias/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Add color/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
+    fireEvent.click(screen.getByRole('button', { name: /Add swatch/i }));
     fireEvent.click(screen.getByRole('button', { name: /Add stat/i }));
 
     // Fill the newly-added rows. The new alias input is the empty one (index 1).
     const aliasInputs = screen.getAllByLabelText(/^Aliases \d+$/);
     fireEvent.change(aliasInputs[aliasInputs.length - 1], { target: { value: 'Lady Byron' } });
     // New palette name input (empty) — last "Color Palette N name".
-    const paletteNames = screen.getAllByLabelText(/Color Palette \d+ name/);
+    const paletteNames = within(screen.getByRole('region', { name: 'Color palette' })).getAllByLabelText(/row \d+ name/);
     fireEvent.change(paletteNames[paletteNames.length - 1], { target: { value: 'Cobalt' } });
-    const paletteHexes = screen.getAllByLabelText(/Color Palette \d+ hex/);
+    const paletteHexes = screen.getAllByLabelText(/row \d+ hex/);
     fireEvent.change(paletteHexes[paletteHexes.length - 1], { target: { value: '#0047ab' } });
     // New stat label/value inputs (the empty pair).
-    const statLabels = screen.getAllByLabelText(/Stats \d+ label/);
+    const statLabels = screen.getAllByLabelText(/row \d+ label/);
     fireEvent.change(statLabels[statLabels.length - 1], { target: { value: 'Charisma' } });
-    const statValues = screen.getAllByLabelText(/Stats \d+ value/);
+    const statValues = screen.getAllByLabelText(/row \d+ value/);
     fireEvent.change(statValues[statValues.length - 1], { target: { value: '7' } });
 
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
@@ -870,11 +858,12 @@ describe('CatalogIngredient — character sheet', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /^Render$/i })).toHaveProperty('disabled', true));
   });
 
-  it('collapses a sheet section when its header is clicked', async () => {
+  it('collapses a compact sheet group when its header is clicked', async () => {
     await renderPage();
     await waitFor(() => expect(screen.getByDisplayValue('she/her')).toBeTruthy());
-    fireEvent.click(screen.getByText('Identity'));
-    await waitFor(() => expect(screen.queryByDisplayValue('she/her')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: /Visual identity/ }));
+    expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).not.toBeVisible();
+    expect(screen.getByDisplayValue('she/her')).toBeInTheDocument();
   });
 
   // #11317: the box holds only the record's own words. The linked universe's
@@ -1534,6 +1523,7 @@ describe('contextual unlock in Create libraries', () => {
         persisted = { ...persisted, ...patch, updatedAt: '2026-01-01T00:00:01Z' };
         return persisted;
       });
+      api.setCatalogIngredientLock.mockImplementation(async (_id, lockedFlag) => { persisted = { ...persisted, payload: { ...persisted.payload, locked: lockedFlag } }; return persisted; });
       api.listCatalogSheetVariants.mockResolvedValue({ variants: [{ id: 'standard', label: 'Standard' }, { id: 'alternate', label: 'Alternate' }] });
       api.renderCatalogSheet.mockReset().mockResolvedValue({ jobId: 'example-sheet-job', variant: 'alternate' });
       api.attachCatalogIngredientMedia.mockResolvedValue({});
@@ -1548,7 +1538,8 @@ describe('contextual unlock in Create libraries', () => {
       expect(picker).toHaveValue('alternate');
       expect(api.renderCatalogSheet).not.toHaveBeenCalled();
       expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeDisabled();
-      expect(updateCatalogIngredient).toHaveBeenCalledWith('example-locked', { payload: { ...locked.payload, locked: false } }, { silent: true });
+      expect(api.setCatalogIngredientLock).toHaveBeenCalledWith('example-locked', false, { silent: true });
+      expect(updateCatalogIngredient).not.toHaveBeenCalled();
       await act(async () => router.navigate(`/${library}/example-locked/profile`));
       expect(screen.getByLabelText('Name')).toHaveValue('Unsaved draft name');
       fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
@@ -1600,7 +1591,9 @@ describe('Casting lean first render', () => {
     getCatalogUniverseContext.mockImplementation(() => usage.promise);
     listCatalogIngredientRevisions.mockClear().mockResolvedValue({ items: [] });
     const { router } = await renderPage('/casting/cat-chr-1/profile');
-    const description = await screen.findByDisplayValue(CHAR_FIXTURE.payload.physicalDescription);
+    await screen.findByLabelText('Name');
+    fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
+    const description = screen.getByDisplayValue(CHAR_FIXTURE.payload.physicalDescription);
     expect(screen.getByAltText(`${CHAR_FIXTURE.name} cover`)).toHaveAttribute('src', '/data/image-thumbnails/example-cover.webp');
     expect(getCatalogIngredientDetails.mock.calls.map(([, options]) => options.view)).toEqual(['profile']);
     expect(listCatalogIngredientRevisions).not.toHaveBeenCalled();
@@ -1620,4 +1613,33 @@ describe('Casting lean first render', () => {
     expect(screen.queryByAltText(`${CHAR_FIXTURE.name} cover`)).toBeNull();
     expect(listCatalogIngredientRevisions).toHaveBeenCalledTimes(1);
   });
+});
+
+it('keeps meaningful incomplete compact rows dirty across tabs and refuses a Save that would drop them', async () => {
+  const { router } = await renderPage('/casting/cat-chr-1');
+  fireEvent.click(screen.getByRole('button', { name: 'Add stat' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'row 2 value' }), { target: { value: 'Tall' } });
+  expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
+  expect(updateCatalogIngredient).not.toHaveBeenCalled();
+  expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('stat label'));
+  await act(async () => router.navigate('/casting/cat-chr-1/references'));
+  await act(async () => router.navigate('/casting/cat-chr-1/profile'));
+  expect(screen.getByRole('textbox', { name: 'row 2 value' })).toHaveValue('Tall');
+  fireEvent.change(screen.getByRole('textbox', { name: 'row 2 label' }), { target: { value: 'Height' } });
+  updateCatalogIngredient.mockImplementation(async (_id, patch) => ({ ...CHAR_FIXTURE, ...patch }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
+  await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledWith(CHAR_FIXTURE.id,
+    expect.objectContaining({ payload: expect.objectContaining({ stats: [{ label: 'Logic', value: '9' }, { label: 'Height', value: 'Tall' }] }) }), { silent: true }));
+});
+
+it('returns to an allowed Universe Cast context while retaining compact page query through media navigation', async () => {
+  const back = '/universes/example-world?tab=cast&series=example-series';
+  const { router } = await renderPage(`/casting/cat-chr-1?${new URLSearchParams({ returnTo: back })}`);
+  expect(screen.getByRole('link', { name: 'Back to Casting' })).toHaveAttribute('href', back);
+  await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Story' })));
+  await act(async () => router.navigate(`/casting/cat-chr-1/references${router.state.location.search}`));
+  await act(async () => router.navigate(`/casting/cat-chr-1/profile${router.state.location.search}`));
+  expect(screen.getByRole('tab', { name: 'Story' })).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByRole('link', { name: 'Back to Casting' })).toHaveAttribute('href', back);
 });

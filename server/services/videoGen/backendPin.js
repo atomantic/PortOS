@@ -1,3 +1,4 @@
+import { isDefaultA2vLoraStages } from '../../lib/videoLoraStageValidation.js';
 /**
  * Video Gen — creative-surface backend pin → job params (#3135 / #3231 Phase 4).
  *
@@ -163,6 +164,7 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
     'extendFromVideoId', 'extendFromVideoPath', 'icReferencePaths',
     'icReferenceVideoIds', 'icReferenceImageFiles', 'referenceImageFiles', 'referenceImagePaths', 'referenceVideoIds', 'referenceVideoPaths', 'referenceAudioPaths', 'loras', 'loraPaths', 'loraFilenames',
   ].filter((key) => hasInput(params[key]));
+  if (!isDefaultA2vLoraStages(params.a2vLoraStageStrengths)) unsupported.push('per-stage user LoRA strengths');
   if (semantic && semantic !== 'text' && semantic !== 'image') unsupported.push(`mode ${semantic}`);
   if (Number(params.chunks) > 1) unsupported.push('chained chunks');
   if (Number(params.batchSize) > 1) unsupported.push('batched clips');

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'child_process';
+import { trackedFiles } from './lib/trackedFiles.js';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -25,11 +25,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
 function trackedPs1Files() {
-  const out = execFileSync('git', ['ls-files', '-z', '*.ps1'], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-  });
-  return out.split('\0').filter(Boolean);
+  return trackedFiles(REPO_ROOT, ['*.ps1']);
 }
 
 describe('PowerShell scripts (.ps1) ship a UTF-8 BOM (issue #1788)', () => {

@@ -23,9 +23,9 @@
  *
  * There is no allowlist: fix the call site.
  */
+import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -153,11 +153,7 @@ export function findFloatingAsyncCalls(src, dir = null) {
   return createFloatingAsyncScanner().findInSource(src, dir);
 }
 
-const trackedServerSources = () => execFileSync('git', ['ls-files', '*.js', '*.mjs', '*.cjs'], {
-  cwd: SERVER_ROOT,
-  encoding: 'utf8',
-  maxBuffer: 64 * 1024 * 1024,
-}).split('\n').filter((f) => f && !f.includes('.test.'));
+const trackedServerSources = () => trackedFiles(SERVER_ROOT, ['*.js', '*.mjs', '*.cjs']).filter((f) => f && !f.includes('.test.'));
 
 describe('async calls own their rejections (#12978)', () => {
   it('scans the server tree', () => {

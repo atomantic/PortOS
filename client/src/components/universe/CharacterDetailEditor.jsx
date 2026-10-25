@@ -11,7 +11,7 @@
  */
 
 import { Link } from 'react-router';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Plus, Trash2, WandSparkles, Loader2,
   Palette, Hand, Smile, Package, BookOpen, Eye, Activity, Users, Swords,
@@ -52,7 +52,9 @@ import { prepareProfilePlayback } from '../../services/voiceProfileBenchmark';
 import VoicePicker from '../voice/VoicePicker';
 import VoiceFineTuningPanel from '../voice/VoiceFineTuningPanel';
 import TabPills from '../ui/TabPills';
+import CollapsibleSection from '../ui/CollapsibleSection';
 import useDrawerTab from '../../hooks/useDrawerTab';
+import { DraftCommitMode, useDraftCommitMode } from '../../hooks/useDraftCommitMode';
 
 const SECTIONS = Object.freeze([
   {
@@ -64,11 +66,13 @@ const SECTIONS = Object.freeze([
       { name: 'speechAccent', label: 'Accent', placeholder: 'clipped Edinburgh · Brooklyn drawl · off-world inflection', max: L.SPEECH_ACCENT_MAX, type: 'textarea' },
       { name: 'speechPattern', label: 'Speech pattern', placeholder: 'rarely contracts; nautical metaphors; trails off into ellipses when uncertain', max: L.SPEECH_PATTERN_MAX, type: 'textarea' },
       { name: 'visualNotes', label: 'Visual notes (at-a-glance)', placeholder: 'layered streetwear; faded mustard + charcoal; chunky boots', max: L.VISUAL_NOTES_MAX, type: 'textarea' },
+      { name: 'role', label: 'Role / Archetype', max: L.ROLE_MAX, type: 'textarea' },
     ],
   },
   {
     key: 'personality', label: 'Personality & motivations', icon: Smile,
     fields: [
+      { name: 'personality', label: 'Personality', max: L.PERSONALITY_MAX, type: 'textarea' },
       { ...CHARACTER_MOTIVATIONS_FIELD, type: 'textarea' },
       { name: 'likes', label: 'Likes', placeholder: 'short prose; comma-separated', max: L.LIKES_MAX, type: 'textarea' },
       { name: 'dislikes', label: 'Dislikes', placeholder: 'short prose; comma-separated', max: L.DISLIKES_MAX, type: 'textarea' },
@@ -85,8 +89,16 @@ const SECTIONS = Object.freeze([
     fields: CHARACTER_FRAMEWORK_EDITOR_FIELDS.map((f) => ({ ...f, type: 'textarea' })),
   },
   {
+    key: 'history', label: 'Background & notes', icon: BookOpen,
+    fields: [
+      { name: 'background', label: 'Background', max: L.BACKGROUND_MAX, type: 'textarea' },
+      { name: 'notes', label: 'Notes', max: L.NOTES_MAX, type: 'textarea' },
+    ],
+  },
+  {
     key: 'visualIdentity', label: 'Visual identity', icon: Eye,
     fields: [
+      { name: 'physicalDescription', label: 'Physical Description', max: L.PHYSICAL_DESCRIPTION_MAX, type: 'textarea' },
       { name: 'silhouetteNotes', label: 'Silhouette notes', placeholder: 'compact upper body; tapered lower half; short hair adds 5cm height', max: L.SILHOUETTE_NOTES_MAX, type: 'textarea' },
       { name: 'postureNotes', label: 'Posture notes', placeholder: 'slight forward lean; weight in left foot; shoulders loose', max: L.POSTURE_NOTES_MAX, type: 'textarea' },
       { name: 'specialTraits', label: 'Special traits', placeholder: 'quick hands; scar on right eyebrow; observant', max: L.SPECIAL_TRAITS_MAX, type: 'textarea' },
@@ -137,6 +149,7 @@ const LIST_SECTIONS = Object.freeze([
       { name: 'name', placeholder: 'Radio · Map case', max: L.PROP_NAME_MAX },
       { name: 'purpose', placeholder: 'comms · navigation · talisman', max: L.PROP_PURPOSE_MAX },
       { name: 'materials', placeholder: 'aluminum + ABS plastic', max: L.PROP_MATERIALS_MAX },
+      { name: 'notes', placeholder: 'Prop notes', max: L.PROP_NOTES_MAX },
     ],
     summary: (p) => `${p.name}${p.purpose ? ` (${p.purpose})` : ''}`,
   },
@@ -247,19 +260,12 @@ function ListRow({ row, idx, columns, swatchHex, onChange, onDelete, disabled })
   );
 }
 
-// Sheet cards stay open: navigation groups the form instead of nesting disclosures.
-function BoxedSection({ icon: Icon, label, summary, children }) {
-  const headingId = useId();
-  return (
-    <section aria-labelledby={headingId} className="min-w-0 rounded-lg border border-port-border bg-port-bg/50 overflow-hidden">
-      <div className="flex flex-wrap items-center gap-2 border-b border-port-border bg-port-card px-3 py-2.5">
-        {Icon ? <Icon size={14} className="shrink-0 text-port-accent" /> : null}
-        <h4 id={headingId} className="text-xs font-semibold text-gray-200">{label}</h4>
-        {summary ? <span className="ml-auto text-[10px] text-gray-500">{summary}</span> : null}
-      </div>
-      <div className="p-3 space-y-3">{children}</div>
-    </section>
-  );
+// Groups start open and retain drafts when collapsed; pages bound the form’s size.
+function BoxedSection({ icon, label, summary, children }) {
+  return <section aria-label={label} className="min-w-0 rounded-lg border border-port-border bg-port-bg/50 overflow-hidden">
+    <CollapsibleSection icon={icon} label={label} summary={summary} size="bar" defaultOpen keepMounted
+      buttonClassName="px-3 py-2.5 bg-port-card" bodyClassName="p-3 space-y-3">{children}</CollapsibleSection>
+  </section>;
 }
 
 // One LIST_SECTION's row buffer + UI. Extracted so each section gets its
@@ -269,6 +275,7 @@ function BoxedSection({ icon: Icon, label, summary, children }) {
 // `<kind>-<uuid>` under its own convention — see usePendingListRows.js for
 // the trade-off this strip implies for sibling drafts.
 function ListSectionEditor({ section, entry, onPatchList, disabled }) {
+  const parentDraft = useDraftCommitMode() === 'change';
   const rawPersisted = (Array.isArray(entry[section.field]) ? entry[section.field] : []).filter((item) => section.stringList
     ? typeof item === 'string' : item && typeof item === 'object' && typeof item[section.columns[0].name] === 'string');
   // A `stringList` section (e.g. `secrets`) persists a plain string[] on the
@@ -294,10 +301,10 @@ function ListSectionEditor({ section, entry, onPatchList, disabled }) {
   const emit = (next) => onPatchList(
     section.field,
     section.stringList
-      ? next.map((r) => (r?.[col0] || '').trim()).filter(Boolean)
+      ? parentDraft ? next.map(r => r?.[col0] || '') : next.map((r) => (r?.[col0] || '').trim()).filter(Boolean)
       : next,
   );
-  const { merged, addRow, updateRow, removeRow } = usePendingListRows({
+  const buffered = usePendingListRows({
     persisted,
     requiredColumn: col0,
     idPrefix: `pending-${section.key}-`,
@@ -305,6 +312,14 @@ function ListSectionEditor({ section, entry, onPatchList, disabled }) {
     blankRow: () => Object.fromEntries(section.columns.map((c) => [c.name, ''])),
     onChange: emit,
   });
+  // Explicit-save catalog drafts own even incomplete rows. Otherwise typing a
+  // value before its required label would stay invisible to Save/exit guards.
+  const { merged, addRow, updateRow, removeRow } = parentDraft ? {
+    merged: persisted,
+    addRow: () => emit([...persisted, Object.fromEntries(section.columns.map(column => [column.name, '']))]),
+    updateRow: (index, row) => emit(persisted.map((item, i) => i === index ? row : item)),
+    removeRow: index => emit(persisted.filter((_, i) => i !== index)),
+  } : buffered;
   const summary = merged.length === 0
     ? 'empty'
     : `${merged.length} ${merged.length === 1 ? section.singular : section.singular + 's'}`;
@@ -326,7 +341,9 @@ function ListSectionEditor({ section, entry, onPatchList, disabled }) {
               // index fallback would tie ListRow's local `drafts` state
               // to a slot, so a delete on an earlier row would shift
               // another row's drafts onto this one.
-              key={row.id || `${section.key}-${idx}`}
+              // Parent-owned drafts have no delayed row commits. A stable slot
+              // key also keeps focus when a pending row is promoted on typing.
+              key={parentDraft ? `${section.key}-${idx}` : row.id || `${section.key}-${idx}`}
               row={row}
               idx={idx}
               columns={section.columns}
@@ -487,7 +504,7 @@ function RelationshipRow({ link, idx, others, onUpdate, onRemove, disabled }) {
 // Patching the whole array on each mutation mirrors the list-section
 // onPatchList contract; text fields buffer via useFieldDraft and commit on blur.
 function RelationshipsSection({ entry, characters, onPatch, disabled }) {
-  const links = Array.isArray(entry.relationshipLinks) ? entry.relationshipLinks : [];
+  const links = (Array.isArray(entry.relationshipLinks) ? entry.relationshipLinks : []).filter(link => link && typeof link === 'object' && typeof link.targetCharacterId === 'string');
   const others = (Array.isArray(characters) ? characters : []).filter((c) => c?.id && c.id !== entry.id);
   const commit = (next) => onPatch?.({ relationshipLinks: next });
   const addLink = () => {
@@ -1358,14 +1375,21 @@ const SHEET_PAGES = [
 ];
 const SHEET_PAGE_IDS = SHEET_PAGES.map((page) => page.id);
 
-export default function CharacterDetailEditor({ entry, universeId = null, onPatch, onExpand, expanding = false, disabled = false, characters = [], portrait = null, saveHint = 'Edits save when you leave a field', children }) {
-  const [activePage, setActivePage] = useDrawerTab(`castSheet-${entry?.id}`, 'attributes', SHEET_PAGE_IDS);
+export default function CharacterDetailEditor({ draftMode = 'blur', ...props }) {
+  return <DraftCommitMode.Provider value={draftMode}><CharacterDetailForm {...props} /></DraftCommitMode.Provider>;
+}
+
+function CharacterDetailForm({ entry, universeId = null, onPatch, onExpand, expanding = false, disabled = false, actionsDisabled = false,
+  characters = [], portrait = null, identityControls = null, storyExtra = null, navigationId = null, onPageChange = null,
+  contextLoading = false, saveHint = 'Edits save when you leave a field', children }) {
+  const [activePage, setActivePage] = useDrawerTab(`castSheet-${navigationId || entry?.id}`, 'attributes', SHEET_PAGE_IDS);
   // Keep visited pages mounted so pending list rows and local voice drafts survive
   // navigation. Unvisited production tools do not load until explicitly opened.
   const [visited, setVisited] = useState({});
   useEffect(() => {
     setVisited((previous) => previous[activePage] ? previous : { ...previous, [activePage]: true });
-  }, [activePage]);
+    onPageChange?.(activePage);
+  }, [activePage, onPageChange]);
   if (!entry) return null;
 
   const patchField = (name, value) => onPatch?.({ [name]: value });
@@ -1394,7 +1418,7 @@ export default function CharacterDetailEditor({ entry, universeId = null, onPatc
         <Mic size={14} /> Create or assign a voice in Voice Studio
       </Link>)}
         {onExpand ? (
-          <button type="button" onClick={onExpand} disabled={expanding || disabled}
+          <button type="button" onClick={onExpand} disabled={expanding || disabled || actionsDisabled}
             className="inline-flex min-h-[40px] items-center gap-1.5 px-3 py-2 text-xs rounded border border-port-accent/40 bg-port-accent/10 text-port-accent hover:bg-port-accent/20 disabled:opacity-40"
             title={`Fill blank fields on ${entry.name} via one LLM call. Populated fields are preserved.`}>
             {expanding ? <Loader2 size={14} className="animate-spin" /> : <WandSparkles size={14} />}
@@ -1410,9 +1434,10 @@ export default function CharacterDetailEditor({ entry, universeId = null, onPatc
               <div className="xl:text-center">
                 <p className="text-[10px] uppercase tracking-widest text-port-accent">Character primitive</p>
                 <p className="text-lg font-semibold text-white">Identity</p>
-                <p className="text-xs text-gray-500">{disabled ? 'Locked character' : saveHint}</p>
+                <p className="text-xs text-gray-500">{disabled ? 'Read-only character' : saveHint}</p>
               </div>
-              {renderFields(SECTIONS[0].fields.slice(0, 3))}
+              {identityControls}
+              {renderFields([...SECTIONS[0].fields.slice(0, 3), SECTIONS[0].fields.find(field => field.name === 'role')])}
             </div>
           </div>
           {listSection('stats')}
@@ -1429,6 +1454,7 @@ export default function CharacterDetailEditor({ entry, universeId = null, onPatc
                     <ArcFrameworkControls entry={entry} onPatch={onPatch} disabled={disabled} idPrefix={entry.id} />
                   </> : null}
                   {page.id === 'story' ? <>
+                    {proseSection('history')}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
                       {proseSection('framework')}
                       <div className="min-w-0 space-y-3">
@@ -1437,6 +1463,11 @@ export default function CharacterDetailEditor({ entry, universeId = null, onPatc
                       </div>
                     </div>
                     <PsychologySection entry={entry} onPatch={onPatch} disabled={disabled} />
+                    {storyExtra}
+                    {(typeof entry.firstAppearance === 'string' && entry.firstAppearance || Array.isArray(entry.missingFromProse) && entry.missingFromProse.length > 0) && <BoxedSection icon={BookOpen} label="Story evidence">
+                      {typeof entry.firstAppearance === 'string' && entry.firstAppearance && <p className="text-xs text-gray-400 whitespace-pre-wrap break-words">First appearance: {entry.firstAppearance}</p>}
+                      {(Array.isArray(entry.missingFromProse) ? entry.missingFromProse.filter(item => typeof item === 'string') : []).map((item, index) => <p key={`${index}-${item}`} className="text-xs text-gray-400 whitespace-pre-wrap break-words">{item}</p>)}
+                    </BoxedSection>}
                   </> : null}
                   {page.id === 'appearance' ? <>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
@@ -1453,6 +1484,7 @@ export default function CharacterDetailEditor({ entry, universeId = null, onPatc
                       </div>
                     </div>
                     {children}
+                    {typeof entry.prompt === 'string' && entry.prompt && <BoxedSection icon={Images} label="Production prompt"><p className="text-xs text-gray-400 whitespace-pre-wrap break-words">{entry.prompt}</p></BoxedSection>}
                   </> : null}
                   {page.id === 'voice' ? <>
                     <BoxedSection icon={Mic} label="Speech & delivery">
@@ -1462,7 +1494,8 @@ export default function CharacterDetailEditor({ entry, universeId = null, onPatc
                         placeholder="Project default voice" previewText={entry.name ? `Hi, I'm ${entry.name}. This is how I sound.` : undefined} />
                     </BoxedSection>
                     <VoiceCanonSection entry={entry} onPatch={onPatch} disabled={disabled} />
-                    <VoiceProfileSection universeId={universeId} entry={entry} disabled={disabled} />
+                    {contextLoading ? <p role="status" className="text-xs text-gray-400">Load the owning universe context to manage local voice profiles.</p>
+                      : <VoiceProfileSection universeId={universeId} entry={entry} disabled={disabled || actionsDisabled} />}
                   </> : null}
                 </div>
               ) : null}
