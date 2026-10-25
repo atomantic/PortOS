@@ -166,10 +166,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         if (!trace) return;
         const phases = Object.entries(trace.phases).map(([phase, row]) =>
           `${phase}=${Math.round(row.ms)}ms/${row.count} max=${Math.round(row.maxMs)}ms active=${row.active}`).join('; ');
-        console.log(`⏱️ merged-receipt ${trace.entryPoint} ${state}: ${Math.round(performance.now() - trace.started)}ms; ${phases}`);
+        process.stderr.write(`⏱️ merged-receipt ${trace.entryPoint} ${state}: ${Math.round(performance.now() - trace.started)}ms; ${phases}\n`);
       };
       const failed = Boolean(task.result?.errors?.length);
-      const fixtureReport = () => console.log(`⏱️ retirement fixture: ${owned.summary()}`);
+      // CI's quiet setup replaces console methods, including on failed tests.
+      const fixtureReport = () => process.stderr.write(`⏱️ retirement fixture: ${owned.summary()}\n`);
       if (failed) { report('before-settlement'); fixtureReport(); }
       // Vitest's deadline rejects its wrapper, not the async fixture. Never erase
       // the repo while archive/proof/removal work from this exact case is running.
@@ -178,7 +179,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         if (failed || process.env.PORTOS_PROFILE_HELD_RECEIPT === '1') report('settled');
         if (failed || process.env.PORTOS_PROFILE_RETIREMENT_FIXTURE === '1') fixtureReport();
         receiptTiming.current = null;
-        if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+        if (scratch) {
+          try { await owned.run('scratch-removal', () => rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })); }
+          catch (error) { await owned.drain(); fixtureReport(); throw error; }
+        }
       }
     });
   });

@@ -51,12 +51,16 @@ beforeEach(async () => {
 });
 afterEach(({ task }) => {
   return owned.cleanup(async () => {
-    const report = () => console.log(`⏱️ exact-delivery fixture: ${owned.summary()}`);
+    // CI's quiet setup replaces console methods, including on failed tests.
+    const report = () => process.stderr.write(`⏱️ exact-delivery fixture: ${owned.summary()}\n`);
     if (task.result?.errors?.length) report();
     try { await owned.drain(); }
     finally {
       if (task.result?.errors?.length || process.env.PORTOS_PROFILE_RETIREMENT_FIXTURE === '1') report();
-      if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 3 });
+      if (scratch) {
+        try { await owned.run('scratch-removal', () => rm(scratch, { recursive: true, force: true, maxRetries: 3 })); }
+        catch (error) { await owned.drain(); report(); throw error; }
+      }
     }
   });
 });
