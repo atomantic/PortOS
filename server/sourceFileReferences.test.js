@@ -12,8 +12,8 @@
  * Placeholder examples (stem of one character, or foo|bar|baz|example) are
  * skipped. There is no allowlist: fix the path or drop the citation.
  */
+import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -46,9 +46,7 @@ export function findBrokenReferences(src, tracked) {
   return broken;
 }
 
-const gitFiles = () => execFileSync('git', ['ls-files'], {
-  cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
-}).split('\n').filter(Boolean);
+const gitFiles = () => trackedFiles(REPO_ROOT);
 
 describe('source file references (#12408)', () => {
   it('flags a moved path and ignores placeholder examples', () => {

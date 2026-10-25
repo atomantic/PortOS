@@ -45,9 +45,9 @@
  *   - Awaits inside a nested `async` function body are not the spawning
  *     function's yield point and are skipped.
  */
+import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -197,11 +197,7 @@ export function findLateChildListeners(src) {
   return offenders;
 }
 
-const trackedServerSources = () => execFileSync('git', ['ls-files', '*.js', '*.mjs', '*.cjs'], {
-  cwd: SERVER_ROOT,
-  encoding: 'utf8',
-  maxBuffer: 64 * 1024 * 1024,
-}).split('\n').filter((f) => f && !f.includes('.test.'));
+const trackedServerSources = () => trackedFiles(SERVER_ROOT, ['*.js', '*.mjs', '*.cjs']).filter((f) => f && !f.includes('.test.'));
 
 describe('spawned children get a terminal listener before the next await (#11761)', () => {
   it('scans the server tree, every module extension included', () => {

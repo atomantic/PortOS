@@ -1,8 +1,8 @@
+import { trackedFiles } from '../../scripts/lib/trackedFiles.js';
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from './childProcess.js';
 import {
   QWEN_AGENT_PARSERS,
   QWEN_AGENT_RUNTIMES,
@@ -91,12 +91,7 @@ describe('qwen parser spellings live only in the table', () => {
     // Acceptance criterion of #4778: the SGLang runtime (#4776) and the vLLM
     // guided install (#4767) must import this table instead of retyping the
     // string. Scoped to git-tracked JS so scratch files never flake it.
-    const tracked = execFileSync('git', ['ls-files', '*.js', '*.jsx', '*.cjs', '*.mjs'], {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-    })
-      .split('\n')
-      .filter(Boolean);
+    const tracked = trackedFiles(REPO_ROOT, ['*.js', '*.jsx', '*.cjs', '*.mjs']);
     const allowed = new Set(['server/lib/qwenAgentParsers.js', 'server/lib/qwenAgentParsers.test.js']);
     const offenders = tracked.filter((rel) => {
       if (allowed.has(rel)) return false;

@@ -6,8 +6,8 @@
  * aligned with that owner. CI runs the preferred Node 26 line, while a
  * dedicated minimum job exercises the lower supported Node 22 line.
  */
+import { trackedFiles } from './lib/trackedFiles.js';
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
@@ -103,12 +103,7 @@ describe('Node version contract has exactly one owner (issue #3863)', () => {
     });
 
     it('every CI setup-node pin is supported', () => {
-      const workflows = execFileSync('git', ['ls-files', '-z', '.github/workflows'], {
-        cwd: REPO_ROOT,
-        encoding: 'utf8',
-      })
-        .split('\0')
-        .filter(Boolean);
+      const workflows = trackedFiles(REPO_ROOT, ['.github/workflows']);
       const pinsIn = (body) =>
         [...body.matchAll(/node-version:\s*['"]?v?(\d+(?:\.[\dx]+)*)/g)].map((m) => m[1]);
       const pins = workflows.flatMap((rel) => pinsIn(read(rel)).map((pin) => ({ rel, pin })));

@@ -1,8 +1,8 @@
+import { trackedFiles } from '../../scripts/lib/trackedFiles.js';
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from './childProcess.js';
 
 /**
  * Checked-in generated manifests must be addressed by CONTENT, never by
@@ -97,10 +97,7 @@ const findPositionalReferences = (value, path = '$') => {
 // Memoized: this file is in ALWAYS_RUN_TESTS, so it runs on every CI job and
 // there is no reason to spawn git once per assertion.
 let tracked;
-const trackedManifests = () => (tracked ??= execFileSync('git', ['ls-files', '*.generated.json'], {
-  cwd: REPO_ROOT,
-  encoding: 'utf8',
-}).split('\n').filter(Boolean));
+const trackedManifests = () => (tracked ??= trackedFiles(REPO_ROOT, ['*.generated.json']));
 
 describe('checked-in generated manifests', () => {
   it('finds the manifests it is meant to guard', () => {
@@ -160,10 +157,7 @@ describe('checked-in generated manifests', () => {
   // which is the same "someone has to remember" problem this whole change set
   // exists to delete. This makes adoption structural instead.
   it('requires every generator to carry the position-invariance property test', () => {
-    const listed = execFileSync('git', ['ls-files', 'scripts/*.js'], {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-    }).split('\n').filter(Boolean);
+    const listed = trackedFiles(REPO_ROOT, ['scripts/*.js']);
     const tests = new Set(listed.filter((path) => path.endsWith('.test.js')));
 
     // Scope by what a script PRODUCES, not by what it is named. Keying off

@@ -74,9 +74,9 @@
  * recognizer below is timer-specific; keeping the rest shared is what stops the
  * two guards drifting on what "owns its rejection" means.
  */
+import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -117,11 +117,7 @@ export function findUnguardedTimerAwaits(src) {
 // Every module extension the tree actually ships, not just `.js`: the operator
 // scripts under `server/scripts/` are `.mjs`, and a `*.js`-only glob would
 // report the tree clean while one of them held an unguarded timer (#7953).
-const trackedServerSources = () => execFileSync('git', ['ls-files', '*.js', '*.mjs', '*.cjs'], {
-  cwd: SERVER_ROOT,
-  encoding: 'utf8',
-  maxBuffer: 64 * 1024 * 1024,
-}).split('\n').filter((f) => f && !f.includes('.test.'));
+const trackedServerSources = () => trackedFiles(SERVER_ROOT, ['*.js', '*.mjs', '*.cjs']).filter((f) => f && !f.includes('.test.'));
 
 describe('async timer callbacks own their rejections (#5668)', () => {
   it('scans the server tree', () => {

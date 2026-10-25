@@ -58,6 +58,7 @@
  * PortOS *generates* for someone else — `routes/apps/viteTls.js` emits exactly
  * that for a user's vite config — is correctly not treated as a PortOS setting.
  */
+import { existingPaths } from '../scripts/lib/trackedFiles.js';
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
@@ -125,14 +126,14 @@ const INHERITED_ENV = {
  * DIRECTORY on disk (mode 160000), which would blow the reader up. Its contents
  * are not tracked in this repo anyway.
  */
-const trackedFiles = (...args) => execFileSync('git', ['ls-files', '--stage', ...args], {
+const trackedFiles = (...args) => existingPaths(REPO_ROOT, execFileSync('git', ['ls-files', '--stage', ...args], {
   cwd: REPO_ROOT,
   encoding: 'utf8',
   maxBuffer: 64 * 1024 * 1024,
 }).split('\n').filter(Boolean).flatMap((line) => {
   const [meta, path] = line.split('\t');
   return meta.startsWith('160000 ') ? [] : [path];
-});
+}));
 
 /** Tracked, non-test server RUNTIME modules — the forward-scan surface. */
 const serverRuntimeSources = () => trackedFiles('server').filter((f) => (

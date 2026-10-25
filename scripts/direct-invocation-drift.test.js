@@ -11,8 +11,8 @@
  * likely to appear exactly where nobody thought to look. Reading the whole
  * tracked tree costs ~65ms, so scoping it any tighter buys nothing.
  */
+import { trackedFiles } from './lib/trackedFiles.js';
 import { describe, expect, it } from 'vitest';
-import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -22,8 +22,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 /** The helper itself compares the two by definition — it is the one owner. */
 const OWNER = 'scripts/lib/directInvocation.js';
 
-const scriptFiles = execFileSync('git', ['ls-files', '*.js'], { cwd: REPO_ROOT, encoding: 'utf8' })
-  .split('\n')
+const scriptFiles = trackedFiles(REPO_ROOT, ['*.js'])
   .filter((relativePath) => (
     relativePath
     && !relativePath.endsWith('.test.js')
