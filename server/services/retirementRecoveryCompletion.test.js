@@ -220,7 +220,8 @@ describe('retirement recovery public completion flow', () => {
   it('keeps delivery repair and ordinary code tasks on their applicable commit gates', async () => {
     await retire();
     store.task.metadata.recoveryMergeTarget = { branch: release.branch, url: 'https://github.com/example/repo/pull/1' };
-    expect(await verifyRetirementRecoveryCompletion(store.task)).toBeNull();
+    expect(await verifyRetirementRecoveryCompletion(store.task)).toMatchObject({ status: 'verified' });
+    expect(await settleRetirementReviewRun(store.agent)).toEqual({ verified: true });
     expect(await evaluateSuccessCriteria({ task: store.task, workspacePath: repo, startedAt: Date.now() + 1000, success: true })).toBe(false);
   });
 });

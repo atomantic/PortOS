@@ -6,9 +6,9 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { PR_COMPLETIONS, prStaysOpen } from '../lib/prDisposition.js';
 
 // A delivery-repair recovery still owns its PR/review/commit gates.
-export const isRetirementOnlyRecovery = task => task?.taskType === 'internal'
-  && task.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup'
-  && !!task.metadata?.retirementReview && !task.metadata?.recoveryMergeTarget;
+const hasRetirementTarget = task => task?.taskType === 'internal'
+  && task.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup' && !!task.metadata?.retirementReview;
+export const isRetirementOnlyRecovery = task => hasRetirementTarget(task) && !task.metadata?.recoveryMergeTarget;
 
 const unverified = (reason, target = null) => ({ status: 'unverified', reason, target });
 
@@ -17,7 +17,7 @@ const unverified = (reason, target = null) => ({ status: 'unverified', reason, t
  * No task prose, success report, ancestry or activity in the source repo counts.
  */
 export async function verifyRetirementRecoveryCompletion(input) {
-  if (!isRetirementOnlyRecovery(input)) return null;
+  if (!hasRetirementTarget(input)) return null;
   const { withClaimOwnershipLock } = await import('./cosClaimOwnership.js');
   return withClaimOwnershipLock(() => verifyCurrentRetirement(input))
     .catch(() => unverified('retirement-evidence-unreadable'));
@@ -28,8 +28,9 @@ async function verifyCurrentRetirement(input) {
   try {
     const { getTaskById } = await import('./cosTaskStore.js');
     const task = await getTaskById(input.id);
-    if (!isRetirementOnlyRecovery(task) || !isDeepStrictEqual(task.metadata.retirementReview, input.metadata.retirementReview)
-      || !isDeepStrictEqual(task.metadata.recoveryOrigin, input.metadata.recoveryOrigin)) return unverified('retirement-task-changed');
+    if (!hasRetirementTarget(task) || !isDeepStrictEqual(task.metadata.retirementReview, input.metadata.retirementReview)
+      || !isDeepStrictEqual(task.metadata.recoveryOrigin, input.metadata.recoveryOrigin)
+      || !isDeepStrictEqual(task.metadata.recoveryMergeTarget, input.metadata.recoveryMergeTarget)) return unverified('retirement-task-changed');
     target = task.metadata.retirementReview;
     const { release, appId, createdAt } = target;
     if (!appId || !release?.branch || !release.path || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(release.head || '')
