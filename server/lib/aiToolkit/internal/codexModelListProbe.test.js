@@ -66,6 +66,7 @@ describe('probeCodexModelsViaAppServer', () => {
     spawn.mockReturnValue(child);
     const promise = probeCodexModelsViaAppServer('codex', ['app-server'], null, { includeDetails: true, cwd: '/tmp' });
     const reply = (id, result) => child.stdout.emit('data', `${JSON.stringify({ id, result })}\n`);
+    expect(spawn.mock.calls.at(-1)[2]).toMatchObject({ cwd: '/tmp', env: { PWD: '/tmp' } });
     reply(1, {});
     reply(3, { account: { type: 'chatgpt' } });
     reply(4, { requirements: { featureRequirements: { fast_mode: false } } });

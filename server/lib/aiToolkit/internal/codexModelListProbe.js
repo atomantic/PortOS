@@ -31,6 +31,8 @@ export function probeCodexModelsViaAppServer(command, args, provider, options = 
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const label = options.label ?? `'${command} ${args.join(' ')}'`;
   const childEnv = { ...process.env, ...provider?.envVars };
+  // The standalone toolkit cannot import PortOS's spawnCwd helper.
+  if (options.cwd) childEnv.PWD = options.cwd;
   return new Promise((resolve, reject) => {
     let settled = false;
     let child;
