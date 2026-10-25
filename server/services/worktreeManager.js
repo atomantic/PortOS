@@ -1597,7 +1597,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
   const ignoredPaths = [DONE_SENTINEL_NAME, ...doneSentinelCandidateNames(agentId)];
   const preserve = async () => {
     const { releaseCheckoutWithoutArchive } = await import('./heldCheckoutRecovery.js');
-    return releaseCheckoutWithoutArchive({ repoPath: sourceWorkspace, path: worktreePath, branch: branchName, ignoredPaths }, async () => {
+    return releaseCheckoutWithoutArchive({ repoPath: sourceWorkspace, path: worktreePath, branch: branchName, ignoredPaths, retainValidationEvidence: true }, async () => {
       const tree = (await listWorktrees(sourceWorkspace)).find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath));
       const detached = Boolean(await detachedCheckout());
       if (!tree || (detached ? !tree.detached || tree.branch : tree.branch !== `refs/heads/${branchName}`)) throw new Error('worktree-holder-changed');
@@ -1608,6 +1608,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
       const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path).catch(() => null);
       return {
         head: tree.head, path: tree.path, branch: detached ? null : branchName,
+        integrationTarget: mergeTarget ? (await execGit(['rev-parse', '--verify', `${mergeTarget}^{commit}`], sourceWorkspace)).stdout.trim() : null,
         ...(checkoutIdentity && { checkoutIdentity }),
         verify: async holder => {
           if (!holder || holder.head !== tree.head || Boolean(holder.detached) !== Boolean(tree.detached)) return 'worktree-holder-changed';
@@ -1837,6 +1838,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     finish: async (preservation) => {
       const removal = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
         verifyRemoval: preservation.verify,
+        preservedFiles: preservation.preservedFiles,
         ignoredPaths,
         label: `Worktree remove failed for ${agentId}, falling back to manual cleanup`,
         log: 'all',

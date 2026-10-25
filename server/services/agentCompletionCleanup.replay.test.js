@@ -213,6 +213,20 @@ describe('durable post-ingestion cleanup replay', () => {
     expect((await saved()).metadata.completionCleanup).toMatchObject({ status: 'pending', stages: { worktree: { status: 'held' } } });
   });
 
+  it('rechecks a held checkout immediately after release without replaying completed handoffs', async () => {
+    cleanupAgentWorktree.mockResolvedValueOnce(['Original execution still owns the checkout']).mockResolvedValue([]);
+    await finish();
+    const held = await saved();
+    expect(held.metadata.completionCleanup.stages.worktree).toMatchObject({ status: 'held', retryable: false });
+    const handoffs = updateTask.mock.calls.length;
+    await Promise.all([replayAgentCompletionCleanup(held), replayAgentCompletionCleanup(held)]);
+    expect(cleanupAgentWorktree).toHaveBeenCalledTimes(2);
+    expect(updateTask).toHaveBeenCalledTimes(handoffs);
+    expect((await saved()).metadata.completionCleanup).toMatchObject({ status: 'completed', stages: { worktree: { status: 'done' } } });
+    await replayAgentCompletionCleanup(await saved());
+    expect(cleanupAgentWorktree).toHaveBeenCalledTimes(2);
+  });
+
   it('never acknowledges a replacement or sends its checkout to cleanup', async () => {
     await writeFile(marker, 'replacement generation');
     await finish();

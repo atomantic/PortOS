@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 // maybeCreateInvestigationTask → createInvestigationTask → addTask does real
 // store I/O; stub it so the skip-vs-create gate can be asserted in isolation.
 // getAllTasks feeds the fingerprint dedup scan (#2615).
+vi.mock('./cosState.js', () => ({ getConfig: vi.fn().mockResolvedValue({ autoApproveInvestigations: true }) }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn().mockResolvedValue('fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./cosTaskStore.js', () => ({ addTask: vi.fn(), updateTask: vi.fn(), getAllTasks: vi.fn() }));
 
@@ -34,6 +35,7 @@ import { PII_PATTERNS } from '../lib/piiRedactionPatterns.js';
 import { detectImmediateFallbackSignal } from '../lib/aiToolkit/errorDetection.js';
 import { API_ACCESS_ERROR_CATEGORIES } from './agentErrorAnalysis.js';
 import { ENVIRONMENTAL_ERROR_CATEGORIES } from './taskLearning/metrics.js';
+import { getConfig } from './cosState.js';
 import { addTask, updateTask, getAllTasks } from './cosTaskStore.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks } from '../lib/taskParser.js';
@@ -1003,7 +1005,7 @@ describe('createInvestigationTask approval wiring (#3714)', () => {
     await createInvestigationTask('agent-original', { ...failedTask, taskType: 'internal' },
       { ...analysis, blockedSystemRecovery: true });
     expect(addTask.mock.calls[0][0]).toMatchObject({ targetInstanceId: 'fixture-local',
-      metadata: { preserveOriginalBudget: true, blockedSystemRecovery: true } });
+      metadata: { preserveOriginalBudget: true, blockedSystemRecovery: true }, approvalRequired: false });
     const body = addTask.mock.calls[0][0].description;
     expect(body).toContain('Resolve the affected work');
     expect(body).toContain('regression tests');
@@ -1011,6 +1013,18 @@ describe('createInvestigationTask approval wiring (#3714)', () => {
     expect(body).toContain('reuse an active fix');
     expect(body).toContain('without inventing a code defect');
     expect(body).toContain('original work, approvals and retry/spawn budgets');
+  });
+
+  it.each(['disabled', 'unreadable'])('requires approval for system recovery when the setting is %s', async mode => {
+    if (mode === 'disabled') getConfig.mockResolvedValueOnce({ autoApproveInvestigations: false });
+    else getConfig.mockRejectedValueOnce(new Error('configuration unavailable'));
+    await createInvestigationTask('agent-original', { ...failedTask, taskType: 'internal' },
+      { ...analysis, blockedSystemRecovery: true });
+    expect(addTask.mock.calls[0][0]).toMatchObject({ approvalRequired: true,
+      approvalReason: 'system-investigation-approval-required', targetInstanceId: 'fixture-local',
+      metadata: { preserveOriginalBudget: true, blockedSystemRecovery: true } });
+    expect(addTask.mock.calls[0][0].description).toContain('Approve this scoped investigation');
+    expect(addTask.mock.calls[0][0].description).not.toContain('undefined');
   });
 
   it('defers repeated system diagnosis instead of creating another blocked approval card', async () => {
