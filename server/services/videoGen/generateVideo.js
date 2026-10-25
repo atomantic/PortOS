@@ -77,6 +77,7 @@ import {
   resolveVideoDraftDecoder,
 } from '../../lib/videoDraftDecoders.js';
 import { isDefaultVideoStreamingMode } from '../../lib/videoStreamingMode.js';
+import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
 import { extendLatentFrames, supportsContextWindow } from '../../lib/videoContinuity.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 // Re-export the extracted runtime + history surface so existing deep imports
@@ -511,8 +512,23 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
   const speedProfileMode = inferEffectiveVideoMode({
     mode, keyframes, sourceImagePath, extendFromVideoPath, audioFilePath,
   });
-  const speedProfile = resolveVideoSpeedProfile({ model, profileId: speedProfileId, mode: speedProfileMode });
+  let speedProfile = resolveVideoSpeedProfile({ model, profileId: speedProfileId, mode: speedProfileMode });
+  if (isMiniMaxH3SpeedProfileRequest(speedProfileId)) {
+    const { prepareMiniMaxH3SpeedProfile } = await import('./ensureWeights.js');
+    speedProfile = await prepareMiniMaxH3SpeedProfile({
+      model, profileId: speedProfileId, mode: speedProfileMode,
+      width: w, height: h, steps, guidanceScale,
+      keyframes, lastImagePath, extendFromVideoPath, audioFilePath,
+    }, await getSettings());
+  }
+  if (model.runtime === 'minimax_h3_cuda' && resolvedLoras.length) {
+    const { validateMiniMaxH3CudaLoras } = await import('./ensureWeights.js');
+    await validateMiniMaxH3CudaLoras(resolvedLoras, speedProfile);
+  }
   const speedProfileDeclined = speedProfile ? null : speedProfileDeclineReason({ model, profileId: speedProfileId, mode: speedProfileMode });
+  if (speedProfileDeclined && model.runtime === 'minimax_h3_cuda') {
+    throw new ServerError(speedProfileDeclined.message, { status: 400, code: speedProfileDeclined.code });
+  }
   if (speedProfileDeclined) {
     console.log(`⚠️ Speed profile declined [${jobId.slice(0, 8)}] ${speedProfileDeclined.code}: ${speedProfileDeclined.message}`);
   }
@@ -523,7 +539,9 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
   let actualGuidance = sampler.guidance;
   let actualStage2Steps = sampler.stage2Steps;
   if (speedProfile) {
-    console.log(`⚡ Speed profile "${speedProfile.id}" [${jobId.slice(0, 8)}]: ${actualSteps}+${actualStage2Steps} steps, cfg ${actualGuidance}${speedProfile.teacache ? ', teacache' : ''}`);
+    const schedule = speedProfile.denoisingSteps != null
+      ? `${speedProfile.denoisingSteps} updates (${actualSteps} sigma points)` : `${actualSteps}+${actualStage2Steps} steps`;
+    console.log(`⚡ Speed profile "${speedProfile.id}" [${jobId.slice(0, 8)}]: ${schedule}, cfg ${actualGuidance}${speedProfile.teacache ? ', teacache' : ''}`);
   }
   // Opt-in T2V Standard two-stage perf experiment — overrides steps/guidance
   // (and adds an explicit stage-2 step count) only for a plain default text

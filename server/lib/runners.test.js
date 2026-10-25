@@ -179,10 +179,10 @@ describe('isMiniMaxH3Runtime', () => {
     (runtime) => { expect(isMiniMaxH3Runtime(runtime)).toBe(false); },
   );
 
-  it('does not grant the CUDA runtime a LoRA family — the diffusers path has no applicator', () => {
+  it('grants the CUDA runtime a LoRA family only after its own adapter probe passed', () => {
     expect(videoLoraFamily({ runtime: 'minimax_h3_cuda' })).toBe(null);
-    // Not even when a stale/synced payload claims the MLX port's probe verdict.
-    expect(videoLoraFamily({ runtime: 'minimax_h3_cuda', runtimeLoraCapable: true })).toBe(null);
+    expect(videoLoraFamily({ runtime: 'minimax_h3_cuda', runtimeLoraCapable: false })).toBe(null);
+    expect(videoLoraFamily({ runtime: 'minimax_h3_cuda', runtimeLoraCapable: true })).toBe(VIDEO_LORA_FAMILIES.MINIMAX_H3);
   });
 });
 

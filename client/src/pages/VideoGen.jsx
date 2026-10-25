@@ -78,7 +78,7 @@ import ModelSelect from '../components/ModelSelect';
 import { FormField } from '../components/ui/FormField';
 import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../components/media/ModelDownloadBadge';
-import { useDownloadableAssets, useModelDownloadStatus, TEXT_ENCODER_DOWNLOAD_ID, textEncoderDownloadId } from '../hooks/useModelDownloadStatus';
+import { useDownloadableAssets, useModelDownloadStatus, TEXT_ENCODER_DOWNLOAD_ID, textEncoderDownloadId, speedProfileDownloadId } from '../hooks/useModelDownloadStatus';
 import TextEncoderPicker from '../components/videoGen/TextEncoderPicker';
 import { useMediaJobSse } from '../hooks/useMediaJobSse';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
@@ -828,6 +828,9 @@ export default function VideoGen() {
   // pull before hitting Render.
   const modelDownload = useModelDownloadStatus({ kind: 'video' });
   const modelStatus = modelId ? modelDownload.getStatus(modelId) : null;
+  const selectedH3SpeedProfile = currentModel?.speedProfiles?.find((p) => p.id === speedProfileId && p.type === 'minimax-h3-lightx2v');
+  const speedProfileAssetId = selectedH3SpeedProfile ? speedProfileDownloadId(modelId, speedProfileId) : null;
+  const speedProfileStatus = speedProfileAssetId ? modelDownload.getStatus(speedProfileAssetId) : null;
   const usesSharedTextEncoder = currentModel?.runtime === 'mlx_video' || currentModel?.runtime === 'ltx2';
   const textEncoderInfo = modelDownload.extra.textEncoder || null;
   const textEncoderStatus = textEncoderInfo
@@ -870,6 +873,11 @@ export default function VideoGen() {
       applies: true, extraBlocked: statusLoading || !modelId || !currentModel,
       status: modelStatus, keyPrefix: modelId,
       name: currentModel?.name || modelId, repairLabel: 'Repair model',
+    },
+    {
+      key: 'speed-profile', id: speedProfileAssetId, label: 'LightX2V adapter',
+      applies: !!speedProfileAssetId, status: speedProfileStatus, keyPrefix: speedProfileAssetId,
+      name: 'The LightX2V v1.3 adapter', repairLabel: 'Download adapter again',
     },
     {
       key: 'shared-encoder', id: TEXT_ENCODER_DOWNLOAD_ID, label: 'shared text encoder',
@@ -1978,6 +1986,11 @@ export default function VideoGen() {
               steps={steps} onStepsChange={setSteps}
               guidanceScale={guidanceScale} onGuidanceScaleChange={setGuidanceScale}
               speedProfileId={speedProfileId} onSpeedProfileChange={setSpeedProfileId}
+              speedProfileStatus={speedProfileStatus}
+              onSpeedProfileDownload={() => modelDownload.start(speedProfileAssetId, { force: true })}
+              width={width} height={height}
+              onCancelSpeedProfileDownload={modelDownload.cancel}
+              speedProfileDownloadError={modelDownload.lastError?.modelId === speedProfileAssetId ? modelDownload.lastError.message : null}
               draftDecode={draftDecode} onDraftDecodeChange={setDraftDecode}
               draftDecodeLocked={deliveryModelSelected}
               streamingMode={streamingMode} onStreamingModeChange={setStreamingMode}

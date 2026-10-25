@@ -14,6 +14,7 @@ import {
   isDefaultI2vReferenceMode, normalizeI2vReferenceMode,
 } from '../../lib/videoReferenceModes.js';
 import { isDefaultVideoStreamingMode } from '../../lib/videoStreamingMode.js';
+import { miniMaxH3SpeedProfileDeclineReason } from '../../lib/minimaxH3SpeedProfiles.js';
 import { extendLatentFrames } from '../../lib/videoContinuity.js';
 import { videoLoraLayoutIssue } from '../../lib/safetensors.js';
 import { formatLoraEffect, loraEffectIssue } from '../../lib/loraEffect.js';
@@ -197,7 +198,7 @@ export const resolveVideoLoras = async (loras, { probeEffect = false, runtime = 
       throw new ServerError(`LoRA not found: ${l.filename}`, { status: 400, code: 'LORA_NOT_FOUND' });
     }
     const layout = await getLoraKeyLayout(l.filename);
-    const issue = runtime === 'minimax_h3' && layout !== 'not_a_lora'
+    const issue = ['minimax_h3', 'minimax_h3_cuda'].includes(runtime) && layout !== 'not_a_lora'
       ? null
       : videoLoraLayoutIssue(layout);
     if (issue) {
@@ -898,7 +899,7 @@ const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numF
 // transformer, conditioner, both VAEs and the schedulers in the model's own
 // `repo`, so the file list rides on `repoFiles` and there is no separate
 // upstream-checkpoint dependency to resolve.
-const buildMiniMaxH3CudaArgs = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath }) => {
+const buildMiniMaxH3CudaArgs = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, loras, speedProfile }) => {
   assertMiniMaxH3Preflight({
     runtimeId: 'minimax_h3_cuda',
     repoLabel: 'repo or revision',
@@ -931,6 +932,16 @@ const buildMiniMaxH3CudaArgs = ({ model, prompt, negativePrompt, width, height, 
     ...miniMaxH3HostMemoryArgs(model),
   ];
   for (const file of files) args.push('--repo-file', file);
+  if (speedProfile) {
+    const reason = miniMaxH3SpeedProfileDeclineReason({ model, profileId: speedProfile.id, mode,
+      width, height, steps, keyframes, lastImagePath, extendFromVideoPath, audioFilePath });
+    if (reason) throw new ServerError(reason.message, { status: 400, code: reason.code });
+    if (!speedProfile.adapterPath) {
+      throw new ServerError('LightX2V adapter was not resolved from the pinned cache.', { status: 400, code: 'MINIMAX_H3_SPEED_WEIGHTS_NOT_CACHED' });
+    }
+    args.push('--speed-profile', speedProfile.id, '--speed-adapter', speedProfile.adapterPath);
+  }
+  for (const lora of loras || []) args.push('--lora', lora.path, '--lora-scale', String(lora.strength));
   // A user-pinned offload recipe from data/media-models.json. Omitted, the
   // helper sizes one from the card's own VRAM — the right default, since the
   // registry entry is shared across every install that syncs it and can't know
@@ -1192,7 +1203,7 @@ export const buildArgs = ({ upscale, pythonPath, modelId, model, wanModelPath, f
   // Defense-in-depth: LoRAs run only where videoLoraFamily() says they can —
   // ltx2 (handled above), a non-quantized LTX-2.x mlx_video model (the wrapper
   // below), or a minimax_h3 checkout whose probe proved a quant-aware
-  // applicator. All of those macOS/mlx-only. The route already rejects the rest,
+  // applicator (including CUDA's separately probed adapter). The route rejects the rest,
   // but a non-route caller (test, queue replay) — or a Windows install with a
   // hand-edited/synced entry — could reach here. Fail clearly rather than fall
   // through to the generate_win.py branch below, which would silently drop the
@@ -1225,7 +1236,7 @@ export const buildArgs = ({ upscale, pythonPath, modelId, model, wanModelPath, f
     return buildMiniMaxH3Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder, draftDecoder });
   }
   if (model.runtime === 'minimax_h3_cuda') {
-    return buildMiniMaxH3CudaArgs({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath });
+    return buildMiniMaxH3CudaArgs({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, loras, speedProfile });
   }
   if (model.runtime === 'minimax_h3_ref2va') {
     return buildMiniMaxH3Ref2vaArgs({

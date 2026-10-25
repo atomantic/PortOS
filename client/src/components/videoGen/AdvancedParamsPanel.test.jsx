@@ -348,6 +348,35 @@ describe('AdvancedParamsPanel — reference mode before the model catalog loads'
 // reachable without hand-tuning steps/CFG — and so it is NEVER offered where
 // the server would decline it, which would be a dead speed affordance.
 describe('AdvancedParamsPanel — speed profiles', () => {
+  const H3_PROFILE = { id: 'h3-speed', type: 'minimax-h3-lightx2v', name: 'LightX2V experimental',
+    description: 'No measured speed claim.', steps: 5, guidance: 0, modes: ['text', 'image'],
+    canvases: [[1344, 768]], videoShift: 6, audioShift: 3,
+    adapter: { file: 'example-speed.safetensors', alpha: 8, rank: 128 } };
+  const h3 = { runtime: 'minimax_h3_cuda', samplerLocked: true, steps: 8, guidance: 0,
+    supportedModes: ['text', 'image', 'fflf'], speedProfiles: [H3_PROFILE] };
+
+  it('offers an explicit H3 profile on a locked stock sampler and downloads only on a click', () => {
+    const onDownload = vi.fn();
+    renderPanel({ currentModel: h3, speedProfileId: H3_PROFILE.id,
+      speedProfileStatus: { cached: false }, onSpeedProfileDownload: onDownload, width: 1344, height: 768 });
+    expect(screen.getByLabelText('Speed').value).toBe(H3_PROFILE.id);
+    expect(screen.getByText(/alpha 8\/rank 128/)).toBeTruthy();
+    expect(onDownload).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /download.*adapter/i }));
+    expect(onDownload).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText(/Steps/).disabled).toBe(true);
+  });
+
+  it('retains an incompatible H3 selection visibly and leaves Quality reachable', () => {
+    const onChange = vi.fn();
+    renderPanel({ currentModel: h3, mode: 'fflf', speedProfileId: H3_PROFILE.id, onSpeedProfileChange: onChange });
+    const select = screen.getByLabelText('Speed');
+    expect(select.value).toBe(H3_PROFILE.id);
+    expect(screen.getByRole('alert').textContent).toContain('1344×768');
+    fireEvent.change(select, { target: { value: 'quality' } });
+    expect(onChange).toHaveBeenCalledWith('quality');
+  });
+
   const FAST = {
     id: 'fast',
     name: 'Fast',

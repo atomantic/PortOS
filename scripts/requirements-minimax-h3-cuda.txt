@@ -12,7 +12,7 @@
 # it first, from the host's correct index (see WIN_TORCH_CUDA_INDEX in
 # server/lib/pythonSetup.js, and PORTOS_TORCH_CUDA_INDEX to override).
 
-diffusers==0.38.0
+diffusers==0.42.0
 
 # int8 weight-only quantization. This is what makes H3 fit a consumer card at
 # all: the bf16 transformer + Qwen3-VL conditioner are 133 GB together, and
@@ -28,7 +28,7 @@ transformers==5.15.0
 # that hands accelerate a downloaded snapshot screens the checkpoint indexes
 # itself first — scripts/_checkpoint_index_guard.py. Do not un-pin expecting a fix.
 accelerate==1.14.0
-huggingface_hub==1.27.0
+huggingface_hub==1.32.0
 
 # PyAV backs diffusers' encode_video() muxing of the joint video + audio output.
 av==18.1.0

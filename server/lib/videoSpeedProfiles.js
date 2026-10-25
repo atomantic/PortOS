@@ -4,7 +4,10 @@
  * A *speed profile* is a named, pre-validated sampler configuration a user can
  * pick instead of hand-tuning steps and CFG: it swaps the whole schedule at
  * once (stage-1 / stage-2 step counts, guidance, and runtime acceleration
- * levers like TeaCache) for a documented wall-time saving.
+ * levers like TeaCache). Measured claims are separate from experimental profiles.
+ * The separately typed H3 LightX2V contract is model/runtime/adapter-bound,
+ * overrides the stock lock only as a complete schedule, and refuses mismatches
+ * before admission. It has no measured PortOS speed claim (issue #13612).
  *
  * The relationship between a model and its profiles is DECLARED here — not
  * inferred from a runtime name — and attached to registry entries as
@@ -44,8 +47,8 @@
  *     silently applying numbers that mean nothing there.
  *   - **Sampler lock.** A `samplerLocked` entry pins its own validated
  *     schedule; a speed profile would be a second authority over the same
- *     dials, so the two are mutually exclusive by construction (asserted by
- *     `validateSpeedProfileTable`).
+ *     dials, so legacy LTX profiles and locks are mutually exclusive. Only the
+ *     complete pinned H3 contract may replace a locked stock schedule.
  *
  * Everything the RUNNER cannot promise ahead of time — is the pinned
  * `ltx_pipelines_mlx` new enough to accept `enable_teacache`? is the distilled
@@ -55,11 +58,14 @@
  * speed claim: the profile still renders (at its step schedule), the missing
  * lever is reported as `degraded`, and the history record says so.
  *
- * Pure module: no I/O, and no imports out to services (the one import is a
- * sibling lib constant).
+ * Pure module: no I/O or imports out to services.
  */
 
 import { LTX2_FAMILY_RUNTIMES } from './runners.js';
+import {
+  MINIMAX_H3_LIGHTX2V_PROFILE, isMiniMaxH3SpeedProfile, isMiniMaxH3SpeedProfileRequest,
+  isPinnedMiniMaxH3SpeedProfile, miniMaxH3SpeedProfileDeclineReason,
+} from './minimaxH3SpeedProfiles.js';
 
 /**
  * The implicit "unchanged" profile. Never resolves to an override.
@@ -96,6 +102,11 @@ export const TWO_STAGE_SPEED_PROFILE_MODES = Object.freeze(['text', 'image']);
  *   modes           modes the profile may resolve for
  */
 export const VIDEO_SPEED_PROFILES = Object.freeze({
+  minimax_h3_cuda: Object.freeze({
+    shippedRepo: MINIMAX_H3_LIGHTX2V_PROFILE.model.repo,
+    shippedRevision: MINIMAX_H3_LIGHTX2V_PROFILE.model.revision,
+    profiles: Object.freeze([MINIMAX_H3_LIGHTX2V_PROFILE]),
+  }),
   // LTX-2.5 Q8. The step schedule here is NOT invented: it is the same
   // 8 stage-1 / 3 stage-2 / CFG 1.0 configuration the env-gated
   // PORTOS_T2V_TWO_STAGE experiment measured at ~30-35% off wall time
@@ -197,12 +208,14 @@ export const findVideoSpeedProfile = (model, id) => (
  * Why a requested profile could not be applied — a machine-readable reason plus
  * a sentence the UI/log can show verbatim. `null` when the profile applies.
  *
- * Returned rather than thrown: the render still proceeds at the model's own
- * default sampler. The point of the feature is an honest fallback, not a 400
- * on a knob that only ever makes a render faster.
+ * Returned rather than thrown. Legacy LTX callers may retain their documented
+ * fallback; H3 callers propagate the reason as a refusal, without fallback.
  */
 export const speedProfileDeclineReason = ({ model, profileId, mode }) => {
   if (isDefaultSpeedProfile(profileId)) return null;
+  if (isMiniMaxH3SpeedProfileRequest(profileId)) {
+    return miniMaxH3SpeedProfileDeclineReason({ model, profileId, mode });
+  }
   if (model?.samplerLocked === true) {
     return {
       code: 'SPEED_PROFILE_SAMPLER_LOCKED',
@@ -245,6 +258,7 @@ export const resolveVideoSpeedProfile = ({ model, profileId, mode }) => {
   if (speedProfileDeclineReason({ model, profileId, mode })) return null;
   const profile = findVideoSpeedProfile(model, profileId);
   if (!profile) return null;
+  if (isMiniMaxH3SpeedProfile(profile)) return isPinnedMiniMaxH3SpeedProfile(model, profile) ? profile : null;
   return {
     id: profile.id,
     steps: profile.steps,
@@ -335,6 +349,9 @@ export const speedProfileDeclineReasonForModes = ({ model, profileId, modes }) =
  * construction instead of by two copies of the same rule.
  */
 export const resolveVideoSampler = ({ model, steps, guidanceScale, speedProfile = null }) => {
+  if (isMiniMaxH3SpeedProfile(speedProfile)) {
+    return { steps: speedProfile.steps, guidance: speedProfile.guidance, stage2Steps: null };
+  }
   if (model?.samplerLocked === true) {
     return { steps: model.steps, guidance: model.guidance, stage2Steps: null };
   }
@@ -379,7 +396,9 @@ export const validateSpeedProfileTable = (list) => {
       fail(entry.id, null, 'speedProfiles must be an array');
       continue;
     }
-    if (entry.speedProfiles.length > 0 && entry.samplerLocked === true) {
+    const h3Profiles = entry.speedProfiles.length > 0
+      && entry.speedProfiles.every((profile) => isPinnedMiniMaxH3SpeedProfile(entry, profile));
+    if (entry.speedProfiles.length > 0 && entry.samplerLocked === true && !h3Profiles) {
       fail(entry.id, null, 'a samplerLocked model cannot also declare speedProfiles');
       continue;
     }
@@ -388,13 +407,17 @@ export const validateSpeedProfileTable = (list) => {
     // while TeaCache and the adapter silently would not — and no SPEEDPROFILE:
     // report would come back, so history would read as a FULL speed-up that
     // never happened. Refuse the declaration rather than ship that gap.
-    if (entry.speedProfiles.length > 0 && !LTX2_FAMILY_RUNTIMES.includes(entry.runtime)) {
+    if (entry.speedProfiles.length > 0 && !LTX2_FAMILY_RUNTIMES.includes(entry.runtime) && !h3Profiles) {
       fail(entry.id, null, `speedProfiles need an LTX-2-family runtime (got "${entry.runtime || 'none'}") — no other builder emits their flags`);
       continue;
     }
     const seen = new Set();
     for (const profile of entry.speedProfiles) {
       const pid = profile?.id;
+      if (isMiniMaxH3SpeedProfile(profile) && !isPinnedMiniMaxH3SpeedProfile(entry, profile)) {
+        fail(entry.id, pid, 'H3 speed profiles must match the complete pinned model/runtime/adapter/schedule contract');
+        continue;
+      }
       if (typeof pid !== 'string' || pid.length === 0) {
         fail(entry.id, pid ?? null, 'profile id must be a non-empty string');
         continue;
