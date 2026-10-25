@@ -43,7 +43,7 @@ export default function ExecutionOptionsSelect({ provider, model, value, onChang
         {descriptor?.values.map((setting) => <option key={setting} value={setting}>{setting.charAt(0).toUpperCase() + setting.slice(1)}</option>)}
       </select>
       <button type="button" className="text-xs text-port-accent mt-1" disabled={disabled || !!inspectionBlockedReason} onClick={() => setRefresh((current) => current + 1)}>Refresh capabilities</button>
-      <p className="text-xs text-gray-500 mt-1">{unsupported || !descriptor?.values.length ? capabilities?.reason || 'This saved option is unsupported or unverified for the selected route and model.' : descriptor?.help}</p>
+      {(unsupported || !descriptor?.values.length) && <p className="text-xs text-gray-500 mt-1">{capabilities?.reason || 'This saved option is unsupported or unverified for the selected route and model.'}</p>}
     </div>;
   });
 }
