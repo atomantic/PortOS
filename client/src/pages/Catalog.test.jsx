@@ -573,4 +573,13 @@ describe('Catalog page', () => {
       expect(btn.textContent.startsWith(visiblePrefix)).toBe(true);
     }
   });
+
+  it('renders section navigation tabs linking to Catalog, Casting, Environments, and Objects', async () => {
+    renderCatalog();
+    await act(async () => {});
+    expect(screen.getByRole('tab', { name: 'Catalog' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Casting' })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tab', { name: 'Environments' })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tab', { name: 'Objects' })).toHaveAttribute('aria-selected', 'false');
+  });
 });

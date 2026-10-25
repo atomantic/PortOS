@@ -1,6 +1,6 @@
 // Single source of truth for PortOS navigation. Consumed by the sidebar,
 // server/services/voice/tools.js#ui_navigate, and the Cmd+K palette.
-// Entry: { id, path, label, section, tabId?, tabGroup?, navGroup?, tabLabel?, aliases?, keywords?, previousPaths?, preservePreviousPathSuffix? }.
+// Entry: { id, path, label, section, tabId?, tabGroup?, navGroup?, parentPath?, tabLabel?, aliases?, keywords?, previousPaths?, preservePreviousPathSuffix? }.
 // See AGENTS.md "Command Palette & Voice Nav" for the contract.
 //
 // `previousPaths` lists every path this page has ANSWERED TO BEFORE — including
@@ -44,11 +44,11 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.catalog', path: '/catalog', label: 'Catalog', section: 'Create', aliases: ['catalog', 'ingredients', 'creative-catalog'], keywords: ['character', 'place', 'object', 'idea', 'scene', 'concept', 'inventory', 'reference', 'creative'] },
   { id: 'nav.catalog.ingest', path: '/catalog/ingest', label: 'Catalog Ingest', section: 'Create', aliases: ['catalog-ingest', 'ingest', 'paste-scrap', 'extract-ingredients'], keywords: ['paste', 'snippet', 'scene', 'idea', 'extract', 'scrap', 'import-catalog'] },
   { id: 'nav.catalog.settings', path: '/catalog?settings=1', label: 'Catalog Types', section: 'Create', previousPaths: ['/settings/catalog'], aliases: ['catalog settings', 'catalog-settings', 'settings-catalog', 'catalog-types'], keywords: ['catalog', 'types', 'labels', 'character', 'place', 'object', 'taxonomy'] },
-  { id: 'nav.create.casting', path: '/casting', label: 'Casting', section: 'Create', aliases: ['casting', 'cast', 'characters', 'actors', 'casting-sheets', 'cast-list'], keywords: ['character', 'casting sheet', 'turnaround', 'wardrobe', 'looks', 'performer', 'actor', 'reference'] },
+  { id: 'nav.create.casting', path: '/casting', label: 'Casting', section: 'Create', parentPath: '/catalog', aliases: ['casting', 'cast', 'characters', 'actors', 'casting-sheets', 'cast-list'], keywords: ['character', 'casting sheet', 'turnaround', 'wardrobe', 'looks', 'performer', 'actor', 'reference'] },
   // ⌘K / voice only — no sidebar row: reached from the Casting, Environments and Objects headers.
   { id: 'nav.create.casting-import', path: '/casting/import', label: 'Import Cast from Music Videos', section: 'Create', aliases: ['import-cast', 'cast-import', 'import-sets', 'backfill-cast'], keywords: ['music video', 'casting sheet', 'set plate', 'catalog', 'backfill', 'import'] },
-  { id: 'nav.create.environments', path: '/environments', label: 'Environments', section: 'Create', aliases: ['environments', 'environment', 'sets', 'locations', 'places', 'set-list'], keywords: ['place', 'set', 'location', 'clean plate', 'background', 'scene setting', 'reference'] },
-  { id: 'nav.create.objects', path: '/objects', label: 'Objects', section: 'Create', aliases: ['objects', 'props', 'prop-list', 'items'], keywords: ['object', 'prop', 'artifact', 'talisman', 'macguffin', 'reference'] },
+  { id: 'nav.create.environments', path: '/environments', label: 'Environments', section: 'Create', parentPath: '/catalog', aliases: ['environments', 'environment', 'sets', 'locations', 'places', 'set-list'], keywords: ['place', 'set', 'location', 'clean plate', 'background', 'scene setting', 'reference'] },
+  { id: 'nav.create.objects', path: '/objects', label: 'Objects', section: 'Create', parentPath: '/catalog', aliases: ['objects', 'props', 'prop-list', 'items'], keywords: ['object', 'prop', 'artifact', 'talisman', 'macguffin', 'reference'] },
   { id: 'nav.media', path: '/media', label: 'Media Gen', section: 'Create', aliases: ['media', 'media-gen', 'mediagen', 'generate'], keywords: ['image', 'video', 'render', 'art', 'movie'] },
   { id: 'nav.media.image', path: '/media/image', label: 'Image', section: 'Create', tabGroup: 'media', tabId: 'image', previousPaths: ['/image-gen'], aliases: ['image-gen', 'imagegen', 'generate-image', 'sd', 'stable-diffusion'], keywords: ['stable diffusion', 'render', 'art', 'picture', 'photo', 'draw', 'flux', 'mflux'] },
   { id: 'nav.media.video', path: '/video/generate', label: 'Generate Video', tabLabel: 'Video', section: 'Create', tabGroup: 'media', tabId: 'video', previousPaths: ['/video-gen', '/media/video'], aliases: ['video-gen', 'videogen', 'generate-video', 'ltx'], keywords: ['video', 'animate', 'movie', 'clip', 'ltx', 'episode composer', 'continuous video', 'multi-scene'] },
@@ -593,6 +593,14 @@ for (const cmd of NAV_COMMANDS) {
   }
   if (cmd.tabLabel !== undefined && (typeof cmd.tabLabel !== 'string' || !cmd.tabLabel.trim())) {
     throw new Error(`navManifest: tabLabel must be a non-empty string — got "${cmd.tabLabel}" for ${cmd.id}`);
+  }
+  if (cmd.parentPath !== undefined) {
+    if (typeof cmd.parentPath !== 'string' || !cmd.parentPath.startsWith('/')) {
+      throw new Error(`navManifest: parentPath must start with / — got "${cmd.parentPath}" for ${cmd.id}`);
+    }
+    if (!RAW_NAV_COMMANDS.some((c) => c.path === cmd.parentPath)) {
+      throw new Error(`navManifest: parentPath "${cmd.parentPath}" not found for ${cmd.id}`);
+    }
   }
   if (seenIds.has(cmd.id)) throw new Error(`navManifest: duplicate id ${cmd.id}`);
   seenIds.add(cmd.id);
