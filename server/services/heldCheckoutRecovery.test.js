@@ -3062,6 +3062,21 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
           sourceHead: release.head, deliveredHead, base: release.head, targetTree, sourceCommits: 0,
         } });
     }
+    if (scenario.startsWith('separate-')) {
+      // The real represented-head reader intentionally omits historical patch
+      // fields. Missing current-base objects still need a proof-bound fetch.
+      delete c.forge.changeBase; delete c.forge.firstCommit;
+      if (scenario === 'separate-incomplete') {
+        const remote = join(scratch, 'represented-proof-remote');
+        await execGit(['clone', '--no-hardlinks', repo, remote], scratch);
+        await execGit(['config', 'user.email', 'test@example.com'], remote);
+        await execGit(['config', 'user.name', 'Test'], remote);
+        await execGit(['commit', '--allow-empty', '-m', 'remote-only default advance'], remote);
+        c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
+        await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+        injected.fetchRemote = remote;
+      }
+    }
     injected.policies = [agent];
     let lineageControls = [];
     if (scenario === 'normal-resumed-lineage') {
@@ -3112,6 +3127,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       return;
     }
     expect(prepared.reason).toBeUndefined();
+    if (scenario === 'separate-incomplete') {
+      expect(injected.fetches).toHaveLength(1);
+      expect(injected.fetches[0].args).toContain(c.forge.defaultHead);
+      expect((await execGit(['rev-parse', 'main'], repo)).stdout.trim()).toBe(c.forge.mergeCommit);
+      expect(existsSync(join(repo, '.git', 'FETCH_HEAD'))).toBe(false);
+    }
     if (scenario === 'normal-resumed-lineage') {
       const detachedIdentity = await readRetirementCheckoutIdentity(path);
       expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [

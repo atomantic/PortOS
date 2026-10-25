@@ -1869,8 +1869,13 @@ export async function fetchRetirementProofObjects(repoPath, release, prUrl, expe
   }
   if (expectedHeadSha !== null && forge.prHead !== expectedHeadSha) return { ok: false, reason: 'receipt-pr-head-changed' };
   const exactDelivery = forge.scopeProof === 'exact-delivered-head' && forge.prHead === release.head && !opts.sourceSupersessionHead;
+  const representedDetached = !release.branch && !opts.sourceSupersessionHead
+    && forge.scopeProof === 'represented-detached-head' && forge.exactAliasHead === release.head
+    && forge.detachedRepresentation?.sourceHead === release.head
+    && forge.detachedRepresentation.deliveredHead === forge.prHead;
   const heads = [...new Set([forge.prHead, forge.mergeCommit, forge.targetHead ?? forge.defaultHead,
-    ...(exactDelivery ? [forge.defaultHead] : [forge.changeBase, forge.firstCommit])])];
+    ...(exactDelivery || representedDetached ? [forge.defaultHead] : [forge.changeBase, forge.firstCommit]),
+    ...(representedDetached ? [forge.detachedRepresentation.sourceHead, forge.detachedRepresentation.base] : [])])];
   if (heads.some(head => typeof head !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head))) {
     return { ok: false, reason: 'retirement-forge-unreadable' };
   }
