@@ -130,6 +130,7 @@ async function runAdmittedAgentSpawn(task, permit) {
       reason: setupError,
       category: optionRefusal ? PROVIDER_CONFIG_BLOCKED_CATEGORY : 'private-security-setup-failed',
       persist: privateSecurity || optionRefusal,
+      emit: optionRefusal ? null : 'agent:error',
     });
     if (task.metadata?.jobId) {
       cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId, reason: 'failed' });
