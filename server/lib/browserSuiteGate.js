@@ -48,7 +48,7 @@ export function browserSuiteBlockReason(prerequisites) {
   if (missing.length === 0 && failed.length === 0) return null;
   return [
     ...(missing.length ? [`missing ${missing.join(', ')}`] : []),
-    ...failed.map(([name, found]) => `${name} probe failed (${found.probeFailure})`),
+    ...failed.map(([name, found]) => `${name} probe failed (${found.probeFailure})${found.probeDiagnostics ? `; ${found.probeDiagnostics}` : ''}`),
   ].join('; ');
 }
 
@@ -75,14 +75,20 @@ const MAX_OUTPUT_BYTES = 64 * 1024;
 // Signals the probe's whole process group (it was spawned detached) so Chrome's
 // helper processes go with it; Windows takes the tree down with taskkill.
 function killProbeTree(child, signal, processGroup) {
-  if (IS_WIN32 && child.pid) {
-    spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' }).on('error', () => {}).unref();
-    return;
-  }
-  if (processGroup && child.pid) {
-    try { process.kill(-child.pid, signal); return; } catch { /* group already gone */ }
-  }
-  child.kill(signal);
+  try {
+    if (IS_WIN32 && child.pid) {
+      spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' }).on('error', () => {}).unref();
+      return 'requested';
+    }
+    let groupFailure = '';
+    if (processGroup && child.pid) {
+      try { process.kill(-child.pid, signal); return 'accepted'; }
+      catch (error) {
+        if (error.code !== 'ESRCH') groupFailure = ['EPERM', 'EACCES'].includes(error.code) ? `group-${error.code}/` : 'group-failed/';
+      }
+    }
+    return `${groupFailure}${child.kill(signal) ? 'accepted' : 'refused'}`;
+  } catch { return 'failed'; }
 }
 
 const PROBE_TIMEOUT_MS = 20000;
@@ -92,11 +98,16 @@ const PROBE_KILL_GRACE_MS = 5000;
 // deadline, and a SIGTERM -> SIGKILL ladder that waits for `close` so the
 // outcome says whether cleanup was actually observed. stderr is discarded, so
 // no raw browser output (paths, PIDs) can reach a caller.
-function runOwnedProbe(file, args, { timeoutMs, graceMs }) {
+function runOwnedProbe(file, args, { timeoutMs, graceMs, removeProfile }) {
   return new Promise((resolve) => {
     const processGroup = !IS_WIN32;
-    const child = spawn(file, args, { stdio: ['ignore', 'pipe', 'ignore'], detached: processGroup });
+    let child;
     const timers = [];
+    const started = performance.now();
+    const observed = { spawnMs: null, answerMs: null, exitMs: null, closeMs: null,
+      term: 'not-attempted', kill: 'not-attempted', childError: 'none' };
+    const elapsed = () => Math.max(0, Math.round(performance.now() - started));
+    const stamp = key => { observed[key] ??= elapsed(); };
     let stdout = '';
     let timedOut = false;
     let settled = false;
@@ -105,23 +116,49 @@ function runOwnedProbe(file, args, { timeoutMs, graceMs }) {
       if (settled) return;
       settled = true;
       timers.forEach(clearTimeout);
-      // Reap renderer/GPU helpers a slow-exiting Chrome may have left behind.
-      killProbeTree(child, 'SIGKILL', processGroup);
-      child.stdout?.destroy();
-      resolve({ stdout, timedOut, ...outcome });
+      // Preserve the private profile while this retained child can still write.
+      // A signal result or an error event alone is not terminal-event proof.
+      if (outcome.cleanupVerified) {
+        killProbeTree(child, 'SIGKILL', processGroup);
+        outcome.cleanupVerified = removeProfile();
+      }
+      child?.stdout?.destroy();
+      resolve({ stdout, timedOut, diagnostics: { ...observed, elapsedMs: elapsed(),
+        profile: outcome.cleanupVerified ? 'removed' : 'retained' }, ...outcome });
     };
+
+    try { child = spawn(file, args, { stdio: ['ignore', 'pipe', 'ignore'], detached: processGroup }); }
+    catch (error) {
+      observed.childError = ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code) ? error.code : 'other';
+      finish({ spawnErrorCode: error.code ?? 'UNKNOWN', cleanupVerified: true });
+      return;
+    }
 
     child.stdout.on('data', (chunk) => {
       stdout = (stdout + chunk).slice(-MAX_OUTPUT_BYTES);
+      if (/H264:(\w*)/.test(stdout)) stamp('answerMs');
     });
-    child.on('error', (error) => finish({ spawnErrorCode: error.code ?? 'UNKNOWN', cleanupVerified: true }));
-    child.on('close', (code, signal) => finish({ code, signal, cleanupVerified: true }));
+    child.on('spawn', () => stamp('spawnMs'));
+    child.on('exit', () => stamp('exitMs'));
+    child.on('error', (error) => {
+      observed.childError = ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code) ? error.code : 'other';
+      if (!child.pid) finish({ spawnErrorCode: error.code ?? 'UNKNOWN', cleanupVerified: true });
+    });
+    child.on('close', (code, signal) => {
+      stamp('closeMs');
+      if (settled) {
+        // An unverified timeout stays a failure even when cleanup finishes later.
+        if (!removeProfile()) console.error('❌ H.264 probe late profile removal failed');
+        return;
+      }
+      finish({ code, signal, cleanupVerified: true });
+    });
 
     timers.push(setTimeout(() => {
       timedOut = true;
-      killProbeTree(child, 'SIGTERM', processGroup);
+      observed.term = killProbeTree(child, 'SIGTERM', processGroup);
       timers.push(setTimeout(() => {
-        killProbeTree(child, 'SIGKILL', processGroup);
+        observed.kill = killProbeTree(child, 'SIGKILL', processGroup);
         timers.push(setTimeout(() => finish({ cleanupVerified: false }), graceMs));
       }, graceMs));
     }, timeoutMs));
@@ -138,37 +175,43 @@ function runOwnedProbe(file, args, { timeoutMs, graceMs }) {
  * - `teardown-failed` — Chrome answered but then exited nonzero or by signal;
  *   the codec answer is NOT trusted from a probe that did not shut down cleanly
  * - `no-answer` — Chrome did not report a codec verdict at all
- * Never rejects; the profile directory is removed once the child is settled.
+ * The profile is removed only after terminal-event proof; an unverified timeout
+ * retains it until that exact child eventually closes.
  */
 export async function probeChromeH264(chromePath, { timeoutMs = PROBE_TIMEOUT_MS, graceMs = PROBE_KILL_GRACE_MS } = {}) {
   if (!chromePath) return { ok: false, cause: 'missing-executable' };
   const profile = mkdtempSync(join(tmpdir(), 'portos-h264-probe-'));
-  try {
-    const run = await runOwnedProbe(chromePath, [
-      '--headless=new', '--disable-gpu', '--no-sandbox',
-      '--no-first-run', '--no-default-browser-check',
-      '--disable-background-networking', '--disable-component-update',
-      '--disable-sync', '--disable-breakpad',
-      '--password-store=basic', '--use-mock-keychain',
-      `--user-data-dir=${profile}`, '--virtual-time-budget=2000', '--dump-dom', H264_PROBE_PAGE,
-    ], { timeoutMs, graceMs });
-    if (run.spawnErrorCode) {
-      return { ok: false, cause: ['ENOENT', 'ENOTDIR'].includes(run.spawnErrorCode) ? 'missing-executable' : 'no-answer' };
-    }
-    if (run.timedOut) return { ok: false, cause: 'probe-timeout', timeoutMs, cleanupVerified: run.cleanupVerified };
-    const answer = /H264:(\w*)/.exec(run.stdout);
-    if (run.code !== 0) {
-      return { ok: false, cause: answer ? 'teardown-failed' : 'no-answer', exit: run.code ?? run.signal };
-    }
-    if (!answer) return { ok: false, cause: 'no-answer', exit: 0 };
-    return answer[1] ? { ok: true, chromePath } : { ok: false, cause: 'codec-unavailable' };
-  } finally {
-    rmSync(profile, { recursive: true, force: true });
+  let removed = false;
+  const removeProfile = () => {
+    if (removed) return true;
+    try { rmSync(profile, { recursive: true, force: true }); removed = true; return true; }
+    catch { return false; }
+  };
+  const run = await runOwnedProbe(chromePath, [
+    '--headless=new', '--disable-gpu', '--no-sandbox',
+    '--no-first-run', '--no-default-browser-check',
+    '--disable-background-networking', '--disable-component-update',
+    '--disable-sync', '--disable-breakpad',
+    '--password-store=basic', '--use-mock-keychain',
+    `--user-data-dir=${profile}`, '--virtual-time-budget=2000', '--dump-dom', H264_PROBE_PAGE,
+  ], { timeoutMs, graceMs, removeProfile });
+  const evidence = { cleanupVerified: run.cleanupVerified, diagnostics: run.diagnostics };
+  if (run.spawnErrorCode) {
+    return { ok: false, cause: ['ENOENT', 'ENOTDIR'].includes(run.spawnErrorCode) ? 'missing-executable' : 'no-answer', ...evidence };
   }
+  if (run.timedOut) return { ok: false, cause: 'probe-timeout', timeoutMs, ...evidence };
+  const answer = /H264:(\w*)/.exec(run.stdout);
+  if (run.code !== 0 || !run.cleanupVerified) {
+    return { ok: false, cause: answer ? 'teardown-failed' : 'no-answer', exit: run.code ?? run.signal, ...evidence };
+  }
+  if (!answer) return { ok: false, cause: 'no-answer', exit: 0, ...evidence };
+  return answer[1] ? { ok: true, chromePath } : { ok: false, cause: 'codec-unavailable' };
 }
 
+const describeProbePhases = diagnostics => `probe phases ${Object.entries(diagnostics).map(([key, value]) => `${key}=${value ?? 'unobserved'}`).join(' ')}`;
+
 /** One-line, path/PID-free description of a failed `probeChromeH264` result. */
-export function describeH264Probe({ cause, exit, timeoutMs, cleanupVerified }) {
+function describeProbeOutcome({ cause, exit, timeoutMs, cleanupVerified }) {
   switch (cause) {
     case 'missing-executable': return 'Chrome executable not found';
     case 'codec-unavailable': return 'Chrome reports no H.264 decode support';
@@ -178,6 +221,10 @@ export function describeH264Probe({ cause, exit, timeoutMs, cleanupVerified }) {
       return `Chrome answered the H.264 probe but then failed to shut down cleanly (exit ${exit}); a browser lifecycle failure, not a missing codec`;
     default: return `Chrome H.264 probe produced no codec answer${exit === undefined ? '' : ` (exit ${exit})`}`;
   }
+}
+
+export function describeH264Probe(result) {
+  return `${describeProbeOutcome(result)}${result.diagnostics ? `; ${describeProbePhases(result.diagnostics)}` : ''}`;
 }
 
 /**
@@ -192,6 +239,7 @@ export async function chromeWithH264(chromePath, options) {
   const result = await probeChromeH264(chromePath, options);
   if (result.ok) return result.chromePath;
   if (result.cause === 'missing-executable' || result.cause === 'codec-unavailable') return null;
-  return { probeFailure: result.cause === 'probe-timeout' && !result.cleanupVerified
+  return { ...(result.diagnostics ? { probeDiagnostics: describeProbePhases(result.diagnostics) } : {}),
+    probeFailure: result.cause === 'probe-timeout' && !result.cleanupVerified
     ? 'probe-timeout, cleanup unverified' : result.cause };
 }

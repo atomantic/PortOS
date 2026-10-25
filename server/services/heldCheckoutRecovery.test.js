@@ -2071,11 +2071,16 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const c = await reviewedCheckout('legacy', { superseded, gitlink: true });
     if (!superseded) expect(await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, c.opts))
       .toMatchObject({ ok: false, reason: 'pr-completion-review-required' });
+    // A stale stat cache must not let confirmation's own status read rewrite
+    // the private index and invalidate an otherwise unchanged scoped review.
+    await utimes(join(c.path, 'feature.txt'), new Date('2001-01-01'), new Date('2001-01-01'));
+    const index = await readFile(join(c.admin, 'index'));
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
+    expect(await readFile(join(c.admin, 'index'))).toEqual(index);
     expect(prepared.review.comparison.disposition).toBe('integrated');
     const result = await c.confirm(prepared.review);
-    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(result, `Confirmation refusal: ${result.reason ?? 'none'}`).toMatchObject({ ok: true, branchDeleted: true });
     expect(result.archiveDir).toBeUndefined();
     expect(existsSync(c.path)).toBe(false);
     expect(await archives()).toEqual([]);
