@@ -20,7 +20,7 @@ import { WORKSPACE_TEST_CACHE_ROOTS } from '../lib/workspaceTestCacheRoots.js';
 import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { realpathSync, constants } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
-import { lstat, stat, realpath, readlink, readdir, opendir, readFile, chmod, open, mkdtemp } from 'node:fs/promises';
+import { lstat, stat, realpath, readlink, readdir, opendir, readFile, chmod, open, mkdtemp, unlink, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve, relative, sep } from 'node:path';
@@ -675,6 +675,7 @@ async function integratedPolicyReviewIdentity(repoPath, release, prUrl, forge, a
 }
 
 const reviewForgeOptions = (release, kind, opts) => ({ forgeAccount: opts.forgeAccount,
+  ...(!kind && { exactDeliveredHead: release.head }),
   ...(!release.branch && { exactAliasHead: release.head }),
   ...(kind === 'source-supersession' && { sourceSupersessionHead: release.head }) });
 
@@ -715,18 +716,22 @@ async function readCheckoutReviewPrerequisites(input, opts) {
   return { ok: true, tree: matched.tree, forge, policy };
 }
 
-async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { tree, forge, policy }, opts) {
+async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { tree, forge, policy }, opts, captureContent) {
   const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
   return archiveSnapshots(tree, repoPath, null, archiveWork(opts.signal), true)
-    .then(([content, administration]) => buildCheckoutRetirementReview({ repoPath, release, prUrl, kind,
-      contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge }))
+    .then(async ([content, administration]) => {
+      const review = await buildCheckoutRetirementReview({ repoPath, release, prUrl, kind,
+        contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge });
+      captureContent?.(content);
+      return review;
+    })
     .then(review => ({ ok: true, review }), error => archiveLimitRefusal(error) || ({ ok: false,
       reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-local-evidence-unavailable' }));
 }
 
-async function reviewCurrentCheckout(input, opts = {}) {
+async function reviewCurrentCheckout(input, opts = {}, captureContent) {
   const prerequisites = await readCheckoutReviewPrerequisites(input, opts);
-  return prerequisites.ok ? buildCurrentCheckoutReview(input, prerequisites, opts) : prerequisites;
+  return prerequisites.ok ? buildCurrentCheckoutReview(input, prerequisites, opts, captureContent) : prerequisites;
 }
 
 async function previewCheckoutIdentity(path) {
@@ -796,7 +801,7 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
     // merged exact-head proof. Never promote an orphan's execution to success.
     const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
     const forge = await (opts.readForge || readRetirementForgeEvidence)(app.repoPath, release.branch, prUrl,
-      { forgeAccount: app.forgeAccount ?? null }).catch(() => null);
+      reviewForgeOptions(release, kind, { ...opts, forgeAccount: app.forgeAccount ?? null })).catch(() => null);
     if (forge?.prUrl === prUrl && forge.prHead === release.head) {
       const [repoPath, checkoutPath] = await Promise.all([
         realpath(app.repoPath).catch(() => null), realpath(release.path).catch(() => null),
@@ -868,6 +873,19 @@ async function disposableModuleCache(path, rel, ignored, verified, work) {
   return archiveFile(path, join(path, rel)).then(() => true, cacheInspectionFailure);
 }
 
+// Git for Windows can enumerate junction descendants. Inspect components in
+// order so Node's lstat sees the link before hashing any target bytes.
+async function listedContentEntry(path, listed, work) {
+  const parts = listed.replace(/\/$/, '').split('/');
+  for (let i = 0; i < parts.length; i++) {
+    work.check();
+    const rel = parts.slice(0, i + 1).join('/');
+    const info = await lstat(join(path, rel));
+    if (info.isSymbolicLink() || i === parts.length - 1) return { rel, info };
+    if (!info.isDirectory()) throw new Error(`${rel} is not a directory`);
+  }
+}
+
 async function snapshotContent(path, work = archiveWork(), allowDisposableCache = false) {
   work.check();
   // These reads are independent and each Git spawn is mostly launch latency, so
@@ -932,15 +950,18 @@ async function snapshotContent(path, work = archiveWork(), allowDisposableCache 
     if (await rawBlobId(join(path, rel), info.size, format, work) !== blob) await addFile(rel, info, { tracked: true });
   }
   const symlinks = [];
-  for (const rel of zLines(others)) {
-    work.check();
+  const links = new Set();
+  for (const listed of zLines(others)) {
+    const { rel, info } = await listedContentEntry(path, listed, work);
+    if (links.has(rel)) continue;
     // `ls-files --others` names a nested repository as `dir/` without its files.
-    if (rel.endsWith('/')) throw new Error(`nested repository at ${rel} cannot be archived`);
-    const info = await lstat(join(path, rel));
+    // A junction may also have a trailing slash; classify the link first.
+    if (!info.isSymbolicLink() && listed.endsWith('/')) throw new Error(`nested repository at ${rel} cannot be archived`);
     if (info.isSymbolicLink()) {
       const link = { path: rel, target: archiveText(await readlink(join(path, rel), { encoding: 'buffer' })) };
       work.add(link);
       symlinks.push(link);
+      links.add(rel);
     }
     else if (info.isFile()) {
       const disposableCache = allowDisposableCache && await disposableModuleCache(path, rel, ignored, verifiedCaches, work);
@@ -1460,6 +1481,9 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     if (!unlocked) return { ok: false, reason: 'worktree-unlock-failed' };
   }
   let capacityRefusal;
+  let reviewedLinks = [];
+  const removedLinks = [];
+  let linksPrepared = false;
   const verifyRemoval = async (holder) => {
     if (opts.signal?.aborted) return 'retirement-archive-cancelled';
     if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
@@ -1468,7 +1492,8 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
     const [reason, fresh, porcelain] = await Promise.all([
       ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled }),
-      review ? reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind, unlocked: release.locked }, opts) : null,
+      review ? reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind, unlocked: release.locked }, opts,
+        content => { reviewedLinks = content.symlinks; }) : null,
       getStatusPorcelain(tree.path).catch(() => null),
     ]);
     if (fresh && !fresh.ok) { capacityRefusal = fresh; return fresh.reason; }
@@ -1485,15 +1510,50 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     return null;
   };
   const removal = await forceRemoveWorktreeDir(repoPath, tree.path, {
-    label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval, beforeMutation: opts.beforeMutation,
+    label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval,
+    beforeMutation: async () => {
+      await opts.beforeMutation?.();
+      // The removal helper also calls this hook before pruning registration.
+      if (linksPrepared) return;
+      linksPrepared = true;
+      // Git for Windows leaves junctions behind (git-for-windows/git#6151).
+      // Unlink only freshly reviewed links after the final removal gate, never
+      // recursively delete their targets or use a fallback checkout remover.
+      const work = archiveWork(opts.signal);
+      for (const link of reviewedLinks) {
+        const { rel, info } = await listedContentEntry(tree.path, link.path, work);
+        if (rel !== link.path || !info.isSymbolicLink()
+          || archiveText(await readlink(join(tree.path, rel), { encoding: 'buffer' })) !== link.target) throw new Error('retirement-review-changed');
+        // Ordinary file links are already handled by Git. Only directory links
+        // need this preparation; inspect target metadata without reading bytes.
+        const target = await stat(join(tree.path, rel)).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+        if (!target?.isDirectory()) continue;
+        await unlink(join(tree.path, rel));
+        removedLinks.push(link);
+      }
+    },
   });
   if (!removal.removed) {
+    let linkRestoreFailed = false;
+    // A refused Git removal may leave the original generation intact. Restore
+    // its links without overwriting anything a concurrent writer created.
+    if (removedLinks.length && await readRetirementCheckoutIdentity(tree.path) === checkoutIdentity) {
+      for (const link of removedLinks) {
+        const parent = link.path.split('/').slice(0, -1).join('/');
+        const parentSafe = !parent || await listedContentEntry(tree.path, parent, archiveWork())
+          .then(entry => entry.rel === parent && entry.info.isDirectory(), () => false);
+        const restored = parentSafe && await symlink(link.target, join(tree.path, link.path), process.platform === 'win32' ? 'junction' : 'dir')
+          .then(() => true, () => false);
+        if (!restored) linkRestoreFailed = true;
+      }
+    }
     // Hand the lock back exactly as released. A lock someone took in the
     // meantime makes this fail, which is the outcome we want anyway.
     if (release.locked) {
       const args = ['worktree', 'lock', ...(release.lockReason != null ? ['--reason', release.lockReason] : []), tree.path];
       await execGit(args, repoPath).catch(err => console.warn(`⚠️ held-checkout recovery: could not restore lock on ${tree.path}: ${err.message}`));
     }
+    if (linkRestoreFailed) return { ok: false, reason: 'retirement-link-restore-failed' };
     return capacityRefusal || { ok: false, reason: removal.reason || 'worktree-remove-failed' };
   }
   console.log(`🧹 held-checkout recovery: retired ${tree.path}`);
@@ -1544,13 +1604,15 @@ export async function fetchRetirementProofObjects(repoPath, release, prUrl, expe
   const [{ readRetirementForgeEvidence }, { getOriginInfo }, { resolveForgeExecOptions }] = await Promise.all([
     import('./heldCheckoutReview.js'), import('../lib/gitRemote.js'), import('./forgeExecOptions.js'),
   ]);
-  const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl, opts).catch(() => null);
+  const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl, { ...opts, ...(!opts.sourceSupersessionHead && { exactDeliveredHead: release.head }) }).catch(() => null);
   const origin = await getOriginInfo(repoPath).catch(() => null);
   if (!origin || !forge || forge.repository !== `${origin.host}/${origin.fullName}` || forge.prUrl !== prUrl) {
     return { ok: false, reason: 'retirement-pr-repository-mismatch' };
   }
   if (expectedHeadSha !== null && forge.prHead !== expectedHeadSha) return { ok: false, reason: 'receipt-pr-head-changed' };
-  const heads = [...new Set([forge.prHead, forge.mergeCommit, forge.targetHead ?? forge.defaultHead, forge.changeBase, forge.firstCommit])];
+  const exactDelivery = forge.scopeProof === 'exact-delivered-head' && forge.prHead === release.head && !opts.sourceSupersessionHead;
+  const heads = [...new Set([forge.prHead, forge.mergeCommit, forge.targetHead ?? forge.defaultHead,
+    ...(exactDelivery ? [forge.defaultHead] : [forge.changeBase, forge.firstCommit])])];
   if (heads.some(head => typeof head !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head))) {
     return { ok: false, reason: 'retirement-forge-unreadable' };
   }

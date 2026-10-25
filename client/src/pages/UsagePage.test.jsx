@@ -496,7 +496,8 @@ describe('UsagePage mobile provider-card layout', () => {
     };
 
     api.getProviderUsage.mockResolvedValue({ providers: [cardWithPeriods] });
-    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    // The report mounts other cards whose fetches settle after the quota heading.
+    await act(async () => { render(<MemoryRouter><UsagePage /></MemoryRouter>); });
 
     await screen.findByRole('heading', { name: 'Image Gen' });
     expect(screen.getByText('2 renders · 24h')).toBeInTheDocument();
