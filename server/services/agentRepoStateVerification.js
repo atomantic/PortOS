@@ -290,7 +290,21 @@ async function readAbsentTaskSnapshot(agent) {
   if (!Array.isArray(expected) || expected.length !== 4
     || ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].some(key =>
       expected.filter(entry => Array.isArray(entry) && entry.length === 2 && entry[0] === key && entry[1] != null).length !== 1)) return null;
-  if (!matchesCompletionTaskDispatch(agent, replay?.task)) return null;
+  let snapshot = replay?.task;
+  if (!matchesCompletionTaskDispatch(agent, snapshot)) {
+    // Older finalizers saved the provider's pre-dispatch task. The independent
+    // server-written handoff records the exact charged dispatch before release.
+    // It may repair only that tuple, never task scope or a missing replay.
+    const handoff = agent.metadata?.completionCleanup?.taskHandoff;
+    if (!snapshot || handoff?.version !== 1 || handoff.taskId !== agent.taskId
+      || handoff.startedAt !== agent.startedAt || handoff.taskType !== (snapshot.taskType || 'user')
+      || !Array.isArray(handoff.expected)
+      || expected.some(([key]) => handoff.expected.filter(row => Array.isArray(row)
+        && row.length === 2 && row[0] === key && row[1] != null).length !== 1)) return null;
+    const dispatch = Object.fromEntries(expected.map(([key]) => handoff.expected.find(row => Array.isArray(row) && row[0] === key)));
+    snapshot = { ...snapshot, metadata: { ...snapshot.metadata, ...dispatch } };
+    if (!matchesCompletionTaskDispatch(agent, snapshot)) return null;
+  }
   const meta = agent.metadata;
   const branches = meta.isWorktree === true ? [meta.worktreeBranch]
     : [meta.claimBranches, meta.claimReleasedBranches].flatMap(value => Array.isArray(value) ? value : []);
@@ -302,7 +316,7 @@ async function readAbsentTaskSnapshot(agent) {
       || rows[0].repoPath !== repository || !rows[0].path || !/^[a-f0-9]{40,64}$/.test(rows[0].head || '')
       || !retirementCheckoutIdentityFromPointer(rows[0].incarnation?.pointer)) return null;
   }
-  return replay.task;
+  return snapshot;
 }
 
 /** Exhaustion stops provider work, not proof of already completed delivery.
