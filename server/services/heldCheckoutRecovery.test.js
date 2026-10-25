@@ -1159,6 +1159,37 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return { path, release, admin, opts, forge, prepare, confirm };
   }
 
+  it.each(['accepted', 'unaccepted', 'unpublished-tip', 'lagging-default'])(
+    'keeps exact squash delivery retirement scoped when shared files change: %s', async scenario => {
+      const c = await reviewedCheckout(`exact-squash-${scenario}`, { multipleCommits: true, superseded: true });
+      if (scenario === 'unpublished-tip') {
+        await writeFile(join(c.path, 'unpublished.txt'), 'still wanted local work\n');
+        await execGit(['add', 'unpublished.txt'], c.path);
+        await execGit(['commit', '-m', 'unpublished local continuation'], c.path);
+        c.release.head = (await execGit(['rev-parse', 'HEAD'], c.path)).stdout.trim();
+        await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
+      }
+      if (scenario === 'lagging-default') {
+        await execGit(['checkout', '--detach', 'main'], repo);
+        await execGit(['branch', '-f', 'main', c.forge.changeBase], repo);
+      }
+      const prepared = await c.prepare();
+      expect(prepared).toMatchObject({ ok: true, review: { comparison: { disposition: 'review-supersession' } } });
+      const result = await retireInventoriedCheckout({ appId: 'app-1', release: c.release,
+        review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: scenario !== 'unaccepted' } }, c.opts);
+      if (scenario === 'accepted') {
+        expect(result).toMatchObject({ ok: true, branchDeleted: true });
+        expect(await registered(c.path)).toBe(false);
+        expect(existsSync(c.path)).toBe(false);
+        expect(await archives()).toEqual([]);
+      } else {
+        expect(result.ok).toBe(false);
+        expect(await registered(c.path)).toBe(true);
+        expect(existsSync(c.path)).toBe(true);
+        if (scenario === 'unpublished-tip') expect(await readFile(join(c.path, 'unpublished.txt'), 'utf8')).toBe('still wanted local work\n');
+      }
+    });
+
   it.each(['unrelated-upstream', 'changed-delivery'])('uses exact merged PR file scope after inherited upstream history: %s', async scenario => {
     const c = await reviewedCheckout(`scope-${scenario}`, { normalMerge: true });
     await writeFile(join(repo, 'upstream.txt'), 'inherited upstream\n');

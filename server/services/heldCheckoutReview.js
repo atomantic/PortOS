@@ -178,3 +178,18 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
     comparison: { base, paths, localPatch, difference, disposition: mechanicallyEquivalent ? 'integrated' : 'review-supersession' } };
   return { digest: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'), ...evidence };
 }
+
+/** Explicit acceptance may retire an exact delivered PR head after later edits
+ * to shared files. It never covers unpublished tips, replacement delivery, or
+ * a default checkout that has not incorporated the actual merge commit. The
+ * caller must already have re-read and digest-checked the complete review. */
+export async function acceptedExactMergedHeadReview({ repoPath, review, accepted, runGit = execGit }) {
+  const forge = review?.forge;
+  if (review?.kind || accepted?.kind || accepted?.acceptSuperseded !== true
+    || review?.comparison?.disposition !== 'review-supersession'
+    || !oid(review?.release?.head) || review.release.head !== forge?.prHead
+    || !oid(forge?.mergeCommit) || typeof forge.defaultBranch !== 'string' || !forge.defaultBranch) return false;
+  const result = await runGit(['merge-base', '--is-ancestor', forge.mergeCommit, `refs/heads/${forge.defaultBranch}`],
+    repoPath, { ignoreExitCode: true }).catch(() => null);
+  return result?.exitCode === 0;
+}

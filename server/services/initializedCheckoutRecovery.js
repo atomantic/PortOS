@@ -251,10 +251,14 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     const prepared = await makeReview({ ...input, prUrl: input.review.prUrl });
     assertReview(prepared.review, input.review);
     const { ctx } = prepared;
-    if (prepared.review.comparison?.disposition !== 'integrated') return { ok: false, reason: 'not-merged-on-recheck' };
+    const runGit = deps.execGit || execGit;
+    const { acceptedExactMergedHeadReview } = await import('./heldCheckoutReview.js');
+    if (prepared.review.comparison?.disposition !== 'integrated'
+      && !await acceptedExactMergedHeadReview({ repoPath: ctx.repoPath, review: prepared.review, accepted: input.review, runGit })) {
+      return { ok: false, reason: 'not-merged-on-recheck' };
+    }
     // Captured by makeReview before removal. A later lstat of a deleted .git is null.
     const checkoutIdentity = prepared.review.checkoutIdentity || input.release.checkoutIdentity || null;
-    const runGit = deps.execGit || execGit;
     const status = await runGit(['status', '--porcelain'], input.release.path, { ignoreExitCode: true }).catch(() => null);
     if (!status || status.exitCode !== 0) return { ok: false, reason: 'worktree-status-unavailable' };
     if (String(status.stdout || '').trim()) return { ok: false, reason: 'worktree-dirty' };

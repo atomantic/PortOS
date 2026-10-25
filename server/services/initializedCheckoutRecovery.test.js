@@ -267,6 +267,26 @@ describe('initialized checkout removal', () => {
     expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
   });
 
+  it.each(['accepted', 'different-pr-head', 'merge-not-local'])(
+    'binds initialized supersession acceptance to delivered head and actual local merge: %s', async scenario => {
+      fixture.superseded = true;
+      fixture.facts.mergeCommit = '9'.repeat(40);
+      fixture.facts.defaultBranch = 'main';
+      if (scenario === 'different-pr-head') fixture.facts.prHead = '8'.repeat(40);
+      cleanGit();
+      if (scenario === 'merge-not-local') fixture.deps.execGit.mockImplementation(async () => ({ exitCode: 1, stdout: '' }));
+      const result = await fixture.service.retire(await reviewed());
+      if (scenario === 'accepted') {
+        expect(result).toEqual({ ok: true, branchDeleted: true });
+        expect(fixture.deps.recordRetirement).toHaveBeenCalled();
+      } else {
+        expect(result).toEqual({ ok: false, reason: 'not-merged-on-recheck' });
+        expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+        expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
+      }
+      expect(await readdir(root)).toEqual([]);
+    });
+
   it('leaves a review-superseded checkout in place', async () => {
     fixture.superseded = true;
     cleanGit();
