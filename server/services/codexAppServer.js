@@ -949,7 +949,7 @@ export async function runCodexTextTurn({
   // ephemeral and no turn exists yet, so nothing is left running to interrupt.
   const started = await raceCodexAbort(sendRequest(owner, CODEX_TURN_RPC.threadStart, {
     ...CODEX_TEXT_THREAD_CONFIG,
-    ...(requestedTier ? { config: { ...CODEX_TEXT_THREAD_CONFIG.config, features: { fast_mode: true } } } : {}),
+    ...(requestedTier === 'fast' ? { config: { ...CODEX_TEXT_THREAD_CONFIG.config, features: { fast_mode: true } } } : {}),
     cwd,
     ...(model ? { model } : {}),
   }, REQUEST_TIMEOUT_MS), signal);

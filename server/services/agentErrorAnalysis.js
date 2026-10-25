@@ -127,7 +127,7 @@ export const ERROR_PATTERNS = [
   // AGENTS.md).
   //
   // The rejected key can come from either side, and the fix text says which
-  // (see `extract`): PortOS injects only PORTOS_CLI_CONFIG_KEYS via `-c`, so
+  // (see `extract`): PortOS injects startup/effort keys and optional execution-speed keys via `-c`, so
   // any other key is already in the user's own config file. Second real
   // incident, 2026-08-18: the Codex desktop app wrote `service_tier =
   // "default"` into the shared `~/.codex/config.toml`, and the older
@@ -156,15 +156,11 @@ export const ERROR_PATTERNS = [
       const key = match[4] || null;
       const keyRef = key ? `\`${key}\`` : 'the rejected key';
       const accepts = expected ? ` This CLI version expects ${expected}.` : '';
-      // Provenance is the whole fix here. PortOS emits exactly two `-c` config
-      // keys (PORTOS_CLI_CONFIG_KEYS); anything else was already sitting in the
-      // user's own config file — commonly written there by a NEWER install of
-      // the same CLI sharing that file. Real incident 2026-08-18: the Codex
-      // desktop app wrote `service_tier = "default"` into `~/.codex/config.toml`
-      // and the older `codex` on PATH rejects that variant. Naming the wrong
-      // source costs a whole investigation cycle, so say which one it is.
+      // A rejection alone cannot identify the source of conditional speed overrides.
       const source = !key
         ? `Look first in the CLI's own config file — for codex that is \`~/.codex/config.toml\` — then in the \`-c <key>=<value>\` overrides PortOS builds in server/lib/providerModels.js.`
+        : ['service_tier', 'features.fast_mode'].includes(key)
+          ? `${keyRef} can come from an explicit PortOS execution-speed selection or the CLI configuration. Clear an unsupported speed selection or upgrade Codex; if no speed was selected, inspect provider args and \`~/.codex/config.toml\`. The rejection alone does not prove which source supplied it.`
         : isPortosSuppliedConfigKey(key)
           ? `PortOS supplies ${keyRef} itself as a \`-c <key>=<value>\` override, so the accepted values belong in that provider's ladder in server/lib/providerModels.js — editing the CLI config file will not help.`
           : `PortOS never supplies ${keyRef}, so it is already in the CLI's own config file — for codex that is \`~/.codex/config.toml\`. Edit or delete that line, or upgrade this CLI to a version that accepts the value; a second, newer install of the same CLI sharing one config file is the usual source.`;

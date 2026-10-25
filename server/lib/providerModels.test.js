@@ -769,7 +769,7 @@ describe('providerModels', () => {
       for (const pair of emitted) expect(isPortosSuppliedConfigKey(pair.split('=')[0])).toBe(true);
     });
 
-    it('is false for keys that only ever live in the user config file', () => {
+    it('does not infer ownership of optional or user configuration from the key alone', () => {
       // Real 2026-08-18 rejection: written by a newer install of the same CLI.
       expect(isPortosSuppliedConfigKey('service_tier')).toBe(false);
       expect(isPortosSuppliedConfigKey('notify')).toBe(false);

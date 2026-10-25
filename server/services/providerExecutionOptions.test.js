@@ -53,9 +53,11 @@ describe('execution options at dispatch', () => {
   });
 
   it('pins explicit Standard over inherited Fast, including a TUI resume', async () => {
+    probeCodexModelsViaAppServer.mockResolvedValue({ accountType: 'chatgpt', config: {}, requirements: { featureRequirements: { fast_mode: false } }, models: [{ id: model, serviceTiers: [] }] });
     const prepared = await prepareExecutionOptions({ ...provider, type: 'tui', args: ['resume', 'example-session'], executionOptions: { serviceTier: 'fast' } }, model, { serviceTier: 'standard' });
     const args = buildTuiInvocation(prepared.provider, model).args;
     expect(args).toContain('service_tier="default"');
+    expect(args).not.toContain('features.fast_mode=true');
     expect(args).toContain('resume');
     expect(prepared.attribution.provenance).toEqual({ serviceTier: 'run' });
   });

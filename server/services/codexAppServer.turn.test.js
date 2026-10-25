@@ -131,7 +131,7 @@ describe('running a text turn', () => {
         if (answered.has(request.id)) continue;
         const responses = {
           'account/read': { account: { type: 'chatgpt' } },
-          'configRequirements/read': { requirements: null },
+          'configRequirements/read': { requirements: speed === 'standard' ? { featureRequirements: { fast_mode: false } } : null },
           'model/list': { data: [{ id: 'model-alpha', model: 'model-alpha', serviceTiers: [{ id: 'fast' }] }] },
           'config/read': { config: { model_provider: 'openai' } },
         };
@@ -146,7 +146,7 @@ describe('running a text turn', () => {
     await driveTurn(child, { deltas: ['ok'] });
     expect((await promise).executionOptions).toMatchObject({ requested: { serviceTier: speed }, effective: {}, confirmation: 'requested/unconfirmed' });
     expect(child.lastRequest('turn/start').params.serviceTierForTurn).toBe(speed === 'standard' ? 'default' : 'fast');
-    expect(child.lastRequest('thread/start').params).toMatchObject({ sandbox: 'read-only', approvalPolicy: 'never', config: { mcp_servers: {}, features: { fast_mode: true } } });
+    expect(child.lastRequest('thread/start').params).toMatchObject({ sandbox: 'read-only', approvalPolicy: 'never', config: { mcp_servers: {}, ...(speed === 'fast' ? { features: { fast_mode: true } } : {}) } });
     expect(child.written.some(frame => frame.method?.startsWith('config/'))).toBe(true);
     expect(child.written.some(frame => frame.method?.includes('write'))).toBe(false);
   });

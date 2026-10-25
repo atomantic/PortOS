@@ -821,8 +821,9 @@ export const PORTOS_CLI_CONFIG_KEYS = Object.freeze([
 ]);
 
 /**
- * True when `key` is a config key PortOS supplies via `-c` (see
- * PORTOS_CLI_CONFIG_KEYS). Null-safe; comparison is exact, so a lookalike key
+ * True when `key` is a startup/effort config key PortOS supplies via `-c` (see
+ * PORTOS_CLI_CONFIG_KEYS). Conditional speed overrides are handled separately
+ * by the error analyzer; a key alone cannot prove their origin. Null-safe; comparison is exact, so a lookalike key
  * from the user's config file is correctly reported as not-ours.
  * @param {unknown} key
  * @returns {boolean}

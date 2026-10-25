@@ -148,5 +148,5 @@ export function buildCodexExecutionOptionArgs(provider, existingArgs = []) {
     throw executionOptionsError('Execution speed conflicts with provider args; remove the baked speed configuration');
   }
   return ['-c', `service_tier="${tier === 'standard' ? 'default' : 'fast'}"`,
-    '-c', 'features.fast_mode=true'];
+    ...(tier === 'fast' ? ['-c', 'features.fast_mode=true'] : [])];
 }

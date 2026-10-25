@@ -157,17 +157,18 @@ describe('analyzeAgentFailure — ERROR_PATTERNS classification', () => {
   // PATH — the binary PortOS spawns — accepts only `fast` or `flex`. Every
   // codex agent on the machine died at config load. The first pass at this fix
   // text told the reader to check "the provider's ladder in providerModels.js",
-  // which for a key PortOS never emits is a dead end: the analysis has to name
+  // which was a dead end in that incident: the analysis must retain
   // the CLI's own config file as the source.
-  it('blames the user config for a key PortOS never supplies', () => {
+  it('keeps the historical config remedy without inventing the source of an optional speed override', () => {
     const line = 'Error loading config.toml: unknown variant `default`, expected `fast` or `flex`\nin `service_tier`';
     const analysis = analyzeAgentFailure(withLead(line), { id: 't' }, 'gpt-5.6-luna');
     expect(analysis.category).toBe('cli-config-invalid');
     expect(analysis.rejectedConfigKey).toBe('service_tier');
     expect(analysis.rejectedConfigValue).toBe('default');
-    expect(analysis.suggestedFix).toContain('PortOS never supplies `service_tier`');
+    expect(analysis.suggestedFix).toContain('explicit PortOS execution-speed selection');
+    expect(analysis.suggestedFix).toContain('does not prove which source');
     expect(analysis.suggestedFix).toContain('~/.codex/config.toml');
-    // Pointing at PortOS source for a key PortOS does not emit is the failure
+    // Pointing only at the effort ladder for optional speed config is the failure
     // mode this test exists to prevent.
     expect(analysis.suggestedFix).not.toContain('providerModels.js');
   });
