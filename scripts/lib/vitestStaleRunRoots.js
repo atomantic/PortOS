@@ -172,11 +172,13 @@ function processKind({ args = [] }) {
   return 'other';
 }
 
-function ownedSnapshot(parent, prefix, read) {
-  const records = read();
-  if (!Array.isArray(records)) return null;
+function ownedSnapshot(parent, prefix, read, onInspection = () => {}) {
+  let inspection = { reason: 'reader-unavailable', attempts: [] };
+  const records = read(undefined, { onInspection: value => { inspection = value; } });
+  if (!Array.isArray(records)) { onInspection(false, inspection); return null; }
   const ancestors = processAncestors(records);
-  if (!ancestors) return null;
+  if (!ancestors) { onInspection(false, { ...inspection, reason: 'ancestry-unavailable' }); return null; }
+  onInspection(true, { ...inspection, reason: 'available' });
   const owned = records.flatMap(record => {
     if (record.terminal || !Number.isSafeInteger(record.pid) || record.pid <= 1 || typeof record.start !== 'string' || !record.start) return [];
     const root = testProcessRoot(record, parent, prefix);
@@ -217,8 +219,7 @@ export function killTestProcessesUnder(root, { read = readTestProcesses, probe =
   }
   const parent = dirname(root);
   const prefix = basename(root);
-  const snapshot = ownedSnapshot(parent, prefix, read);
-  onInspection(snapshot !== null);
+  const snapshot = ownedSnapshot(parent, prefix, read, onInspection);
   if (!snapshot) return 0;
   const owner = readOwner(root);
   if (rootExists && !owner) return 0;
