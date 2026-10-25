@@ -14,6 +14,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const claimVerifier = vi.hoisted(() => ({ verifyClaimDisposition: vi.fn() }));
+vi.mock('./claimDisposition.js', () => claimVerifier);
+
 vi.mock('../lib/execGit.js', () => ({
   execGit: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
 }));
@@ -197,6 +200,7 @@ const completion = () => completeAgentMock.mock.calls[0][1];
 
 beforeEach(() => {
   vi.clearAllMocks();
+  claimVerifier.verifyClaimDisposition.mockResolvedValue(null);
   execGit.mockResolvedValue({ stdout: 'claim/issue-42', exitCode: 0 });
   resolveForgeForRepo.mockResolvedValue({ cli: 'gh', env: { GH_TOKEN: 'synthetic-token' } });
   resolveRepoForgeTarget.mockResolvedValue(null);
@@ -215,6 +219,20 @@ beforeEach(() => {
 });
 
 describe('finalizeAgent — goal-fidelity gate', () => {
+  it('accepts a verified operator stand-down without judging a partial landed diff against the still-open issue', async () => {
+    const task = { id: 'claim-example', taskType: 'user', metadata: { claimFlow: true, claimTarget: '42' } };
+    claimVerifier.verifyClaimDisposition.mockResolvedValue({ status: 'verified', taskId: task.id,
+      issues: [{ issue: 42, disposition: 'operator-blocked' }] });
+    runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink', missing: ['Unreproduced root cause'] }));
+    await finalize({ task, finalSummary: JSON.stringify({ summary: 'No further actionable work until recurrence.',
+      taskOutcome: { status: 'blocked', reason: 'Operator parked the issue pending new evidence.' } }) });
+    expect(completion()).toMatchObject({ success: true, validationPassed: true, taskOutcome: { status: 'no-action-needed' } });
+    expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+    expect(runGoalFidelityFollowUpMock).not.toHaveBeenCalled();
+    expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
+    expect(updateTaskMock).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ status: 'completed' }), task.taskType);
+  });
+
   it('judges the run-window diff against the TASK objective, not the agent transcript', async () => {
     await finalize();
     const [args] = runLocalGoalFidelityReviewMock.mock.calls[0];

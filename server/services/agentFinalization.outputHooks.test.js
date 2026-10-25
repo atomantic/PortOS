@@ -648,6 +648,46 @@ describe('recovery output-hook dispatch (#3182)', () => {
     } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
   });
 
+  it.each(['normal', 'restart'])('settles an operator-parked claim during %s completion without retrying the blocked report', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: 'claim-example', taskType: 'user', metadata: { claimFlow: true, claimTarget: '42', failureCount: 0 } };
+    const reported = { status: 'blocked', reason: 'The selected issue awaits new evidence; no actionable work remains.' };
+    const claimDisposition = { status: 'verified', taskId: task.id, issues: [{ issue: 42, disposition: 'operator-blocked' }] };
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.taskOutcome = reported;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    claimVerifier.verifyClaimDisposition.mockResolvedValue(claimDisposition);
+    try {
+      if (mode === 'normal') await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+        finalSummary: JSON.stringify({ summary: reported.reason, taskOutcome: reported }) });
+      else await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: true,
+        validationPassed: true, taskOutcome: expect.objectContaining({ status: 'no-action-needed' }), claimDisposition }));
+      expect(persistedAgent.metadata).toMatchObject({ taskOutcomeSource: 'forge-verification', reportedTaskOutcome: reported });
+      expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
+      if (mode === 'normal') expect(updateTask).toHaveBeenLastCalledWith(task.id,
+        expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ failureCount: 0 }) }), task.taskType);
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
+  it.each(['normal', 'restart'])('preserves an unverified claim blocker during %s completion', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: 'claim-example', taskType: 'user', metadata: { claimFlow: true, claimTarget: '42' } };
+    const taskOutcome = { status: 'blocked', reason: 'The issue may be parked; independent evidence is missing.' };
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.taskOutcome = taskOutcome;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    claimVerifier.verifyClaimDisposition.mockResolvedValue({ status: 'unverified', reason: 'block-authority-unverified' });
+    try {
+      if (mode === 'normal') await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+        finalSummary: JSON.stringify({ summary: taskOutcome.reason, taskOutcome }) });
+      else await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: false, taskOutcome }));
+      expect(persistedAgent.metadata.taskOutcomeSource).not.toBe('forge-verification');
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
   it('preserves a failed delivery gate during claim no-op recovery', async () => {
     isProgrammaticIoTaskType.mockReturnValue(false);
     const task = { id: 'claim-example', taskType: 'user', metadata: { claimFlow: true, claimTarget: '42' } };

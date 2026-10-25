@@ -1,5 +1,6 @@
 /** Read-only completion evidence for a selected claim, never agent prose. */
 import { resolve } from 'node:path';
+import { execGit } from '../lib/execGit.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { expandHome, safeJSONParse } from '../lib/fileUtils.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
@@ -9,10 +10,10 @@ const unverified = reason => ({ status: 'unverified', reason });
 const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 const positiveIssue = value => /^[1-9]\d*$/.test(String(value ?? '')) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
 
-async function trustedGithubClosure(closed, target, run) {
+async function trustedGithubEvent(event, target, run) {
   const { createGithubActorTrust } = await import('./forgeActorTrust.js');
   const trust = await createGithubActorTrust({ runGh: run, host: target.apiHost, repoFullName: target.fullName });
-  return trust.isTrusted(closed.actor?.login);
+  return trust.isTrusted(event.actor?.login);
 }
 
 function selectedIssues(task, agent) {
@@ -31,11 +32,14 @@ function selectedIssues(task, agent) {
 const PR_FIELDS = `number merged mergedAt baseRefName baseRepository { nameWithOwner }
   mergeCommit { oid } closingIssuesReferences(first:100) { nodes { number repository { nameWithOwner } } }`;
 const CLAIM_QUERY = `query($owner:String!,$name:String!,$number:Int!) {
-  repository(owner:$owner,name:$name) { nameWithOwner defaultBranchRef { name }
+  repository(owner:$owner,name:$name) { nameWithOwner defaultBranchRef { name target { oid } }
     issue(number:$number) { number state stateReason repository { nameWithOwner }
-      timelineItems(last:100,itemTypes:[CLOSED_EVENT,CROSS_REFERENCED_EVENT]) { nodes {
-        ... on ClosedEvent { actor { login } createdAt closer { __typename ... on PullRequest { ${PR_FIELDS} } } }
+      labels(first:100) { nodes { name } }
+      timelineItems(last:100,itemTypes:[CLOSED_EVENT,CROSS_REFERENCED_EVENT,LABELED_EVENT,UNLABELED_EVENT]) { nodes {
+        ... on ClosedEvent { __typename actor { login } createdAt closer { __typename ... on PullRequest { ${PR_FIELDS} } } }
         ... on CrossReferencedEvent { source { __typename ... on PullRequest { ${PR_FIELDS} } } }
+        ... on LabeledEvent { __typename actor { login } createdAt label { name } }
+        ... on UnlabeledEvent { __typename actor { login } createdAt label { name } }
       } }
     }
   }
@@ -59,16 +63,26 @@ async function githubDisposition({ number, target, run }) {
   const repository = response?.data?.repository;
   const issue = repository?.issue;
   if (response?.errors || !sameRepo(repository?.nameWithOwner, target.fullName)
-    || issue?.number !== number || !sameRepo(issue.repository?.nameWithOwner, target.fullName)
-    || issue.state !== 'CLOSED') return unverified('issue-not-closed-or-mismatched');
+    || issue?.number !== number || !sameRepo(issue.repository?.nameWithOwner, target.fullName)) {
+    return unverified('issue-not-closed-or-mismatched');
+  }
   const events = issue.timelineItems?.nodes;
+  if (issue.state === 'OPEN' && issue.labels?.nodes?.some(label => label.name === 'blocked')) {
+    const blocked = Array.isArray(events) ? events.filter(event => event?.label?.name === 'blocked').at(-1) : null;
+    if (blocked?.__typename !== 'LabeledEvent' || !Number.isFinite(Date.parse(blocked.createdAt))
+      || !await trustedGithubEvent(blocked, target, run)) return unverified('block-authority-unverified');
+    return { status: 'verified', disposition: 'operator-blocked', issue: number,
+      blockedAt: blocked.createdAt, blockedBy: blocked.actor.login,
+      defaultBranch: repository.defaultBranchRef?.name, defaultCommit: repository.defaultBranchRef?.target?.oid };
+  }
+  if (issue.state !== 'CLOSED') return unverified('issue-not-closed-or-mismatched');
   if (!Array.isArray(events)) return unverified('closure-unavailable');
-  const closed = events.filter(event => event?.createdAt).at(-1);
+  const closed = events.filter(event => event?.__typename === 'ClosedEvent').at(-1);
   if (!closed || !Number.isFinite(Date.parse(closed.createdAt))) return unverified('closure-unavailable');
   if (issue.stateReason === 'NOT_PLANNED') {
     // A typed stand-down is distinct from delivery. Only a repository operator
     // may invalidate work: arbitrary contributor labels/comments grant nothing.
-    if (!await trustedGithubClosure(closed, target, run)) return unverified('closure-authority-unverified');
+    if (!await trustedGithubEvent(closed, target, run)) return unverified('closure-authority-unverified');
     return { status: 'verified', disposition: 'not-planned', issue: number, closedAt: closed.createdAt };
   }
   if (issue.stateReason !== 'COMPLETED') return unverified('closure-reason-unverified');
@@ -83,7 +97,7 @@ async function githubDisposition({ number, target, run }) {
   // does not prove a particular PR delivered code. An automatic PR closure
   // still needs the exact merged/default-branch evidence above.
   if (closed.closer != null) return unverified('merged-delivery-unverified');
-  if (!await trustedGithubClosure(closed, target, run)) return unverified('closure-authority-unverified');
+  if (!await trustedGithubEvent(closed, target, run)) return unverified('closure-authority-unverified');
   return { status: 'verified', disposition: 'operator-closed', issue: number,
     closedAt: closed.createdAt, closedBy: closed.actor.login };
 }
@@ -131,7 +145,8 @@ async function gitlabDisposition({ number, target, run }) {
  * live finalization and restart recovery can safely repeat the same check.
  */
 export async function verifyClaimDisposition({ task, agent, reportedOutcome, success }) {
-  if (!success || reportedOutcome?.status !== 'no-action-needed' || !hasClaimFlowContract(task)) return null;
+  if (!success || !['no-action-needed', 'blocked'].includes(reportedOutcome?.status)
+    || reportedOutcome.recovery || !hasClaimFlowContract(task)) return null;
   if (!task?.id || agent?.taskId !== task.id) return unverified('task-binding-unverified');
   const app = await getAppDataForTask(task);
   const source = agent.metadata?.sourceWorkspace || agent.metadata?.workspacePath;
@@ -154,6 +169,31 @@ export async function verifyClaimDisposition({ task, agent, reportedOutcome, suc
     const result = await (tracker === 'github' ? githubDisposition : gitlabDisposition)({ number, target, run });
     if (result.status !== 'verified') return result;
     issues.push(result);
+  }
+  // Parking an issue settles this attempt, not unfinished code. Require the
+  // checkout to be clean and fully present in the live default-branch head.
+  for (const issue of issues.filter(issue => issue.disposition === 'operator-blocked')) {
+    if (!/^[a-f0-9]{40,64}$/i.test(issue.defaultCommit || '')) return unverified('default-branch-unavailable');
+    // Swarm coordinators run outside their selected children's checkouts.
+    // Only server-captured seeds bind each child to the path we must inspect.
+    const workspace = Array.isArray(agent.metadata?.claimBranches)
+      ? agent.metadata.checkoutSeeds?.find(seed => seed.agentId === agent.id && seed.branch === `claim/issue-${issue.issue}`
+        && typeof seed.repoPath === 'string' && resolve(seed.repoPath) === resolve(source))?.path
+      : agent.metadata?.workspacePath;
+    if (typeof workspace !== 'string' || !workspace) return unverified('checkout-unavailable');
+    const status = await execGit(['status', '--porcelain', '--untracked-files=all'], workspace);
+    if (status.stdout.trim()) return unverified('checkout-has-undelivered-work');
+    const ancestry = await execGit(['merge-base', '--is-ancestor', 'HEAD', issue.defaultCommit], workspace, { ignoreExitCode: true });
+    if (ancestry.exitCode === 0) continue;
+    if (ancestry.exitCode === 1) return unverified('checkout-has-undelivered-work');
+    // A just-merged default head may not exist locally yet. Ask the forge about
+    // these exact commits instead of fetching or retrying a correct stand-down.
+    const head = (await execGit(['rev-parse', '--verify', 'HEAD'], workspace)).stdout.trim();
+    if (!/^[a-f0-9]{40,64}$/i.test(head)) return unverified('checkout-has-undelivered-work');
+    const comparison = safeJSONParse(await run(['api', '--hostname', target.apiHost, '--method', 'GET',
+      `repos/${target.fullName}/compare/${head}...${issue.defaultCommit}`]), null, { logError: false });
+    if (!['ahead', 'identical'].includes(comparison?.status) || comparison.base_commit?.sha !== head
+      || comparison.merge_base_commit?.sha !== head) return unverified('checkout-has-undelivered-work');
   }
   return { status: 'verified', tracker, repository: `${target.webHost}/${target.fullName}`, taskId: task.id, issues };
 }
