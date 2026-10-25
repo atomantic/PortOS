@@ -1293,7 +1293,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await mkdir(root, { recursive: true });
     await symlink(outside, join(root, 'modules'), process.platform === 'win32' ? 'junction' : 'dir');
     const prepared = await c.prepare();
-    expect(prepared.ok).toBe(true);
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true });
     expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
     expect(await sha256File(wanted)).toBe(before);
     expect(await archives()).toEqual([]);
@@ -2075,7 +2075,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(prepared.ok).toBe(true);
     expect(prepared.review.comparison.disposition).toBe('integrated');
     const result = await c.confirm(prepared.review);
-    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(result, JSON.stringify({ ok: result.ok, reason: String(result.reason || '').replaceAll(scratch, '<fixture>') })).toMatchObject({ ok: true, branchDeleted: true });
     expect(result.archiveDir).toBeUndefined();
     expect(existsSync(c.path)).toBe(false);
     expect(await archives()).toEqual([]);
