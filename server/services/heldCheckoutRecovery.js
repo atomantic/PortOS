@@ -647,10 +647,11 @@ async function retirementPolicy(repoPath, branch, opts, reviewIdentity = {}) {
     if (!generation) return initial;
     identity = { ...identity, checkoutIncarnation: generation.incarnation };
   }
+  const resumed = reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...identity, checkoutIdentities });
+  if (!resumed.reason) return resumed;
   const { readCheckoutDeliveryContinuations } = await import('./checkoutDeliveryContinuation.js');
   const deliveryContinuations = await readCheckoutDeliveryContinuations({ repoPath, branch, ...identity }, policies, opts);
-  return deliveryContinuations.length
-    ? reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...identity, checkoutIdentities, deliveryContinuations }) : initial;
+  return reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...identity, checkoutIdentities, deliveryContinuations });
 }
 
 const policyReviewIdentity = (release, prUrl, forge) => ({
@@ -1502,7 +1503,9 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   if (review) {
     const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
     const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, branch, review.prUrl, reviewForgeOptions(release, review.kind, opts)).catch(() => null);
-    const captured = reviewed.review.policy?.policies?.find(row => row.continuedDelivery)?.continuedDelivery.checkoutIncarnation;
+    const policies = reviewed.review.policy?.policies || [];
+    const captured = policies.find(row => row.continuedDelivery)?.continuedDelivery.checkoutIncarnation
+      || policies.find(row => row.resumedCleanup)?.resumedCleanup.checkoutIncarnation;
     const identity = await integratedPolicyReviewIdentity(repoPath, release, review.prUrl, forge, captured);
     const policy = identity ? await retirementPolicy(repoPath, branch, opts, identity) : null;
     if (JSON.stringify(policy) !== JSON.stringify(reviewed.review.policy) || JSON.stringify(forge) !== JSON.stringify(reviewed.review.forge)) {

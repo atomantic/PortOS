@@ -1252,7 +1252,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const prepared = await c.prepare();
     expect(prepared).toMatchObject({ ok: true, review: { comparison: { disposition: 'integrated' } } });
     const retired = await c.confirm(prepared.review);
-    expect(retired).toMatchObject({ ok: true, branchDeleted: true });
+    expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
     expect(retired.archiveDir ?? null).toBeNull();
     expect(existsSync(c.path)).toBe(false);
     expect(await registered(c.path)).toBe(false);
@@ -2080,6 +2080,58 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(existsSync(c.path)).toBe(false);
     expect(await archives()).toEqual([]);
     expect(injected.policies[0].metadata.branchCompletionPolicy).toBeUndefined();
+  });
+
+  it('retires a resumed merged checkout without promoting failed attempts or accepting unrelated generations', async () => {
+    const c = await reviewedCheckout('resumed-cleanup', { normalMerge: true });
+    await execGit(['worktree', 'unlock', c.path], repo);
+    Object.assign(c.release, { locked: false, lockReason: null });
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
+    const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+    const captured = await readCompletedCheckoutIdentity({ repoPath: repo, ...c.release });
+    const attempts = ['failed', 'cleanup', 'resumed'].map((id, index) => {
+      const startedAt = `2026-03-01T0${index}:00:00.000Z`;
+      const path = index === 2 ? c.path : join(external, id);
+      return { id, taskId: 'same-original-task', status: 'completed', startedAt,
+        completedAt: `2026-03-01T0${index}:01:00.000Z`,
+        result: index === 0 ? { success: false, executionSuccess: false, validationPassed: null }
+          : { success: false, executionSuccess: true, validationPassed: true, cleanupPending: true,
+            taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } },
+        metadata: { sourceWorkspace: repo, workspacePath: path, worktreeBranch: c.release.branch,
+          prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { branch: c.release.branch, url: c.forge.prUrl },
+          checkoutSeeds: [],
+          resumedFromAgentId: index ? ['failed', 'cleanup'][index - 1] : null,
+          completedCheckouts: [{ version: 1, agentId: id, startedAt, capturedAt: startedAt, ...captured, path }] } };
+    });
+    injected.policies = attempts;
+    const original = structuredClone(attempts);
+    // A missing link, a different task or physical generation, and a real
+    // validation/human hold cannot be released by a later successful execution.
+    for (const [target, key, value] of [[attempts[2].metadata, 'resumedFromAgentId', null],
+      [attempts[0], 'taskId', 'other-task'], [attempts[0].result, 'validationPassed', false],
+      [attempts[0].metadata, 'prCompletionPolicy', 'leave-open'],
+      [attempts[0].metadata.completedCheckouts[0], 'head', 'b'.repeat(40)],
+      [attempts[0].metadata.completedCheckouts[0], 'incarnation', { pointer: { ino: 'other' } }]]) {
+      const prior = target[key]; target[key] = value;
+      const refused = await c.prepare();
+      expect(refused, `${key}: ${JSON.stringify(refused)}`).toMatchObject({ ok: false });
+      expect(await registered(c.path)).toBe(true);
+      target[key] = prior;
+    }
+    const prepared = await c.prepare();
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { policy: { policies: [
+      { id: 'cleanup', success: false, resumedCleanup: { successorAgentId: 'resumed' } },
+      { id: 'failed', success: false, resumedCleanup: { successorAgentId: 'resumed' } },
+      { id: 'resumed', success: false },
+    ] } } });
+    const retired = await c.confirm(prepared.review);
+    expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(c.path)).toBe(false);
+    expect(await archives()).toEqual([]);
+    expect(injected.policies).toEqual(original);
+    expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
+      branch: c.release.branch, path: c.path, head: c.release.head, branchDeleted: true, archiveDir: null,
+    }));
   });
 
   it.each([false, true])('retires legacy pinned cleanup with lagging main and missing remote proof=%s', async missingProof => {

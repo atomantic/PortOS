@@ -884,6 +884,15 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
       if (Object.hasOwn(updates.metadata, key)) updatedMetadata[key] = updates.metadata[key];
     }
   }
+  // Receipt-only completion is not a human revive. Keep the charged failure
+  // history when the original cleanup owner settles an exhausted dispatch.
+  if (preserveRetryBudget && expectedStatus === 'blocked' && expectedTask && recoveryOwner
+    && updates.status === 'completed' && current.metadata?.blockedCategory === 'task-recovery-exhausted'
+    && current.metadata.deliveryRecovery === 'cleanup' && current.metadata.deliveryRecoveryAgentId === recoveryOwner.id) {
+    for (const key of ['failureCount', 'lastErrorCategory', 'lastFailureAt']) {
+      if (Object.hasOwn(current.metadata, key)) updatedMetadata[key] = current.metadata[key];
+    }
+  }
 
   // Drop the resume pointer once the task reaches a terminal state. `existingBranch`
   // + `resumeWorktreePath` + `resumedFromAgentId` are stamped by

@@ -304,6 +304,25 @@ async function readAbsentTaskSnapshot(agent) {
   return replay.task;
 }
 
+/** Exhaustion stops provider work, not proof of already completed delivery.
+ * Only the original cleanup owner and charged dispatch may settle receipts;
+ * human holds, another dispatch and failed execution remain stopped.
+ */
+function exhaustedCleanupOwner(task, agent) {
+  const meta = task.metadata || {};
+  const binding = agent.metadata?.completionTaskDispatch;
+  const expected = binding?.expected;
+  return task.status === 'blocked' && meta.blockedCategory === 'task-recovery-exhausted' && !meta.blocker
+    && agent.status === 'completed' && agent.taskId === task.id && binding?.taskId === task.id
+    && binding.taskType === (task.taskType || 'user') && Array.isArray(expected)
+    && meta.deliveryDecisionAgentId === agent.id && agent.result?.executionSuccess === true
+    && agent.result.validationPassed !== false && !agent.metadata?.executionInterruption && !agent.result.executionInterruption
+    && ['lastSpawnedAt', 'totalSpawnCount'].every(key => {
+      const rows = expected.filter(row => Array.isArray(row) && row[0] === key);
+      return rows.length === 1 && rows[0][1] != null && meta[key] != null && String(rows[0][1]) === String(meta[key]);
+    });
+}
+
 export async function verifyAgentRepoState(input) {
   if (verificationRuns.has(input.agentId)) return verificationRuns.get(input.agentId);
   const cleanupPending = input.agentState?.result?.cleanupPending === true;
@@ -328,7 +347,7 @@ export async function verifyAgentRepoState(input) {
         return verifyRunBranches({ ...input, success: true, cleanupWarnings: [] });
       }
       const current = await recoverCompletionTaskHandoff(input.agentState) || original;
-      if (current.status !== 'in_progress' || current.metadata?.deliveryRecovery !== 'cleanup'
+      if ((current.status !== 'in_progress' && !exhaustedCleanupOwner(current, input.agentState)) || current.metadata?.deliveryRecovery !== 'cleanup'
         || current.metadata.deliveryRecoveryAgentId !== input.agentId) {
         return skipped('cleanup-owner-changed');
       }
@@ -354,6 +373,8 @@ export async function verifyAgentRepoState(input) {
       || (item.skipReason === 'cleanup-delivery-unverified' && (['OPEN', 'CLOSED'].includes(item.observed?.prState)
         || (item.observed?.prState === null && item.observed?.prUrl === null && item.observed?.unreadable?.length === 0))));
     if (cleanupPending && unsupported) {
+      // An exhausted task gets no new recovery dispatch or refunded budget.
+      if (input.task.status === 'blocked') return result;
       const { resolveUndeliveredTaskUpdate } = await import('./agentErrorAnalysis.js');
       const outcome = { status: 'incomplete', reason: `Cleanup verification cannot run (${unsupported.skipReason}). ${input.task.metadata?.taskOutcome?.reason || ''}`.trim() };
       const planned = resolveUndeliveredTaskUpdate(input.task, outcome, input.agentId);
@@ -375,11 +396,14 @@ export async function verifyAgentRepoState(input) {
           stages: { worktree: { status: 'done', retryable: false, value: [], verifiedBy: 'repository-preservation-receipt' } } });
         if (!recorded) return { ...result, verified: false, skipReason: 'cleanup-ledger-settlement-unverified' };
       }
+      const settlementFence = input.task.status === 'blocked' ? {
+        expectedStatus: 'blocked', expectedTask: { description: input.task.description, priority: input.task.priority, metadata: input.task.metadata },
+        recoveryOwner: { id: input.agentId, startedAt: input.agentState.startedAt }, preserveRetryBudget: true,
+      } : { expectedStatus: 'in_progress', expectedMetadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: input.agentId } };
       const updated = await updateTask(input.task.id, { status: 'completed', metadata: {
         deliveryRecovery: undefined, deliveryRecoveryAgentId: undefined,
         taskOutcome: { status: 'completed', reason: 'Delivery and repository preservation were verified by completion recovery.' },
-      } }, input.task.taskType || 'user', { expectedStatus: 'in_progress',
-        expectedMetadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: input.agentId } });
+      } }, input.task.taskType || 'user', settlementFence);
       if (updated?.status !== 'completed' || updated?.error || updated?.statusChanged) return { ...result, verified: false, skipReason: 'cleanup-task-settlement-unverified' };
     }
     // Completion persists pending before publishing its event. A failed probe,
@@ -763,6 +787,9 @@ async function settleDivergedBranch(ctx) {
     return held;
   }
   if (prepared.integrated) return retireIntegratedCheckout({ ...ctx, appId: prepared.appId }, prepared.retirement);
+  if (ctx.task?.status === 'blocked' && ctx.agentState?.result?.cleanupPending === true) {
+    return ctx.blockWith('cleanup-budget-exhausted', { issues, observed });
+  }
   // A recovery successor cannot start a new lineage with a fresh budget.
   if (ctx.task?.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup') {
     return ctx.blockWith('cleanup-successor-review-unresolved', { issues: ctx.issues, observed: ctx.observed });
