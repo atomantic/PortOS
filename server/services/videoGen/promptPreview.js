@@ -14,11 +14,11 @@ import { getSettings } from '../settings.js';
 import { VIDEO_GEN_MODE } from './modes.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { resolveRequestedVideoBackend } from './prepareParams.js';
-import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES } from './requestFields.js';
+import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES, REFERENCE_AUDIO_FIELDS } from './requestFields.js';
 import { grokVideoSentPrompt } from './grok.js';
 import { falVideoSentPrompt } from './fal.js';
 
-export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', 'icReference', 'runwayVideo', 'runwayCharacterVideo'];
+export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'];
 const UPLOADED_SOURCE_IMAGE = '(uploaded image)';
 
 const asWritten = (body, extra = {}) => ({

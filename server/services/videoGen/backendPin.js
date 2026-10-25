@@ -161,7 +161,7 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
   const unsupported = [
     'keyframes', 'lastImagePath', 'lastImageFile', 'audioFilePath', 'audioFile',
     'extendFromVideoId', 'extendFromVideoPath', 'icReferencePaths',
-    'icReferenceVideoIds', 'icReferenceImageFiles', 'loras', 'loraPaths', 'loraFilenames',
+    'icReferenceVideoIds', 'icReferenceImageFiles', 'referenceImageFiles', 'referenceImagePaths', 'referenceVideoIds', 'referenceVideoPaths', 'referenceAudioPaths', 'loras', 'loraPaths', 'loraFilenames',
   ].filter((key) => hasInput(params[key]));
   if (semantic && semantic !== 'text' && semantic !== 'image') unsupported.push(`mode ${semantic}`);
   if (Number(params.chunks) > 1) unsupported.push('chained chunks');
