@@ -1294,10 +1294,18 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   const validationPassed = recoveredValidation !== false && (mergedReviewFollowUp || claimDisposition)
     ? mergedReviewFollowUp || claimDisposition.status === 'verified' ? true : null
     : recoveredValidation;
-  const taskOutcome = reportedOutcome || retirementCompletion ? resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
+  let taskOutcome = reportedOutcome || retirementCompletion ? resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
     ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedOutcome,
     success: effectiveSuccess, validationPassed, noCommitDeclared: declaresNoCommitCriterion(task) }) : null;
   if (['blocked', 'incomplete'].includes(taskOutcome?.status)) effectiveSuccess = false;
+
+  const savedCleanup = isDeliveryCleanupHeld(task?.metadata) && task.metadata.deliveryRecoveryAgentId === agent.id;
+  const cleanupAllowed = savedCleanup || (executionSuccess && validationPassed !== false
+    && (agent.metadata?.isWorktree === true || hasClaimCheckoutBindings(agent.metadata)));
+  const recoveryOutcome = !cleanupAllowed && taskOutcome?.recovery?.mode === 'cleanup' ? { ...taskOutcome, recovery: undefined } : taskOutcome;
+  let recoveryUpdate = deliveryHeld && !refused && !isPrivateSecurity && task?.id && task.status !== 'completed'
+    ? await resolveDeliveryRecoveryUpdate(task, recoveryOutcome, agent.id) : null;
+  if (recoveryUpdate?.runtimeRecoveryContext) taskOutcome = recoveryUpdate.metadata.taskOutcome;
 
   if (agent.metadata?.runId) {
     const bufferedOutput = Array.isArray(agent.output)
@@ -1315,12 +1323,6 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     );
   }
 
-  const savedCleanup = isDeliveryCleanupHeld(task?.metadata) && task.metadata.deliveryRecoveryAgentId === agent.id;
-  const cleanupAllowed = savedCleanup || (executionSuccess && validationPassed !== false
-    && (agent.metadata?.isWorktree === true || hasClaimCheckoutBindings(agent.metadata)));
-  const recoveryOutcome = !cleanupAllowed && taskOutcome?.recovery?.mode === 'cleanup' ? { ...taskOutcome, recovery: undefined } : taskOutcome;
-  let recoveryUpdate = deliveryHeld && !refused && !isPrivateSecurity && task?.id && task.status !== 'completed'
-    ? await resolveDeliveryRecoveryUpdate(task, recoveryOutcome, agent.id) : null;
   let recoveryOwnershipLost = false;
   if (recoveryUpdate) {
     const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user', {
@@ -2017,7 +2019,7 @@ export async function finalizeAgent({
       return null;
     });
 
-  const taskOutcome = resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
+  let taskOutcome = resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
     ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedTaskOutcome, success: verdict.success,
     validationPassed, branchProvenEmpty, noChangeAllowed: permitsNoChangeCompletion(task),
     noCommitDeclared: declaresNoCommitCriterion(task) });
@@ -2037,6 +2039,7 @@ export async function finalizeAgent({
     ? await resolveDeliveryRecoveryUpdate(preHookTask, (!executionSuccess || !verdict.success || validationPassed === false || !cleanupEligible) && taskOutcome.recovery?.mode === 'cleanup'
       ? { ...taskOutcome, recovery: undefined } : taskOutcome, agentId)
     : await resolveFinalTaskUpdate({ task, preHookTask, hookMetadata, verdict, terminatedByUser, agentId });
+  if (taskUpdate.runtimeRecoveryContext) taskOutcome = taskUpdate.metadata.taskOutcome;
   taskUpdate.metadata = { ...(taskUpdate.metadata || task.metadata), taskOutcome };
 
   if (isLegacyDeepAudit(task.metadata) && hookResult?.deepAudit) {
@@ -2482,7 +2485,7 @@ async function resolveDeliveryRecoveryUpdate(task, outcome, agentId) {
 }
 
 function runtimeRecoveryFence(update) {
-  if (update.metadata?.blockedCategory !== 'runtime-verification') return [];
+  if (update.metadata?.blockedCategory !== 'runtime-verification') return update.runtimeRecoveryContext ? [update.runtimeRecoveryContext] : [];
   const p = update.metadata.runtimeVerification;
   return [{ ...update.runtimeRecoveryContext, expectedStatus: p.dispatchStatus, expectedMetadata: {
     ...(p.dispatchStatus === 'blocked' ? { runtimeVerificationId: update.metadata.runtimeVerificationId } : {}),

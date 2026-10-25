@@ -263,10 +263,13 @@ function resumedCleanupPolicies(policies, input) {
   if (input.verifiedPrHead !== input.tip) return policies;
   const byId = new Map(policies.map(policy => [policy.agent.id, policy]));
   const proofs = new Map();
+  // Claims may discover their PR only during retirement. A missing saved URL
+  // retains the exact task, capture and generation requirements below.
   const receipt = (policy, incarnation, successor = null) => {
     const agent = policy.agent;
     if (agent.status !== 'completed' || !agent.taskId || agent.result?.validationPassed === false
-      || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE || retirementPr(policy) !== input.prUrl
+      || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
+      || (retirementPr(policy) && retirementPr(policy) !== input.prUrl)
       || (policy.tip && policy.tip !== input.tip && !successor)) return null;
     const rewritten = row => successor && input.resumedDeliveries?.some(proof =>
       proof.agentId === agent.id && proof.successorAgentId === successor.agent.id && proof.taskId === agent.taskId

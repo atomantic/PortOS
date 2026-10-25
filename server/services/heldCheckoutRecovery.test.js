@@ -2443,7 +2443,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     }));
   });
 
-  it('retires a resumed merged checkout without promoting failed attempts or accepting unrelated generations', async () => {
+  it.each(['bound', 'discovered'])('retires a resumed merged checkout with %s PR identity without promoting failed attempts', async prIdentity => {
     const c = await reviewedCheckout('resumed-cleanup', { normalMerge: true });
     await execGit(['worktree', 'unlock', c.path], repo);
     Object.assign(c.release, { locked: false, lockReason: null });
@@ -2456,10 +2456,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       return { id, taskId: 'same-original-task', status: 'completed', startedAt,
         completedAt: `2026-03-01T0${index}:01:00.000Z`,
         result: index === 0 ? { success: false, executionSuccess: false, validationPassed: null }
-          : { success: false, executionSuccess: true, validationPassed: true, cleanupPending: true,
+          : { success: false, executionSuccess: true, validationPassed: null, cleanupPending: true,
             taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } },
         metadata: { sourceWorkspace: repo, workspacePath: path, worktreeBranch: c.release.branch,
-          prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { branch: c.release.branch, url: c.forge.prUrl },
+          prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: prIdentity === 'bound' ? { branch: c.release.branch, url: c.forge.prUrl } : null,
           checkoutSeeds: [],
           resumedFromAgentId: index ? ['failed', 'cleanup'][index - 1] : null,
           completedCheckouts: [{ version: 1, agentId: id, startedAt, capturedAt: startedAt, ...captured, path }] } };
@@ -2476,6 +2476,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     for (const [target, key, value] of [[attempts[2].metadata, 'resumedFromAgentId', null],
       [attempts[0], 'taskId', 'other-task'], [attempts[0].result, 'validationPassed', false],
       [attempts[0].metadata, 'prCompletionPolicy', 'leave-open'],
+      [attempts[0].metadata, 'reviewLoopMergeTarget', { branch: c.release.branch, url: 'https://github.com/example/repo/pull/99' }],
       [receipt, 'repoPath', join(scratch, 'unrelated-repo')],
       [receipt, 'path', join(external, 'unrelated-checkout')],
       [attempts[0].metadata.completedCheckouts[0], 'head', 'b'.repeat(40)],
