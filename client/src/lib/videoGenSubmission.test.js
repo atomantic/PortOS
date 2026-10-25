@@ -278,3 +278,34 @@ describe('buildVideoGenSubmission — prompt additions (#11317)', () => {
     expect(payload.promptAdditions).toEqual([{ id: 'style-1', label: 'Style preset: Film noir', text: 'cinematic noir' }]);
   });
 });
+
+describe('buildVideoGenSubmission — extra reference images', () => {
+  it('sends the filled gallery picks, clipped to the model ceiling minus the input image', () => {
+    const payload = buildVideoGenSubmission(baseArgs({
+      currentModel: { runtime: 'fastvideo', maxReferenceImages: 3 },
+      referenceImageFiles: ['a.png', '', 'b.png', 'c.png'],
+    }));
+    expect(payload.referenceImageFiles).toEqual(['a.png', 'b.png']);
+  });
+
+  it('sends clips as ids and voices as indexed upload slots, clipped to the model ceilings', () => {
+    const voices = [new File(['a'], 'a.wav'), new File(['b'], 'b.wav'), new File(['c'], 'c.wav')];
+    const payload = buildVideoGenSubmission(baseArgs({
+      currentModel: { runtime: 'fastvideo', maxReferenceImages: 2, maxReferenceVideos: 1, maxReferenceAudios: 2 },
+      referenceVideoIds: ['', 'clip-1', 'clip-2'],
+      referenceAudioFiles: voices,
+    }));
+    expect(payload.referenceVideoIds).toEqual(['clip-1']);
+    expect(payload.referenceAudio0).toBe(voices[0]);
+    expect(payload.referenceAudio1).toBe(voices[1]);
+    expect(payload.referenceAudio2).toBeUndefined();
+  });
+
+  it('never carries a stale list to a model that takes none', () => {
+    const payload = buildVideoGenSubmission(baseArgs({
+      currentModel: { runtime: 'fastvideo' },
+      referenceImageFiles: ['a.png'],
+    }));
+    expect(payload.referenceImageFiles).toBeUndefined();
+  });
+});

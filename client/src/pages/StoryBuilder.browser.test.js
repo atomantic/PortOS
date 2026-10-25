@@ -14,7 +14,9 @@ const steps = ['idea', 'universeAesthetic', 'plotArc', 'readerMap', 'characters'
 
 // Browser geometry uniquely proves that long stage work cannot displace the
 // action and that sidebar/zoom/narrow-container widths drive the same navigator.
-describe.skipIf(!chrome)('Story Builder persistent stage workspace', () => {
+// A fresh browser per stage contains the navigation stall observed after
+// reusing a process for the preceding zoom/resize matrices.
+describe.skipIf(!chrome).each(['idea', 'universeAesthetic', 'production'])('Story Builder %s persistent stage workspace', step => {
   let fixture;
   beforeAll(async () => {
     fixture = await startBrowserFixture({ name: 'story-workspace', createServer, chromium,
@@ -77,38 +79,36 @@ describe.skipIf(!chrome)('Story Builder persistent stage workspace', () => {
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify(data) });
     });
     try {
-      for (const step of ['idea', 'universeAesthetic', 'production']) {
-        await page.goto(`${fixture.origin}story-test?step=${step}`);
-        await page.getByRole('heading', { name: steps.find(s => s.id === step).label, exact: true }).waitFor().catch(error => { throw new Error(errors.join('\n') || error.message); });
-        for (const width of [320, 375, 390, 768, 1024, 1280, 1440]) {
-          for (const expanded of [false, true]) {
-            for (const zoom of [1, 2]) {
-              await page.setViewportSize({ width, height: width === 1440 ? 900 : 812 });
-              await page.evaluate(({ expanded, zoom, width }) => {
-                document.body.style.zoom = String(zoom);
-                document.documentElement.style.setProperty('--sidebar', expanded && width >= 768 ? '240px' : '0px');
-                document.getElementById('root').style.maxWidth = '';
-              }, { expanded, zoom, width });
-              await assertGeometry(page, { step, width, expanded, zoom });
-            }
+      await page.goto(`${fixture.origin}story-test?step=${step}`);
+      await page.getByRole('heading', { name: steps.find(s => s.id === step).label, exact: true }).waitFor().catch(error => { throw new Error(errors.join('\n') || error.message); });
+      for (const width of [320, 375, 390, 768, 1024, 1280, 1440]) {
+        for (const expanded of [false, true]) {
+          for (const zoom of [1, 2]) {
+            await page.setViewportSize({ width, height: width === 1440 ? 900 : 812 });
+            await page.evaluate(({ expanded, zoom, width }) => {
+              document.body.style.zoom = String(zoom);
+              document.documentElement.style.setProperty('--sidebar', expanded && width >= 768 ? '240px' : '0px');
+              document.getElementById('root').style.maxWidth = '';
+            }, { expanded, zoom, width });
+            await assertGeometry(page, { step, width, expanded, zoom });
           }
         }
-        for (const width of [240, 320, 480]) {
-          await page.setViewportSize({ width: 1440, height: 900 });
-          await page.evaluate(width => {
-            document.body.style.zoom = '1';
-            document.documentElement.style.setProperty('--sidebar', '0px');
-            document.getElementById('root').style.maxWidth = `${width}px`;
-          }, width);
-          await assertGeometry(page);
-        }
-        const work = page.getByRole('region', { name: 'Stage work' });
-        const action = page.getByRole('button', { name: step === 'idea' ? 'Unlock to revise' : 'Lock & continue' });
-        const before = await action.boundingBox();
-        await work.evaluate(el => { el.scrollTop = el.scrollHeight; });
-        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-        expect(await action.boundingBox()).toEqual(before);
       }
+      for (const width of [240, 320, 480]) {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.evaluate(width => {
+          document.body.style.zoom = '1';
+          document.documentElement.style.setProperty('--sidebar', '0px');
+          document.getElementById('root').style.maxWidth = `${width}px`;
+        }, width);
+        await assertGeometry(page);
+      }
+      const work = page.getByRole('region', { name: 'Stage work' });
+      const action = page.getByRole('button', { name: step === 'idea' ? 'Unlock to revise' : 'Lock & continue' });
+      const before = await action.boundingBox();
+      await work.evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      expect(await action.boundingBox()).toEqual(before);
       expect(mutations).toEqual([]);
     } finally { await page.close(); }
   }, 120000);
