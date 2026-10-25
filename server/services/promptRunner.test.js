@@ -1171,6 +1171,17 @@ describe('promptRunner — retry-with-fallback', () => {
   // A pin opts out of ROUTING, not out of health reporting. Leaving the mark to
   // the fallback cascade let a provider fail every pinned call for hours while
   // the Providers page stayed green and unpinned callers kept choosing it.
+  it('refuses unsupported execution options before creating a run or spending on recovery', async () => {
+    const status = mockToolkitWithFallback();
+    await expect(runPromptThroughProvider({ provider: primaryApi, prompt: 'p', source: 'test',
+      executionOptions: { serviceTier: 'fast' } })).rejects.toMatchObject({ code: 'EXECUTION_OPTIONS_UNSUPPORTED' });
+    expect(runner.createRun).not.toHaveBeenCalled();
+    expect(runner.executeApiRun).not.toHaveBeenCalled();
+    expect(status.getFallbackProvider).not.toHaveBeenCalled();
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+    expect(autoFixer.escalateProviderFailure).not.toHaveBeenCalled();
+  });
+
   it('stops an initial policy refusal without selecting a provider or scheduling recovery', async () => {
     const status = mockToolkitWithFallback();
     runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({

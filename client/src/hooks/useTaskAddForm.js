@@ -677,6 +677,7 @@ export default function useTaskAddForm({
       model: selectedModelOrSole || undefined,
       provider: state.newTask.provider || undefined,
       effort: state.newTask.effort || undefined,
+      executionOptions: state.newTask.executionOptions,
       orchestrationMode: state.orchestrationMode === 'orchestrated' ? 'orchestrated' : undefined,
       orchestrationProfile: state.orchestrationMode === 'orchestrated' ? state.orchestrationProfile : undefined,
       temperature: state.newTask.temperature === '' ? undefined : Number(state.newTask.temperature),

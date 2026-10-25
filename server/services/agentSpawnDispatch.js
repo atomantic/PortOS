@@ -170,7 +170,15 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       ? `${basePrompt}\n\n${formatPublicReviewInputPrompt(publicReviewPromptData)}`
       : basePrompt;
     const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
-    const requestedProvider = applyTaskGenerationOverrides(provider, task.metadata);
+    let requestedProvider = applyTaskGenerationOverrides(provider, task.metadata);
+    let executionAttribution;
+    if (requestedProvider.executionOptions && Object.keys(requestedProvider.executionOptions).length) {
+      const { prepareExecutionOptions } = await import('./providerExecutionOptions.js');
+      const prepared = await prepareExecutionOptions(provider, selectedModel, task.metadata?.executionOptions, 'task');
+      requestedProvider.executionOptions = prepared.provider.executionOptions;
+      requestedProvider.executionOptionSupport = prepared.provider.executionOptionSupport;
+      executionAttribution = prepared.attribution;
+    }
     if (notificationAuth.env) {
       // This copy exists only for this launch. The stored provider and agent/run
       // registration retain the original provider, with no inbox token added.
@@ -321,6 +329,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     const securityScanGrant = dispatchUseRunner && resolveTaskHookType(task) === 'security' && isCodexProvider(runProvider)
       ? securityScanGrantFromArgs(cliConfig.args)
       : null;
+    if (executionAttribution) await updateAgent(agentId, { metadata: { executionOptions: executionAttribution } });
     if (securityScanGrant) await updateAgent(agentId, { metadata: { securityScanGrant, taskAnalysisType: 'security' } });
 
     emitLog('success', `Spawning agent for task ${task.id}`, {

@@ -1,3 +1,4 @@
+import { executionOptionsSchema } from './internal/executionOptionsValidation.js';
 import { z } from 'zod';
 import { MAX_MODEL_ACCESS_PATTERNS, MAX_MODEL_ACCESS_PATTERN_LENGTH, MODEL_ACCESS_MODES } from './internal/modelAccess.js';
 import { basename, extname } from 'path';
@@ -106,6 +107,7 @@ export const providerSchema = z.object({
   defaultModel: z.string().nullable().optional(),
   // Empty string is the UI's "use the provider/CLI default" sentinel.
   effort: providerEffort,
+  executionOptions: executionOptionsSchema.optional(),
   lightModel: z.string().nullable().optional(),
   mediumModel: z.string().nullable().optional(),
   heavyModel: z.string().nullable().optional(),

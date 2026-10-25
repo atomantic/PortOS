@@ -130,6 +130,7 @@ import { isCompositeProviderId } from '../utils/providerRef.js';
 import useToolUseModelIds from '../hooks/useToolUseModelIds.js';
 import useVisionModelIds from '../hooks/useVisionModelIds.js';
 import useProviderCatalog from '../hooks/useProviderCatalog.js';
+import ExecutionOptionsSelect from './providers/ExecutionOptionsSelect.jsx';
 import EffortSelect from './cos/EffortSelect.jsx';
 import ProviderComposePopover from './providers/ProviderComposePopover.jsx';
 import ToolUseWarning from './ui/ToolUseWarning.jsx';
@@ -172,6 +173,8 @@ export default function ProviderModelSelector({
   highlightVision = false,
   effort,
   onEffortChange,
+  executionOptions,
+  onExecutionOptionsChange,
   selectionPolicy,
   compose = true,
   composeMethods,
@@ -474,6 +477,13 @@ export default function ProviderModelSelector({
             optionFilter={effortAllowed}
             className={selectClass}
           />
+        </div>
+      )}
+      {onExecutionOptionsChange && (
+        <div className={fieldClass}>
+          <ExecutionOptionsSelect provider={selectedProvider} model={effectiveModel}
+            value={executionOptions} onChange={onExecutionOptionsChange}
+            disabled={disabled || loading} className={selectClass} />
         </div>
       )}
       {composeEnabled && (

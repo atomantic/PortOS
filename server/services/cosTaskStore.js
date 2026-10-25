@@ -109,7 +109,7 @@ export { PAUSED_BLOCKED_CATEGORIES };
 // with the #4153 split so the task editor can edit the agent-facing payload the
 // same way it edits the human note — deliberately WITHOUT re-classification, so
 // a multi-line note edit can't overwrite the payload (see `splitTaskPromptFields`).
-const LEGACY_DIRECT_FIELDS = ['context', 'prompt', 'model', 'provider', 'effort', 'temperature', 'thinking', 'app', 'orchestrationMode', 'orchestrationProfile'];
+const LEGACY_DIRECT_FIELDS = ['context', 'prompt', 'model', 'provider', 'effort', 'executionOptions', 'temperature', 'thinking', 'app', 'orchestrationMode', 'orchestrationProfile'];
 
 // Equality for metadata values across a fresh markdown re-parse: primitives by
 // ===, arrays/objects (reviewers[], screenshots[], …) by JSON since the two

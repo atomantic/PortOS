@@ -1,3 +1,4 @@
+import { providerExecutionOptionsQuerySchema } from '../lib/validation.js';
 import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
 import { tuiModeAddition } from '../lib/providerModePairing.js';
@@ -763,6 +764,14 @@ export function createPortOSProviderRoutes(aiToolkit) {
    * `effort` become the preset's defaults; a `+<bootstrap>` suffix becomes
    * its `credentialBootstrapId`.
    */
+  router.get('/:id/execution-options', asyncHandler(async (req, res) => {
+    const { model } = validateRequest(providerExecutionOptionsQuerySchema, req.query);
+    const provider = await providerService.getProviderById(req.params.id);
+    if (!provider) throw new ServerError('Provider not found', { status: 404 });
+    const { getExecutionOptionCapabilities } = await import('../services/providerExecutionOptions.js');
+    res.json(await getExecutionOptionCapabilities(provider, model));
+  }));
+
   router.post('/presets', asyncHandler(async (req, res) => {
     const input = validateRequest(providerPresetCreateSchema, req.body ?? {});
     const { createPresetFromComposite } = await presetService();

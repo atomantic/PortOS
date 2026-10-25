@@ -1,3 +1,4 @@
+import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { auditWorkflow } from './auditWorkflow.js';
 /**
  * Chief-of-Staff (CoS) Zod schemas (split out of validation.js, issue #1831).
@@ -213,6 +214,7 @@ export const createCosTaskSchema = z.object({
   model: z.string().optional(),
   provider: providerRefFieldSchema.optional(),
   effort: effortInputSchema,
+  executionOptions: executionOptionsSchema.optional(),
   orchestrationMode: orchestrationModeInputSchema,
   orchestrationProfile: orchestrationProfileSchema.optional(),
   temperature: taskTemperatureInputSchema,
@@ -354,6 +356,7 @@ export const updateCosTaskSchema = z.object({
   model: z.string().optional(),
   provider: providerRefFieldSchema.optional(),
   effort: effortUpdateSchema,
+  executionOptions: executionOptionsSchema.optional(),
   orchestrationMode: orchestrationModeUpdateSchema,
   orchestrationProfile: orchestrationProfileSchema.nullable().optional(),
   temperature: taskTemperatureUpdateSchema,

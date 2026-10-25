@@ -83,7 +83,7 @@ export function probeCodexModelsViaAppServer(command, args, provider, options = 
               settle(new Error(`${label} returned no model ids`));
               return;
             }
-            settle(null, withCodexShippedModels(ids));
+            settle(null, options.includeDetails ? rawModels.filter((m) => !m.hidden) : withCodexShippedModels(ids));
             return;
           }
         } catch { /* not JSON, or not a message we're waiting on — ignore */ }

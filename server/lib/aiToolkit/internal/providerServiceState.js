@@ -308,6 +308,7 @@ export function createProviderServiceState(config = {}) {
       ...(providerData.modelHardwareRequirements ? { modelHardwareRequirements: providerData.modelHardwareRequirements } : {}),
       defaultModel: providerData.defaultModel || null,
       effort: providerData.effort || null,
+      ...(providerData.executionOptions ? { executionOptions: providerData.executionOptions } : {}),
       lightModel: providerData.lightModel || null,
       mediumModel: providerData.mediumModel || null,
       heavyModel: providerData.heavyModel || null,
