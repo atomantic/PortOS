@@ -60,6 +60,7 @@ import {
   isPasteCommitted,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
+  PASTE_COMMIT_PATIENCE_MS,
   scheduleSubmitEnters,
   SELF_CLEARING_RESUBMIT_POLL_MS,
   PASTE_DEADLINE_MS,
@@ -435,6 +436,7 @@ ${prompt}`;
   // path dead (issue #1229). Lives only during the paste→Enter window; nulled
   // when detection resolves or the run finalizes.
   let postPasteStripped = null;
+  let postPasteOutputAt = 0;
   let firstOutputAt = null;
   let lastOutputAt = startTime;
   let firstResponseAt = null;
@@ -696,7 +698,10 @@ ${prompt}`;
       inputReady.observe(text, stripped);
       if (stripped) {
         promptGate.observe(stripped, now);
-        if (postPasteStripped !== null) postPasteStripped += stripped;
+        if (postPasteStripped !== null) {
+          postPasteStripped += stripped;
+          postPasteOutputAt = now;
+        }
         outputBuffer += stripped;
         if (outputBuffer.length > OUTPUT_BUFFER_HEADROOM) {
           outputBuffer = outputBuffer.slice(-OUTPUT_BUFFER_CAP);
@@ -935,6 +940,7 @@ ${prompt}`;
       // Start capturing stripped post-paste output BEFORE the paste write so the
       // marker watcher sees every response chunk.
       postPasteStripped = '';
+      postPasteOutputAt = Date.now();
       try {
         ptyProcess.write(`\x1b[200~${wrappedPrompt}\x1b[201~`);
       } catch (err) {
@@ -967,6 +973,7 @@ ${prompt}`;
       }, 1000);
 
       const pasteSentAt = Date.now();
+      let pasteSettleStartedAt = null;
       pasteEnterTimer = setInterval(() => {
         if (finalized) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; postPasteStripped = null; return; }
         const elapsed = Date.now() - pasteSentAt;
@@ -974,8 +981,22 @@ ${prompt}`;
         // counts as a commit — without a verifiable prefix this is the marker
         // count plus Claude's/OpenCode's collapsed-chip shape.
         const markerSeen = isPasteCommitted(postPasteStripped || '', { promptMarkerCount });
-        if ((markerSeen && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
-          || elapsed >= PASTE_TO_ENTER_FALLBACK_MS) {
+        // Receipt can precede the end of a Windows paste burst. The existing
+        // settle interval belongs after its latest output, even on the fallback.
+        const settled = !isCodexCommand(command)
+          || Date.now() - postPasteOutputAt >= PASTE_TO_ENTER_MIN_DELAY_MS;
+        if (!settled && (markerSeen || elapsed >= PASTE_TO_ENTER_FALLBACK_MS)) {
+          pasteSettleStartedAt ??= Date.now();
+          // The fixed cold-start patience also bounds a continuously repainting
+          // composer. Refuse submission instead of forcing a blind Enter.
+          if (Date.now() - pasteSettleStartedAt >= PASTE_COMMIT_PATIENCE_MS) {
+            finish({ success: false, exitCode: 1, reason: 'prompt-not-submitted',
+              error: 'Codex paste output never settled; no submission Enter was sent.' });
+            return;
+          }
+        }
+        if (settled && ((markerSeen && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
+          || elapsed >= PASTE_TO_ENTER_FALLBACK_MS)) {
           clearInterval(pasteEnterTimer);
           pasteEnterTimer = null;
           // The commit buffer holds the chip: a TUI that ignores the Enter may

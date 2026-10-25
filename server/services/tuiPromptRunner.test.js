@@ -1406,6 +1406,56 @@ describe('executeTuiRun', () => {
       }));
     });
 
+    it('waits for late Codex paste output to settle even past the fallback deadline', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+      const provider = { id: 'codex', type: 'tui', command: 'codex', tuiPromptDelayMs: 50 };
+      const promise = executeTuiRun({ runId: 'run-paste-settle', provider,
+        prompt: 'complete this task', workspacePath: TEST_WORKSPACE, timeout: 60000 });
+      await flushAsync();
+      const pty = ptyInstances[0];
+      pty.emitData('› Ask Codex to do anything\n? for shortcuts');
+      await vi.advanceTimersByTimeAsync(1500);
+      const pastes = () => pty.write.mock.calls.filter(([keys]) => keys.startsWith('\x1b[200~'));
+      const enters = () => pty.write.mock.calls.filter(([keys]) => keys === '\r');
+      expect(pastes()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(3000);
+      pty.emitData('[Pasted Content 30000 chars]');
+      for (let chunk = 0; chunk < 8; chunk += 1) {
+        await vi.advanceTimersByTimeAsync(100);
+        pty.emitData(' remaining prompt text');
+        expect(enters()).toHaveLength(0);
+      }
+      await vi.advanceTimersByTimeAsync(199);
+      expect(enters()).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(101);
+      expect(enters()).toHaveLength(1);
+      expect(pastes()).toHaveLength(1);
+      pty.emitExit({ exitCode: 1 });
+      await promise;
+    });
+
+    it('bounds continuous Codex paste output without sending Enter or another paste', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+      const provider = { id: 'codex', type: 'tui', command: 'codex', tuiPromptDelayMs: 50 };
+      const promise = executeTuiRun({ runId: 'run-paste-never-settles', provider,
+        prompt: 'complete this task', workspacePath: TEST_WORKSPACE, timeout: 0 });
+      await flushAsync();
+      const pty = ptyInstances[0];
+      pty.emitData('› Ask Codex to do anything\n? for shortcuts');
+      await vi.advanceTimersByTimeAsync(1500);
+      pty.emitData('[Pasted Content 30000 chars]');
+      for (let chunk = 0; chunk < 460; chunk += 1) {
+        await vi.advanceTimersByTimeAsync(100);
+        pty.emitData(' continuing redraw');
+      }
+      await promise;
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        success: false, extras: expect.objectContaining({ completionReason: 'prompt-not-submitted' }),
+      }));
+      expect(pty.write.mock.calls.filter(([keys]) => keys === '\r')).toHaveLength(0);
+      expect(pty.write.mock.calls.filter(([keys]) => keys.startsWith('\x1b[200~'))).toHaveLength(1);
+    });
+
     it('presses Enter again when the paste chip sits unsubmitted, instead of idle-completing on it', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
       const provider = { id: 'claude', type: 'tui', command: 'claude', tuiPromptDelayMs: 50 };
