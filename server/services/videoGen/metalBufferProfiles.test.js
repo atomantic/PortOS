@@ -78,6 +78,22 @@ describe('successful Metal profile persistence', () => {
     expect(token).toMatchObject({ applied: false, diagnostic: 'unreadable' });
     expect(await unreadable.learn(token)).toMatchObject({ learned: false, diagnostic: 'unreadable' });
   });
+
+  it('a failed invalidation disables reuse until a successful clear repairs storage', async () => {
+    const write = vi.fn(async (_file, data) => {
+      await mkdir(join(root, 'cache'), { recursive: true });
+      await writeFile(file, JSON.stringify(data));
+    });
+    const failing = createMetalBufferProfiles({ file, write, now: () => now });
+    await failing.learn(await failing.lookup(signature(1)));
+    const learned = await failing.lookup(signature(1));
+    expect(learned.applied).toBe(true);
+    write.mockRejectedValueOnce(new Error('write failed'));
+    await expect(failing.invalidate(learned)).rejects.toThrow('write failed');
+    expect(await failing.lookup(signature(1))).toMatchObject({ applied: false, diagnostic: 'write-failed' });
+    await failing.clear();
+    expect(await failing.lookup(signature(1))).toMatchObject({ applied: false, diagnostic: 'ready' });
+  });
 });
 
 it('binds execution shape and current runtime/helper/model/encoder/memory evidence without binding prompt, seed or source names', async () => {

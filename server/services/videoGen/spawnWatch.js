@@ -231,6 +231,9 @@ export async function spawnAndWatchVideo({
     // relaunch — reset it explicitly so a phase left open by the child that just
     // died can never be read as the replacement child's state.
     job.promptEncodePhase = null;
+    job.speedProfile = null;
+    job.draftDecode = null;
+    job.streamingPolicy = null;
     // Panel-side completion watchdog. Armed once we see the render's completion
     // marker on stdout; SIGKILLs the child if it hasn't exited after the grace
     // window. clearCompletionWatchdog() runs in every terminal path ('close',
@@ -579,7 +582,9 @@ export async function spawnAndWatchVideo({
             }
             thumbnail = await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, terminal: false, mutateHistory: mutateVideoHistory, publication: publications.get(outputPath) });
           }
-          if (reactiveRecovery && metalProfile && code === 0 && !signal && !proc.killed && ownershipSettled
+          const effectiveProfileConfirmed = (!speedProfileId || (job.speedProfile?.id === speedProfileId && job.speedProfile.degraded?.length === 0))
+            && (!args.includes('--draft-decoder-id') || job.draftDecode?.applied === true);
+          if (reactiveRecovery && metalProfile && effectiveProfileConfirmed && code === 0 && !signal && !proc.killed && ownershipSettled
             && videoJobState.cancelEpoch === cancelEpochAtClose && !preparation?.wasCanceled()
             && [...publications.values()].every(publication => publication.committed)) {
             const verified = await verifyPostCompletionOutputs({ outputPaths: expectedOutputPaths, completedOutputs,

@@ -21,7 +21,9 @@ const canonical = value => JSON.stringify(value, (_key, item) => item && typeof 
 export function createMetalBufferProfiles({ file, now = Date.now, read = readFile, write = atomicWrite }) {
   const queue = createFileWriteQueue();
   let epoch = 0;
+  let writeFault = false;
   const load = async () => {
+    if (writeFault) return { entries: null, diagnostic: 'write-failed' };
     const result = await read(file, 'utf8').then(text => ({ text }), error => ({ error }));
     if (result.error) return result.error.code === 'ENOENT'
       ? { entries: [], diagnostic: 'empty' } : { entries: null, diagnostic: 'unreadable' };
@@ -29,7 +31,11 @@ export function createMetalBufferProfiles({ file, now = Date.now, read = readFil
     if (!parsed.success) return { entries: null, diagnostic: 'invalid-or-unknown-version' };
     return { entries: parsed.data.entries.filter(entry => entry.learnedAt <= now() && now() - entry.learnedAt < TTL_MS), diagnostic: 'ready' };
   };
-  const save = entries => write(file, { version: 1, entries });
+  const save = entries => write(file, { version: 1, entries }).catch(error => {
+    // A failed invalidation must not let this process keep reusing the old file.
+    writeFault = true;
+    throw error;
+  });
   return {
     lookup: signature => {
       const startedEpoch = epoch;
@@ -58,7 +64,7 @@ export function createMetalBufferProfiles({ file, now = Date.now, read = readFil
     clear: () => {
       // Fence learning immediately, including jobs whose success is still awaiting publication.
       epoch += 1;
-      return queue(async () => { await save([]); return { cleared: true }; });
+      return queue(async () => { await save([]); writeFault = false; return { cleared: true }; });
     },
   };
 }
