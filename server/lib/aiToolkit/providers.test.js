@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, join } from 'path';
 import { createProviderService, isOllamaBackedProvider } from './providers.js';
@@ -35,6 +35,24 @@ describe('Provider Service', () => {
     await expect(reload.updateProvider('speed-selection', { command: 'another' })).rejects.toThrow('source provider');
     await reload.deleteProvider('codex-source');
     expect(await reload.getProviderById('speed-selection')).toMatchObject({ enabled: false, unavailableReason: expect.any(String) });
+  });
+
+  it.each(['refreshProviderModels', 'refreshProviderModelsBatch'])('refreshes the source catalog through an execution selection with %s', async method => {
+    await providerService.createProvider({ id: 'source', name: 'Source', type: 'api', enabled: true,
+      endpoint: 'https://api.example.com/v1', models: ['old'], defaultModel: 'old' });
+    await providerService.createProvider({ id: 'selection', name: 'Fast requested', type: 'api', enabled: true,
+      executionSourceProviderId: 'source', executionOptions: { serviceTier: 'fast' }, models: ['old'] });
+    const probe = vi.spyOn(providerService, '_refreshAPIProviderModels').mockResolvedValue(['new']);
+    const refreshed = await providerService[method](method.endsWith('Batch') ? ['selection', 'source'] : 'selection');
+    if (!method.endsWith('Batch')) expect(refreshed).toMatchObject({ id: 'selection', models: ['new'], executionSelectionOptions: { serviceTier: 'fast' } });
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(probe.mock.calls[0][0].id).toBe('source');
+    const reload = createProviderService({ dataDir: TEST_DATA_DIR, providersFile: 'providers.json' });
+    expect(await reload.getProviderById('source')).toMatchObject({ models: ['new'] });
+    expect(await reload.getProviderById('selection')).toMatchObject({ models: ['new'], executionSelectionOptions: { serviceTier: 'fast' } });
+    const stored = JSON.parse(await readFile(join(TEST_DATA_DIR, 'providers.json'), 'utf8'));
+    expect(stored.providers.selection.models).toEqual(['old']);
+    await expect(reload.updateProvider('selection', { command: 'another' })).rejects.toThrow('source provider');
   });
 
   it('serializes overlapping provider mutations without losing either record', async () => {
