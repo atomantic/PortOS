@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { CANCEL_SETTLE_MS, recoverSupersededGate } from './ci-recover-superseded-gate.js';
+import { CANCEL_SETTLE_MS, DRAIN_POLL_INTERVAL_MS, DRAIN_TIMEOUT_MS, recoverSupersededGate } from './ci-recover-superseded-gate.js';
 
 const env = {
   GITHUB_REPOSITORY: 'example/project', GITHUB_REPOSITORY_ID: '10', GITHUB_TOKEN: 'test-token',
@@ -28,6 +28,7 @@ function api(options = {}) {
   };
   const writes = [];
   const reads = [];
+  let clock = 0;
   const fetchImpl = vi.fn(async (url, init = {}) => {
     const path = new URL(url).pathname.replace('/repos/example/project', '');
     if (init.method === 'POST') {
@@ -51,8 +52,11 @@ function api(options = {}) {
     else throw new Error(`Unexpected request ${path}`);
     return { status: 200, ok: true, json: async () => structuredClone(body) };
   });
-  const sleep = vi.fn(async (ms) => { expect(ms).toBe(CANCEL_SETTLE_MS); options.duringWait?.(state); });
-  return { state, writes, reads, execute: () => recoverSupersededGate({ env, fetchImpl, sleep }), sleep };
+  const sleep = vi.fn(async (ms) => {
+    clock += ms;
+    options.duringWait?.(state, ms, { writes, advance: (elapsed) => { clock += elapsed; } });
+  });
+  return { state, writes, reads, execute: () => recoverSupersededGate({ env, fetchImpl, sleep, now: () => clock }), sleep };
 }
 
 describe('superseded aggregate recovery through the Actions API', () => {
@@ -60,12 +64,65 @@ describe('superseded aggregate recovery through the Actions API', () => {
     const fixture = api({ forceSettles: true });
     expect(await fixture.execute()).toEqual({ outcome: 'settled', reason: 'force-cancel-settled' });
     expect(fixture.writes).toEqual(['/actions/runs/101/cancel', '/actions/runs/101/force-cancel']);
+    expect(fixture.sleep).toHaveBeenCalledWith(CANCEL_SETTLE_MS);
     expect(fixture.sleep).toHaveBeenCalledOnce();
     expect(fixture.reads.at(-1)).toBe('/actions/runs/101');
     expect(fixture.state.jobs[0].conclusion).toBe('failure');
     // A duplicate observer cannot cancel again or rewrite the genuine failure.
     expect((await fixture.execute()).outcome).toBe('held');
     expect(fixture.writes).toHaveLength(2);
+  });
+
+  const startDraining = (fixture) => {
+    Object.assign(fixture.state.jobs[0], { status: 'in_progress', conclusion: null,
+      steps: [{ status: 'in_progress', conclusion: null }] });
+  };
+
+  it('observes finishing non-gate work before qualifying the queued aggregate, without cancelling live jobs', async () => {
+    const fixture = api({ forceSettles: true, duringWait: (state, ms, { writes }) => {
+      if (ms !== DRAIN_POLL_INTERVAL_MS) return;
+      expect(writes).toEqual([]);
+      state.jobs[0] = jobs()[0];
+    } });
+    startDraining(fixture);
+    expect(await fixture.execute()).toEqual({ outcome: 'settled', reason: 'force-cancel-settled' });
+    expect(fixture.sleep.mock.calls.map(([ms]) => ms)).toEqual([DRAIN_POLL_INTERVAL_MS, CANCEL_SETTLE_MS]);
+    expect(fixture.writes).toEqual(['/actions/runs/101/cancel', '/actions/runs/101/force-cancel']);
+  });
+
+  it('holds persistently live work at one total deadline without any write', async () => {
+    const fixture = api();
+    startDraining(fixture);
+    expect(await fixture.execute()).toEqual({ outcome: 'held', reason: 'old-jobs-drain-timeout' });
+    expect(fixture.sleep.mock.calls.reduce((total, [ms]) => total + ms, 0)).toBe(DRAIN_TIMEOUT_MS);
+    expect(fixture.writes).toEqual([]);
+  });
+
+  it('includes time consumed during inspection in the drain deadline instead of resetting its budget', async () => {
+    const fixture = api({ duringWait: (_state, _ms, { advance }) => advance(DRAIN_TIMEOUT_MS) });
+    startDraining(fixture);
+    expect(await fixture.execute()).toEqual({ outcome: 'held', reason: 'old-jobs-drain-timeout' });
+    expect(fixture.sleep).toHaveBeenCalledOnce();
+    expect(fixture.writes).toEqual([]);
+  });
+
+  it.each([
+    ['current head changes', (s) => { s.pr.head.sha = 'c'.repeat(40); }],
+    ['old attempt changes', (s) => { s.old.run_attempt = 2; }],
+    ['old job data becomes incomplete', (s) => { s.jobs[0].steps = null; }],
+  ])('stops read-only drain polling if %s', async (_name, duringWait) => {
+    const fixture = api({ duringWait });
+    startDraining(fixture);
+    expect((await fixture.execute()).outcome).toBe('held');
+    expect(fixture.sleep).toHaveBeenCalledOnce();
+    expect(fixture.writes).toEqual([]);
+  });
+
+  it('observes the old run completing during drain without cancellation', async () => {
+    const fixture = api({ duringWait: (s) => Object.assign(s.old, { status: 'completed', conclusion: 'cancelled' }) });
+    startDraining(fixture);
+    expect(await fixture.execute()).toEqual({ outcome: 'settled', reason: 'old-run-settled-during-drain' });
+    expect(fixture.writes).toEqual([]);
   });
 
   it('does not force after normal cancellation settles', async () => {

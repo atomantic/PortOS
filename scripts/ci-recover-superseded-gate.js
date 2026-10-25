@@ -7,6 +7,9 @@ import { githubJson, githubRequest, repoApiPath, trimmed } from './lib/githubAct
 import { writeStepSummary } from './lib/githubOutput.js';
 
 export const CANCEL_SETTLE_MS = 45_000;
+export const DRAIN_TIMEOUT_MS = 120_000;
+export const DRAIN_POLL_INTERVAL_MS = 15_000;
+const MAX_DRAIN_POLLS = DRAIN_TIMEOUT_MS / DRAIN_POLL_INTERVAL_MS;
 const TERMINAL = new Set(['success', 'failure', 'neutral', 'cancelled', 'skipped', 'timed_out', 'action_required', 'stale', 'startup_failure']);
 const PENDING = new Set(['queued', 'requested', 'waiting', 'pending']);
 const positiveId = (value) => /^\d+$/.test(String(value)) && Number.isSafeInteger(Number(value)) && Number(value) > 0;
@@ -45,19 +48,32 @@ function completeList(body, key) {
     && new Set(rows.map((row) => row.id)).size === rows.length ? rows : null;
 }
 
-function queuedAggregateOnly(jobs, runId) {
-  if (!jobs || jobs.length < 2 || jobs.some((job) => job.run_id !== runId)) return false;
+const terminalJob = (job) => job.status === 'completed' && TERMINAL.has(job.conclusion)
+  && Array.isArray(job.steps) && job.steps.every((step) => step.status === 'completed' && TERMINAL.has(step.conclusion));
+const queuedGate = (job) => job.name === 'CI Gate' && job.status === 'queued'
+  && job.conclusion === null && job.started_at === null && job.completed_at === null
+  && Array.isArray(job.steps) && job.steps.length === 0;
+
+function inspectJobs(jobs, runId) {
+  if (!jobs?.length || jobs.some((job) => job.run_id !== runId)) return 'unverified';
   const unfinished = jobs.filter((job) => job.status !== 'completed');
-  const gate = unfinished[0];
-  return unfinished.length === 1 && gate.name === 'CI Gate' && gate.status === 'queued'
-    && gate.conclusion === null && gate.started_at === null && gate.completed_at === null
-    && Array.isArray(gate.steps) && gate.steps.length === 0
-    && jobs.filter((job) => job !== gate).every((job) => TERMINAL.has(job.conclusion)
-      && Array.isArray(job.steps) && job.steps.every((step) => step.status === 'completed' && TERMINAL.has(step.conclusion)));
+  if (jobs.length >= 2 && unfinished.length === 1 && queuedGate(unfinished[0])
+    && jobs.filter((job) => job !== unfinished[0]).every(terminalJob)) return 'qualified';
+  // Read-only waiting is allowed while known non-gate work winds down. A gate
+  // may not have been created yet; it still must exist and qualify before any
+  // mutation. Unknown results or a started gate stop the observer immediately.
+  const gates = jobs.filter((job) => job.name === 'CI Gate');
+  const liveNonGate = (job) => job.name !== 'CI Gate'
+    && ['queued', 'in_progress'].includes(job.status) && job.conclusion === null
+    && Array.isArray(job.steps) && job.steps.every((step) =>
+      (step.status === 'completed' && TERMINAL.has(step.conclusion))
+      || (['queued', 'in_progress'].includes(step.status) && step.conclusion === null));
+  return gates.length <= 1 && gates.every(queuedGate) && jobs.some(liveNonGate)
+    && jobs.every((job) => queuedGate(job) || terminalJob(job) || liveNonGate(job)) ? 'draining' : 'unverified';
 }
 
 export async function recoverSupersededGate({
-  env = process.env, fetchImpl = globalThis.fetch,
+  env = process.env, fetchImpl = globalThis.fetch, now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}) {
   const target = targetFromEnv(env);
@@ -104,11 +120,29 @@ export async function recoverSupersededGate({
       || run.run_number !== candidate.run_number) return 'unverified';
     if (completed(run)) return 'settled';
     if (run.status !== 'in_progress' || run.conclusion !== null) return 'unverified';
-    return queuedAggregateOnly(await jobsFor(run), run.id) ? 'qualified' : 'unverified';
+    return inspectJobs(await jobsFor(run), run.id);
   }
 
+  let oldState = await inspectOld();
+  if (oldState === 'draining') {
+    // The deadline spans ALL polling work (including API latency), not a fresh
+    // budget per read. The count also bounds tests/callers with a frozen clock.
+    const deadline = now() + DRAIN_TIMEOUT_MS;
+    for (let poll = 0; poll < MAX_DRAIN_POLLS && oldState === 'draining'; poll += 1) {
+      const remaining = deadline - now();
+      if (remaining <= 0) return held('old-jobs-drain-timeout');
+      await sleep(Math.min(DRAIN_POLL_INTERVAL_MS, remaining));
+      if (now() >= deadline) return held('old-jobs-drain-timeout');
+      if (!await freshSuccessor()) return held('successor-changed-during-drain');
+      if (now() >= deadline) return held('old-jobs-drain-timeout');
+      oldState = await inspectOld();
+      if (now() >= deadline) return held('old-jobs-drain-timeout');
+    }
+    if (oldState === 'draining') return held('old-jobs-drain-timeout');
+    if (oldState === 'settled') return { outcome: 'settled', reason: 'old-run-settled-during-drain' };
+  }
   // Each mutation has adjacent fresh identity/job and current-head reads.
-  if (await inspectOld() !== 'qualified' || !await freshSuccessor()) return held('stale-run-no-longer-qualified');
+  if (oldState !== 'qualified' || !await freshSuccessor()) return held('stale-run-no-longer-qualified');
   async function cancel(kind) {
     try {
       const response = await githubRequest(fetchImpl, `${target.base}/actions/runs/${candidate.id}/${kind}`, target.token, { method: 'POST' });
