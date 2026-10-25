@@ -56,6 +56,8 @@ const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 const UNSUPPORTED_CONDITIONING = Object.freeze({
   icReferenceVideoIds: 'IC-LoRA references',
   icReferenceImageFiles: 'IC-LoRA references',
+  referenceImageFiles: 'reference images',
+  referenceVideoIds: 'reference clips',
   keyframes: 'keyframes',
   extendFromVideoId: 'a source video to extend',
   loraFilenames: 'LoRA weights',

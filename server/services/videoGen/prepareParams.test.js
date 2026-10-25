@@ -792,6 +792,63 @@ describe('prepareVideoGenParams — i2v reference mode (#4874)', () => {
   });
 });
 
+describe('prepareVideoGenParams — Omni reference inputs', () => {
+  const OMNI = {
+    id: 'fasth3_omni_int6', name: 'FastH3 Omni', runtime: 'fastvideo', fastvideoFamily: 'fasth3omni',
+    supportedModes: ['image'], maxReferenceImages: 9, maxReferenceVideos: 3, maxReferenceAudios: 3, maxReferenceTotal: 12,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listVideoModels.mockReturnValue([OMNI]);
+    loadHistory.mockResolvedValue([]);
+  });
+
+  const omniBody = (extra) => ({ modelId: 'fasth3_omni_int6', backend: 'local', mode: 'image', sourceImageFile: 'first.png', ...extra });
+
+  it('resolves extra gallery references and voices in order', async () => {
+    const prepared = await prepare(omniBody({ referenceImageFiles: ['a.png', 'b.png'] }), {
+      referenceAudio0: upload('referenceAudio0'),
+    });
+    expect(prepared.referenceImagePaths.map(posix)).toEqual(['/mock/images/a.png', '/mock/images/b.png']);
+    expect(prepared.referenceAudioPaths).toHaveLength(1);
+    expect(prepared.uploadedTempPaths).toEqual(prepared.referenceAudioPaths);
+  });
+
+  it('rejects references past the per-kind ceiling and rolls back staged voices', async () => {
+    await expect(prepare(omniBody({ referenceImageFiles: Array.from({ length: 9 }, (_, i) => `r${i}.png`) })))
+      .rejects.toMatchObject({ status: 400, code: 'VIDEO_REFERENCE_IMAGES_UNSUPPORTED' });
+  });
+
+  it('rejects references past the combined ceiling even when each kind fits', async () => {
+    loadHistory.mockResolvedValue([1, 2, 3].map((n) => ({ id: `0000000${n}-0000-4000-8000-000000000000`, filename: `c${n}.mp4` })));
+    await expect(prepare(
+      omniBody({
+        referenceImageFiles: Array.from({ length: 8 }, (_, i) => `r${i}.png`),
+        referenceVideoIds: [1, 2, 3].map((n) => `0000000${n}-0000-4000-8000-000000000000`),
+      }),
+      { referenceAudio0: upload('referenceAudio0') },
+    )).rejects.toMatchObject({ status: 400, code: 'VIDEO_REFERENCE_TOTAL_EXCEEDED' });
+    expect(unlinkedDurablePaths().length).toBeGreaterThan(0);
+  });
+
+  it('refuses references on a chained render, before they could outlive chunk zero', async () => {
+    await expect(prepare(omniBody({ chunks: 2, referenceImageFiles: ['a.png'] })))
+      .rejects.toMatchObject({ status: 400, code: 'VIDEO_REFERENCE_CHUNKS_CONFLICT' });
+  });
+
+  it('refuses references on a hosted backend instead of silently dropping them', async () => {
+    await expect(prepare(omniBody({ backend: 'grok', referenceImageFiles: ['a.png'] })))
+      .rejects.toMatchObject({ status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' });
+  });
+
+  it('refuses references on a model that declares no ceilings', async () => {
+    listVideoModels.mockReturnValue([{ ...OMNI, maxReferenceImages: undefined }]);
+    await expect(prepare(omniBody({ referenceImageFiles: ['a.png'] })))
+      .rejects.toMatchObject({ status: 400, code: 'VIDEO_REFERENCE_IMAGES_UNSUPPORTED' });
+  });
+});
+
 describe('prepareVideoGenParams — fal end frame catalog check (#10700)', () => {
   const falSettings = () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' } }, videoGen: { fal: { apiKey: 'test-key' } } });
   beforeEach(() => { copyFileMock.mockClear(); unlinkMock.mockClear(); });

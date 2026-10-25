@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
@@ -510,17 +511,24 @@ async function resumeCompletionAudits() {
       replayAttempts: attempt, retryAt: new Date(Date.now() + Math.min(30 * 60_000, 60_000 * 2 ** Math.min(attempt - 1, 5))).toISOString() });
     const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
     const { getAgentRecord } = await import('./cosAgentLifecycle.js');
-    await replayAgentCompletionCleanup(original).catch(error => emitLog('warn', `Completion cleanup deferred for ${original.id}: ${error.message}`, { agentId: original.id }));
-    const agent = await getAgentRecord(original.id || original.agentId).catch(() => null) || original;
-    const task = await getTaskById(agent.taskId).catch(() => null);
-    // Move missing tasks to the back of the next pass; they cannot grant authority.
+    let agent = await getAgentRecord(original.id || original.agentId).catch(() => null) || original;
+    const lookup = await getTaskById(agent.taskId).then(task => ({ task, readable: true }), () => ({ task: null, readable: false }));
+    const task = lookup.task;
+    // Definite absence may use the existing immutable-snapshot receipt proof.
+    // An unreadable task is not absent, and neither case replays external stages.
     if (!task) {
-      const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
-      await recordRepoStateVerification(agent.id || agent.agentId, { status: 'pending',
-        checkedAt: new Date().toISOString(), reasons: ['task-unavailable'] });
+      const resumed = lookup.readable && agent.result?.cleanupPending === true
+        ? await resumeAgentCompletionRetirement(agent.id || agent.agentId).catch(() => null) : null;
+      if (!resumed?.verified) {
+        const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+        await recordRepoStateVerification(agent.id || agent.agentId, { status: 'pending',
+          checkedAt: new Date().toISOString(), reasons: [resumed?.skipReason || 'task-unavailable'] });
+      }
       checked++;
       continue;
     }
+    await replayAgentCompletionCleanup(agent).catch(error => emitLog('warn', `Completion cleanup deferred for ${agent.id}: ${error.message}`, { agentId: agent.id }));
+    agent = await getAgentRecord(agent.id || agent.agentId).catch(() => null) || agent;
     await verifyAgentRepoState({ agentId: agent.id || agent.agentId, agentState: agent, task,
       success: agent.result?.success === true, prExpected: isTruthyMeta(task.metadata?.openPR) || !!task.metadata?.reviewLoopPRUrl || !!agent.metadata?.reviewLoopMergeTarget?.url })
       .catch(error => emitLog('warn', `Completion recovery deferred for ${agent.id}: ${error.message}`, { agentId: agent.id }));
@@ -777,7 +785,7 @@ async function settleDivergedBranch(ctx) {
   if (ctx.task?.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup') {
     return ctx.blockWith('cleanup-successor-review-unresolved', { issues: ctx.issues, observed: ctx.observed });
   }
-  return fileDivergenceRecovery(ctx, prepared.retirement);
+  return fileDivergenceRecovery({ ...ctx, appId: prepared.appId }, prepared.retirement);
 }
 
 async function retireIntegratedCheckout({ appId, observed, issues, record, blockWith }, retirement) {
@@ -1005,8 +1013,21 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     const duplicate = await getTaskById(created.id).catch(() => null);
     const origin = duplicate?.metadata?.recoveryOrigin;
     const target = duplicate?.metadata?.recoveryMergeTarget;
-    if (!mergeTarget || origin?.parentAgentId !== agentId || origin?.parentTaskId !== task?.id
-      || origin?.subsystem !== 'repository-cleanup' || target?.url !== mergeTarget.url || target?.branch !== branchName) return null;
+    if (origin?.parentAgentId !== agentId || origin?.parentTaskId !== task?.id
+      || origin?.subsystem !== 'repository-cleanup'
+      || (!retirement && (!mergeTarget || target?.url !== mergeTarget.url || target?.branch !== branchName))) return null;
+  }
+  if (retirement && created?.id) {
+    const { getTaskById } = await import('./cosTaskStore.js');
+    const persisted = await getTaskById(created.id);
+    const target = { appId, release: retirement.release, createdAt: retirement.createdAt };
+    if (persisted?.metadata?.recoveryOrigin?.parentAgentId !== agentId
+      || persisted.metadata.recoveryOrigin.parentTaskId !== task?.id
+      || !isDeepStrictEqual(persisted.metadata.retirementReview, target)) return null;
+    const { recordRepoStateRecovery } = await import('./cosAgentLifecycle.js');
+    const bound = await recordRepoStateRecovery(agentId, { taskId: created.id, branch: branchName,
+      retirementReview: target, repoPath: sourceWorkspace }, { claimRun: true });
+    if (!bound) throw new Error('retirement-recovery-binding-unavailable');
   }
   if (mergeTarget && created?.id) {
     // Admission's trust anchor: task metadata is API-writable, so only this

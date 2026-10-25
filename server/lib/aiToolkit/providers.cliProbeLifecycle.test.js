@@ -28,13 +28,16 @@ describe('testProvider — real CLI process lifecycle', () => {
     tempDir = await mkdtemp(join(tmpdir(), 'portos-cli-probe-'));
     originalPath = process.env.PATH;
     const evidencePath = join(tempDir, 'processes.json');
+    const pendingEvidencePath = join(tempDir, 'processes.pending.json');
     const commandPath = join(tempDir, 'hang-cli');
     const shellQuote = value => "'" + value.replaceAll("'", "'\\''") + "'";
     // A shell publishes both owned PIDs immediately; interpreter startup must
     // not consume the 150 ms probe budget before the descendant even exists.
+    // Rename complete JSON into place before the readiness watcher can see it.
     await writeFile(commandPath, `#!/bin/sh
 ${shellQuote(process.execPath)} -e 'setInterval(() => {}, 1000)' &
-printf '[%s,%s]' "$$" "$!" > ${shellQuote(evidencePath)}
+printf '[%s,%s]' "$$" "$!" > ${shellQuote(pendingEvidencePath)}
+mv ${shellQuote(pendingEvidencePath)} ${shellQuote(evidencePath)}
 wait
 `);
     await chmod(commandPath, 0o755);
