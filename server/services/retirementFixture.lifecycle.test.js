@@ -66,18 +66,30 @@ function lifecycleSource(root, mode, tracked) {
   return `
     import { vi } from 'vitest';
     import { waitForFixtureReady } from ${JSON.stringify(fixtureUrl)};
-    const state = vi.hoisted(() => ({ scratch: '', active: 0, held: false, earlyRemoval: false, work: new Set() }));
+    const state = vi.hoisted(() => ({ scratch: '', active: 0, held: false, earlyRemoval: false, rootIdentity: null, work: new Set() }));
     globalThis.__retirementFixture = state;
     vi.mock('node:fs/promises', async original => {
       const fs = await original();
+      const { statSync, writeFileSync } = await import('node:fs');
       return { ...fs,
         mkdtemp: async (...args) => {
           const path = await fs.mkdtemp(...args);
-          if (/detached-delivery-|portos-held-checkout-/.test(String(args[0]))) state.scratch = await fs.realpath(path);
+          if (/detached-delivery-|portos-held-checkout-/.test(String(args[0]))) {
+            state.scratch = await fs.realpath(path);
+            state.rootIdentity = statSync(path, { bigint: true });
+          }
           return path;
         },
         rm: async (path, options) => {
-          if (path === state.scratch && state.active) state.earlyRemoval = true;
+          // Windows Git/Node can spell the same root with long/8.3 paths.
+          // Observe the physical root before awaiting anything or releasing I/O.
+          let identity;
+          try { identity = statSync(path, { bigint: true }); }
+          catch (error) { if (error.code !== 'ENOENT') throw error; }
+          if (identity && state.rootIdentity && identity.dev === state.rootIdentity.dev && identity.ino === state.rootIdentity.ino) {
+            state.earlyRemoval ||= state.active > 0;
+            writeFileSync(process.env.RETIRE_REMOVAL, 'scratch removal attempted');
+          }
           return fs.rm(path, options);
         },
         writeFile: async (path, ...args) => {
@@ -129,6 +141,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retirement fixture cancellation boundar
         writeFileSync(join(root, 'vitest.setup.js'), `import ${JSON.stringify(new URL('../vitest.setup.js', import.meta.url).href)};`);
         const ready = join(host, 'ready'), release = join(host, 'release');
         const cleanup = join(host, 'cleanup'), cancelled = join(host, 'cancelled');
+        const removal = join(host, 'removal');
         const resultFile = join(host, 'result.json'), hooks = join(root, 'hooks');
         mkdirSync(hooks);
         const hookScript = join(root, 'hold-git.mjs');
@@ -140,7 +153,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retirement fixture cancellation boundar
         writeFileSync(join(hooks, 'pre-commit'), `#!/bin/sh\nexec ${quote(process.execPath.replaceAll('\\', '/'))} ${quote(hookScript.replaceAll('\\', '/'))}\n`, { mode: 0o755 });
         Object.assign(fixture.options.env, {
           RETIRE_READY: ready, RETIRE_RELEASE: release, RETIRE_CLEANUP: cleanup,
-          RETIRE_CANCELLED: cancelled, RETIRE_RESULT: resultFile, RETIRE_HOOKS: hooks,
+          RETIRE_CANCELLED: cancelled, RETIRE_RESULT: resultFile, RETIRE_HOOKS: hooks, RETIRE_REMOVAL: removal,
         });
         writeFileSync(join(root, 'lifecycle.test.js'), lifecycleSource(root, mode, tracked));
         if (mode === 'git') writeFileSync(join(root, 'neighbor.test.js'), fixtureReadyFailureSource(ready));
@@ -156,6 +169,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retirement fixture cancellation boundar
           writeFileSync(cancelled, 'expire the setup wrapper with owned I/O pending');
         } else await waitForFixtureReady(cancelled, { signal: controller.signal });
         await waitForFixtureReady(cleanup, { signal: controller.signal });
+        if (!tracked) await waitForFixtureReady(removal, { signal: controller.signal });
         writeFileSync(release, 'release after teardown starts');
         const result = await running;
         closed = result.closeConfirmed;
