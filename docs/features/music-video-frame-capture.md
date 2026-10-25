@@ -101,3 +101,50 @@ browser/version and numeric evidence. Local macOS results do not substitute
 for that CI result. Safari was present but could not create a WebDriver session
 because Allow remote automation was disabled; Safari pixels remain unverified.
 No browser settings were changed for this investigation.
+
+## Linux dissolve investigation (#13644)
+
+The original [PR #13621 browser job, attempt 1](https://github.com/atomantic/PortOS/actions/runs/40215062339/attempts/1)
+failed the incoming-dissolve/exact-VHS-look comparison with mean channel error
+`39.02135633680555`; the independently reported isolated Linux baseline was
+approximately `39.014`. Neither retained the pixels or serialized filter revision.
+The passing second attempt does not establish a cause. #13643 added revision
+diagnostics and rejected late preview changes, but its controlled resize is not
+evidence that resizing caused the original failure.
+
+The follow-up matrix starts each case in a fresh document and controls first
+look activation, an already-active look, resizing before/after activation, and
+reversed BT601/BT709 outgoing/incoming footage. It uses the actual Save frame
+button and normal image-decode timing. Each case is a separate test: a failure
+does not prevent the other inputs from running. The comparison checks the song,
+visible clip times, paused-canvas fingerprints, box and serialized/live filter
+revisions before accepting the unchanged mean-error bound below 1. Failure
+artifacts include the synthetic saved/displayed PNGs, filter revisions and a
+4-by-4 map of mean pixel errors; no full-page or live-instance imagery is saved.
+
+One additional control defers only the film-look ResizeObserver callback. The
+box is already resized before serialization; its size, song and both footage
+surfaces then stay fixed. Saving with that provisional filter must match the
+display. Committing the measured filter while decode is held must reject the
+upload, and saving after the commit must again match the display. This separates
+filter-only mutation from the previously covered geometry-change guard. It
+demonstrates a stale-filter path without attributing the historical incident to it.
+
+On Linux arm64, Chromium 156.0.8078.47, FFmpeg 5.1.9, Node 26.12.1, the natural
+matrix also passed using the original pre-#13643 capture helper from
+`d56e183a1e91891ac27af6cbca9fc2de3130b785` with the new diagnostics:
+
+| Controlled input | Mean channel error |
+| --- | ---: |
+| First exact-look activation, 640px picture | 0.027223307291666665 |
+| Already-active exact look, 640px picture | 0.027223307291666665 |
+| Resize before activation, 600px picture | 0.011158506429277943 |
+| Resize while active, 600px picture | 0.011158506429277943 |
+| Reversed footage order, 640px picture | 0.02725368923611111 |
+
+These are bounded non-reproductions, including on the old capture implementation;
+they do not prove a same-revision raster repair or resolve #13644. The original
+Linux x64 environment and its missing frame/filter evidence remain distinct from
+this arm64 investigation. A future failure must retain and compare that evidence
+before choosing a synchronization or raster/compositor fix. Do not infer the
+historical cause from a similar aggregate error or from passing reruns.
