@@ -19,9 +19,19 @@ export async function withRetiredDataRemoval(work) {
   finally { removingRetiredData = false; }
 }
 
-export async function withRetiredDataAccess(work) {
+export function acquireRetiredDataAccess() {
   assertRetiredDataAvailable();
   retainedDataUsers += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    retainedDataUsers -= 1;
+  };
+}
+
+export async function withRetiredDataAccess(work) {
+  const release = acquireRetiredDataAccess();
   try { return await work(); }
-  finally { retainedDataUsers -= 1; }
+  finally { release(); }
 }

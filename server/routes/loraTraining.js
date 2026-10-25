@@ -7,7 +7,7 @@ import { validateRequest } from '../lib/validation.js';
 import { assertSafeFilename } from '../lib/fileUtils.js';
 import { refuseRetiredTraining, TRAINING_RETIRED_MESSAGE } from '../lib/retiredLoraTraining.js';
 import { attachSseClient, cancelJob } from '../services/mediaJobQueue/index.js';
-import { getRunRequired, listCheckpoints, listRuns, listSamples, promoteCheckpoint, runSamplesDir } from '../services/loraTraining/index.js';
+import { cancel as cancelTrainer, getRunRequired, listCheckpoints, listRuns, listSamples, promoteCheckpoint, runSamplesDir } from '../services/loraTraining/index.js';
 
 const router = Router();
 router.use((req, _res, next) => {
@@ -31,9 +31,12 @@ router.get('/runs/:id/events', asyncHandler(async (req, res) => {
 }));
 router.post('/runs/:id/cancel', asyncHandler(async (req, res) => {
   const run = await getRunRequired(req.params.id);
-  if (!run.jobId) throw new ServerError('Run has no job to cancel', { status: 409, code: 'ALREADY_TERMINAL' });
-  const result = await cancelJob(run.jobId);
-  if (!result.ok) throw new ServerError(result.error || 'Cancel failed', { status: result.code === 'NOT_FOUND' ? 404 : 409, code: result.code });
+  const result = run.jobId ? await cancelJob(run.jobId) : { ok: false, code: 'NOT_FOUND', error: 'Run has no queue job' };
+  if (!result.ok && result.code === 'NOT_FOUND' && cancelTrainer(run.jobId || run.id)) {
+    res.json({ ok: true, status: 'canceling', orphan: true });
+    return;
+  }
+  if (!result.ok) throw new ServerError(result.error || 'Cancel failed', { status: !run.jobId ? 409 : result.code === 'NOT_FOUND' ? 404 : 409, code: !run.jobId ? 'ALREADY_TERMINAL' : result.code });
   res.json(result);
 }));
 router.get('/runs/:id/checkpoints', asyncHandler(async (req, res) => {

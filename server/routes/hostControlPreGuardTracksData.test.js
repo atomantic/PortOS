@@ -98,6 +98,7 @@ vi.mock('../services/games/index.js', () => ({
 }));
 vi.mock('../services/dataManager.js', () => ({ archiveCategory: effects.archive }));
 vi.mock('../services/loraTraining/index.js', () => ({
+  cancel: vi.fn(() => false),
   getRunRequired: effects.getRun,
   promoteCheckpoint: effects.promote,
 }));

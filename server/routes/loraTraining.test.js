@@ -9,6 +9,7 @@ import { request } from '../lib/testHelper.js';
 // stub every collaborator so the suite only exercises the HTTP layer.
 const svc = vi.hoisted(() => ({ samplesDir: '' }));
 vi.mock('../services/loraTraining/index.js', () => ({
+  cancel: vi.fn(() => false),
   clearDatasetForDeletedLora: vi.fn(),
   deleteRun: vi.fn(),
   getRunRequired: vi.fn(async (id) => ({ id, status: 'completed' })),
@@ -79,4 +80,25 @@ it('retires launch, resume and legacy deletion while retaining history controls'
   }
   const status = await request(app).get('/api/lora-training/status');
   expect(status.body).toMatchObject({ retired: true, runtimes: { mflux: { ready: false }, flux2: { ready: false } } });
+});
+
+it('can explicitly cancel an observed orphan when the queue record is missing', async () => {
+  const { cancel } = await import('../services/loraTraining/index.js');
+  const { cancelJob } = await import('../services/mediaJobQueue/index.js');
+  const { getRunRequired } = await import('../services/loraTraining/index.js');
+  vi.mocked(getRunRequired).mockResolvedValueOnce({ id: 'example-run', jobId: 'example-job', status: 'running' });
+  vi.mocked(cancelJob).mockResolvedValueOnce({ ok: false, code: 'NOT_FOUND' });
+  vi.mocked(cancel).mockReturnValueOnce(true);
+  const response = await request(makeApp()).post('/api/lora-training/runs/example-run/cancel');
+  expect(response.status).toBe(200);
+  expect(response.body).toMatchObject({ ok: true, status: 'canceling', orphan: true });
+  expect(cancel).toHaveBeenCalledWith('example-job');
+});
+
+it('preserves the terminal-run cancellation contract when no queue job or observer exists', async () => {
+  const { getRunRequired } = await import('../services/loraTraining/index.js');
+  vi.mocked(getRunRequired).mockResolvedValueOnce({ id: 'example-ended', jobId: null, status: 'completed' });
+  const response = await request(makeApp()).post('/api/lora-training/runs/example-ended/cancel');
+  expect(response.status).toBe(409);
+  expect(response.body.code).toBe('ALREADY_TERMINAL');
 });

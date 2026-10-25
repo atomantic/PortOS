@@ -1,4 +1,4 @@
-import { refuseRetiredTraining, withRetiredDataAccess } from '../../lib/retiredLoraTraining.js';
+import { refuseRetiredTraining, withRetiredDataAccess, acquireRetiredDataAccess } from '../../lib/retiredLoraTraining.js';
 /**
  * Retired trainer recovery only: observe/cancel a verified detached survivor,
  * finalize its output and keep historical records/checkpoint promotion readable.
@@ -46,6 +46,7 @@ export const runSamplesDir = (runId) => join(runDir(runId), 'samples');
 // newer run.
 let activeProcess = null;
 let activeJobId = null;
+const explicitlyCanceledTrainers = new WeakSet();
 
 // Recovery still observes a surviving trainer for stalls.
 const STALL_TICK_MS = 30_000;
@@ -53,6 +54,7 @@ const STALL_TICK_MS = 30_000;
 export const cancel = (jobId) => {
   if (!activeProcess || (jobId && activeJobId !== jobId)) return false;
   const proc = activeProcess;
+  explicitlyCanceledTrainers.add(proc);
   // Keep activeProcess set until 'close' clears it — the trainer may spend
   // a few seconds writing its cancel checkpoint. Escalate after 8s.
   killWithEscalation(proc, { label: 'training child', stillRunning: () => activeProcess === proc });
@@ -169,7 +171,7 @@ export async function deleteTrainingRun(runId, { withLora = false } = {}) {
  * queue's dispatcher; this function resolves once the observer attaches
  * (the queue awaits the terminal event separately).
  */
-export async function runTraining({ jobId, runId, reattach = false }) {
+export async function runTraining({ jobId, runId, reattach = false, recoveryPermit = null }) {
   const fail = (message) => {
     console.error(`❌ training [${shortId(jobId)}] ${message}`);
     emitFailed(jobId, message);
@@ -236,12 +238,13 @@ export async function runTraining({ jobId, runId, reattach = false }) {
     console.log(`🔁 training [${shortId(jobId)}] re-attached to surviving trainer pid ${proc.pid} (run ${shortId(runId)})`);
     trainingEvents.emit('status', { generationId: jobId, message: 'Re-attached to trainer that survived a restart' });
     wireProcLifecycle(proc, { isReattach: true });
-    return;
+    return { observing: true };
   }
 
   refuseRetiredTraining();
 
   function wireProcLifecycle(proc, { isReattach = false } = {}) {
+  const releaseDataAccess = acquireRetiredDataAccess();
   activeProcess = proc;
   activeJobId = jobId;
   void heavyClaim?.handoffTo?.(proc.pid)?.catch((err) => console.error(`❌ training [${shortId(jobId)}] claim handoff failed: ${err.message}`));
@@ -451,12 +454,15 @@ export async function runTraining({ jobId, runId, reattach = false }) {
     // both read run.artifacts. Async finalize wrapped so a rejection can't
     // escape the event handler (unhandled rejection kills the process on Node ≥15).
     // The trainer has exited; release its accelerator claim before finalizing.
-    releaseClaim()
-      .then(() => flushProgress())
-      .then(() => processError
-        ? failBeforeSpawn(`trainer process failed: ${processError.message}`)
-        : finalizeTraining({ jobId, runId, code, signal, state: getState(), stallKilled }))
-      .then(() => wakeDisplay(settings))
+    const settle = async () => {
+      await releaseClaim();
+      await flushProgress();
+      if (processError) return failBeforeSpawn(`trainer process failed: ${processError.message}`);
+      return finalizeTraining({ jobId, runId, code, signal, state: getState(), stallKilled, canceledByOperator: explicitlyCanceledTrainers.has(proc) });
+    };
+    const terminalWork = recoveryPermit ? recoveryPermit.run(settle) : settle();
+    terminalWork
+      .then(async () => { wakeDisplay(settings); await recoveryPermit?.finish(); })
       .catch((err) => {
         retainOwnership();
         // A finalize/flush rejection is still a terminal end with no auto-resume
@@ -465,15 +471,15 @@ export async function runTraining({ jobId, runId, reattach = false }) {
         wakeDisplay(settings);
         console.error(`❌ training [${shortId(jobId)}] finalize failed: ${err?.message}`);
         fail(`finalize failed: ${err?.message}`);
-      });
+      }).finally(releaseDataAccess);
   });
   } // end wireProcLifecycle
 }
 
-async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled = false }) {
+async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled = false, canceledByOperator = false }) {
   const run = await runsDb.getRun(runId);
   const job = getJob(jobId);
-  const canceled = !!job?.cancelRequested;
+  const canceled = !!job?.cancelRequested || canceledByOperator;
 
   // Run record vanished mid-training (direct DB edit / race — the DELETE
   // route blocks active runs, so this is defensive). Don't register a LoRA
@@ -532,7 +538,7 @@ async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled
 
   if (canceled) {
     // Queue's cancelRequested flips the failed event into a clean cancel;
-    // record keeps the checkpoint lineage for a future resume.
+    // record keeps the checkpoint lineage for inspection or explicit promotion.
     await runsDb.updateRun(runId, { status: 'canceled', completedAt: new Date().toISOString(), error: 'Canceled' });
     await flipDatasetAfterRun(run, { trained: false });
     trainingEvents.emit('failed', { generationId: jobId, error: 'Canceled' });
@@ -805,7 +811,11 @@ export async function initLoraTraining() {
       // Upgrade never kills an orphan trainer. Keep its artifacts pinned until
       // the existing process finishes or the operator explicitly cancels it.
       if (await hasSurvivingTrainer(run.id)) {
-        console.log(`⏸️ Retired trainer ${shortId(run.id)} still owns its artifacts; preserved for recovery`);
+        const jobId = run.jobId || run.id;
+        const recoveryPermit = maintenance.recoverOwned('media', jobId);
+        const observer = await recoveryPermit.run(() => runTraining({ jobId, runId: run.id, reattach: true, recoveryPermit }));
+        if (!observer?.observing) await recoveryPermit.finish();
+        console.log(`🔁 Observing retired trainer ${shortId(run.id)} without restarting it`);
         continue;
       }
       await runsDb.updateRun(run.id, {

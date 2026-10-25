@@ -29,7 +29,9 @@ trainer is retired without spawning; the run records the retirement. A verified
 trainer that already survived a restart is observed to completion without starting
 a new trainer. Its outputs are finalized normally. Automatic stall resumes are
 disabled. Existing cancellation controls remain available in **Active Queues**.
-An unowned detached trainer remains intact and blocks maintenance until it exits;
+A detached trainer whose queue record is missing is also observed through completion,
+and blocks maintenance until it exits. The retained run cancel endpoint
+(`POST /api/lora-training/runs/:id/cancel`) can cancel that observer-owned process;
 upgrade never kills it merely because the queue record is absent.
 
 ## Explicit removal

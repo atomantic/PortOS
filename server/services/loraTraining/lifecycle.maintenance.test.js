@@ -27,6 +27,7 @@ vi.mock('../../lib/heavyJobClaim.js', () => ({
 }));
 vi.mock('./db.js', () => ({
   getRun: async () => fixture.run,
+  listActiveRuns: async () => [fixture.run],
   updateRun: (...args) => fixture.save(...args), getRunRequired: vi.fn(), listRuns: vi.fn(), deleteRun: vi.fn(),
 }));
 vi.mock('../settings.js', () => ({ getSettings: async () => ({ loraTraining: { stallWatchdog: false } }) }));
@@ -36,8 +37,9 @@ vi.mock('../mediaJobQueue/index.js', () => ({
 }));
 vi.mock('./displayPower.js', () => ({ sleepDisplayForTraining: vi.fn(), wakeDisplay: vi.fn() }));
 
-const { runTraining, cancel, trainingEvents } = await import('./index.js');
+const { runTraining, initLoraTraining, cancel, trainingEvents } = await import('./index.js');
 const { createMaintenanceAdmission } = await import('../../lib/maintenanceAdmission.js');
+const { isReattachable, spawnDetached, reapDetached } = await import('../../lib/detachedSpawn.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
 let fixtureNumber = 0;
 beforeEach(() => {
@@ -47,6 +49,7 @@ beforeEach(() => {
     stdout: new EventEmitter(), stderr: new EventEmitter(), kill: vi.fn() });
   fixture.run = { id: 'example-run', jobId: 'example-job', datasetId: 'example-dataset', params: { steps: 10 }, runtime: 'mflux' };
   fixture.queueJob = {};
+  vi.mocked(isReattachable).mockReset().mockResolvedValue(false);
   fixture.release.mockReset().mockResolvedValue();
   fixture.save.mockReset().mockResolvedValue();
   fixture.saveDataset.mockReset().mockResolvedValue();
@@ -167,4 +170,28 @@ describe('training physical settlement under maintenance', () => {
       await permit.finish();
     }
   });
+});
+
+it('observes an orphan survivor without spawning/reaping and settles explicit cancellation in retained history', async () => {
+  fixture.queueJob = null;
+  fixture.run.status = 'running';
+  vi.mocked(isReattachable).mockResolvedValue(true);
+  await initLoraTraining();
+  expect(spawnDetached).not.toHaveBeenCalled();
+  expect(reapDetached).not.toHaveBeenCalled();
+  expect(fixture.child.listenerCount('close')).toBeGreaterThan(0);
+  const { withRetiredDataRemoval } = await import('../../lib/retiredLoraTraining.js');
+  await expect(withRetiredDataRemoval(async () => {})).rejects.toMatchObject({ code: 'MAINTENANCE_BUSY' });
+  expect(cancel('example-job')).toBe(true);
+  const originalSave = fixture.save.getMockImplementation();
+  let finishRecord;
+  fixture.save.mockImplementationOnce(() => new Promise(resolve => { finishRecord = resolve; }));
+  fixture.child.emit('close', 1, 'SIGTERM');
+  await vi.waitFor(() => expect(finishRecord).toBeTypeOf('function'));
+  await expect(withRetiredDataRemoval(async () => {})).rejects.toMatchObject({ code: 'MAINTENANCE_BUSY' });
+  finishRecord();
+  fixture.save.mockImplementation(originalSave);
+  await new Promise(resolve => setImmediate(resolve));
+  await expect(withRetiredDataRemoval(async () => 'settled')).resolves.toBe('settled');
+  await vi.waitFor(() => expect(fixture.save).toHaveBeenCalledWith('example-run', expect.objectContaining({ status: 'canceled' })));
 });
