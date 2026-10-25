@@ -1583,7 +1583,7 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     // Chunk 1's "source" is a temp tail window the stitch already holds; only
     // chunk 0 renders from the user's own clip. A hidden chunk keeps no audio master.
     expect(spliceExtendSource).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      sourcePath: sourceVideoPath, keepMaster: false, outputPath: join(MOCK_PATHS.videos, `${innerJobIds[0]}.mp4`),
+      runtime: 'ltx2', sourcePath: sourceVideoPath, keepMaster: false, outputPath: join(MOCK_PATHS.videos, `${innerJobIds[0]}.mp4`),
     }));
   });
 
