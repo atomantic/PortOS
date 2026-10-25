@@ -93,7 +93,6 @@ import { replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { resumeAgentCompletionRetirement, verifyAgentRepoState, sweepRepoStateVerifications, bindCompletionRetirementEvents, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
-import { replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
 import { recordBranchReconcileOutcome } from './taskSchedule.js';
 import { findMissingCheckoutPreservation, prepareInventoriedCheckoutRetirement, retireInventoriedCheckout } from './heldCheckoutRecovery.js';
