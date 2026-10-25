@@ -16,13 +16,11 @@ import { LocalLlmTab } from '../components/settings/LocalLlmTab';
 import LocalLlmRuntimesView from '../components/settings/LocalLlmRuntimesView.jsx';
 import { lazyWithReload } from '../utils/lazyWithReload';
 
-// The three panels moved in from the Media Gen tabs were each their own route
+// The media-model panels moved in from the Media Gen tabs were each their own route
 // chunk before the move (#4728) — keep them split, or landing on Performance
 // downloads the whole LoRA manager and HF-cache browser to render an
 // assessments table. The small always-on tabs above stay static.
 const Loras = lazyWithReload(() => import('./Loras'));
-const LoraTraining = lazyWithReload(() => import('./LoraTraining'));
-const LoraDatasetDetail = lazyWithReload(() => import('./LoraDatasetDetail'));
 const MediaModels = lazyWithReload(() => import('./MediaModels'));
 
 /**
@@ -43,7 +41,6 @@ const MediaModels = lazyWithReload(() => import('./MediaModels'));
  *   - **Providers** — configured AI provider connections and model catalogs.
  *   - **Status** — residency plus the downloaded-model inventory.
  *   - **Subscriptions** — which paid plans are on, their tier, price and spend.
- *   - **Training** — LoRA fine-tuning datasets and runs.
  *   - **Usage** — provider quota and PortOS AI usage accounting.
  *
  * What deliberately stayed OUT is output rather than weights: Three.js Models is
@@ -69,21 +66,6 @@ const TAB_CONTENT = {
   performance: LocalModelAssessments,
   status: ModelStatusTab,
   subscriptions: SubscriptionsTab,
-  training: LoraTraining,
-};
-
-/**
- * Drill-downs rendered INSIDE the section shell, keyed by the tab that owns them.
- *
- * A tab's detail view is still that tab — the LoRA dataset workbench is Training
- * with one dataset open — so it keeps the section header and tab bar rather than
- * becoming a bare route that drops both. Under `/media` these pages got that for
- * free, because MediaGen was a layout route; declaring them here gives the same
- * result without every future detail view needing its own special case in
- * App.jsx.
- */
-const TAB_DETAIL = {
-  training: LoraDatasetDetail,
 };
 
 export default function Models({ fixedTab, fixedRecordId } = {}) {
@@ -92,6 +74,7 @@ export default function Models({ fixedTab, fixedRecordId } = {}) {
   const tab = fixedTab || params.tab;
   const recordId = fixedRecordId || params.recordId;
   const taskView = params.taskView || params.view || (fixedTab === 'performance' && params.assessmentKey ? 'results' : undefined);
+  if (tab === 'training') return <Navigate to="/settings/data-maintenance" replace />;
   if (tab === 'llms' && recordId === 'jev') return <Navigate to={`/models/decision-classifiers/jev${taskView ? '/' + taskView : ''}`} replace />;
   // An unknown slug lands on LLMs rather than rendering a blank page, matching
   // the section's default destination in App and the primary navigation.
@@ -103,10 +86,6 @@ export default function Models({ fixedTab, fixedRecordId } = {}) {
   const activeTab = tab && Object.hasOwn(TAB_CONTENT, tab) ? tab : null;
   if (!activeTab) return <Navigate to="/models/llms" replace />;
 
-  // A record id in the URL selects the tab's drill-down, when it has one. Tabs
-  // without a detail component receive it as a focused sub-view id (LLMs uses
-  // `library` and `abuse`); tabs that do not recognize it render their index.
-  const DetailContent = recordId && Object.hasOwn(TAB_DETAIL, activeTab) ? TAB_DETAIL[activeTab] : null;
   const TabContent = TAB_CONTENT[activeTab];
   // The shell names the destination you are on (Code Reviewers, Performance),
   // matching the section navigator. "Models" stays the area, not the page title.
@@ -126,9 +105,7 @@ export default function Models({ fixedTab, fixedRecordId } = {}) {
         {/* Local boundary rather than the App-level one: a lazy tab must not blank
             the section header and tab bar while its chunk loads. */}
         <Suspense fallback={<PageSkeleton header="none" label="Loading models section" cards={3} sidebar={false} />}>
-          {DetailContent
-            ? <DetailContent recordId={recordId} />
-            : <TabContent view={recordId} taskView={taskView} assessmentKey={params.assessmentKey} />}
+          <TabContent view={recordId} taskView={taskView} assessmentKey={params.assessmentKey} />
         </Suspense>
       </div>
     </ModelsSectionLayout>

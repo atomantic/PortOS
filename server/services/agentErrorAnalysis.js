@@ -24,6 +24,7 @@ import {
   INVESTIGATION_CIRCUIT_MAX_CREATIONS,
   INVESTIGATION_HEADLINE_PREFIX,
   INVESTIGATION_TASK_DELIVERY,
+  SUPERVISED_INVESTIGATION_DELIVERY,
   LOOP_REASON_PROSE,
   MAX_AUTO_RETRIES_PER_TASK,
   buildInvestigationFingerprint,
@@ -1344,6 +1345,16 @@ async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis) {
   const { approvalRequired, loopReason, approvalReason } = resolveInvestigationApproval({
     fingerprint, tasks: allTasks, recentCreations: recentInvestigationCreations(now), now
   });
+  // The blocked-system watcher owns durable backoff; a repeat failure must not
+  // allocate another blocked task asking the user to supervise machine recovery.
+  const systemRecovery = analysis.blockedSystemRecovery === true;
+  if (systemRecovery && approvalRequired) return null;
+  let targetInstanceId;
+  if (systemRecovery) {
+    const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
+    targetInstanceId = await getInstanceId();
+    if (!targetInstanceId || targetInstanceId === UNKNOWN_INSTANCE_ID) return null;
+  }
 
   // Every interpolated free-text field is redacted before it lands in the body —
   // this task is human-facing and may sync across federated peers, so no
@@ -1369,11 +1380,15 @@ async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis) {
         `## What to approve\n${remedy}`,
         `## Why this is held for you\n${LOOP_REASON_PROSE[loopReason]}`
       ].join('\n\n')
-    : `## What to do\nNo approval needed — this investigation runs unattended. Diagnose the failure above, apply the fix, and leave the task's findings in your summary. Do NOT un-block the original task by hand; completing this one does it.\n\n${remedy}`;
+    : systemRecovery
+      ? `## What to do\nResolve the affected work and investigate its root cause. Repair demonstrated code defects with regression tests, required PR review, CI and merge delivery; reuse an active fix rather than duplicate it. Record external permission or transient causes accurately without inventing a code defect. Preserve original work, approvals and retry/spawn budgets. Do not requeue or mark the original task complete by hand.\n\n${remedy}`
+      : `## What to do\nNo approval needed — this investigation runs unattended. Diagnose the failure above, apply the fix, and leave the task's findings in your summary. Do NOT un-block the original task by hand; completing this one does it.\n\n${remedy}`;
 
   // Completing this task revives every blocked task in `affectedTasks`
   // automatically (investigationRetry.js), so nobody has to go find them.
-  const unblocks = `${approvalRequired ? 'Approving and applying' : 'Applying'} the fix and completing this task automatically retries the original task \`${originalTask.id}\`; it will resume: ${originalDesc}. If the same cause blocks it again after ${MAX_AUTO_RETRIES_PER_TASK} automatic retries, it stays blocked for you.`;
+  const unblocks = systemRecovery
+    ? `This investigation does not refund or reset task \`${originalTask.id}\` budgets. Its existing delivery verifier may settle proven completion; unfinished work remains stopped under its existing limits. Report the actual remaining work or user-owned decision.`
+    : `${approvalRequired ? 'Approving and applying' : 'Applying'} the fix and completing this task automatically retries the original task \`${originalTask.id}\`; it will resume: ${originalDesc}. If the same cause blocks it again after ${MAX_AUTO_RETRIES_PER_TASK} automatic retries, it stays blocked for you.`;
 
   // The fingerprint rides in the headline so addTask's first-line dedup —
   // which sees no `metadata.app` on investigation tasks — tracks fingerprint
@@ -1396,7 +1411,8 @@ ${actionBlock}
 ${unblocks}`;
 
   const investigationTask = await addTask({
-    ...INVESTIGATION_TASK_DELIVERY,
+    ...(systemRecovery ? SUPERVISED_INVESTIGATION_DELIVERY : INVESTIGATION_TASK_DELIVERY),
+    ...(systemRecovery && { targetInstanceId, metadata: { preserveOriginalBudget: true, blockedSystemRecovery: true } }),
     description,
     priority: 'HIGH',
     context: `Auto-generated from agent ${agentId} failure`,

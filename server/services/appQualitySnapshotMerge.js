@@ -111,9 +111,8 @@ export async function retainedSnapshotMergeCheckouts(app, pr, deps) {
   return retained;
 }
 
-/** Archive all attempts, including superseded heads, before verified retirement. */
+/** Remove verified snapshot checkouts in place. Nothing is copied into an archive. */
 export async function retireSnapshotMergeCheckouts(app, pr, deps) {
-  const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
   const { forceRemoveWorktreeDir } = await import('./worktreeManager.js');
   const { retireWithUnlockedArchive } = await import('./cosClaimOwnershipState.js');
   const checkOwner = deps.checkSnapshotPublicationOwnership
@@ -126,8 +125,14 @@ export async function retireSnapshotMergeCheckouts(app, pr, deps) {
       admit: async () => await ownership()
         ? { fence: { repoPath: app.repoPath, path: tree.path, branch: null } }
         : { result: { removed: false } },
-      archive: async () => ({ archive: await preserveMergedCheckout(app.repoPath, tree, null,
-        deps.snapshotArchiveCosDir ? { cosDir: deps.snapshotArchiveCosDir } : {}) }),
+      archive: async () => {
+        const { releaseCheckoutWithoutArchive } = await import('./heldCheckoutRecovery.js');
+        const archive = await releaseCheckoutWithoutArchive({ repoPath: app.repoPath, path: tree.path }, async () => ({
+          verify: async holder => (!holder || holder.head !== tree.head || holder.branch || holder.detached !== true)
+            ? 'snapshot-checkout-changed' : null,
+        }));
+        return { archive };
+      },
       finish: async (_admitted, archive) => forceRemoveWorktreeDir(app.repoPath, tree.path, {
         verifyRemoval: async holder => await ownership() ? archive.verify(holder) : 'snapshot-owner-changed',
       }),

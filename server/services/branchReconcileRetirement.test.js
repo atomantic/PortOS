@@ -91,15 +91,16 @@ describe('historical completed-checkout review obligations', () => {
       { beforeMutation: expect.any(Function) });
   });
 
-  it('retains a missing archive receipt across repeated deterministic attempts without dispatch', async () => {
+  it('retires a checkout whose receipt has no archive directory without dispatch', async () => {
     const deps = setup();
     const prepared = await deps.prepare();
     prepared.review.comparison = { disposition: 'integrated', localPatch: '', difference: '' };
     deps.prepare.mockResolvedValue(prepared);
     deps.retire = vi.fn(async () => ({ ok: true, branchDeleted: true }));
     for (let n = 0; n < 70; n++) expect(await prepareReconcileRetirements(app, scan(), deps)).toMatchObject({
-      candidates: [], retired: [], held: [{ reason: 'retirement-receipt-unverified' }],
+      candidates: [], held: [], retired: [expect.objectContaining({ branch: branch.branch, head })],
     });
+    expect(deps.retire).toHaveBeenCalledTimes(70);
   });
 
   it('does not wake cognitive review for an unrelated default advance, timestamp or digest change', () => {

@@ -13,10 +13,33 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { __resetReviewerIdentityCache } from './reviewerIdentity.js';
+import { buildClaimWorkTask, buildJiraTicketTask } from './cosTaskClaimWork.js';
+import { emitOnDemandEmpty } from './cosTaskGenerator.js';
+import { cosEvents } from './cosEvents.js';
 
 vi.mock('./taskPromptService.js', () => ({
   getTaskPrompt: vi.fn(async () => 'Improve {appName} at {repoPath}\n{issueAuthorFilter}\n{issueExcludeLabels}\nReviewers: {reviewers}'),
   getStagePrompt: vi.fn(async () => 'Improve {appName} at {repoPath}\n{issueAuthorFilter}\n{issueExcludeLabels}\nReviewers: {reviewers}'),
+}));
+
+const getCodeReviewDefaultsMock = vi.fn(async () => ({ reviewers: ['codex'], usernames: [], optionalReviewers: [] }));
+vi.mock('./codeReview.js', async original => ({
+  ...await original(), getCodeReviewDefaults: (...args) => getCodeReviewDefaultsMock(...args),
+}));
+const identityLookup = vi.fn(async () => ({}));
+vi.mock('./github.js', async original => ({ ...await original(), execGh: (...args) => identityLookup(...args) }));
+const targetMock = vi.fn(async () => ({ tracker: 'github', target: { forge: 'github', apiHost: 'github.example.test' } }));
+vi.mock('../lib/workTracker.js', async original => ({ ...await original(),
+  resolveAppForgeTarget: (...args) => targetMock(...args),
+  resolveAppWorkTracker: vi.fn(async () => ({ resolved: 'github', source: 'test' })),
+}));
+const recordPreflightOutcome = vi.fn(async () => {});
+const finishPreflightCard = vi.fn(async () => {});
+vi.mock('./preflightTaskCard.js', () => ({
+  recordPreflightOutcome: (...args) => recordPreflightOutcome(...args),
+  finishPreflightCard: (...args) => finishPreflightCard(...args),
+  preflightReporter: () => vi.fn(async () => {}),
 }));
 
 const getTaskIntervalMock = vi.fn(async () => ({ type: 'weekly', taskMetadata: {} }));
@@ -236,5 +259,92 @@ describe('prepareManagedAppImprovementTask skip result', () => {
   it('names the gate for an install-wide target request that has no managed app to run on', async () => {
     const prepared = await prepareManagedAppImprovementTask('model-comparison-refresh', APP, STATE);
     expect(prepared).toMatchObject({ task: null, pendingPerpetualDispatch: null, skip: { gate: 'install-wide-target', reason: null } });
+  });
+});
+
+
+describe('claim dispatch reviewer identity preflight (#13522)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetReviewerIdentityCache();
+    identityLookup.mockReset().mockResolvedValue({});
+    targetMock.mockResolvedValue({ tracker: 'github', target: { forge: 'github', apiHost: 'github.example.test' } });
+    getTaskIntervalMock.mockResolvedValue({ type: 'weekly', taskMetadata: {} });
+    getAppTaskTypeOverridesMock.mockResolvedValue({});
+    getCodeReviewDefaultsMock.mockResolvedValue({ reviewers: ['codex'], usernames: ['missing-reviewer'], optionalReviewers: [] });
+  });
+
+  const prepare = () => prepareManagedAppImprovementTask('claim-issue', APP, STATE, { skipPreconditions: true });
+  const missing = () => { throw Object.assign(new Error('gh: Not Found (HTTP 404)'), { ghStderr: 'gh: Not Found (HTTP 404)' }); };
+
+  it('blocks the scheduled prompt and records the exact default entry; repeated dispatch reuses the identity cache', async () => {
+    identityLookup.mockImplementation(missing);
+    const prepared = await prepare();
+    expect(prepared.task).toBeNull();
+    expect(prepared.skip).toMatchObject({ gate: 'reviewer-identity', detail: { reviewers: ['missing-reviewer'] } });
+    expect(prepared.skip.reason).toContain('@missing-reviewer');
+    expect(prepared.skip.reason).toContain('Settings → Code Reviewers (usernames)');
+    expect(recordPreflightOutcome).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'failed', reason: 'REVIEWER_IDENTITY_NOT_FOUND', note: prepared.skip.reason }));
+    await prepare();
+    expect(identityLookup).toHaveBeenCalledTimes(1);
+    expect(identityLookup).toHaveBeenCalledWith(['api', '--hostname', 'github.example.test', 'users/missing-reviewer'], 8000);
+    const emitted = vi.fn();
+    cosEvents.on('schedule:on-demand-empty', emitted);
+    try {
+      await emitOnDemandEmpty({ taskScheduleMod: { getPerpetualParkInfo: async () => null }, request: { id: 'request-1', taskType: 'claim-issue' }, targetApp: APP, taskConfig: { perpetual: false }, skip: prepared.skip });
+      expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'transient', reason: prepared.skip.reason, forge: { cli: 'reviewer identity', remedy: prepared.skip.reason } }));
+    } finally {
+      cosEvents.off('schedule:on-demand-empty', emitted);
+    }
+  });
+
+  it('blocks both manual claim builders before returning a prompt and names a task override entry', async () => {
+    identityLookup.mockImplementation(missing);
+    getTaskIntervalMock.mockResolvedValue({ type: 'weekly', taskMetadata: { usernames: ['missing-reviewer'] } });
+    await expect(buildClaimWorkTask(APP)).rejects.toMatchObject({ code: 'REVIEWER_IDENTITY_NOT_FOUND', message: expect.stringContaining('Tasks → Schedule → claim-work → Reviewers (taskMetadata.usernames)') });
+    await expect(buildJiraTicketTask(APP, 'TEST-123')).rejects.toMatchObject({ code: 'REVIEWER_IDENTITY_NOT_FOUND' });
+    expect(identityLookup).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the per-app settings entry when an app override supplied the missing reviewer', async () => {
+    identityLookup.mockImplementation(missing);
+    getAppTaskTypeOverridesMock.mockResolvedValue({ 'claim-issue': { taskMetadata: { usernames: ['missing-reviewer'] } } });
+    const prepared = await prepare();
+    expect(prepared.skip.reason).toContain('Apps → Automation → claim-issue → Reviewers (taskMetadata.usernames)');
+  });
+
+  it('preserves healthy reviewer roster and prompt metadata', async () => {
+    const { task, skip } = await prepare();
+    expect(skip).toBeNull();
+    expect(task.description).toContain('Reviewers: codex,@missing-reviewer');
+    expect(task.metadata.usernames).toEqual(['missing-reviewer']);
+    expect(task.description).not.toContain('Reviewer identity preflight');
+    expect(recordPreflightOutcome).not.toHaveBeenCalled();
+  });
+
+  it('does not classify authentication failure as a missing identity', async () => {
+    identityLookup.mockRejectedValue(new Error('HTTP 401: Bad credentials'));
+    const { task, skip } = await prepare();
+    expect(skip).toBeNull();
+    expect(task.description).toContain('@missing-reviewer');
+    expect(recordPreflightOutcome).not.toHaveBeenCalled();
+  });
+
+  it('reports a verified-missing optional entry without blocking or rewriting its roster', async () => {
+    identityLookup.mockImplementation(missing);
+    getCodeReviewDefaultsMock.mockResolvedValue({ reviewers: ['codex'], usernames: ['missing-reviewer'], optionalReviewers: ['@missing-reviewer'] });
+    const { task, skip } = await prepare();
+    expect(skip).toBeNull();
+    expect(task.description).toContain('@missing-reviewer~opt');
+    expect(task.description).toContain('Reviewer identity preflight');
+    expect(task.description).toContain('Report this configuration fault in the run summary');
+    expect(task.metadata.optionalReviewers).toEqual(['@missing-reviewer']);
+  });
+
+  it('does not send GitHub identity probes to a GitLab target', async () => {
+    targetMock.mockResolvedValue({ tracker: 'gitlab', target: { forge: 'gitlab', apiHost: null } });
+    const { task } = await prepare();
+    expect(task.description).toContain('@missing-reviewer');
+    expect(identityLookup).not.toHaveBeenCalled();
   });
 });

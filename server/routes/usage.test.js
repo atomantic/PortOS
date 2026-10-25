@@ -405,6 +405,19 @@ describe('usage routes', () => {
     expect(getProviderQuotas).toHaveBeenCalledWith({ wait: 'fresh', family: 'grok' });
   });
 
+  it('GET /api/usage/providers forwards the period query parameter', async () => {
+    getProviderQuotas.mockResolvedValue([{ family: 'imagegen', supported: true, limits: [], metrics: [] }]);
+    const res = await request(buildApp()).get('/api/usage/providers?period=week');
+    expect(res.status).toBe(200);
+    expect(getProviderQuotas).toHaveBeenCalledWith({ wait: 'never', family: null, period: 'week' });
+  });
+
+  it('GET /api/usage/providers rejects an invalid period parameter', async () => {
+    const res = await request(buildApp()).get('/api/usage/providers?period=invalid');
+    expect(res.status).toBe(400);
+    expect(getProviderQuotas).not.toHaveBeenCalled();
+  });
+
   it('GET /api/usage/providers rejects a malformed family id', async () => {
     const res = await request(buildApp()).get('/api/usage/providers?family=../etc');
     expect(res.status).toBe(400);

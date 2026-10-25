@@ -458,7 +458,7 @@ function TrainingJobDetail({ runId }) {
 function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
   const Icon = KIND_ICON[job.kind] || Film;
   const canCancel = job.status === 'queued' || job.status === 'running';
-  const canRetry = (job.status === 'failed' || job.status === 'canceled') && typeof onRetry === 'function';
+  const canRetry = job.kind !== 'training' && (job.status === 'failed' || job.status === 'canceled') && typeof onRetry === 'function';
   // Delete only on terminal rows — live jobs go through Cancel.
   const canDelete = (job.status === 'failed' || job.status === 'canceled' || job.status === 'completed')
     && typeof onDelete === 'function';

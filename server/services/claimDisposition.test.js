@@ -53,6 +53,24 @@ describe('selected claim tracker completion', () => {
     expect((await verify()).issues[0]).not.toHaveProperty('mergeCommit');
   });
 
+  it('settles a trusted manual COMPLETED closure even when shipped work has no closing-keyword link', async () => {
+    repository.issue.timelineItems.nodes[0].source.closingIssuesReferences.nodes = [];
+    const result = await verify();
+    expect(result).toMatchObject({ status: 'verified', issues: [{ issue: 42, disposition: 'operator-closed', closedBy: 'example' }] });
+    expect(result.issues[0]).not.toHaveProperty('mergeCommit');
+    expect(result.issues[0]).not.toHaveProperty('changeRequest');
+    // Later retries see only the same closure; no PR or new agent is needed.
+    repository.issue.timelineItems.nodes = [closure()];
+    expect(await verify()).toEqual(result);
+  });
+
+  it('requires authority from the latest manual closure, ignoring earlier trusted closures', async () => {
+    repository.issue.timelineItems.nodes = [closure(), { ...closure(),
+      createdAt: '2026-10-02T11:00:00Z', actor: { login: 'outside-contributor' } }];
+    execGh.mockImplementation(async args => args[1] === 'graphql' ? JSON.stringify({ data: { repository } }) : '{}');
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'closure-authority-unverified' });
+  });
+
   it('preserves delegated collaborator closure authority and rejects an untrusted invalidation', async () => {
     repository.issue.stateReason = 'NOT_PLANNED';
     repository.issue.timelineItems.nodes = [{ ...closure(), actor: { login: 'delegated-agent' } }];
@@ -78,6 +96,8 @@ describe('selected claim tracker completion', () => {
     ['unproven merge commit', r => { r.issue.timelineItems.nodes[0].source.mergeCommit = null; }],
     ['closure before merge', r => { r.issue.timelineItems.nodes[0].source.mergedAt = '2026-10-02T00:00:00Z'; }],
   ])('refuses %s despite affirmative agent prose', async (_name, mutate) => {
+    // An automatic PR closure must still satisfy the exact delivery contract.
+    repository.issue.timelineItems.nodes[1].closer = repository.issue.timelineItems.nodes[0].source;
     mutate(repository);
     expect(await verify()).toMatchObject({ status: 'unverified' });
   });
@@ -128,7 +148,7 @@ describe('GitLab selected claim delivery', () => {
   const mr = { iid: 7, project_id: 5, target_project_id: 5, state: 'merged', target_branch: 'main',
     merge_commit_sha: 'b'.repeat(40), merged_at: '2026-10-01T10:00:00Z' };
 
-  it('requires a same-project merged MR that explicitly closes this issue, and refuses unsupported closure-only claims', async () => {
+  it('requires a same-project merged MR that explicitly closes this issue, or a verified operator closure', async () => {
     resolveAppForgeTarget.mockResolvedValue({ tracker: 'gitlab', target: { ...target, forge: 'gitlab' } });
     resolveForgeForRepo.mockResolvedValue({ cli: 'glab', env: { GITLAB_TOKEN: 'invented-token' } });
     let closes = [issue];
@@ -144,5 +164,27 @@ describe('GitLab selected claim delivery', () => {
     expect(await verify()).toMatchObject({ status: 'unverified', reason: 'merged-delivery-unverified' });
     closes = [];
     expect(await verify()).toMatchObject({ status: 'unverified' });
+  });
+
+  it('verifies the GitLab closer through inherited project membership, and refuses read-only or mismatched members', async () => {
+    resolveAppForgeTarget.mockResolvedValue({ tracker: 'gitlab', target: { ...target, forge: 'gitlab' } });
+    resolveForgeForRepo.mockResolvedValue({ cli: 'glab' });
+    let member = { id: 9, access_level: 30 };
+    let requests = [];
+    execGlab.mockImplementation(async args => {
+      const endpoint = args.at(-1);
+      return JSON.stringify(endpoint.includes('/members/all/') ? member
+        : endpoint.includes('related_merge_requests') ? requests : endpoint.endsWith('/42') ? { ...issue, closed_by: { id: 9 } } : project);
+    });
+    const result = await verify();
+    expect(result).toMatchObject({ status: 'verified', issues: [{ issue: 42, disposition: 'operator-closed' }] });
+    expect(result.issues[0]).not.toHaveProperty('mergeCommit');
+    member = { id: 9, access_level: 20 };
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'closure-authority-unverified' });
+    member = { id: 10, access_level: 50 };
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'closure-authority-unverified' });
+    member = { id: 9, access_level: 40 };
+    requests = [{ ...mr, target_branch: 'release' }];
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'merged-delivery-unverified' });
   });
 });

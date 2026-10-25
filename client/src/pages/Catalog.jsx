@@ -21,6 +21,7 @@ import { Sparkles, Plus, Search, FileInput, Loader2, RefreshCw, Wand2, X, Layout
 import BrailleSpinner from '../components/BrailleSpinner';
 import Drawer from '../components/Drawer';
 import PageHeader from '../components/PageHeader';
+import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import toast from '../components/ui/Toast';
 import {
   listCatalogIngredients,
@@ -39,6 +40,7 @@ import CatalogCard from '../components/catalog/CatalogCard';
 import CatalogAlbum from '../components/catalog/CatalogAlbum';
 import { CatalogTypesTab } from '../components/settings/CatalogTypesTab';
 import { catalogRefRoleForType } from '../lib/catalogTypes';
+import { CATALOG_NAV_TABS } from '../lib/creativeLibraries';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import useDrawerTab from '../hooks/useDrawerTab';
 import useUrlParams from '../hooks/useUrlParams';
@@ -625,6 +627,9 @@ export default function Catalog() {
         </div>
         )}
       />
+      <div className="shrink-0">
+        <RouteTabsHeader tabs={CATALOG_NAV_TABS} activeTab="catalog" ariaLabel="Catalog sections" />
+      </div>
       <div className="flex-1 min-h-0 overflow-auto p-4">
       {/* Search sits directly under the header so the primary way to find an
           ingredient stays above the fold on a phone, ahead of the filters. */}

@@ -301,6 +301,9 @@ router.post('/schedule/branch-reconcile/checkouts/review', asyncHandler(async (r
   const { appId, prUrl, kind, ...release } = validateRequest(heldCheckoutReviewBodySchema, req.body);
   const { prepareInventoriedCheckoutRetirement } = await import('../services/heldCheckoutRecovery.js');
   const result = await prepareInventoriedCheckoutRetirement({ appId, release, prUrl, ...(kind && { kind }) });
+  if (!result.ok && result.reason === 'retirement-submodule-not-uninitialized' && !result.nextAction) {
+    result.nextAction = 'This checkout has initialized Git submodules. Request its exact review through /api/cos/schedule/branch-reconcile/initialized-checkouts/review; do not deinitialize or remove modules to bypass this refusal.';
+  }
   if (!result.ok) throw new ServerError(`Checkout review refused: ${result.reason}`, {
     status: 409, code: 'CHECKOUT_REVIEW_REFUSED', context: { reason: result.reason, ...(result.archiveLimit && { archiveLimit: result.archiveLimit }), ...(result.nextAction && { nextAction: result.nextAction }) },
   });

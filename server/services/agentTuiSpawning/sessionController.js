@@ -948,8 +948,10 @@ export function createTuiSessionController({
       });
     }
 
-    persistence.releaseRunRecord(agentData?.pid ?? null);
-    if (sessionId && session.isAlive(sessionId)) session.kill(sessionId);
+    // Stop this finished writer before releasing its execution binding. The
+    // adapter then awaits deterministic retirement; no scheduled wake is owed.
+    if (sessionId && session.isAlive(sessionId)) await session.kill(sessionId);
+    await persistence.releaseRunRecord(agentData?.pid ?? null);
   };
 
   /**
@@ -1131,7 +1133,7 @@ export function createTuiSessionController({
       errorExecutionFallback: `TUI agent ended: ${reason}`,
     });
 
-    if (finalizeOutcome.outcome === 'paused') { persistence.releaseRunRecord(agentData?.pid ?? null); return; }
+    if (finalizeOutcome.outcome === 'paused') { await persistence.releaseRunRecord(agentData?.pid ?? null); return; }
 
     if (finalizeOutcome.outcome === 'abandoned') {
       await abandonForHostShutdown();

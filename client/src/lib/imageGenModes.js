@@ -159,7 +159,7 @@ export const RENDER_TARGET_OPTIONS = Object.freeze([
   { id: RENDER_TARGET.SPRITE_REFERENCE, label: 'Sprite references & anchors' },
   { id: RENDER_TARGET.PIPELINE_VISUAL, label: 'Pipeline visuals (storyboards, comics, covers)' },
   { id: RENDER_TARGET.MUSIC_VIDEO, label: 'Music Video scene frames & clips', video: true },
-  { id: RENDER_TARGET.LORA_DATASET, label: 'LoRA training datasets' },
+  { id: RENDER_TARGET.LORA_DATASET, label: 'LoRA training datasets', retired: true },
   { id: RENDER_TARGET.CREATIVE_AGENT, label: 'Creative agent renders', video: true },
   { id: RENDER_TARGET.DECK, label: 'Deck card renders (playing cards & tarot)' },
 ]);

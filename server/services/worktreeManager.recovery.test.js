@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it as vitestIt, onTestFailed, vi } from 'vitest';
-import { mkdir, writeFile, rm, readFile, readdir } from 'fs/promises';
+import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot, mockTestIdentity, ownTestBodies } from '../lib/mockPathsDataRoot.js';
@@ -132,25 +132,23 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('failed worktree cleanup recovery', () =
     expect((await execGit(['show', 'HEAD:recoverable.txt'], resumed)).stdout).toBe('unpublished agent work\n');
   });
 
-  it('retires a merged recovery idempotently and preserves its reflog and commit bundle', async () => {
-    const { repo, branch, agentId } = fixture;
+  it('retires a merged recovery idempotently and pins the commit without an archive', async () => {
+    const { repo, branch, worktree, agentId } = fixture;
     // Once recovered work lands, both its first cleanup and any later completion
-    // callback must report success without inventing a preserved branch.
+    // callback must report success without inventing a preserved branch or an archive copy.
     phase('merge');
     await execGit(['merge', branch, '--no-edit'], repo);
-    const reflog = await readFile(join(repo, '.git', 'logs', 'refs', 'heads', ...branch.split('/')));
+    const head = (await execGit(['rev-parse', branch], repo)).stdout.trim();
     phase('merged checkout retirement');
     expect(await removeWorktree(agentId, repo, branch, options)).toMatchObject({ removed: true, warnings: [] });
     phase('repeated merged callback');
     expect(await removeWorktree(agentId, repo, branch, options)).toMatchObject({ removed: true, warnings: [] });
     phase('preservation assertions');
-    const archiveRoot = join(PATHS.cos, 'branch-retirement-archives');
-    const archives = await readdir(archiveRoot);
-    expect(archives).toHaveLength(1);
-    expect(await readFile(join(archiveRoot, archives[0], 'reflog'))).toEqual(reflog);
-    await expect(execGit(['bundle', 'verify', join(archiveRoot, archives[0], 'commits.bundle')], repo))
-      .resolves.toMatchObject({ exitCode: 0 });
+    expect(existsSync(worktree)).toBe(false);
+    expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
     expect((await execGit(['show-ref', '--verify', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
+    expect((await execGit(['rev-parse', `refs/portos/completed/${head}`], repo)).stdout.trim()).toBe(head);
+    expect((await execGit(['show', 'HEAD:recoverable.txt'], repo)).stdout).toBe('unpublished agent work\n');
   });
 });
 

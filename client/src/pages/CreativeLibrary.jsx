@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Drama, Mountain, Package, Plus, Search, Loader2, Sparkles, Library, Import } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
+import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import MediaImage from '../components/MediaImage';
 import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 import toast from '../components/ui/Toast';
@@ -19,7 +20,7 @@ import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import { usePagedCollection } from '../hooks/usePagedCollection';
 import useUrlParams from '../hooks/useUrlParams';
 import useCancelableDebounce from '../hooks/useCancelableDebounce';
-import { libraryById, ingredientPath, ingredientCoverUrl, usageSummary } from '../lib/creativeLibraries';
+import { libraryById, ingredientPath, ingredientCoverUrl, usageSummary, CATALOG_NAV_TABS } from '../lib/creativeLibraries';
 import { formatCount } from '../utils/formatters';
 
 const PAGE_SIZE = 48;
@@ -121,20 +122,16 @@ export default function CreativeLibrary({ libraryId }) {
         )}
         actions={(
           <div className="flex items-center gap-2">
-            <Link
-              to="/casting/import"
-              aria-label="Import from music videos"
-              title="Import from music videos"
-              className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-lg border border-port-border bg-port-card hover:bg-port-bg text-gray-300 hover:text-white text-sm"
-            >
-              <Import size={16} aria-hidden="true" /> <span className="hidden sm:inline">From videos</span>
-            </Link>
-            <Link
-              to={`/catalog?type=${encodeURIComponent(library.type)}`}
-              className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-lg border border-port-border bg-port-card hover:bg-port-bg text-gray-300 hover:text-white text-sm"
-            >
-              <Library size={16} aria-hidden="true" /> Catalog
-            </Link>
+            {library.id === 'casting' && (
+              <Link
+                to="/casting/import"
+                aria-label="Import from music videos"
+                title="Import from music videos"
+                className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-lg border border-port-border bg-port-card hover:bg-port-bg text-gray-300 hover:text-white text-sm"
+              >
+                <Import size={16} aria-hidden="true" /> <span className="hidden sm:inline">From videos</span>
+              </Link>
+            )}
             <button
               type="button"
               onClick={() => setShowForm((v) => !v)}
@@ -145,6 +142,9 @@ export default function CreativeLibrary({ libraryId }) {
           </div>
         )}
       />
+      <div className="shrink-0">
+        <RouteTabsHeader tabs={CATALOG_NAV_TABS} activeTab={library.id} ariaLabel="Catalog sections" />
+      </div>
       <div className="flex-1 min-h-0 overflow-auto p-3 sm:p-4 flex flex-col gap-3">
         {showForm && (
           <form onSubmit={handleCreate} className="p-3 bg-port-card border border-port-border rounded-lg flex flex-col gap-3">

@@ -74,3 +74,16 @@ describe('LoRA dataset caption-run routes', () => {
     expect(res.status).toBe(404);
   });
 });
+
+it('refuses every retired dataset mutation before reaching a producer or deleting retained files', async () => {
+  for (const [method, path] of [
+    ['post', ''], ['patch', '/example'], ['delete', '/example'], ['post', '/example/images'],
+    ['post', '/example/import-gallery'], ['post', '/example/generate'], ['post', '/example/caption'],
+    ['post', '/example/slice-reference-sheet'], ['post', '/example/strip-shared-fragments'],
+    ['patch', '/example/images/image-example'], ['delete', '/example/images/image-example'],
+  ]) {
+    const response = await request(makeApp())[method](`/api/lora-datasets${path}`).send({});
+    expect(response.status).toBe(410);
+    expect(response.body.code).toBe('LORA_TRAINING_RETIRED');
+  }
+});

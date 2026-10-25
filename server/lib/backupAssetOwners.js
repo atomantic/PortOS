@@ -408,7 +408,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     // Explicit file cleanup can leave external references by design, but one
     // lease keeps its single/bulk deletion out of a copy-then-dump snapshot.
     id: 'operator-file-purge', status: 'admitted',
-    modules: ['services/dataManager.js', 'routes/uploads.js', 'routes/attachments.js'],
+    modules: ['services/dataManager.js', 'services/dataMaintenance.js', 'routes/uploads.js', 'routes/attachments.js'],
   },
   {
     // Snapshot JSON and its index entry are one pair. Deletion persists index

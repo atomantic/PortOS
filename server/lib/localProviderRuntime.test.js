@@ -286,7 +286,6 @@ describe('shipped copy names a Models page by route, never by literal (#7419)', 
   const ALLOWLISTED_FILES = new Set([
     'server/lib/navManifest.js',
     'server/services/loraDatasetCaption.js',
-    'client/src/components/loraTraining/CaptionModelPicker.jsx',
   ]);
 
   /**

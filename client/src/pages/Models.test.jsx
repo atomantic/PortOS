@@ -36,9 +36,7 @@ vi.mock('../components/settings/CodeReviewersTab', () => ({ default: () => <div>
 vi.mock('../components/models/ModelComparison', () => ({ default: () => <div>comparison panel</div> }));
 vi.mock('../components/models/DecisionClassifiers', () => ({ default: ({ view }) => <div>classifiers panel {view}</div> }));
 vi.mock('./Loras', () => ({ default: () => <div>loras panel</div> }));
-vi.mock('./LoraTraining', () => ({ default: () => <div>training panel</div> }));
 vi.mock('./MediaModels', () => ({ default: () => <div>media models panel</div> }));
-vi.mock('./LoraDatasetDetail', () => ({ default: ({ recordId }) => <div>dataset workbench {recordId}</div> }));
 
 import Models from './Models';
 
@@ -62,7 +60,6 @@ const PANEL_MARKER = {
   performance: 'assessments panel',
   status: 'status panel',
   subscriptions: 'subscriptions panel',
-  training: 'training panel',
 };
 
 // These destinations belong to Models in the sidebar but keep their own route
@@ -75,6 +72,7 @@ const renderAt = (path) => render(
     <Routes>
       <Route path="/models/performance/results/:assessmentKey" element={<Models fixedTab="performance" />} />
       <Route path="/models/performance/:view" element={<Models fixedTab="performance" />} />
+      <Route path="/settings/data-maintenance" element={<div>Retired training maintenance</div>} />
       <Route path="/models/:tab" element={<Models />} />
       <Route path="/models/:tab/:recordId" element={<Models />} />
       <Route path="/models/decision-classifiers/jev/:taskView" element={<Models fixedTab="decision-classifiers" fixedRecordId="jev" />} />
@@ -213,14 +211,10 @@ describe('Models — tab drill-downs', () => {
     expect(screen.getByRole('tab', { name: view === 'library' ? 'Model Library' : 'Abuse Guard' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('renders a tab detail view INSIDE the section shell, not as a bare page', async () => {
-    // Under /media these pages kept the shell's chrome for free, because MediaGen
-    // was a layout route. Registering the workbench as its own top-level route
-    // would silently drop the section header and tab bar; asserting the tab bar is
-    // still present (and still marks Training active) is what catches that.
-    renderAt('/models/training/dataset-abc');
-    expect(await screen.findByText('dataset workbench dataset-abc')).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Training' })).toHaveAttribute('aria-selected', 'true');
+  it.each(['/models/training', '/models/training/dataset-abc'])('redirects retired deep link %s to maintenance', async path => {
+    renderAt(path);
+    expect(await screen.findByText('Retired training maintenance')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Training' })).toBeNull();
   });
 
   it('falls back to the tab index when the tab has no detail view', async () => {

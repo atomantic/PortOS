@@ -432,9 +432,8 @@ export function invalidateFlux2Health() {
 // symmetry with the other resolvers.
 const MFLUX_TRAIN_BIN = IS_WIN ? 'mflux-train.exe' : 'mflux-train';
 
-// True when `mflux-train` sits next to `pythonPath` (the same probe
-// loraTraining's isMfluxTrainAvailable uses; kept here so resolveMfluxPython is
-// self-contained). Null/empty path → false.
+// Historical console-script probe retained for shared image-runtime discovery.
+// Retirement never uninstalls or changes which existing venv is selected.
 export const hasMfluxTrain = (pythonPath) =>
   !!pythonPath && existsSync(join(dirname(pythonPath), MFLUX_TRAIN_BIN));
 
@@ -448,13 +447,12 @@ const MFLUX_VENV_CANDIDATES = IS_WIN
       join(PATHS.data, 'python', 'venv-mflux', 'bin', 'python3'),
     ];
 
-// Resolve the Python whose `mflux-train` PortOS should spawn for MLX LoRA
-// training. Preference order: (1) an explicitly-configured image-gen Python
+// Resolve the existing shared mflux Python. Preserve the historical preference
+// order: (1) an explicitly-configured image-gen Python
 // that actually ships mflux-train — the historical `pip --user` layout, so
 // existing installs behave exactly as before; (2) the first dedicated
 // ~/.portos/venv-mflux that ships it. When neither ships mflux-train, return
-// the configured path unchanged (or null) so the caller's isMfluxTrainAvailable
-// still reports the honest "not installed" state instead of a phantom venv path.
+// the configured path unchanged (or null) rather than inventing a venv path.
 export function resolveMfluxPython(configuredPath = null) {
   if (hasMfluxTrain(configuredPath)) return configuredPath;
   for (const p of MFLUX_VENV_CANDIDATES) {

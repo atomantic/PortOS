@@ -408,6 +408,8 @@ async function bootDaemon(state) {
         emitLog('info', `🧹 Periodic cleanup: ${cleaned} orphaned agent(s)`);
       }
       await resetOrphanedTasks();
+      const { recoverBlockedSystemTasks } = await import('./blockedSystemInvestigation.js');
+      await recoverBlockedSystemTasks().catch(err => console.error(`❌ Blocked-system investigation recovery failed: ${err.message}`));
       // Evaluation is event-driven, so without this cadence a timed pause
       // (`worktree-busy`, `orphan-cooldown`) whose `cooldownUntil` lapsed would
       // sit blocked until the next restart or manual evaluate.
@@ -1532,6 +1534,12 @@ export async function init() {
           await settleBranchReconcileRun(agent);
         })
         .catch(err => console.error(`❌ Branch reconciliation completion failed: ${err.message}`))
+        .then(async () => {
+          if (!isDaemonRunning() || !agent?.taskId) return;
+          const { recoverBlockedSystemTask } = await import('./blockedSystemInvestigation.js');
+          await recoverBlockedSystemTask(agent.taskId);
+        })
+        .catch(err => console.error(`❌ Blocked-system investigation recovery failed: ${err.message}`))
         .then(() => refillPerpetualForCompletedAgent(agent))
         .catch(err => console.error(`❌ Perpetual refill after ${agent?.id} failed: ${err.message}`))
         // Same window as the refill above: this runs before the completing
@@ -1629,11 +1637,21 @@ export async function init() {
     }
   });
 
+  // A delivery follow-up owns a parent continuation, not a new cron obligation.
+  // Replay of the same completed observation is safe: the parent verifier binds
+  // its exact cleanup owner and receipt, and coalesces concurrent wake-ups.
+  const { bindCompletionRetirementEvents } = await import('./agentRepoStateVerification.js');
+  bindCompletionRetirementEvents(cosEvents);
+
   // Contributor remediation retains its forge hand-back when blocked. Ordinary
   // merge follow-ups stay in automated recovery rather than the human inbox.
   cosEvents.on('tasks:changed', (data) => {
     handBackBlockedPrRemediation(data)
       .catch(err => console.error(`❌ Blocked PR remediation hand-back failed for task ${data?.task?.id}: ${err.message}`));
+    if (isDaemonRunning() && data?.type === 'internal' && data.task?.status === 'blocked') {
+      import('./blockedSystemInvestigation.js').then(({ recoverBlockedSystemTask }) => recoverBlockedSystemTask(data.task.id))
+        .catch(err => console.error(`❌ Blocked-system investigation recovery failed: ${err.message}`));
+    }
   });
 
   // A critical health transition reaches the bell even when no CoS view is open.

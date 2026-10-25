@@ -1,368 +1,69 @@
+import { refuseRetiredTraining, withRetiredDataAccess, acquireRetiredDataAccess } from '../../lib/retiredLoraTraining.js';
 /**
- * LoRA training engine — run lifecycle + python trainer spawn.
- *
- * Routed through mediaJobQueue's GPU lane as `kind: 'training'` (training
- * shares the Metal/MLX runtime with renders, so serialization is correct).
- * The queue owns job status / SSE / watchdog / cancel escalation; this
- * module owns the run RECORD (PostgreSQL `lora_training_runs`), the child
- * process, artifact collection under `data/training-runs/<runId>/`, and
- * trained-LoRA registration into `data/loras/`.
- *
- * Spawn/cancel mirrors videoGen/local.js: SIGTERM → 8s SIGKILL escalation,
- * PYTHONUNBUFFERED, hfChildEnv, caffeinate on darwin.
- * The trainers checkpoint on SIGTERM, so a cancel keeps its progress.
+ * Retired trainer recovery only: observe/cancel a verified detached survivor,
+ * finalize its output and keep historical records/checkpoint promotion readable.
+ * New launch, resume and queue admission are permanently refused.
  */
 
 import { spawn } from '../../lib/childProcess.js';
 import { existsSync } from 'fs';
-import { join, basename, dirname } from 'path';
+import { join, basename } from 'path';
 import { platform } from 'os';
-import { PATHS, ensureDir, atomicWrite, shortId, copyFileGuarded, writeFileGuarded, rmGuarded } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, shortId, copyFileGuarded, writeFileGuarded, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
-import { v4 as uuidv4 } from '../../lib/uuid.js';
-import { hfChildEnv } from '../hfToken.js';
-import { spawnDetached, reapDetached, reattachDetached, isReattachable } from '../../lib/detachedSpawn.js';
+
+import { reattachDetached, isReattachable } from '../../lib/detachedSpawn.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { getImageModels } from '../../lib/mediaModels.js';
-import { resolveFlux2Python, isFlux2VenvHealthy, resolveMfluxPython } from '../../lib/pythonSetup.js';
+
 import { getSettings } from '../settings.js';
 import { deleteLora, writeLoraSidecar } from '../loras.js';
-import { assertMediaQueueRoom, enqueueJob, getJob, mediaJobEvents } from '../mediaJobQueue/index.js';
+import { getJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { updateDataset } from '../loraDatasets.js';
 import { trainingEvents } from './events.js';
 import { sleepDisplayForTraining, wakeDisplay } from './displayPower.js';
-import {
-  TRAINING_DEFAULTS,
-  TRAINING_RUNTIMES,
-  buildFlux2TrainArgs,
-  buildMfluxTrainArgs,
-  buildMfluxTrainConfig,
-  resolveTrainingRuntime,
-  MFLUX_DEFAULT_COOLDOWN_SEC,
-} from './runtimes.js';
+
 import { makeTrainingLineHandler } from './progress.js';
 import { makeStallDetector } from './stallDetector.js';
-import { prepareMemoryForTraining, gpuBlockersMessage, TRAINING_MIN_HEADROOM_GB } from './memoryPrep.js';
+
 import { claimHeavyLocalJob, adoptHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { classifyTrainingFailure } from './failure.js';
 import { buildTrainedSidecar, trainedLoraFilename } from './sidecar.js';
-import { validateDatasetReady } from './dataset.js';
-import {
-  listRunCheckpoints,
-  listRunSamples,
-  resolveCheckpointAdapterBuffer,
-  resolveLatestCheckpointArtifact,
-  selectDeployableCheckpoint,
-} from './checkpoints.js';
+
+import { listRunCheckpoints, listRunSamples, resolveCheckpointAdapterBuffer, selectDeployableCheckpoint } from './checkpoints.js';
 import * as runsDb from './db.js';
 
 export { listRuns, getRun, getRunRequired, deleteRun } from './db.js';
 export { trainingEvents } from './events.js';
 
-const TRAINER_SCRIPTS = {
-  [TRAINING_RUNTIMES.MFLUX]: join(PATHS.root, 'scripts', 'train_mflux_lora.py'),
-  [TRAINING_RUNTIMES.FLUX2]: join(PATHS.root, 'scripts', 'train_flux2_lora.py'),
-};
-
 export const runDir = (runId) => join(PATHS.trainingRuns, runId);
 export const runSamplesDir = (runId) => join(runDir(runId), 'samples');
-
-/**
- * mflux ships its trainer as the `mflux-train` console script — probe for
- * it next to the configured local-image-gen python (e.g.
- * /opt/miniconda3/bin/python3 → /opt/miniconda3/bin/mflux-train). Present
- * only on mflux ≥0.17 installs.
- */
-export const isMfluxTrainAvailable = (pythonPath) =>
-  !!pythonPath && existsSync(join(dirname(pythonPath), 'mflux-train'));
 
 // GPU lane serializes training with renders, so at most one trainer child
 // exists at a time. Keyed by jobId anyway so a stale cancel can't kill a
 // newer run.
 let activeProcess = null;
 let activeJobId = null;
+const explicitlyCanceledTrainers = new WeakSet();
 
-// Phase-aware stall watchdog (issue #1330): how many times a single run may be
-// auto-resumed after a *soft* GPU hang before we give up and let it stay failed.
-// Bounded so a config that wedges every segment can't resume-loop forever — the
-// user sees a failed run after N attempts and intervenes. Counted separately
-// from manual resumes (run.resume.autoCount). Env-overridable.
-const STALL_MAX_AUTO_RESUMES = (() => {
-  const n = Number(process.env.LORA_TRAIN_STALL_MAX_AUTO_RESUMES);
-  return Number.isFinite(n) && n >= 0 ? n : 2;
-})();
-// How often the watchdog polls checkStall while a trainer is running. Well
-// under the 90s floor budget so a stall is caught within ~one tick of the
-// budget elapsing (worst-case detection lag = budget + one tick).
+// Recovery still observes a surviving trainer for stalls.
 const STALL_TICK_MS = 30_000;
 
 export const cancel = (jobId) => {
   if (!activeProcess || (jobId && activeJobId !== jobId)) return false;
   const proc = activeProcess;
+  explicitlyCanceledTrainers.add(proc);
   // Keep activeProcess set until 'close' clears it — the trainer may spend
   // a few seconds writing its cancel checkpoint. Escalate after 8s.
   killWithEscalation(proc, { label: 'training child', stillRunning: () => activeProcess === proc });
   return true;
 };
 
-/** Merge order: code defaults ← settings slice ← request params. */
-const mergeParams = (settings, requestParams = {}) => ({
-  ...TRAINING_DEFAULTS,
-  ...(settings?.loraTraining?.defaults || {}),
-  ...requestParams,
-});
+export async function startTrainingRun() { refuseRetiredTraining(); }
 
-// A dataset belongs to a run only while it still points at the run's subject.
-// Match the full (universeId, entryId) key the dataset store uses — a different
-// universe can reuse the same entryId, so entryId alone would falsely re-own a
-// reassigned dataset. (flipDatasetAfterRun keeps its own missing-entryId
-// fallthrough for pre-reassignment runs that predate the character snapshot.)
-const sameCharacter = (a, b) =>
-  a?.entryId === b?.entryId
-  && a?.universeId === b?.universeId
-  && (a?.entryKind || 'characters') === (b?.entryKind || 'characters');
-
-// Re-stamp a dataset as `training` with the run's new job/run ids, but only
-// while it still owns the dataset — the dataset can be reassigned to a different
-// character between validation and this stamp (patchDataset resets it to draft);
-// stamping a moved dataset would strand it in `training` forever (flipDatasetAfterRun
-// is character-guarded and would skip the un-flip). Used by both the fresh-launch
-// and resume paths.
-const stampDatasetTrainingStatus = (run, jobId) =>
-  updateDataset(run.datasetId, (current) => {
-    if (!sameCharacter(current.character, run.character)) return null;
-    return {
-      ...current,
-      status: 'training',
-      training: { ...current.training, lastJobId: jobId, lastRunId: run.id },
-    };
-  }).catch((err) => console.error(`❌ dataset training-status stamp failed: ${err?.message}`));
-
-/**
- * Route-facing run launcher. Validates dataset readiness + runtime health,
- * creates the run record, and enqueues the training job. Returns
- * `{ runId, jobId, position }` (202-shaped).
- */
-export async function startTrainingRun({
-  datasetId, baseModelId, name = null, params = {}, acknowledgeCaptionLeak = false,
-}) {
-  const settings = await getSettings();
-  // Resolve the mflux trainer's Python: the configured image-gen Python when it
-  // ships mflux-train (the `pip --user` layout), else an auto-discovered
-  // dedicated ~/.portos/venv-mflux (setup-image-video.sh's fallback for a system
-  // Python that can't host mflux). The resolved path threads into the job so
-  // runTraining spawns the right interpreter without re-resolving.
-  const pythonPath = resolveMfluxPython(settings?.imageGen?.local?.pythonPath || null);
-  // Engine pick: prefer mflux's MLX trainer when the user's mflux install
-  // ships it (Apple Silicon native, no second venv); fall back to the
-  // torch/diffusers trainer in venv-flux2.
-  const mlxAvailable = isMfluxTrainAvailable(pythonPath);
-  const routing = resolveTrainingRuntime(baseModelId, getImageModels(), { mlxAvailable });
-  const { dataset } = await validateDatasetReady(datasetId, { acknowledgeCaptionLeak });
-
-  if (routing.runtime === TRAINING_RUNTIMES.FLUX2) {
-    // The torch/diffusers fallback trainer can't train on Apple Silicon:
-    // PyTorch's MPS backend has no `linear_backward` for the FLUX.2 transformer
-    // Linear layers, so a LoRA backward dies at the first optimizer step
-    // ("mps_linear_backward: unsupported weights data type", for both bf16 and
-    // fp32 — validated on an M-series box, issue #1227). mflux (MLX-native) is
-    // THE Apple-Silicon runtime. Refuse at request time so we never queue a run
-    // that loads a ~16 GB base and precomputes latents for minutes before
-    // crashing. `--device cpu` would work but is impractically slow, so the
-    // actionable guidance is to install mflux. (Linux/CUDA installs are the
-    // torch path's real target and are unaffected.)
-    if (platform() === 'darwin') {
-      throw new ServerError(
-        'LoRA training on Apple Silicon requires the mflux runtime — the torch fallback can\'t train on this Mac\'s GPU (Metal/MPS). '
-        + 'Install mflux ≥0.17 in your local image-gen python (Settings → Image Gen) via `bash scripts/setup-image-video.sh`.',
-        { status: 412, code: 'TRAINING_MPS_UNSUPPORTED' },
-      );
-    }
-    const healthy = await isFlux2VenvHealthy();
-    if (!healthy) {
-      throw new ServerError(
-        'No training engine available — install mflux ≥0.17 in your local image-gen python (Settings → Image Gen) '
-        + 'or set up the FLUX.2 venv via `bash scripts/setup-image-video.sh`',
-        { status: 412, code: 'TRAINING_ENGINE_MISSING' },
-      );
-    }
-  }
-
-  // A full media queue (#8326) refuses the launch before the run row exists,
-  // so the common case leaves no failed run behind; the enqueue below still
-  // re-checks (and fails the row) if another producer filled the queue since.
-  assertMediaQueueRoom(1);
-  const mergedParams = mergeParams(settings, params);
-  const runId = uuidv4();
-  const run = {
-    id: runId,
-    jobId: null,
-    status: 'queued',
-    runtime: routing.runtime,
-    baseModelId,
-    fluxVariant: routing.variant,
-    trainRepo: routing.trainRepo,
-    mfluxModel: routing.mfluxModel,
-    name: name || null,
-    character: dataset.character,
-    datasetId,
-    triggerWord: dataset.triggerWord,
-    // Persist whether the launch opted past the caption identity-leak gate, so
-    // the staging re-validation can skip the gate for THIS run without also
-    // skipping it for ordinary queued runs whose captions were edited (leaky)
-    // while waiting in the queue.
-    captionLeakAcknowledged: acknowledgeCaptionLeak === true,
-    params: mergedParams,
-    progress: { step: 0, totalSteps: mergedParams.steps, loss: null, lastCheckpointStep: null },
-    artifacts: { dir: `training-runs/${runId}`, checkpoints: [], samples: [] },
-    output: { loraFilename: null, finalLoss: null },
-    error: null,
-    createdAt: new Date().toISOString(),
-    startedAt: null,
-    completedAt: null,
-  };
-  await runsDb.createRun(run);
-
-  // The run row already exists, so a refused admission (#8325) must fail it
-  // rather than leave a 'queued' run no job will ever pick up.
-  const queued = await enqueueJob({
-    kind: 'training',
-    owner: 'lora-training',
-    params: {
-      runId,
-      runtime: routing.runtime,
-      datasetId,
-      characterId: dataset.character.entryId,
-      characterName: dataset.character.name,
-      triggerWord: dataset.triggerWord,
-      baseModelId,
-      steps: mergedParams.steps,
-      rank: mergedParams.rank,
-      pythonPath,
-    },
-  }).catch(async (err) => {
-    await runsDb.updateRun(runId, { status: 'failed', error: err.message, completedAt: new Date().toISOString() });
-    throw err;
-  });
-  await runsDb.updateRun(runId, { jobId: queued.jobId });
-  await stampDatasetTrainingStatus(run, queued.jobId);
-
-  console.log(`🏋️ Training run ${shortId(runId)} queued — ${routing.runtime}/${baseModelId} dataset=${shortId(datasetId)} job=${shortId(queued.jobId)}`);
-  return { runId, jobId: queued.jobId, position: queued.position, status: 'queued' };
-}
-
-/**
- * Resume a failed/canceled run from its latest on-disk checkpoint. mflux bakes
- * the output path into the checkpoint zip and reads everything (config, dataset
- * paths, optimizer + adapter state, step counter) from `--resume <zip>` — so a
- * resume MUST re-run in the ORIGINAL run dir, not a fresh one, or the trainer
- * would write its new artifacts where the wrapper's watcher can't see them.
- * We therefore re-enqueue a new job against the SAME runId: new checkpoints and
- * samples append to the existing artifact arrays (the checkpoint picker shows
- * the full timeline across the resume), and finalize registers the LoRA as
- * usual. Progress may briefly read low if the trainer restarts its step bar at
- * the resume point — cosmetic; the durable record catches up on the next flush.
- */
-export async function resumeTrainingRun(runId, { auto = false } = {}) {
-  const run = await runsDb.getRunRequired(runId);
-  if (!['failed', 'canceled'].includes(run.status)) {
-    throw new ServerError(`Can only resume a failed or canceled run (status: ${run.status})`, {
-      status: 409, code: 'RUN_NOT_RESUMABLE',
-    });
-  }
-  // A run can be marked failed (boot reconcile / cancel) while its detached
-  // trainer is still alive — reap it before resuming so we never run two
-  // trainers against the same checkpoint dir. Idempotent: a no-op when nothing
-  // survives. Belt-and-suspenders with the boot-reconcile reap, since resume
-  // can race the reconcile's SIGTERM grace window.
-  const reaped = await reapDetached(join(runDir(runId), '.detached')).catch(() => ({ reaped: false }));
-  if (reaped.reaped) console.log(`🧹 reaped surviving trainer pid ${reaped.pid} before resuming run ${shortId(runId)}`);
-  // Both runtimes restore optimizer state + the step counter on resume, so
-  // training picks up mid-run and finishes at the original total: mflux via
-  // `mflux-train --resume <zip>`, and the torch FLUX.2 trainer via
-  // `--resume-from <dir>` (restores the AdamW state from the checkpoint's
-  // optimizer.pt and continues range(start_step + 1, steps + 1) — no
-  // over-training, no checkpoint renumber collisions).
-  const checkpoint = resolveLatestCheckpointArtifact(run);
-  if (!checkpoint) {
-    throw new ServerError(
-      'No checkpoint to resume from — the run was killed before its first checkpoint saved. Start a fresh run.',
-      { status: 409, code: 'NO_RESUMABLE_CHECKPOINT' },
-    );
-  }
-
-  // Re-validate dataset readiness + ownership exactly like a fresh launch — the
-  // dataset may have been edited, deleted, or reassigned since the run failed.
-  // Skip the caption-leak gate: this run already cleared it at first launch,
-  // and resume shouldn't re-block on captions the user already accepted.
-  const { dataset } = await validateDatasetReady(run.datasetId, { acknowledgeCaptionLeak: true });
-  if (!sameCharacter(dataset.character, run.character)) {
-    throw new ServerError('Dataset was reassigned to a different subject — start a fresh run.', {
-      status: 409, code: 'DATASET_REASSIGNED',
-    });
-  }
-
-  // Engine health: mirror startTrainingRun for the run's existing runtime —
-  // including resolving the dedicated ~/.portos/venv-mflux, so a resume (manual
-  // OR the stall-watchdog auto-resume) on a dedicated-venv install doesn't
-  // falsely fail the availability check and thread a null interpreter into the
-  // re-enqueued job.
-  const settings = await getSettings();
-  const pythonPath = resolveMfluxPython(settings?.imageGen?.local?.pythonPath || null);
-  if (run.runtime === TRAINING_RUNTIMES.FLUX2) {
-    if (!(await isFlux2VenvHealthy())) {
-      throw new ServerError('FLUX.2 training venv is unavailable — run `bash scripts/setup-image-video.sh`', {
-        status: 412, code: 'TRAINING_ENGINE_MISSING',
-      });
-    }
-  } else if (!isMfluxTrainAvailable(pythonPath)) {
-    throw new ServerError('mflux-train not found next to the configured python — update mflux (≥0.17)', {
-      status: 412, code: 'TRAINING_ENGINE_MISSING',
-    });
-  }
-
-  const queued = await enqueueJob({
-    kind: 'training',
-    owner: 'lora-training',
-    params: {
-      runId,
-      runtime: run.runtime,
-      datasetId: run.datasetId,
-      characterId: run.character?.entryId,
-      characterName: run.character?.name,
-      triggerWord: run.triggerWord,
-      baseModelId: run.baseModelId,
-      steps: run.params?.steps,
-      rank: run.params?.rank,
-      pythonPath,
-      resumeCheckpoint: checkpoint.path,
-    },
-  });
-  await runsDb.updateRun(runId, (current) => ({
-    ...current,
-    status: 'queued',
-    jobId: queued.jobId,
-    error: null,
-    errorCode: null,
-    errorRepo: null,
-    completedAt: null,
-    resume: {
-      count: (current.resume?.count || 0) + 1,
-      // Auto (stall-watchdog) resumes are counted separately so the watchdog
-      // can cap its own retries without a manual resume resetting the budget.
-      autoCount: (current.resume?.autoCount || 0) + (auto ? 1 : 0),
-      fromStep: checkpoint.step,
-      resumedAt: new Date().toISOString(),
-      lastReason: auto ? 'stall-watchdog' : 'manual',
-    },
-  }));
-  await stampDatasetTrainingStatus(run, queued.jobId);
-
-  console.log(`🏋️ Training run ${shortId(runId)} ${auto ? 'auto-resumed (stall watchdog)' : 'resumed'} from step ${checkpoint.step} — job=${shortId(queued.jobId)}`);
-  return { runId, jobId: queued.jobId, position: queued.position, status: 'queued', fromStep: checkpoint.step };
-}
+export async function resumeTrainingRun() { refuseRetiredTraining(); }
 
 const emitFailed = (jobId, error) => trainingEvents.emit('failed', { generationId: jobId, error });
 
@@ -467,10 +168,10 @@ export async function deleteTrainingRun(runId, { withLora = false } = {}) {
  * 'training'. Resolves the trainer binary + args, spawns, parses the line
  * protocol into trainingEvents, and finalizes (LoRA registration or
  * failure classification) on close. Terminal status flows through the
- * queue's dispatcher; this function resolves once the child is spawned
+ * queue's dispatcher; this function resolves once the observer attaches
  * (the queue awaits the terminal event separately).
  */
-export async function runTraining({ jobId, runId, pythonPath = null, resumeCheckpoint = null, reattach = false }) {
+export async function runTraining({ jobId, runId, reattach = false, recoveryPermit = null }) {
   const fail = (message) => {
     console.error(`❌ training [${shortId(jobId)}] ${message}`);
     emitFailed(jobId, message);
@@ -497,6 +198,11 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   // stuck `running` (lingering until the next boot reconcile) or the dataset
   // stuck on its `training` chip.
   const failBeforeSpawn = async (message) => {
+    if (reattach && await hasSurvivingTrainer(runId)) {
+      retainOwnership();
+      console.error(`❌ training [${shortId(jobId)}] observer unavailable; live trainer and artifacts preserved: ${message}`);
+      return { preserved: true };
+    }
     await releaseClaim();
     await runsDb.updateRun(runId, {
       status: 'failed', error: message, completedAt: new Date().toISOString(),
@@ -505,7 +211,7 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     return fail(message);
   };
 
-  // Boot re-attach (#1332): the queue re-enqueues a run whose detached trainer
+  // Recovery attaches only to a trainer that already exists. The queue restores a run whose detached trainer
   // SURVIVED a hard server restart with `reattach: true`. The child reparented
   // to init and is still training (or finished during the downtime), so we tail
   // its existing control-dir output instead of spawning a second trainer — no
@@ -513,7 +219,7 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   // exact same line-handling/finalize path as a normal spawn, so a run that
   // completed mid-restart still registers its LoRA instead of being discarded.
   //
-  // This runs BEFORE the fresh claimHeavyLocalJob() below: the survivor already
+  // The survivor already
   // holds the machine-wide accelerator claim from before the restart (handed
   // off to its PID pre-crash), so acquiring a NEW claim here would see that
   // live claim as a competing job and refuse it — failing every restart-
@@ -523,9 +229,9 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     const proc = await reattachDetached(join(dir, '.detached'));
     if (!proc) {
       // The survivor died (killed mid-run) with no RESULT to recover — fail the
-      // run; its latest checkpoint stays resumable manually/auto, same as the
+      // run; its latest checkpoint stays retained for inspection, same as the
       // pre-#1332 reap path would have left it.
-      return failBeforeSpawn('Trainer did not survive the restart — marking failed; resume from the latest checkpoint.');
+      return failBeforeSpawn('Trainer did not survive the restart — marking failed; artifacts are preserved.');
     }
     heavyClaim = (await adoptHeavyLocalJob({ kind: 'LoRA training', id: jobId, pid: proc.pid }))
       || (await claimHeavyLocalJob({ kind: 'LoRA training', id: jobId }));
@@ -537,191 +243,13 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     console.log(`🔁 training [${shortId(jobId)}] re-attached to surviving trainer pid ${proc.pid} (run ${shortId(runId)})`);
     trainingEvents.emit('status', { generationId: jobId, message: 'Re-attached to trainer that survived a restart' });
     wireProcLifecycle(proc, { isReattach: true });
-    return;
+    return { observing: true };
   }
 
-  heavyClaim = await claimHeavyLocalJob({ kind: 'LoRA training', id: jobId });
-  if (!heavyClaim.ok) return failBeforeSpawn(heavyClaim.message);
+  refuseRetiredTraining();
 
-  // Re-validate — the dataset may have been edited/deleted while queued. Skip
-  // the caption identity-leak gate ONLY for a run that already opted past it:
-  // one launched with an explicit "Train anyway" (persisted on the record) or a
-  // resume (its captions already trained once). An ordinary clean-at-launch run
-  // is still re-checked here, so captions edited leaky while it sat in the queue
-  // are caught instead of training silently.
-  const skipCaptionLeakGate = run.captionLeakAcknowledged === true || resumeCheckpoint != null;
-  let manifest;
-  let dataset;
-  try {
-    ({ dataset, manifest } = await validateDatasetReady(
-      run.datasetId,
-      { acknowledgeCaptionLeak: skipCaptionLeakGate },
-    ));
-  } catch (err) {
-    return failBeforeSpawn(err.message);
-  }
-  // Stage-time ownership check: if the dataset was reassigned to a different
-  // subject after this run was queued, the run no longer owns it. Bail out
-  // rather than training the moved dataset and registering a LoRA under the
-  // run's now-stale subject. failBeforeSpawn's flipDatasetAfterRun is
-  // character-guarded, so it won't disturb the reassigned dataset's state.
-  // Match the full (universeId, entryId) key the dataset store uses elsewhere.
-  if (!sameCharacter(dataset.character, run.character)) {
-    return failBeforeSpawn('Dataset was reassigned to a different subject after this run was queued — cancel and retrain.');
-  }
-
-  // Reclaim unified memory before a GPU-heavy run, then gate on real headroom.
-  // Training shares the unified-memory pool with resident LLMs and renders; an
-  // oversubscribed run swap-thrashes and has coincided with GPU watchdog
-  // reboots (docs/research/2026-06-13-mflux-training-watchdog-panic.md). We
-  // unload resident models, measure what's actually free, and refuse to start
-  // (rather than crash mid-run) when headroom is below the floor. The budget
-  // also sizes the mflux quantize/low_ram tier below.
-  const memReport = await prepareMemoryForTraining();
-  // A GPU tenant the unload path cannot evict (today: the vLLM Qwen container)
-  // makes the run unwinnable regardless of system-RAM headroom, so it is checked
-  // BEFORE the budget gate below — that gate reports free system RAM, which says
-  // nothing about VRAM on exactly the discrete-GPU host this matters on.
-  if (memReport.blockers.length) return failBeforeSpawn(gpuBlockersMessage(memReport.blockers));
-  if (memReport.unloaded.length) {
-    console.log(`🧹 training [${shortId(jobId)}] freed ${memReport.unloaded.length} resident model(s): ${memReport.unloaded.join(', ')}`);
-  }
-  console.log(`🧮 training [${shortId(jobId)}] memory budget ${memReport.budgetGb.toFixed(0)} GB free of ${memReport.totalGb.toFixed(0)} GB total`);
-  if (!Number.isFinite(memReport.budgetGb) || memReport.budgetGb < TRAINING_MIN_HEADROOM_GB) {
-    // Fail safe: a non-finite budget (should never happen — both inputs are
-    // finite) must REFUSE the run, not slip past `NaN < x` (always false).
-    return failBeforeSpawn(`Not enough free memory to train safely — ${memReport.budgetGb.toFixed(1)} GB available, need ≥ ${TRAINING_MIN_HEADROOM_GB} GB. Stop other model servers or close apps and retry.`);
-  }
-
-  const checkpointsDir = join(dir, 'checkpoints');
-  const samplesDir = join(dir, 'samples');
-
-  let bin;
-  let args;
-  // Staging I/O (mkdir + copyFile/writeFile/atomicWrite) is wrapped: a throw
-  // here — e.g. a dataset image deleted in the window after validateDatasetReady's
-  // existence check (TOCTOU), or disk-full — would otherwise propagate to the
-  // queue's catch (no crash) but leave the run record `running` forever.
-  try {
-    await ensureDir(checkpointsDir);
-    await ensureDir(samplesDir);
-
-    if (run.runtime === TRAINING_RUNTIMES.FLUX2) {
-      bin = resolveFlux2Python();
-      if (!bin) {
-        return failBeforeSpawn('FLUX.2 python environment disappeared — re-run scripts/setup-image-video.sh');
-      }
-      const manifestPath = join(dir, 'manifest.json');
-      await atomicWrite(manifestPath, {
-        triggerWord: manifest.triggerWord,
-        images: manifest.images.map((img) => ({ path: img.path, caption: img.caption })),
-      });
-      args = buildFlux2TrainArgs({
-        scriptPath: TRAINER_SCRIPTS.flux2,
-        trainRepo: run.trainRepo,
-        manifestPath,
-        runDir: dir,
-        triggerWord: run.triggerWord,
-        params: run.params,
-        samplePrompt: run.params?.samplePrompt || null,
-        resumeFrom: resumeCheckpoint,
-      });
-    } else {
-      bin = pythonPath;
-      if (!bin || !isMfluxTrainAvailable(bin)) {
-        return failBeforeSpawn('mflux-train not found next to the configured python — update mflux (≥0.17) or set up the FLUX.2 venv');
-      }
-      // Stage the dataset in mflux's auto-discovery layout: NNNN.png +
-      // NNNN.txt caption pairs, plus preview_1.txt for the periodic sample
-      // render. mflux resolves everything from the config's `data` dir.
-      const dataDir = join(dir, 'data');
-      await ensureDir(dataDir);
-      for (let i = 0; i < manifest.images.length; i += 1) {
-        const stem = String(i + 1).padStart(4, '0');
-        await copyFileGuarded(manifest.images[i].path, join(dataDir, `${stem}.png`));
-        await writeFileGuarded(join(dataDir, `${stem}.txt`), `${manifest.images[i].caption}\n`);
-      }
-      if ((run.params?.sampleEvery ?? TRAINING_DEFAULTS.sampleEvery) > 0) {
-        const samplePrompt = run.params?.samplePrompt || `${run.triggerWord} portrait, neutral background`;
-        await writeFileGuarded(join(dataDir, 'preview_1.txt'), `${samplePrompt}\n`);
-      }
-      // output_path must NOT pre-exist — mflux appends a timestamp suffix to
-      // an existing dir (its new_folder behavior), which would break the
-      // wrapper's artifact watcher. mflux creates checkpoints/ + preview/
-      // (+ loss/) inside it.
-      const mfluxOutputDir = join(dir, 'mflux');
-      const config = buildMfluxTrainConfig({
-        params: run.params,
-        variant: run.fluxVariant,
-        mfluxModel: run.mfluxModel,
-        dataDir,
-        imageCount: manifest.images.length,
-        outputDir: mfluxOutputDir,
-        // Memory-derived quantize/low_ram (see deriveMfluxMemoryConfig) keyed
-        // on the post-unload AVAILABLE budget, not raw RAM — a bf16 base +
-        // in-RAM latent cache OOM-killed a 48 GB machine, and on a shared box
-        // resident models eat the same pool, so the tier must track headroom.
-        totalMemGb: memReport.budgetGb,
-      });
-      const configPath = join(dir, 'mflux-train.json');
-      await atomicWrite(configPath, config);
-      // Segmented training (watchdog-panic mitigation): default ON, globally
-      // disable-able via settings.loraTraining.segmentation = false once a
-      // macOS/mflux update fixes the underlying GPU-driver hang. Segment size
-      // is the config's effective save_frequency so each segment ends exactly
-      // on a checkpoint — no extra checkpoints, no lost steps on resume.
-      const segCfg = settings?.loraTraining || {};
-      const segmentationOn = segCfg.segmentation !== false;
-      const cooldownSec = Number.isFinite(segCfg.segmentCooldownSec)
-        ? segCfg.segmentCooldownSec : MFLUX_DEFAULT_COOLDOWN_SEC;
-      args = buildMfluxTrainArgs({
-        scriptPath: TRAINER_SCRIPTS.mflux,
-        configPath,
-        runDir: dir,
-        totalSteps: run.params?.steps || TRAINING_DEFAULTS.steps,
-        resumeCheckpoint,
-        segmentSteps: segmentationOn ? config.checkpoint.save_frequency : 0,
-        cooldownSec,
-      });
-    }
-  } catch (err) {
-    return failBeforeSpawn(`staging failed: ${err.message}`);
-  }
-
-  await runsDb.updateRun(runId, { status: 'running', startedAt: new Date().toISOString() });
-  trainingEvents.emit('status', { generationId: jobId, message: `Starting ${run.runtime} training (${run.params.steps} steps)` });
-
-  const childEnv = await hfChildEnv({ PYTHONUNBUFFERED: '1' });
-  delete childEnv.PYTHONPATH;
-
-  console.log(`🏋️ training [${shortId(jobId)}] spawn ${basename(bin)} ${run.runtime} steps=${run.params.steps} rank=${run.params.rank} images=${manifest.images.length}${resumeCheckpoint ? ` resume=${basename(resumeCheckpoint)}` : ''}`);
-  // `spawnDetached` double-forks the trainer so it reparents to init (PPID=1)
-  // and leaves pm2's process tree entirely. A plain `detached: true` child only
-  // gets its OWN process group — but pm2's TreeKill keys on PPID, not the group,
-  // so the still-PPID-linked trainer was found and SIGINT'd anyway whenever
-  // portos-server restarted (e.g. on the memory ceiling, which a long session
-  // crosses routinely — observed twice: SIGINT/KeyboardInterrupt at the exact
-  // second of a server restart, losing hours of GPU work). The detached trainer
-  // streams stdout/stderr through on-disk log files under `<runDir>/.detached`
-  // that the server tails. We still `proc.kill()` it directly by PID on cancel,
-  // and the queue worker awaits the 'close' event for the run lifecycle. No
-  // `cleanup` — those logs are the only copy of raw trainer stdout/stderr, kept
-  // in the run dir for post-mortem and removed when the run dir is deleted.
-  let proc;
-  try {
-    proc = await spawnDetached(bin, args, { env: childEnv, controlDir: join(dir, '.detached') });
-  } catch (err) {
-    return failBeforeSpawn(`trainer spawn failed: ${err.message}`);
-  }
-  wireProcLifecycle(proc);
-
-  // Wire a freshly-spawned OR re-attached (#1332) trainer handle into the full
-  // run lifecycle: live output streaming + progress mirror, the phase-aware
-  // stall watchdog, and the close→finalize path that registers the LoRA. A
-  // hoisted nested function so the early reattach branch (above) can call it too
-  // — both paths share identical handling. Closes over jobId/runId/run/dir/
-  // settings/fail/failBeforeSpawn.
   function wireProcLifecycle(proc, { isReattach = false } = {}) {
+  const releaseDataAccess = acquireRetiredDataAccess();
   activeProcess = proc;
   activeJobId = jobId;
   void heavyClaim?.handoffTo?.(proc.pid)?.catch((err) => console.error(`❌ training [${shortId(jobId)}] claim handoff failed: ${err.message}`));
@@ -821,8 +349,7 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   // protocol to apply a tight, step-rate-derived budget ONLY during
   // STAGE:training — load/encode/sampling/cooldown stay on the flat watchdog so
   // a legitimately slow phase is never false-killed. On a training-phase stall
-  // we SIGKILL the wedged child; the close handler auto-resumes from the newest
-  // checkpoint. Disable via settings.loraTraining.stallWatchdog = false.
+  // we stop the wedged child and retain its newest checkpoint. Disable via settings.loraTraining.stallWatchdog = false.
   const stallWatchdogOn = (settings?.loraTraining?.stallWatchdog !== false);
   const stallDetector = makeStallDetector();
   let stallKilled = false; // set when the tick SIGKILLs — close handler reads it
@@ -884,11 +411,10 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
         if (!stalled) return;
         stallKilled = true;
         stopStallWatchdog();
-        console.log(`⏱️ training [${shortId(jobId)}] phase-aware watchdog: training stalled ${Math.round(idleMs / 1000)}s (budget ${Math.round(budgetMs / 1000)}s) — SIGKILL + auto-resume`);
+        console.log(`⏱️ training [${shortId(jobId)}] phase-aware watchdog: training stalled ${Math.round(idleMs / 1000)}s (budget ${Math.round(budgetMs / 1000)}s) — stopping stalled trainer; checkpoints preserved`);
         // Soft hang: SIGKILL straight away (SIGTERM relies on the GIL the hang
         // holds, so the 8s escalation in cancel() would just waste the window).
-        // The newest checkpoint is the resume point; the close handler picks it
-        // up. Direct PID kill via the detached handle.
+        // Direct PID kill through the already-owned detached handle.
         proc.kill('SIGKILL');
       } catch (err) {
         console.error(`❌ training [${shortId(jobId)}] stall watchdog tick failed: ${err?.message}`);
@@ -911,7 +437,7 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     // A no-PID launch failure owns no running trainer.
     wakeDisplay(settings);
     // A launch failure after the run was marked `running` — a genuine spawn
-    // error, or (with spawnDetached) the control dir failing to create/clear.
+    // error, including a detached observer losing its control directory.
     // Route through the same terminal cleanup as pre-spawn failures so the run
     // row doesn't stay stuck `running` and the dataset's `training` chip is
     // released; `fail()` alone only logs + emits. Async + guarded since this
@@ -932,22 +458,16 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     // finalize reads the run record — the collapse guard and previewImageUrl
     // both read run.artifacts. Async finalize wrapped so a rejection can't
     // escape the event handler (unhandled rejection kills the process on Node ≥15).
-    // The trainer has exited, so release before finalization can enqueue an
-    // automatic checkpoint resume; that successor must acquire a fresh claim.
-    releaseClaim()
-      .then(() => flushProgress())
-      .then(() => processError
-        ? failBeforeSpawn(`trainer process failed: ${processError.message}`)
-        : finalizeTraining({ jobId, runId, code, signal, state: getState(), stallKilled }))
-      .then((resumed) => {
-        // Wake the display now the run is over so the user sees the result —
-        // but NOT when finalize actually enqueued a stall-watchdog auto-resume
-        // (it re-spawns and re-sleeps the display for the next attempt). Gating
-        // on the returned `resumed` flag, not raw `stallKilled`, ensures a
-        // budget-exhausted or failed resume (terminal, no re-spawn) still wakes.
-        // Best-effort, darwin-only.
-        if (!resumed) wakeDisplay(settings);
-      })
+    // The trainer has exited; release its accelerator claim before finalizing.
+    const settle = async () => {
+      await releaseClaim();
+      await flushProgress();
+      if (processError) return failBeforeSpawn(`trainer process failed: ${processError.message}`);
+      return finalizeTraining({ jobId, runId, code, signal, state: getState(), stallKilled, canceledByOperator: explicitlyCanceledTrainers.has(proc) });
+    };
+    const terminalWork = recoveryPermit ? recoveryPermit.run(settle) : settle();
+    terminalWork
+      .then(async () => { wakeDisplay(settings); await recoveryPermit?.finish(); })
       .catch((err) => {
         retainOwnership();
         // A finalize/flush rejection is still a terminal end with no auto-resume
@@ -956,45 +476,15 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
         wakeDisplay(settings);
         console.error(`❌ training [${shortId(jobId)}] finalize failed: ${err?.message}`);
         fail(`finalize failed: ${err?.message}`);
-      });
+      }).finally(releaseDataAccess);
   });
   } // end wireProcLifecycle
 }
 
-/**
- * After a phase-aware-watchdog SIGKILL, auto-resume the run from its newest
- * checkpoint (issue #1330) — bounded by STALL_MAX_AUTO_RESUMES so a config that
- * wedges every segment can't resume-loop forever. Best-effort: any failure
- * leaves the run in its finalize-set `failed` state for manual resume. Runs
- * outside the request lifecycle (called from the close handler), so it owns its
- * own error handling rather than bubbling.
- *
- * Returns true ONLY when a resume was actually enqueued (a fresh trainer will
- * re-spawn). The close handler relies on this to decide whether to wake the
- * display: a budget-exhausted or failed resume does NOT re-spawn, so the display
- * must be woken just like any other terminal end — gating on raw `stallKilled`
- * would leave it asleep forever on those paths.
- */
-async function autoResumeAfterStall(runId, jobId) {
-  const run = await runsDb.getRun(runId).catch(() => null);
-  if (!run) return false;
-  const autoCount = run.resume?.autoCount || 0;
-  if (autoCount >= STALL_MAX_AUTO_RESUMES) {
-    console.log(`⚠️ training [${shortId(jobId)}] stall auto-resume budget exhausted (${autoCount}/${STALL_MAX_AUTO_RESUMES}) — leaving run failed for manual resume`);
-    return false;
-  }
-  // resumeTrainingRun requires a failed/canceled status + a resumable checkpoint;
-  // finalize has already flipped the run to failed by the time this runs.
-  return resumeTrainingRun(runId, { auto: true }).then(
-    (res) => { console.log(`🔁 training [${shortId(jobId)}] auto-resumed run ${shortId(runId)} from step ${res.fromStep} (attempt ${autoCount + 1}/${STALL_MAX_AUTO_RESUMES})`); return true; },
-    (err) => { console.error(`❌ training [${shortId(jobId)}] stall auto-resume failed: ${err?.message} — run stays failed for manual resume`); return false; },
-  );
-}
-
-async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled = false }) {
+async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled = false, canceledByOperator = false }) {
   const run = await runsDb.getRun(runId);
   const job = getJob(jobId);
-  const canceled = !!job?.cancelRequested;
+  const canceled = !!job?.cancelRequested || canceledByOperator;
 
   // Run record vanished mid-training (direct DB edit / race — the DELETE
   // route blocks active runs, so this is defensive). Don't register a LoRA
@@ -1053,7 +543,7 @@ async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled
 
   if (canceled) {
     // Queue's cancelRequested flips the failed event into a clean cancel;
-    // record keeps the checkpoint lineage for a future resume.
+    // record keeps the checkpoint lineage for inspection or explicit promotion.
     await runsDb.updateRun(runId, { status: 'canceled', completedAt: new Date().toISOString(), error: 'Canceled' });
     await flipDatasetAfterRun(run, { trained: false });
     trainingEvents.emit('failed', { generationId: jobId, error: 'Canceled' });
@@ -1089,14 +579,6 @@ async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled
   console.error(`❌ training [${shortId(jobId)}] ${failCode}: ${message}`);
   trainingEvents.emit('failed', { generationId: jobId, error: message, code: failCode, repo: failRepo });
 
-  // Phase-aware watchdog SIGKILL (issue #1330): the run is now `failed`, so
-  // resumeTrainingRun's status precondition is satisfied — auto-resume from the
-  // newest checkpoint. Bounded by STALL_MAX_AUTO_RESUMES; awaited so the resume
-  // (re-enqueue + run-record flip back to queued) completes within finalize.
-  // Return whether a resume was actually enqueued so the close handler knows NOT
-  // to wake the display in that case (the re-spawn re-sleeps it); every other
-  // terminal path falls through to the implicit `undefined` (falsy) → wake.
-  if (stallKilled) return autoResumeAfterStall(runId, jobId);
 }
 
 /**
@@ -1140,6 +622,10 @@ export async function listSamples(runId) {
  * degradation — see the loss-is-misleading note in checkpoints.js).
  */
 export async function promoteCheckpoint(runId, step) {
+  return withRetiredDataAccess(() => promoteRetainedCheckpoint(runId, step));
+}
+
+async function promoteRetainedCheckpoint(runId, step) {
   const run = await runsDb.getRunRequired(runId);
   // Allow completed runs AND failed/canceled runs that saved at least one
   // checkpoint — promoting a partial checkpoint is a deliberate salvage (the
@@ -1196,7 +682,7 @@ export async function promoteCheckpoint(runId, step) {
   // render failure (OOM, missing venv, server restart) must never fail the
   // promote — the LoRA is already deployed; the thumbnail is cosmetic.
   if (!target.previewUrl) {
-    ensureCheckpointPreview(run, step, filename).catch((err) => {
+    withRetiredDataAccess(() => ensureCheckpointPreview(run, step, filename)).catch((err) => {
       console.error(`⚠️ training [${shortId(runId)}] preview render for step ${step} failed: ${err?.message}`);
     });
   }
@@ -1327,17 +813,27 @@ export async function initLoraTraining() {
   for (const run of active) {
     const job = run.jobId ? getJob(run.jobId) : null;
     if (!job || ['failed', 'canceled', 'completed'].includes(job.status)) {
-      // The trainer is a detached child that survives a pm2 restart, so it may
-      // STILL be running even though its in-memory job is gone. Reap it (clean
-      // SIGTERM → checkpoint → SIGKILL) before marking the run failed/resumable,
-      // so a resume can't spawn a second trainer into the same checkpoint dir.
-      const reaped = await reapDetached(join(runDir(run.id), '.detached')).catch(() => ({ reaped: false }));
-      if (reaped.reaped) console.log(`🧹 reaped surviving trainer pid ${reaped.pid} for run ${shortId(run.id)}`);
+      // Upgrade never kills an orphan trainer. Keep its artifacts pinned until
+      // the existing process finishes or the operator explicitly cancels it.
+      if (await hasSurvivingTrainer(run.id)) {
+        const jobId = run.jobId || run.id;
+        const recoveryPermit = maintenance.recoverOwned('media', jobId);
+        try {
+          const observer = await recoveryPermit.run(() => runTraining({ jobId, runId: run.id, reattach: true, recoveryPermit }));
+          if (observer?.observing) console.log(`🔁 Observing retired trainer ${shortId(run.id)} without restarting it`);
+          else if (!observer?.preserved && !await hasSurvivingTrainer(run.id)) await recoveryPermit.finish();
+        } catch (err) {
+          // An uncertain observer must retain its recovery permit: the detached
+          // process may still be writing, even when its database/claim is down.
+          console.error(`❌ Retired trainer ${shortId(run.id)} could not be observed; artifacts stay pinned: ${err?.message}`);
+        }
+        continue;
+      }
       await runsDb.updateRun(run.id, {
-        status: 'failed', error: 'interrupted by restart', completedAt: new Date().toISOString(),
+        status: job?.status === 'canceled' ? 'canceled' : 'failed', error: 'LoRA training retired; artifacts preserved', completedAt: new Date().toISOString(),
       }).catch(() => {});
       await flipDatasetAfterRun(run, { trained: false });
-      console.log(`🧹 training run ${shortId(run.id)} marked failed (interrupted by restart)`);
+      console.log(`🧹 training run ${shortId(run.id)} retired; artifacts preserved`);
     }
   }
 

@@ -150,6 +150,7 @@ import {
   getPerpetualDrainState,
   recordPerpetualDispatch,
   recordBranchReconcileOutcome,
+  recordLegacyRetirementResolutions,
   getBranchReconcileOutcome,
   recordInitializedRetirementRecovery,
   recordHeldCheckoutRetirement,
@@ -3299,6 +3300,38 @@ describe('taskSchedule', () => {
         expect(await shouldRunTask('branch-reconcile', 'app-1')).toEqual({ shouldRun: false, reason: 'disabled' });
       });
 
+      it('does not adopt new missing-checkout incidents into the frozen upgrade scope', async () => {
+        let saved = { version: 2, retirementPolicyVersion: 2, tasks: {}, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const row = { branch: 'fix/new-incident', path: '/example/new', head: 'a'.repeat(40), reason: 'retirement-provenance-unverified' };
+        const result = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [row] });
+        expect(result.legacyRetirementTransition).toEqual({ version: 1, observations: [], resolutions: [] });
+        expect(result.retirementObligations).toEqual([expect.objectContaining(row)]);
+      });
+
+      it('persists legacy audit settlement only against unchanged inventory and absent originals', async () => {
+        const { markLegacyRetirements, legacyRetirementKey } = await import('../lib/legacyRetirementTransition.js');
+        const row = { branch: 'fix/delivered', path: '/example/old', head: 'a'.repeat(40),
+          reason: 'retirement-provenance-unverified', createdAt: '2026-01-01T00:00:00.000Z' };
+        const original = { status: 'incomplete', remaining: [row], retirementObligations: [row], retired: [] };
+        markLegacyRetirements(original);
+        let saved = { version: 2, tasks: {}, executions: { 'task:branch-reconcile': {
+          perApp: { 'app-1': { branchReconcileOutcome: original } },
+        } }, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const plans = [{ key: legacyRetirementKey(row), observation: row, removalVerified: false,
+          evidence: { kind: 'merged-ancestry', head: row.head, defaultHead: 'b'.repeat(40) } }];
+        expect(await recordLegacyRetirementResolutions('app-1', { ...original, updatedAt: 'changed' }, plans, async () => true)).toEqual(original);
+        expect(await recordLegacyRetirementResolutions('app-1', original, plans, async () => false)).toEqual(original);
+        const result = await recordLegacyRetirementResolutions('app-1', original, plans, async () => true);
+        expect(result).toMatchObject({ retirementObligations: [], remaining: [], retired: [],
+          legacyRetirementTransition: { resolutions: [{ observation: row, removalVerified: false }] } });
+        expect(await recordLegacyRetirementResolutions('app-1', original, plans, async () => true)).toEqual(result);
+        expect(await getBranchReconcileOutcome('app-1')).toEqual(result);
+      });
+
       it('persists incomplete sweep evidence and exposes it when recurring dispatch is off', async () => {
         let saved = { version: 2, tasks: { 'branch-reconcile': { enabled: true, type: 'on-demand', perpetual: false } }, executions: {}, templates: [] };
         readJSONFile.mockImplementation(async () => structuredClone(saved));
@@ -3385,6 +3418,29 @@ describe('taskSchedule', () => {
         await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches' });
         expect(outcome()).toMatchObject({ status: 'incomplete', retirementObligations: [{ ...release, checkoutIdentity: 'new-incarnation', createdAt: recreatedAt, reason: 'retirement-receipt-unverified' }] });
 
+      });
+
+      it('records a separate receipt when the same checkout tuple is recreated without an archive', async () => {
+        let saved = { version: 2, tasks: {}, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const row = { branch: 'fix/example', path: '/example/checkout', head: 'a'.repeat(40),
+          checkoutIdentity: 'original', reason: 'retirement-review-pending' };
+        const outcome = () => saved.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome;
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [row] });
+        await recordHeldCheckoutRetirement('app-1', { ...row, branchDeleted: true });
+        expect(outcome().retirementObligations).toEqual([]);
+        const recreated = { ...row, checkoutIdentity: 'recreated' };
+        isCurrentRetirementCheckout.mockResolvedValueOnce(true);
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [recreated] });
+        expect(outcome().retirementObligations).toEqual([expect.objectContaining({ checkoutIdentity: 'recreated' })]);
+        await recordHeldCheckoutRetirement('app-1', { ...recreated, branchDeleted: true });
+        expect(outcome().retirementObligations).toEqual([]);
+        expect(Object.values(outcome().retirementReceiptEvidence).map(entry => entry.checkoutIdentity).sort())
+          .toEqual(['original', 'recreated']);
+        expect(Object.keys(outcome().retirementReceiptIdentities)).toHaveLength(2);
+        await recordHeldCheckoutRetirement('app-1', { ...row, branchDeleted: true });
+        expect(Object.keys(outcome().retirementReceiptIdentities)).toHaveLength(2);
       });
 
       it.each(['scan-first', 'receipt-first'])('does not resurrect a stale scan across serialized %s writes', async order => {

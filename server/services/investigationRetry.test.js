@@ -25,6 +25,13 @@ describe('retryTasksResolvedByInvestigation', () => {
     updateTask.mockResolvedValue({ id: 'ok' });
   });
 
+  it('does not refund original budgets after a diagnostic-only system investigation', async () => {
+    expect(await retryTasksResolvedByInvestigation(investigation({ preserveOriginalBudget: true })))
+      .toEqual({ retried: [], skipped: [] });
+    expect(getAllTasks).not.toHaveBeenCalled();
+    expect(reviveBlockedTask).not.toHaveBeenCalled();
+  });
+
   it('revives the blocked task the investigation was diagnosing, stamping the auto-retry budget', async () => {
     getAllTasks.mockResolvedValue(queues({
       user: [{ id: 'task-1', status: 'blocked', metadata: { blockedCategory: 'test-failure' } }]

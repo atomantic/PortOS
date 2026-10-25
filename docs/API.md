@@ -819,7 +819,9 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/conflict-journal` | Sync conflict journal |
 | `/api/importer` | Story importer |
 | `/api/story-builder` | Story Builder |
-| `/api/loras`, `/api/lora-datasets`, `/api/lora-training` | LoRA management/training |
+| `/api/loras` | Supported inference adapter management |
+| `/api/lora-datasets`, `/api/lora-training` | Retained read/cancel/checkpoint operations; training launch/resume and dataset mutation return 410 |
+| `/api/data-maintenance` | Operator-authorized retired-data inventory, fresh preview and confirmed allowlisted removal; see [Data Maintenance](DATA_MAINTENANCE.md) |
 | `/sdapi/v1` | AUTOMATIC1111-compatible image generation surface (gated by `settings.imageGen.expose.a1111`) |
 | `/api/openclaw` | OpenClaw operator chat |
 | `/api/rounds` | Rounds (music + Morse training) |

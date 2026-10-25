@@ -1832,16 +1832,26 @@ describe('Audio kind (#1928)', () => {
     expect(params.remoteMedia.request.prompt).toBe('a harbour');
   });
 
-  it('leaves a training job carrying a stray marker on the local path', async () => {
-    // Bypass probe for the normalization above: `training` has no federated
-    // contract, so a marker on one is corrupt state — blanking its params would
-    // destroy a real local run.
-    const job = await mediaJobQueue.enqueueJob({
-      kind: 'training',
-      params: { runId: 'run-1', runtime: 'mflux', modelId: 'dev', remoteMedia: remoteImageMediaParams() },
+  it('rejects media admission during retired-data removal and permits it after settlement', async () => {
+    const { withRetiredDataRemoval } = await import('../../lib/retiredLoraTraining.js');
+    await withRetiredDataRemoval(async () => {
+      await expect(mediaJobQueue.enqueueJob({ kind: 'image', params: {} })).rejects.toMatchObject({ status: 409, code: 'DATA_MAINTENANCE_ACTIVE' });
     });
+    const accepted = await mediaJobQueue.enqueueJob({ kind: 'image', params: {} });
+    expect(accepted.jobId).toBeTruthy();
+  });
 
-    expect(mediaJobQueue.getJob(job.jobId).params.modelId).toBe('dev');
+  it('retires persisted queued training without invoking a trainer or removing artifacts', async () => {
+    const id = '00000000-0000-4000-8000-000000000019';
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{ id, kind: 'training', status: 'queued', params: { runId: 'example-retired' } }] }));
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    expect(mediaJobQueue.getJob(id)).toMatchObject({ status: 'canceled', error: expect.stringContaining('retired') });
+    expect(stubs.runTraining).not.toHaveBeenCalled();
+  });
+
+  it('refuses retired training even when carrying a stray remote marker', async () => {
+    await expect(mediaJobQueue.enqueueJob({ kind: 'training', params: { runId: 'example', remoteMedia: remoteImageMediaParams() } })).rejects.toMatchObject({ status: 410, code: 'LORA_TRAINING_RETIRED' });
   });
 
   it('persists cancellation intent before signaling a running remote adapter', async () => {
@@ -2731,7 +2741,7 @@ describe('local video failure holds', () => {
     remoteAdapter.mockRestore();
   });
 
-  it('lets other local models, image, audio, training, cloud and remote work pass a hold', async () => {
+  it('lets other local models, image, audio, cloud and remote work pass a hold', async () => {
     const ids = await submitMany(4);
     for (const id of ids.slice(0, 3)) { await tick(); await finish(id); }
     const cloud = await submit('example-mlx', { mode: 'grok' });
@@ -2742,7 +2752,7 @@ describe('local video failure holds', () => {
     expect(stubs.generateVideoRemote).toHaveBeenCalledWith(expect.objectContaining({ jobId: remote }));
     expect(mediaJobQueue.getJob(other).status).toBe('running');
     await finish(other, null);
-    for (const [kind, emitter] of [['image', imageGenEvents], ['audio', audioGenEvents], ['training', (await import('../loraTraining/events.js')).trainingEvents]]) {
+    for (const [kind, emitter] of [['image', imageGenEvents], ['audio', audioGenEvents]]) {
       stubs.runTraining.mockResolvedValue({});
       const { jobId } = await mediaJobQueue.enqueueJob({ kind, params: {} });
       await tick();
@@ -4236,7 +4246,6 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
       entry: 'runSharingCopy', bus: 'video', verb: 'Generating', window: WINDOWS.VIDEO },
     { kind: 'html-composition', params: { directory: 'compositions/example' }, entry: 'renderComposition', bus: 'video', verb: 'Generating', window: WINDOWS.IMAGE },
     { kind: 'image', params: {}, entry: 'generateImage', bus: 'image', verb: 'Generating', window: WINDOWS.IMAGE },
-    { kind: 'training', params: {}, entry: 'runTraining', bus: 'training', verb: 'Training', window: WINDOWS.TRAINING },
     { kind: 'audio', params: {}, entry: 'generateAudio', bus: 'audio', verb: 'Generating', window: WINDOWS.AUDIO },
     { kind: 'supercollider', params: {}, entry: 'renderSuperCollider', bus: 'audio', verb: 'Generating', window: WINDOWS.IMAGE },
   ];
@@ -4247,8 +4256,8 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
     training: (await import('../loraTraining/events.js')).trainingEvents,
   })[name];
 
-  it('covers every declared job kind', () => {
-    expect(KIND_CASES.map(c => c.kind).sort()).toEqual([...mediaJobQueue.JOB_KINDS].sort());
+  it('covers every newly dispatchable kind; historical training is recovery-only', () => {
+    expect(KIND_CASES.map(c => c.kind).sort()).toEqual(mediaJobQueue.JOB_KINDS.filter(kind => kind !== 'training').sort());
   });
 
   describe.each(KIND_CASES)('$kind', ({ kind, params, entry, bus, verb, window }) => {

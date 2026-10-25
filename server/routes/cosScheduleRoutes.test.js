@@ -78,6 +78,18 @@ describe('CoS Schedule Routes', () => {
     expect((await request(app).post('/api/cos/schedule/branch-reconcile/checkouts/review').send({ appId: 'app-1', ...tuple, prUrl, kind: 'force' })).status).toBe(400);
   });
 
+  it('explains the supported initialized-submodule workflow without weakening the ordinary refusal', async () => {
+    recovery.prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'retirement-submodule-not-uninitialized' });
+    const response = await request(app).post('/api/cos/schedule/branch-reconcile/checkouts/review').send({
+      appId: 'app-1', path: '/synthetic/checkout', head: 'a'.repeat(40), branch: 'feature/example',
+      locked: false, lockReason: null, prUrl: 'https://github.com/example/repo/pull/42',
+    });
+    expect(response.status).toBe(409);
+    expect(response.body.context).toMatchObject({ reason: 'retirement-submodule-not-uninitialized',
+      nextAction: expect.stringContaining('/initialized-checkouts/review') });
+    expect(response.body.context.nextAction).toContain('do not deinitialize');
+  });
+
   it.each([false, true])('validates retirement review evidence with optional observation identity: %s', async withObservation => {
     const tuple = { path: '/synthetic/checkout', head: 'a'.repeat(40), branch: 'claim/42', locked: false, lockReason: null };
     if (withObservation) Object.assign(tuple, { checkoutIdentity: 'c'.repeat(64), observedAt: '2026-10-23T00:00:00Z' });

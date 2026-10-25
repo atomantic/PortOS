@@ -59,7 +59,7 @@ describe('updateDefaultBranch', () => {
       'checkout main',
       'pull --ff-only origin main'
     ]));
-    expect(commands().some(command => command.includes('rebase'))).toBe(false);
+    expect(commands().some(command => command.startsWith('rebase ') || command.startsWith('pull --rebase'))).toBe(false);
   });
 
   it('repairs pinned submodules before and after pulling the parent repository', async () => {
@@ -104,7 +104,7 @@ describe('updateDefaultBranch', () => {
     expect(commands()).not.toContain('rebase --abort');
   });
 
-  it('reports a conflict and aborts the rebase when --autostash cannot reconcile', async () => {
+  it('reports a conflict and preserves the rebase when --autostash cannot reconcile', async () => {
     withGit({
       'pull --ff-only origin main': fail('fatal: Not possible to fast-forward, aborting.'),
       // Git splits a failed pull across both streams: fetch progress on stderr,
@@ -123,7 +123,7 @@ describe('updateDefaultBranch', () => {
     // actionable content of the CoS task the caller queues from this.
     expect(result.error).toContain('CONFLICT (content): Merge conflict in server/index.js');
     expect(result.error).toContain('could not apply 1a2b3c4');
-    expect(commands()).toContain('rebase --abort');
+    expect(commands()).not.toContain('rebase --abort');
   });
 
   it('reports a conflict when the autostash re-apply collides, which git exits 0 on', async () => {
@@ -222,7 +222,7 @@ describe('updateDefaultBranch', () => {
     expect(commands()).not.toContain('pull --rebase --autostash origin main');
   });
 
-  it('clears an abandoned rebase lock, aborts the rebase, and does not retry', async () => {
+  it('clears an abandoned rebase lock without aborting or retrying', async () => {
     withGit({
       'pull --ff-only origin main': fail('fatal: Not possible to fast-forward, aborting.'),
       'pull --rebase --autostash origin main': fail("fatal: Unable to create '/repo/.git/index.lock': File exists")
@@ -235,7 +235,7 @@ describe('updateDefaultBranch', () => {
 
     expect(result).toMatchObject({ success: false, branch: 'main', conflict: true });
     expect(result.error).toContain('/repo/.git/index.lock');
-    expect(commands()).toContain('rebase --abort');
+    expect(commands()).not.toContain('rebase --abort');
     expect(commands().filter((c) => c === 'pull --rebase --autostash origin main')).toHaveLength(1);
   });
 });

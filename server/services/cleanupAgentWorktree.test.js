@@ -353,6 +353,21 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     );
   });
 
+  it('cleans an already merged exact head after a cleanup-only incomplete result without a cognitive follow-up', async () => {
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'found', detail: 'MERGED',
+      headRefOid: '1'.repeat(40), url: 'https://github.com/test/repo/pull/78' });
+    execGitMock.mockResolvedValue({ exitCode: 0, stdout: `${'1'.repeat(40)}\n`, stderr: '' });
+    removeWorktree.mockResolvedValue({ removed: true, merged: false, warnings: [] });
+    const warnings = await cleanupAgentWorktree('agent-1', false, { prCreation: 'if-missing',
+      originalTask: { id: 'original', metadata: { prCompletion: 'review-then-merge' } } });
+    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
+    expect(addTask).not.toHaveBeenCalled();
+    expect(forceSpawnTask).not.toHaveBeenCalled();
+    expect(warnings).toEqual([]);
+    findPullRequestForBranchMock.mockReset().mockResolvedValue({ status: 'unavailable' });
+    execGitMock.mockReset().mockResolvedValue({ exitCode: 128, stdout: '', stderr: '' });
+  });
+
   it.each([true, false])('verifies a server-created draft before completing cleanup: %s', async ok => {
     git.push.mockResolvedValue(undefined);
     git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/1' });

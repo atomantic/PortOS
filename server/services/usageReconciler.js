@@ -428,9 +428,13 @@ async function readClaudeSessions({ home, workspacePath, from, to, fold, reserve
   // The project directory name is the slugified cwd — an exact lookup, with
   // no directory scan and no chance of picking up another repo's sessions.
   const projectDir = join(home, '.claude', 'projects', claudeProjectSlug(workspacePath));
-  for (const file of await listDir(projectDir)) {
-    if (!file.endsWith('.jsonl')) continue;
-    const path = join(projectDir, file);
+  // Recursive: Claude Code writes each subagent's turns to
+  // `<session>/subagents/agent-*.jsonl`, not into the parent transcript, and
+  // those sidechains carry most of a delegating run's output tokens.
+  const entries = await readdir(projectDir, { recursive: true, withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+    const path = join(entry.parentPath ?? entry.path, entry.name);
     const text = await tryReadFile(path);
     if (!text) continue;
     const parsed = parseClaudeTranscript(text, { from, to, exclude: excludeFor(path) });
