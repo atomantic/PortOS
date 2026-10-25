@@ -114,10 +114,14 @@ it('hands Vitest the selection as a file, sliced by the runner for the matrix sh
   }
 }, 150_000);
 
-it('hands the real client fixture consumers to Vitest for a shared browser cleanup change', () => {
+it('hands only real client fixture consumers to Vitest for a shared browser cleanup change', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'portos-client-helper-selection-'));
   try {
     installFakeNpm(fixture, REPORTING_NPM);
+    const unused = collectPlanInputs({ baseSha: 'HEAD', changedFiles: ['scripts/lib/setupDbChoice.js'], cwd: join(import.meta.dirname, '..') });
+    expect(buildCiTestPlan(unused.changedFiles, unused)).toMatchObject({
+      full: false, build: false, client: { mode: 'skip', files: [] },
+    });
     const source = 'scripts/lib/ownedBrowserCleanup.js';
     const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd: join(import.meta.dirname, '..') });
     const plan = buildCiTestPlan(inputs.changedFiles, inputs);
@@ -127,6 +131,13 @@ it('hands the real client fixture consumers to Vitest for a shared browser clean
     expect(plan.server.sources).toContain(source);
     expect(plan.browserFiles.length).toBeGreaterThan(0);
     expect(plan.client.mode).toBe('files');
+    // Real comment-heavy consumers and fixture templates must resolve without
+    // retaining hundreds of unrelated files in the actual runner handoff.
+    for (const test of ['client/src/components/sprites/WalkWorkflow.test.jsx', 'client/src/components/sprites/TrackWorkflow.test.jsx',
+      'client/src/services/apiRounds.test.js', 'client/src/a11yConventions.test.js']) {
+      expect(inputs.clientTestDependencies[test], test).toEqual(expect.any(Array));
+      expect(plan.client.files, test).not.toContain(test);
+    }
     const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'client'], {
       encoding: 'utf8', timeout: 120000,
       env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
