@@ -1137,6 +1137,25 @@ describe('completion after its originating task was removed', () => {
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
   });
 
+  it.each(['verified', 'unreadable-task', 'ambiguous-replay'])('sweeps a removed originating task through the existing absence proof: %s', async mode => {
+    const { state } = fixture();
+    readBranchCompletionPolicies.mockResolvedValue([state]);
+    if (mode === 'unreadable-task') getTaskById.mockRejectedValue(new Error('task read unavailable'));
+    if (mode === 'ambiguous-replay') readCompletionData.mockRejectedValue(new Error('completion-data-changed'));
+    await sweepRepoStateVerifications();
+    if (mode === 'verified') {
+      expect(settleAbsentTaskCompletion).toHaveBeenCalledWith('agent-1', state);
+      expect(recordRepoStateVerification.mock.calls.some(([, value]) => value.reasons?.includes('task-unavailable'))).toBe(false);
+    } else {
+      expect(settleAbsentTaskCompletion).not.toHaveBeenCalled();
+      expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'pending' }));
+    }
+    expect(replayAgentCompletionCleanup).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+  });
+
   it('keeps merged absent work pending when its completion settlement races', async () => {
     fixture();
     settleAbsentTaskCompletion.mockResolvedValue(false);

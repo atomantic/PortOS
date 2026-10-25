@@ -1,6 +1,8 @@
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-finalization-output-') }));
 afterAll(cleanupTempDataRoots);
+const retirementVerifier = vi.hoisted(() => ({ verifyRetirementReviewCompletion: vi.fn() }));
+vi.mock('./retirementReviewCompletion.js', () => retirementVerifier);
 const mergedTarget = vi.hoisted(() => ({
   getOriginInfo: vi.fn(),
   probeChangeRequestState: vi.fn(),
@@ -131,6 +133,34 @@ describe('recovery output-hook dispatch (#3182)', () => {
     });
     hook = vi.fn().mockResolvedValue({ recorded: true });
     getTaskOutputHook.mockResolvedValue(hook);
+  });
+
+  it.each(['completed', 'no-action-needed'])('accepts an exact server retirement receipt during shared finalization and recovery (%s)', async status => {
+    const task = { ...TASK, taskType: 'internal', metadata: { recoveryOrigin: { subsystem: 'repository-cleanup' },
+      retirementReview: { appId: 'fixture-app', release: { branch: 'fix/assigned' } } } };
+    const reported = { status, reason: 'Assigned checkout retired.' };
+    const proof = { status: 'verified', reason: 'retirement-receipt-verified' };
+    retirementVerifier.verifyRetirementReviewCompletion.mockResolvedValue(proof);
+    await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+      workspacePath: '/no-new-source-commit', startedAt: Date.now() - 1000,
+      finalSummary: JSON.stringify({ summary: 'Cleanup finished.', taskOutcome: reported }) });
+    expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: true,
+      validationPassed: true, taskOutcome: expect.objectContaining({ status }) }));
+    // Recovery reuses the same authoritative criterion, including a cached
+    // false source-commit result on an execution record that is still running.
+    persistedAgent.result = { validationPassed: false, taskOutcome: reported };
+    persistedAgent.metadata.taskOutcome = reported; persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+    expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: true, validationPassed: true }));
+    expect(retirementVerifier.verifyRetirementReviewCompletion).toHaveBeenLastCalledWith(task, { agentId: persistedAgent.id });
+  });
+
+  it('retains an unverified retirement despite a successful provider summary', async () => {
+    const task = { ...TASK, metadata: { recoveryOrigin: { subsystem: 'repository-cleanup' }, retirementReview: {} } };
+    retirementVerifier.verifyRetirementReviewCompletion.mockResolvedValue({ status: 'unverified', reason: 'retirement-receipt-unverified' });
+    await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0, workspacePath: '/source',
+      startedAt: Date.now() - 1000, finalSummary: JSON.stringify({ summary: 'Says done.', taskOutcome: { status: 'completed', reason: 'Reported success' } }) });
+    expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: false, validationPassed: false }));
   });
 
   it('awaits the scheduled outcome ledger and finishes even when that write fails', async () => {

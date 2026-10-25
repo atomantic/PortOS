@@ -121,6 +121,8 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     return null;
   }
 
+  if (task.metadata?.retirementReview && await (await import('./retirementReviewCompletion.js')).settleRetirementReviewBeforeSpawn(task)) return null;
+
   const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
   if (totalSpawns >= MAX_TOTAL_SPAWNS) {
     console.log(`🚫 Task ${task.id} hit max total spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS}), blocking`);

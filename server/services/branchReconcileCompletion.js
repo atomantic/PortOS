@@ -91,13 +91,14 @@ export async function settleRetirementReviewRun(agent) {
     await recordCleanupOutcome(agent.id, { status: 'blocked', reason: 'legacy-cleanup-receipt-unverified' });
     return { verified: false };
   }
-  const { getBranchReconcileOutcome, recordBranchReconcileOutcome } = await import('./taskSchedule.js');
-  const outcome = await getBranchReconcileOutcome(target.appId);
-  if (hasRetirementReceipt(outcome, { ...target.release, createdAt: target.createdAt })) {
+  const { recordBranchReconcileOutcome } = await import('./taskSchedule.js');
+  const proof = await (await import('./retirementReviewCompletion.js')).verifyRetirementReviewCompletion(task, { agentId: agent.id })
+    .catch(() => ({ status: 'unverified', reason: 'retirement-verification-unavailable' }));
+  if (proof?.status === 'verified') {
     await recordCleanupOutcome(agent.id, { status: 'verified', reason: 'retirement-receipt-verified', ...target.release });
     return { verified: true };
   }
-  await recordCleanupOutcome(agent.id, { status: 'blocked', reason: 'retirement-receipt-unverified', ...target.release });
+  await recordCleanupOutcome(agent.id, { status: 'blocked', reason: proof?.reason || 'retirement-receipt-unverified', ...target.release });
   await recordBranchReconcileOutcome(target.appId, {
     status: 'incomplete', reason: 'retirement-receipt-unverified',
     retirementObligations: [{ ...target.release, createdAt: target.createdAt, reason: 'retirement-receipt-unverified' }],

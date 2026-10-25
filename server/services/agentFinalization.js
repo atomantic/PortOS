@@ -134,8 +134,9 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  *
  * @returns {Promise<boolean|null|'skip-learning'>}
  */
-export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null }) {
+export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null }) {
   if (terminatedByUser) return null;
+  if (retirementCompletion) return success && retirementCompletion.status === 'verified';
   if (success && mergedReviewFollowUp?.status === 'verified') return true;
   const taskType = task?.taskType || 'user';
   // The SCHEDULED type (`metadata.analysisType`) if any, else the queue category —
@@ -1175,6 +1176,19 @@ export function dispatchRecoveredTaskOutputHook({ agentId, task, success, worksp
   });
 }
 
+/** Cleanup completion is service evidence, independent of source commits. */
+async function completionRetirementReview({ task, agentId, reportedOutcome, eligible }) {
+  if (!eligible || !task?.metadata?.retirementReview) return null;
+  const proof = await (await import('./retirementReviewCompletion.js')).verifyRetirementReviewCompletion(task, { agentId })
+    .catch(() => ({ status: 'unverified', reason: 'retirement-verification-unavailable' }));
+  if (!proof) return null;
+  const taskOutcome = proof.status === 'verified' ? { status: reportedOutcome?.status === 'completed' ? 'completed' : 'no-action-needed',
+    reason: 'The assigned checkout and branch are absent with an exact service retirement receipt.' } : reportedOutcome;
+  await updateAgent(agentId, { metadata: { retirementCompletion: proof,
+    ...(proof.status === 'verified' && { taskOutcome, taskOutcomeSource: 'retirement-verification', reportedTaskOutcome: reportedOutcome }) } });
+  return { ...proof, taskOutcome };
+}
+
 /** Server-owned merge evidence settles only the assigned review/merge target. */
 async function completionReviewFollowUp({ task, agentId, workspacePath, reportedOutcome, eligible }) {
   if (!eligible) return null;
@@ -1261,6 +1275,9 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     workspacePath: agent.metadata?.workspacePath, reportedOutcome,
     eligible: executionSuccess && !isPrivateSecurity && !interruption });
   if (mergedReviewFollowUp) reportedOutcome = mergedReviewFollowUp.taskOutcome;
+  const retirementCompletion = await completionRetirementReview({ task, agentId: agent.id, reportedOutcome,
+    eligible: executionSuccess && !isPrivateSecurity && !interruption });
+  if (retirementCompletion?.status === 'verified') reportedOutcome = retirementCompletion.taskOutcome;
   const claimDisposition = await completionClaimDisposition({ task, agent, reportedOutcome,
     success: executionSuccess && !isPrivateSecurity && !interruption && agent.result?.validationPassed !== false });
   reportedOutcome = await completionClaimOutcome(agent.id, reportedOutcome, claimDisposition);
@@ -1287,7 +1304,8 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     : agent.result?.validationPassed ?? null;
   // A disposition never erases a recorded failed delivery gate. A saved pass,
   // however, cannot replace a fresh selected-issue proof on no-op recovery.
-  const validationPassed = recoveredValidation !== false && (mergedReviewFollowUp || claimDisposition)
+  const validationPassed = retirementCompletion ? effectiveSuccess && retirementCompletion.status === 'verified'
+    : recoveredValidation !== false && (mergedReviewFollowUp || claimDisposition)
     ? mergedReviewFollowUp || claimDisposition.status === 'verified' ? true : null
     : recoveredValidation;
   const taskOutcome = reportedOutcome ? resolveTaskOutcome({ reported: reportedOutcome,
@@ -1765,6 +1783,10 @@ export async function finalizeAgent({
     eligible: executionSuccess && !terminatedByUser && !executionInterruption
       && !isPrivateSecurityTask(task) && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent });
   if (mergedReviewFollowUp) reportedTaskOutcome = mergedReviewFollowUp.taskOutcome;
+  const retirementCompletion = await completionRetirementReview({ task, agentId, reportedOutcome: reportedTaskOutcome,
+    eligible: executionSuccess && !terminatedByUser && !executionInterruption && !isPrivateSecurityTask(task)
+      && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent });
+  if (retirementCompletion?.status === 'verified') reportedTaskOutcome = retirementCompletion.taskOutcome;
   const claimDisposition = await completionClaimDisposition({ task, agentId, reportedOutcome: reportedTaskOutcome,
     success: executionSuccess && !terminatedByUser && !executionInterruption && !isPrivateSecurityTask(task)
       && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent });
@@ -1911,7 +1933,10 @@ export async function finalizeAgent({
   // a local backend for it.
   // A verified stand-down is judged from tracker state. A partial landed diff
   // cannot prove the still-open issue's root cause and must not launch follow-ups.
+  // Exact retirement evidence judges an API-only delivery; unrelated source
+  // changes are not its code objective and must not trigger a model review.
   const fidelity = deliveredVerdict.success && !isPrivateSecurityTask(task) && claimDisposition?.status !== 'verified'
+    && retirementCompletion?.status !== 'verified'
     ? await evaluateGoalFidelity({ task, workspacePath, startedAt: runStartedAt })
       .catch(err => {
         emitLog('warn', `Goal-fidelity review failed for ${agentId}: ${err.message}`, { agentId });
@@ -2002,6 +2027,7 @@ export async function finalizeAgent({
     emptyBranchInconclusiveEvidence: prEvidence.emptyBranchInconclusiveEvidence,
     claimDisposition,
     mergedReviewFollowUp,
+    retirementCompletion,
   })
     .catch(err => {
       emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });
