@@ -606,6 +606,37 @@ describe('Layout — dynamic third-level navigation', () => {
     expect(screen.getByRole('link', { name: 'Example Universe' })).toBeTruthy();
   });
 
+  it('renders Casting, Environments, and Objects as 3rd-level sub-pages under Catalog in Create', async () => {
+    await renderLayout('/catalog');
+
+    const collapseCatalog = screen.getByRole('button', { name: 'Collapse Catalog' });
+    expect(collapseCatalog).toBeInTheDocument();
+
+    expect(screen.getByRole('link', { name: 'Casting' })).toHaveAttribute('href', '/casting');
+    expect(screen.getByRole('link', { name: 'Environments' })).toHaveAttribute('href', '/environments');
+    expect(screen.getByRole('link', { name: 'Objects' })).toHaveAttribute('href', '/objects');
+
+    fireEvent.click(collapseCatalog);
+    expect(screen.queryByRole('link', { name: 'Casting' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Environments' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Objects' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Catalog' }));
+    expect(screen.getByRole('link', { name: 'Casting' })).toHaveAttribute('href', '/casting');
+    expect(screen.getByRole('link', { name: 'Environments' })).toHaveAttribute('href', '/environments');
+    expect(screen.getByRole('link', { name: 'Objects' })).toHaveAttribute('href', '/objects');
+  });
+
+  it('auto-expands Create and Catalog when visiting a grandchild route', async () => {
+    await renderLayout('/casting');
+
+    expect(screen.getByRole('button', { name: 'Collapse Create' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Collapse Catalog' })).toBeInTheDocument();
+    const castingLink = screen.getByRole('link', { name: 'Casting' });
+    expect(castingLink).toHaveAttribute('href', '/casting');
+    expect(castingLink.className).toContain('text-port-accent');
+  });
+
   it('updates dynamic apps navigation when apps:changed is emitted', async () => {
     let appsChangedHandler;
     socket.on.mockImplementation((event, handler) => {

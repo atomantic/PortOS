@@ -15,8 +15,11 @@ import { resolveMusicTrackPath } from '../pipeline/audioMux.js';
 import { openComposition } from './browser.js';
 import { encodeComposition, encodeContactSheet, proofTimes, synthesizeCompositionMusic } from './encode.js';
 import { validateLaunchVideoAssets } from '../../lib/launchVideoValidation.js';
+import { makePathResolver } from '../../lib/pathSafety.js';
+import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
 
 const active = new Map();
+const resolveAudioUpload = makePathResolver(() => PATHS.uploads, { extensions: UPLOAD_AUDIO_EXTENSIONS });
 const lifecycle = channel('portos.composition-render.lifecycle');
 // A music-video owner may run as long as its song, and no longer than this.
 const MUSIC_VIDEO_DURATION_CAP_SEC = 900;
@@ -178,14 +181,18 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
     const parsedInput = validateRequest(htmlCompositionRenderSchema, input);
     let { directory } = parsedInput;
     const sourceDirectory = directory;
-    const { musicTrack, launchVideo, synthesizeMusic, proof, formats, motionBlur: blurChoice, masterLoudness } = parsedInput;
+    const { musicTrack, audioUpload, launchVideo, synthesizeMusic, proof, formats, motionBlur: blurChoice, masterLoudness } = parsedInput;
     // A music-video render may still ask for the extra frames its contract
     // declares in portosComposition.formats (renderTargets enforces that).
-    if (musicVideo && (launchVideo || synthesizeMusic || musicTrack || proof)) {
-      throw new Error('A music-video composition render cannot use launch-video, proof, or library-music options');
+    if (musicVideo && (launchVideo || synthesizeMusic || musicTrack || audioUpload || proof)) {
+      throw new Error('A music-video composition render cannot use launch-video, proof, or soundtrack options');
     }
     let musicPath = musicTrack ? await resolveMusicTrackPath(musicTrack) : null;
     if (musicTrack && !musicPath) throw new Error('musicTrack is missing from the Music library');
+    if (audioUpload) {
+      musicPath = resolveAudioUpload(audioUpload);
+      if (!musicPath) throw new Error('audioUpload is missing or is not a supported audio file');
+    }
     signal.throwIfAborted();
     let launchPlan;
     let launchAssets;

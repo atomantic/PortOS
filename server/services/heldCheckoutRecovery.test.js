@@ -30,6 +30,7 @@ const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fe
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, execGit: async (args, cwd, options) => {
+    if (injected.onSnapshot && args[0] === 'ls-files' && args[1] === '-u') await injected.onSnapshot();
     // Pauses an archive mid-write, after its first snapshot and before its re-read.
     if (injected.onBundle && args.includes('bundle') && args.includes('create')) await injected.onBundle();
     if (injected.onUnlockedStatus && args[0] === 'status' && args[1] === '--porcelain') {
@@ -45,6 +46,7 @@ vi.mock('../lib/execGit.js', async importOriginal => {
     }
     try {
       const result = await actual.execGit(args, cwd, options);
+      if (injected.onPreviewEvidence && args[0] === '--literal-pathspecs' && args[1] === 'diff') await injected.onPreviewEvidence();
       if (injected.onArchiveRef && args[0] === 'update-ref' && args[1]?.startsWith('refs/portos/archive/')) await injected.onArchiveRef();
       if (injected.onProof && args.includes('--bare') && options?.env?.GIT_NO_REPLACE_OBJECTS === '1') await injected.onProof();
       return result;
@@ -95,7 +97,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   beforeEach(async () => {
     Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
-    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onUnlockedStatus: null, statusReads: 0 });
+    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -1213,6 +1215,83 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         if (scenario === 'unpublished-tip') expect(await readFile(join(c.path, 'unpublished.txt'), 'utf8')).toBe('still wanted local work\n');
       }
     });
+  it.each(['snapshot', 'forge'])('keeps unrelated ownership admission available while preview %s work is pending', async phase => {
+    const c = await reviewedCheckout(`preview-queue-${phase}`);
+    let paused;
+    let resume;
+    const entered = new Promise(resolve => { paused = resolve; });
+    const pending = new Promise(resolve => { resume = resolve; });
+    const pause = async () => { paused(); await pending; };
+    if (phase === 'snapshot') injected.onSnapshot = pause;
+    else c.opts.readForge = async () => { await pause(); return c.forge; };
+    const preparing = c.prepare();
+    try {
+      await entered;
+      expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
+      expect(await checkReconcileOwnership({ appId: 'app-1', branch: 'feature/unrelated' }, {
+        getAgents: async () => [], getActiveAgentIds: () => [], readCompletionHold: async () => null,
+      })).toEqual({ admitted: true });
+    } finally {
+      resume();
+    }
+    expect(await preparing).toMatchObject({ ok: true });
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect(await archives()).toEqual([]);
+  });
+
+  it.each([
+    ['owner', 'claim-owner-active'],
+    ['unreadable-owner', 'claim-ownership-unreadable'],
+    ['handoff', 'pr-completion-human-handoff'],
+    ['policy', 'retirement-review-changed'],
+    ['head', 'checkout-head-changed'],
+    ['lock', 'checkout-lock-changed'],
+    ['pointer', 'checkout-identity-changed'],
+    ['administration', 'checkout-identity-changed'],
+  ])('refuses preview when %s changes during unlocked evidence construction', async (change, reason) => {
+    const c = await reviewedCheckout(`preview-race-${change}`);
+    let owners = [];
+    c.opts.readAgents = async () => owners;
+    injected.onPreviewEvidence = async () => {
+      injected.onPreviewEvidence = null;
+      if (change === 'owner') owners = [{ id: 'agent-live', status: 'running', workspacePath: c.path }];
+      if (change === 'unreadable-owner') owners = null;
+      if (change === 'handoff') injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
+      if (change === 'policy') injected.policies[0].id = 'different-completed-agent';
+      if (change === 'head') await execGit(['commit', '--allow-empty', '-m', 'new work during preview'], c.path);
+      if (change === 'lock') await writeFile(join(c.admin, 'locked'), 'new owner lock');
+      if (change === 'pointer') {
+        const pointer = join(c.path, '.git');
+        const bytes = await readFile(pointer);
+        await rename(pointer, join(scratch, 'original-pointer'));
+        await writeFile(pointer, bytes);
+      }
+      if (change === 'administration') {
+        const original = join(scratch, 'original-administration');
+        await rename(c.admin, original);
+        await cp(original, c.admin, { recursive: true });
+      }
+    };
+    expect(await c.prepare()).toMatchObject({ ok: false, reason });
+    expect(await registered(c.path)).toBe(true);
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await archives()).toEqual([]);
+  });
+
+  it('rebuilds content evidence at confirmation after an unlocked preview observes older bytes', async () => {
+    const c = await reviewedCheckout('preview-content-change');
+    injected.onPreviewEvidence = async () => {
+      injected.onPreviewEvidence = null;
+      await writeFile(join(c.path, 'ignored.txt'), 'changed during preview\n');
+    };
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true);
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('changed during preview\n');
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect(await archives()).toEqual([]);
+  });
 
   it.each(['unrelated-upstream', 'changed-delivery'])('uses exact merged PR file scope after inherited upstream history: %s', async scenario => {
     const c = await reviewedCheckout(`scope-${scenario}`, { normalMerge: true });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -84,5 +84,18 @@ describe('CreativeLibrary', () => {
       expect.objectContaining({ type: 'object', name: 'Reel can', payload: { description: 'Dented tin.' } }),
       { silent: true },
     );
+  });
+
+  it('renders section navigation tabs with the current library active', async () => {
+    listCatalogIngredients.mockResolvedValue({ items: [] });
+    renderLibrary('casting', '/casting');
+    await act(async () => {});
+    expect(screen.getByRole('tab', { name: 'Casting' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Catalog' })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tab', { name: 'Environments' })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tab', { name: 'Objects' })).toHaveAttribute('aria-selected', 'false');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Objects' }));
+    expect(navigateMock).toHaveBeenCalledWith('/objects');
   });
 });

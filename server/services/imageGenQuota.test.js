@@ -332,4 +332,74 @@ describe('getImageGenQuota', () => {
     const card = await getImageGenQuota({ enabledModes: ['agy'], now });
     expect(card.metrics[0].value).toBe('1 render · 24h');
   });
+
+  it('reports counts across 24h, week (7d), and month (30d) periods', async () => {
+    // 10 days ago (outside 7d, inside 30d)
+    await recordImageGenOutcome({ mode: 'agy', ok: true, at: now - 10 * 24 * 60 * 60 * 1000 });
+    // 3 days ago (outside 24h, inside 7d & 30d)
+    await recordImageGenOutcome({ mode: 'agy', ok: true, at: now - 3 * 24 * 60 * 60 * 1000 });
+    // 2 hours ago (inside 24h, 7d & 30d)
+    await recordImageGenOutcome({ mode: 'agy', ok: true, at: now - 2 * 60 * 60 * 1000 });
+
+    const card = await getImageGenQuota({ enabledModes: ['agy'], now });
+    const metric = card.metrics[0];
+    expect(metric.value).toBe('1 render · 24h');
+    expect(metric.counts).toEqual({ day: 1, week: 2, month: 3 });
+    expect(metric.periods['24h'].value).toBe('1 render · 24h');
+    expect(metric.periods['7d'].value).toBe('2 renders · week');
+    expect(metric.periods['30d'].value).toBe('3 renders · month');
+  });
+
+  it('selects week or month as the primary period when requested', async () => {
+    await recordImageGenOutcome({ mode: 'agy', ok: true, at: now - 3 * 24 * 60 * 60 * 1000 });
+    await recordImageGenOutcome({ mode: 'agy', ok: true, at: now - 2 * 60 * 60 * 1000 });
+
+    const weekCard = await getImageGenQuota({ enabledModes: ['agy'], now, period: 'week' });
+    expect(weekCard.period).toBe('7d');
+    expect(weekCard.metrics[0].value).toBe('2 renders · week');
+
+    const monthCard = await getImageGenQuota({ enabledModes: ['agy'], now, period: '30d' });
+    expect(monthCard.period).toBe('30d');
+    expect(monthCard.metrics[0].value).toBe('2 renders · month');
+  });
+
+  it('tracks renders since the last observed reset', async () => {
+    const resetTime = now - 2 * 60 * 60 * 1000;
+    // Before reset
+    await recordImageGenOutcome({ mode: 'agy', ok: true, at: resetTime - 60_000 });
+    // Simulate active block with reset
+    await recordImageGenOutcome({ mode: 'agy', ok: false, error: `quota will reset in approximately 2 hours (around ${new Date(resetTime).toISOString()})`, at: resetTime - 7200_000 });
+    // Successful render after reset
+    await recordImageGenOutcome({ mode: 'agy', ok: true, at: resetTime + 60_000 });
+
+    const card = await getImageGenQuota({ enabledModes: ['agy'], now });
+    const metric = card.metrics[0];
+    expect(metric.periods.reset).toBeDefined();
+    expect(metric.periods.reset.count).toBe(1);
+    expect(metric.periods.reset.value).toBe('1 render · reset');
+
+    const resetCard = await getImageGenQuota({ enabledModes: ['agy'], now, period: 'reset' });
+    expect(resetCard.period).toBe('reset');
+    expect(resetCard.metrics[0].value).toBe('1 render · reset');
+  });
+
+  it('reconciles reset boundary when rendering recovers early before forecasted reset', async () => {
+    const forecastedReset = now + 2 * 60 * 60 * 1000;
+    const earlyRecoveryTime = now - 30 * 60 * 1000;
+    // Failed render with forecasted reset 2 hours into future
+    await recordImageGenOutcome({
+      mode: 'agy',
+      ok: false,
+      error: `quota will reset in approximately 2 hours (around ${new Date(forecastedReset).toISOString()})`,
+      at: now - 60 * 60 * 1000,
+    });
+    // Early successful render before forecastedReset
+    await recordImageGenOutcome({ mode: 'agy', ok: true, at: earlyRecoveryTime });
+
+    const card = await getImageGenQuota({ enabledModes: ['agy'], now });
+    const metric = card.metrics[0];
+    expect(metric.periods.reset).toBeDefined();
+    expect(metric.periods.reset.count).toBe(1);
+    expect(metric.periods.reset.value).toBe('1 render · reset');
+  });
 });

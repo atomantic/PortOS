@@ -673,7 +673,7 @@ const reviewForgeOptions = (release, kind, opts) => ({ forgeAccount: opts.forgeA
   ...(!release.branch && { exactAliasHead: release.head }),
   ...(kind === 'source-supersession' && { sourceSupersessionHead: release.head }) });
 
-async function reviewCurrentCheckout({ repoPath, release, prUrl, kind, unlocked = false }, opts = {}) {
+async function matchReviewTarget({ repoPath, release, kind, unlocked = false }, opts) {
   if (kind && kind !== 'source-supersession') return { ok: false, reason: 'retirement-review-kind-unavailable' };
   if (kind && !release.branch) return { ok: false, reason: 'retirement-source-branch-required' };
   if (PROTECTED_BRANCHES.includes(release.branch)) return { ok: false, reason: 'protected-branch' };
@@ -682,7 +682,14 @@ async function reviewCurrentCheckout({ repoPath, release, prUrl, kind, unlocked 
   const owner = await ownerReason({ repoPath, tree: matched.tree, branch: release.branch,
     readAgents: opts.readAgents || readClaimOwnershipAgents, reviewed: true });
   if (owner) return { ok: false, reason: owner };
-  const { buildCheckoutRetirementReview, readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+  return { ok: true, tree: matched.tree };
+}
+
+async function readCheckoutReviewPrerequisites(input, opts) {
+  const { repoPath, release, prUrl, kind } = input;
+  const matched = await matchReviewTarget(input, opts);
+  if (!matched.ok) return matched;
+  const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
   const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl, reviewForgeOptions(release, kind, opts))
     .catch(error => ({ error }));
   if (forge?.error) return { ok: false, reason: /^retirement-[a-z-]+$/.test(forge.error.message) ? forge.error.message : 'retirement-forge-unavailable' };
@@ -700,11 +707,65 @@ async function reviewCurrentCheckout({ repoPath, release, prUrl, kind, unlocked 
   }
   const policy = await retirementPolicy(repoPath, policyBranch, opts, identity);
   if (policy.reason) return { ok: false, reason: policy.reason };
-  return archiveSnapshots(matched.tree, repoPath, null, archiveWork(opts.signal))
+  return { ok: true, tree: matched.tree, forge, policy };
+}
+
+async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { tree, forge, policy }, opts) {
+  const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
+  return archiveSnapshots(tree, repoPath, null, archiveWork(opts.signal))
     .then(([content, administration]) => buildCheckoutRetirementReview({ repoPath, release, prUrl, kind,
       contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge }))
     .then(review => ({ ok: true, review }), error => archiveLimitRefusal(error) || ({ ok: false,
       reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-local-evidence-unavailable' }));
+}
+
+async function reviewCurrentCheckout(input, opts = {}) {
+  const prerequisites = await readCheckoutReviewPrerequisites(input, opts);
+  return prerequisites.ok ? buildCurrentCheckoutReview(input, prerequisites, opts) : prerequisites;
+}
+
+async function previewCheckoutIdentity(path) {
+  const pointer = await readRetirementCheckoutIdentity(path);
+  if (!pointer) return null;
+  const gitdir = await realpath((await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim());
+  const info = await lstat(gitdir, { bigint: true });
+  if (!info.isDirectory() || await readRetirementCheckoutIdentity(path) !== pointer) return null;
+  return JSON.stringify([pointer, gitdir, String(info.dev), String(info.ino), String(info.birthtimeNs)]);
+}
+
+/** Preview is evidence, never a retirement reservation or mutation grant. Keep
+ * forge calls, hashing and diff construction outside the process-wide queue. */
+async function previewCurrentCheckout(input, opts) {
+  const matched = await withClaimOwnershipLock(() => matchReviewTarget(input, opts));
+  if (!matched.ok) return matched;
+  const { repoPath, release, prUrl, kind } = input;
+  const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+  const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl,
+    reviewForgeOptions(release, kind, opts)).catch(error => ({ error }));
+  const localOptions = { ...opts, readForge: async () => forge };
+  const captured = await withClaimOwnershipLock(async () => {
+    const prerequisites = await readCheckoutReviewPrerequisites(input, localOptions);
+    if (!prerequisites.ok) return prerequisites;
+    const identity = await previewCheckoutIdentity(release.path).catch(() => null);
+    return identity && (!release.checkoutIdentity || await readRetirementCheckoutIdentity(release.path) === release.checkoutIdentity)
+      ? { ...prerequisites, identity }
+      : { ok: false, reason: 'checkout-identity-changed' };
+  });
+  if (!captured.ok) return captured;
+  const prepared = await buildCurrentCheckoutReview(input, captured, localOptions);
+  if (!prepared.ok) return prepared;
+  return withClaimOwnershipLock(async () => {
+    // Bind even legacy inventory rows to the generation captured before hashing.
+    const current = await readCheckoutReviewPrerequisites(input, localOptions);
+    if (!current.ok) return current;
+    if (await previewCheckoutIdentity(release.path).catch(() => null) !== captured.identity) {
+      return { ok: false, reason: 'checkout-identity-changed' };
+    }
+    if (JSON.stringify(current.policy) !== JSON.stringify(captured.policy)) {
+      return { ok: false, reason: 'retirement-review-changed' };
+    }
+    return prepared;
+  });
 }
 
 /** Host-control-gated preview of one inventory row; may fetch missing proof objects. */
@@ -716,7 +777,7 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
   release = bindInventoriedRelease(outcome, release);
   if (!release) return { ok: false, reason: 'release-not-in-inventory' };
   const reviewOptions = { ...opts, forgeAccount: app.forgeAccount ?? null };
-  const review = () => withClaimOwnershipLock(() => reviewCurrentCheckout({ repoPath: app.repoPath, release, prUrl, kind }, reviewOptions));
+  const review = () => previewCurrentCheckout({ repoPath: app.repoPath, release, prUrl, kind }, reviewOptions);
   let prepared = await review();
   if (prepared.reason === 'retirement-local-objects-missing') {
     // A remote default may advance while local refs stay put. Acquire only its
