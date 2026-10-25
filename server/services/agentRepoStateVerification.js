@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
+import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
 import { recoverCompletionTaskHandoff, matchesCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
 import { withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
@@ -625,6 +626,11 @@ async function verifyRunBranches(input) {
 
 async function verifyAgentBranchState({ agentId, task, agentState, success, prExpected = false, cleanupWarnings = [], originTaskAbsent = false }) {
   const metadata = agentState?.metadata || {};
+  // Claim prompts own publication even when the generic openPR toggle is off.
+  // Resumed claims are already worktree runs, so they bypass the swarm loop
+  // that supplies this expectation. Skipping their forge lookup turns a merged
+  // cleanup hold into another provider retry with no delivery evidence.
+  prExpected ||= hasClaimFlowContract(task) || isTruthyMeta(metadata.configClaimFlow);
   const branchName = metadata.worktreeBranch || null;
   const sourceWorkspace = metadata.sourceWorkspace || null;
   const appId = task?.metadata?.app || null;
