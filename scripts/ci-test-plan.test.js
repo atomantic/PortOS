@@ -1600,6 +1600,19 @@ describe('CI test impact planner', () => {
     expect(plan.windowsSources).toEqual([]);
   });
 
+  it('runs every changed retirement fixture on Windows for a test-only repair', () => {
+    const contracts = [
+      'server/services/heldCheckoutExactDelivery.integration.test.js',
+      'server/services/heldCheckoutRecovery.test.js',
+      'server/services/retirementFixture.lifecycle.test.js',
+    ];
+    const plan = buildCiTestPlan(contracts, { trackedFiles: [...TRACKED, ...contracts] });
+
+    expect(plan.windowsMode).toBe('files');
+    expect(plan.windowsFiles).toEqual(expect.arrayContaining(contracts));
+    expect(plan.server.files).toEqual(expect.arrayContaining(contracts));
+  });
+
   describe('slashdo submodule initialization (#6263)', () => {
     it('requests the submodule for a gitlink-only change, forced full by the unclassified path', () => {
       const plan = buildCiTestPlan([SLASHDO_GITLINK_PATH], { trackedFiles: TRACKED });
@@ -1818,6 +1831,8 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'server/services/worktreeManager.js',
       'server/services/heldCheckoutRecovery.js',
       'server/services/heldCheckoutRecovery.test.js',
+      'server/services/heldCheckoutExactDelivery.integration.test.js',
+      'server/services/retirementFixture.lifecycle.test.js',
       'server/lib/shellCd.js',
       'server/lib/agentGuard/index.js',
       'server/cos-runner/index.js',

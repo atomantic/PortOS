@@ -316,6 +316,9 @@ export const WINDOWS_RISK_RULES = [
   /^server\/services\/worktree(?:Manager|Reap)\b/,
   // Git enumerates NTFS junctions differently from Node lstat (#13562).
   /^server\/services\/heldCheckoutRecovery(?:\.test)?\.js$/,
+  // Scratch locks and cancellation settlement require a real Windows runner;
+  // test-only diffs have no source edge for related-test selection (#13651).
+  /^server\/services\/(?:heldCheckoutExactDelivery\.integration|retirementFixture\.lifecycle)\.test\.js$/,
   /^server\/lib\/shell(?:Cd|Exit|LivenessProbe|ReadinessProbe)(?:\.test)?\.js$/,
   /^server\/lib\/agentGuard\//,
   /^server\/cos-runner\//,
