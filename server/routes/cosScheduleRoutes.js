@@ -1,3 +1,4 @@
+import { executionOptionsSchema } from '../lib/aiToolkit/internal/executionOptionsValidation.js';
 import { PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 import { AUDIT_DEFINITIONS } from '../lib/auditCatalog.js';
 /**
@@ -52,16 +53,18 @@ const maintenanceRunStartSchema = z.object({
     providerId: z.string().trim().min(1),
     model: z.string().trim().min(1),
     effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+  executionOptions: executionOptionsSchema.optional(),
   }).nullable().optional(),
   appId: z.string().trim().min(1),
   providerId: z.string().trim().min(1),
   model: z.string().trim().min(1),
   effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+  executionOptions: executionOptionsSchema.optional(),
 }).strict();
 
 const router = Router();
 
-const SCHEDULE_FIELDS = ['type', 'autoStart', 'perpetual', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'description', 'labels', 'dataInputs', 'taskMetadata', 'runAfter',
+const SCHEDULE_FIELDS = ['type', 'autoStart', 'perpetual', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'executionOptions', 'prompt', 'description', 'labels', 'dataInputs', 'taskMetadata', 'runAfter',
   // Advisory run order — which OTHER scheduled tasks a user should generally run
   // first. Editable and unenforced; `runAfter` above is the enforced gate.
   'suggestedAfter',

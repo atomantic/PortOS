@@ -1,3 +1,6 @@
+import ExecutionOptionsSelect from '../providers/ExecutionOptionsSelect.jsx';
+import { saveExecutionOptionSelection } from '../../services/apiProviders.js';
+import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { useId, useState } from 'react';
 import { Plus, X, ChevronUp, ChevronDown } from 'lucide-react';
 import Pill from '../ui/Pill';
@@ -174,7 +177,8 @@ export default function ReviewerPicker({
 }) {
   const id = useId();
   const [effortNotice, setEffortNotice] = useState('');
-  const providerRecords = modelOptions?.providers || [];
+  const [createdSelections, setCreatedSelections] = useState([]);
+  const providerRecords = [...(modelOptions?.providers || []), ...createdSelections.filter((entry) => !modelOptions?.providers?.some((provider) => provider.id === entry.id))];
   // A review runs its provider headless (CLI or API), never through an
   // interactive TUI session, so TUI records are not offered as new reviewers.
   // A TUI reviewer saved earlier keeps its row and label.
@@ -380,6 +384,24 @@ export default function ReviewerPicker({
     onChange?.(partial);
   };
 
+  const [changeReviewerExecutionOptions, changingExecutionOptions] = useAsyncAction(async (token, options) => {
+    const provider = providerRecords.find((record) => `provider:${record.id}` === token);
+    if (!provider) return;
+    const selection = await saveExecutionOptionSelection(provider.id, models.get(token) || provider.defaultModel, options, { silent: true });
+    setCreatedSelections((previous) => [...previous.filter((entry) => entry.id !== selection.id), selection]);
+    const nextToken = `provider:${selection.id}`;
+    const remap = (map) => Object.fromEntries(Object.entries(map).map(([key, value]) => [key.toLowerCase() === token.toLowerCase() ? nextToken : key, value]));
+    emit({ reviewers: [...new Set(selected.map((reviewer) => reviewer === token ? nextToken : reviewer))],
+      optionalReviewers: optionalTokens.map((reviewer) => reviewer === token ? nextToken : reviewer),
+      reviewerModels: remap(modelsMap), reviewerEfforts: remap(effortsMap), reviewerMaxRounds: remap(maxRoundsMap) });
+  }, { errorMessage: 'Could not save reviewer execution options' });
+  const renderExecutionOptions = (token) => {
+    const provider = providerRecords.find((record) => `provider:${record.id}` === token);
+    return provider ? <ExecutionOptionsSelect provider={provider} model={models.get(token) || provider.defaultModel}
+      value={provider.executionSourceProviderId ? provider.executionSelectionOptions ?? provider.executionOptions : undefined}
+      onChange={(options) => changeReviewerExecutionOptions(token, options)} disabled={disabled || changingExecutionOptions}
+      className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs" /> : null;
+  };
   const toggleOptional = (token) => emit({
     optionalReviewers: isOptional(token) ? withoutToken(token) : [...optionalTokens, token]
   });
@@ -823,7 +845,7 @@ export default function ReviewerPicker({
                   <span className={CELL_LABEL_CLASS}>Model</span>
                   <div className="min-w-0">{renderModelCell(value)}</div>
                   <span className={CELL_LABEL_CLASS}>Effort</span>
-                  <div className="min-w-0">{renderEffortCell(value)}</div>
+                  <div className="min-w-0">{renderEffortCell(value)}{renderExecutionOptions(value)}</div>
                   <span className={CELL_LABEL_CLASS}>Optional</span>
                   <div>
                     {renderOptToggle(value, labelFor(value), isOptional(value)

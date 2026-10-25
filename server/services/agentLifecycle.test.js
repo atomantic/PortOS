@@ -574,7 +574,7 @@ describe('runAgentSpawn source — handedOff pre-spawn vs post-handoff split', (
     expect(AGENT_LIFECYCLE_SRC).toMatch(/context\.handedOff/);
     expect(AGENT_LIFECYCLE_SRC).toMatch(/if\s*\(!context\.setupCatchArmed\s*\|\|\s*context\.handedOff\)\s*throw\s+err\s*;/);
     expect(AGENT_LIFECYCLE_SRC).toMatch(
-      /await context\.blockAndBail\(\{[\s\S]{0,300}?reason: setupError,[\s\S]{0,200}?category: 'private-security-setup-failed',/
+      /await context\.blockAndBail\(\{[\s\S]{0,300}?reason: setupError,[\s\S]{0,200}?category: optionRefusal \? PROVIDER_CONFIG_BLOCKED_CATEGORY : 'private-security-setup-failed',/
     );
     expect(AGENT_LIFECYCLE_SRC).toMatch(/job:spawn-failed/);
     expect(AGENT_LIFECYCLE_SRC).toMatch(/task\.metadata\??\.jobId/);

@@ -1,3 +1,4 @@
+import { resolveExecutionOptions } from './executionOptions.js';
 /**
  * Per-run generation controls a task may pin on top of its provider record.
  *
@@ -32,6 +33,10 @@ export function applyTaskGenerationOverrides(provider, metadata) {
   const thinking = metadata?.thinking;
   const overridden = {
     ...provider,
+    ...((provider.executionOptions || metadata?.executionOptions) ? { executionOptions: resolveExecutionOptions(
+      { source: 'provider', options: provider.executionOptions },
+      { source: 'task', options: metadata?.executionOptions },
+    ).requested } : {}),
     ...(Number.isFinite(temperature) && temperature >= MIN_TEMPERATURE && temperature <= MAX_TEMPERATURE
       ? { temperature }
       : {}),

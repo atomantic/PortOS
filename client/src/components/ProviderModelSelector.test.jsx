@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 // The tool-use annotation unions the server's authoritative capability list into
 // the client id regex, so the picker fetches it whenever `highlightToolUse` is on.
 const getToolUseModels = vi.fn();
 vi.mock('../services/apiLocalLlm', () => ({ getToolUseModels: (...a) => getToolUseModels(...a) }));
 
+vi.mock('../services/apiCore.js', () => ({ request: vi.fn().mockResolvedValue({ options: [] }) }));
+
+import { request } from '../services/apiCore.js';
 import ProviderModelSelector from './ProviderModelSelector';
 import { providerModeSelectionPolicy } from '../utils/providers.js';
 import { __resetToolUseModelIdsCache } from '../hooks/useToolUseModelIds.js';
@@ -36,6 +39,25 @@ function renderSelector(props = {}) {
 }
 
 describe('ProviderModelSelector', () => {
+  it('saves speed as a real provider reference for legacy consumers and restores their model and effort pins', async () => {
+    const preset = { id: 'selection-example', name: 'Fast requested', type: 'cli', command: 'codex', executionSourceProviderId: 'codex', executionOptions: { serviceTier: 'fast' }, executionSelectionOptions: { serviceTier: 'fast' } };
+    request.mockImplementation(async (_url, options) => options?.method === 'POST' ? preset : { options: [{ key: 'serviceTier', label: 'Speed', values: ['standard', 'fast'] }] });
+    const onProviderChange = vi.fn();
+    const onModelChange = vi.fn();
+    const onEffortChange = vi.fn();
+    const props = { providers: [{ id: 'codex', name: 'Codex', type: 'cli', command: 'codex', executionOptionKeys: ['serviceTier'] }], selectedProviderId: 'codex', selectedModel: 'm1', effort: 'high', onProviderChange, onModelChange, onEffortChange };
+    let view;
+    await act(async () => { view = renderSelector(props); });
+    await act(async () => { fireEvent.change(screen.getByLabelText('Speed'), { target: { value: 'fast' } }); });
+    expect(onProviderChange).toHaveBeenCalledWith(preset.id);
+    expect(request).toHaveBeenCalledWith(expect.stringContaining('/execution-options/selection'), expect.objectContaining({ body: JSON.stringify({ model: 'm1', executionOptions: { serviceTier: 'fast' } }) }));
+    await act(async () => { view.rerender(<ProviderModelSelector {...props} selectedProviderId={preset.id} availableModels={['m1']} />); });
+    expect(onModelChange).toHaveBeenLastCalledWith('m1');
+    expect(onEffortChange).toHaveBeenLastCalledWith('high');
+    expect(screen.getByLabelText('Speed').value).toBe('fast');
+    request.mockResolvedValue({ options: [] });
+  });
+
   it('alphabetizes string and named model options without changing the selected model or catalog', () => {
     const models = Object.freeze(['Zulu', { id: 'z-id', name: 'alpha' }, 'Beta']);
     const onModelChange = vi.fn();
@@ -48,16 +70,16 @@ describe('ProviderModelSelector', () => {
     expect(onModelChange).toHaveBeenCalledWith('z-id');
   });
 
-  it('shows inherited provider, model and effort without writing overrides on mount', () => {
+  it('shows inherited provider, model and effort without writing overrides on mount', async () => {
     const onProviderChange = vi.fn();
     const onModelChange = vi.fn();
     const onEffortChange = vi.fn();
-    renderSelector({
+    await act(async () => { renderSelector({
       providers: [{ id: 'codex', name: 'Codex', type: 'cli', command: 'codex', defaultModel: 'gpt-5', effort: 'high' }],
       selectedProviderId: '', effectiveProviderId: 'codex', selectedModel: '',
       availableModels: ['gpt-5'], emptyProviderOption: 'Auto', emptyModelOption: 'Default model',
       effort: '', onProviderChange, onModelChange, onEffortChange,
-    });
+    }); });
     expect(screen.getByRole('option', { name: 'Auto — Codex' }).selected).toBe(true);
     expect(screen.getByRole('option', { name: 'Default model — gpt-5' }).selected).toBe(true);
     expect(screen.getByRole('option', { name: 'Default effort — high' }).selected).toBe(true);
@@ -224,13 +246,13 @@ describe('ProviderModelSelector', () => {
     expect(labels).toEqual(['Provider One', 'Provider Two']);
   });
 
-  it('applies one selection policy to providers, models, and effort options', () => {
+  it('applies one selection policy to providers, models, and effort options', async () => {
     const policy = {
       provider: (provider) => provider.id === 'local',
       model: (model) => (typeof model === 'string' ? model : model.id) === 'safe-model',
       effort: (level) => level === 'low',
     };
-    renderSelector({
+    await act(async () => { renderSelector({
       providers: [{ id: 'local', name: 'Local', type: 'cli', command: 'codex', models: ['gpt-5'] }, { id: 'cloud', name: 'Cloud' }],
       selectedProviderId: 'local',
       selectedModel: 'safe-model',
@@ -238,7 +260,7 @@ describe('ProviderModelSelector', () => {
       effort: 'low',
       onEffortChange: () => {},
       selectionPolicy: policy,
-    });
+    }); });
 
     const [providerSelect, modelSelect, effortSelect] = screen.getAllByRole('combobox');
     expect(presetOptions(providerSelect).map((option) => option.value)).toEqual(['local']);

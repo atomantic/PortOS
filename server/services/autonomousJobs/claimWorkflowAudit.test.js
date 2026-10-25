@@ -50,6 +50,14 @@ describe('PortOS workflow audit job dispatch', () => {
     });
   });
 
+  it('carries an explicit speed override without enabling or scheduling the audit job', async () => {
+    const job = { ...configured(), executionOptions: { serviceTier: 'standard' } };
+    expect((await generateTaskFromJob(job)).metadata.executionOptions).toEqual({ serviceTier: 'standard' });
+    expect(job.enabled).toBe(false);
+    expect(job.interval).toBe('on-demand');
+    expect(audit.CLAIM_WORKFLOW_AUDIT_JOB).not.toHaveProperty('executionOptions');
+  });
+
   it('refuses incomplete or unbounded configurations before dispatch and allows a corrected retry', async () => {
     await expect(generateTaskFromJob(audit.CLAIM_WORKFLOW_AUDIT_JOB)).rejects.toMatchObject({ status: 400 });
     await expect(generateTaskFromJob({ ...configured(), formValues: { recentRuns: 999, minutes: 15, maxFindings: 2 } })).rejects.toMatchObject({ status: 400 });

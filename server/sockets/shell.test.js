@@ -13,8 +13,11 @@ vi.mock('../services/shell.js', () => ({
   attachSession: vi.fn(),
   detachSocketSessions: vi.fn()
 }));
+vi.mock('../lib/aiToolkit/internal/codexModelListProbe.js', () => ({ probeCodexModelsViaAppServer: vi.fn() }));
 vi.mock('../services/providers.js', () => ({ getProviderById: vi.fn() }));
 
+const { getProviderById } = await import('../services/providers.js');
+const { probeCodexModelsViaAppServer } = await import('../lib/aiToolkit/internal/codexModelListProbe.js');
 const { registerShellHandlers } = await import('./shell.js');
 
 const setup = () => {
@@ -26,6 +29,20 @@ const setup = () => {
 
 describe('shell:start payload validation', () => {
   beforeEach(() => createShellSession.mockClear());
+
+  it('validates the saved shell speed, records only the request and refuses unsupported authentication', async () => {
+    const provider = { id: 'codex-tui', type: 'tui', command: 'codex', codexAuthMode: 'chatgpt', defaultModel: 'alpha', executionOptions: { serviceTier: 'fast' } };
+    getProviderById.mockResolvedValue(provider);
+    probeCodexModelsViaAppServer.mockResolvedValue({ accountType: 'chatgpt', requirements: null, config: {}, models: [{ id: 'alpha', serviceTiers: [{ id: 'fast' }] }] });
+    const { handlers, socket } = setup();
+    await handlers['shell:start']({ providerId: provider.id });
+    expect(createShellSession).toHaveBeenCalledWith(socket, expect.objectContaining({ executionOptions: expect.objectContaining({ requested: { serviceTier: 'fast' }, effective: {}, confirmation: 'requested/unconfirmed' }) }));
+    createShellSession.mockClear();
+    probeCodexModelsViaAppServer.mockResolvedValue({ accountType: 'apiKey', config: {}, models: [] });
+    await handlers['shell:start']({ providerId: provider.id });
+    expect(createShellSession).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith('shell:error', expect.objectContaining({ error: expect.stringContaining('ChatGPT') }));
+  });
 
   it('rejects a non-string cwd on shell:error without creating a session', async () => {
     const { handlers, socket } = setup();

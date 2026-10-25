@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { createProviderCrudService } from './internal/providerCrudService.js';
@@ -30,11 +31,19 @@ function withGatewayApiKey(provider, providers) {
 function withGatewayModelAccess(provider, providers) {
   if (!provider || typeof provider !== 'object') return provider;
   const own = normalizeModelAccess(provider.modelAccess);
-  if (own) return { ...provider, modelAccessEffective: own, modelAccessSource: 'own' };
+  if (own) {
+    const result = { ...provider, modelAccessEffective: own, modelAccessSource: 'own' };
+    const key = Object.getOwnPropertyDescriptor(provider, 'apiKey');
+    if (key && !key.enumerable) Object.defineProperty(result, 'apiKey', key);
+    return result;
+  }
   const gateway = gatewayForProvider(provider);
   const inherited = gateway ? normalizeModelAccess(providers?.[gateway.id]?.modelAccess) : null;
   if (!inherited) return provider;
-  return { ...provider, modelAccessEffective: inherited, modelAccessSource: gateway.id };
+  const result = { ...provider, modelAccessEffective: inherited, modelAccessSource: gateway.id };
+  const key = Object.getOwnPropertyDescriptor(provider, 'apiKey');
+  if (key && !key.enumerable) Object.defineProperty(result, 'apiKey', key);
+  return result;
 }
 
 const readProvider = (provider, providers) => (provider
@@ -52,6 +61,20 @@ export function createProviderService(config = {}) {
     cachedModelIds,
     resolveCompositeProvider,
   } = state;
+  const writes = new AsyncLocalStorage();
+  let tail = Promise.resolve();
+  const withProviderWrite = (work) => {
+    if (writes.getStore()?.active) return work();
+    const queued = tail.then(() => {
+      const lease = { active: true };
+      return writes.run(lease, async () => {
+        try { return await work(); }
+        finally { lease.active = false; }
+      });
+    });
+    tail = queued.catch(() => {});
+    return queued;
+  };
   const crud = createProviderCrudService({
     loadProviders,
     saveProviders,
@@ -74,6 +97,15 @@ export function createProviderService(config = {}) {
     sampleFile,
     defaultSamplePath: DEFAULT_SAMPLE_PATH,
     cliProbeTimeouts: config.cliProbeTimeouts,
+    withProviderWrite,
   });
-  return { ...crud, ...catalog };
+  const service = { ...crud, ...catalog };
+  for (const name of ['setActiveProvider', 'createProvider', 'createProviderModes', 'createProviderTuiMode',
+    'updateProvider', 'applyProviderPatches', 'deleteProvider']) {
+    const operation = service[name];
+    service[name] = function (...args) {
+      return withProviderWrite(() => operation.apply(service, args));
+    };
+  }
+  return service;
 }

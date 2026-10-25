@@ -71,6 +71,7 @@ export function normalizeJobPayload(formData) {
     payload.providerId = null;
     payload.model = null;
     payload.effort = null;
+    if (payload.executionOptions !== undefined) payload.executionOptions = {};
     payload.dataInputs = [];
     // The configuration form exists to parameterize a PROMPT. A shell/script job
     // has none, so its values would reach nothing — clear them rather than leave
@@ -356,6 +357,7 @@ export default function JobCard({
       providerId: job.providerId || '',
       model: job.model || '',
       effort: job.effort || '',
+      ...(job.executionOptions !== undefined ? { executionOptions: job.executionOptions } : {}),
       dataInputs: job.dataInputs || [],
       formFields: job.formFields || [],
       formValues: job.formValues || {},

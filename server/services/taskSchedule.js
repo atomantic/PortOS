@@ -1540,7 +1540,7 @@ export async function getNextTaskType(appId = null, { perpetualOnly = false, con
  */
 export async function triggerOnDemandTask(taskType, appId = null, {
   emit = true, origin = ON_DEMAND_ORIGINS.USER, targetPullRequest = null, burn = null,
-  provider = null, model = null, effort = null,
+  provider = null, model = null, effort = null, executionOptions,
 } = {}) {
   // A targeted run names ONE open PR/MR instead of letting the task pick from
   // the app's whole open set (the PR/MR row's "Review this PR" button). Coerced
@@ -1560,7 +1560,7 @@ export async function triggerOnDemandTask(taskType, appId = null, {
   // picker) — layered onto the task's metadata by
   // prepareManagedAppImprovementTask as the MOST specific pin, above
   // the schedule interval and the app's own per-app override.
-  const providerOverride = (provider || model || effort) ? { provider, model, effort } : null;
+  const providerOverride = (provider || model || effort || executionOptions) ? { provider, model, effort, ...(executionOptions !== undefined ? { executionOptions } : {}) } : null;
   const manual = isManualOnDemandRequest({ origin, burn: burnProvenance });
   // Unattended launches (burn, refill) of an input-gated audit are declined while
   // nothing it reads changed since its last clean run; a human Run always goes.

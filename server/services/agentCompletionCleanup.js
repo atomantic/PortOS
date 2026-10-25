@@ -182,7 +182,7 @@ export async function handlePipelineProgression(task, agentId, success) {
   // public-review stage means "first eligible provider on this install" (what
   // the schedule UI promises), so the previous stage's pins are dropped here.
   if (publicReviewPostureForProfile(nextStage.executionProfile)) {
-    for (const key of ['provider', 'providerId', 'model', 'effort']) delete nextTask.metadata[key];
+    for (const key of ['provider', 'providerId', 'model', 'effort', 'executionOptions']) delete nextTask.metadata[key];
   }
   // The previous stage's agent payload must not travel: `description` above IS
   // this stage's prompt, and addTask only promotes it to `metadata.prompt` when
@@ -194,6 +194,8 @@ export async function handlePipelineProgression(task, agentId, success) {
     nextTask.metadata.provider = nextStage.providerId;
     nextTask.metadata.providerId = nextStage.providerId;
   }
+  if (nextStage.providerId) delete nextTask.metadata.executionOptions;
+  if (nextStage.executionOptions !== undefined) nextTask.metadata.executionOptions = nextStage.executionOptions;
   if (nextStage.effort) nextTask.metadata.effort = nextStage.effort;
   // The profile, unlike the pins above, is SET-OR-CLEARED (see the guard at the
   // top of the hand-off): each stage runs under exactly the contract it

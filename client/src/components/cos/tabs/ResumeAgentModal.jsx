@@ -1,13 +1,13 @@
+import ProviderModelSelector from '../../ProviderModelSelector.jsx';
+import { taskExecutionOptions } from '../../../../../server/lib/executionOptions.js';
 import { useState, useRef } from 'react';
-import { shortClaudeModelName } from '../../../utils/formatters';
 import { X, RotateCcw, Image, Loader2 } from 'lucide-react';
 import { processScreenshotUploads } from '../../../services/apiMedia';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
 import FilePickerButton from '../../ui/FilePickerButton';
 import { FormField } from '../../ui/FormField';
-import EffortSelect from '../EffortSelect';
-import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel, seedModelEffort } from '../../../utils/providers';
+import { effortAwareModelOptions, effortSurvivingModel, seedModelEffort } from '../../../utils/providers';
 import { isAgentHandoff, agentHandoffReason } from '../../../lib/agentOutcome';
 import AgentResultLine from '../AgentResultLine';
 
@@ -62,6 +62,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
       provider,
       model: seeded.model,
       effort: seeded.effort,
+      executionOptions: taskExecutionOptions(agent.metadata?.executionOptions),
       app: agent.metadata?.taskApp || agent.metadata?.app || ''
     };
   });
@@ -100,6 +101,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
       context: fullContext,
       model: formData.model,
       provider: formData.provider,
+      executionOptions: formData.executionOptions,
       effort: formData.effort,
       app: formData.app,
       type: taskType,
@@ -225,54 +227,13 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
             </select>
           </FormField>
 
-          {/* Provider, Model and Thinking Effort */}
-          <div className="flex flex-col sm:flex-row gap-3">
-            <FormField label="Provider" className="flex-1">
-              <select
-                value={formData.provider}
-                onChange={e => setFormData({ ...formData, provider: e.target.value, model: '', effort: '' })}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
-                disabled={!providersLoaded}
-              >
-                {/* Mid-fetch, `providers` is empty — say so instead of rendering a
-                    picker whose only option looks like a broken control. */}
-                {providersLoaded
-                  ? <option value="">Auto (default)</option>
-                  : <option value="">Loading providers…</option>}
-                {providersLoaded && providers?.filter(p => p.enabled).map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </FormField>
-            <FormField label="Model" className="flex-1">
-              <select
-                value={formData.model}
-                onChange={e => setFormData(d => ({
-                  ...d,
-                  model: e.target.value,
-                  // A model with no effort tiers hides the select beside it — clear
-                  // the value with it instead of resuming on a level the UI dropped.
-                  effort: effortSurvivingModel(selectedProvider, e.target.value, d.effort),
-                }))}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
-                disabled={!providersLoaded || !formData.provider}
-              >
-                <option value="">{!providersLoaded ? 'Loading providers…' : formData.provider ? 'Select model...' : 'Select provider first'}</option>
-                {availableModels.map(m => (
-                  <option key={m} value={m}>{shortClaudeModelName(m)}</option>
-                ))}
-              </select>
-            </FormField>
-            <EffortSelect
-              provider={selectedProvider}
-              model={effectiveModelFor(selectedProvider, formData.model)}
-              value={formData.effort}
-              onChange={effort => setFormData(d => ({ ...d, effort }))}
-              label="Thinking Effort"
-              fieldClassName="flex-1"
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
-            />
-          </div>
+          <ProviderModelSelector providers={providers || []} selectedProviderId={formData.provider}
+            selectedModel={formData.model} availableModels={availableModels} loading={!providersLoaded}
+            onProviderChange={provider => setFormData(d => ({ ...d, provider, model: '', effort: '' }))}
+            onModelChange={model => setFormData(d => ({ ...d, model, effort: effortSurvivingModel(selectedProvider, model, d.effort) }))}
+            effort={formData.effort} onEffortChange={effort => setFormData(d => ({ ...d, effort }))}
+            executionOptions={formData.executionOptions} onExecutionOptionsChange={executionOptions => setFormData(d => ({ ...d, executionOptions }))}
+            emptyProviderOption="Auto (default)" emptyModelOption="Select model..." alwaysShowModel />
 
           {/* Context Preview (collapsed) */}
           <details className="text-sm">

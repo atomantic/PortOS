@@ -1,3 +1,4 @@
+import ExecutionOptionsSelect from '../../providers/ExecutionOptionsSelect.jsx';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   Clock,
@@ -80,6 +81,7 @@ const getTaskEditData = (task, providers) => {
     model: seeded.model,
     provider,
     effort: seeded.effort,
+    executionOptions: task.metadata?.executionOptions,
     // '' = "Any instance" (#4520) — no pin, the opportunistic default.
     targetInstanceId: task.metadata?.targetInstanceId || ''
   };
@@ -330,6 +332,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
     editData.model !== savedEditData.model ||
     editData.provider !== savedEditData.provider ||
     editData.effort !== savedEditData.effort ||
+    JSON.stringify(editData.executionOptions) !== JSON.stringify(savedEditData.executionOptions) ||
     editData.targetInstanceId !== savedEditData.targetInstanceId;
 
   const handleCancelEdit = () => {
@@ -572,6 +575,9 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                   onChange={effort => setEditData(d => ({ ...d, effort }))}
                   className="w-full sm:w-36 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
+                <ExecutionOptionsSelect provider={editProvider} model={effectiveModelFor(editProvider, editData.model)}
+                  value={editData.executionOptions} onChange={executionOptions => setEditData(d => ({ ...d, executionOptions }))}
+                  className="w-full sm:w-36 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm" />
               </div>
               {canPinInstance && (
                 <InstancePicker

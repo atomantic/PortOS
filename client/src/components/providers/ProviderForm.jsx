@@ -1,3 +1,4 @@
+import ExecutionOptionsSelect from './ExecutionOptionsSelect.jsx';
 import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
@@ -75,6 +76,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     allowCustomEndpoint: provider?.allowCustomEndpoint === true,
     ignoreUserConfig: provider?.ignoreUserConfig === true,
     codexAuthMode: provider?.codexAuthMode || '',
+    executionOptions: provider?.executionOptions,
     lowPriorityOnUsageLimit: provider?.lowPriorityOnUsageLimit === true,
     // The FULL advertised catalog, never the model-access-scoped `models` the
     // payload carries. This textarea is saved verbatim, so seeding it from the
@@ -1128,6 +1130,12 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                 </p>
               </FormField>
 
+              {provider?.id && <div>
+                <ExecutionOptionsSelect provider={provider} model={formData.defaultModel} value={formData.executionOptions}
+                  onChange={executionOptions => setFormData(current => ({ ...current, executionOptions }))}
+                  className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm" />
+                <p className="text-xs text-gray-500">Saved execution defaults apply to future runs, including scheduled jobs using this preset.</p>
+              </div>}
               <EffortSelect
                 provider={isProcessProvider(capabilityProvider) ? capabilityProvider : null}
                 model={formData.defaultModel}

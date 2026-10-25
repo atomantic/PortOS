@@ -1,3 +1,4 @@
+import ExecutionOptionsAttribution from '../../providers/ExecutionOptionsAttribution.jsx';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Trash2, RotateCcw, ScrollText, Square } from 'lucide-react';
@@ -274,6 +275,7 @@ export default function RunsTab() {
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                           <span className="font-medium text-white">{run.providerName}</span>
                           <span className="text-gray-500 text-sm">{run.model}</span>
+                          <ExecutionOptionsAttribution value={run.executionOptions} />
                           {run.source === 'cos-agent' && (
                             <span className="text-xs text-port-accent-2 bg-port-accent-2/10 px-2 py-0.5 rounded">
                               CoS

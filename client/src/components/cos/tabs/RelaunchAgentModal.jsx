@@ -1,3 +1,4 @@
+import { taskExecutionOptions } from '../../../../../server/lib/executionOptions.js';
 import { useCallback, useMemo, useState } from 'react';
 import { RefreshCw, Loader2, X } from 'lucide-react';
 import * as api from '../../../services/api';
@@ -68,6 +69,7 @@ export default function RelaunchAgentModal({ agent, providers, providersLoaded =
       provider: currentProvider,
       model: seeded.model,
       effort: seeded.effort,
+      executionOptions: taskExecutionOptions(agent.metadata?.executionOptions),
       app: agent?.metadata?.taskApp || agent?.metadata?.app || '',
       note: ''
     };
@@ -88,6 +90,7 @@ export default function RelaunchAgentModal({ agent, providers, providersLoaded =
     const result = await api.relaunchCosAgent(agent.id, {
       provider: formData.provider || undefined,
       model: formData.model || undefined,
+      executionOptions: formData.executionOptions,
       effort: formData.effort || undefined,
       app: formData.app || undefined,
       context: formData.note.trim() || undefined
@@ -169,6 +172,8 @@ export default function RelaunchAgentModal({ agent, providers, providersLoaded =
           availableModels={availableModels}
           onProviderChange={provider => setFormData(d => ({ ...d, provider, model: '', effort: '' }))}
           onModelChange={model => setFormData(d => ({ ...d, model }))}
+          executionOptions={formData.executionOptions}
+          onExecutionOptionsChange={executionOptions => setFormData(d => ({ ...d, executionOptions }))}
           effort={formData.effort}
           onEffortChange={effort => setFormData(d => ({ ...d, effort }))}
           emptyProviderOption="Auto (default)"

@@ -30,7 +30,7 @@ const RUNS_DIR = PATHS.runs;
  *   The memories whose text went into the prompt. Always stored (empty list
  *   when none) so a missing field only ever means a pre-upgrade record.
  */
-export async function createAgentRun({ agentId, task, model, provider, workspacePath, appName, injectedMemories }) {
+export async function createAgentRun({ agentId, task, model, provider, workspacePath, appName, injectedMemories, executionOptions }) {
   const runId = uuidv4();
   const runDir = join(RUNS_DIR, runId);
 
@@ -42,6 +42,7 @@ export async function createAgentRun({ agentId, task, model, provider, workspace
     id: runId,
     type: 'ai',
     source: 'cos-agent',
+    ...(executionOptions ? { executionOptions } : {}),
     agentId,
     taskId: task.id,
     providerId: provider.id,

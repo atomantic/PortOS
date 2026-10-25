@@ -1,3 +1,4 @@
+import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 /**
  * Agent & social-automation Zod schemas (split out of validation.js, issue #1831).
  *
@@ -362,6 +363,7 @@ export const featureAgentSchema = z.object({
   providerId: z.string().optional().nullable(),
   model: z.string().optional().nullable(),
   effort: z.preprocess((value) => (value === '' ? undefined : value), z.enum(EFFORT_LEVELS).nullable().optional()),
+  executionOptions: executionOptionsSchema.optional(),
   autonomyLevel: featureAgentAutonomySchema.default('assistant'),
   priority: featureAgentPrioritySchema.default('MEDIUM')
 });
@@ -382,6 +384,7 @@ export const featureAgentUpdateSchema = z.object({
   providerId: z.string().optional().nullable(),
   model: z.string().optional().nullable(),
   effort: z.preprocess((value) => (value === '' ? undefined : value), z.enum(EFFORT_LEVELS).nullable().optional()),
+  executionOptions: executionOptionsSchema.optional(),
   autonomyLevel: featureAgentAutonomySchema.optional(),
   priority: featureAgentPrioritySchema.optional()
 });

@@ -1,5 +1,8 @@
+import { homedir } from 'node:os';
+import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
 import * as shellService from '../services/shell.js';
 import { getProviderById } from '../services/providers.js';
+import { prepareExecutionOptions } from '../lib/providerExecutionOptions.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import {
   shellAttachSchema,
@@ -21,12 +24,18 @@ export const registerShellHandlers = (socket, _io) => {
     const options = validateSocketData(shellStartSchema, rawOptions, socket, 'shell:start');
     if (options === null) return;
     try {
-      const cwd = options?.cwd || undefined;
+      const cwd = options?.cwd || homedir();
       const providerId = typeof options?.providerId === 'string' ? options.providerId : null;
       let initialCommand = options?.initialCommand || undefined;
       let env;
+      let executionOptions;
       if (providerId) {
-        const provider = await getProviderById(providerId).catch(() => null);
+        let provider = await getProviderById(providerId).catch(() => null);
+        if (provider) {
+          const prepared = await prepareExecutionOptions(provider, provider.defaultModel, undefined, 'run', { cwd });
+          provider = prepared.provider;
+          if (Object.keys(prepared.attribution.requested).length) executionOptions = prepared.attribution;
+        }
         const launch = buildTuiShellLaunch(provider);
         if (!launch) {
           socket.emit('shell:error', { error: `Provider '${providerId}' is not a launchable TUI provider` });
@@ -35,7 +44,7 @@ export const registerShellHandlers = (socket, _io) => {
         initialCommand = launch.commandLine;
         env = launch.env;
       }
-      const sessionId = shellService.createShellSession(socket, { cwd, env });
+      const sessionId = shellService.createShellSession(socket, { cwd, env, ...(executionOptions ? { executionOptions } : {}) });
       if (sessionId) {
         socket.emit('shell:started', { sessionId });
         if (initialCommand) {
@@ -46,7 +55,8 @@ export const registerShellHandlers = (socket, _io) => {
       }
     } catch (err) {
       const message = err?.message ?? String(err);
-      console.error(`❌ Socket handler error [shell:start]: ${message}`);
+      if (err.code === EXECUTION_OPTIONS_ERROR) console.log(`🚫 Shell execution option refused: ${message}`);
+      else console.error(`❌ Socket handler error [shell:start]: ${message}`);
       socket.emit('shell:error', { error: message });
     }
   });

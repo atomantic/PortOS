@@ -228,6 +228,7 @@ async function generateTaskFromJob(job) {
       // spawn builders emit `--effort`/`-c model_reasoning_effort=` (no-op for
       // non-effort providers). Absent = provider default.
       ...(job.effort ? { effort: job.effort } : {}),
+      ...(job.executionOptions !== undefined ? { executionOptions: job.executionOptions } : {}),
       // File-issues delivery, from the SAME catalog object a scheduled audit
       // stamps (`lib/auditCatalog.js`) rather than a second definition of the
       // mode. A custom job is user-authored, so there is no catalog default to

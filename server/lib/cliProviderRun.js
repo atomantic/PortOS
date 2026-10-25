@@ -72,7 +72,9 @@ export function pickCliProvider(providers, config = {}) {
   const provider =
     (providerId && cli.find((p) => p.id === providerId)) ||
     cli.find((p) => p.id === fallbackId) ||
-    cli[0];
+    cli.find((candidate) => !(candidate.executionSourceProviderId || candidate.executionSelectionRoot));
+
+  if (!provider) return { error: 'No automatic CLI provider is configured' };
 
   // Honor the requested model only when the provider actually offers it;
   // otherwise fall back to the provider's own default so a stale stored model
@@ -132,6 +134,17 @@ export function runCliProviderPrompt(args = {}) {
     return Promise.resolve({ error: 'Provider has no enforced tool-free review mode, or extra arguments would override it.' });
   }
 
+  if ((args.executionOptions !== undefined || (Object.keys(provider.executionOptions || {}).length > 0 && !provider.executionOptionAttribution))) {
+    const preparationStarted = Date.now();
+    return import('./providerExecutionOptions.js')
+      .then(({ prepareExecutionOptions }) => prepareExecutionOptions(provider, model ?? provider.defaultModel, args.executionOptions, 'run', { cwd, timeoutMs }))
+      .then((prepared) => {
+        const remaining = timeoutMs - (Date.now() - preparationStarted);
+        if (remaining <= 0) return { error: 'Caller runtime budget exhausted before CLI dispatch', code: 'RUNTIME_BUDGET_EXHAUSTED', partial: false };
+        return runCliProviderPrompt({ ...args, timeoutMs: remaining, provider: prepared.provider, executionOptions: undefined })
+          .then((result) => ({ ...result, executionOptions: prepared.attribution }));
+      });
+  }
   // Clone with the per-call model as defaultModel so buildCliArgs injects the
   // right --model/-m flag for this provider's CLI convention.
   const effectiveProvider = { ...provider, apiKey: provider.apiKey, defaultModel: model ?? provider.defaultModel };

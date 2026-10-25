@@ -313,6 +313,8 @@ function TaskTypeFields({ form, compact, queueFirst }) {
             availableModels={modelOptions}
             onProviderChange={handleProviderChange}
             onModelChange={(model) => setTaskField('model', model)}
+            executionOptions={state.newTask.executionOptions}
+            onExecutionOptionsChange={(options) => setTaskField('executionOptions', options)}
             effort={state.newTask.effort}
             onEffortChange={(effort) => setTaskField('effort', effort)}
             emptyProviderOption="Auto (default)"

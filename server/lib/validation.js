@@ -1,3 +1,4 @@
+import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { federatedSourceAudioSchema } from './federatedMediaWire.js';
 import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 export { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
@@ -2777,6 +2778,7 @@ export const providerPresetCreateSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
   model: z.string().trim().min(1).max(512).nullable().optional(),
   effort: z.string().trim().min(1).max(20).nullable().optional(),
+  executionOptions: executionOptionsSchema.optional(),
 }).strict();
 
 /** `PUT /api/providers/harnesses/:id` — flip one harness's enablement. */
@@ -3150,3 +3152,7 @@ export const modelDownloadQuerySchema = z.object({
 export const modelDownloadParamsSchema = z.object({ modelId: z.string().min(1).max(256) });
 export const icLoraDownloadParamsSchema = z.object({ mode: z.string().min(1).max(256) });
 export const textEncoderDownloadParamsSchema = z.object({ id: z.string().min(1).max(256) });
+
+export const providerExecutionOptionsQuerySchema = z.object({ model: z.string().trim().max(512).optional(), refresh: z.enum(['true', 'false']).optional() }).strict();
+
+export const executionOptionSelectionSchema = z.object({ model: z.string().trim().max(512).optional(), executionOptions: executionOptionsSchema }).strict();

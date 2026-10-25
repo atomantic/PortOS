@@ -1,3 +1,4 @@
+import { EXECUTION_OPTIONS_ERROR } from './executionOptions.js';
 /**
  * Resolve everything a TUI provider needs to be launched by hand in a Shell
  * session: the exact command line to type, and the environment the PTY must
@@ -32,7 +33,12 @@ import { applyCredentialBootstrap } from './credentialBootstrap.js';
  */
 export function buildTuiShellLaunch(provider) {
   if (provider?.type !== PROVIDER_TYPES.TUI) return null;
-  const invocation = buildTuiInvocation(provider, provider.defaultModel);
+  let invocation;
+  try { invocation = buildTuiInvocation(provider, provider.defaultModel); }
+  catch (error) {
+    if (error.code === EXECUTION_OPTIONS_ERROR) return null;
+    throw error;
+  }
   if (!invocation.command) return null;
   // What the shell must type is what every agent spawn runs: the bootstrap CLI
   // in front of the harness for a credential-bootstrap provider (see

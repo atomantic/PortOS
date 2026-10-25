@@ -1,3 +1,4 @@
+import { resolveExecutionOptions, executionOptionsError } from '../lib/executionOptions.js';
 import { invalidateModelObservation } from './modelObservation.js';
 /**
  * PortOS's client for the Codex **app-server** — the JSON-RPC-over-stdio
@@ -871,6 +872,7 @@ export async function runCodexTextTurn({
   prompt,
   model = null,
   effort = null,
+  executionOptions,
   timeoutMs = TURN_TIMEOUT_MS,
   signal = null,
   onDelta = null,
@@ -894,6 +896,8 @@ export async function runCodexTextTurn({
     );
   }
 
+  const optionAttribution = resolveExecutionOptions({ source: 'run', options: executionOptions });
+  const requestedTier = optionAttribution.requested.serviceTier;
   const cwd = await ensureTextTurnCwd();
   const { effort: resolvedEffort, clamped, reason } = resolveCodexEffort(effort, cachedModelEntry(model));
   if (clamped) console.log(`⚠️ Codex effort clamped: ${reason}`);
@@ -904,6 +908,35 @@ export async function runCodexTextTurn({
   // silently send this turn's frames to a child that has never heard of its
   // thread id.
   const owner = await connect();
+  let speedCatalog;
+  if (requestedTier) {
+    const [account, requirements, catalog, configuration] = await raceCodexAbort(Promise.all([
+      sendRequest(owner, CODEX_RPC.accountRead, {}, REQUEST_TIMEOUT_MS),
+      sendRequest(owner, 'configRequirements/read', {}, REQUEST_TIMEOUT_MS),
+      (async () => {
+        const models = [];
+        let cursor;
+        for (let page = 0; page < MODEL_LIST_MAX_PAGES; page++) {
+          const result = normalizeCodexModels(await sendRequest(owner, CODEX_TURN_RPC.modelList, cursor ? { cursor } : {}, REQUEST_TIMEOUT_MS));
+          models.push(...result.models);
+          cursor = result.nextCursor;
+          if (!cursor) return { models };
+        }
+        throw executionOptionsError('The model capability catalog did not finish paginating.');
+      })(),
+      sendRequest(owner, 'config/read', { includeLayers: false, cwd }, REQUEST_TIMEOUT_MS),
+    ]), signal);
+    if (!['chatgpt', 'chatgptAuthTokens'].includes(account?.account?.type)
+        || !configuration?.config || (configuration.config.model_provider && configuration.config.model_provider !== 'openai')
+        || configuration.config.forced_login_method === 'api'
+        || !Object.hasOwn(requirements || {}, 'requirements') || catalog.error || !Array.isArray(catalog.models)) {
+      throw executionOptionsError('This app-server route could not verify subscription speed capabilities.');
+    }
+    if (requestedTier === 'fast' && requirements.requirements?.featureRequirements?.fast_mode === false) {
+      throw executionOptionsError('Fast mode is disabled by managed requirements.');
+    }
+    speedCatalog = catalog.models;
+  }
   // `connect()` can spawn and handshake a whole app-server child, which is the
   // longest await in this function. Re-read the signal before paying for a
   // thread the caller has already abandoned — the up-front check above ran
@@ -916,6 +949,7 @@ export async function runCodexTextTurn({
   // ephemeral and no turn exists yet, so nothing is left running to interrupt.
   const started = await raceCodexAbort(sendRequest(owner, CODEX_TURN_RPC.threadStart, {
     ...CODEX_TEXT_THREAD_CONFIG,
+    ...(requestedTier === 'fast' ? { config: { ...CODEX_TEXT_THREAD_CONFIG.config, features: { fast_mode: true } } } : {}),
     cwd,
     ...(model ? { model } : {}),
   }, REQUEST_TIMEOUT_MS), signal);
@@ -969,6 +1003,15 @@ export async function runCodexTextTurn({
     // guard is what tells the two apart — the `finally` has already deleted the
     // entry by the time an abandoned response lands, whereas a response the
     // normal path is still reading finds the thread registered.
+    if (requestedTier) {
+      const effectiveModel = typeof started.model === 'string' ? started.model : model;
+      const entry = speedCatalog.find((candidate) => candidate.id === effectiveModel);
+      if (!Array.isArray(entry?.serviceTiers)
+          || (requestedTier === 'fast' && !entry.serviceTiers.some((tier) => tier.id === 'fast' || tier.id === 'priority'))) {
+        throw executionOptionsError('The selected app-server model does not advertise the requested speed.');
+      }
+      optionAttribution.model = effectiveModel;
+    }
     const response = await raceCodexAbort(sendRequest(owner, CODEX_TURN_RPC.turnStart, {
       threadId,
       input: [{ type: 'text', text: prompt }],
@@ -976,6 +1019,7 @@ export async function runCodexTextTurn({
       approvalPolicy: CODEX_TEXT_THREAD_CONFIG.approvalPolicy,
       ...(model ? { model } : {}),
       ...(resolvedEffort ? { effort: resolvedEffort } : {}),
+      ...(requestedTier ? { serviceTierForTurn: requestedTier === 'standard' ? 'default' : 'fast' } : {}),
       ...(responseSchema ? { outputSchema: responseSchema } : {}),
     }, timeoutMs), signal, (late) => {
       if (activeTurns.has(threadId)) return;
@@ -999,7 +1043,8 @@ export async function runCodexTextTurn({
     // The model Codex ACTUALLY ran, which is the thread's answer rather than the
     // request's — a caller that passed `null` still gets told what served it.
     const ranModel = typeof started.model === 'string' && started.model ? started.model : (model ?? null);
-    return { ...result, model: ranModel, effort: resolvedEffort, effortClamped: clamped, clampReason: reason };
+    return { ...result, model: ranModel, effort: resolvedEffort, effortClamped: clamped, clampReason: reason,
+      ...(requestedTier ? { executionOptions: optionAttribution } : {}) };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);

@@ -109,6 +109,9 @@
  *   flow may offer (`['tui']` for a shell launcher, `['api']` for a streaming
  *   caller). Defaults to `selectionPolicy.modes`; omit both for no restriction.
  */
+import { request } from '../services/apiCore.js';
+import { saveExecutionOptionSelection } from '../services/apiProviders.js';
+import { useAsyncAction } from '../hooks/useAsyncAction.js';
 import { useEffect, useId, useRef, useState } from 'react';
 import {
   COMPOSE_OPTION_VALUE,
@@ -130,6 +133,7 @@ import { isCompositeProviderId } from '../utils/providerRef.js';
 import useToolUseModelIds from '../hooks/useToolUseModelIds.js';
 import useVisionModelIds from '../hooks/useVisionModelIds.js';
 import useProviderCatalog from '../hooks/useProviderCatalog.js';
+import ExecutionOptionsSelect from './providers/ExecutionOptionsSelect.jsx';
 import EffortSelect from './cos/EffortSelect.jsx';
 import ProviderComposePopover from './providers/ProviderComposePopover.jsx';
 import ToolUseWarning from './ui/ToolUseWarning.jsx';
@@ -172,6 +176,8 @@ export default function ProviderModelSelector({
   highlightVision = false,
   effort,
   onEffortChange,
+  executionOptions,
+  onExecutionOptionsChange,
   selectionPolicy,
   compose = true,
   composeMethods,
@@ -189,19 +195,30 @@ export default function ProviderModelSelector({
   // A composed/minted route's model and effort, waiting for the caller to
   // reflect its provider id (see `selectRoute`).
   const [pendingRoute, setPendingRoute] = useState(null);
-  const callbacksRef = useRef({ onModelChange, onEffortChange });
-  callbacksRef.current = { onModelChange, onEffortChange };
+  const callbacksRef = useRef({ onModelChange, onEffortChange, onExecutionOptionsChange });
+  callbacksRef.current = { onModelChange, onEffortChange, onExecutionOptionsChange };
   const providerAllowed = selectionPolicy?.provider;
   const modelAllowed = selectionPolicy?.model;
   const effortAllowed = selectionPolicy?.effort;
   const callerProviders = Array.isArray(providers) ? providers : [];
-  const providerList = [
+  const localProviderList = [
     ...callerProviders,
     ...savedPresets.filter((preset) => !callerProviders.some((p) => p?.id === preset.id)),
   ];
   // Resolve against the effective provider (the pin, or what a blank selection
   // falls back to) — everything below describes what a run would actually use.
   const lookupId = effectiveProviderId ?? selectedProviderId;
+  const [resolvedPreset, setResolvedPreset] = useState(null);
+  const needsPreset = typeof lookupId === 'string' && lookupId.startsWith('selection-') && !isCompositeProviderId(lookupId) && !localProviderList.some((provider) => provider.id === lookupId);
+  useEffect(() => {
+    let active = true;
+    if (needsPreset) request(`/providers/${encodeURIComponent(lookupId)}`, { silent: true })
+      .then((provider) => { if (active) setResolvedPreset({ id: lookupId, provider }); })
+      .catch(() => { if (active) setResolvedPreset({ id: lookupId, provider: { id: lookupId, name: lookupId, enabled: false, unavailableReason: 'not available on this install' } }); });
+    return () => { active = false; };
+  }, [lookupId, needsPreset]);
+  const providerList = needsPreset && resolvedPreset?.id === lookupId
+    ? [...localProviderList, resolvedPreset.provider] : localProviderList;
   const listedProvider = providerList.find((p) => p.id === lookupId);
   // A composite the caller's list cannot name is looked up in the shared
   // catalog — fetched only in that case, so the many preset-only pickers never
@@ -338,24 +355,38 @@ export default function ProviderModelSelector({
   // lets the caller's own clearing rule (a provider change resetting the
   // model) run first and then be overridden by the explicit choice. A caller
   // that never reflects the id simply never gets the model/effort.
-  const selectRoute = (id, model, routeEffort) => {
-    setPendingRoute({ id, model: model || '', effort: routeEffort || '' });
+  const selectRoute = (id, model, routeEffort, options) => {
+    setPendingRoute({ id, model: model || '', effort: routeEffort || '', options });
     onProviderChange(id);
   };
   useEffect(() => {
     if (!pendingRoute || pendingRoute.id !== selectedProviderId) return;
     callbacksRef.current.onModelChange?.(pendingRoute.model);
     callbacksRef.current.onEffortChange?.(pendingRoute.effort);
+    if (pendingRoute.options !== undefined) callbacksRef.current.onExecutionOptionsChange?.(pendingRoute.options);
     setPendingRoute(null);
   }, [pendingRoute, selectedProviderId]);
   // "Use once" passes the composite id; "Save as preset" passes the minted
   // preset (whose defaults are the composed model and effort) after carrying
   // it locally until the caller's list catches up.
-  const handleCompose = (compositeId, { model, effort: composedEffort }) => selectRoute(compositeId, model, composedEffort);
+  const [handleCompose, composingSelection] = useAsyncAction(async (compositeId, { model, effort: composedEffort, executionOptions: options }) => {
+    if (!onExecutionOptionsChange && Object.keys(options || {}).length) {
+      const preset = await saveExecutionOptionSelection(compositeId, model, options, { silent: true });
+      setSavedPresets((previous) => [...previous.filter((entry) => entry.id !== preset.id), preset]);
+      selectRoute(preset.id, model, composedEffort);
+    } else selectRoute(compositeId, model, composedEffort, options);
+  }, { errorMessage: 'Could not save execution selection' });
   const handlePresetSaved = (preset) => {
     setSavedPresets((prev) => [...prev.filter((p) => p.id !== preset.id), preset]);
     selectRoute(preset.id, preset.defaultModel, preset.effort);
   };
+  const [changeExecutionOptions, executionOptionsSaving] = useAsyncAction(async (options) => {
+    if (onExecutionOptionsChange) return onExecutionOptionsChange(options);
+    if (!selectedProvider) return;
+    const selection = await saveExecutionOptionSelection(selectedProvider.id, effectiveModel, options, { silent: true });
+    setSavedPresets((previous) => [...previous.filter((preset) => preset.id !== selection.id), selection]);
+    selectRoute(selection.id, selectedModel, effort);
+  }, { errorMessage: 'Could not save execution options' });
   const optionFor = (p) => {
     const hardwareUnavailable = !isProviderHardwareCompatible(p);
     const policyDisallowed = Boolean(providerAllowed && !providerAllowed(p));
@@ -475,6 +506,11 @@ export default function ProviderModelSelector({
             className={selectClass}
           />
         </div>
+      )}
+      {selectedProvider && (
+          <ExecutionOptionsSelect fieldClassName={fieldClass} provider={selectedProvider} model={effectiveModel}
+            value={onExecutionOptionsChange ? executionOptions : selectedProvider.executionSourceProviderId ? selectedProvider.executionSelectionOptions ?? selectedProvider.executionOptions : undefined} onChange={changeExecutionOptions}
+            disabled={disabled || loading || executionOptionsSaving || composingSelection || selectedProvider.enabled === false || Boolean(providerAllowed && !providerAllowed(selectedProvider))} className={selectClass} />
       )}
       {composeEnabled && (
         <ProviderComposePopover

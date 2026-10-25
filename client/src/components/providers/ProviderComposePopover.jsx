@@ -1,3 +1,4 @@
+import ExecutionOptionsSelect from './ExecutionOptionsSelect.jsx';
 /**
  * The "Custom combination…" compose flow (#7566): harness → method → service
  * → model → effort, narrowing at each step, plus an optional credential
@@ -62,6 +63,7 @@ export default function ProviderComposePopover({
   const [serviceSlug, setServiceSlug] = useState('');
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
+  const [executionOptions, setExecutionOptions] = useState(undefined);
   const [bootstrapSlug, setBootstrapSlug] = useState('');
   const [presetName, setPresetName] = useState('');
   const [showPresetField, setShowPresetField] = useState(false);
@@ -80,6 +82,7 @@ export default function ProviderComposePopover({
     setServiceSlug(initialHarness && initialMethod ? initialService : '');
     setModel('');
     setEffort('');
+    setExecutionOptions(undefined);
     setBootstrapSlug('');
     setPresetName('');
     setShowPresetField(false);
@@ -123,6 +126,7 @@ export default function ProviderComposePopover({
       name: presetName.trim() || undefined,
       model: model || null,
       effort: effort || null,
+      executionOptions,
     });
     onPresetSaved?.(created);
     onClose();
@@ -263,6 +267,9 @@ export default function ProviderComposePopover({
           </FormField>
         )}
 
+        {compositeId && <ExecutionOptionsSelect provider={{ id: compositeId, executionOptionKeys: selectedHarness?.executionOptionKeys }} model={model || null}
+          value={executionOptions} onChange={setExecutionOptions} disabled={saving} className={SELECT_CLASS} />}
+
         {bootstrapEligible && (
           <FormField label={`Credential bootstrap${bootstrapRequired ? ' (required)' : ''}`} className="mb-0">
             <select
@@ -303,7 +310,7 @@ export default function ProviderComposePopover({
               type="button"
               className="flex-1 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:bg-port-border disabled:opacity-50"
               disabled={!canCompose}
-              onClick={() => { onCompose?.(compositeId, { model, effort }); onClose(); }}
+              onClick={() => { onCompose?.(compositeId, { model, effort, executionOptions }); onClose(); }}
             >
               Use once
             </button>

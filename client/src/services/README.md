@@ -32,6 +32,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiCore.js` | `request()` and `uploadBody()` (stream File/Blob multipart; legacy base64 JSON) + stable PortOS-app id. Shared error / toast handling. |
 | `apiBatch.js` | `fetchByIds(path, ids, options)` — batch-fetch records through a list route's `?ids=a,b,c` filter (dedupe, empty-list short-circuit, `{ items }` envelope unwrap). |
 | `actionFeedback.js` | Marks the button whose click/submit started a `request()` as `data-pending` until it settles (never `aria-busy`, which stays component-owned) (styled in `index.css`), and counts those requests for `ActionActivityBar`. Installed once from `main.jsx`; no per-component opt-in. |
+| `executionSelectionCache.js` | Bounded client-local saved selection handoff from a successful save to model hooks while provider lists refresh; no HTTP calls. |
 | `socket.js` | Singleton Socket.IO client over relative path (Tailscale-friendly). |
 | `appUrls.js` | Compute candidate launch URLs for an app from page context. |
 

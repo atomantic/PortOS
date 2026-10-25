@@ -574,6 +574,7 @@ async function queueWorktreeMerge({ agentId, worktreeBranch, originalTask, descr
             providerId: originalTask.metadata.providerId,
             model: originalTask.metadata.model,
             effort: originalTask.metadata.effort,
+            executionOptions: originalTask.metadata.executionOptions,
           }
         }
       });
@@ -1305,6 +1306,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
     if (sourceMeta.model) providerPins.model = sourceMeta.model;
   }
   if (sourceMeta.effort) providerPins.effort = sourceMeta.effort;
+  if (sourceMeta.executionOptions !== undefined) providerPins.executionOptions = sourceMeta.executionOptions;
 
   // Routing key, and the one field here that turns a serialization slip into a
   // dead PR: a follow-up whose `app` doesn't resolve is BLOCKED by

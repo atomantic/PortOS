@@ -1,3 +1,4 @@
+import { resolveExecutionOptions } from './executionOptions.js';
 import { isCompositeProviderId } from './providerRef.js';
 
 export function createProviderCrudService({
@@ -23,18 +24,37 @@ export function createProviderCrudService({
     }
   };
 
+  async function executionSelection(record, providers) {
+    if (!record?.executionSourceProviderId) return record;
+    const id = record.executionSourceProviderId;
+    const source = providers[id] || (typeof resolveCompositeProvider === 'function' && isCompositeProviderId(id)
+      ? await resolveCompositeProvider(id) : null);
+    if (!source || source.executionSourceProviderId) {
+      return { ...record, enabled: false, unavailableReason: 'Execution selection source is unavailable' };
+    }
+    const resolved = { ...source, id: record.id, name: record.name,
+      enabled: source.enabled !== false && record.enabled !== false,
+      executionSourceProviderId: id,
+      executionSelectionDefaults: source.executionOptions,
+      executionSelectionOptions: record.executionOptions,
+      executionOptions: resolveExecutionOptions({ source: 'provider', options: source.executionOptions },
+        { source: 'selection', options: record.executionOptions }).requested };
+    if (source.apiKey) Object.defineProperty(resolved, 'apiKey', { value: source.apiKey, enumerable: false, configurable: true });
+    return resolved;
+  }
+
   return {
     async getAllProviders() {
       const data = await loadProviders();
       return {
         activeProvider: data.activeProvider,
-        providers: Object.values(data.providers).map(provider => withGatewayModelAccess(provider, data.providers))
+        providers: await Promise.all(Object.values(data.providers).map(async provider => withGatewayModelAccess(await executionSelection(provider, data.providers), data.providers)))
       };
     },
 
     async getProviderById(id) {
       const data = await loadProviders();
-      const stored = readProvider(data.providers[id], data.providers);
+      const stored = readProvider(await executionSelection(data.providers[id], data.providers), data.providers);
       if (stored || typeof resolveCompositeProvider !== 'function' || !isCompositeProviderId(id)) return stored;
       return (await resolveCompositeProvider(id)) ?? null;
     },
@@ -42,7 +62,7 @@ export function createProviderCrudService({
     async getActiveProvider() {
       const data = await loadProviders();
       if (!data.activeProvider) return null;
-      return readProvider(data.providers[data.activeProvider], data.providers);
+      return readProvider(await executionSelection(data.providers[data.activeProvider], data.providers), data.providers);
     },
 
     async setActiveProvider(id) {
@@ -50,7 +70,7 @@ export function createProviderCrudService({
       if (!data.providers[id]) return null;
       data.activeProvider = id;
       await saveProviders(data);
-      return data.providers[id];
+      return executionSelection(data.providers[id], data.providers);
     },
 
     async createProvider(providerData) {
@@ -88,6 +108,11 @@ export function createProviderCrudService({
       const data = await loadProviders();
       if (!data.providers[id]) return null;
 
+      if (data.providers[id].executionSourceProviderId && Object.keys(updates).some(key => !['name', 'enabled', 'executionOptions'].includes(key))) {
+        const error = new Error('Edit the source provider to change this execution selection route.');
+        error.status = 400;
+        throw error;
+      }
       const provider = { ...data.providers[id], ...updates, id };
       normalizeClearedFields(provider);
 
@@ -123,7 +148,7 @@ export function createProviderCrudService({
       for (const modeId of removed) delete data.providers[modeId];
 
       if (removed.includes(data.activeProvider)) {
-        const remaining = Object.keys(data.providers);
+        const remaining = Object.keys(data.providers).filter((key) => !(data.providers[key].executionSourceProviderId || data.providers[key].executionSelectionRoot));
         data.activeProvider = remaining.length > 0 ? remaining[0] : null;
       }
 

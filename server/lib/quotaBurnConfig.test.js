@@ -15,6 +15,14 @@ import {
 import { QUOTA_BURN_UNAVAILABLE, quotaBurnStepIsDispatchable } from './quotaBurnTaskRef.js';
 
 describe('normalizeQuotaBurnConfig', () => {
+  it('retains explicit speed through normalized plan save/reload without opting existing steps in', () => {
+    const raw = { id: 'speed-step', taskRef: { kind: 'custom', jobId: 'example-job' }, overrides: { executionOptions: { serviceTier: 'standard' } } };
+    const saved = normalizeQuotaBurnJob(raw, 0);
+    expect(saved.overrides.executionOptions).toEqual({ serviceTier: 'standard' });
+    expect(normalizeQuotaBurnJob(JSON.parse(JSON.stringify(saved)), 0).overrides.executionOptions).toEqual({ serviceTier: 'standard' });
+    expect(normalizeQuotaBurnJob({ ...raw, overrides: {} }, 0).overrides).not.toHaveProperty('executionOptions');
+  });
+
   it('materializes every family so absent is never confused with off', () => {
     const config = normalizeQuotaBurnConfig(undefined);
     expect(Object.keys(config.families).sort()).toEqual([...QUOTA_BURN_FAMILIES].sort());
