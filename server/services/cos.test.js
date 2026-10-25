@@ -2554,7 +2554,7 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     // freed slot with idle-review work before the perpetual task is queued,
     // breaking the back-to-back drain. The handler must chain refill → dequeue.
     const onIdx = COS_SRC.indexOf("cosEvents.on('agent:completed'");
-    const handlerSlice = COS_SRC.slice(onIdx, onIdx + 1400);
+    const handlerSlice = COS_SRC.slice(onIdx, COS_SRC.indexOf('// Create notification when a daily briefing completes', onIdx));
     expect(
       /refillPerpetualForCompletedAgent\(agent\)[\s\S]*\.then\(\s*\(\)\s*=>\s*dequeueNextTask\(/.test(handlerSlice),
       'handler must run dequeueNextTask in a .then() AFTER the refill resolves'
