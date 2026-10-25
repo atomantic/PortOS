@@ -467,6 +467,19 @@ describe('fleet report', () => {
     expect(whole.totals.tokensOut).toBe(7000);
   });
 
+  it('carries a peer\'s media units and long-context subsets through the wire digest', async () => {
+    const usage = usageFixture({ day: '2026-01-15', tokensOut: 100 });
+    const bucket = usage.dailyActivity['2026-01-15'].byProvider.anthropic;
+    Object.assign(bucket, { images: 3, videoSeconds: 12, inputImages: 2, longTokensIn: 40, longTokensOut: 5 });
+    Object.assign(bucket.byModel['claude-opus-5'], { images: 3, videoSeconds: 12, inputImages: 2, longTokensIn: 40, longTokensOut: 5 });
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({ usage: buildUsageDigest(usage, { now: new Date('2026-01-20T00:00:00Z') }) }) } });
+
+    const { data } = await getUsageSnapshot();
+    const stored = data.instances['inst-peer'].usage.dailyActivity['2026-01-15'].byProvider.anthropic;
+    expect(stored).toMatchObject({ images: 3, videoSeconds: 12, inputImages: 2, longTokensIn: 40, longTokensOut: 5 });
+    expect(stored.byModel['claude-opus-5']).toMatchObject({ images: 3, videoSeconds: 12, inputImages: 2, longTokensIn: 40 });
+  });
+
   it('scopes every instance to the same report window', async () => {
     await applyUsageRemote({ instances: { 'inst-peer': peerEntry() } });
     const outside = await getFleetUsage({ from: '2026-09-01', to: '2026-09-30', providers: [] });
