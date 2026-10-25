@@ -111,8 +111,11 @@ async function gitlabDisposition({ number, target, run }) {
         changeRequest: mr.iid, mergeCommit: mr.merge_commit_sha, defaultBranch: repository.default_branch };
     }
   }
-  // GitLab has no typed NOT_PLANNED reason. Verify the actual closer's project
-  // write authority rather than treating labels or agent prose as a disposition.
+  // GitLab's issue response does not distinguish automatic MR closure. Related
+  // MRs with unproven delivery must not fall through to operator authority.
+  if (requests.length) return unverified('merged-delivery-unverified');
+  // Without a related MR, verify the actual closer's project write authority
+  // rather than treating labels or agent prose as a disposition.
   const closerId = issue.closed_by?.id;
   if (!Number.isSafeInteger(closerId) || closerId < 1) return unverified('closure-authority-unverified');
   const member = await read(`${project}/members/all/${closerId}`);

@@ -161,7 +161,7 @@ describe('GitLab selected claim delivery', () => {
     expect(execGlab.mock.calls[0]).toEqual([expect.arrayContaining(['--hostname', target.webHost, '--method', 'GET']),
       '/example/project', undefined, { env: { GITLAB_TOKEN: 'invented-token' } }]);
     closes = [{ ...issue, project_id: 6 }];
-    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'closure-authority-unverified' });
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'merged-delivery-unverified' });
     closes = [];
     expect(await verify()).toMatchObject({ status: 'unverified' });
   });
@@ -170,10 +170,11 @@ describe('GitLab selected claim delivery', () => {
     resolveAppForgeTarget.mockResolvedValue({ tracker: 'gitlab', target: { ...target, forge: 'gitlab' } });
     resolveForgeForRepo.mockResolvedValue({ cli: 'glab' });
     let member = { id: 9, access_level: 30 };
+    let requests = [];
     execGlab.mockImplementation(async args => {
       const endpoint = args.at(-1);
       return JSON.stringify(endpoint.includes('/members/all/') ? member
-        : endpoint.includes('related_merge_requests') ? [] : endpoint.endsWith('/42') ? { ...issue, closed_by: { id: 9 } } : project);
+        : endpoint.includes('related_merge_requests') ? requests : endpoint.endsWith('/42') ? { ...issue, closed_by: { id: 9 } } : project);
     });
     const result = await verify();
     expect(result).toMatchObject({ status: 'verified', issues: [{ issue: 42, disposition: 'operator-closed' }] });
@@ -182,5 +183,8 @@ describe('GitLab selected claim delivery', () => {
     expect(await verify()).toMatchObject({ status: 'unverified', reason: 'closure-authority-unverified' });
     member = { id: 10, access_level: 50 };
     expect(await verify()).toMatchObject({ status: 'unverified', reason: 'closure-authority-unverified' });
+    member = { id: 9, access_level: 40 };
+    requests = [{ ...mr, target_branch: 'release' }];
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'merged-delivery-unverified' });
   });
 });
