@@ -52,6 +52,7 @@ import KeyframePanel from '../components/videoGen/KeyframePanel';
 import AudioPanel from '../components/videoGen/AudioPanel';
 import ExtendPanel from '../components/videoGen/ExtendPanel';
 import IcLoraPanel from '../components/videoGen/IcLoraPanel';
+import ReferenceImagesPanel from '../components/videoGen/ReferenceImagesPanel';
 import AdvancedParamsPanel from '../components/videoGen/AdvancedParamsPanel';
 import RuntimeFingerprint from '../components/videoGen/RuntimeFingerprint';
 import ModelDisclosure from '../components/videoGen/ModelDisclosure';
@@ -286,6 +287,9 @@ export default function VideoGen() {
     icReferenceFile, icReferenceVideoId, icReferenceNames, icReferenceImageFiles,
     pickIcReferenceFile, pickIcReferenceVideoId,
     addIcReferenceImage, updateIcReferenceImage, removeIcReferenceImage,
+    referenceImageFiles, addReferenceImage, updateReferenceImage, removeReferenceImage,
+    referenceVideoIds, maxReferenceVideos, addReferenceVideo, pickReferenceVideo, removeReferenceVideo,
+    referenceAudioFiles, maxReferenceAudios, addReferenceAudio, removeReferenceAudio,
     icStrength, setIcStrength, icSkipStage2, setIcSkipStage2,
     applyRemix, applyFinish, applyResumedParams, buildGeneratePayload,
   } = useVideoGenForm({
@@ -395,6 +399,7 @@ export default function VideoGen() {
     else if (kind === 'last') pickLastImage(filename);
     else if (kind === 'keyframe') updateKeyframe(index, { file: filename });
     else if (kind === 'icReference') updateIcReferenceImage(index, filename);
+    else if (kind === 'reference') updateReferenceImage(index, filename);
   };
 
   const [history, setHistory] = useState([]);
@@ -1562,6 +1567,26 @@ export default function VideoGen() {
               sourceImageFile={sourceImageFile}
               visibleHistory={visibleHistory}
               onPick={handleExtendPick}
+            />
+          )}
+
+          {Number(currentModel?.maxReferenceImages) > 1 && (
+            <ReferenceImagesPanel
+              maxImages={Number(currentModel.maxReferenceImages)}
+              files={referenceImageFiles}
+              onAdd={addReferenceImage}
+              onBrowse={(index) => setGalleryPicker({ kind: 'reference', index })}
+              onRemove={removeReferenceImage}
+              maxVideos={maxReferenceVideos}
+              videoIds={referenceVideoIds}
+              history={visibleHistory}
+              onAddVideo={addReferenceVideo}
+              onPickVideo={pickReferenceVideo}
+              onRemoveVideo={removeReferenceVideo}
+              maxAudios={maxReferenceAudios}
+              audioFiles={referenceAudioFiles}
+              onAddAudio={addReferenceAudio}
+              onRemoveAudio={removeReferenceAudio}
             />
           )}
 

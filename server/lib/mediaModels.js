@@ -203,6 +203,97 @@ const FASTH3_SOURCE_ENTRIES = FASTH3_SOURCE_FORMATS.map(({ format, memoryGb, lab
   supportsDisableAudio: false,
 }));
 
+// FastH3 Omni (Ref2VA): a reference-conditioned PDD student that turns a prompt
+// plus ordered image references (up to 9, including the first-frame input) into
+// one joint video + audio clip. FastVideo's MLX runtime needs five pinned pieces
+// the export alone does not carry: the BF16 export (the model repo), the base
+// snapshot's text encoder / tokenizer / processor / audio VAE, the LightVAE
+// reference encoder and the FastH3 quality decoder. Each is an exact file list,
+// not a snapshot: the QAD repo also holds ~75 GB of CUDA transformer variants
+// the MLX path cannot read.
+const FASTH3_OMNI_BASE_REPO = 'FastVideo/FastH3-Omni-NVFP4-QAD';
+const FASTH3_OMNI_MAX_IMAGES = 9;
+const FASTH3_OMNI_MAX_VIDEOS = 3;
+const FASTH3_OMNI_MAX_AUDIOS = 3;
+const FASTH3_OMNI_BASE_FILES = Object.freeze([
+  'audio_vae/config.json',
+  'audio_vae/diffusion_pytorch_model.safetensors',
+  'processor/chat_template.json',
+  'processor/merges.txt',
+  'processor/preprocessor_config.json',
+  'processor/tokenizer.json',
+  'processor/tokenizer_config.json',
+  'processor/video_preprocessor_config.json',
+  'processor/vocab.json',
+  'text_encoder/chat_template.json',
+  'text_encoder/config.json',
+  'text_encoder/merges.txt',
+  'text_encoder/model.safetensors.index.json',
+  ...[1, 2, 3, 4].map((i) => `text_encoder/model-0000${i}-of-00004.safetensors`),
+  'text_encoder/preprocessor_config.json',
+  'text_encoder/tokenizer.json',
+  'text_encoder/tokenizer_config.json',
+  'text_encoder/video_preprocessor_config.json',
+  'text_encoder/vocab.json',
+  'tokenizer/merges.txt',
+  'tokenizer/tokenizer.json',
+  'tokenizer/tokenizer_config.json',
+  'tokenizer/vocab.json',
+  'vae/config.json',
+]);
+
+const FASTH3_OMNI_ENTRY = {
+  id: 'fasth3_omni_int6',
+  name: 'FastH3 Omni — MLX INT6 + VSA (reference images → video + audio, ~92 GB download, 48+ GB RAM, 8-step)',
+  repo: 'FastVideo/FastVideo-FastH3-Omni-8-Step-V1',
+  revision: '53e0d26a1691aa473b6262d8196a8feb2c297df0',
+  runtime: 'fastvideo',
+  fastvideoFamily: 'fasth3omni',
+  fastvideoMlxFormat: 'int6',
+  fastvideoVsa: true,
+  maxReferenceImages: FASTH3_OMNI_MAX_IMAGES,
+  maxReferenceVideos: FASTH3_OMNI_MAX_VIDEOS,
+  maxReferenceAudios: FASTH3_OMNI_MAX_AUDIOS,
+  requiredWeights: [
+    {
+      role: 'base',
+      repo: FASTH3_OMNI_BASE_REPO,
+      revision: 'f01e6a23ac6066aa9eb622cf94b6259442e70ec2',
+      files: FASTH3_OMNI_BASE_FILES,
+    },
+    {
+      role: 'vaeDecoder',
+      repo: 'FastVideo/FastH3-NVFP4-VAE-Decoder',
+      revision: 'bd0c248f2a0f57ca643b3df2ac1f375fa55101fb',
+      files: ['quality-36L/decoder-nvfp4.safetensors'],
+    },
+    {
+      role: 'vaeEncoder',
+      repo: 'lightx2v/LightVAE',
+      revision: '4925ea978147b9de492d7a5fd4f9c6d1854ca1cc',
+      files: ['lightvae-lite-h3-encoder.safetensors'],
+    },
+  ],
+  // Reference-conditioned only: the model has no text-only workflow, and the
+  // first-frame input is the first of the ordered references.
+  supportedModes: ['image'],
+  defaultWidth: 832,
+  defaultHeight: 480,
+  defaultFrames: 124,
+  frameOptions: [...FASTH3_OUTPUT_PROFILE.frameOptions],
+  fpsOptions: [...FASTH3_OUTPUT_PROFILE.fpsOptions],
+  resolutionStep: FASTH3_OUTPUT_PROFILE.resolutionStep,
+  resolutionOptions: FASTH3_OUTPUT_PROFILE.resolutionOptions.map((preset) => ({ ...preset })),
+  memoryGb: 48,
+  steps: 8,
+  guidance: 1.0,
+  samplerLocked: true,
+  samplerNote: 'FastH3 Omni is an 8-step distilled reference-to-video+audio model: the input image, up to 8 more reference images, up to 3 reference clips and up to 3 voice clips condition the clip, with 80% sparse attention. First use converts the BF16 transformer to an MLX INT6 DiT locally (a few minutes, once), after which the 66 GB BF16 transformer can be deleted. Renders video with audio at a fixed 24 fps.',
+  supportsNegativePrompt: false,
+  supportsTiling: false,
+  supportsDisableAudio: false,
+};
+
 // The MLX entry's output profile: the shared canvas above PLUS the upgrade
 // machinery migration 267 and `upgradeMiniMaxH3OutputControls` key off (the id,
 // the repo it was checked against, and the frame list it supersedes). That
@@ -850,6 +941,8 @@ const DEFAULT_REGISTRY = {
         steps: 8,
         samplerNote: 'Quality option: 8 steps with 80% sparse attention, reference implementation. Requires an updated FastVideo runtime with VSA support. INT6 and INT8 share one ~147.9 GB source download; first use converts the DiT locally with routing weights retained. Not a real-time model.',
       })),
+      // FastH3 Omni reference-to-video+audio (FastVideo PR #2000).
+      structuredClone(FASTH3_OMNI_ENTRY),
       // FastH3 Preview v1 Dense / Data-Free, packed for MLX (#5860). Same
       // `fastvideo` venv and checkout as FastMetal above, but a different entry
       // script and argv shape — `fastvideoFamily` is what routes it, see

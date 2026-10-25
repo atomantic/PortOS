@@ -65,7 +65,7 @@ import { PREVIEW_UPLOAD_FIELDS, previewVideoPrompt } from '../services/videoGen/
 import { resolveReactorApiKey, mintReactorToken } from '../services/videoGen/reactor.js';
 import { isVideoModeUsable, VIDEO_GEN_MODE } from '../services/videoGen/modes.js';
 import { MAX_VIDEO_BATCH_SIZE } from '../services/videoGen/batch.js';
-import { VIDEO_GEN_LOCAL_ONLY_FIELDS } from '../services/videoGen/requestFields.js';
+import { VIDEO_GEN_LOCAL_ONLY_FIELDS, REFERENCE_AUDIO_FIELDS } from '../services/videoGen/requestFields.js';
 import { attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
 import {
@@ -171,13 +171,14 @@ export const isAudioMime = (mime, filename) => {
 
 // FFLF accepts up to two image uploads (start and end frame); a2v takes one
 // audio upload (audioFile); the IC-LoRA remix modes take one reference video
-// upload (icReference). Files stream to disk without a file-size cap.
+// upload (icReference); FastH3 Omni takes up to three voice clips in indexed
+// slots (REFERENCE_AUDIO_FIELDS). Files stream to disk without a file-size cap.
 // Per-fieldname mime filtering rejects mismatched parts
 // up-front so a stray .mp4 drag-drop can't get staged under these fields.
-const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile', 'icReference', 'runwayVideo', 'runwayCharacterVideo'], {
+const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'], {
   fileFilter: (_req, file, cb) => {
     const isImageField = file.fieldname === 'sourceImage' || file.fieldname === 'lastImage';
-    const isAudioField = file.fieldname === 'audioFile';
+    const isAudioField = file.fieldname === 'audioFile' || REFERENCE_AUDIO_FIELDS.includes(file.fieldname);
     const isVideoField = ['icReference', 'runwayVideo', 'runwayCharacterVideo'].includes(file.fieldname);
     const okImage = isImageField && file.mimetype.startsWith('image/');
     const okAudio = isAudioField && isAudioMime(file.mimetype, file.originalname);
@@ -214,6 +215,9 @@ const optionalInt = (min, max, label) => z.preprocess(
 // the schema before the per-mode assertion below can speak. Per-weight bounds are
 // still enforced against the mode's own spec (assertIcReferenceCount).
 const MAX_IC_REFERENCES = Math.max(...listIcLoraRemixModes().map((s) => s.maxReferences));
+
+const MAX_REFERENCE_IMAGE_FILES = 16;
+const MAX_REFERENCE_CLIP_IDS = 8;
 
 // Chain ceiling — 8 × ~5min ≈ 40min on an M3 Max keeps the worst-case wall time
 // bounded. Shared by `chunks` and the per-chunk prompt list so the two can never
@@ -430,6 +434,17 @@ const generateBodySchema = z.object({
     // rule is asserted below against the mode's own spec.
     z.array(z.string().min(1).max(512)).min(1).max(MAX_IC_REFERENCES).optional(),
   ),
+  // Ordered gallery stills that join the first-frame input as extra references
+  // for a reference-to-video model. Gallery-only like `keyframes`; the coarse
+  // bound below only stops an absurd payload, and the real per-model ceiling is
+  // asserted in prepareVideoGenParams against the model's `maxReferenceImages`.
+  referenceImageFiles: z.preprocess(
+    listPreprocess,
+    z.array(z.string().min(1).max(512)).min(1).max(MAX_REFERENCE_IMAGE_FILES).optional(),
+  ),
+  // Prior renders used as ordered video references (coarse bound; the model's
+  // `maxReferenceVideos` is asserted in prepareVideoGenParams).
+  referenceVideoIds: z.preprocess(listPreprocess, z.array(z.string().guid()).min(1).max(MAX_REFERENCE_CLIP_IDS).optional()),
   // Reference-video conditioning strength for the IC-LoRA channel. Distinct
   // from the IC-LoRA's own fusion strength (fixed at 1.0 server-side) and from
   // `icAttentionStrength`, which scales the conditioning ATTENTION.
@@ -1139,6 +1154,17 @@ const pickJobParams = (job) => {
     if (names.length && icLoraSpecForMode(params.mode)?.referenceKind === 'image') {
       out.icReferenceImageFiles = names;
     }
+  }
+  // Same display-only echo as the IC references above: basenames only. They ARE
+  // the gallery filenames, so the resuming form can repopulate its picker.
+  if (Array.isArray(params.referenceAudioPaths) && params.referenceAudioPaths.length) {
+    out.referenceAudioNames = params.referenceAudioPaths.filter((p) => typeof p === 'string' && p).map((p) => basename(p));
+  }
+  if (Array.isArray(params.referenceVideoPaths) && params.referenceVideoPaths.length) {
+    out.referenceVideoNames = params.referenceVideoPaths.filter((p) => typeof p === 'string' && p).map((p) => basename(p));
+  }
+  if (Array.isArray(params.referenceImagePaths) && params.referenceImagePaths.length) {
+    out.referenceImageFiles = params.referenceImagePaths.filter((p) => typeof p === 'string' && p).map((p) => basename(p));
   }
   // A federated render's prompt and model live only inside the versioned marker
   // — the top-level copies are blanked so a downgraded build fails closed

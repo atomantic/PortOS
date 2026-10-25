@@ -120,6 +120,9 @@ export function useVideoGenForm({
     i2vReferenceMode, setI2vReferenceMode,
     icReferenceFile, setIcReferenceFile,
     icReferenceImageFiles, setIcReferenceImageFiles,
+    referenceImageFiles, setReferenceImageFiles,
+    referenceVideoIds, setReferenceVideoIds,
+    referenceAudioFiles, setReferenceAudioFiles,
     icReferenceNames, setIcReferenceNames,
     icReferenceVideoId, setIcReferenceVideoId,
     icSkipStage2, setIcSkipStage2,
@@ -852,6 +855,23 @@ export function useVideoGenForm({
   const removeIcReferenceImage = (i) => setIcReferenceImageFiles((prev) => (
     prev.length <= icSpec.minReferences ? prev : prev.filter((_, idx) => idx !== i)
   ));
+  // Extra reference rows for a reference-to-video model. The model's
+  // `maxReferenceImages` counts the first-frame input, so rows cap one lower.
+  const maxExtraReferenceImages = Math.max(0, (Number(currentModel?.maxReferenceImages) || 0) - 1);
+  const addReferenceImage = () => setReferenceImageFiles((prev) => (
+    prev.length >= maxExtraReferenceImages ? prev : [...prev, '']
+  ));
+  const updateReferenceImage = (i, file) => setReferenceImageFiles((prev) => (
+    prev.map((f, idx) => (idx === i ? file : f))
+  ));
+  const removeReferenceImage = (i) => setReferenceImageFiles((prev) => prev.filter((_, idx) => idx !== i));
+  const maxReferenceVideos = Number(currentModel?.maxReferenceVideos) || 0;
+  const maxReferenceAudios = Number(currentModel?.maxReferenceAudios) || 0;
+  const addReferenceVideo = () => setReferenceVideoIds((prev) => (prev.length >= maxReferenceVideos ? prev : [...prev, '']));
+  const pickReferenceVideo = (i, id) => setReferenceVideoIds((prev) => prev.map((v, idx) => (idx === i ? id : v)));
+  const removeReferenceVideo = (i) => setReferenceVideoIds((prev) => prev.filter((_, idx) => idx !== i));
+  const addReferenceAudio = (file) => setReferenceAudioFiles((prev) => (prev.length >= maxReferenceAudios ? prev : [...prev, file]));
+  const removeReferenceAudio = (i) => setReferenceAudioFiles((prev) => prev.filter((_, idx) => idx !== i));
   // Upload and history pick are mutually exclusive server-side
   // (IC_LORA_REFERENCE_CONFLICT), so setting one clears the other — along with
   // the in-flight render's read-only name hint, which would otherwise name a
@@ -1326,6 +1346,9 @@ export function useVideoGenForm({
     if (Array.isArray(p.icReferenceImageFiles) && p.icReferenceImageFiles.length) {
       setIcReferenceImageFiles(p.icReferenceImageFiles);
     }
+    if (Array.isArray(p.referenceImageFiles) && p.referenceImageFiles.length) {
+      setReferenceImageFiles(p.referenceImageFiles);
+    }
     // Restore the LoRA picker — params carry { filename, scale } basenames;
     // resolve the display name from the loaded library (falls back to the
     // filename if the library hasn't loaded yet or the LoRA was deleted).
@@ -1365,7 +1388,7 @@ export function useVideoGenForm({
     keyframesActive, keyframes, loraFamily, selectedLoras,
     lastImageFile, lastImageUpload, extendFromVideoId, audioFile,
     icModeActive, icImageKind, icReferenceFile, icReferenceVideoId,
-    icReferenceImageFiles, icStrength, icSkipStage2,
+    icReferenceImageFiles, icStrength, icSkipStage2, referenceImageFiles, referenceVideoIds, referenceAudioFiles,
     chainingActive, chunks, chunkPrompts, contextFrames,
   };
   const { buildGeneratePayload, envelopedPrompt } = useVideoGenSubmitFlow(submissionState);
@@ -1440,6 +1463,9 @@ export function useVideoGenForm({
     icReferenceFile, icReferenceVideoId, icReferenceNames, icReferenceImageFiles,
     pickIcReferenceFile, pickIcReferenceVideoId,
     addIcReferenceImage, updateIcReferenceImage, removeIcReferenceImage,
+    referenceImageFiles, addReferenceImage, updateReferenceImage, removeReferenceImage,
+    referenceVideoIds, maxReferenceVideos, addReferenceVideo, pickReferenceVideo, removeReferenceVideo,
+    referenceAudioFiles, maxReferenceAudios, addReferenceAudio, removeReferenceAudio,
     icStrength, setIcStrength,
     icSkipStage2, setIcSkipStage2,
     // Prefill + submit

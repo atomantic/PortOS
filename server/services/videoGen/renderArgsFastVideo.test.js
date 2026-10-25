@@ -204,3 +204,62 @@ describe('buildFastVideoArgs — upstream FastH3 snapshot', () => {
     expect(args).not.toContain('--mlx-checkpoint');
   });
 });
+
+describe('FastH3 Omni argv', () => {
+  const omni = {
+    id: 'fasth3_omni_example',
+    name: 'Example Omni Profile',
+    runtime: 'fastvideo',
+    fastvideoFamily: 'fasth3omni',
+    fastvideoMlxFormat: 'int6',
+    repo: 'example-org/example-omni',
+    supportedModes: ['image'],
+  };
+  const assets = {
+    baseRoot: '/fixture/cache/omni-base',
+    vaeDecoder: '/fixture/cache/decoder-nvfp4.safetensors',
+    vaeEncoder: '/fixture/cache/lightvae-encoder.safetensors',
+  };
+  const omniBase = {
+    ...base, model: omni, mode: 'image', steps: 8,
+    fastvideoModelPath: '/fixture/cache/omni', fastvideoOmniAssets: assets,
+    sourceImagePath: '/fixture/in/first.png',
+  };
+
+  it('routes the omni family and hands the helper every downloaded piece plus ordered references', () => {
+    expect(fastvideoFamily(omni)).toBe('fasth3omni');
+    const { args } = buildFastVideoArgs({
+      ...omniBase, referenceImagePaths: ['/fixture/in/second.png', '/fixture/in/third.png'],
+    });
+    expect(flagValue(args, '--family')).toBe('fasth3omni');
+    expect(flagValue(args, '--mlx-format')).toBe('int6');
+    expect(flagValue(args, '--omni-base-root')).toBe(assets.baseRoot);
+    expect(flagValue(args, '--vae-decoder')).toBe(assets.vaeDecoder);
+    expect(flagValue(args, '--vae-encoder')).toBe(assets.vaeEncoder);
+    expect(flagValue(args, '--image')).toBe('/fixture/in/first.png');
+    expect(args.flatMap((arg, i) => (arg === '--reference-image' ? [args[i + 1]] : [])))
+      .toEqual(['/fixture/in/second.png', '/fixture/in/third.png']);
+    expect(args).not.toContain('--mlx-checkpoint');
+    expect(args).not.toContain('--vsa');
+  });
+
+  it('appends clips then voices after the images so the helper preserves kind order', () => {
+    const { args } = buildFastVideoArgs({
+      ...omniBase, referenceImagePaths: ['/fixture/in/second.png'],
+      referenceVideoPaths: ['/fixture/v/one.mp4'], referenceAudioPaths: ['/fixture/a/voice.wav'],
+    });
+    expect(args.indexOf('--reference-image')).toBeLessThan(args.indexOf('--reference-video'));
+    expect(args.indexOf('--reference-video')).toBeLessThan(args.indexOf('--reference-audio'));
+    expect(flagValue(args, '--reference-audio')).toBe('/fixture/a/voice.wav');
+  });
+
+  it('refuses to render before its weights are resolved', () => {
+    expect(() => buildFastVideoArgs({ ...omniBase, fastvideoOmniAssets: null }))
+      .toThrow(/missing its downloaded weights/);
+  });
+
+  it('is reference-conditioned only: text mode is rejected by the mode contract', () => {
+    expect(() => buildFastVideoArgs({ ...omniBase, mode: 'text', sourceImagePath: null }))
+      .toThrow();
+  });
+});
