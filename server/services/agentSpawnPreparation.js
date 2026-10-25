@@ -1,3 +1,4 @@
+import { isRetirementOnlyRecovery, settleRetirementRecoveryBeforeSpawn } from './retirementRecoveryCompletion.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState } from './cosState.js';
 import { hasActiveTaskOwner } from './agentState.js';
@@ -121,7 +122,10 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     return null;
   }
 
-  if (task.metadata?.retirementReview && await (await import('./retirementReviewCompletion.js')).settleRetirementReviewBeforeSpawn(task)) return null;
+  if (isRetirementOnlyRecovery(task) && await settleRetirementRecoveryBeforeSpawn(task)) {
+    await context.cleanupOnError('retirement dispatch settled or changed');
+    return null;
+  }
 
   const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
   if (totalSpawns >= MAX_TOTAL_SPAWNS) {

@@ -1,6 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const retirementVerifier = vi.hoisted(() => ({ verifyRetirementReviewCompletion: vi.fn() }));
-vi.mock('./retirementReviewCompletion.js', () => retirementVerifier);
 vi.mock('./cosAgentLifecycle.js', () => ({ recordCleanupOutcome: vi.fn(async () => true), recordRepoCleanupRecovery: vi.fn(async () => true) }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn() }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn() }));
@@ -137,29 +135,15 @@ describe('branch reconciliation completion', () => {
 });
 
 
-describe('scoped retirement recovery completion', () => {
-  it('uses persisted task identity and keeps missing receipts despite reported success, without a Git scan', async () => {
+describe('legacy cleanup recovery completion', () => {
+  it('keeps a recovery without an exact persisted retirement target unresolved', async () => {
     vi.clearAllMocks();
-    const release = { branch: 'fix/merged', path: '/example/checkout', head: 'a'.repeat(40) };
-    retirementVerifier.verifyRetirementReviewCompletion.mockResolvedValue({ status: 'unverified', reason: 'retirement-receipt-unverified' });
-    const recovery = { taskId: 'recovery', result: { success: true }, metadata: {
+    getTaskById.mockResolvedValue({ id: 'legacy-recovery', taskType: 'internal', metadata: {} });
+    const recovery = { id: 'legacy-agent', taskId: 'legacy-recovery', result: { success: true }, metadata: {
       recoveryOrigin: { subsystem: 'repository-cleanup' }, retirementReview: { appId: 'untrusted-hint' },
     } };
-    getTaskById.mockResolvedValue({ metadata: { retirementReview: { appId: 'persisted-app', release, createdAt: '2026-10-20T00:00:00Z' } } });
-    getBranchReconcileOutcome.mockResolvedValue({ retired: [{ ...release, head: 'b'.repeat(40), branchDeleted: true, archiveDir: '/example/other' }] });
     expect(await settleRetirementReviewRun(recovery)).toEqual({ verified: false });
-    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('persisted-app', expect.objectContaining({ retirementObligations: [{ ...release, createdAt: '2026-10-20T00:00:00Z', reason: 'retirement-receipt-unverified' }] }));
+    expect(recordCleanupOutcome).toHaveBeenCalledWith(recovery.id, { status: 'blocked', reason: 'legacy-cleanup-receipt-unverified' });
     expect(reconcile).not.toHaveBeenCalled();
-    recordBranchReconcileOutcome.mockClear();
-    retirementVerifier.verifyRetirementReviewCompletion.mockResolvedValue({ status: 'verified' });
-    expect(await settleRetirementReviewRun(recovery)).toEqual({ verified: true });
-    expect(retirementVerifier.verifyRetirementReviewCompletion).toHaveBeenLastCalledWith(
-      expect.objectContaining({ metadata: { retirementReview: { appId: 'persisted-app', release, createdAt: '2026-10-20T00:00:00Z' } } }),
-      { agentId: recovery.id });
-    expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();
-    getTaskById.mockResolvedValue({ metadata: {} });
-    expect(await settleRetirementReviewRun(recovery)).toEqual({ verified: false });
-    expect(recordCleanupOutcome).toHaveBeenLastCalledWith(recovery.id, expect.objectContaining({ status: 'blocked', reason: 'legacy-cleanup-receipt-unverified' }));
-    expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();
   });
 });

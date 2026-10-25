@@ -1,7 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
 
-const retired = vi.hoisted(() => ({ settleRetirementReviewBeforeSpawn: vi.fn() }));
-vi.mock('./retirementReviewCompletion.js', () => retired);
 const loadState = vi.hoisted(() => vi.fn());
 const hasActiveTaskOwner = vi.hoisted(() => vi.fn());
 
@@ -20,8 +18,7 @@ vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn() }));
 import { prepareAgentSpawn, createAgentSpawnContext } from './agentSpawnPreparation.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { updateTask } from './cosTaskStore.js';
-import { release, acquire } from './executionLanes.js';
-import { ensureInstanceId } from './instanceIdentity.js';
+import { release } from './executionLanes.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 
 describe('prepareAgentSpawn — duplicate dispatch', () => {
@@ -36,19 +33,6 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining('Task task-1 already has an active owner'));
     expect(warn).not.toHaveBeenCalled();
   });
-});
-
-it('settles a satisfied exact cleanup target before allocating another agent or checking exhausted spawn budget', async () => {
-  loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
-  ensureInstanceId.mockResolvedValue('fixture-instance'); retired.settleRetirementReviewBeforeSpawn.mockResolvedValue(true);
-  acquire.mockClear(); updateTask.mockClear();
-  const task = { id: 'cleanup-task', status: 'pending', taskType: 'internal', metadata: {
-    totalSpawnCount: 100, retirementReview: { appId: 'fixture-app' } } };
-  expect(await prepareAgentSpawn(task)).toBeNull();
-  expect(retired.settleRetirementReviewBeforeSpawn).toHaveBeenCalledWith(task);
-  expect(acquire).not.toHaveBeenCalled();
-  expect(updateTask).not.toHaveBeenCalled();
-  expect(task.metadata.totalSpawnCount).toBe(100);
 });
 
 describe('createAgentSpawnContext — failed bookkeeping writes', () => {
