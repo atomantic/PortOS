@@ -192,6 +192,25 @@ function completedDetachedSiblingCapture(policy, input) {
 
 const completedDetachedSibling = (policy, input) => Boolean(completedDetachedSiblingCapture(policy, input));
 
+function separatelyDeliveredCheckout(policy, input) {
+  const forge = input.retirementForge;
+  if (forge?.scopeProof !== 'represented-detached-head' || forge.detachedRepresentation?.sourceHead !== input.tip
+    || forge.detachedRepresentation.deliveredHead !== input.verifiedPrHead
+    || completedDetachedSibling(policy, input) || policy.resumedCleanup
+    || policy.agent.status !== 'completed' || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
+    || retirementPr(policy) !== input.prUrl || !/^[a-f0-9]{64}$/.test(input.detachedCheckoutIdentity || '')) return null;
+  const rows = policy.agent.metadata?.completedCheckouts?.filter(row => completedCheckoutReceiptValid(policy.agent, row)
+    && samePath(row.repoPath, input.repoPath) && row.branch === input.branch
+    && samePath(row.path, policy.agent.metadata.workspacePath) && !sameReviewedPath(row.path, input.checkoutPath, input)
+    && row.incarnation?.pointer && createHash('sha256')
+      .update(JSON.stringify(['dev', 'ino', 'birthtimeNs'].map(key => row.incarnation.pointer[key])))
+      .digest('hex') !== input.detachedCheckoutIdentity
+    && input.detachedDeliveredCaptures?.some(proof => proof.agentId === policy.agent.id
+      && proof.capturedHead === row.head && proof.capturedAt === row.capturedAt && proof.path === row.path
+      && proof.detachedCheckoutIdentity === input.detachedCheckoutIdentity && isDeepStrictEqual(proof.incarnation, row.incarnation)));
+  return rows?.length === 1 ? rows[0] : null;
+}
+
 function reviewedIncarnation(input, policies) {
   if (!isAbsolute(input.checkoutPath || '') || samePath(input.checkoutPath, input.repoPath)
     || !input.prUrl || input.verifiedPrHead !== input.tip
@@ -319,7 +338,7 @@ export function reviewedRetirementPolicy(input) {
   const incarnation = reviewedIncarnation(input, resumed);
   const policies = incarnation?.current || resumed;
   if (policies.some(p => p.completion === PR_COMPLETIONS.LEAVE_OPEN)) return { reason: held };
-  if (policies.some(p => p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input)
+  if (policies.some(p => !separatelyDeliveredCheckout(p, input) && (p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input)
     && !reviewedOrphanCheckout(p, input) && !completedDetachedSibling(p, input) && !continuedDelivery(p, input) && !p.resumedCleanup)
     || (p.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
       && !(p.completion === PR_COMPLETIONS.MERGE_ON_GREEN && continuedDelivery(p, input)))
@@ -327,13 +346,14 @@ export function reviewedRetirementPolicy(input) {
       && ((!incarnation && !completedDetachedSibling(p, input)
         && !(input.detachedCheckoutIdentity && p.resumedCleanup?.detachedCheckoutIdentity === input.detachedCheckoutIdentity)) || retirementPr(p) !== input.prUrl))
     || (reviewTarget(p) && (reviewTarget(p).branch !== input.branch || (p.prUrl && p.prUrl !== reviewTarget(p).url)))
-    || (incarnation && p.tip && p.tip !== input.tip && !continuedDelivery(p, input) && !p.resumedCleanup))) {
+    || (incarnation && p.tip && p.tip !== input.tip && !continuedDelivery(p, input) && !p.resumedCleanup)))) {
     return { reason: 'retirement-policy-not-legacy-completed' };
   }
   return { reason: null, ...(input.integratedCleanupHead && { integratedCleanupHead: input.integratedCleanupHead }), policies: policies.map(p => ({
     id: p.agent.id || p.agent.agentId, startedAt: p.agent.startedAt,
     completedAt: p.agent.completedAt, status: p.agent.status, success: p.agent.result.success,
     ...(p.resumedCleanup && { resumedCleanup: p.resumedCleanup }),
+    ...(separatelyDeliveredCheckout(p, input) && { retainedSiblingObligation: separatelyDeliveredCheckout(p, input) }),
     ...(continuedDelivery(p, input) && { continuedDelivery: continuedDelivery(p, input) }),
     ...(reviewedOrphanCheckout(p, input) && { orphanedExecution: true }),
     ...(completedDetachedSibling(p, input) && { ...(p.agent.result?.orphaned === true ? { orphanedSibling: true } : { completedSibling: true }), detachedCheckoutIdentity: input.detachedCheckoutIdentity }),

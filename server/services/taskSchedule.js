@@ -1035,7 +1035,7 @@ export async function recordSupersededCheckoutPreservation(appId, release, revie
  * where its archive went. Status is untouched: only the next sweep can say the
  * repository converged.
  */
-export async function recordHeldCheckoutRetirement(appId, { path, branch, branchDeleted, head, archiveDir, checkoutIdentity, checkoutOnly = false, supersessionDigest = null }) {
+export async function recordHeldCheckoutRetirement(appId, { path, branch, branchDeleted, head, archiveDir, checkoutIdentity, checkoutOnly = false, supersessionDigest = null, validationEvidence = null }) {
   // Only a branchless checkout can be settled without a deleted branch; the
   // receipt then records exactly that and never claims a deletion.
   const checkoutOnlyReceipt = checkoutOnly === true && !branch && branchDeleted !== true;
@@ -1074,6 +1074,9 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
       // later inventory row can match the receipt that already settled this tuple.
       const prior = evidence[receiptId];
       if (prior && checkoutIdentity && !prior.checkoutIdentity) evidence[receiptId] = { ...prior, checkoutIdentity };
+      if (evidence[receiptId] && validationEvidence && !evidence[receiptId].validationEvidence) {
+        evidence[receiptId] = { ...evidence[receiptId], validationEvidence };
+      }
       const changed = JSON.stringify(receipts) !== JSON.stringify(outcome.retirementReceiptIdentities || {})
         || JSON.stringify(evidence) !== JSON.stringify(outcome.retirementReceiptEvidence || {});
       if (changed) record.branchReconcileOutcome = { ...outcome, retirementReceiptIdentities: receipts, retirementReceiptEvidence: evidence };
@@ -1082,6 +1085,7 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     const retiredAt = new Date().toISOString();
     if (receiptId) receipts[receiptId] = retiredAt;
     const receipt = { path, ...(branch && { branch }), head,
+      ...(validationEvidence && { validationEvidence }),
       ...(supersessionDigest && outcome.supersededSourceEvidence?.[supersessionDigest]
         && { disposition: 'superseded-preserved', supersessionDigest }), branchDeleted: checkoutOnlyReceipt ? false : branchDeleted, archiveDir: recordedArchive, retiredAt,
       ...(checkoutOnlyReceipt && { checkoutOnly: true }), ...(checkoutIdentity && { checkoutIdentity }) };
