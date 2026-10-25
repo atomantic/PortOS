@@ -131,7 +131,7 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
       {quota.metrics?.length > 0 && (
         <div className="space-y-1.5 sm:space-y-2">
           {availablePeriods.length > 1 && (
-            <div className="flex items-center gap-1" role="group" aria-label="Usage period">
+            <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Usage period">
               {availablePeriods.map((p) => {
                 const active = selectedPeriod === p.key;
                 return (
@@ -139,7 +139,7 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
                     key={p.key}
                     type="button"
                     onClick={() => setSelectedPeriod(p.key)}
-                    className={`px-2 py-0.5 rounded text-[10px] sm:text-xs font-medium transition-colors ${
+                    className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-xs font-medium transition-colors ${
                       active
                         ? 'bg-port-accent text-white shadow-xs'
                         : 'text-gray-400 hover:text-white bg-port-bg border border-port-border'

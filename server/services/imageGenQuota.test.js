@@ -382,4 +382,24 @@ describe('getImageGenQuota', () => {
     expect(resetCard.period).toBe('reset');
     expect(resetCard.metrics[0].value).toBe('1 render · reset');
   });
+
+  it('reconciles reset boundary when rendering recovers early before forecasted reset', async () => {
+    const forecastedReset = now + 2 * 60 * 60 * 1000;
+    const earlyRecoveryTime = now - 30 * 60 * 1000;
+    // Failed render with forecasted reset 2 hours into future
+    await recordImageGenOutcome({
+      mode: 'agy',
+      ok: false,
+      error: `quota will reset in approximately 2 hours (around ${new Date(forecastedReset).toISOString()})`,
+      at: now - 60 * 60 * 1000,
+    });
+    // Early successful render before forecastedReset
+    await recordImageGenOutcome({ mode: 'agy', ok: true, at: earlyRecoveryTime });
+
+    const card = await getImageGenQuota({ enabledModes: ['agy'], now });
+    const metric = card.metrics[0];
+    expect(metric.periods.reset).toBeDefined();
+    expect(metric.periods.reset.count).toBe(1);
+    expect(metric.periods.reset.value).toBe('1 render · reset');
+  });
 });

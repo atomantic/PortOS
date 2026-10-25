@@ -152,8 +152,14 @@ export async function recordImageGenOutcome({ mode, ok, error = '', at = Date.no
     if (ok) {
       // A render that succeeded proves the backend is serving again — clear a
       // block that outlived its stated reset (providers round "approximately").
-      if (entry.blockedUntil && (!entry.lastResetAt || entry.blockedUntil > entry.lastResetAt)) {
-        entry.lastResetAt = entry.blockedUntil;
+      if (entry.blockedUntil || entry.blockedAt) {
+        if (entry.blockedUntil && at >= entry.blockedUntil) {
+          entry.lastResetAt = Math.max(entry.lastResetAt || 0, entry.blockedUntil);
+        } else {
+          // Early recovery before forecasted reset (or block without stated reset):
+          // the reset occurred at or before this successful render.
+          entry.lastResetAt = at;
+        }
       }
       entry.blockedAt = null;
       entry.blockedUntil = null;
@@ -345,7 +351,9 @@ export async function getImageGenQuota({ enabledModes = [], now = Date.now(), pe
       },
     };
 
-    const lastReset = entry.lastResetAt ?? (entry.blockedUntil && now >= entry.blockedUntil ? entry.blockedUntil : null);
+    const lastReset = (entry.lastResetAt && entry.lastResetAt <= now)
+      ? entry.lastResetAt
+      : (entry.blockedUntil && now >= entry.blockedUntil ? entry.blockedUntil : null);
     if (lastReset && lastReset <= now) {
       const recentReset = allRenders.filter((r) => r.at >= lastReset);
       const failedReset = recentReset.filter((r) => !r.ok).length;
