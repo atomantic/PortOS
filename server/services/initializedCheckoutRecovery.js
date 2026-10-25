@@ -221,7 +221,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       checkoutIncarnation = generation.incarnation;
       return ensureOwner(ctx, release, true, { forge: { prUrl }, checkoutIncarnation });
     });
-    const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release, requireOwnership: true,
+    const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release, requireOwnership: true, retirementOnly: true,
       ...(wholeCheckout && { wholeCheckout: true }) });
     const facts = await forge(ctx, release, prUrl);
     const base = await comparison(ctx, release, prUrl, snapshot, policy, facts);
