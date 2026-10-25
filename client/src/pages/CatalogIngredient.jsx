@@ -771,7 +771,7 @@ function IngredientEditor() {
             className="ml-2 text-port-accent hover:underline">Discard local edits and load latest</button>
         </div>}
         <CatalogUniversePanel key={`universe-${record.id}`} ingredient={record} context={record.universeContext}
-          onContextChange={applyUniverseContext} readOnly={identityReadOnly} unsaved={isDirty || saving || lookSaving} />
+          onContextChange={applyUniverseContext} readOnly={identityReadOnly} forkBlocked={record.sharedIdentity?.reason === 'CATALOG_IDENTITY_FENCED'} unsaved={isDirty || saving || lookSaving} />
 
         {activeTab === 'profile' && (
           <>

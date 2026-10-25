@@ -20,13 +20,29 @@ const initial = { status: 'needs-review', owner: null, refs: [
   { refKind: 'universe', refId: 'first', role: 'canon-character', refName: 'First world', resolved: true },
   { refKind: 'series', refId: 'missing-series', role: 'cast', resolved: false, reason: 'missing-target' },
 ] };
-function Harness() {
+function Harness(props) {
   const [context, setContext] = useState(initial);
-  return <CatalogUniversePanel ingredient={{ id: 'cat-chr-1', type: 'character', name: 'Example courier' }} context={context} onContextChange={setContext} />;
+  return <CatalogUniversePanel ingredient={{ id: 'cat-chr-1', type: 'character', name: 'Example courier' }} context={context} onContextChange={setContext} {...props} />;
 }
 beforeEach(() => vi.clearAllMocks());
 
 describe('primitive ownership and fork controls', () => {
+  it.each([false, true])('allows an independent fork from a read-only source unless its identity is fenced (%s)', async (fenced) => {
+    forkCatalogIngredient.mockResolvedValue({ id: 'cat-chr-fork', type: 'character' });
+    render(<MemoryRouter><Harness readOnly forkBlocked={fenced} /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Fork into another universe…' }));
+    await screen.findByRole('option', { name: 'Second world' });
+    expect(screen.queryByRole('button', { name: 'Set owning universe' })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Destination universe'), { target: { value: 'second' } });
+    const button = screen.getByRole('button', { name: 'Create fork' });
+    if (fenced) expect(button).toBeDisabled();
+    else {
+      expect(button).toBeEnabled();
+      fireEvent.click(button);
+      await waitFor(() => expect(navigate).toHaveBeenCalledWith('/casting/cat-chr-fork'));
+    }
+  });
+
   it('shows legacy/missing usages, resolves ownership explicitly, then forks with a deliberate asset choice and stable retry key', async () => {
     const owner = { refKind: 'universe', refId: 'first', role: 'owner', refName: 'First world', resolved: true };
     setCatalogUniverseOwner.mockResolvedValue({ ...initial, status: 'owned', owner });

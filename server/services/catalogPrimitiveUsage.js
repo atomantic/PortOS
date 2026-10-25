@@ -38,7 +38,7 @@ export async function assertUniversePrimitivesRemovable(universeId) {
       WHERE r.ref_kind = 'universe' AND r.ref_id = $1 AND r.role = 'owner' AND r.deleted = false AND i.deleted = false)
     OR EXISTS(SELECT 1 FROM fableloom_stories WHERE universe_id = $1 AND deleted = false)
     OR EXISTS(SELECT 1 FROM voice_profiles WHERE universe_id = $1 AND approval_status <> 'retired') AS blocked`, [universeId]);
-  if (rows[0]?.blocked) throw new ServerError('This universe owns creative primitives or has FableLoom/voice bindings. Archive or reassign those records before deleting it.',
+  if (rows[0]?.blocked) throw new ServerError('Before deleting this universe, remove its primitives from their containers and delete them from Catalog. Reassign or delete its FableLoom stories and Voice Studio profiles first.',
     { status: 409, code: 'UNIVERSE_PRIMITIVES_IN_USE' });
 }
 

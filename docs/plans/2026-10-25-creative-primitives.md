@@ -47,7 +47,10 @@ Existing unowned records remain readable and editable. New cross-universe adds
 must be explicit forks; existing cross-universe references remain intact and
 visible. Removing from a canon bucket retires that usage, preserving ownership,
 the catalog row, other usages, images and revisions. Delete remains a separate
-catalog action.
+catalog action. To retire an owning universe, fork any primitives you want to keep
+into another universe, then remove the originals from their containers and delete
+them from Catalog. Reassign or delete its FableLoom stories and voice profiles
+before deleting the universe; established ownership is not moved in place.
 
 ## Fork contract
 

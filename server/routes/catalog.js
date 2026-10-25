@@ -283,9 +283,8 @@ router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
   if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
   const { getPrimitiveContext } = await import('../services/catalogPrimitives.js');
   const [context, sources, relations, revisions, media, missingMedia, sharedIdentity] = await Promise.all([
-    // Live refs only (#1812): the detail page's "Appears in" panel must not
-    // render a chip deep-linking to a soft-deleted universe/series/CD target.
-    // The orphan stays recoverable via the Catalog "Orphaned" album.
+    // Missing references remain visible for cleanup, with resolved:false so
+    // the shared usage panel never deep-links to a deleted container.
     getPrimitiveContext(req.params.id),
     catalogDB.listSourcesForIngredient(req.params.id),
     catalogDB.listRelationsForIngredient(req.params.id),
@@ -463,8 +462,8 @@ router.post('/ingredients/:id/revisions/:revisionId/restore', asyncHandler(async
 }));
 
 router.delete('/ingredients/:id', asyncHandler(async (req, res) => {
-  const refs = await catalogDB.listRefsForIngredient(req.params.id);
-  if (refs.some((ref) => !(ref.refKind === 'universe' && ref.role === 'owner'))) {
+  const refs = await resolveRefs(await catalogDB.listRefsForIngredient(req.params.id));
+  if (refs.some((ref) => ref.resolved && !(ref.refKind === 'universe' && ref.role === 'owner'))) {
     throw new ServerError('Remove this primitive from its containers before deleting it. Ownership and media can be kept.', { status: 409, code: 'CATALOG_PRIMITIVE_IN_USE' });
   }
   await catalogDB.deleteIngredient(req.params.id);

@@ -528,12 +528,13 @@ describe.skipIf(!runDb)('ingredient content and history commit together', () => 
     const firstName = `Example first ${NONCE}`;
     const secondName = `Example second ${NONCE}`;
     const refId = `example-universe-${NONCE}`;
+    await query('INSERT INTO universes (id, name) VALUES ($1, $2)', [refId, 'Example rollback world']);
     await expect(withRevisionFailure(/^INSERT INTO catalog_ingredient_revisions/i, () =>
       catalogDB.commitScrap({
         scrapId: scrap.id, universeRef: refId,
         accepted: [{ type: 'idea', name: firstName }, { type: 'idea', name: secondName }],
       }), (params) => params?.[2] === secondName,
-    )).rejects.toThrow('division by zero');
+    ).finally(() => query('DELETE FROM universes WHERE id = $1', [refId]))).rejects.toThrow('division by zero');
     expect((await query('SELECT ingredient_id FROM catalog_ingredient_refs WHERE ref_id = $1', [refId])).rows).toEqual([]);
     expect((await query('SELECT id FROM catalog_ingredients WHERE name = ANY($1)', [[firstName, secondName]])).rows).toEqual([]);
     expect((await query('SELECT ingredient_id FROM catalog_ingredient_sources WHERE scrap_id = $1', [scrap.id])).rows).toEqual([]);
@@ -640,7 +641,7 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/details — batched hy
     expect(rSolo.body.sources[0].siblings).toEqual([]);
   });
 
-  it('omits dangling "Appears in" refs whose target was soft-deleted (#1812)', async () => {
+  it('shows dangling refs without dead links and permits deletion after live usages are removed', async () => {
     const liveUni = `details-live-uni-${NONCE}`;
     const deadUni = `details-dead-uni-${NONCE}`;
     await query('INSERT INTO universes (id, name) VALUES ($1, $2)', [liveUni, `Live Uni ${NONCE}`]);
@@ -655,7 +656,13 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/details — batched hy
     expect(r.status).toBe(200);
     const refIds = r.body.refs.map((ref) => ref.refId);
     expect(refIds).toContain(liveUni);        // live target → chip stays
-    expect(refIds).not.toContain(deadUni);    // dangling target → chip dropped
+    expect(refIds).toContain(deadUni);
+    expect(r.body.refs.find((ref) => ref.refId === deadUni)).toMatchObject({ resolved: false, reason: 'missing-target' });
+    expect((await request(makeApp()).delete(`/api/catalog/ingredients/${ing.id}`)).status).toBe(409);
+    expect((await request(makeApp()).delete(`/api/catalog/ingredients/${ing.id}/link`)
+      .send({ refKind: 'universe', refId: liveUni, role: 'cast-character' })).status).toBe(204);
+    expect((await request(makeApp()).delete(`/api/catalog/ingredients/${ing.id}`)).status).toBe(204);
+    expect(await catalogDB.getIngredient(ing.id)).toBeNull();
 
     await query('DELETE FROM catalog_ingredient_refs WHERE ref_id = ANY($1)', [[liveUni, deadUni]]).catch(() => {});
     await query('DELETE FROM universes WHERE id = ANY($1)', [[liveUni, deadUni]]).catch(() => {});
@@ -699,7 +706,7 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
       return row;
     };
     const originalCounts = await counts();
-    expect(originalCounts).toEqual({ sources: '2', ingredients: '2', revisions: '2', refs: '2', edges: '1' });
+    expect(originalCounts).toEqual({ sources: '2', ingredients: '2', revisions: '2', refs: '4', edges: '1' });
     // A fresh process has no request cache: it must replay the durable receipt.
     const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
       import { commitScrap } from './services/catalogDB/commit.js';
@@ -758,9 +765,17 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
     createdIngredientIds.add(idea.id);
 
     const heroRefs = await catalogDB.listRefsForIngredient(hero.id);
-    expect(heroRefs).toEqual([expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'canon-character' })]);
+    expect(heroRefs).toHaveLength(2);
+    expect(heroRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'owner' }),
+      expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'canon-character' }),
+    ]));
     const ideaRefs = await catalogDB.listRefsForIngredient(idea.id);
-    expect(ideaRefs).toEqual([expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'reference' })]);
+    expect(ideaRefs).toHaveLength(2);
+    expect(ideaRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'owner' }),
+      expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'reference' }),
+    ]));
 
     // HAS_ANY_HOMING_REF is true for both — neither buckets as unlinked (#7615 core symptom).
     const facets = await request(makeApp()).get('/api/catalog/facets');

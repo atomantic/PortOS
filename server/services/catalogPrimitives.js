@@ -7,7 +7,7 @@ import { CATALOG_OWNER_ROLE, catalogUniverseContext } from '../lib/catalogUniver
 import { ingredientIdPrefix } from '../lib/catalogTypes.js';
 import { BIBLE_LIMITS } from '../lib/storyBible.js';
 import { createIngredient, getIngredient, getIngredientIdentityIds } from './catalogDB/ingredients.js';
-import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable } from './catalogDB/identityAccess.js';
+import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable, getCatalogIdentityAccess } from './catalogDB/identityAccess.js';
 import { linkIngredientToRef, unlinkIngredientFromRef } from './catalogDB/refs.js';
 import { describeCatalogRefs } from './catalogRefResolver.js';
 import { catalogEvents } from './catalogEvents.js';
@@ -171,8 +171,9 @@ export async function forkPrimitive(sourceId, { universeId, name, copyImages = f
       return receipt.ingredients[0];
     }
     await requireUniverse(client, universeId);
-    await assertCatalogIdentityWritable(sourceId, { client });
     await client.query('SELECT id FROM catalog_ingredients WHERE id = catalog_canonical_ingredient_id($1) AND deleted = false FOR SHARE', [sourceId]);
+    const access = await getCatalogIdentityAccess(sourceId, { client });
+    if (access?.reason === 'CATALOG_IDENTITY_FENCED') fail('Wait for the shared identity transition to complete before creating a fork', 'CATALOG_IDENTITY_FENCED');
     const source = await getIngredient(sourceId, { client });
     if (!source) fail('Source ingredient not found', 'CATALOG_NOT_FOUND', 404);
     const sourceContext = catalogUniverseContext(await refsFor(source.id, client.query.bind(client)));

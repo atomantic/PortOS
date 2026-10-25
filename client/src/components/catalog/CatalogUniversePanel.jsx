@@ -14,7 +14,7 @@ import useMounted from '../../hooks/useMounted';
 const roleLabel = (role = '') => ({ owner: 'Owning universe', 'canon-character': 'Character canon', 'canon-place': 'Environment canon',
   'canon-object': 'Object canon', cast: 'Cast', set: 'Set', prop: 'Prop', reference: 'Reference', mentioned: 'Mentioned' }[role] || role.replaceAll('-', ' '));
 
-export default function CatalogUniversePanel({ ingredient, context, onContextChange, readOnly = false, unsaved = false }) {
+export default function CatalogUniversePanel({ ingredient, context, onContextChange, readOnly = false, forkBlocked = false, unsaved = false }) {
   const fieldId = useId();
   const navigate = useNavigate();
   const mounted = useMounted();
@@ -52,7 +52,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
 
   const owner = context?.owner;
   const own = async () => {
-    if (busy || unsaved || !target) return;
+    if (readOnly || busy || unsaved || !target) return;
     setBusy(true);
     const result = await setCatalogUniverseOwner(ingredient.id, target, { silent: true })
       .catch((err) => { toast.error(err.message || 'Could not set owning universe'); return null; });
@@ -61,7 +61,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
     if (result) { applyContext(result); setTarget(''); setOpen(false); toast.success('Owning universe set'); }
   };
   const fork = async () => {
-    if (busy || unsaved || !target || !forkName.trim()) return;
+    if (forkBlocked || busy || unsaved || !target || !forkName.trim()) return;
     const submission = JSON.stringify({ universeId: target, name: forkName.trim(), copyImages });
     if (operation.current?.submission !== submission) operation.current = { submission, key: uuidv4() };
     setBusy(true);
@@ -103,7 +103,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
           {owner ? <Link to={threadRefUrl('universe', owner.refId)} className="ml-2 text-port-accent hover:underline break-words">{owner.refName || owner.refId}</Link>
             : <span className="ml-2 text-port-warning">{context?.status === 'conflict' ? 'Conflicting owners — review required' : 'Ownership needs review'}</span>}
         </div>
-        {!readOnly && <button type="button" onClick={() => setOpen((value) => !value)} className="text-xs text-port-accent hover:underline">{open ? 'Close' : owner ? 'Fork into another universe…' : 'Resolve ownership / fork…'}</button>}
+        <button type="button" onClick={() => setOpen((value) => !value)} className="text-xs text-port-accent hover:underline">{open ? 'Close' : owner || readOnly ? 'Fork into another universe…' : 'Resolve ownership / fork…'}</button>
       </div>
       {!owner && <p className="text-xs text-gray-400">Existing references are preserved. Select an owning universe explicitly to establish story and style context.</p>}
       {owner && !refs.some((ref) => ref.refKind === 'universe' && ref.refId === owner.refId) && !readOnly && <button type="button"
@@ -118,6 +118,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
         {refs.some((ref) => ref.derived) && <span className="text-gray-500">Story mentions are inferred; FableLoom and voice links use exact canon IDs.</span>}
       </div>
       {open && <div className="border-t border-port-border pt-3 space-y-3">
+        {forkBlocked && <p className="text-xs text-port-warning">Wait for the shared identity transition to complete before creating a fork.</p>}
         {unsaved && <p className="text-xs text-port-warning">Save your edits before changing ownership or creating a fork.</p>}
         {loadError ? <p role="alert" className="text-sm text-port-error">Could not load universes. Close and reopen to retry.</p> : universes === null ? <p className="text-xs text-gray-400">Loading universes…</p> : <>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl">
@@ -137,8 +138,8 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
           </label>
           <p className="text-xs text-gray-500">A fork gets a new identity and provenance. Production uses, character links, voice bindings and approvals stay with the original. Image files stay in the library when a reference is removed.</p>
           <div className="flex flex-wrap gap-2">
-            {!owner && <button type="button" disabled={busy || unsaved || !target} onClick={own} className="px-3 py-2 text-xs rounded border border-port-accent text-port-accent disabled:opacity-40">Set owning universe</button>}
-            <button type="button" disabled={busy || unsaved || !target || !forkName.trim()} onClick={fork} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs rounded bg-port-accent text-white disabled:opacity-40">
+            {!owner && !readOnly && <button type="button" disabled={busy || unsaved || !target} onClick={own} className="px-3 py-2 text-xs rounded border border-port-accent text-port-accent disabled:opacity-40">Set owning universe</button>}
+            <button type="button" disabled={forkBlocked || busy || unsaved || !target || !forkName.trim()} onClick={fork} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs rounded bg-port-accent text-white disabled:opacity-40">
               {busy ? <Loader2 size={13} className="animate-spin" /> : <Copy size={13} />} Create fork
             </button>
           </div>

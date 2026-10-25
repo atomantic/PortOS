@@ -3,7 +3,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-const db = vi.hoisted(() => ({ state: null, failMedia: false }));
+const db = vi.hoisted(() => ({ state: null, failMedia: false, access: null }));
 vi.mock('../lib/db.js', () => {
   const query = async (sql, params = []) => {
     const state = db.state;
@@ -57,7 +57,7 @@ vi.mock('../services/catalogDB/ingredients.js', async () => {
     },
   };
 });
-vi.mock('../services/catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: async (id) => id }));
+vi.mock('../services/catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: async (id) => id, getCatalogIdentityAccess: async () => db.access }));
 vi.mock('../services/catalogDB/refs.js', () => ({
   linkIngredientToRef: async (ingredientId, refKind, refId, role) => {
     const existing = db.state.refs.find((ref) => ref.ingredientId === ingredientId && ref.refKind === refKind && ref.refId === refId && ref.role === role);
@@ -80,6 +80,7 @@ const operationKey = 'd48e7a1a-3f88-42a7-93ab-a2650562a290';
 
 beforeEach(() => {
   db.failMedia = false;
+  db.access = null;
   db.state = { universes: { first: 'First universe', second: 'Second universe' }, receipts: {}, relations: [], revisions: [],
     refs: [{ ingredientId: 'cat-chr-source', refKind: 'universe', refId: 'first', role: 'owner' }],
     ingredients: { 'cat-chr-source': { id: 'cat-chr-source', type: 'character', name: 'Example courier', tags: [], syncSequence: '72',
@@ -155,6 +156,26 @@ describe('creative primitive ownership and forks', () => {
     const failed = await request(app).post(`${path}/fork`).send({ universeId: 'second', copyImages: true, operationKey: 'b0d52efa-a06a-47b8-81aa-393ea39c83f4' });
     expect(failed.status).toBe(500);
     expect(db.state).toEqual(before);
+  });
+
+  it('forks readable foreign and retained identities without granting writes, but refuses pending transitions', async () => {
+    const before = structuredClone(db.state.ingredients['cat-chr-source']);
+    for (const [reason, key] of [
+      ['CATALOG_IDENTITY_FOREIGN', '3c4a1494-32a5-4d51-9d56-d7bad695f675'],
+      ['CATALOG_IDENTITY_RETAINED', '755fe69a-b840-46ed-8b4a-5fc84382d098'],
+    ]) {
+      db.access = { writable: false, reason };
+      const response = await request(app).post(`${path}/fork`).send({ universeId: 'second', operationKey: key });
+      expect(response.status).toBe(201);
+      expect(response.body.id).not.toBe(before.id);
+      expect(db.state.ingredients[before.id]).toEqual(before);
+    }
+    db.access = { writable: false, reason: 'CATALOG_IDENTITY_FENCED' };
+    const snapshot = structuredClone(db.state);
+    const result = await request(app).post(`${path}/fork`).send({ universeId: 'second', operationKey: 'b27b9806-9984-42ae-9c5f-419249ea4121' });
+    expect(result.status).toBe(409);
+    expect(result.body.code).toBe('CATALOG_IDENTITY_FENCED');
+    expect(db.state).toEqual(snapshot);
   });
 
   it('validates the public request before any write and requires a real destination', async () => {

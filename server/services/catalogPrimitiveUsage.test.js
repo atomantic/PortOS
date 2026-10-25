@@ -44,7 +44,7 @@ describe('catalog usage across canonical consumers', () => {
     await expect(assertCanonRemovable('world-1', 'object', 'obj-1')).rejects.toMatchObject({ code: 'UNIVERSE_CANON_IN_USE' });
     await expect(assertCanonRemovable('world-1', 'object', 'unreferenced')).resolves.toBeUndefined();
     await expect(assertCanonRemovable('world-1', 'character', 'unreferenced')).resolves.toBeUndefined();
-    await expect(assertUniversePrimitivesRemovable('world-1')).rejects.toMatchObject({ status: 409, code: 'UNIVERSE_PRIMITIVES_IN_USE' });
+    await expect(assertUniversePrimitivesRemovable('world-1')).rejects.toMatchObject({ status: 409, code: 'UNIVERSE_PRIMITIVES_IN_USE', message: expect.stringContaining('remove its primitives from their containers and delete them from Catalog') });
     await expect(assertUniversePrimitivesRemovable('unreferenced')).resolves.toBeUndefined();
   });
 
