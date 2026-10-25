@@ -403,9 +403,12 @@ describe('instances.js', () => {
   it('pairing a legacy peer preserves its outbound relationship', async () => {
     const peer = { id: 'legacy-peer', instanceId: 'peer-a', enabled: true, syncEnabled: false };
     readJSONFile.mockResolvedValue({ self: { instanceId: 'local-instance' }, peers: [peer] });
-    await updatePeer('legacy-peer', { syncSecret: 'synthetic-pair-secret-32-characters-long' });
+    await updatePeer('legacy-peer', { syncSecret: 'synthetic-pair-secret-32-characters-long' }, { probe: false });
+    await vi.runAllTimersAsync();
     expect(peer.directions).toEqual(['outbound', 'inbound']);
     expect(peer.syncEnabled).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(peer).not.toHaveProperty('lastProbe');
   });
 
   describe('redactPeerForWire', () => {
@@ -576,18 +579,24 @@ describe('instances.js', () => {
       const peers = [{ id: 'peer-1', name: 'host', enabled: true, auth: null }];
       readJSONFile.mockResolvedValue({ self: null, peers });
 
-      const result = await updatePeer('peer-1', { auth: { username: 'bob', password: 'pw' } });
+      const result = await updatePeer('peer-1', { auth: { username: 'bob', password: 'pw' } }, { probe: false });
+      await vi.runAllTimersAsync();
 
       expect(result.auth).toEqual({ username: 'bob', password: 'pw' });
+      expect(fetch).not.toHaveBeenCalled();
+      expect(result).not.toHaveProperty('lastProbe');
     });
 
     it('should clear a credential when auth is null', async () => {
       const peers = [{ id: 'peer-1', name: 'host', enabled: true, auth: { username: 'bob', password: 'pw' } }];
       readJSONFile.mockResolvedValue({ self: null, peers });
 
-      const result = await updatePeer('peer-1', { auth: null });
+      const result = await updatePeer('peer-1', { auth: null }, { probe: false });
+      await vi.runAllTimersAsync();
 
       expect(result.auth).toBeNull();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(result).not.toHaveProperty('lastProbe');
     });
 
     it('should ignore a malformed auth value rather than wiping a working credential', async () => {
@@ -615,19 +624,32 @@ describe('instances.js', () => {
     it('should reconnect the relay and re-probe immediately when the credential changes', async () => {
       // Peer is deep in backoff from prior 401s — the new credential must
       // trigger an immediate probe, not wait out nextProbeAt.
-      const peers = [{ id: 'peer-1', name: 'host', enabled: true, status: 'offline', consecutiveFailures: 5, nextProbeAt: '2999-01-01T00:00:00Z', auth: { username: 'bob', password: 'old' } }];
+      const peers = [{ id: 'peer-1', name: 'host', address: '192.0.2.10', port: 5555, enabled: true, status: 'offline', consecutiveFailures: 5, nextProbeAt: '2999-01-01T00:00:00Z', auth: { username: 'bob', password: 'old' } }];
       readJSONFile.mockResolvedValue({ self: null, peers });
-      fetch.mockRejectedValue(new Error('offline'));
+      fetch.mockResolvedValue({ ok: false, status: 401 });
+      // The failed probe's final relay update follows persistence and all
+      // transport work. Own that completion before per-test globals reset.
+      const probeFinished = new Promise((resolve) => {
+        disconnectFromPeer.mockImplementationOnce(() => {}).mockImplementationOnce(resolve);
+      });
 
       await updatePeer('peer-1', { auth: { username: 'bob', password: 'new' } });
+      await probeFinished;
 
       // Relay pins the Basic header at connect time, so a credential change
       // must tear it down to reconnect with the new extraHeaders.
       expect(disconnectFromPeer).toHaveBeenCalledWith('peer-1');
-      // Immediate re-probe fired (bypasses the nextProbeAt backoff gate). The
-      // probe is fire-and-forget and now resolves our instanceId (one extra
-      // microtask) before fetching sync-status, so wait for the fetch.
-      await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+      expect(disconnectFromPeer).toHaveBeenCalledTimes(2);
+      expect(fetch.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+        '/api/system/health/details', '/api/apps', '/api/instances/sync-status',
+      ]);
+      for (const [url, options] of fetch.mock.calls) {
+        expect(new URL(url).origin).toBe('http://192.0.2.10:5555');
+        expect(options.headers.Authorization).toBe(`Basic ${Buffer.from('bob:new').toString('base64')}`);
+      }
+      expect(peers[0].lastProbe).toMatchObject({ ok: false, httpStatus: 401 });
+      expect(peers[0].consecutiveFailures).toBe(6);
+      expect(peers[0].nextProbeAt).not.toBe('2999-01-01T00:00:00Z');
     });
 
     it('should NOT reconnect or re-probe on a no-op credential write', async () => {
@@ -2320,12 +2342,28 @@ describe('instances.js', () => {
       ...overrides,
     });
 
+    beforeEach(() => {
+      fetch.mockImplementation(async (url) => {
+        const responses = {
+          '/api/instances/peers/pair-secret': { paired: true },
+          '/api/system/health/details': { instanceId: peerId },
+          '/api/apps': [],
+          '/api/instances/sync-status': {},
+        };
+        const path = new URL(url).pathname;
+        if (!Object.hasOwn(responses, path)) throw new Error(`Unexpected pairing request: ${path}`);
+        return new Response(JSON.stringify(responses[path]), { headers: { 'Content-Type': 'application/json' } });
+      });
+    });
+
     it('generates one secret, provisions it remotely with Basic auth, then stores it locally', async () => {
       const peer = makePeer();
       readJSONFile.mockResolvedValue({ self: { instanceId: selfId }, peers: [peer] });
-      fetch.mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ paired: true }) });
 
       const updated = await pairPeerSyncSecret(peer.id);
+      expect(updated.lastProbe).toMatchObject({ ok: true });
+      expect(connectToPeer).toHaveBeenCalledWith(peer);
+      expect(fetch).toHaveBeenCalledTimes(4);
       const pairCall = fetch.mock.calls.find(([url]) => url.endsWith('/api/instances/peers/pair-secret'));
       expect(pairCall).toBeDefined();
       const [, options] = pairCall;
@@ -2346,9 +2384,10 @@ describe('instances.js', () => {
       const secret = 'synthetic-pair-secret-32-characters-long';
       const peer = makePeer({ syncSecret: secret, peerAuthAccepted: false });
       readJSONFile.mockResolvedValue({ self: { instanceId: selfId }, peers: [peer] });
-      fetch.mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ paired: true }) });
 
-      await pairPeerSyncSecret(peer.id);
+      const updated = await pairPeerSyncSecret(peer.id);
+      expect(updated.lastProbe).toMatchObject({ ok: true });
+      expect(fetch).toHaveBeenCalledTimes(4);
 
       const pairCall = fetch.mock.calls.find(([url]) => url.endsWith('/api/instances/peers/pair-secret'));
       expect(JSON.parse(pairCall[1].body).syncSecret).toBe(secret);
