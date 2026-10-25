@@ -18,7 +18,7 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 const canonical = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 
-export function createMetalBufferProfiles({ file, now = Date.now, read = readFile, write = atomicWrite }) {
+export function _createMetalBufferProfiles({ file, now = Date.now, read = readFile, write = atomicWrite }) {
   const queue = createFileWriteQueue();
   let epoch = 0;
   let writeFault = false;
@@ -122,5 +122,5 @@ export async function metalBufferExecutionSignature({ model, encoder, runtimeInf
 }
 
 let profiles;
-export const getMetalBufferProfiles = () => profiles ??= createMetalBufferProfiles({ file: join(PATHS.data, 'cache', 'video-gen', 'metal-buffer-profiles.json') });
+export const getMetalBufferProfiles = () => profiles ??= _createMetalBufferProfiles({ file: join(PATHS.data, 'cache', 'video-gen', 'metal-buffer-profiles.json') });
 export const clearMetalBufferProfiles = () => getMetalBufferProfiles().clear();

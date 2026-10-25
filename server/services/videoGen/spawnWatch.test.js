@@ -76,7 +76,7 @@ import { pinArch, pinPlatform } from '../../lib/testHelper.js';
 import { videoGenEvents } from './events.js';
 import { videoJobState } from './jobState.js';
 import { spawnAndWatchVideo } from './spawnWatch.js';
-import { createMetalBufferProfiles } from './metalBufferProfiles.js';
+import { _createMetalBufferProfiles } from './metalBufferProfiles.js';
 
 // Watchdog timing, buffered early exits, and Gemma retry/cancellation already
 // have generateVideo boundary coverage in local.test.js. These tests pin the
@@ -322,7 +322,7 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
       mocks.mlx = true;
       mocks.signature.mockResolvedValue('a'.repeat(64));
       saved = JSON.stringify({ version: 1, entries: [] });
-      mocks.profiles = createMetalBufferProfiles({ file: 'unused', read: async () => saved,
+      mocks.profiles = _createMetalBufferProfiles({ file: 'unused', read: async () => saved,
         write: async (_file, data) => { saved = JSON.stringify(data); } });
     });
     afterEach(() => { restore(); vi.unstubAllEnvs(); });

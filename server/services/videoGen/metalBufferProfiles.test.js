@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMetalBufferProfiles, metalBufferExecutionSignature } from './metalBufferProfiles.js';
+import { _createMetalBufferProfiles, metalBufferExecutionSignature } from './metalBufferProfiles.js';
 
 const signature = number => number.toString(16).padStart(64, '0');
 let root;
@@ -13,7 +13,7 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'portos-metal-profile-'));
   file = join(root, 'cache', 'profiles.json');
   now = 100000;
-  store = createMetalBufferProfiles({ file, now: () => now });
+  store = _createMetalBufferProfiles({ file, now: () => now });
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
@@ -24,7 +24,7 @@ describe('successful Metal profile persistence', () => {
       const token = await store.lookup(signature(index));
       await store.learn(token);
     }));
-    const reloaded = createMetalBufferProfiles({ file, now: () => now });
+    const reloaded = _createMetalBufferProfiles({ file, now: () => now });
     expect(await reloaded.lookup(signature(0))).toMatchObject({ applied: false });
     expect(await reloaded.lookup(signature(129))).toMatchObject({ applied: true });
     const saved = JSON.parse(await readFile(file, 'utf8'));
@@ -40,7 +40,7 @@ describe('successful Metal profile persistence', () => {
     const writing = new Promise(resolve => { releaseWrite = resolve; });
     let enteredWrite;
     const entered = new Promise(resolve => { enteredWrite = resolve; });
-    const slow = createMetalBufferProfiles({ file, now: () => now, write: async (_file, data) => {
+    const slow = _createMetalBufferProfiles({ file, now: () => now, write: async (_file, data) => {
       enteredWrite();
       await writing;
       await mkdir(join(root, 'cache'), { recursive: true });
@@ -73,7 +73,7 @@ describe('successful Metal profile persistence', () => {
   });
 
   it('distinguishes a read failure from a verified empty cache', async () => {
-    const unreadable = createMetalBufferProfiles({ file, read: vi.fn().mockRejectedValue(Object.assign(new Error('denied'), { code: 'EACCES' })) });
+    const unreadable = _createMetalBufferProfiles({ file, read: vi.fn().mockRejectedValue(Object.assign(new Error('denied'), { code: 'EACCES' })) });
     const token = await unreadable.lookup(signature(1));
     expect(token).toMatchObject({ applied: false, diagnostic: 'unreadable' });
     expect(await unreadable.learn(token)).toMatchObject({ learned: false, diagnostic: 'unreadable' });
@@ -84,7 +84,7 @@ describe('successful Metal profile persistence', () => {
       await mkdir(join(root, 'cache'), { recursive: true });
       await writeFile(file, JSON.stringify(data));
     });
-    const failing = createMetalBufferProfiles({ file, write, now: () => now });
+    const failing = _createMetalBufferProfiles({ file, write, now: () => now });
     await failing.learn(await failing.lookup(signature(1)));
     const learned = await failing.lookup(signature(1));
     expect(learned.applied).toBe(true);
