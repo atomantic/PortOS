@@ -52,6 +52,21 @@ it('fails closed when process observation is unavailable without exposing output
   expect(signal).not.toHaveBeenCalled();
 });
 
+it('reports deadline exhaustion when the bounded process observation times out', async () => {
+  observation.read.mockImplementationOnce((_file, _args, { timeout }) => new Promise((_, reject) => {
+    setTimeout(() => reject(Object.assign(new Error('/private/command'), { killed: true, signal: 'SIGTERM' })), timeout);
+  }));
+  const verdict = expect(drainBrowserProcessGroup(group, 100, 25)).rejects.toThrow(
+    /^Composition browser group cleanup exceeded its deadline \(groupSignalError=none, groupFailedSignal=none, groupFailedPhase=none\)$/,
+  );
+  await vi.advanceTimersByTimeAsync(100);
+  await verdict;
+  expect(observation.read).toHaveBeenCalledExactlyOnceWith('ps', ['-A', '-o', 'pid=', '-o', 'pgid=', '-o', 'stat='],
+    expect.objectContaining({ timeout: 100 }));
+  expect(signal).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it('rejects within the retained deadline if accepted signals do not stop writers', async () => {
   observation.read.mockResolvedValue(snapshot(`23456 ${group} S`));
   const verdict = expect(drainBrowserProcessGroup(group, 100, 25)).rejects.toThrow(/exceeded its deadline/);

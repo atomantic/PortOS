@@ -101,7 +101,11 @@ export async function drainBrowserProcessGroup(pgid, deadline, graceMs, state = 
     if (remaining <= 0) throw failure('Composition browser group cleanup exceeded its deadline');
     let members;
     try { members = await liveMembers(pgid, remaining); }
-    catch { throw failure('Composition browser group observation failed'); }
+    catch {
+      throw failure(performance.now() >= deadline
+        ? 'Composition browser group cleanup exceeded its deadline'
+        : 'Composition browser group observation failed');
+    }
     if (!members.length) {
       if (state.error !== 'none') {
         const signal = safeSignal(state.failedSignal);
