@@ -1,3 +1,4 @@
+import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 /**
  * Operator-scoped retirement of a merged checkout that branch reconciliation
@@ -307,6 +308,34 @@ async function historicalCheckoutAbsent(release, trees) {
   return !present && trees.length > 0 && !trees.some(tree => tree.path === release.path || (release.branch && shortBranch(tree.branch) === release.branch));
 }
 
+/** Read existing no-archive service receipts, scoped to the original repository
+ * and physical checkout generation. Never infer removal from absence alone. */
+async function completedServiceRetirement(repoPath, release) {
+  if (!/^[a-f0-9]{64}$/.test(release.checkoutIdentity || '')) return null;
+  const [{ loadSchedule }, { getAppById }] = await Promise.all([
+    import('./taskScheduleStore.js'), import('./apps.js'),
+  ]);
+  const schedule = await loadSchedule();
+  const root = await realpath(repoPath).catch(() => null);
+  if (!root) return null;
+  const found = new Map();
+  for (const [appId, record] of Object.entries(schedule.executions?.['task:branch-reconcile']?.perApp || {})) {
+    const receipts = matchingRetirementReceipts(record.branchReconcileOutcome, release).filter(row => row.archiveDir == null
+      && row.checkoutIdentity === release.checkoutIdentity && Date.parse(row.retiredAt) >= Date.parse(release.createdAt));
+    if (!receipts.length) continue;
+    const app = await getAppById(appId);
+    if (!app?.repoPath || await realpath(app.repoPath).catch(() => null) !== root) continue;
+    for (const row of receipts) {
+      const key = JSON.stringify([row.branch, row.path, row.head, row.checkoutIdentity, row.retiredAt, row.branchDeleted]);
+      found.set(key, row);
+    }
+  }
+  if (found.size !== 1) return null;
+  const [key, receipt] = [...found][0];
+  return { kind: 'service-retirement-receipt', archiveDir: null, receipt,
+    evidenceDigest: createHash('sha256').update(key).digest('hex') };
+}
+
 /** Completion audits have a server-captured checkout generation, but may never
  * have entered the scheduled retirement queue. Reuse its archive verifier
  * without creating an obligation or inventing a branch-deletion receipt.
@@ -320,6 +349,12 @@ export async function findMissingCheckoutPreservation({ repoPath, release }, opt
     return ref.exitCode === 1 && await historicalCheckoutAbsent(release, trees);
   };
   if (!await absent()) return null;
+  const receipt = await completedServiceRetirement(repoPath, release).catch(() => null);
+  if (receipt) return { ...receipt, recheck: async () => {
+    if (!await absent()) return false;
+    const fresh = await completedServiceRetirement(repoPath, release).catch(() => null);
+    return fresh?.evidenceDigest === receipt.evidenceDigest;
+  } };
   const root = heldCheckoutArchiveRoot(opts.cosDir);
   const info = await lstat(root).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
   if (!info?.isDirectory()) return null;

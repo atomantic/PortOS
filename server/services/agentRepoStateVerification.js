@@ -1,3 +1,5 @@
+import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
+import { createSingleFlight } from '../lib/singleFlight.js';
 import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
 import { recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
 import { withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
@@ -362,7 +364,15 @@ export async function verifyAgentRepoState(input) {
 
 /** Wake only this terminal job after its execution entry was released. The
  * periodic bounded sweep remains the durable fallback if the process exits. */
-export async function resumeAgentCompletionRetirement(agentId) {
+const releasedCompletionRuns = createSingleFlight();
+export function resumeAgentCompletionRetirement(agentId) {
+  return releasedCompletionRuns.run(agentId, () => resumeReleasedCompletion(agentId));
+}
+
+async function resumeReleasedCompletion(agentId) {
+  // A pre-release audit may still be settling an owner-active observation.
+  // Wait for it, then start a fresh verification instead of joining its stale result.
+  await verificationRuns.get(agentId)?.catch(() => {});
   const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const agent = await getAgentRecord(agentId);
   if (agent?.status !== 'completed' || agent.result?.cleanupPending !== true
@@ -373,10 +383,39 @@ export async function resumeAgentCompletionRetirement(agentId) {
   const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
   await replayAgentCompletionCleanup(agent);
   const current = await getAgentRecord(agentId);
-  await verifyAgentRepoState({ agentId, agentState: current, task,
+  const result = await verifyAgentRepoState({ agentId, agentState: current, task,
     success: current.result?.success === true, prExpected: isTruthyMeta(task.metadata?.openPR) });
   const settled = await getAgentRecord(agentId);
   await replayAgentCompletionCleanup(settled);
+  return result;
+}
+
+/** A completed delivery follow-up settles its original job immediately. No
+ * schedule, provider, retry reset or fabricated completion is involved. */
+const completedDeliveryParents = createSingleFlight();
+async function resumeCompletedDeliveryParent(task) {
+  const m = task?.metadata;
+  if (task?.status !== 'completed' || !isTruthyMeta(m?.reviewLoopFollowUp)
+    || typeof m.sourceAgentId !== 'string' || !m.sourceAgentId || typeof m.sourceTaskId !== 'string') return;
+  return completedDeliveryParents.run(JSON.stringify([m.sourceAgentId, m.sourceTaskId]), async () => {
+    const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+    const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
+    const [parent, instanceId] = await Promise.all([getAgentRecord(m.sourceAgentId), getInstanceId()]);
+    if (parent?.taskId !== m.sourceTaskId || !instanceId || instanceId === UNKNOWN_INSTANCE_ID
+      || parent.metadata?.instanceId !== instanceId) return;
+    return resumeAgentCompletionRetirement(m.sourceAgentId);
+  });
+}
+
+/** Bind the deterministic receipt handoff, including duplicate completion replay. */
+export function bindCompletionRetirementEvents(events) {
+  const onChange = data => {
+    if (data?.task?.status !== 'completed' || !data.task.metadata?.reviewLoopFollowUp) return;
+    return resumeCompletedDeliveryParent(data.task)
+      .catch(error => emitLog('warn', `Parent completion deferred after delivery follow-up: ${error.message}`, { taskId: data.task.id }));
+  };
+  events.on('tasks:changed', onChange);
+  return () => events.off('tasks:changed', onChange);
 }
 
 let completionSweep = null;
@@ -633,7 +672,7 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
   const proofUrl = originalPrUrl || observed.prUrl;
   const forge = proofUrl && observed.prState === 'MERGED' ? await readRetirementForgeEvidence(sourceWorkspace, branchName, proofUrl,
     { forgeAccount: app?.forgeAccount ?? null }).catch(() => null) : null;
-  const integrated = forge && (await execGit(['merge-base', '--is-ancestor', forge.prHead, forge.defaultHead], sourceWorkspace,
+  const integrated = forge && (await execGit(['merge-base', '--is-ancestor', forge.mergeCommit, forge.defaultHead], sourceWorkspace,
     { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
   const completed = metadata.completedCheckouts?.find(row => [1, 2].includes(row.version) && row.agentId === agentId
     && row.startedAt === agentState.startedAt
@@ -645,8 +684,9 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
   }
   if (!staysOpen && integrated && completed && completed.head === forge.prHead && observed.remoteBranchPresent === false) {
     const { findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
+    const checkoutIdentity = retirementCheckoutIdentityFromPointer(completed.incarnation?.pointer);
     const release = { branch: branchName, path: worktreePath, head: completed.head,
-      locked: false, lockReason: null, createdAt: completed.capturedAt };
+      locked: false, lockReason: null, createdAt: completed.capturedAt, ...(checkoutIdentity && { checkoutIdentity }) };
     const proof = await findMissingCheckoutPreservation({ repoPath: sourceWorkspace, release }).catch(() => null);
     if (proof) {
       const { withClaimOwnershipLock } = await import('./cosClaimOwnership.js');

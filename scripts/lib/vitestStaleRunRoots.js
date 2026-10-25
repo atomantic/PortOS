@@ -247,6 +247,14 @@ export function killTestProcessesUnder(root, { read = readTestProcesses, probe =
     const current = read(pending.map(item => item.record.pid));
     for (const item of pending) {
       if (item.settlement !== 'terminated') item.settlement = testProcessSettlement(item.record, current, probePid);
+      // A transient inspection failure can withhold the first signal. Retry
+      // only after fresh incarnation, ancestry and root proof; an attempted
+      // signal (including a permission failure) is never blindly repeated.
+      if (item.settlement !== 'terminated' && item.signal === 'not-attempted'
+        && stillOwned(item.record, snapshot, parent, prefix, read)) {
+        try { kill(item.record.pid, 'SIGKILL'); item.signal = 'delivered'; }
+        catch { item.signal = 'failed'; }
+      }
     }
     if (pending.every(item => item.settlement === 'terminated') || now() >= deadline) break;
     wait(Math.min(25, deadline - now()));
