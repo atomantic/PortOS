@@ -31,7 +31,7 @@ import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { backupSlug } from './supersededBackup.js';
 import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch, classifyWorktreeDirt } from './worktreeManager.js';
-import { getDefaultBranch, hasBranchMergeEvidence } from './git.js';
+import { getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence } from './git.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArchive } from './cosClaimOwnership.js';
 
 /** Unlocked recheck between ownership sections. Does not copy the checkout. */
@@ -1404,7 +1404,8 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
         ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
         : await isAncestor(repoPath, tree.head, defaultBranch);
       if (!locallyMerged && !review) return refuse('not-merged-on-recheck');
-      const porcelain = await execGit(['status', '--porcelain'], tree.path).then(r => r.stdout, () => null);
+      // Status must not refresh the private index bound into the review digest.
+      const porcelain = await getStatusPorcelain(tree.path).catch(() => null);
       if (porcelain === null) return refuse('worktree-status-unavailable');
       if (!classifyWorktreeDirt(porcelain).clean) return refuse('worktree-dirty');
       const reviewed = review ? await reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind }, opts) : null;
@@ -1420,7 +1421,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
       try {
         await releaseCheckoutWithoutArchive({ repoPath, path: tree.path, branch }, async () => {
           if (opts.signal?.aborted) throw new Error('retirement-archive-cancelled');
-          const status = await execGit(['status', '--porcelain'], tree.path).then(r => r.stdout, () => null);
+          const status = await getStatusPorcelain(tree.path).catch(() => null);
           if (status === null) throw new Error('worktree-status-unavailable');
           if (!classifyWorktreeDirt(status).clean) throw new Error('worktree-dirty');
           const mergedNow = branch
@@ -1467,7 +1468,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     const [reason, fresh, porcelain] = await Promise.all([
       ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled }),
       review ? reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind, unlocked: release.locked }, opts) : null,
-      execGit(['status', '--porcelain'], tree.path).then(r => r.stdout, () => null),
+      getStatusPorcelain(tree.path).catch(() => null),
     ]);
     if (fresh && !fresh.ok) { capacityRefusal = fresh; return fresh.reason; }
     if (fresh && fresh.review.digest !== review.digest) return 'retirement-review-changed';
