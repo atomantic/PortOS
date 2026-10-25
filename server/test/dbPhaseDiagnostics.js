@@ -71,7 +71,13 @@ export function createDbPhaseDiagnostics({ onTestFailed, observer, fixturePid, e
         sample(active, count);
       }, intervalMs);
       timer.unref?.();
-      active.stop = () => clearInterval(timer);
+      active.stop = () => {
+        // Cancellation stops the timer deliberately; later body-drain time
+        // must not be reported as an event-loop scheduling delay.
+        active.timerDelayMs = metrics().timerDelayMs;
+        active.nextSampleAt = Infinity;
+        clearInterval(timer);
+      };
       try { return await operation(); }
       finally {
         clearInterval(timer);

@@ -61,8 +61,9 @@ it('retains late waits and timer delay at failure without sampling cancelled wor
   const observer = { query: vi.fn(async () => ({ rows: [{ fixture: true,
     wait_event_type: now >= 10000 ? 'Lock' : null, wait_event: now >= 10000 ? 'relation' : null }] })) };
   const operation = Promise.withResolvers();
+  const lines = [];
   const diagnostics = createDbPhaseDiagnostics({ onTestFailed: hook => hooks.push(hook), observer,
-    fixturePid: 42, enabled: true, write: () => {} });
+    fixturePid: 42, enabled: true, write: line => lines.push(line) });
   expect(await diagnostics.phase('fast-fixture', () => 'original result')).toBe('original result');
   expect(observer.query).not.toHaveBeenCalled();
   const run = diagnostics.phase('compact-explain', () => operation.promise);
@@ -82,10 +83,15 @@ it('retains late waits and timer delay at failure without sampling cancelled wor
   expect(error.message).toContain('"timerDelayMs":10000');
   expect(error.message).toContain('"wait_event":"relation"');
   expect(error.message).toContain('"phase":"compact-explain"');
+  now = 64000;
   await vi.advanceTimersByTimeAsync(50000);
   expect(observer.query).toHaveBeenCalledTimes(4);
   operation.resolve();
   await run;
+  // Teardown waiting on the body after cancellation is not scheduler delay.
+  const settled = lines.map(line => JSON.parse(line.slice('DB phases: '.length)))
+    .find(event => event.phase === 'compact-explain' && event.state === 'settled');
+  expect(settled.timerDelayMs).toBe(10000);
   await diagnostics.phase('after-cancellation', () => undefined);
   await diagnostics.drain();
   expect(observer.query).toHaveBeenCalledTimes(4);
