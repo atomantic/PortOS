@@ -408,6 +408,15 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
       expect(job.metalBufferPolicy.diagnostic).toBe('cache-write-failed');
     });
 
+    it('does not learn a requested sampler profile whose runner reports degradation', async () => {
+      params.speedProfileId = 'fast';
+      await recover();
+      child.stdout.emit('data', Buffer.from('SPEEDPROFILE:{"id":"fast","degraded":["adapter-unavailable"]}\n'));
+      await closeChild(0);
+      expect(job.status).toBe('complete');
+      expect(JSON.parse(saved).entries).toEqual([]);
+    });
+
     it('operator caps and non-MLX execution bypass learned settings', async () => {
       await mocks.profiles.learn(await mocks.profiles.lookup('a'.repeat(64)));
       vi.stubEnv('MLX_MAX_MB_PER_BUFFER', '32');
