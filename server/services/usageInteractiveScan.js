@@ -246,7 +246,7 @@ async function parseSession(family, session, from, to, byCwd, seen, regionsOf = 
   return results;
 }
 
-const isSidechainPath = (path) => path.includes('/subagents/');
+const isSidechainPath = (path) => /[\\/]subagents[\\/]/.test(path);
 
 /**
  * One-time repair for Claude runs reconciled before the run path read subagent

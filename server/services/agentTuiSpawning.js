@@ -403,10 +403,10 @@ export async function spawnTuiAgent({
       updateAgent,
       appendRunEvent,
       readRunRecord: () => activeAgents.get(agentId),
-      releaseRunRecord: (pid) => {
+      releaseRunRecord: async (pid) => {
         if (pid) unregisterSpawnedAgent(pid);
         activeAgents.delete(agentId);
-        void import('./agentRepoStateVerification.js').then(module => module.resumeAgentCompletionRetirement(agentId))
+        await import('./agentRepoStateVerification.js').then(module => module.resumeAgentCompletionRetirement(agentId))
           .catch(error => emitLog('warn', `Completion retirement deferred for ${agentId}: ${error.message}`, { agentId }));
         maintenanceCleaned = true;
         settleMaintenance();

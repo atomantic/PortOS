@@ -1381,7 +1381,7 @@ async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis) {
         `## Why this is held for you\n${LOOP_REASON_PROSE[loopReason]}`
       ].join('\n\n')
     : systemRecovery
-      ? `## What to do\nInvestigate and repair the machine cause with required review and CI. Preserve original work, approvals and retry/spawn budgets. Do not requeue or mark the original task complete by hand.\n\n${remedy}`
+      ? `## What to do\nResolve the affected work and investigate its root cause. Repair demonstrated code defects with regression tests, required PR review, CI and merge delivery; reuse an active fix rather than duplicate it. Record external permission or transient causes accurately without inventing a code defect. Preserve original work, approvals and retry/spawn budgets. Do not requeue or mark the original task complete by hand.\n\n${remedy}`
       : `## What to do\nNo approval needed — this investigation runs unattended. Diagnose the failure above, apply the fix, and leave the task's findings in your summary. Do NOT un-block the original task by hand; completing this one does it.\n\n${remedy}`;
 
   // Completing this task revives every blocked task in `affectedTasks`

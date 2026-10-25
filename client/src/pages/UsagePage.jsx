@@ -2,7 +2,7 @@ import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
-import { RefreshCw, AlertTriangle, DatabaseZap, Network } from 'lucide-react';
+import { RefreshCw, AlertTriangle, DatabaseZap, Network, BarChart3 } from 'lucide-react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -1015,7 +1015,7 @@ function InternalUsageMetrics() {
 
 export function UsagePage() {
   return (
-    <PageLayout header={<PageHeader title="Subscription Usage" />} navigation={<ModelsTabsHeader activeTab="usage" />}>
+    <PageLayout header={<PageHeader icon={BarChart3} title="Subscription Usage" />} navigation={<ModelsTabsHeader activeTab="usage" />}>
       <div className="space-y-6">
         <ProviderQuotaSection />
         <InternalUsageMetrics />

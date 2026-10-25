@@ -4,10 +4,17 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execGit } from './execGit.js';
 
+/** Same identity from a server-captured pointer, after the checkout is gone. */
+export function retirementCheckoutIdentityFromPointer(pointer) {
+  const values = [pointer?.dev, pointer?.ino, pointer?.birthtimeNs];
+  return values.every(value => typeof value === 'string' && /^\d+$/.test(value))
+    ? createHash('sha256').update(JSON.stringify(values)).digest('hex') : null;
+}
+
 export async function readRetirementCheckoutIdentity(path) {
   const info = await lstat(join(path, '.git'), { bigint: true }).catch(() => null);
   if (!info || (!info.isFile() && !info.isDirectory())) return null;
-  return createHash('sha256').update(JSON.stringify([String(info.dev), String(info.ino), String(info.birthtimeNs)])).digest('hex');
+  return retirementCheckoutIdentityFromPointer({ dev: String(info.dev), ino: String(info.ino), birthtimeNs: String(info.birthtimeNs) });
 }
 
 /** Read-only admission; neither a stale inventory nor a pathname grants a new obligation. */

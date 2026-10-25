@@ -168,13 +168,12 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
   const paths = [...new Set(release.head === forge.prHead && !kind
     ? forge.changedPaths : [...forge.changedPaths, ...localPaths])].sort();
   const difference = paths.length ? await git(['--literal-pathspecs', 'diff', '--binary', '--no-ext-diff', '--no-textconv', release.head, forge.defaultHead, '--', ...paths], repoPath) : '';
-  // Historical ancestry/cherry equivalence does not establish that current
-  // code still implements the original work (it may have been strengthened or
-  // reverted). Exact affected-file equality is the mechanical case; differences
-  // require the operator's explicit supersession judgment on the displayed diff.
-  const mechanicallyEquivalent = difference === '' && kind !== 'source-supersession';
+  // Exact delivered PR heads remain delivered after later changes to shared
+  // files. Older/replacement heads still need content equivalence or review.
+  const exactMergedDelivery = !kind && release.head === forge.prHead;
+  const mechanicallyEquivalent = (difference === '' || exactMergedDelivery) && kind !== 'source-supersession';
   const evidence = { repoPath, release, forge, contentFingerprint, administrationFingerprint, policy,
     ...(kind && { kind }),
-    comparison: { base, paths, localPatch, difference, disposition: mechanicallyEquivalent ? 'integrated' : 'review-supersession' } };
+    comparison: { base, paths, localPatch, difference, exactMergedDelivery, disposition: mechanicallyEquivalent ? 'integrated' : 'review-supersession' } };
   return { digest: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'), ...evidence };
 }

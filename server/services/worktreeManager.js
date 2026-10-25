@@ -1857,7 +1857,10 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
         sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
       await recordWorkspaceCheckoutRetirement(sourceWorkspace, {
         path: preservation.path, branch: preservation.branch, head: preservation.head,
-        branchDeleted: ref?.exitCode === 1, ...(preservation.checkoutIdentity && { checkoutIdentity: preservation.checkoutIdentity }),
+        branchDeleted: ref?.exitCode === 1,
+        // A detached checkout has no branch to delete; its receipt says so instead of claiming one.
+        ...(!preservation.branch && { checkoutOnly: true }),
+        ...(preservation.checkoutIdentity && { checkoutIdentity: preservation.checkoutIdentity }),
       }).catch(error => { warnings.push(`Retirement receipt not recorded: ${error.message}`); });
       return { merged, removed: true, uncommittedSaved: false, warnings };
     },
