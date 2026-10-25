@@ -492,6 +492,22 @@ delivery remain held. Cleanup preserves the batch's incomplete result, every
 capture and unfinished sibling checkout; it does not reset or resume exhausted
 retry budgets.
 
+## Archive-era bookkeeping transition
+
+Migration 443 freezes existing retirement observations for reconciliation. A
+supported inventory refresh settles those observations only when no checkout,
+local branch, registered holder or active/human owner remains and a unique
+service receipt or verified merged delivery explains the old work. Squash and
+rebased deliveries use exact merged-head lineage or stable patch equivalence;
+an old SHA need not itself be an ancestor of main. Changed or unreadable
+evidence stays unresolved. New missing-checkout incidents are outside this
+frozen upgrade scope.
+
+The original observation and proof remain in `legacyRetirementTransition`
+audit history. Delivery-only settlement explicitly does not claim a verified
+deletion and creates no retirement receipt. Agent results, retry budgets and
+current worktrees are unchanged. A new sweep still establishes convergence.
+
 ## Whole-checkout preservation
 
 For a reviewed checkout that exceeds the ordinary archive byte bounds, the

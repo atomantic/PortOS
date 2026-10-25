@@ -29,6 +29,7 @@ const queueScheduleWrite = createFileWriteQueue();
  */
 const DEFAULT_SCHEDULE = {
   version: 2,
+  retirementPolicyVersion: 2,
   lastUpdated: null,
 
   // Unified task intervals (applies to all apps including PortOS)
@@ -57,6 +58,7 @@ function migrateScheduleV1toV2(schedule) {
 
   const migrated = {
     version: 2,
+    retirementPolicyVersion: schedule.retirementPolicyVersion ?? 1,
     lastUpdated: new Date().toISOString(),
     tasks: structuredClone(DEFAULT_TASK_INTERVALS),
     executions: {},
@@ -228,6 +230,9 @@ async function readSchedule() {
 
   const schedule = {
     ...DEFAULT_SCHEDULE,
+    // Pre-transition stores retain their compatibility semantics until migration
+    // 443 freezes their historical observations. Fresh installs start at v2.
+    retirementPolicyVersion: loaded.retirementPolicyVersion ?? 1,
     ...loaded,
     tasks: mergedTasks,
     executions: loaded.executions || {},

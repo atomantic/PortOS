@@ -1159,6 +1159,37 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return { path, release, admin, opts, forge, prepare, confirm };
   }
 
+  it.each(['unrelated-upstream', 'changed-delivery'])('uses exact merged PR file scope after inherited upstream history: %s', async scenario => {
+    const c = await reviewedCheckout(`scope-${scenario}`, { normalMerge: true });
+    await writeFile(join(repo, 'upstream.txt'), 'inherited upstream\n');
+    await execGit(['add', 'upstream.txt'], repo);
+    await execGit(['commit', '-m', 'upstream work already delivered elsewhere'], repo);
+    await execGit(['merge', '--ff-only', 'main'], c.path);
+    await writeFile(join(c.path, 'feature.txt'), 'current PR delivery\n');
+    await execGit(['commit', '-am', 'current PR'], c.path);
+    c.release.head = (await execGit(['rev-parse', 'HEAD'], c.path)).stdout.trim();
+    await execGit(['merge', '--ff-only', c.release.branch], repo);
+    c.forge.prHead = c.release.head;
+    c.forge.mergeCommit = c.release.head;
+    await writeFile(join(repo, scenario === 'changed-delivery' ? 'feature.txt' : 'upstream.txt'), 'later upstream change\n');
+    await execGit(['commit', '-am', 'advance default after delivery'], repo);
+    c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
+    const prepared = await c.prepare();
+    expect(prepared).toMatchObject({ ok: true, review: { comparison: { paths: ['feature.txt'],
+      disposition: scenario === 'changed-delivery' ? 'review-supersession' : 'integrated' } } });
+    const result = await c.confirm(prepared.review);
+    if (scenario === 'changed-delivery') {
+      expect(result).toMatchObject({ ok: false, reason: 'retirement-supersession-not-accepted' });
+      expect(await registered(c.path)).toBe(true);
+    } else {
+      expect(result).toMatchObject({ ok: true, branchDeleted: true });
+      expect(await registered(c.path)).toBe(false);
+      expect(await archives()).toEqual([]);
+    }
+    expect(await readFile(join(repo, scenario === 'changed-delivery' ? 'feature.txt' : 'upstream.txt'), 'utf8')).toBe('later upstream change\n');
+  });
+
   async function receiptCheckout(name, options) {
     const checkout = await reviewedCheckout(name, options);
     await execGit(['worktree', 'unlock', checkout.path], repo);
