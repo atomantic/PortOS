@@ -41,3 +41,8 @@ export function redactTailcatDiagnostics(text) {
   return joined.length > DIAGNOSTIC_MAX_CHARS ? `${joined.slice(0, DIAGNOSTIC_MAX_CHARS)}…` : joined;
 }
 
+
+/** Canonical public identity only; private keys and capabilities are rejected. */
+export function isValidNodePublicKey(value) {
+  return typeof value === 'string' && /^nodekey:[0-9a-f]{64}$/.test(value);
+}

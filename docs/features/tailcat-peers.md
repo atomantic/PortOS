@@ -460,3 +460,67 @@ peer registration, rollback, retry, and restore. `tailcatServe.js` owns serve
 storage, keys, and lifecycle; `tailcatIngress.js` owns the isolated remote
 ingress listener. Version parsing and the minimum supported version remain in
 `server/lib/tailcatVersion.js`.
+
+## Owner-approved device identities
+
+Tailcat is a private encrypted connection between owner-approved devices. Keep the
+full server capability private and exchange client public keys out of band. Neither
+a relay nor discovery can approve a new device. The owner or an authenticated
+agent acting for the owner approves each presented `nodekey:` public identity;
+knowledge of the server capability alone does not grant management authority.
+Client private keys stay on the client and are never accepted by these APIs.
+
+In **Tailcat serve → Device access**, enter a label and the device's canonical
+`nodekey:` followed by 64 lowercase hex characters. Approving a key does not
+silently change legacy access. Select **Enable device enforcement** explicitly
+when the fleet is enrolled. Existing listeners remain visibly **capability-only**
+after upgrade; new records also require this explicit enrollment step. In that
+mode a capability holder can still connect, including a revoked device. Revocation
+rejects that device's reconnects only when enforcement is enabled.
+
+An enforced listener passes the complete approved-key set in `--allow`. Empty
+sets suspend serving instead of passing an empty flag (which Tailcat treats as
+allow-all). Approval, revocation, mode changes, boot restoration, and retry share
+one serialized lifecycle. Each change saves the policy first, waits for the old
+process to exit (escalating to kill if necessary), and starts the replacement
+with the saved server key and PSK. Terminating that process cuts its HTTP,
+keepalive, and WebSocket connections. Approved devices must reconnect, and
+PortOS authentication and remote host-control checks continue to apply.
+
+A failed save leaves the old policy running and returns an error. A failed
+replacement leaves the new policy saved and the listener stopped; Retry and boot
+use that policy. An unconfirmed old-process exit returns an error and does not
+claim revocation complete. Protected readiness requires the replacement's JSON
+listen-address frame, emitted by the CLI after loading its allowlist. An
+unsupported CLI fails rather than falling back to capability-only access.
+
+All device endpoints require the existing operator boundary: an authenticated
+owner/delegated-agent session, or a genuine local connection when authentication
+is disabled. A remote Tailcat connection and spoofed headers cannot enroll itself.
+Serve status is also operator-gated because its existing Copy surface contains the
+full capability. Device responses omit that capability.
+
+| Endpoint | Request | Response |
+| --- | --- | --- |
+| `GET /api/instances/peers/tailcat/devices` | None | Serve status without `tcAddress`, including `devices` and `enforcement` below. |
+| `POST …/devices` | `{ "label": "Example phone", "publicKey": "nodekey:<64 lowercase hex characters>" }` | Updated device/status receipt; reapproval keeps the same stable ID. Unknown fields, including private keys, are rejected. |
+| `DELETE …/devices/:id` | None | Updated receipt with `revokedAt`; active sessions reconnect. |
+| `PATCH …/devices/enforcement` | `{ "enabled": true }` (or explicit `false` to restore capability-only mode) | Updated receipt after policy application. |
+
+A device is `{ id, label, publicKey, approvedAt, revokedAt }`; timestamps are ISO
+strings, `revokedAt` is null until revoked, and `id` is the SHA-256 of its public
+key. At most 100 identities are retained, including revoked entries.
+`enforcement` is `{ enabled, state, approvedCount }`. State is `capability-only`,
+`enforced` (the running process loaded the current policy), `suspended` (zero
+approved keys), or `pending` (configured but application not confirmed). Check
+`live`, `status`, and `lastError` alongside it; a saved policy alone is not proof
+of a running protected listener. All mutations return a non-2xx error on failure.
+Lifecycle events contain no identities or capabilities.
+
+The policy lives atomically alongside serve configuration in version 2 of
+`data/tailcat-serve.json`. Migration 444 retains the legacy consent and server
+identity without enabling protection. Older readers reject version 2 instead of
+silently restoring unrestricted serving. No client private key is stored and no
+trust record or capability enters federation. Backups exclude this machine-local
+transport authority and address file so restoring a snapshot cannot restore old
+approvals or disclose the capability; enroll again on a new install.

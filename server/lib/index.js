@@ -985,3 +985,4 @@ export * from './executionOptions.js';
 
 export * from './providerExecutionOptions.js';
 export * from './catalogUniverseContext.js';
+export * from './tailcatValidation.js';

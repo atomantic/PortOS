@@ -4,6 +4,9 @@ import { render as renderUI, screen, waitFor, act } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../services/api', () => ({
+  approveTailcatDevice: vi.fn(),
+  revokeTailcatDevice: vi.fn(),
+  setTailcatDeviceEnforcement: vi.fn(),
   getTailcatServe: vi.fn(),
   startTailcatServe: vi.fn(),
   retryTailcatServe: vi.fn(),
@@ -29,7 +32,7 @@ import socket from '../../services/socket';
 
 afterEach(() => vi.useRealTimers());
 
-import { getTailcatServe, startTailcatServe, retryTailcatServe, stopTailcatServe } from '../../services/api';
+import { approveTailcatDevice, revokeTailcatDevice, setTailcatDeviceEnforcement, getTailcatServe, startTailcatServe, retryTailcatServe, stopTailcatServe } from '../../services/api';
 import TailcatServePanel from './TailcatServePanel';
 
 const stopped = {
@@ -200,4 +203,41 @@ it('shows relay degradation and socket-driven recovery without claiming peer hea
   getTailcatServe.mockResolvedValue({ ...serving, relayStatus: 'unknown' });
   await act(async () => socket.emit('tailcat:serve:changed', {}));
   expect(screen.getByText(/Relay reachability is unknown/)).toBeInTheDocument();
+});
+
+
+it('enrolls an explicit public key, enables enforcement, and renders revocation from mutation receipts', async () => {
+  const user = userEvent.setup();
+  const publicKey = `nodekey:${'4'.repeat(64)}`;
+  const device = { id: 'example-phone', label: 'Example phone', publicKey, approvedAt: '2026-01-01T00:00:00Z', revokedAt: null };
+  getTailcatServe.mockResolvedValue({ ...serving, devices: [], enforcement: { enabled: false, state: 'capability-only', approvedCount: 0 } });
+  approveTailcatDevice.mockResolvedValue({ devices: [device], enforcement: { enabled: false, state: 'capability-only', approvedCount: 1 } });
+  setTailcatDeviceEnforcement.mockResolvedValue({ devices: [device], enforcement: { enabled: true, state: 'enforced', approvedCount: 1 } });
+  revokeTailcatDevice.mockResolvedValue({ devices: [{ ...device, revokedAt: '2026-01-02T00:00:00Z' }], live: false, status: 'suspended', enforcement: { enabled: true, state: 'suspended', approvedCount: 0 } });
+  render(<TailcatServePanel />);
+  await screen.findByText(/Capability-only access:/);
+  await user.type(screen.getByLabelText('Device label'), 'Example phone');
+  await user.type(screen.getByLabelText('Client public key'), publicKey);
+  await user.click(screen.getByRole('button', { name: 'Approve device' }));
+  expect(approveTailcatDevice).toHaveBeenCalledWith({ label: 'Example phone', publicKey });
+  await screen.findByRole('button', { name: 'Revoke Example phone' });
+  await user.click(screen.getByRole('button', { name: 'Enable device enforcement' }));
+  expect(setTailcatDeviceEnforcement).toHaveBeenCalledWith(true);
+  await screen.findByText(/Only approved device keys/);
+  // Redacted device receipts must not erase the existing authorized Copy surface.
+  expect(screen.getByRole('button', { name: 'Copy address' })).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Revoke Example phone' }));
+  expect(revokeTailcatDevice).toHaveBeenCalledWith('example-phone');
+  await screen.findByText(/Access suspended:/);
+  expect(screen.queryByRole('button', { name: 'Revoke Example phone' })).not.toBeInTheDocument();
+});
+
+
+it('shows an operator status-read refusal with an explicit reload instead of endless loading', async () => {
+  getTailcatServe.mockRejectedValueOnce(new Error('Operator authority required'));
+  render(<TailcatServePanel />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not read Tailcat status');
+  getTailcatServe.mockResolvedValue(stopped);
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Reload Tailcat status' }));
+  await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
 });

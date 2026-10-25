@@ -3208,7 +3208,7 @@ describe('restoreSnapshot manifest verification', () => {
       });
     });
 
-    for (const path of ['peer-execution-grants.json', 'peer-execution-catalog.json', 'peer-execution/fixture-operation/evidence.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance/state.json', 'workflow-maintenance/recovered-fixture/receipt.json', 'Workflow-Maintenance/state.json', 'backup-admission/cut/owner.json', 'Backup-Admission/publications/owner.json']) {
+    for (const path of ['tailcat-serve.json', 'tailcat-serve.addr', 'Tailcat-Serve.json', 'tailcat-serve.json.example.tmp', 'peer-execution-grants.json', 'peer-execution-catalog.json', 'peer-execution/fixture-operation/evidence.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance/state.json', 'workflow-maintenance/recovered-fixture/receipt.json', 'Workflow-Maintenance/state.json', 'backup-admission/cut/owner.json', 'Backup-Admission/publications/owner.json']) {
       it(`preserves non-rewound execution authority and ownership at ${path} (#10127)`, async context => {
         await withRealRsync(context, async () => {
           const localPath = joinPath(PATHS.data, path);
@@ -3908,6 +3908,8 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=desktop.ini',
         '--exclude=._*',
         // Machine-local admission state is never installed by a restore (#10064).
+        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN]',
+        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[aA][dD][dD][rR]',
         '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]',
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[cC][aA][tT][aA][lL][oO][gG].[jJ][sS][oO][nN]',
@@ -3916,6 +3918,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
         '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
         '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
+        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
         // No snapshot instances.json was approved for install (#12596).
         '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
         '--dry-run',
@@ -3944,6 +3947,8 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=Thumbs.db',
         '--exclude=desktop.ini',
         '--exclude=._*',
+        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN]',
+        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[aA][dD][dD][rR]',
         '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]',
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[cC][aA][tT][aA][lL][oO][gG].[jJ][sS][oO][nN]',
@@ -3952,6 +3957,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
         '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
         '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
+        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
         // No snapshot instances.json was approved for install (#12596).
         '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
       ]);
@@ -5701,4 +5707,11 @@ describe('runBackup lifecycle', () => {
     });
   });
 
+});
+
+
+it('cannot re-enable Tailcat authority/capability files in backup filters', () => {
+  const paths = ['/tailcat-serve.json', '/tailcat-serve.json.*.tmp', '/tailcat-serve.addr'];
+  const excluded = computeEffectiveExcludes({ disabledDefaultExcludes: paths });
+  for (const path of paths) expect(excluded).toContain(path);
 });
