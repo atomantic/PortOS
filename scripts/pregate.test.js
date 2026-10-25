@@ -228,6 +228,7 @@ describe('pregate hidden-content invocation', () => {
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
+      'server/lib/workspaceTestCacheRoots.js',
     ]) {
       mkdirSync(dirname(join(root, path)), { recursive: true });
       copyFileSync(join(REPO_ROOT, path), join(root, path));

@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createVitestTempFixture, runFixtureToCompletion } from './vitestTempRootFixture.js';
+import { WORKSPACE_TEST_CACHE_ROOTS } from '../../server/lib/workspaceTestCacheRoots.js';
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url));
 const link = (target, path) => {
@@ -57,7 +58,6 @@ function checkout(host, name, workspace, configName, dependencies) {
   // Copy the real config so import.meta.url names THIS checkout; its existing
   // helpers stay shared read-only, just like dependencies in an ordinary worktree.
   copyFileSync(join(REPO, workspace, configName), join(root, configName));
-  link(join(REPO, 'server/lib/workspaceTestCacheRoots.js'), workspace === 'server' ? join(root, 'lib/workspaceTestCacheRoots.js') : join(parent, 'server/lib/workspaceTestCacheRoots.js'));
   for (const file of ['lib/vitestTempRoot.js', 'lib/testProcessAttribution.js', 'lib/dbTestFiles.js', 'lib/browserSuites.js', 'lib/workspaceTests.js', 'vitestCiPool.js', 'vitestTempRootSetup.js']) {
     link(join(REPO, 'scripts', file), join(parent, 'scripts', file));
   }
@@ -123,6 +123,9 @@ const cachedModules = root => snapshot(join(root, 'modules')).filter(([name]) =>
 // Assertions are supplied by the owning Vitest workspace; this shared fixture
 // imports only Node builtins and dependency-free fixture support.
 export async function checkWorkspaceCacheIsolation(workspace, configName, cacheName, expect, signal) {
+  const contract = WORKSPACE_TEST_CACHE_ROOTS[configName === 'vitest.config.db.js' ? 'db' : workspace];
+  expect(contract.workspace).toBe(workspace);
+  expect(contract.cacheDir).toBe(`.cache/${cacheName}`);
     const host = mkdtempSync(join(tmpdir(), 'workspace-cache-'));
     try {
       const dependencies = primaryDependencies(host, workspace);
