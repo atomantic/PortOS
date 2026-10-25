@@ -1,4 +1,7 @@
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
@@ -10,9 +13,14 @@ const script = fileURLToPath(new URL('./run_jev.py', import.meta.url));
 // Synthetic tokenizer/model doubles exercise the shipped Python runner without
 // downloading 9 GB of weights or invoking a provider in the test suite.
 const HARNESS = `
-import contextlib, json, runpy, sys
+import sys
+def phase(name):
+    print("jev-fixture:" + name, file=sys.stderr, flush=True)
+phase("python-started")
+import contextlib, json, runpy
 from types import SimpleNamespace
 helper = runpy.run_path(sys.argv[1])
+phase("helper-loaded")
 
 encoded = []
 def encode(text, **kwargs):
@@ -71,20 +79,42 @@ sys.modules["torch"] = SimpleNamespace(
 )
 
 state = helper["load_state"](__import__("pathlib").Path("."))
+phase("model-ready")
 `;
 
-const run = (body, { tokenCount = 64, window = 1024 } = {}) => execFileSync(
-  python,
-  ['-c', HARNESS.replace('TOKEN_COUNT', String(tokenCount)).replaceAll('WINDOW', String(window)) + body, script],
-  { encoding: 'utf8', timeout: 20_000 },
-);
+const run = (body, { tokenCount = 64, window = 1024, env = process.env } = {}) => {
+  try {
+    // This harness needs only stdlib and its explicit model doubles. Ambient
+    // site hooks and PYTHONPATH must not run before those doubles are installed.
+    return execFileSync(
+      python,
+      ['-I', '-S', '-c', HARNESS.replace('TOKEN_COUNT', String(tokenCount)).replaceAll('WINDOW', String(window)) + body, script],
+      { encoding: 'utf8', timeout: 20_000, env, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+  } catch (error) {
+    const phases = String(error.stderr ?? '').match(/jev-fixture:(?:python-started|helper-loaded|model-ready)/g);
+    const lastPhase = phases?.at(-1) ?? 'no-phase-reported';
+    throw new Error(`JEV synthetic Python fixture failed (last phase: ${lastPhase})`, { cause: error });
+  }
+};
 
 describe.skipIf(!python)('jev Python wire contract', () => {
   it('renders the model\'s own NLI template per pair and maps labels by id2label', () => {
-    const raw = JSON.parse(run(`
+    const startup = mkdtempSync(join(tmpdir(), 'jev-wire-startup-'));
+    let raw;
+    try {
+      // Uniquely catches interpreter startup importing ambient code before the
+      // shipped runner and its synthetic tokenizer/model contract can execute.
+      for (const name of ['sitecustomize.py', 'json.py']) {
+        writeFileSync(join(startup, name), 'raise SystemExit("ambient startup must not enter the wire fixture")\n');
+      }
+      raw = JSON.parse(run(`
 scores = helper["score_pairs"](state, "A premise.", ["first", "second"])
 print(json.dumps({"scores": scores, "encoded": encoded, "device": state["device"]}))
-`));
+`, { env: { ...process.env, PYTHONPATH: startup } }));
+    } finally {
+      rmSync(startup, { recursive: true, force: true });
+    }
     // In request order, one forward pass per pair, and the entailment
     // probability read from the id2label index rather than a fixed slot.
     expect(raw.scores).toEqual([
