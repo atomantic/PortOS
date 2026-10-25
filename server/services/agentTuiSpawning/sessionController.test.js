@@ -269,6 +269,28 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
     expect(vi.getTimerCount()).toBe(0);
   });
 
+
+  it('binds failure analysis to the raw byte boundary after the submission Enter', async () => {
+    const prompt = 'A failing guard leaves the PR open with its failing test named.';
+    const { controller, resolveErrorAnalysis, write } = makeController({
+      tuiConfig: { ...TUI_CONFIG, command: 'claude', spawnCommand: 'claude', promptDelayMs: 250 }, prompt,
+    });
+    controller.attachSession({ sessionId: 'session-test', pid: 4242 });
+    controller.markCommandInjected();
+    await controller.handleData('\x1b[?2004h');
+    await vi.advanceTimersByTimeAsync(300);
+    await controller.handleData(prompt);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(write).toHaveBeenCalledWith('session-test', '\r', { promptSubmission: true });
+    const emitted = '\nActual tool output 🌟\ntest failed';
+    await controller.handleData(emitted);
+    await controller.handleExit({ exitCode: 1, killed: false });
+    expect(resolveErrorAnalysis).toHaveBeenCalledWith(expect.objectContaining({
+      completionReason: 'shell-exit',
+      promptProvenance: { submitted: true, suppliedPrompt: prompt, bytesSinceSubmission: Buffer.byteLength(emitted) },
+    }));
+  });
+
   it('sends Claude low-priority once after an opted-in session-limit banner', async () => {
     const { controller, write, paste, finalizeAgent } = makeController({
       provider: {
