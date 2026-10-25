@@ -41,13 +41,13 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useMounted from '../../hooks/useMounted';
 import { useCanonPatch } from '../../hooks/useCanonPatch';
 import CanonCard from '../pipeline/CanonCard';
+import UniverseCharacterGrid from './UniverseCharacterGrid';
 import CanonAddEntryForm from './CanonAddEntryForm';
 import { KindSectionProvider, useKindSection } from './KindSectionContext';
 import { pipelineImageCfgToRenderOpts } from '../../lib/pipelineImageDefaults';
 import { buildUniverseSectionRenderTag } from '../../lib/universeRunTag';
 import { universeStylePreset } from '../../lib/universeStylePreset';
 import { descriptorForCanonEntry } from '../../lib/canonPrompt';
-import { applySheetPointer } from '../../lib/sheetPointers';
 import { BIBLE_LIMITS, capImageRefs } from '../../lib/bibleLimits';
 import { formatCount } from '../../utils/formatters';
 
@@ -347,31 +347,6 @@ export default function UniverseCanonSection({
       ? `Expanded ${result.entry?.name || 'character'} — filled ${fields.length} field${fields.length === 1 ? '' : 's'}`
       : `${result.entry?.name || 'Character'} already complete — nothing to fill`);
   };
-
-  // Server already stamped the character via mediaJobEvents — merge the
-  // filename into the local draft instead of refetching the whole universe.
-  // Read from `latestUniverseRef` (not closed-over `universe`) so an edit
-  // that landed during the panel's HEAD-poll wait isn't clobbered by an
-  // older snapshot. No deps on `universe` keeps the callback stable.
-  const handleSheetCompleted = useCallback((entryId, destFilename, variant) => {
-    const latest = latestUniverseRef.current;
-    if (!latest || !destFilename) return;
-    const nextCharacters = (latest.characters || []).map((c) =>
-      c.id === entryId ? applySheetPointer(c, variant, destFilename) : c,
-    );
-    onUniverseChange({ ...latest, characters: nextCharacters });
-    const entryName = nextCharacters.find((c) => c.id === entryId)?.name || 'Character';
-    toast.success(`${entryName} reference sheet ready`);
-  }, [onUniverseChange]);
-
-  const handleSheetDeleted = useCallback((entryId, variant) => {
-    const latest = latestUniverseRef.current;
-    if (!latest) return;
-    const nextCharacters = (latest.characters || []).map((c) =>
-      c.id === entryId ? applySheetPointer(c, variant, null) : c,
-    );
-    onUniverseChange({ ...latest, characters: nextCharacters });
-  }, [onUniverseChange]);
 
   const handleRenderRef = async (kind, entry) => {
     const description = kind.descFor(entry);
@@ -707,8 +682,11 @@ export default function UniverseCanonSection({
     refiningId,
     onExpandCharacter: handleExpandCharacter,
     expandingId,
-    onSheetCompleted: handleSheetCompleted,
-    onSheetDeleted: handleSheetDeleted,
+    onCatalogLockChanged: (entryId, updated) => {
+      const latest = latestUniverseRef.current;
+      if (latest) onUniverseChange({ ...latest, characters: (latest.characters || []).map(entry => entry.id === entryId
+        ? { ...entry, locked: updated.payload.locked } : entry) });
+    },
     onToggleLock: (entryId, nextLocked) => handleToggleLock(kind, entryId, nextLocked),
     togglingLockId,
     onPatchEntry: (entryId, patch) => handlePatchEntry(kind, entryId, patch),
@@ -935,33 +913,17 @@ export default function UniverseCanonSection({
 // KindSectionContext — see that module for the published shape and why the bag
 // isn't prop-threaded any more.
 function KindSection() {
+  const context = useKindSection();
   const {
-    kind, universeId, all, totalCount, filtered, usage, renderingJobs,
+    kind, all, totalCount, filtered, usage, renderingJobs,
     onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId,
-    onExpandCharacter, expandingId, onSheetCompleted, onSheetDeleted,
     onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate,
     onDescribeImages = null, onCorrectFromImage = null, seriesNameMap,
     onBulkLock, bulkLocking, fullList, castList = [],
     externalPendingByEntryId = null, compact = false, onRenderAll = null,
     renderingAll = false, onPickFromCatalog = null, catalogLinking = false,
     onAddEntry = null, creating = false, onRemoveEntry = null, onRemoveImageRef = null,
-  } = useKindSection();
-  // Universe-only character wiring — `null` for non-character kinds so
-  // CanonCard's gate stays `kind === 'characters' && characterExtensions`.
-  // Memoized so the BASE object is stable across re-renders that aren't
-  // expansion-related (refining, lock toggle, etc). The per-card spread
-  // below still allocates a fresh object every render to fold in
-  // `expanding: expandingId === entry.id`; that's unavoidable without
-  // per-card memoization and isn't worth the complexity at typical cast
-  // sizes.
-  const characterExtensions = useMemo(
-    () => (kind.key === 'characters'
-      // `castList` is the universe-wide character list — feeds the
-      // relationship-link target picker in CharacterDetailEditor (#1287).
-      ? { universeId, onExpandCharacter, onSheetCompleted, onSheetDeleted, castList: fullList }
-      : null),
-    [kind.key, universeId, onExpandCharacter, onSheetCompleted, onSheetDeleted, fullList],
-  );
+  } = context;
   // Universe-only object wiring (#1288) — `null` for non-object kinds so
   // CanonCard's gate stays `kind === 'objects' && objectExtensions`. `castList`
   // is the universe-wide character list (passed in directly, since `fullList`
@@ -1090,7 +1052,7 @@ function KindSection() {
     filtered && totalCount > 0
       ? <p className="text-xs text-gray-500 italic">No {kind.label.toLowerCase()} in the selected series. {formatCount(totalCount)} total in this universe — clear the filter to see them all.</p>
       : <p className="text-xs text-gray-500 italic">No {kind.label.toLowerCase()} yet. Use <em>Add</em> or <em>Extract from prose</em> above to populate this list.</p>
-  ) : (
+  ) : kind.key === 'characters' ? <UniverseCharacterGrid context={context} /> : (
     <ul className="space-y-2">
       {all.map((entry) => (
         <CanonCard
@@ -1120,9 +1082,6 @@ function KindSection() {
           onDescribeImages={onDescribeImages}
           onCorrectFromImage={onCorrectFromImage}
           seriesNameMap={seriesNameMap}
-          characterExtensions={characterExtensions
-            ? { ...characterExtensions, expanding: expandingId === entry.id }
-            : null}
           objectExtensions={objectExtensions}
           onRemove={onRemoveEntry}
           onRemoveImageRef={onRemoveImageRef}

@@ -899,3 +899,9 @@ export const catalogIngredientDetailQuerySchema = z.object({
   view: z.enum(['full', 'profile', 'media']).default('full'),
   includeEmbedding: z.enum(['true', 'false']).optional(),
 }).strip();
+
+export const catalogIngredientCardsQuerySchema = z.object({
+  ids: csvIdsParam({ max: 50, maxIdLength: 80 }).refine(ids => Array.isArray(ids) && ids.length > 0, 'Ingredient ids are required'),
+}).strict();
+
+export const catalogIngredientLockSchema = z.object({ locked: z.boolean() }).strict();

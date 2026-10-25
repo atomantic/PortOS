@@ -10,6 +10,8 @@ vi.mock('react-router', async (importOriginal) => {
 
 vi.mock('../services/apiCatalog', () => ({
   listCatalogIngredients: vi.fn(),
+  getCatalogIngredientCards: vi.fn(async () => []),
+  setCatalogIngredientLock: vi.fn(),
   createCatalogIngredient: vi.fn(),
   getCatalogFacets: vi.fn(),
 }));
@@ -21,7 +23,7 @@ vi.mock('../components/MediaImage', () => ({
 }));
 
 import CreativeLibrary from './CreativeLibrary';
-import { listCatalogIngredients, createCatalogIngredient, getCatalogFacets } from '../services/apiCatalog';
+import { listCatalogIngredients, createCatalogIngredient, getCatalogFacets, setCatalogIngredientLock } from '../services/apiCatalog';
 import { listCatalogTypes } from '../services/apiCatalogTypes';
 
 const renderLibrary = (libraryId, entry) => render(
@@ -48,12 +50,25 @@ describe('CreativeLibrary', () => {
     renderLibrary('casting', '/casting');
 
     const ada = await screen.findByRole('link', { name: /Ada/ });
-    expect(ada).toHaveAttribute('href', '/casting/cat-chr-1');
+    expect(ada).toHaveAttribute('href', '/casting/cat-chr-1?returnTo=%2Fcasting');
     expect(screen.getByRole('img', { name: 'Ada' })).toHaveAttribute('src', '/data/images/ada.png');
     expect(screen.getByRole('img', { name: 'Bo' })).toHaveAttribute('src', '/data/images/bo.png');
     expect(screen.getByText('1 universe · 2 videos')).toBeInTheDocument();
-    expect(screen.getByText('Not used yet')).toBeInTheDocument();
+    expect(screen.getByText('No linked containers')).toBeInTheDocument();
     expect(listCatalogIngredients).toHaveBeenCalledWith(expect.objectContaining({ type: 'character', offset: 0 }));
+  });
+
+  it('keeps confirmed card locks when another page appends older copies of the loaded records', async () => {
+    const items = Array.from({ length: 48 }, (_, index) => ({ id: `example-${index}`, type: 'character', name: `Example ${index}`, payload: { locked: false } }));
+    listCatalogIngredients.mockResolvedValueOnce({ items }).mockResolvedValueOnce({ items: [{ id: 'last', type: 'character', name: 'Last', payload: {} }] });
+    setCatalogIngredientLock.mockResolvedValue({ ...items[0], payload: { locked: true } });
+    renderLibrary('casting', '/casting?scope=example-world');
+    fireEvent.click(await screen.findByRole('button', { name: 'Lock Example 0' }));
+    await screen.findByRole('button', { name: 'Unlock Example 0' });
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await screen.findByRole('link', { name: 'Open Last' });
+    expect(screen.getByRole('button', { name: 'Unlock Example 0' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Example 0' })).toHaveAttribute('href', '/casting/example-0?returnTo=%2Fcasting%3Fscope%3Dexample-world');
   });
 
   it('scopes to a universe or to unlinked records from the URL', async () => {

@@ -247,6 +247,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['PUT /api/catalog/ingredients/:id/owner', RECORDS],
   ['DELETE /api/catalog/ingredients/:id', REMOVES_RECORD],
   ['PATCH /api/catalog/ingredients/:id', RECORDS],
+  ['PATCH /api/catalog/ingredients/:id/lock', RECORDS],
   ['DELETE /api/catalog/ingredients/:id/link', REMOVES_RECORD],
   ['POST /api/catalog/ingredients/:id/link', RECORDS],
   ['DELETE /api/catalog/ingredients/:id/media', REMOVES_RECORD],

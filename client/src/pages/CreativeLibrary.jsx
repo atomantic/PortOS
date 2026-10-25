@@ -13,6 +13,8 @@ import { Drama, Mountain, Package, Plus, Search, Loader2, Sparkles, Library, Imp
 import PageHeader from '../components/PageHeader';
 import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import MediaImage from '../components/MediaImage';
+import CharacterCard from '../components/catalog/CharacterCard';
+import useCatalogCards from '../hooks/useCatalogCards';
 import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 import toast from '../components/ui/Toast';
 import { listCatalogIngredients, getCatalogFacets, createCatalogIngredient } from '../services/apiCatalog';
@@ -87,6 +89,7 @@ export default function CreativeLibrary({ libraryId }) {
     return { items, nextCursor: items.length === PAGE_SIZE ? offset + items.length : null };
   }, [library.type, urlQ, scope]);
   const page = usePagedCollection(fetchPage);
+  const cards = useCatalogCards(library.type === 'character' ? page.items.map(item => item.id) : [], { initial: page.items });
 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', content: '', universeId: '' });
@@ -236,13 +239,17 @@ export default function CreativeLibrary({ libraryId }) {
           ))}
         </div>
 
+        {cards.error && <p role="alert" className="text-sm text-port-error">Could not refresh card context. <button type="button" onClick={cards.retry} className="underline">Retry cards</button></p>}
         {page.loaded && page.items.length === 0 ? (
           <div className="bg-port-card border border-port-border rounded-lg p-8 text-center text-sm text-gray-400">
             {urlQ || scope ? `No ${library.label.toLowerCase()} match this filter.` : library.empty}
           </div>
         ) : (
           <ul className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-            {page.items.map((it) => <LibraryTile key={it.id} ingredient={it} />)}
+            {page.items.map((it) => library.type === 'character'
+              ? <CharacterCard key={it.id} ingredient={cards.cards[it.id] || it} onUpdated={cards.update} unavailable={!!cards.error}
+                to={`${ingredientPath(it)}?${new URLSearchParams({ returnTo: `${library.path}${searchParams.size ? `?${searchParams}` : ''}` })}`} />
+              : <LibraryTile key={it.id} ingredient={it} />)}
           </ul>
         )}
         <InfiniteScrollFooter hasMore={page.hasMore} loading={page.loading} error={page.error} onLoadMore={page.loadMore} />
