@@ -2989,6 +2989,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     if (scenario.startsWith('separate-')) {
       agent.result = { success: false, executionSuccess: true, validationPassed: null,
         taskOutcome: { status: 'blocked', reason: 'Earlier CI did not finish' } };
+      // Captures use native canonical paths; app inventories may use Git's
+      // spelling. Even a portable trailing separator must not lose the proof.
+      for (const row of [...agent.metadata.checkoutSeeds, ...agent.metadata.completedCheckouts]) row.repoPath += '/';
       if (scenario === 'separate-wrong-pr') agent.metadata.reviewLoopMergeTarget.url = 'https://github.com/example/repo/pull/43';
     }
     const originalResult = structuredClone(agent.result);

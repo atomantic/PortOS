@@ -646,11 +646,15 @@ async function retirementPolicy(repoPath, branch, opts, reviewIdentity = {}) {
     && forge.detachedRepresentation.deliveredHead === forge.prHead
     && Array.isArray(policies)) {
     const { completedCheckoutReceiptValid } = await import('./completedCheckoutEvidence.js');
-    const candidates = policies.flatMap(agent => (agent.status === 'completed' ? agent.metadata?.completedCheckouts || [] : [])
-      .filter(row => row.branch === branch && row.repoPath === repoPath && completedCheckoutReceiptValid(agent, row))
+    const candidates = policies.flatMap(agent => (agent.status === 'completed' && Array.isArray(agent.metadata?.completedCheckouts) ? agent.metadata.completedCheckouts : [])
+      .filter(row => row?.branch === branch && completedCheckoutReceiptValid(agent, row))
       .map(row => ({ agent, row })));
     const delivered = [];
+    const repository = await realpath(repoPath).catch(() => null);
+    const canonical = path => process.platform === 'win32' ? path?.toLowerCase() : path;
     if (candidates.length <= 25) for (const { agent, row } of candidates) {
+      const capturedRepository = await realpath(row.repoPath).catch(() => null);
+      if (!repository || !capturedRepository || canonical(repository) !== canonical(capturedRepository)) continue;
       const ancestor = row.head === forge.prHead || await execGit(['--no-replace-objects', '-c', 'core.commitGraph=false',
         'merge-base', '--is-ancestor', row.head, forge.prHead], repoPath,
       { ignoreExitCode: true, timeout: 2000,
