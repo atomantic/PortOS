@@ -12,6 +12,12 @@ PortDeck can view and control a PortOS machine through a VNC server running on t
 
 VNC grants control of the currently logged-in desktop. Use a unique VNC password that is different from both the macOS login password and the PortOS instance password. Apply Tailscale ACLs and the host firewall as appropriate; enabling a platform VNC server may make its own port available on additional interfaces independently of the PortOS loopback broker.
 
+## Tailcat companion transport
+
+The managed Tailcat listener on loopback port 5565 supports the same token-authenticated viewer WebSocket as the main API, using the API's HTTP/HTTPS mode and certificate reload. Tailcat requests remain remote even though the transport connects through loopback. Stopping or replacing this listener closes its HTTP and upgraded connections without revoking viewers on the main API.
+
+`GET /api/remote-desktop/status` advertises `tailcatIngressSupported: true`. Companions must require both this flag and `available` before opening a Tailcat viewer; a missing or false capability on older servers means unsupported. This does not change session authentication, the VNC target, or the private-network deployment model.
+
 ## One-time host setup
 
 Run this on each PortOS machine:

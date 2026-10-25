@@ -51,7 +51,7 @@ describe('remote desktop routes', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({ available: false, configured: true, requiresPortOSAuth: true });
+    expect(response.body).toMatchObject({ available: false, configured: true, requiresPortOSAuth: true, tailcatIngressSupported: true });
   });
 
   it('creates a viewer session for an authenticated instance', async () => {
