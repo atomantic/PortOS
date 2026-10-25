@@ -261,7 +261,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     const { assertNoUniqueIgnoredCheckoutPayload } = await import('./heldCheckoutRecovery.js');
     const paths = [input.release.path, ...(prepared.review.snapshot.modules || []).map(module => join(input.release.path, module.path))];
     for (const path of paths) {
-      const hold = await assertNoUniqueIgnoredCheckoutPayload(path, runGit).then(() => null,
+      const hold = await assertNoUniqueIgnoredCheckoutPayload(path, runGit, [], [], path === input.release.path ? ctx.repoPath : null).then(() => null,
         error => error.message || 'checkout-not-disposable');
       if (hold) return { ok: false, reason: hold };
     }

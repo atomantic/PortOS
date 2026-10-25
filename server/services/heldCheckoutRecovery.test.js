@@ -1478,6 +1478,34 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       expect(await archives()).toEqual([]);
     });
 
+  it.each(['duplicate', 'modified'])('retires only proven private npm copies at the destructive boundary: %s', async kind => {
+    const manifest = { name: 'fixture', version: '1.0.0' };
+    const lock = { ...manifest, lockfileVersion: 3, requires: true, packages: { 'node_modules/example': { version: '1.0.0' } } };
+    await writeFile(join(repo, 'package.json'), JSON.stringify(manifest));
+    await writeFile(join(repo, 'package-lock.json'), JSON.stringify(lock));
+    await execGit(['add', 'package.json', 'package-lock.json'], repo);
+    await execGit(['commit', '-m', 'fixture dependency inputs'], repo);
+    const c = await reviewedCheckout(`private-npm-${kind}`);
+    for (const root of [repo, c.path]) {
+      await mkdir(join(root, 'node_modules/example'), { recursive: true });
+      await writeFile(join(root, 'node_modules/.package-lock.json'), JSON.stringify(lock));
+      await writeFile(join(root, 'node_modules/example/index.js'), 'shipped package bytes');
+    }
+    if (kind === 'modified') await writeFile(join(c.path, 'node_modules/example/index.js'), 'unique local modification');
+    const prepared = await c.prepare();
+    expect(prepared.ok, JSON.stringify(prepared)).toBe(true);
+    const retired = await c.confirm(prepared.review);
+    if (kind === 'duplicate') {
+      expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+      expect(await registered(c.path)).toBe(false);
+      expect(await readFile(join(repo, 'node_modules/example/index.js'), 'utf8')).toBe('shipped package bytes');
+    } else {
+      expect(retired).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
+      expect(await readFile(join(c.path, 'node_modules/example/index.js'), 'utf8')).toBe('unique local modification');
+    }
+    expect(await archives()).toEqual([]);
+  });
+
   // Normal tests generate state caches as well as compiled modules. Only their
   // tagged producer schema may pass the actual destructive retirement boundary.
   it.each(['results', 'dependencies', 'unknown-field', 'bad-version', 'bad-project', 'bad-index', 'untagged', 'untracked', 'sidecar'])(
