@@ -799,6 +799,8 @@ def parse_args() -> argparse.Namespace:
                         "when the selected model includes it, otherwise it uses the legacy adapter.")
     p.add_argument("--lora-strength", type=float, default=1.0,
                    help="Distilled-LoRA fusion strength (default 1.0, matches dgrauet's CLI).")
+    p.add_argument("--a2v-lora-stage-strengths", type=json.loads, default=None,
+                   help="User-LoRA motion/refine multipliers as [0..1, 0..1]; A2V only")
     p.add_argument("--user-loras", default=None,
                    help="JSON list of {path, strength} dicts — user LoRAs (e.g. a "
                         "fal LTX-2.3 LoRA) applied on every transformer load: added at "
@@ -1096,7 +1098,7 @@ def _lora_report():
     return _LORA_REPORT
 
 
-def _install_adapters(pipe, specs: list[tuple[str, float]], *, ic: bool) -> None:
+def _install_adapters(pipe, specs: list[tuple[str, float]], *, ic: bool = False, user_stage_strengths=None):
     """Apply user (and, for IC, reference) adapters at inference time (#12262).
 
     Every pipeline builds its DiT through _load_transformer_with_optional_streaming,
@@ -1108,12 +1110,13 @@ def _install_adapters(pipe, specs: list[tuple[str, float]], *, ic: bool) -> None
     attach once, before stage 1 (see install_pipeline_adapters).
     """
     if not specs and not ic:
-        return
+        return lambda: None
     from ltx_runtime_lora import install_pipeline_adapters
     if specs:
         names = ", ".join(f"{Path(p).name}@{s:g}" for p, s in specs)
         emit_status(f"Applying {len(specs)} user LoRA(s): {names}")
-    install_pipeline_adapters(pipe, list(specs or []), report=_lora_report(), status=emit_status, ic=ic)
+    return install_pipeline_adapters(pipe, list(specs or []), report=_lora_report(), status=emit_status,
+                                     ic=ic, user_stage_strengths=user_stage_strengths)
 
 
 def _apply_user_loras(pipe, specs: list[tuple[str, float]]) -> None:
@@ -2016,6 +2019,13 @@ def run_a2v(args: argparse.Namespace) -> str:
     AudioToVideoPipeline = _resolve_pipeline("A2VidPipelineTwoStage", "AudioToVideoPipeline")
     if not args.audio:
         raise SystemExit("--audio is required for a2v mode")
+    from ltx_runtime_lora import release_pipeline_adapters, validate_stage_strengths
+    strengths = validate_stage_strengths(getattr(args, "a2v_lora_stage_strengths", None))
+    if strengths != (1.0, 1.0):
+        if not args.user_lora_specs:
+            raise ValueError("A2V stage strengths require at least one selected user LoRA")
+        from ltx_a2v_lora_probe import require_a2v_stage_capability
+        require_a2v_stage_capability(AudioToVideoPipeline)
     streaming_policy = configure_streaming_policy(args, AudioToVideoPipeline, "a2v")
     optional_kwargs = _pipeline_optional_kwargs(
         AudioToVideoPipeline, "a2v", streaming_policy
@@ -2023,23 +2033,26 @@ def run_a2v(args: argparse.Namespace) -> str:
     emit_status(f"Loading A2V pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
     pipe = AudioToVideoPipeline(model_dir=args.model, **optional_kwargs, **_gemma_kwargs(args))
-    _prefer_distilled_lora(pipe, args.distilled_lora)
-    _refuse_if_streaming_distilled_adapter_missing(pipe, streaming_policy["active"])
-    _apply_user_loras(pipe, args.user_lora_specs)
-    emit_stage(1, 1, 1, "Loaded")
-    emit_status(f"Generating A2V from {Path(args.audio).name}…")
-    stage1_steps = args.steps if args.steps is not None else 30
-    _A2V_TC_CONFIG = _teacache_config(not args.no_teacache, _A2V_TC_PATCH_OK, stage1_steps,
-                                      args.teacache_thresh)
-    if _A2V_TC_CONFIG["enable"]:
-        emit_status(f"TeaCache active on A2V Stage 1 (thresh={_teacache_thresh_label(args.teacache_thresh)})")
-    audio_path, audio_start, padded_audio = a2v_audio_covering_clip(
-        args.audio, args.audio_start, args.num_frames, args.fps, str(Path(args.output).parent))
-    restore_image_rate = _patch_a2v_image_conditioning_rate(args.fps)
-    _A2V_FREEZE_STAGE2_AUDIO = _A2V_FREEZE_PATCH_OK
-    if _A2V_FREEZE_PATCH_OK:
-        emit_status("Holding the supplied audio fixed through the refine pass")
+    padded_audio = None
+    restore_image_rate = lambda: None
+    restore_adapters = lambda: None
     try:
+        _prefer_distilled_lora(pipe, args.distilled_lora)
+        _refuse_if_streaming_distilled_adapter_missing(pipe, streaming_policy["active"])
+        restore_adapters = _install_adapters(pipe, args.user_lora_specs, user_stage_strengths=strengths)
+        emit_stage(1, 1, 1, "Loaded")
+        emit_status(f"Generating A2V from {Path(args.audio).name}…")
+        stage1_steps = args.steps if args.steps is not None else 30
+        _A2V_TC_CONFIG = _teacache_config(not args.no_teacache, _A2V_TC_PATCH_OK, stage1_steps,
+                                          args.teacache_thresh)
+        if _A2V_TC_CONFIG["enable"]:
+            emit_status(f"TeaCache active on A2V Stage 1 (thresh={_teacache_thresh_label(args.teacache_thresh)})")
+        audio_path, audio_start, padded_audio = a2v_audio_covering_clip(
+            args.audio, args.audio_start, args.num_frames, args.fps, str(Path(args.output).parent))
+        restore_image_rate = _patch_a2v_image_conditioning_rate(args.fps)
+        _A2V_FREEZE_STAGE2_AUDIO = _A2V_FREEZE_PATCH_OK
+        if _A2V_FREEZE_PATCH_OK:
+            emit_status("Holding the supplied audio fixed through the refine pass")
         return _run_with_ltx_stepwise_preview(pipe, args, lambda: pipe.generate_and_save(
             prompt=args.prompt,
             output_path=args.output,
@@ -2056,6 +2069,8 @@ def run_a2v(args: argparse.Namespace) -> str:
             **_rate_kwargs(pipe.generate_and_save, args.fps),
         ))
     finally:
+        restore_adapters()
+        release_pipeline_adapters(pipe)
         restore_image_rate()
         _A2V_TC_CONFIG = None
         _A2V_FREEZE_STAGE2_AUDIO = False
@@ -2569,6 +2584,10 @@ def main() -> NoReturn:
         ))
     # Parse user LoRAs once up-front (strict validation surfaces bad input
     # before any model load). Each run_* installs them on its pipeline.
+    from ltx_runtime_lora import validate_stage_strengths
+    args.a2v_lora_stage_strengths = validate_stage_strengths(args.a2v_lora_stage_strengths)
+    if args.a2v_lora_stage_strengths != (1.0, 1.0) and args.mode != "a2v":
+        raise SystemExit("A2V LoRA stage strengths apply only to a2v mode")
     args.user_lora_specs = parse_user_loras(args.user_loras)
     configure_negative_prompt(args.negative_prompt)
     install_prompt_encode_markers()

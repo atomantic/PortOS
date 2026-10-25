@@ -1,3 +1,4 @@
+import { isDefaultA2vLoraStages } from '../../lib/videoLoraStageValidation.js';
 /**
  * Submit a validated video-generation request to its federated, hosted, or local
  * dispatch lane. HTTP parsing and validation stay in the route; this service
@@ -88,6 +89,7 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
       ['reference images', body.referenceImageFiles?.length],
       ['reference clips', body.referenceVideoIds?.length],
       ['LoRA weights', body.loraFilenames?.length],
+      ['per-stage user LoRA strengths', !isDefaultA2vLoraStages(body.a2vLoraStageStrengths)],
       ['chained chunks', body.chunks > 1],
       ['warm render batches', body.batchSize > 1],
       ['the Grok backend', body.backend === 'grok'],
@@ -395,6 +397,7 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
 // that never changed the render.
 const localDeliveryParams = (body) => ({
   tiling: body.tiling || 'auto',
+  ...(body.a2vLoraStageStrengths !== undefined ? { a2vLoraStageStrengths: body.a2vLoraStageStrengths } : {}),
   ...(isStockTextEncoder(body.textEncoderId) ? {} : { textEncoderId: body.textEncoderId }),
   ...(isDefaultSpeedProfile(body.speedProfileId) ? {} : { speedProfileId: body.speedProfileId }),
   ...(isFullDecode(body.draftDecode) ? {} : { draftDecode: body.draftDecode }),

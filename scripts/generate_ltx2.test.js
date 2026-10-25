@@ -44,6 +44,50 @@ const argsExpr = (overrides = {}) => {
 };
 
 describe.skipIf(!pyBin)('generate_ltx2.py', () => {
+  it('restores A2V adapter and image-rate hooks on failure or cancellation while preserving prompt and audio arguments', () => {
+    runPython(`${importRunner}
+import ltx_runtime_lora as adapters
+import tempfile
+from unittest.mock import patch
+for error, specs in ((RuntimeError, []), (KeyboardInterrupt, [("example.safetensors", 0.7)])):
+    captured = []
+    class Pipeline:
+        def __init__(self, **kwargs):
+            self.dit = None
+            self._loaded = True
+            captured.append(self)
+        def _load_transformer_with_optional_streaming(self, path):
+            raise AssertionError("No weights should load in this fixture")
+        def generate_and_save(self, **kwargs):
+            assert kwargs["prompt"] == "  A paper singer.  "
+            assert kwargs["audio_path"] == "synthetic.wav"
+            raise error("injected failure")
+    sys.argv = ["bridge", "--mode", "a2v", "--prompt", "  A paper singer.  ", "--model", "example", "--output", "example.mp4", "--audio", "synthetic.wav"]
+    args = runner.parse_args()
+    args.user_lora_specs = specs
+    restored = []
+    statuses = []
+    with patch.object(runner, "emit_status", side_effect=statuses.append), patch.object(runner, "_resolve_pipeline", return_value=Pipeline), \
+         patch.object(runner, "configure_streaming_policy", return_value={"active": False}), \
+         patch.object(runner, "_pipeline_optional_kwargs", return_value={}), \
+         patch.object(runner, "_prefer_distilled_lora"), \
+         patch.object(runner, "_refuse_if_streaming_distilled_adapter_missing"), \
+         patch.object(runner, "a2v_audio_covering_clip", return_value=("synthetic.wav", 0.0, None)), \
+         patch.object(runner, "_patch_a2v_image_conditioning_rate", return_value=lambda: restored.append(True)), \
+         patch.object(runner, "_run_with_ltx_stepwise_preview", side_effect=lambda pipe, args, run: run()):
+        try:
+            runner.run_a2v(args)
+            raise AssertionError("Failure was swallowed")
+        except error:
+            pass
+    assert restored == [True]
+    assert ("Applying 1 user LoRA(s): example.safetensors@0.7" in statuses) == bool(specs)
+    assert captured[0].dit is None and captured[0]._loaded is False
+    assert "_pending_loras" not in captured[0].__dict__
+    assert "_load_transformer_with_optional_streaming" not in captured[0].__dict__
+`);
+  });
+
   // A partial flag set would silently fall back to the conditioner packed in the
   // 2.5 model and hand back a render the user has no way to tell apart from the
   // one they asked for, so the boundary rejects it instead of choosing for them.

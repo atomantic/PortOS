@@ -1460,6 +1460,7 @@ const REVIEWED_PROCESS_SITES = [
   ['server/services/videoGen/runtimes.js#isByovRuntimeReady', VERSION_PROBE],
   ['server/services/videoGen/runtimes.js#probeRuntimeFingerprint', VERSION_PROBE],
   ['server/services/videoGen/runtimes.js#resolveByovRuntimeLoraCapable', VERSION_PROBE],
+  ['server/services/videoGen/runtimes.js#resolveA2vLoraStageCapable', 'Runs only the fixed LTX A2V seam probe in the installed venv: imports pipeline definitions and reads pinned checkout revision/status; loads no model, downloads nothing and accepts no request-supplied command or path.'],
   ['server/services/ytdlpUpdate.js#readYtDlpVersion', VERSION_PROBE],
 ];
 

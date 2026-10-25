@@ -313,6 +313,11 @@ export default function MediaLightbox({
     // Image Strength number alone never told anyone.
     ['Reference', item.raw?.i2vReferenceMode ? i2vReferenceModeLabel(item.raw.i2vReferenceMode) : null],
     ['Image strength', item.raw?.imageStrength],
+    ['User LoRA stages requested', item.raw?.a2vLoraStageStrengths
+      ? `motion ×${item.raw.a2vLoraStageStrengths[0]}, detail ×${item.raw.a2vLoraStageStrengths[1]}` : null],
+    ['User LoRA stages applied', item.raw?.a2vLoraStageStrengths && item.raw?.loraStrategyApplied?.adapters
+      ?.filter((adapter) => adapter.role === 'user')
+      .map((adapter) => `${adapter.name}: ${adapter.stages.join(', ')} = ${adapter.strength}`).join('; ')],
     ['Created', item.createdAt && formatDateTime(item.createdAt)],
     // Wall-clock the render itself took, excluding queue wait (see the renderMs
     // contract in normalize.js). Absent drops the row via the null-filter below.

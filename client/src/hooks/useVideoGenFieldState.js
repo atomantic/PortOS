@@ -67,6 +67,7 @@ export function useVideoGenFieldState({
   const [streamingMode, setStreamingMode] = useState(DEFAULT_VIDEO_STREAMING_MODE);
   const [disableAudio, setDisableAudio] = useState(false);
   const [selectedLoras, setSelectedLoras] = useState([]);
+  const [a2vLoraStageStrengths, setA2vLoraStageStrengths] = useState([1, 1]);
   const [noMusic, setNoMusic] = useState(false);
   const [sourceImageFile, setSourceImageFile] = useState(incomingSourceImage || null);
   const [sourceImageUpload, setSourceImageUpload] = useState(null);
@@ -143,6 +144,7 @@ export function useVideoGenFieldState({
     remixSourceModel, setRemixSourceModel,
     seed, setSeed, batchSize, setBatchSize,
     selectedLoras, setSelectedLoras,
+    a2vLoraStageStrengths, setA2vLoraStageStrengths,
     selectedUniverse, setSelectedUniverse,
     sizeManuallySetRef,
     speedProfileId, setSpeedProfileId,
