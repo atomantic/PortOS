@@ -117,6 +117,14 @@ async function packageMatches(root, files, work) {
   return seen === files.size;
 }
 
+function npmRegistryArtifact(entry) {
+  try {
+    const url = new URL(entry.resolved);
+    return url.protocol === 'https:' && url.hostname === 'registry.npmjs.org'
+      && !url.username && !url.password && !url.search && !url.hash && url.pathname.endsWith('.tgz');
+  } catch { return false; }
+}
+
 function hiddenLockMatches(hidden, locked) {
   return record(hidden) && record(hidden.packages) && hidden.lockfileVersion === 3 && hidden.requires === true
     && hidden.name === locked.name && hidden.version === locked.version
@@ -163,7 +171,7 @@ export function createNpmRetirementVerifier(checkout, primary, work, { cacheRoot
     const local = proof.prefix ? rel.slice(proof.prefix.length + 1) : rel;
     const name = Object.keys(proof.hidden.packages).filter(path => local.startsWith(`${path}/`)).sort((a, b) => b.length - a.length)[0];
     const entry = proof.locked.packages?.[name];
-    if (!entry?.integrity || entry.hasInstallScript || proof.hidden.packages[name].hasInstallScript) return false;
+    if (!entry?.integrity || !npmRegistryArtifact(entry) || entry.hasInstallScript || proof.hidden.packages[name].hasInstallScript) return false;
     const key = `${root}:${name}`;
     if (!packages.has(key)) packages.set(key, (async () => {
       const digest = Buffer.from(entry.integrity.replace(/^sha512-/, ''), 'base64');

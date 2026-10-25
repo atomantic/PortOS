@@ -30,7 +30,7 @@ async function fixture(members = [{ name: 'package/index.js', content: 'export c
   roots.push(root);
   const checkout = join(root, 'checkout'); const primary = join(root, 'primary'); const cacheRoot = join(root, 'cache');
   const archive = tarball(members);
-  const entry = { version: '1.0.0', integrity: integrity(archive), optional: true };
+  const entry = { version: '1.0.0', resolved: 'https://registry.npmjs.org/example/-/example-1.0.0.tgz', integrity: integrity(archive), optional: true };
   const lock = { name: 'fixture', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { 'node_modules/example': entry } };
   for (const dir of [checkout, primary]) {
     await mkdir(join(dir, 'node_modules'), { recursive: true });
@@ -82,6 +82,15 @@ describe('private npm payload retirement proof', () => {
   it('refuses cached-package fallback for install-script outputs', async () => {
     const f = await fixture();
     f.lock.packages['node_modules/example'].hasInstallScript = true;
+    for (const path of [join(f.checkout, 'package-lock.json'), join(f.primary, 'package-lock.json'), join(f.checkout, 'node_modules/.package-lock.json')]) {
+      await writeFile(path, JSON.stringify(f.lock));
+    }
+    expect(await f.verifier()('node_modules/example/index.js')).toBe(false);
+  });
+
+  it('retains a locally authored tarball package even when npm cached matching bytes', async () => {
+    const f = await fixture();
+    f.lock.packages['node_modules/example'].resolved = 'file:../unpublished-source.tgz';
     for (const path of [join(f.checkout, 'package-lock.json'), join(f.primary, 'package-lock.json'), join(f.checkout, 'node_modules/.package-lock.json')]) {
       await writeFile(path, JSON.stringify(f.lock));
     }
