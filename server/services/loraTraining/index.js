@@ -198,6 +198,11 @@ export async function runTraining({ jobId, runId, reattach = false, recoveryPerm
   // stuck `running` (lingering until the next boot reconcile) or the dataset
   // stuck on its `training` chip.
   const failBeforeSpawn = async (message) => {
+    if (reattach && await hasSurvivingTrainer(runId)) {
+      retainOwnership();
+      console.error(`❌ training [${shortId(jobId)}] observer unavailable; live trainer and artifacts preserved: ${message}`);
+      return { preserved: true };
+    }
     await releaseClaim();
     await runsDb.updateRun(runId, {
       status: 'failed', error: message, completedAt: new Date().toISOString(),
@@ -813,9 +818,15 @@ export async function initLoraTraining() {
       if (await hasSurvivingTrainer(run.id)) {
         const jobId = run.jobId || run.id;
         const recoveryPermit = maintenance.recoverOwned('media', jobId);
-        const observer = await recoveryPermit.run(() => runTraining({ jobId, runId: run.id, reattach: true, recoveryPermit }));
-        if (!observer?.observing) await recoveryPermit.finish();
-        console.log(`🔁 Observing retired trainer ${shortId(run.id)} without restarting it`);
+        try {
+          const observer = await recoveryPermit.run(() => runTraining({ jobId, runId: run.id, reattach: true, recoveryPermit }));
+          if (observer?.observing) console.log(`🔁 Observing retired trainer ${shortId(run.id)} without restarting it`);
+          else if (!observer?.preserved && !await hasSurvivingTrainer(run.id)) await recoveryPermit.finish();
+        } catch (err) {
+          // An uncertain observer must retain its recovery permit: the detached
+          // process may still be writing, even when its database/claim is down.
+          console.error(`❌ Retired trainer ${shortId(run.id)} could not be observed; artifacts stay pinned: ${err?.message}`);
+        }
         continue;
       }
       await runsDb.updateRun(run.id, {
