@@ -1,9 +1,9 @@
 import { getNavPageForPath } from '../lib/navManifest.js';
 import { withRetiredDataRemoval } from '../lib/retiredLoraTraining.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, readdir, realpath, rename } from 'node:fs/promises';
+import { lstat, readdir, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { PATHS, rmGuarded } from '../lib/fileUtils.js';
+import { PATHS, renameGuarded, rmGuarded } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
@@ -92,7 +92,7 @@ export async function executeMaintenance({ token, confirmation }) {
     const source = join(PATHS.data, preview.directory);
     const stagedName = `.maintenance-${preview.token}`;
     const staged = join(PATHS.data, stagedName);
-    await rename(source, staged);
+    await renameGuarded(source, staged);
     // Renaming first detaches the exact inspected directory from normal writers.
     // Revalidate identity and contents before removing anything. On uncertainty,
     // preserve the detached tree and report its recovery location.
@@ -107,7 +107,7 @@ export async function executeMaintenance({ token, confirmation }) {
       await rmGuarded(staged, { recursive: true, force: false });
     } catch (error) {
       const replacement = await lstat(source).catch(missing);
-      if (!replacement) await rename(staged, source).catch(() => {});
+      if (!replacement) await renameGuarded(staged, source).catch(() => {});
       throw new ServerError(`Removal did not complete. Inspect data/${preview.directory} and data/${stagedName} before trying again.`, { status: 409, code: 'MAINTENANCE_INCOMPLETE', cause: error });
     }
     const remaining = await inspect(preview.directory).catch(() => null);
