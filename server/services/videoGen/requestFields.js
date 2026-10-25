@@ -20,6 +20,10 @@ export const VIDEO_GEN_LOCAL_ONLY_FIELDS = Object.freeze({
   STREAMING_MODE: 'streamingMode',
 });
 
+// Indexed multipart slots for ordered voice references (FastH3 Omni): the
+// streaming parser keeps one file per field name, so N clips need N names.
+export const REFERENCE_AUDIO_FIELDS = Object.freeze(['referenceAudio0', 'referenceAudio1', 'referenceAudio2']);
+
 export const VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES = Object.freeze(
   Object.values(VIDEO_GEN_LOCAL_ONLY_FIELDS),
 );

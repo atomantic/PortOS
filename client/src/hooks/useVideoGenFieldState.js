@@ -84,6 +84,9 @@ export function useVideoGenFieldState({
   const [icReferenceFile, setIcReferenceFile] = useState(null);
   const [icReferenceVideoId, setIcReferenceVideoId] = useState('');
   const [icReferenceImageFiles, setIcReferenceImageFiles] = useState([]);
+  const [referenceImageFiles, setReferenceImageFiles] = useState([]);
+  const [referenceVideoIds, setReferenceVideoIds] = useState([]);
+  const [referenceAudioFiles, setReferenceAudioFiles] = useState([]);
   const [icStrength, setIcStrength] = useState(1.0);
   const [icSkipStage2, setIcSkipStage2] = useState(false);
   const [icReferenceNames, setIcReferenceNames] = useState([]);
@@ -118,6 +121,9 @@ export function useVideoGenFieldState({
     i2vReferenceMode, setI2vReferenceMode,
     icReferenceFile, setIcReferenceFile,
     icReferenceImageFiles, setIcReferenceImageFiles,
+    referenceImageFiles, setReferenceImageFiles,
+    referenceVideoIds, setReferenceVideoIds,
+    referenceAudioFiles, setReferenceAudioFiles,
     icReferenceNames, setIcReferenceNames,
     icReferenceVideoId, setIcReferenceVideoId,
     icSkipStage2, setIcSkipStage2,

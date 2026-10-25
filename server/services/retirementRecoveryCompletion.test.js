@@ -2,12 +2,13 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
 import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
+import { listWorktrees } from './worktreeManager.js';
 
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-retirement-completion-') }));
 afterAll(cleanupTempDataRoots);
@@ -81,8 +82,15 @@ beforeEach(async () => {
   const branch = 'fix/receipt-example';
   await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
   originalHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
-  release = { branch, path, head: originalHead, locked: false, lockReason: null,
-    checkoutIdentity: await readRetirementCheckoutIdentity(path), observedAt: new Date().toISOString() };
+  // Production inventory persists Git's path spelling, which can differ from
+  // a native Windows path. Prove it names the requested physical checkout.
+  const registered = (await listWorktrees(repo)).find(tree => tree.branch === `refs/heads/${branch}`);
+  const checkoutIdentity = await readRetirementCheckoutIdentity(path);
+  expect(Boolean(registered && checkoutIdentity
+    && await readRetirementCheckoutIdentity(registered.path) === checkoutIdentity),
+  'Git inventory must identify the fixture checkout').toBe(true);
+  release = { branch, path: registered.path, head: originalHead, locked: false, lockReason: null,
+    checkoutIdentity, observedAt: new Date().toISOString() };
   Object.assign(store, { app: { id: 'example-app', repoPath: repo }, schedule: { tasks: {}, executions: {} }, owners: [], unreadable: false });
   await recordBranchReconcileOutcome(store.app.id, { status: 'incomplete',
     worktreeInventory: [{ ...release, managed: false }],
@@ -108,7 +116,19 @@ async function retire() {
   const result = await retireInventoriedCheckout({ appId: store.app.id, release }, {
     cosDir: join(scratch, 'cos'), readAgents: async () => [],
   });
-  expect(result, JSON.stringify(result)).toMatchObject({ ok: true, branchDeleted: true });
+  // Keep native registration failures actionable without publishing temporary paths.
+  const diagnostics = result.ok ? null : await listWorktrees(repo).then(trees => ({
+    checkoutExists: existsSync(release.path),
+    registrations: trees.map(tree => ({
+      branchMatches: tree.branch === `refs/heads/${release.branch}`,
+      headMatches: tree.head === release.head,
+      pathExists: existsSync(tree.path),
+      resolvedPathMatches: resolve(tree.path) === resolve(release.path),
+      caseFoldedPathMatches: resolve(tree.path).toLowerCase() === resolve(release.path).toLowerCase(),
+      quotedPath: tree.path.startsWith('"'),
+    })),
+  }), error => ({ registrationError: error.code || error.name }));
+  expect(result, JSON.stringify({ result, diagnostics })).toMatchObject({ ok: true, branchDeleted: true });
   expect(existsSync(release.path)).toBe(false);
   expect(existsSync(join(scratch, 'cos', 'held-checkout-archives'))).toBe(false);
 }
@@ -192,6 +212,7 @@ describe('retirement recovery public completion flow', () => {
 
 
   it('recognizes an existing recovery only through its original reservation and captured physical generation', async () => {
+    expect(capturedCheckout).not.toBeNull();
     await retire();
     const origin = store.task.metadata.recoveryOrigin;
     store.parent.metadata = {
@@ -199,7 +220,16 @@ describe('retirement recovery public completion flow', () => {
       completedCheckouts: [{ ...capturedCheckout, version: 1, agentId: store.parent.id, startedAt: store.parent.startedAt,
         capturedAt: store.parent.completedAt }],
     };
-    expect(await verifyRetirementRecoveryCompletion(store.task)).toMatchObject({ status: 'verified' });
+    const proof = await verifyRetirementRecoveryCompletion(store.task);
+    expect(proof, proof.reason).toMatchObject({ status: 'verified' });
+    // Path equivalence must survive removal, without reopening the checkout.
+    const receipt = store.parent.metadata.completedCheckouts[0];
+    receipt.path = `${capturedCheckout.path}/.`;
+    const equivalentPath = await verifyRetirementRecoveryCompletion(store.task);
+    expect(equivalentPath, equivalentPath.reason).toMatchObject({ status: 'verified' });
+    receipt.path = `${capturedCheckout.path}-different`;
+    expect(await verifyRetirementRecoveryCompletion(store.task)).toMatchObject({ status: 'unverified' });
+    receipt.path = capturedCheckout.path;
     store.parent.metadata.repoCleanupRecoveries[release.branch].taskId = 'sys-different-task';
     expect(await verifyRetirementRecoveryCompletion(store.task)).toMatchObject({ status: 'unverified' });
   });

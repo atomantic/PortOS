@@ -419,7 +419,7 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
     "${FASTVIDEO_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.8.14"
   fi
 
-  FASTVIDEO_PIN="${FASTVIDEO_PIN:-430e52154e76b902c3cc17a16b3edc1fad790012}"
+  FASTVIDEO_PIN="${FASTVIDEO_PIN:-fa2d1324c60050cd65209c6aaeac470e7fb412f5}"
   FASTVIDEO_DIR="${HOME}/.portos/fastvideo"
   FASTVIDEO_PY="${FASTVIDEO_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"
