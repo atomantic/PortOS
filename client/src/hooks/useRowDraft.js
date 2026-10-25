@@ -4,14 +4,24 @@
 // A's committed value, spreading the stale `row` prop alone would overwrite
 // A back to its original. Merging the pending `drafts` map into the commit
 // payload lets A's in-flight edit ride along on B's commit.
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { useDraftCommitMode } from './useDraftCommitMode';
 
 export default function useRowDraft(row, onChange) {
+  const immediate = useDraftCommitMode() === 'change';
   const [drafts, setDrafts] = useState({});
+  const pending = useRef({});
+  const previousRow = useRef(row);
+  if (previousRow.current !== row) { previousRow.current = row; pending.current = {}; }
 
   const draftFor = (col) => (col in drafts ? drafts[col] : (row[col] || ''));
 
-  const setDraft = (col, v) => setDrafts((p) => ({ ...p, [col]: v }));
+  const setDraft = (col, v) => {
+    if (immediate) {
+      pending.current = { ...pending.current, [col]: v };
+      onChange({ ...row, ...pending.current });
+    } else setDrafts((p) => ({ ...p, [col]: v }));
+  };
 
   const clearDraft = (col) => setDrafts((prev) => {
     const next = { ...prev };
@@ -20,6 +30,7 @@ export default function useRowDraft(row, onChange) {
   });
 
   const commit = (col) => {
+    if (immediate) return;
     if (!(col in drafts)) return;
     const v = drafts[col];
     if (v === (row[col] || '')) {

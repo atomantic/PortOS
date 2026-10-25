@@ -1106,6 +1106,21 @@ the same attachment read. History remains available through the existing
 paginated revisions endpoint. Library editors fetch media on its first visible
 tab and history on explicit request; full details retain their prior fields.
 
+`GET /api/catalog/ingredient-cards?ids=…` accepts 1–50 IDs up to 80 characters.
+It returns `{ items }` with the requested `id`, resolved `canonicalId`, bounded
+card payload fields, selected `thumbnailKey`, direct usage counts, explicit
+ownership and shared identity write status. Missing/deleted IDs are omitted;
+requested retained IDs remain visible and read-only. This projection omits
+longform canon, media metadata, history and local voice configuration.
+
+`PATCH /api/catalog/ingredients/:id/lock` accepts only `{ locked: boolean }`.
+For character/place/object it changes the persisted flag under a row lock,
+preserves other payload fields, records revision history, projects linked canon
+and emits `catalog:primitive-changed`. It does not embed or save an editor draft.
+Existing shared identity fences apply. The client shares this control across
+cards and detail; locks protect AI/render workflows while manual authoring
+retains its existing permissions.
+
 `PUT /api/catalog/ingredients/:id/owner` accepts `{ universeId }`. It resolves
 unowned/ambiguous records explicitly and refuses to move an established owner.
 `POST /api/catalog/ingredients` accepts optional `universeId` and `operationKey`

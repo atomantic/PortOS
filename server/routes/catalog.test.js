@@ -998,3 +998,36 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients?scrapId= (#7617)', () => {
     expect(ids).not.toContain(outOfScrap.id);
   });
 });
+
+describe.skipIf(!runDb)('shared card and lock HTTP boundaries', () => {
+  it('changes only the persisted lock with history and accepts no accidental payload save', async () => {
+    const ingredient = await catalogDB.createIngredient({ type: 'character', name: 'Example courier', payload: { locked: false, physicalDescription: 'A coat.' } });
+    createdIngredientIds.add(ingredient.id);
+    // Simulate a later-version/legacy extension; lock writes must never sanitize it away.
+    await query("UPDATE catalog_ingredients SET payload = payload || $2::jsonb WHERE id = $1", [ingredient.id, { futureCanon: { retained: true }, notes: 'Concurrent saved note.' }]);
+    const before = await catalogDB.getIngredient(ingredient.id);
+    const bad = await request(makeApp()).patch(`/api/catalog/ingredients/${ingredient.id}/lock`).send({ locked: true, payload: { notes: 'Stale draft' } });
+    expect(bad.status).toBe(400);
+    const response = await request(makeApp()).patch(`/api/catalog/ingredients/${ingredient.id}/lock`).send({ locked: true });
+    expect(response.status).toBe(200);
+    expect(response.body.payload).toEqual({ ...before.payload, locked: true });
+    expect(response.body.updatedAt).not.toBe(before.updatedAt);
+    const revisions = await catalogDB.listIngredientRevisions(ingredient.id);
+    expect(revisions.items[0].payload).toEqual(response.body.payload);
+    expect((await request(makeApp()).patch(`/api/catalog/ingredients/${ingredient.id}/lock`).send({ locked: 'true' })).status).toBe(400);
+  });
+  it('hydrates valid80-character IDs with chosen portrait and bounded card fields', async () => {
+    const id = `example-card-${NONCE}-`.padEnd(80, 'x');
+    const ingredient = await catalogDB.createIngredient({ id, type: 'character', name: 'Example guide', payload: { physicalDescription: 'A coat.', notes: 'Long authored content.', voiceCanon: { description: 'Private direction.' } } });
+    createdIngredientIds.add(ingredient.id);
+    await catalogDB.attachMedia(id, 'selected-cover.png', 'portrait');
+    const response = await request(makeApp()).get(`/api/catalog/ingredient-cards?${new URLSearchParams({ ids: `${id},missing-example` })}`);
+    expect(response.status).toBe(200);
+    expect(response.body.items).toHaveLength(1);
+    expect(response.body.items[0]).toMatchObject({ id, canonicalId: id, thumbnailKey: 'selected-cover.png', payload: { physicalDescription: 'A coat.' } });
+    expect(response.body.items[0].payload).not.toHaveProperty('notes');
+    expect(response.body.items[0].payload).not.toHaveProperty('voiceCanon');
+    expect((await request(makeApp()).get('/api/catalog/ingredient-cards')).status).toBe(400);
+    expect((await request(makeApp()).get(`/api/catalog/ingredient-cards?ids=${Array.from({ length: 51 }, (_, i) => `id-${i}`).join(',')}`)).status).toBe(400);
+  });
+});

@@ -23,7 +23,7 @@ vi.mock('../instanceIdentity.js', () => ({ getInstanceId: async () => 'list-test
 
 const { checkHealth, close, ensureSchema, query } = await import('../../lib/db.js');
 const { requireDbOrSkip } = await import('../../lib/dbTestGate.js');
-const { listIngredients } = await import('./ingredients.js');
+const { listIngredients, getIngredientCards, setIngredientLock } = await import('./ingredients.js');
 const { HOMING_REF_KINDS_SQL, liveHomingTargetSql } = await import('./shared.js');
 
 const health = await checkHealth().catch((error) => ({ connected: false, error: error.message }));
@@ -227,6 +227,29 @@ describe.skipIf(!ready)('listIngredients identity read views (#12989)', () => {
       pages.push(...project(page));
     }
     expect(pages).toEqual(all);
+  });
+
+  it('hydrates requested aliases and identity fences in three queries independent of batch size', async () => {
+    const expected = new Map([
+      [id('op-source'), { canonicalId: id('op-survivor'), reason: 'CATALOG_IDENTITY_RETAINED' }],
+      [id('op-survivor'), { canonicalId: id('op-survivor'), reason: 'CATALOG_IDENTITY_FOREIGN' }],
+      [id('merge-source'), { canonicalId: id('merge-survivor'), reason: undefined }],
+    ]);
+    const requested = [...expected.keys()];
+    query.mockClear();
+    const cards = await getIngredientCards(requested);
+    expect(query).toHaveBeenCalledTimes(3);
+    expect(cards.map(card => card.id)).toEqual(requested);
+    await expect(setIngredientLock(id('op-source'), true)).rejects.toMatchObject({ code: 'CATALOG_IDENTITY_RETAINED' });
+    await expect(setIngredientLock(id('op-survivor'), true)).rejects.toMatchObject({ code: 'CATALOG_IDENTITY_FOREIGN' });
+    for (const card of cards) {
+      expect(card.canonicalId).toBe(expected.get(card.id).canonicalId);
+      expect(card.sharedIdentity?.reason).toBe(expected.get(card.id).reason);
+    }
+    query.mockClear();
+    const full = await getIngredientCards(Array.from({ length: 50 }, (_, index) => requested[index % requested.length]));
+    expect(query).toHaveBeenCalledTimes(3);
+    expect(full).toHaveLength(50);
   });
 
   // Uniquely catches a regression to per-row view evaluation: a correlated

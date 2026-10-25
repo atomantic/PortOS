@@ -4,6 +4,33 @@ import { query } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getInstanceId } from '../instanceIdentity.js';
 
+function accessFromRows(rows, localId) {
+  if (!rows.length) return null;
+  const row = rows[0];
+  const reason = rows.some(item => item.state !== 'committed') ? 'CATALOG_IDENTITY_FENCED'
+    : rows.some(item => item.source_id === item.requested_id) ? 'CATALOG_IDENTITY_RETAINED'
+      : rows.some(item => !item.origin_instance_id || item.origin_instance_id !== localId) ? 'CATALOG_IDENTITY_FOREIGN' : null;
+  return { operationId: row.id, sourceId: row.source_id, survivorId: row.survivor_id,
+    sourceOwner: row.source_owner, survivorOwner: row.survivor_owner, localOwner: row.local_owner,
+    state: row.state, writable: reason === null, reason };
+}
+
+export async function getCatalogIdentityAccessForIds(ids) {
+  if (!ids.length) return new Map();
+  const { rows } = await query(`SELECT requested.id AS requested_key, o.id, o.state, o.source_id, o.survivor_id,
+      o.source_owner, o.survivor_owner, o.local_owner, i.origin_instance_id,
+      catalog_resolve_ingredient_id(requested.id) AS requested_id
+    FROM unnest($1::text[]) requested(id)
+    JOIN catalog_identity_operations o ON (o.source_id = catalog_resolve_ingredient_id(requested.id)
+      OR o.survivor_id = catalog_resolve_ingredient_id(requested.id))
+    LEFT JOIN catalog_ingredients i ON i.id = o.survivor_id
+    WHERE o.state IN ('prepared', 'committed', 'recovery_prepared')`, [ids]);
+  const localId = rows.length ? await getInstanceId() : null;
+  const grouped = new Map(ids.map(id => [id, []]));
+  for (const row of rows) grouped.get(row.requested_key)?.push(row);
+  return new Map([...grouped].map(([id, values]) => [id, accessFromRows(values, localId)]));
+}
+
 export async function getCatalogIdentityAccess(id, { client } = {}) {
   const exec = client ? client.query.bind(client) : query;
   const { rows } = await exec(`SELECT o.id, o.state, o.source_id, o.survivor_id,
@@ -14,14 +41,8 @@ export async function getCatalogIdentityAccess(id, { client } = {}) {
     WHERE (o.source_id = catalog_resolve_ingredient_id($1) OR o.survivor_id = catalog_resolve_ingredient_id($1))
       AND o.state IN ('prepared', 'committed', 'recovery_prepared')`, [id]);
   if (!rows.length) return null;
-  const row = rows[0];
   const localId = await getInstanceId();
-  const reason = rows.some(item => item.state !== 'committed') ? 'CATALOG_IDENTITY_FENCED'
-    : rows.some(item => item.source_id === item.requested_id) ? 'CATALOG_IDENTITY_RETAINED'
-      : rows.some(item => !item.origin_instance_id || item.origin_instance_id !== localId) ? 'CATALOG_IDENTITY_FOREIGN' : null;
-  return { operationId: row.id, sourceId: row.source_id, survivorId: row.survivor_id,
-    sourceOwner: row.source_owner, survivorOwner: row.survivor_owner, localOwner: row.local_owner,
-    state: row.state, writable: reason === null, reason };
+  return accessFromRows(rows, localId);
 }
 
 export async function assertCatalogIdentityWritable(id, options) {
