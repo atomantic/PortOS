@@ -194,7 +194,7 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
               onChange={async (options) => {
                 setSaving(true);
                 setError(null);
-                try { setSelection(await saveExecutionOptionSelection(selection.id, selection.defaultModel, options)); }
+                try { setSelection(await saveExecutionOptionSelection(selection.id, selection.defaultModel, options, { silent: true })); }
                 catch (err) { setError(err.message); }
                 finally { setSaving(false); }
               }} className="w-full bg-port-card border border-port-border rounded p-2 text-sm" />
