@@ -33,8 +33,9 @@ vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: vi.fn(async (
 vi.mock('./heldCheckoutReview.js', () => ({ readRetirementForgeEvidence: vi.fn(async () => ({ prHead: '1'.repeat(40), mergeCommit: '3'.repeat(40), defaultHead: '2'.repeat(40) })) }));
 vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original(), readCompletedCheckoutIdentity: vi.fn() }));
 vi.mock('./cos.js', () => ({}));
+vi.mock('./agentCompletionData.js', () => ({ readCompletionData: vi.fn() }));
 vi.mock('./agentCompletionCleanup.js', () => ({ replayAgentCompletionCleanup: vi.fn(async () => {}) }));
-vi.mock('./cosAgentLifecycle.js', () => ({ retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
+vi.mock('./cosAgentLifecycle.js', () => ({ settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]), withClaimOwnershipLock: fn => fn() }));
 vi.mock('./taskSchedule.js', () => ({ recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
 vi.mock('./heldCheckoutRecovery.js', () => ({
@@ -85,7 +86,10 @@ import { readLocalBranchPresence, readCheckoutPathPresence } from './repoCleanup
 import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
-import { verifyAgentRepoState, sweepRepoStateVerifications, bindCompletionRetirementEvents, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
+import { readCompletionData } from './agentCompletionData.js';
+import { settleAbsentTaskCompletion } from './cosAgentLifecycle.js';
+import { replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
+import { resumeAgentCompletionRetirement, verifyAgentRepoState, sweepRepoStateVerifications, bindCompletionRetirementEvents, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
@@ -1055,5 +1059,80 @@ describe('durable completion replay', () => {
     expect(await run()).toMatchObject({ skipReason: 'review-successor-exists' });
     expect(addTask).not.toHaveBeenCalled();
     expect(recordRepoStateRecovery).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('completion after its originating task was removed', () => {
+  const fixture = () => {
+    const original = { ...task(), taskType: 'user', metadata: { ...task().metadata,
+      claimedBy: 'dispatcher', claimedAt: CREATED_AT, lastSpawnedAt: CREATED_AT, totalSpawnCount: 1 } };
+    const captured = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE,
+      head: HEAD, startedAt: CREATED_AT, capturedAt: CREATED_AT,
+      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const state = { ...agentState({ instanceId: 'fixture-local', completedCheckouts: [captured],
+      reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' },
+      repoStateVerification: { status: 'pending' },
+      completionTaskDispatch: { taskId: 'task-1', taskType: 'user', expected:
+        ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, original.metadata[key]]) },
+      completionCleanup: { version: 1, status: 'pending', replay: { version: 1, kind: 'replay', bytes: 123, sha256: 'a'.repeat(64) } }
+    }), id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT,
+      result: { success: false, executionSuccess: true, cleanupPending: true } };
+    getTaskById.mockResolvedValue(null);
+    getAgentRecord.mockResolvedValue(state);
+    readCompletionData.mockResolvedValue({ task: original });
+    localBranch(false);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/7',
+      detail: { state: 'MERGED', number: 7 } });
+    findMissingCheckoutPreservation.mockResolvedValue({ evidenceDigest: 'a'.repeat(64), recheck: async () => true });
+    settleAbsentTaskCompletion.mockResolvedValue(true);
+    return { state, original, captured };
+  };
+
+  it('verifies the exact retired run immediately without recreating the task or replaying external handoffs', async () => {
+    const { state } = fixture();
+    const result = await resumeAgentCompletionRetirement('agent-1');
+    expect(result).toMatchObject({ verified: true });
+    expect(settleAbsentTaskCompletion).toHaveBeenCalledWith('agent-1', state);
+    expect(state.result).toEqual({ success: false, executionSuccess: true, cleanupPending: true });
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    expect(replayAgentCompletionCleanup).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+  });
+
+  it('keeps absent work pending when its independent retirement receipt is missing or its settlement races', async () => {
+    fixture();
+    findMissingCheckoutPreservation.mockResolvedValue(null);
+    expect(await resumeAgentCompletionRetirement('agent-1')).toMatchObject({ verified: false });
+    expect(settleAbsentTaskCompletion).not.toHaveBeenCalled();
+    findMissingCheckoutPreservation.mockResolvedValue({ recheck: async () => true });
+    settleAbsentTaskCompletion.mockResolvedValue(false);
+    expect(await resumeAgentCompletionRetirement('agent-1')).toMatchObject({ verified: false,
+      skipReason: 'cleanup-receipt-settlement-unverified' });
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('does not settle another instance, ambiguous captures or a corrupt immutable replay', async () => {
+    for (const kind of ['instance', 'capture', 'replay', 'dispatch']) {
+      const { state, captured } = fixture();
+      if (kind === 'instance') state.metadata.instanceId = 'another-install';
+      if (kind === 'capture') state.metadata.completedCheckouts.push({ ...captured, head: 'f'.repeat(40) });
+      if (kind === 'dispatch') state.metadata.completionTaskDispatch.expected = [];
+      if (kind === 'replay') readCompletionData.mockRejectedValue(new Error('completion-data-changed'));
+      expect(await resumeAgentCompletionRetirement('agent-1')).toMatchObject({ verified: false,
+        skipReason: 'cleanup-task-unavailable' });
+    }
+    expect(settleAbsentTaskCompletion).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('never removes a surviving checkout using a deleted task snapshot', async () => {
+    fixture();
+    readCheckoutPathPresence.mockResolvedValue(true);
+    expect(await resumeAgentCompletionRetirement('agent-1')).toMatchObject({ verified: false });
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(inspectOrQueueCompletedReview).not.toHaveBeenCalled();
+    expect(settleAbsentTaskCompletion).not.toHaveBeenCalled();
   });
 });
