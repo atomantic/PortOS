@@ -388,6 +388,47 @@ it('keeps explicit browser selectors with their owner after structural guard reu
   }
 });
 
+it('keeps explicit DB selectors with the DB runner after structural guard reuse and test memo subtraction (#13455)', async () => {
+  const guard = 'server/lib/index.test.js';
+  const dbTest = 'server/services/githubNotifications.db.test.js';
+  const ordinary = 'scripts/example.test.js';
+  const { scratch: fixture, repo: root } = await createRunnerSandbox([guard, dbTest, ordinary]);
+  const run = ({ files, proof }) => spawnSync(process.execPath, [join(root, 'scripts/run-ci-tests.js'), 'server'], {
+    cwd: root, encoding: 'utf8', timeout: 10000,
+    env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, CI_SHARD: '',
+      CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify(files), CI_TEST_SOURCES: '[]',
+      CI: 'true', PORTOS_PREGATE_GUARDS: proof ? JSON.stringify({ files: [guard], snapshot: proof }) : '',
+      PORTOS_TEST_MEMO: 'off', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+  });
+  try {
+    installFakeNpm(fixture, REPORTING_NPM);
+    const proof = guardInputSnapshot(root);
+    expect(proof).toEqual(expect.any(String));
+
+    // When the structural guard is reused, the DB test must not be handed to the server runner as its sole selector.
+    const result = run({ files: [guard, dbTest], proof });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Reused 1 structural guards');
+    expect(result.stdout).toContain('No server tests left to run');
+    expect(result.stdout).not.toContain('{"args"');
+
+    // A mixed selection runs only the ordinary non-DB server contract.
+    const mixed = run({ files: [ordinary, dbTest] });
+    expect(mixed.status, mixed.stderr).toBe(0);
+    const selectionOf = (res) => JSON.parse(res.stdout.split('\n').find(line => line.startsWith('{"args"'))).selection.include;
+    expect(selectionOf(mixed)).toEqual(['../scripts/example.test.js']);
+
+    // A DB-only selection prints "No server tests selected" and exits 0 without invoking Vitest.
+    const soleDb = run({ files: [dbTest] });
+    expect(soleDb.status, soleDb.stderr).toBe(0);
+    expect(soleDb.stdout).toContain('No server tests selected');
+    expect(soleDb.stdout).not.toContain('{"args"');
+  } finally {
+    await destroyGitSandbox(fixture);
+  }
+});
+
 it('rejects empty browser coverage except explicitly deferred smoke-only inputs', () => {
   for (const [profile, files, expected] of [
     ['fidelity', [], 1], ['fidelity', ['server/lib/filmLook.browser.test.js'], 1],

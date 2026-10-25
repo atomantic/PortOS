@@ -10,6 +10,7 @@ import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { readZipArchive } from '../../lib/zipArchive.js';
 import * as ffmpeg from '../../lib/ffmpeg.js';
+import * as jsonIo from '../../lib/jsonIo.js';
 import { findFfmpeg, findFfprobe, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import {
   FABLELOOM_EXPORT_LIMITS, inspectFableLoomExportCharacters,
@@ -833,6 +834,50 @@ describe('portable FableLoom export boundary', () => {
     const result = await terminal(await begin({ episodeIds: ['episode-one'], allowDraft: true }));
     expect(result).toMatchObject({ status: 'failed', error: { code: 'EXPORT_MEDIA_PATH' } });
     await rm(join(PATHS.images, 'escape.png'));
+  });
+
+  it('retains the terminal path refusal when a persisted status read crosses worker release', async () => {
+    const sourceEntered = Promise.withResolvers();
+    const releaseSource = Promise.withResolvers();
+    const snapshotRead = Promise.withResolvers();
+    const releaseRead = Promise.withResolvers();
+    const readSource = media.readFableLoomExportSource;
+    vi.spyOn(media, 'readFableLoomExportSource').mockImplementation(async (...args) => {
+      sourceEntered.resolve();
+      await releaseSource.promise;
+      return readSource(...args);
+    });
+    const bad = 'https://example.com/movie.mp4';
+    loadHistory.mockResolvedValue([{ id: 'entry-record', filename: bad }]);
+    let pendingRead;
+    try {
+      const id = await begin({ episodeIds: ['episode-one'] });
+      await sourceEntered.promise;
+      const readJSONFile = jsonIo.readJSONFile;
+      vi.spyOn(jsonIo, 'readJSONFile').mockImplementationOnce(async (...args) => {
+        const snapshot = await readJSONFile(...args);
+        snapshotRead.resolve(snapshot);
+        await releaseRead.promise;
+        return snapshot;
+      });
+      pendingRead = getFableLoomExport(loom.id, id);
+      expect(await snapshotRead.promise).toMatchObject({ jobId: id, status: 'packing' });
+      releaseSource.resolve();
+      await __testing.drain();
+      const terminalRecord = JSON.parse(await readFile(recordFile(id), 'utf8'));
+      expect(terminalRecord).toMatchObject({ status: 'failed', error: { code: 'EXPORT_MEDIA_PATH' } });
+      releaseRead.resolve();
+      const result = await pendingRead;
+      expect(result).toMatchObject({
+        status: 'failed', revision: terminalRecord.revision, error: { code: 'EXPORT_MEDIA_PATH' },
+      });
+      expect(JSON.stringify(result)).not.toContain(bad);
+      expect(JSON.parse(await readFile(recordFile(id), 'utf8'))).toEqual(terminalRecord);
+    } finally {
+      releaseSource.resolve();
+      releaseRead.resolve();
+      await pendingRead;
+    }
   });
 
   it('persists actionable interruption and expiry states without treating malformed state as missing', async () => {
