@@ -288,5 +288,47 @@ class MlxCheckpointTest(unittest.TestCase):
                 self.helper.ensure_mlx_checkpoint(Path(tmp), root, "int6", {}, base, vsa=True, steps=8)
 
 
+class OmniCommandTest(unittest.TestCase):
+    """FastH3 Omni drives mlx_fasth3_omniref.py with ordered, repeatable references."""
+
+    def setUp(self):
+        self.helper = load_helper()
+
+    def build(self, **overrides):
+        fields = dict(
+            family="fasth3omni", steps=8, image="/fixture/in/first.png",
+            reference_image=["/fixture/in/second.png"], reference_video=[], reference_audio=[], vae_decoder="/fixture/decoder.safetensors",
+            vae_encoder="/fixture/encoder.safetensors")
+        fields.update(overrides)
+        args = make_args(**fields)
+        with redirect_stderr(io.StringIO()):
+            return self.helper.build_command(
+                args, Path("/fixture/omniref.py"), Path("/fixture/composed"), Path("/fixture/int6"))
+
+    def test_input_image_leads_the_ordered_references(self):
+        cmd = self.build()
+        images = [cmd[i + 1] for i, token in enumerate(cmd) if token == "--image"]
+        self.assertEqual(images, ["/fixture/in/first.png", "/fixture/in/second.png"])
+
+    def test_standalone_vaes_and_the_converted_dit_are_passed(self):
+        cmd = self.build()
+        self.assertEqual(cmd[cmd.index("--mlx-checkpoint") + 1], "/fixture/int6")
+        self.assertEqual(cmd[cmd.index("--vae-encoder") + 1], "/fixture/encoder.safetensors")
+        self.assertEqual(cmd[cmd.index("--vae-decoder") + 1], "/fixture/decoder.safetensors")
+        self.assertNotIn("--fps", cmd)
+        # The default dequant+GEMM path hangs the first DiT forward on mlx 0.32.2.
+        self.assertEqual(cmd[cmd.index("--quant-gemm") + 1], "qmm")
+
+    def test_clips_then_voices_follow_the_images(self):
+        cmd = self.build(reference_video=["/fixture/v.mp4"], reference_audio=["/fixture/a.wav"])
+        order = [token for token in cmd if token in ("--image", "--video", "--audio")]
+        self.assertEqual(order, ["--image", "--image", "--video", "--audio"])
+        self.assertEqual(cmd[cmd.index("--audio") + 1], "/fixture/a.wav")
+
+    def test_a_request_without_an_image_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "reference image"):
+            self.build(image=None)
+
+
 if __name__ == "__main__":
     unittest.main()

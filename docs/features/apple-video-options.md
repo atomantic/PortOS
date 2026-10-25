@@ -9,6 +9,7 @@ Video Gen offers these complementary paths:
 | FastMetal 14B | Larger FastMetal model | Wan 2.1 sampler |
 | FastH3 Preview INT4/INT6/INT8 | Four-step joint video and audio | Dense attention; official source is converted locally |
 | FastH3 V2 INT6/INT8 | Eight-step joint video and audio | 80% VSA with reference attention; text-to-video only. Image-to-video stays on MiniMax H3 MLX |
+| FastH3 Omni INT6 | Eight-step reference-to-video and audio | Input image plus up to 8 more gallery reference images (9 total); no text-only mode |
 | MiniMax H3 MLX 4/6/8-bit | Original H3 reference | Dense attention, very slow; smaller quantization is not a speed guarantee |
 
 The V2 choices share the official source snapshot at
@@ -17,7 +18,7 @@ INT6/INT8 describe the locally converted transformer, not the total download.
 Conversion retains routing weights with `--include-vsa` and uses a separate
 cache from dense conversions. An older runtime fails with an update instruction
 before conversion. FastVideo is pinned to commit
-`430e52154e76b902c3cc17a16b3edc1fad790012`; older checkouts appear as needing
+`fa2d1324c60050cd65209c6aaeac470e7fb412f5`; older checkouts appear as needing
 upgrade in Media Gen Settings. Repair / Upgrade checks out that revision and
 prepares the small FastMetal preview decoders, without downloading the large
 model snapshots or calling an AI provider. Update FastVideo there before using V2.
@@ -33,6 +34,20 @@ Missing, mismatched or unsupported contracts fail before rendering.
 SIMD attention remains opt-in upstream; these choices use the reference path.
 
 V2's own weights do accept a first or last frame in ComfyUI (`MiniMaxH3ImageToVideo` on `FastVideo/FastVideo-FastH3-Comfy`). The pinned MLX entry does not, and no other MLX checkpoint is this student. Image and first/last-frame requests stay on the MiniMax H3 MLX rows. The search and the contract to wait for are in [FastH3 V2 image-to-video](../research/2026-09-22-fasth3-v2-mlx-i2v.md).
+
+FastH3 Omni (FastVideo's merged OmniRef MLX runtime) is installed from the same
+Video Gen download button, which fetches five pinned pieces: the BF16
+`FastVideo/FastVideo-FastH3-Omni-8-Step-V1` export (~70 GB), an exact file list
+from `FastVideo/FastH3-Omni-NVFP4-QAD` (text encoder, tokenizer, processor, audio
+VAE; ~21 GB), the FastH3 quality-36L decoder and the LightVAE reference encoder.
+The first render composes them into a directory of symlinks and converts the
+transformer to an MLX INT6 DiT with VSA gates retained, plus an NVFP4 text-encoder
+cache, once, under `~/.portos/fastvideo/mlx-checkpoints`. The form shows a
+**Reference images** panel for this model; the input image is read first, then the
+extra images, then up to three prior renders as reference clips, then up to three
+uploaded voice clips, in that order. Upstream
+is [FastVideo#2000](https://github.com/hao-ai-lab/FastVideo/pull/2000) and the
+[benchmark kit](https://huggingface.co/FastVideo/FastH3-Omni-MLX).
 
 The Preview INT4 community repack is a preconverted package from MrMofer;
 the official Preview INT4 choice converts the source checkpoint on first use.

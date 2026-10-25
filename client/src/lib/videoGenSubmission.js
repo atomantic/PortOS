@@ -236,6 +236,22 @@ function icReferenceFields({
   };
 }
 
+// Extra reference stills for a reference-to-video model. Sent only when the
+// selected model takes them, so a stale list from a previous model never rides
+// along to one that would reject it.
+function referenceImageFields({ currentModel, referenceImageFiles = [], referenceVideoIds = [], referenceAudioFiles = [] }) {
+  const max = Number(currentModel?.maxReferenceImages) || 0;
+  const files = max > 1 ? referenceImageFiles.filter(Boolean).slice(0, max - 1) : [];
+  const clips = referenceVideoIds.filter(Boolean).slice(0, Number(currentModel?.maxReferenceVideos) || 0);
+  const voices = referenceAudioFiles.slice(0, Number(currentModel?.maxReferenceAudios) || 0);
+  return {
+    ...(files.length ? { referenceImageFiles: files } : {}),
+    ...(clips.length ? { referenceVideoIds: clips } : {}),
+    // The streaming parser keeps one file per field name, hence indexed slots.
+    ...Object.fromEntries(voices.map((file, i) => [`referenceAudio${i}`, file])),
+  };
+}
+
 function chunkFields({ chainingActive, chunks, beats, contextFrames }) {
   return {
     chunks: chainingActive ? chunks : '',
@@ -323,6 +339,7 @@ function localVideoSubmission(args, { composed, withEnvelope, effectiveDisableAu
     ...loraFields(args),
     ...frameSourceFields({ ...args, runtime: currentModel?.runtime, legacyFflf }),
     ...icReferenceFields(args),
+    ...referenceImageFields(args),
     ...chunkFields({ chainingActive, chunks, beats, contextFrames }),
   };
 }
