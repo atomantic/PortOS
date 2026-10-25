@@ -38,6 +38,18 @@ const { PATHS } = await import('../../lib/fileUtils.js');
 const { renderComposition } = await import('./index.js');
 
 describe('renderComposition delivery preflight', () => {
+  it.each([
+    [{ audioUpload: 'missing.wav' }, 'audioUpload is missing'],
+    [{ audioUpload: '../private.wav' }, 'Validation failed'],
+    [{ audioUpload: 'not-audio.txt' }, 'audioUpload is missing'],
+    [{ audioUpload: 'example.wav', musicTrack: 'example.wav' }, 'Validation failed'],
+    [{ audioUpload: 'example.wav', synthesizeMusic: true }, 'Validation failed'],
+    [{ audioUpload: 'example.wav', proof: { everySec: 1 } }, 'Validation failed'],
+  ])('refuses unavailable, unsafe or conflicting uploaded audio before capture: %j', async (audio, message) => {
+    await expect(renderComposition({ directory: 'compositions/example', jobId: randomUUID(), ...audio })).rejects.toThrow(message);
+    expect(encodeComposition).not.toHaveBeenCalled();
+  });
+
   // Regression: the production-stage signal used to be ignored, allowing
   // fixture teardown to delete source/output while its renderer still ran.
   it.each([false, true])('drains an aborted renderer before settlement (cleanup refusal: %s)', async cleanupFails => {

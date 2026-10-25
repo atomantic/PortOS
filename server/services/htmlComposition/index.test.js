@@ -358,10 +358,11 @@ globalThis.portosComposition = { durationSec:1, fps:12, width:1280, height:720, 
     await expect(renderComposition({ ...await composition(fixture('', 'renderAudio: async () => Array(24000).fill(2),')), synthesizeMusic: true })).rejects.toThrow('finite mono PCM');
   }, 30000);
 
-  it('loops and trims library music to the video with a half-second tail fade', async () => {
-    await mkdir(PATHS.music, { recursive: true });
-    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.3', '-y', join(PATHS.music, 'example.wav')]);
-    const result = await renderComposition({ ...await composition(), musicTrack: 'example.wav' });
+  it.each(['musicTrack', 'audioUpload'])('loops and trims %s to the video with a half-second tail fade', async source => {
+    const root = source === 'musicTrack' ? PATHS.music : PATHS.uploads;
+    await mkdir(root, { recursive: true });
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.3', '-y', join(root, 'example.wav')]);
+    const result = await renderComposition({ ...await composition(), [source]: 'example.wav' });
     const pcm = execFileSync(ffmpeg, ['-v', 'error', '-i', join(PATHS.videos, result.filename), '-vn', '-f', 'f32le', '-ac', '1', '-ar', '48000', '-']);
     expect(pcm.length / 4 / 48000).toBeGreaterThanOrEqual(1);
     expect(pcm.length / 4 / 48000).toBeLessThan(1.05); // AAC packet padding
@@ -370,6 +371,7 @@ globalThis.portosComposition = { durationSec:1, fps:12, width:1280, height:720, 
       for (let n = start; n < end; n++) sum += pcm.readFloatLE(n * 4) ** 2;
       return Math.sqrt(sum / (end - start));
     };
+    expect(rms(5000, 10000)).toBeGreaterThan(0.01);
     expect(rms(45000, 47500)).toBeLessThan(rms(5000, 10000) * 0.2);
   }, 30000);
 
