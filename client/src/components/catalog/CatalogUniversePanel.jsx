@@ -21,6 +21,8 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
   const contextSequence = useRef(0);
   const applyContext = (updated) => { contextSequence.current += 1; onContextChange(updated); };
   const [open, setOpen] = useState(false);
+  const [usageError, setUsageError] = useState(false);
+  const [usageRetry, setUsageRetry] = useState(0);
   const [universes, setUniverses] = useState(null);
   const [loadError, setLoadError] = useState(false);
   const [target, setTarget] = useState('');
@@ -42,13 +44,14 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
     const refresh = (event) => {
       if (event && event.ingredientId !== ingredient.id) return;
       const sequence = ++contextSequence.current;
-      getCatalogUniverseContext(ingredient.id, { silent: true }).then((data) => { if (active && sequence === contextSequence.current) onContextChange(data); })
-        .catch(() => { if (active) toast.error('Unable to refresh universe ownership. Reload before changing it.'); });
+      getCatalogUniverseContext(ingredient.id, { silent: true }).then((data) => { if (active && sequence === contextSequence.current) { setUsageError(false); onContextChange(data); } })
+        .catch(() => { if (active) { setUsageError(true); toast.error('Unable to refresh universe ownership and usage. Retry before changing it.'); } });
     };
+    if (context?.usageComplete === false) refresh();
     socket.on('catalog:primitive-changed', refresh);
     socket.on('connect', refresh);
     return () => { active = false; socket.off('catalog:primitive-changed', refresh); socket.off('connect', refresh); };
-  }, [ingredient.id, onContextChange]);
+  }, [ingredient.id, onContextChange, context?.usageComplete, usageRetry]);
 
   const owner = context?.owner;
   const own = async () => {
@@ -110,13 +113,14 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
         onClick={addToCanon} disabled={busy || unsaved} className="text-xs text-port-accent hover:underline disabled:opacity-40">Add to owning universe</button>}
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-gray-400">Used in</span>
-        {refs.length === 0 && <span className="text-gray-500">No linked containers</span>}
+        {refs.length === 0 && <span className="text-gray-500">{context?.usageComplete === false ? 'Detailed usage pending' : 'No linked containers'}</span>}
         {refs.map((ref, index) => <ThreadRefChip key={`${ref.refKind}:${ref.refId}:${ref.role}:${index}`} kind={ref.refKind} id={ref.refId}
           label={`${ref.refName || ref.refId} · ${roleLabel(ref.role)}`} resolved={ref.resolved} reason={ref.reason}
           url={ref.resolved === false ? null : threadRefUrl(ref.refKind, ref.refId)} showKind
           onRemove={!readOnly && !busy && !unsaved && !ref.derived && !ref.retained && ref.role !== 'retained-owner' ? () => removeUse(ref) : null} />)}
         {refs.some((ref) => ref.derived) && <span className="text-gray-500">Story mentions are inferred; FableLoom and voice links use exact canon IDs.</span>}
       </div>
+      {usageError && <p role="alert" className="text-xs text-port-error">Detailed usage could not be loaded. <button type="button" onClick={() => setUsageRetry((value) => value + 1)} className="underline">Retry usage</button></p>}
       {open && <div className="border-t border-port-border pt-3 space-y-3">
         {forkBlocked && <p className="text-xs text-port-warning">Wait for the shared identity transition to complete before creating a fork.</p>}
         {unsaved && <p className="text-xs text-port-warning">Save your edits before changing ownership or creating a fork.</p>}

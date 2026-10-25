@@ -1,6 +1,7 @@
 import { query } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getIngredientIdentityIds } from './catalogDB/ingredients.js';
+import { matchCharactersInText, matchPlacesInText, matchObjectsInText } from '../lib/scenePrompt.js';
 
 // Exact identity pointers only. Prose matches are reported separately as
 // inferred mentions and never establish ownership or consolidate identity.
@@ -42,26 +43,54 @@ export async function assertUniversePrimitivesRemovable(universeId) {
     { status: 409, code: 'UNIVERSE_PRIMITIVES_IN_USE' });
 }
 
+// Only the selected identity's small name/alias projection crosses this read
+// boundary. Queries are batched by universe; canon cardinality adds no SQL.
 export async function listPrimitiveUsages(ingredientId, refs) {
   const universeIds = [...new Set(refs.filter((ref) => ref.refKind === 'universe' && ref.resolved !== false).map((ref) => ref.refId))];
   if (!universeIds.length) return [];
-  const identityIds = new Set(await getIngredientIdentityIds(ingredientId));
-  const { rows } = await query('SELECT id, data FROM universes WHERE id = ANY($1) AND deleted = false', [universeIds]);
+  const identityIds = await getIngredientIdentityIds(ingredientId);
+  const { rows: universes } = await query(`SELECT u.id, jsonb_agg(jsonb_build_object(
+      'id', entry->>'id', 'name', entry->>'name', 'aliases', COALESCE(entry->'aliases', '[]'::jsonb), 'kind', kinds.kind)) AS entries
+    FROM universes u
+    CROSS JOIN LATERAL (VALUES ('character', 'characters'), ('place', 'places'), ('object', 'objects')) kinds(kind, field)
+    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(NULLIF(u.data->kinds.field, 'null'::jsonb), '[]'::jsonb)) entry
+    WHERE u.id = ANY($1) AND u.deleted = false AND entry->>'ingredientId' = ANY($2) AND NULLIF(entry->>'id', '') IS NOT NULL
+    GROUP BY u.id`, [universeIds, identityIds]);
+  if (!universes.length) return [];
+  const scope = universes.map((universe) => universe.id);
+  const canonIds = universes.flatMap((universe) => universe.entries.map((entry) => entry.id));
+  const [stories, voices, issues] = await Promise.all([
+    query(`SELECT id, name, universe_id,
+      jsonb_path_query_array(data, '$.**.characterId') || jsonb_path_query_array(data, '$.**.protagonistCharacterId')
+      || jsonb_path_query_array(data, '$.**.placeId') || jsonb_path_query_array(data, '$.**.objectId')
+      || jsonb_path_query_array(data, '$.**.canonId') || jsonb_path_query_array(data, '$.**.objectIds[*]') AS canon_ids
+      FROM fableloom_stories WHERE universe_id = ANY($1) AND deleted = false`, [scope]),
+    query(`SELECT id, data->>'name' AS name, universe_id, character_id, approval_status FROM voice_profiles
+      WHERE universe_id = ANY($1) AND character_id = ANY($2) AND approval_status <> 'retired'`, [scope, canonIds]),
+    query(`SELECT i.id, i.series_id, s.name AS series_name, s.universe_id,
+      COALESCE(NULLIF(i.data->>'title', ''), 'Issue ' || COALESCE(i.number::text, i.id)) AS name,
+      concat_ws(E'\n\n', i.data#>>'{stages,prose,output}', i.data#>>'{stages,prose,input}',
+        i.data#>>'{stages,idea,output}', i.data#>>'{stages,idea,input}',
+        i.data#>>'{stages,comicScript,output}', i.data#>>'{stages,teleplay,output}') AS corpus
+      FROM pipeline_series s JOIN pipeline_issues i ON i.series_id = s.id AND i.deleted = false
+      WHERE s.universe_id = ANY($1) AND s.deleted = false`, [scope]),
+  ]);
+  const byUniverse = new Map(universes.map((universe) => [universe.id, universe.entries]));
   const uses = [];
-  for (const universe of rows) {
-    const entries = ['characters', 'places', 'objects'].flatMap((field) => (universe.data?.[field] || [])
-      .filter((entry) => identityIds.has(entry?.ingredientId)).map((entry) => ({ ...entry, field })));
-    if (!entries.length) continue;
-    const { getUniverseCanonUsage } = await import('./canonUsage.js');
-    const mentions = await getUniverseCanonUsage(universe.id);
-    for (const entry of entries) {
-      const kind = { characters: 'character', places: 'place', objects: 'object' }[entry.field];
-      uses.push(...await findCanonDependencies(universe.id, kind, entry.id));
-      for (const series of mentions[entry.field]?.[entry.id] || []) {
-        uses.push({ refKind: 'series', refId: series.seriesId, refName: series.seriesName, role: 'prose-mention', resolved: true, derived: true });
-        uses.push(...series.issueIds.map((id) => ({ refKind: 'issue', refId: id, role: 'prose-mention', derived: true })));
-      }
-    }
+  for (const story of stories.rows) {
+    if ((byUniverse.get(story.universe_id) || []).some((entry) => story.canon_ids.includes(entry.id)))
+      uses.push({ refKind: 'fableloom', refId: story.id, refName: story.name || story.id, role: 'canon', resolved: true, derived: true });
+  }
+  for (const voice of voices.rows) {
+    if ((byUniverse.get(voice.universe_id) || []).some((entry) => entry.kind === 'character' && entry.id === voice.character_id))
+      uses.push({ refKind: 'voice-profile', refId: voice.id, refName: voice.name || 'Voice profile', role: `${voice.approval_status} voice`, resolved: true, derived: true });
+  }
+  const matchers = { character: matchCharactersInText, place: matchPlacesInText, object: matchObjectsInText };
+  for (const issue of issues.rows) {
+    const entries = byUniverse.get(issue.universe_id) || [];
+    if (!Object.entries(matchers).some(([kind, match]) => match(issue.corpus, entries.filter((entry) => entry.kind === kind)).length)) continue;
+    uses.push({ refKind: 'series', refId: issue.series_id, refName: issue.series_name || issue.series_id, role: 'prose-mention', resolved: true, derived: true });
+    uses.push({ refKind: 'issue', refId: issue.id, refName: issue.name || issue.id, role: 'prose-mention', resolved: true, derived: true });
   }
   return [...new Map(uses.map((use) => [`${use.refKind}:${use.refId}:${use.role}`, use])).values()];
 }

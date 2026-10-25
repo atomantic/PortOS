@@ -123,3 +123,12 @@ it('serializes the source note ids so the server can consume them in the commit 
   await commitCatalogScrapDraft('example-scrap', [], { creativeNoteIds: [], silent: true });
   expect(JSON.parse(request.mock.lastCall[1].body)).toEqual({ accepted: [] });
 });
+
+
+it('serializes detail projection options without changing full-detail compatibility', async () => {
+  const { getCatalogIngredientDetails } = await import('./apiCatalog.js');
+  await getCatalogIngredientDetails('example/id', { view: 'profile', silent: true });
+  expect(request).toHaveBeenLastCalledWith('/catalog/ingredients/example%2Fid/details?view=profile', { silent: true });
+  await getCatalogIngredientDetails('example/id');
+  expect(request).toHaveBeenLastCalledWith('/catalog/ingredients/example%2Fid/details', {});
+});

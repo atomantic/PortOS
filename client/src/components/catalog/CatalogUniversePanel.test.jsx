@@ -14,7 +14,7 @@ vi.mock('../../services/apiCatalog', () => ({
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 import CatalogUniversePanel from './CatalogUniversePanel';
-import { setCatalogUniverseOwner, forkCatalogIngredient } from '../../services/apiCatalog';
+import { getCatalogUniverseContext, setCatalogUniverseOwner, forkCatalogIngredient } from '../../services/apiCatalog';
 
 const initial = { status: 'needs-review', owner: null, refs: [
   { refKind: 'universe', refId: 'first', role: 'canon-character', refName: 'First world', resolved: true },
@@ -71,4 +71,19 @@ describe('primitive ownership and fork controls', () => {
     expect(first).toMatchObject({ universeId: 'second', name: 'Example courier', copyImages: true });
     expect(forkCatalogIngredient.mock.calls[1][1].operationKey).toBe(first.operationKey);
   });
+});
+
+
+it('keeps incomplete usage distinct from unused and retries secondary failures', async () => {
+  function PendingHarness() {
+    const [context, setContext] = useState({ ...initial, refs: [], usageComplete: false });
+    return <CatalogUniversePanel ingredient={{ id: 'cat-chr-1', name: 'Example courier', type: 'character' }} context={context} onContextChange={setContext} />;
+  }
+  getCatalogUniverseContext.mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValue({ ...initial, refs: [], usageComplete: true });
+  render(<MemoryRouter><PendingHarness /></MemoryRouter>);
+  await screen.findByRole('alert');
+  expect(screen.queryByText('No linked containers')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry usage' }));
+  await screen.findByText('No linked containers');
+  expect(screen.queryByRole('alert')).toBeNull();
 });

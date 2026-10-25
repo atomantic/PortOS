@@ -107,11 +107,10 @@ export const listCatalogIngredientsByIds = async (ids = [], options) => {
   return list.map((id) => byId.get(id)).filter(Boolean);
 };
 
-// Batched detail hydration — one request for ingredient + refs + sources +
-// relations + revisions + media + missingMedia, used by the detail page's
-// initial load in place of five separate calls.
-export const getCatalogIngredientDetails = (id, options) =>
-  request(`/catalog/ingredients/${enc(id)}/details`, options);
+// Full detail is the compatibility default. Library profiles request the lean
+// profile projection; media is fetched separately on its first visible tab.
+export const getCatalogIngredientDetails = (id, { view, ...options } = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/details${view ? `?view=${enc(view)}` : ''}`, options);
 
 export const getCatalogUniverseContext = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}/universe-context`, options);
@@ -182,9 +181,6 @@ export const unlinkCatalogIngredientRelation = (id, body, options) =>
 
 export const listCatalogIngredientMedia = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}/media`, options);
-
-export const listCatalogIngredientMissingMedia = (id, options) =>
-  request(`/catalog/ingredients/${enc(id)}/media/missing`, options);
 
 export const attachCatalogIngredientMedia = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/media`, { method: 'POST', body: JSON.stringify(body), ...options });
