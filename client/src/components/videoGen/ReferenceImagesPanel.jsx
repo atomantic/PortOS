@@ -67,7 +67,10 @@ export default function ReferenceImagesPanel({
                 className="flex-1 min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-port-accent"
               >
                 <option value="">Pick a previous render…</option>
-                {history.slice(0, 50).map((v) => (
+                {id && !history.some((video) => video.id === id) && (
+                  <option value={id}>{id} (not in loaded history)</option>
+                )}
+                {history.map((v) => (
                   <option key={v.id} value={v.id}>{(v.prompt || v.filename || v.id).slice(0, 80)}</option>
                 ))}
               </select>
