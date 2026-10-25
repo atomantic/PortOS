@@ -320,3 +320,13 @@ describe('buildVideoGenSubmission — extra reference images', () => {
     expect(payload.referenceImageFiles).toBeUndefined();
   });
 });
+
+
+it('preserves explicit stage strengths through backend/model changes for visible server refusal and leaves defaults absent', () => {
+  for (const lane of [null, 'grok', 'fal', 'reactor', 'runway']) {
+    const payload = buildVideoGenSubmission(baseArgs({ hostedLane: lane, a2vLoraStageStrengths: [0, 1] }));
+    expect(payload.a2vLoraStageStrengths).toBe('[0,1]');
+  }
+  expect(buildVideoGenSubmission(baseArgs({ a2vLoraStageStrengths: [1, 1] })))
+    .not.toHaveProperty('a2vLoraStageStrengths');
+});

@@ -23,6 +23,7 @@ import {
   BYOV_RUNTIME_INFO, BYOV_VIDEO_RUNTIMES, MINIMAX_H3_CUDA_OFFLOAD_PROFILES,
   byovRuntimeLoraCapable, invalidateByovLoraCapabilityCache, invalidateByovReadyCache,
   isByovRuntimeCurrent, isByovRuntimeReady, isPinnedSourceStatusClean, modelAnchorsLastFrame,
+  resolveA2vLoraStageCapable, a2vLoraStageCapable,
   resolveByovRuntimeLoraCapable, runtimeIsCacheOnly, runtimeNeedsProcessGroupKill, runtimeUsesMlx,
   routesToWindowsHelper, warmByovLoraCapabilities, LTX25_EXPECTED_REVISION,
 } from './runtimes.js';
@@ -541,5 +542,25 @@ describe('LTX-2.5 i2v anchor pin verification', () => {
     const claimed = Object.values(BYOV_RUNTIME_INFO)
       .filter((info) => info.i2vAnchorVerifiedRevision).map((info) => info.id);
     expect(claimed).toEqual(['ltx25']);
+  });
+});
+
+
+describe('A2V user-LoRA stage capability', () => {
+  it('keeps unsupported pins fail-closed, re-probes explicit renders and treats refusal as routine', async () => {
+    runtimeMocks.spawn.mockImplementation(() => exitChild(0));
+    await expect(resolveA2vLoraStageCapable('ltx25')).resolves.toBe(true);
+    expect(a2vLoraStageCapable('ltx25')).toBe(true);
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      runtimeMocks.spawn.mockImplementation(() => exitChild(2, 'runtime pin is not inspected'));
+      const denied = await captureProbeLogs(() => resolveA2vLoraStageCapable('ltx25', { fresh: true }));
+      expect(denied).toEqual({ result: false, lines: [] });
+      expect(info).toHaveBeenCalledWith(expect.stringContaining('does not support this capability'));
+      expect(a2vLoraStageCapable('ltx25')).toBe(false);
+      expect(runtimeMocks.spawn).toHaveBeenCalledTimes(2);
+      await expect(resolveA2vLoraStageCapable('ltx25_cuda', { fresh: true })).resolves.toBe(false);
+      expect(runtimeMocks.spawn).toHaveBeenCalledTimes(2);
+    } finally { info.mockRestore(); }
   });
 });

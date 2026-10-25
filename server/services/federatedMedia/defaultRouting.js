@@ -1,3 +1,4 @@
+import { isDefaultA2vLoraStages } from '../../lib/videoLoraStageValidation.js';
 /**
  * Server-owned default provider routing for UNATTENDED media jobs.
  *
@@ -81,6 +82,7 @@ function assertRoutableConditioning(kind, params) {
       .filter(([key]) => isPresent(params?.[key]))
       .map(([, label]) => label),
   )];
+  if (!isDefaultA2vLoraStages(params?.a2vLoraStageStrengths)) unsupported.push('per-stage user LoRA strengths');
   // A multi-chunk video is chained locally from its own prior output; the
   // provider renders one clip and knows nothing about the chain.
   if (kind === 'video' && Number(params?.chunks) > 1) unsupported.push('chained chunks');

@@ -58,7 +58,7 @@ vi.mock('./taskScheduleStore.js', async original => ({ ...await original(), load
   updateSchedule: async mutate => { const output = await mutate(fixture.schedule);
     await writeFile(join(fixture.root, 'schedule.json'), JSON.stringify(fixture.schedule)); return output.result; },
 }));
-const { verifyAgentRepoState, sweepRepoStateVerifications } = await import('./agentRepoStateVerification.js');
+const { verifyAgentRepoState, sweepRepoStateVerifications, resumeDeferredRepoStateVerifications } = await import('./agentRepoStateVerification.js');
 const { bindCompletionTaskDispatch, prepareCompletionTaskHandoff } = await import('./agentCompletionTaskHandoff.js');
 const { completeAgent, getAgentRecord } = await import('./cosAgentLifecycle.js');
 const { getBranchReconcileOutcome } = await import('./taskSchedule.js');
@@ -69,10 +69,10 @@ afterAll(cleanupTempDataRoots);
 let scratch;
 afterEach(async () => { fixture.inventoryAlias = false; activeAgents.clear(); if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); });
 describe('completion to in-place retirement (real Git and persisted service state)', () => {
-  it('drains context-less legacy handoffs instead of sweeping nonretryable failures forever', async () => {
+  it.each(['fallback', 'wake', 'wake-paused', 'wake-backoff'])('drains context-less legacy handoffs with bounded recovery: %s', async scenario => {
     scratch = await mkdtemp(join(tmpdir(), 'portos-completion-sweep-'));
     fixture.root = PATHS.data; await mkdir(fixture.root, { recursive: true });
-    fixture.task = { id: 'sweep-task', taskType: 'user', status: 'completed', metadata: {} };
+    fixture.task = { id: 'sweep-task', taskType: 'user', status: 'completed', metadata: { totalSpawnCount: 7, spawnFailedCount: 7 } };
     await writeFile(join(fixture.root, 'task.json'), JSON.stringify(fixture.task));
     fixture.agents = Object.fromEntries(Array.from({ length: 11 }, (_, index) => {
       const id = `sweep-agent-${index}`;
@@ -82,6 +82,37 @@ describe('completion to in-place retirement (real Git and persisted service stat
             stages: { pipeline: { status: 'failed', retryable: false, reason: 'external-state-unknown' } } } } }];
     }));
     const waiting = fixture.agents['sweep-agent-10'].metadata.completionCleanup.updatedAt;
+    if (scenario !== 'fallback') {
+      const originalBudget = { ...fixture.task.metadata };
+      if (scenario === 'wake-backoff') Object.assign(fixture.agents['sweep-agent-10'].metadata.completionCleanup,
+        { replayAttempts: 5, retryAt: new Date(Date.now() + 60_000).toISOString() });
+      let gates = 0;
+      const blocked = async () => {
+        if (++gates === 2 && scenario === 'wake') {
+          fixture.agents['new-arrival'] = { ...structuredClone(fixture.agents['sweep-agent-10']), id: 'new-arrival' };
+        }
+        return scenario === 'wake-paused' && gates > 1 ? 'daemon paused' : null;
+      };
+      const first = resumeDeferredRepoStateVerifications(blocked);
+      expect(resumeDeferredRepoStateVerifications(blocked)).toBe(first);
+      const result = await first;
+      expect(result).toMatchObject({ checked: scenario === 'wake' ? 11 : 10,
+        pendingAtStart: scenario === 'wake-backoff' ? 10 : 11 });
+      fixture.agents = JSON.parse(await readFile(join(fixture.root, 'agents-state.json'), 'utf8')).agents;
+      expect(fixture.task.metadata).toEqual(originalBudget);
+      expect(Object.values(fixture.agents).every(agent => agent.result.success === false)).toBe(true);
+      expect(fixture.agents['sweep-agent-0'].metadata.completionCleanup.replayAttempts).toBe(1);
+      if (scenario === 'wake') {
+        expect(fixture.agents['sweep-agent-10'].metadata.completionCleanup.status).toBe('abandoned');
+        expect(fixture.agents['new-arrival'].metadata.completionCleanup.lastAttemptAt).toBeUndefined();
+      } else {
+        expect(fixture.agents['sweep-agent-10'].metadata.completionCleanup.updatedAt).toBe(waiting);
+        if (scenario === 'wake-backoff') expect(fixture.agents['sweep-agent-10'].metadata.completionCleanup.replayAttempts).toBe(5);
+        else expect(result.skipReason).toBe('daemon paused');
+      }
+      return;
+    }
+
     expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 10, pendingAtStart: 11 });
     fixture.agents = JSON.parse(await readFile(join(fixture.root, 'agents-state.json'), 'utf8')).agents;
     expect(fixture.agents['sweep-agent-10'].metadata.completionCleanup.updatedAt).toBe(waiting);

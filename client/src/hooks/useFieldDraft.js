@@ -5,19 +5,32 @@
 // value, so a focus-without-edit doesn't fire a redundant PATCH. Persisted
 // `null`/`undefined` coerces to `''` so the input doesn't flip between
 // controlled and uncontrolled.
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { useDraftCommitMode } from './useDraftCommitMode';
 
 export default function useFieldDraft(persisted, onCommit) {
+  const immediate = useDraftCommitMode() === 'change';
   const [draft, setDraft] = useState(undefined);
   const persistedStr = persisted == null ? '' : String(persisted);
+  const previous = useRef(persistedStr);
+  const localChange = useRef(false);
+  // Preserve raw punctuation during the immediate parent echo, but let an
+  // explicit reload/save normalization replace a focused field's old buffer.
+  if (immediate && previous.current !== persistedStr) {
+    previous.current = persistedStr;
+    if (!localChange.current && draft !== undefined) setDraft(undefined);
+  }
+  localChange.current = false;
   const value = draft !== undefined ? draft : persistedStr;
 
   const onChange = (e) => {
     const next = e && e.target ? e.target.value : e;
+    if (immediate) { localChange.current = true; setDraft(next); onCommit(next); return; }
     setDraft(next);
   };
 
   const onBlur = () => {
+    if (immediate) { setDraft(undefined); return; }
     if (draft === undefined) return;
     if (draft === persistedStr) { setDraft(undefined); return; }
     onCommit(draft);

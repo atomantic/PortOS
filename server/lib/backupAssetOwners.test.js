@@ -5,8 +5,8 @@
  * lease is inventoried. Otherwise a stale entry could let a snapshot claim
  * global consistency, or a newly admitted workflow could go unrecorded.
  */
+import { trackedFiles } from '../../scripts/lib/trackedFiles.js';
 import { describe, expect, it } from 'vitest';
-import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -54,8 +54,7 @@ describe('backup asset owner inventory', () => {
   });
 
   it('inventories every module that takes the admission lease', () => {
-    const sources = execFileSync('git', ['ls-files', '*.js', '*.mjs'], { cwd: SERVER_ROOT, encoding: 'utf8' })
-      .split('\n')
+    const sources = trackedFiles(SERVER_ROOT, ['*.js', '*.mjs'])
       .filter(path => path && !path.includes('.test.') && path !== BOUNDARY_MODULE && !path.startsWith('node_modules/'));
     // A broken `git ls-files` would otherwise pass by scanning nothing.
     expect(sources.length).toBeGreaterThan(200);

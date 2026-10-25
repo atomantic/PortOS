@@ -34,6 +34,7 @@
  * registered, rather than joining the list of guards nobody notices has
  * stopped running.
  */
+import { trackedFiles } from './lib/trackedFiles.js';
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
@@ -144,13 +145,7 @@ export const readsUnnamedCrossRootFile = (source, relPath) => {
   return crossRootLiteral(ownRoot).test(source) && !crossRootNamedFile(ownRoot).test(source);
 };
 
-const trackedTests = execFileSync('git', ['ls-files', '*.test.js', '*.test.jsx'], {
-  cwd: REPO_ROOT,
-  encoding: 'utf8',
-  maxBuffer: 64 * 1024 * 1024,
-})
-  .split('\n')
-  .filter(Boolean);
+const trackedTests = trackedFiles(REPO_ROOT, ['*.test.js', '*.test.jsx']);
 
 const testSources = new Map(trackedTests.map((rel) => [rel, readFileSync(join(REPO_ROOT, rel), 'utf8')]));
 

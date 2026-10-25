@@ -12,9 +12,9 @@
  * test only stops a seventh from joining them. See `server/AGENTS.md`
  * "Prompt templates".
  */
+import { trackedFiles } from '../lib/trackedFiles.js';
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -36,11 +36,7 @@ const IMPORTS_PROMPT_DEFAULTS = /from\s+['"][^'"]*taskPromptDefaults\.js['"]/;
 const WRITES_TASK_SCHEDULE = /task-schedule\.json/;
 
 let tracked;
-const trackedMigrations = () => (tracked ??= execFileSync(
-  'git',
-  ['ls-files', 'scripts/migrations/*.js'],
-  { cwd: REPO_ROOT, encoding: 'utf8' },
-).split('\n').filter((path) => path && !path.endsWith('.test.js')));
+const trackedMigrations = () => (tracked ??= trackedFiles(REPO_ROOT, ['scripts/migrations/*.js']).filter((path) => path && !path.endsWith('.test.js')));
 
 describe('prompt-bump migrations stay closed', () => {
   it('finds the migrations it is meant to guard', () => {

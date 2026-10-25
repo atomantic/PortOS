@@ -36,7 +36,7 @@
  * paths both sorted so the file is byte-stable across installs.
  */
 
-import { execFileSync } from 'node:child_process';
+import { trackedFiles } from './lib/trackedFiles.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
@@ -175,12 +175,7 @@ export function readShippedStageKeys(repoRoot = REPO_ROOT) {
  * `data/`, which would make the manifest non-deterministic across installs.
  */
 export function collectServerSources(repoRoot = REPO_ROOT, { diagnostics = createStageScanDiagnostics() } = {}) {
-  const tracked = diagnostics.measure('inventory', () => execFileSync('git', ['ls-files', '--', 'server'], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
-  })
-    .split('\n')
+  const tracked = diagnostics.measure('inventory', () => trackedFiles(repoRoot, ['server'])
     .filter((p) => p.endsWith('.js') && !p.endsWith('.test.js') && !EXCLUDED_SOURCES.has(p)));
 
   diagnostics.checkpoint({ sources: tracked.length });

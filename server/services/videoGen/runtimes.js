@@ -465,16 +465,19 @@ const summarizeProbeStderr = (stderr) => stderr.replace(/\s+/g, ' ').trim() || '
 // `label` names the runtime and which probe ran, so a status request that fans
 // out over several runtimes produces attributable lines. It must never carry a
 // filesystem path — venv paths embed the OS username.
-function runVenvProbe(venvPython, args, label) {
+function runVenvProbe(venvPython, args, label, { unsupportedExitCode } = {}) {
   return new Promise((resolve) => {
     let stderr = '';
     let settled = false;
     let timer = null;
-    const finish = (ok, icon, outcome) => {
+    const finish = (ok, icon, outcome, routine = false) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (!ok) console.error(`${icon} ${label} probe ${outcome}: ${summarizeProbeStderr(stderr)}`);
+      if (!ok) {
+        const log = routine ? console.log : console.error;
+        log(`${icon} ${label} probe ${outcome}: ${summarizeProbeStderr(stderr)}`);
+      }
       resolve(ok);
     };
     const child = spawn(venvPython, args, safeChildProcessOptions({
@@ -497,9 +500,13 @@ function runVenvProbe(venvPython, args, label) {
       if (!child.killed) child.kill('SIGKILL');
       finish(false, '❌', 'timed out after 30s');
     }, 30000);
-    child.on('close', (code, signal) => finish(
-      code === 0, '⚠️', signal ? `was killed by ${signal}` : `exited ${code}`,
-    ));
+    child.on('close', (code, signal) => {
+      if (unsupportedExitCode !== undefined && code === unsupportedExitCode && !signal) {
+        finish(false, '🚫', 'does not support this capability', true);
+      } else {
+        finish(code === 0, '⚠️', signal ? `was killed by ${signal}` : `exited ${code}`);
+      }
+    });
     // Node's spawn-error message interpolates the full interpreter path, which
     // embeds the OS username — the code alone says what went wrong.
     child.on('error', (err) => finish(false, '❌', `could not be spawned (${err?.code || 'unknown error'})`));
@@ -515,6 +522,7 @@ function runVenvProbe(venvPython, args, label) {
 const loraCapabilityCache = new Map();
 const loraProbeFlight = createSingleFlight();
 export function invalidateByovLoraCapabilityCache(runtimeId) {
+  if (runtimeId) a2vLoraStageCache.delete(runtimeId); else a2vLoraStageCache.clear();
   if (runtimeId) loraCapabilityCache.delete(runtimeId); else loraCapabilityCache.clear();
 }
 
@@ -578,7 +586,10 @@ export async function warmByovLoraCapabilities() {
   // `.catch` because this runs on a request path where a future throw must not
   // take the whole model-list response down with it — the values are discarded.
   await Promise.all(Object.keys(BYOV_RUNTIME_INFO)
-    .map((runtimeId) => resolveByovRuntimeLoraCapable(runtimeId).catch(() => {})));
+    .map(async (runtimeId) => {
+      await resolveByovRuntimeLoraCapable(runtimeId).catch(() => {});
+      await resolveA2vLoraStageCapable(runtimeId).catch(() => {});
+    }));
 }
 
 // Single user-facing reason a video model can't take LoRAs. Lives here, beside
@@ -819,4 +830,23 @@ export async function pickDeathFingerprint({ emitted = null, runtimeId = null } 
   const block = await resolveRuntimeFingerprint().catch(() => null);
   if (!block) return null;
   return (runtimeId && block.runtimes?.[runtimeId]) || block.host || null;
+}
+
+// This capability is separate from ordinary user LoRAs: only inspected A2V
+// stage seams may change their strength mid-render. No weights are loaded.
+const a2vLoraStageCache = new Map();
+const a2vLoraStageFlight = createSingleFlight();
+export const a2vLoraStageCapable = (runtimeId) => a2vLoraStageCache.get(runtimeId) === true;
+export async function resolveA2vLoraStageCapable(runtimeId, { fresh = false } = {}) {
+  if (!['ltx2', 'ltx25'].includes(runtimeId)) return false;
+  const cached = a2vLoraStageCache.get(runtimeId);
+  if (!fresh && cached !== undefined) return cached;
+  const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (!existsSync(info.venvPython)) return false;
+  return a2vLoraStageFlight.run(runtimeId, async () => {
+    const capable = await runVenvProbe(info.venvPython,
+      [join(PATHS.root, 'scripts', 'ltx_a2v_lora_probe.py')], `${runtimeId} A2V stage LoRA capability`, { unsupportedExitCode: 2 });
+    a2vLoraStageCache.set(runtimeId, capable);
+    return capable;
+  });
 }

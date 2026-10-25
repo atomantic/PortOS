@@ -1,3 +1,5 @@
+import { validateA2vLoraStages } from './loraStages.js';
+import { a2vLoraStageCapable } from './runtimes.js';
 import { prepareVideoConditioningMedia } from './conditioningMedia.js';
 import { planVideoBatch, supportsWarmVideoBatch, validateVideoBatch } from './batch.js';
 import { normalizeVideoFailure } from '../../lib/videoFailure.js';
@@ -129,6 +131,7 @@ export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id
 const decorateVideoModel = (m) => (m ? {
   ...m,
   supportsWarmBatch: supportsWarmVideoBatch(m),
+  a2vLoraStageCapable: a2vLoraStageCapable(m.runtime),
   lastFrameAnchored: modelAnchorsLastFrame(m),
   runtimeLoraCapable: byovRuntimeLoraCapable(m.runtime),
   textEncoderOptions: publicVideoTextEncoderOptions(m),
@@ -354,7 +357,7 @@ async function resolveRequestedDraftDecoder({ model, draftDecode, jobId }) {
   return draftDecoder;
 }
 
-async function renderLocalVideo(preparation, { pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, referenceImagePaths = null, referenceVideoPaths = null, referenceAudioPaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [] }) {
+async function renderLocalVideo(preparation, { pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, a2vLoraStageStrengths, loras = null, icReferencePaths = null, referenceImagePaths = null, referenceVideoPaths = null, referenceAudioPaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [] }) {
   const sourceAudioProvenance = audioConditioning == null ? null : federatedSourceAudioSchema.parse(audioConditioning);
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
@@ -397,6 +400,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
     referenceVideoPaths,
     referenceAudioPaths,
   });
+  await validateA2vLoraStages({ strengths: a2vLoraStageStrengths, model, mode, hasLoras: loras?.length > 0 });
   // Registry defaults are user-editable. Validate them at this internal-call
   // boundary so an empty or malformed value cannot turn into a 0/NaN runner
   // argument when the caller deliberately leaves the resolution unset.
@@ -669,6 +673,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
     // byte-identical to one from before this setting existed. What the
     // bridge ACTUALLY did (active/reason/peakMb) is stamped separately by
     // finalizeGeneratedVideo from the child's STREAMPOLICY: report.
+    ...(mode === 'a2v' && resolvedLoras.length ? { a2vLoraStageStrengths: a2vLoraStageStrengths ?? [1, 1] } : {}),
     ...(isDefaultVideoStreamingMode(streamingMode) ? {} : { streamingMode }),
     // IC-LoRA remix settings, stamped so the lightbox Remix flow can round-trip
     // them. The reference clip is recorded by BASENAME (not the absolute
@@ -757,6 +762,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
       mode,
       imageStrength: actualImageStrength,
       i2vReferenceMode: effectiveReferenceMode,
+      a2vLoraStageStrengths,
       textEncoderRepo: actualTextEncoderRepo,
       textEncoder: resolvedTextEncoder,
       outputPath,
@@ -794,7 +800,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
       // and the tail window it cuts for chunk 1 are unaffected. Only a visible
       // render keeps an audio master: a hidden chunk is never extended again.
       extendSplice: mode === 'extend' && extendFromVideoPath && (!hidden || keepExtendSource) && !batch && supportsContextWindow(model)
-        ? { sourcePath: extendFromVideoPath, extendLatents: extendLatentFrames(parsedNumFrames), keepMaster: !hidden }
+        ? { runtime: model.runtime, sourcePath: extendFromVideoPath, extendLatents: extendLatentFrames(parsedNumFrames, model.runtime), keepMaster: !hidden }
         : null,
     },
   });

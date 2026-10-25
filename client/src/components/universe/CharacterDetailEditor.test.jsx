@@ -130,12 +130,13 @@ describe('CharacterDetailEditor — Relationships (#1287)', () => {
     };
     render(<CharacterDetailEditor entry={entry} characters={[ARIA, BRAM, CASS]} onPatch={() => {}} />);
     openRelationships();
+    fireEvent.click(screen.getByRole('button', { name: 'Relationships', exact: true }));
     expect(screen.getByText(/2 links · 1 opposing/i)).toBeInTheDocument();
   });
 });
 
 describe('CharacterDetailEditor — character framework (#2175)', () => {
-  const openArc = () => expect(screen.getByRole('heading', { name: /Arc type & sliders/i })).toBeInTheDocument();
+  const openArc = () => expect(screen.getByRole('button', { name: /Arc type & sliders/i })).toHaveAttribute('aria-expanded', 'true');
 
   it('renders the arc-type select seeded from the entry and patches on change', () => {
     const onPatch = vi.fn();
@@ -412,8 +413,10 @@ describe('CharacterDetailEditor — Psychology (#6414)', () => {
   it('reads as unassessed on a legacy character and offers no clear action', () => {
     render(<CharacterDetailEditor entry={ARIA} characters={[ARIA]} onPatch={() => {}} />);
     openPsychology();
-    expect(screen.getByText('unassessed')).toBeInTheDocument();
+    expect(screen.getByLabelText('Assessment')).toHaveValue('');
     expect(screen.getByRole('button', { name: /Clear psychology profile/i })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /Psychology \(theory/ }));
+    expect(screen.getByText('unassessed')).toBeInTheDocument();
   });
 
   it('commits an authored theory of control without disturbing the rest of the profile', () => {
@@ -504,7 +507,7 @@ describe('CharacterDetailEditor — sheet navigation', () => {
     const onPatch = vi.fn();
     render(<><CharacterDetailEditor entry={ARIA} onPatch={onPatch} /><LocationProbe /></>);
     expect(screen.getByRole('textbox', { name: 'Pronouns' })).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Personality & motivations' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Personality & motivations' })).toBeVisible();
     expect(listVoiceEngines).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add prop' }));
@@ -534,4 +537,33 @@ it('links directly from character design to the shared voice studio with its cas
   render(<CharacterDetailEditor entry={ARIA} universeId="example-universe" onPatch={() => {}} />);
   expect(screen.getByRole('link', { name: 'Create or assign a voice in Voice Studio' }))
     .toHaveAttribute('href', '/voices?universeId=example-universe&characterId=chr-aria');
+});
+
+it('keeps parent-owned text, row promotion and voice punctuation editable through compact page navigation', async () => {
+  const { useState } = await import('react');
+  let draft;
+  function Harness() {
+    const [entry, setEntry] = useState({ id: 'example-parent', name: 'Example courier', stats: [], voiceCanon: { approved: true, emotionalRange: ['calm'] } });
+    draft = entry;
+    return <CharacterDetailEditor entry={entry} draftMode="change" onPatch={patch => setEntry(previous => ({ ...previous, ...patch }))} />;
+  }
+  render(<Harness />);
+  fireEvent.click(screen.getByRole('button', { name: 'Add stat' }));
+  const name = screen.getByRole('textbox', { name: 'row 1 label' });
+  fireEvent.change(name, { target: { value: 'Height' } });
+  expect(screen.getByRole('textbox', { name: 'row 1 label' })).toBe(name);
+  fireEvent.change(screen.getByRole('textbox', { name: 'row 1 value' }), { target: { value: 'Tall' } });
+  expect(draft.stats).toEqual([{ label: 'Height', value: 'Tall' }]);
+  fireEvent.click(screen.getByRole('tab', { name: 'Story' }));
+  fireEvent.change(screen.getByLabelText('Background'), { target: { value: 'Unblurred story draft' } });
+  expect(draft.background).toBe('Unblurred story draft');
+  fireEvent.click(screen.getByRole('tab', { name: 'Voice' }));
+  const range = screen.getByLabelText('voice canon emotional range');
+  fireEvent.change(range, { target: { value: 'calm, ' } });
+  expect(range).toHaveValue('calm, ');
+  fireEvent.change(range, { target: { value: 'calm, urgent' } });
+  expect(draft.voiceCanon.emotionalRange).toEqual(['calm', 'urgent']);
+  expect(draft.voiceCanon.approved).toBe(false);
+  fireEvent.click(screen.getByRole('tab', { name: 'Story' }));
+  expect(screen.getByLabelText('Background')).toHaveValue('Unblurred story draft');
 });

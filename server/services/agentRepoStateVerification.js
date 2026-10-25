@@ -503,29 +503,68 @@ export function bindCompletionRetirementEvents(events) {
 }
 
 let completionSweep = null;
+let completionWake = null;
+const runCompletionPass = run => {
+  if (completionSweep) return completionSweep;
+  completionSweep = Promise.resolve().then(run).finally(() => { completionSweep = null; });
+  return completionSweep;
+};
 /** Resume interrupted completion from existing agent archives, bounded per pass. */
 export function sweepRepoStateVerifications() {
-  if (completionSweep) return completionSweep;
-  completionSweep = resumeCompletionAudits().finally(() => { completionSweep = null; });
-  return completionSweep;
+  return runCompletionPass(() => resumeCompletionAudits());
 }
 
-async function resumeCompletionAudits() {
+/** An actual startup/release wake drains its initial eligible snapshot once,
+ * yielding between existing bounded batches. Failed records retain backoff and
+ * cannot cycle through this wake again, even when a slow batch outlasts retryAt.
+ */
+export function resumeDeferredRepoStateVerifications(blocked) {
+  if (typeof blocked !== 'function') return Promise.reject(new Error('completion-recovery-gate-required'));
+  if (completionWake) return completionWake;
+  completionWake = (async () => {
+    while (completionSweep) await completionSweep;
+    return runCompletionPass(async () => {
+      let remaining;
+      let checked = 0;
+      let pendingAtStart = 0;
+      while (true) {
+        const reason = await blocked();
+        if (reason) return { checked, pendingAtStart, skipReason: reason };
+        const result = await resumeCompletionAudits({ onlyAgentIds: remaining, skipPrelude: remaining !== undefined });
+        if (!remaining) {
+          pendingAtStart = result.pendingAtStart;
+          remaining = new Set(result.pendingAgentIds);
+        }
+        for (const id of result.attemptedAgentIds) remaining.delete(id);
+        checked += result.checked;
+        if (!remaining.size || result.checked === 0) return { checked, pendingAtStart };
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    });
+  })().finally(() => { completionWake = null; });
+  return completionWake;
+}
+
+async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false } = {}) {
   const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
   const { getTaskById } = await import('./cosTaskStore.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
-  const { reconcileCleanupThreads } = await import('./brainTaskThreads.js');
-  await reconcileCleanupThreads({ dryRun: false }).catch(error => emitLog('warn', `Cleanup thread reconciliation deferred: ${error.message}`));
-  const { recoverLegacyDeliveryBlocks } = await import('./deliveryRecovery.js');
-  await recoverLegacyDeliveryBlocks(agents);
+  if (!skipPrelude) {
+    const { reconcileCleanupThreads } = await import('./brainTaskThreads.js');
+    await reconcileCleanupThreads({ dryRun: false }).catch(error => emitLog('warn', `Cleanup thread reconciliation deferred: ${error.message}`));
+    const { recoverLegacyDeliveryBlocks } = await import('./deliveryRecovery.js');
+    await recoverLegacyDeliveryBlocks(agents);
+  }
   const lastAttempt = agent => [agent.metadata.repoStateVerification?.checkedAt, agent.metadata.completionCleanup?.updatedAt,
     agent.metadata.completionCleanup?.lastAttemptAt].filter(value => typeof value === 'string').sort().at(-1) || '';
   const pending = agents.filter(agent => agent.status === 'completed' && (agent.metadata?.repoStateVerification?.status === 'pending'
     || agent.metadata?.completionCleanup?.status === 'pending'))
     .filter(agent => !agent.metadata.completionCleanup?.retryAt || Date.parse(agent.metadata.completionCleanup.retryAt) <= Date.now())
+    .filter(agent => !onlyAgentIds || onlyAgentIds.has(agent.id || agent.agentId))
     .sort((a, b) => lastAttempt(a).localeCompare(lastAttempt(b)));
   let checked = 0;
-  for (const original of pending.slice(0, COMPLETION_RECOVERY_BATCH_SIZE)) {
+  const selected = pending.slice(0, COMPLETION_RECOVERY_BATCH_SIZE);
+  for (const original of selected) {
     const { recordCompletionCleanup } = await import('./cosAgentLifecycle.js');
     const attempt = (original.metadata.completionCleanup?.replayAttempts || 0) + 1;
     await recordCompletionCleanup(original.id || original.agentId, original.startedAt, { lastAttemptAt: new Date().toISOString(),
@@ -557,7 +596,8 @@ async function resumeCompletionAudits() {
     if (updated) await replayAgentCompletionCleanup(updated).catch(error => emitLog('warn', `Completion cleanup deferred for ${agent.id}: ${error.message}`, { agentId: agent.id }));
     checked++;
   }
-  return { checked, pendingAtStart: pending.length };
+  return { checked, pendingAtStart: pending.length, pendingAgentIds: pending.map(agent => agent.id || agent.agentId),
+    attemptedAgentIds: selected.map(agent => agent.id || agent.agentId) };
 }
 
 const skipped = (skipReason, { issues = [], observed = null } = {}) => ({ verified: false, skipReason, issues, observed, recoveryTaskId: null });

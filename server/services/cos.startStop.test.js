@@ -21,6 +21,16 @@ vi.mock('./eventScheduler.js', async (importOriginal) => ({
 }));
 
 const recoveryDrain = vi.hoisted(() => ({ calls: [] }));
+const completionWake = vi.hoisted(() => ({ held: false, run: vi.fn(async () => ({ checked: 3 })) }));
+vi.mock('../lib/maintenanceAdmission.js', async original => {
+  const actual = await original();
+  return { ...actual, maintenance: { ...actual.maintenance, held: () => completionWake.held } };
+});
+vi.mock('./agentRepoStateVerification.js', () => ({
+  sweepRepoStateVerifications: (...args) => completionWake.run(...args),
+  resumeDeferredRepoStateVerifications: async blocked => { const reason = await blocked(); return reason ? { checked: 0, skipReason: reason } : completionWake.run(); },
+  bindCompletionRetirementEvents: () => () => {},
+}));
 vi.mock('./initializedCheckoutRecoverySweep.js', () => ({
   INITIALIZED_RECOVERY_INTERVAL_MS: 30 * 60_000,
   sweepInitializedCheckoutRecoveries: async blocked => {
@@ -102,7 +112,7 @@ vi.mock('./prWatcher.js', () => ({
   cancelHandoffFollowUps: () => { handoffFollowUp.gate = null; },
 }));
 
-const { start, stop, getStatus } = await import('./cos.js');
+const { start, stop, getStatus, resumeDeferredCompletions } = await import('./cos.js');
 const { cosEvents } = await import('./cosEvents.js');
 const { isDaemonRunning } = await import('./cosState.js');
 
@@ -119,6 +129,7 @@ beforeEach(() => {
   // Fake only setTimeout: boot's post-start improvement queue (30 s) and the
   // recovery ceiling (60 s) would otherwise keep the worker alive past the run.
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  completionWake.held = false; completionWake.run.mockClear();
   statuses = [];
   releaseRecovery = null;
   cosEvents.on('status', onStatus);
@@ -135,6 +146,38 @@ afterEach(async () => {
 });
 
 describe('CoS daemon start/stop lifecycle (#11860)', () => {
+  it('replays persisted completions on startup and restart without advancing the fallback timer', async () => {
+    persisted = { ...persisted, paused: false, config: { ...persisted.config, domainAutonomy: { cos: 'execute' } } };
+    for (let boot = 1; boot <= 2; boot++) {
+      const starting = start();
+      await waitFor(() => typeof releaseRecovery === 'function');
+      releaseRecovery(); await starting;
+      await waitFor(() => completionWake.run.mock.calls.length === boot);
+      await stop(); releaseRecovery = null;
+    }
+  });
+
+  it('does not recover through maintenance, pause, stopped or non-execute policy boundaries', async () => {
+    persisted = { ...persisted, paused: false, config: { ...persisted.config, domainAutonomy: { cos: 'execute' } } };
+    const starting = start();
+    await waitFor(() => typeof releaseRecovery === 'function');
+    releaseRecovery(); await starting;
+    await waitFor(() => completionWake.run.mock.calls.length === 1);
+    completionWake.run.mockClear();
+    completionWake.held = true;
+    expect(await resumeDeferredCompletions()).toMatchObject({ checked: 0, skipReason: 'maintenance-held' });
+    completionWake.held = false; persisted.paused = true;
+    expect(await resumeDeferredCompletions()).toMatchObject({ checked: 0, skipReason: 'daemon paused' });
+    persisted.paused = false;
+    for (const mode of ['off', 'dry-run']) {
+      persisted.config.domainAutonomy.cos = mode;
+      expect(await resumeDeferredCompletions()).toMatchObject({ checked: 0, skipReason: 'CoS auto-run is not set to execute' });
+    }
+    await stop();
+    expect(await resumeDeferredCompletions()).toMatchObject({ checked: 0, skipReason: 'daemon-stopped' });
+    expect(completionWake.run).not.toHaveBeenCalled();
+  });
+
   it('exposes recovery gates and the actual scheduled sweep time without promising a job completion time', async () => {
     persisted = { ...persisted, paused: false, stats: { tasksCompleted: 0 }, config: { ...persisted.config, domainAutonomy: { cos: 'execute' } } };
     expect((await getStatus()).completionRecovery).toMatchObject({ blockedReason: 'CoS is stopped', nextRunAt: null, batchSize: 10 });

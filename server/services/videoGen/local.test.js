@@ -397,6 +397,7 @@ vi.mock('./runtimes.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
+    resolveA2vLoraStageCapable: vi.fn(async () => true),
     byovRuntimeLoraCapable: vi.fn((runtime) => runtime === 'minimax_h3'
       && (h3LoraState.cached ?? h3LoraState.capable)),
     resolveByovRuntimeLoraCapable: vi.fn(async (runtime) => runtime === 'minimax_h3' && h3LoraState.capable),
@@ -1582,7 +1583,7 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     // Chunk 1's "source" is a temp tail window the stitch already holds; only
     // chunk 0 renders from the user's own clip. A hidden chunk keeps no audio master.
     expect(spliceExtendSource).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      sourcePath: sourceVideoPath, keepMaster: false, outputPath: join(MOCK_PATHS.videos, `${innerJobIds[0]}.mp4`),
+      runtime: 'ltx2', sourcePath: sourceVideoPath, keepMaster: false, outputPath: join(MOCK_PATHS.videos, `${innerJobIds[0]}.mp4`),
     }));
   });
 
@@ -6165,6 +6166,13 @@ describe('generateVideo — LTX-2/2.5 block streaming (#6499)', () => {
     return call[1];
   };
 
+  it('replays an A2V schedule into the helper without dropping selected LoRA strength', async () => {
+    const args = await renderArgs({ jobId: 'a2v-stage-replay', mode: 'a2v', audioFilePath: '/mock/audio.wav',
+      a2vLoraStageStrengths: [0, 1], loras: [{ filename: 'example.safetensors', scale: 0.7 }] });
+    expect(args[args.indexOf('--a2v-lora-stage-strengths') + 1]).toBe('[0,1]');
+    expect(JSON.parse(args[args.indexOf('--user-loras') + 1])[0].strength).toBe(0.7);
+  });
+
   it('threads an explicit request into the helper argv', async () => {
     const args = await renderArgs({ jobId: 'stream-explicit', mode: 'text', streamingMode: 'stream' });
     expect(args[args.indexOf('--streaming-mode') + 1]).toBe('stream');
@@ -6205,6 +6213,13 @@ describe('generateVideo — LTX-2/2.5 block streaming (#6499)', () => {
       expect(started).toBeTruthy();
       return started;
     };
+
+    it('saves requested stage multipliers on A2V history, including the legacy default', async () => {
+      const input = { mode: 'a2v', audioFilePath: '/mock/audio.wav', loras: [{ filename: 'example.safetensors', scale: 0.7 }] };
+      expect(await metaFor('a2v-stage-meta', { ...input, a2vLoraStageStrengths: [0, 1] }))
+        .toMatchObject({ a2vLoraStageStrengths: [0, 1], loraScales: [0.7] });
+      expect(await metaFor('a2v-stage-legacy-meta', input)).toMatchObject({ a2vLoraStageStrengths: [1, 1] });
+    });
 
     it('stamps the REQUESTED mode', async () => {
       const meta = await metaFor('stream-meta-explicit', { streamingMode: 'stream' });

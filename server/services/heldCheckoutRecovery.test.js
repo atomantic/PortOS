@@ -5,7 +5,7 @@
  * does not copy the checkout. Historical archives written by preserveMergedCheckout
  * remain readable.
  */
-import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { describe, it as vitestIt, expect, beforeEach as vitestBeforeEach, afterEach, afterAll, vi } from 'vitest';
 import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat, lstat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
@@ -16,13 +16,17 @@ import { dirname, join } from 'path';
 import { readRetirementCheckoutIdentity, isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
-import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownFixtureWork } from '../lib/mockPathsDataRoot.js';
 import { PATHS } from '../lib/paths.js';
 
 // Local branch deletion archives the common reflog using PATHS.cos, independently
 // of the checkout archive's explicit cosDir option.
 vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-held-branch-archives-') }));
-afterAll(cleanupTempDataRoots);
+const owned = ownFixtureWork();
+const it = owned.tests(vitestIt);
+const beforeEach = (body, ...options) => vitestBeforeEach(owned.wrap('setup', body), ...options);
+vitestBeforeEach(() => owned.prepare());
+afterAll(() => owned.finish(cleanupTempDataRoots));
 
 // Fixed phase names and aggregates only: diagnostics must never expose fixture
 // paths, Git arguments, captured bytes or an unbounded per-command transcript.
@@ -81,7 +85,7 @@ vi.mock('../lib/execGit.js', async importOriginal => {
     try {
       const phase = options?.env?.GIT_NO_REPLACE_OBJECTS === '1' ? 'independent-object-proof'
         : args.includes('bundle') ? 'bundle' : 'other-git';
-      const result = await receiptTiming.run(phase, () => actual.execGit(args, cwd, options));
+      const result = await receiptTiming.run(phase, () => owned.run('git', () => actual.execGit(args, cwd, options)));
       if (injected.onPreviewEvidence && args[0] === '--literal-pathspecs' && args[1] === 'diff') await injected.onPreviewEvidence();
       if (injected.onArchiveRef && args[0] === 'update-ref' && args[1]?.startsWith('refs/portos/archive/')) await injected.onArchiveRef();
       if (injected.onProof && args.includes('--bare') && options?.env?.GIT_NO_REPLACE_OBJECTS === '1') await injected.onProof();
@@ -136,6 +140,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   const noOwners = async () => [];
 
   beforeEach(async ({ task }) => {
+    scratch = null;
     receiptWork = null;
     const remoteSquash = task.name.startsWith('fetches a remote-only squash commit');
     receiptTiming.current = remoteSquash || task.name.startsWith('settles a normally merged checkout before the next scan')
@@ -154,24 +159,28 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       injected.app.repoPath = repo;
     });
   });
-  afterEach(async ({ task }) => {
-    const report = state => {
-      const trace = receiptTiming.current;
-      if (!trace) return;
-      const phases = Object.entries(trace.phases).map(([phase, row]) =>
-        `${phase}=${Math.round(row.ms)}ms/${row.count} max=${Math.round(row.maxMs)}ms active=${row.active}`).join('; ');
-      console.log(`⏱️ merged-receipt ${trace.entryPoint} ${state}: ${Math.round(performance.now() - trace.started)}ms; ${phases}`);
-    };
-    const failed = Boolean(task.result?.errors?.length);
-    if (failed) report('before-settlement');
-    // Vitest's deadline rejects its wrapper, not the async fixture. Never erase
-    // the repo while archive/proof/removal work from this exact case is running.
-    try { await receiptWork?.catch(() => {}); }
-    finally {
-      if (failed || process.env.PORTOS_PROFILE_HELD_RECEIPT === '1') report('settled');
-      receiptTiming.current = null;
-      await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-    }
+  afterEach(({ task }) => {
+    return owned.cleanup(async () => {
+      const report = state => {
+        const trace = receiptTiming.current;
+        if (!trace) return;
+        const phases = Object.entries(trace.phases).map(([phase, row]) =>
+          `${phase}=${Math.round(row.ms)}ms/${row.count} max=${Math.round(row.maxMs)}ms active=${row.active}`).join('; ');
+        console.log(`⏱️ merged-receipt ${trace.entryPoint} ${state}: ${Math.round(performance.now() - trace.started)}ms; ${phases}`);
+      };
+      const failed = Boolean(task.result?.errors?.length);
+      const fixtureReport = () => console.log(`⏱️ retirement fixture: ${owned.summary()}`);
+      if (failed) { report('before-settlement'); fixtureReport(); }
+      // Vitest's deadline rejects its wrapper, not the async fixture. Never erase
+      // the repo while archive/proof/removal work from this exact case is running.
+      try { await owned.drain(); await receiptWork; }
+      finally {
+        if (failed || process.env.PORTOS_PROFILE_HELD_RECEIPT === '1') report('settled');
+        if (failed || process.env.PORTOS_PROFILE_RETIREMENT_FIXTURE === '1') fixtureReport();
+        receiptTiming.current = null;
+        if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      }
+    });
   });
 
   /** A locked checkout outside the managed roots holding unique uncommitted work. */
@@ -453,7 +462,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   describe('bounded historical evidence', () => {
     beforeEach(cleanupTempDataRoots);
-    afterEach(cleanupTempDataRoots);
+    afterEach(async () => { await owned.drain(); await cleanupTempDataRoots(); });
 
     it('bounds persisted recovery diagnostics across obligations and unrelated archives while verifying the exact matching archive', async () => {
       const { release, saved } = await historicalArchive();
@@ -1508,7 +1517,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   // Normal tests generate state caches as well as compiled modules. Only their
   // tagged producer schema may pass the actual destructive retirement boundary.
-  it.each(['results', 'dependencies', 'unknown-field', 'bad-version', 'bad-project', 'bad-index', 'untagged', 'untracked', 'sidecar'])(
+  it.each(['results', 'dependencies', 'dependencies-no-setup', 'bad-setup', 'unknown-field', 'bad-version', 'bad-project', 'bad-index', 'untagged', 'untracked', 'sidecar'])(
     'recognizes only the actual tagged Vitest state producer: %s', async kind => {
       const c = await reviewedCheckout(`state-cache-${kind}`);
       const root = join(c.path, 'server/.cache/vitest/vitest');
@@ -1516,10 +1525,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       if (kind !== 'untracked') await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
       if (kind !== 'untagged') await writeFile(join(root, 'CACHEDIR.TAG'),
         'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.\n# For information about cache directory tags see https://bford.info/cachedir/\n');
-      const dependencies = ['dependencies', 'bad-index'].includes(kind);
+      const dependencies = ['dependencies', 'dependencies-no-setup', 'bad-setup', 'bad-index'].includes(kind);
       const value = { version: 1, projects: { parallel: dependencies
         ? { modules: ['services/feature.js'], globalSetup: [], files: { 'services/feature.test.js': [kind === 'bad-index' ? 99 : 0] } }
         : { files: { 'services/feature.test.js': { failed: false, duration: 12, lastRun: 12345 } } } } };
+      if (kind === 'dependencies-no-setup') delete value.projects.parallel.globalSetup;
+      if (kind === 'bad-setup') value.projects.parallel.globalSetup = 'unique user content';
       if (kind === 'unknown-field') value.wanted = 'unique user content';
       if (kind === 'bad-version') value.version = 99;
       if (kind === 'bad-project') value.projects.parallel = { wanted: 'unique user content' };
@@ -1529,7 +1540,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       const prepared = await c.prepare();
       expect(prepared.ok).toBe(true);
       const retired = await c.confirm(prepared.review);
-      if (['results', 'dependencies'].includes(kind)) {
+      if (['results', 'dependencies', 'dependencies-no-setup'].includes(kind)) {
         expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
         expect(await registered(c.path)).toBe(false);
       } else {
@@ -2037,20 +2048,20 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     // Retain main's separate fixture/retirement/proof phases and their existing
     // 30-second budgets while exercising more than 1,000 files in both snapshots.
     beforeEach(async () => {
-      c = await reviewedCheckout('file-count-admitted', { normalMerge: true });
+      c = await owned.run('many-file-checkout', () => reviewedCheckout('file-count-admitted', { normalMerge: true }));
       const directory = join(c.path, 'private-files');
       await mkdir(directory);
-      await Promise.all(Array.from({ length: 1050 }, (_, i) => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')));
+      await owned.run('payload-writes', () => Promise.all(Array.from({ length: 1050 }, (_, i) => owned.run('file-write', () => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')))));
       if (process.platform !== 'win32') await chmod(join(directory, 'item-1049'), 0o755);
       const privateDir = join(c.admin, 'private-files');
       await mkdir(privateDir);
-      await Promise.all(Array.from({ length: 60 }, (_, i) => writeFile(join(privateDir, `item-${i}`), 'private recovery bytes\n')));
-      prepared = await c.prepare();
+      await owned.run('admin-writes', () => Promise.all(Array.from({ length: 60 }, (_, i) => owned.run('file-write', () => writeFile(join(privateDir, `item-${i}`), 'private recovery bytes\n')))));
+      prepared = await owned.run('many-file-preview', () => c.prepare());
       expect(prepared.ok).toBe(true);
     });
 
     beforeEach(async () => {
-      retired = await c.confirm(prepared.review);
+      retired = await owned.run('many-file-confirm', () => c.confirm(prepared.review));
       expect(retired).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
     });
 
@@ -3061,11 +3072,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner', 'normal-completed', 'normal-invalid-time', 'normal-resumed-lineage', 'separate-incomplete', 'separate-wrong-pr'])('keeps an original sibling obligation separate from a detached copy: %s', async scenario => {
+  it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner', 'normal-completed', 'normal-invalid-time', 'normal-resumed-lineage', 'separate-incomplete', 'separate-retained-work', 'separate-same-incarnation', 'separate-replaced-pointer', 'separate-malformed-capture', 'separate-missing-receipt', 'separate-wrong-pr'])('keeps an original sibling obligation separate from a detached copy: %s', async scenario => {
     const c = await reviewedCheckout(`orphan-sibling-${scenario}`, { normalMerge: scenario.startsWith('separate-') });
     const namedPath = c.path;
     const namedBranch = c.release.branch;
     await execGit(['worktree', 'unlock', namedPath], repo);
+    if (scenario === 'separate-retained-work') {
+      await writeFile(join(namedPath, 'unpublished-reviewer.txt'), 'unique unfinished reviewer work\n');
+      await execGit(['add', 'unpublished-reviewer.txt'], namedPath);
+      await execGit(['commit', '-m', 'unfinished reviewer work'], namedPath);
+    }
+    const capturedHead = (await execGit(['rev-parse', 'HEAD'], namedPath)).stdout.trim();
     const evidence = await import('./completedCheckoutEvidence.js');
     const agent = { id: 'sibling-owner', status: 'running', startedAt: new Date(Date.now() - 60_000).toISOString(),
       metadata: { sourceWorkspace: repo, workspacePath: namedPath, isWorktree: true, worktreeBranch: namedBranch,
@@ -3073,7 +3090,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     agent.metadata.checkoutSeeds = await evidence.captureCheckoutSeeds(agent);
     // Completion records the exact terminal target before publishing the orphan.
     const targets = await evidence.captureSeededCompletionCheckouts(agent, { preterminal: true });
-    expect(targets).toEqual([expect.objectContaining({ head: c.release.head, startedAt: agent.startedAt })]);
+    expect(targets).toEqual([expect.objectContaining({ head: capturedHead, startedAt: agent.startedAt })]);
     agent.metadata.checkoutCapture = { status: 'captured', targets, unknown: false };
     agent.status = 'completed'; agent.completedAt = new Date().toISOString();
     agent.result = { success: false, executionSuccess: false, orphaned: true, validationPassed: null };
@@ -3100,11 +3117,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       agent.metadata.workspacePath = alias;
     }
     let path = join(external, `detached-${scenario}`);
-    if (scenario === 'same-incarnation') {
+    if (scenario === 'same-incarnation' || scenario === 'separate-same-incarnation' || scenario === 'separate-replaced-pointer') {
       const pointerIdentity = await readRetirementCheckoutIdentity(namedPath);
       await execGit(['worktree', 'move', namedPath, path], repo);
       await execGit(['switch', '--detach', c.release.head], path);
       expect(await readRetirementCheckoutIdentity(path)).toBe(pointerIdentity);
+      if (scenario === 'separate-replaced-pointer') {
+        const bytes = await readFile(join(path, '.git'));
+        await rename(join(path, '.git'), join(scratch, 'prior-checkout-pointer'));
+        await writeFile(join(path, '.git'), bytes);
+        expect(await readRetirementCheckoutIdentity(path)).not.toBe(pointerIdentity);
+      }
     }
     else {
       await execGit(['worktree', 'add', '--detach', path, c.release.head], repo);
@@ -3165,7 +3188,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         [ancestors[0].metadata.completedCheckouts[0], 'incarnation', differentGeneration],
         [ancestors[0].metadata, 'prCompletionPolicy', 'leave-open'], [ancestors[0], 'status', 'running']];
     }
-    if (scenario === 'missing-receipt') agent.metadata.completedCheckouts = [];
+    if (scenario === 'separate-malformed-capture') {
+      agent.metadata.completedCheckouts[0].version = 1;
+      delete agent.metadata.completedCheckouts[0].incarnation.gitdir;
+    }
+    if (scenario === 'missing-receipt' || scenario === 'separate-missing-receipt') agent.metadata.completedCheckouts = [];
     if (scenario === 'human-handoff') agent.metadata.prCompletionPolicy = 'leave-open';
     if (scenario === 'active-owner') { agent.status = 'running'; c.opts.readAgents = async () => [agent]; }
     const originalRelease = scenario === 'normal-resumed-lineage'
@@ -3183,7 +3210,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       target[key] = prior;
     }
     const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release, prUrl: c.forge.prUrl }, c.opts);
-    if (!['confirmed', 'owner-alias', 'normal-completed', 'normal-resumed-lineage', 'separate-incomplete'].includes(scenario)) {
+    if (!['confirmed', 'owner-alias', 'normal-completed', 'normal-resumed-lineage', 'separate-incomplete', 'separate-retained-work'].includes(scenario)) {
       const reason = scenario === 'human-handoff' ? 'pr-completion-human-handoff'
         : 'retirement-policy-not-legacy-completed';
       expect(prepared).toMatchObject({ ok: false, reason });
@@ -3207,7 +3234,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       ] } } });
     }
     else expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false,
-      ...(scenario === 'separate-incomplete' ? { retainedSiblingObligation: agent.metadata.completedCheckouts[0] }
+      ...(scenario.startsWith('separate-') ? { retainedSiblingObligation: agent.metadata.completedCheckouts[0] }
         : scenario === 'normal-completed' ? { completedSibling: true } : { orphanedSibling: true }) }] } } });
     const result = await retireInventoriedCheckout({ appId: 'app-1', release,
       review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts);
@@ -3215,7 +3242,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(result.archiveDir).toBeUndefined();
     expect(await registered(path)).toBe(false);
     expect(await registered(namedPath)).toBe(true);
-    expect((await execGit(['rev-parse', namedBranch], repo)).stdout.trim()).toBe(release.head);
+    expect((await execGit(['rev-parse', namedBranch], repo)).stdout.trim()).toBe(capturedHead);
+    if (scenario === 'separate-retained-work') {
+      expect((await execGit(['merge-base', '--is-ancestor', capturedHead, c.forge.prHead], repo, { ignoreExitCode: true })).exitCode).toBe(1);
+      expect(await readFile(join(namedPath, 'unpublished-reviewer.txt'), 'utf8')).toBe('unique unfinished reviewer work\n');
+    }
     expect(agent.result).toEqual(originalResult);
     expect(injected.policies).toEqual(originalPolicies);
     if (scenario === 'normal-resumed-lineage') {

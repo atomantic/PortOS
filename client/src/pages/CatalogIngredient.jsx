@@ -44,6 +44,7 @@ import { universeStylePreset, withUniverseLabel } from '../lib/universeStylePres
 import { useModelInputPreview } from '../hooks/useModelInputPreview';
 import ModelInputPreview from '../components/media/ModelInputPreview';
 import AddToThreadButton from '../components/threads/AddToThreadButton';
+import { getCanonCatalogContext } from '../services/canonCatalogContext';
 import { getUniverse } from '../services/apiUniverseBuilder';
 import useMounted from '../hooks/useMounted';
 import MediaJobThumb from '../components/pipeline/MediaJobThumb';
@@ -58,7 +59,9 @@ import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
 import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
 import CharacterDetailEditor from '../components/universe/CharacterDetailEditor';
 import { RevealTimingField } from '../components/pipeline/CanonCard';
-import CatalogCharacterCanon from '../components/catalog/CatalogCharacterCanon';
+import CanonReferenceRemoval from '../components/catalog/CanonReferenceRemoval';
+import CatalogLockButton from '../components/catalog/CatalogLockButton';
+import CharacterCanonActions from '../components/catalog/CharacterCanonActions';
 import ObjectAttachmentsEditor from '../components/universe/ObjectAttachmentsEditor';
 import CatalogUniversePanel from '../components/catalog/CatalogUniversePanel';
 import CatalogFormsEditor from '../components/catalog/CatalogFormsEditor';
@@ -177,10 +180,14 @@ function IngredientEditor() {
   const navigate = useNavigate();
   // Opened from Casting / Environments / Objects → Back and post-delete return
   // there; otherwise to the catalog.
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const library = libraryForPathname(pathname);
   const detailView = library ? 'profile' : undefined;
-  const backPath = library?.path || '/catalog';
+  const requestedBack = new URLSearchParams(search).get('returnTo') || '';
+  const backPath = /^\/(?:casting(?:\?|$)|universes\/[^/?#]+(?:\?|$))/.test(requestedBack) ? requestedBack : library?.path || '/catalog';
+  const profileActive = !library || resolveDetailTab(library, tabParam) === 'profile';
+  const [profileVisited, setProfileVisited] = useState(profileActive);
+  useEffect(() => { if (profileActive) setProfileVisited(true); }, [profileActive]);
   // Merged type registry (system + user-defined). Falls back synchronously to
   // the static built-ins so the editor renders before the fetch resolves.
   const { getType: getMergedType } = useCatalogTypes();
@@ -195,6 +202,7 @@ function IngredientEditor() {
   const [payload, setPayload] = useState({});
   const [saving, setSaving] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
+  const [characterActionBusy, setCharacterActionBusy] = useState(false);
   // A Looks-tab wardrobe save in flight; the profile Save waits for it so its
   // draft payload can't write back the previous wardrobes.
   const [lookSaving, setLookSaving] = useState(false);
@@ -220,17 +228,25 @@ function IngredientEditor() {
   mediaReadyRef.current = mediaReady;
   const refreshMediaRef = useRef(null);
   const [missingMedia, setMissingMedia] = useState(new Set());
+  const [ownerEntryId, setOwnerEntryId] = useState(null);
   const [ownerUniverse, setOwnerUniverse] = useState(null);
-  const [showCharacterEditor, setShowCharacterEditor] = useState(false);
+  const [ownerContextError, setOwnerContextError] = useState(null);
+  const [contextVersion, setContextVersion] = useState(0);
+  const [contextRequested, setContextRequested] = useState(false);
+  const onCharacterPageChange = useCallback(page => { if (page === 'story' || page === 'voice') setContextRequested(true); }, []);
   const ownerUniverseId = record?.universeContext?.owner?.refId || null;
   useEffect(() => {
     let active = true;
-    setOwnerUniverse(null);
-    if (!ownerUniverseId || !showCharacterEditor && record?.type !== 'object') return;
-    getUniverse(ownerUniverseId, { silent: true }).then((universe) => { if (active) setOwnerUniverse(universe); })
-      .catch(() => { if (active) toast.error('Could not load the owning universe’s character context.'); });
+    setOwnerUniverse(null); setOwnerEntryId(null); setOwnerContextError(null);
+    if (!ownerUniverseId || !contextRequested && record?.type !== 'object') return;
+    const load = record.type === 'character'
+      ? getCanonCatalogContext(ownerUniverseId, record.id, record.type, { silent: true })
+      : getUniverse(ownerUniverseId, { silent: true }).then(universe => ({ universe }));
+    load.then(({ universe, entry }) => { if (active) { setOwnerUniverse(universe); setOwnerEntryId(entry?.id || null);
+      if (record.type === 'character' && !entry) setOwnerContextError('No writable canon binding is available for this character in its owning universe.'); } })
+      .catch(error => { if (active) setOwnerContextError(error.message || 'Could not load the owning universe’s character context.'); });
     return () => { active = false; };
-  }, [ownerUniverseId, showCharacterEditor, record?.type]);
+  }, [ownerUniverseId, contextRequested, contextVersion, record?.type, record?.id]);
   const applyUniverseContext = useCallback((context) => {
     setRecord((current) => current ? { ...current, universeContext: context, refs: context.refs } : current);
   }, []);
@@ -270,6 +286,13 @@ function IngredientEditor() {
     if (externalDetails?.ingredient?.updatedAt && record?.updatedAt
       && Date.parse(externalDetails.ingredient.updatedAt) <= Date.parse(record.updatedAt)) setExternalDetails(null);
   }, [record?.updatedAt, externalDetails]);
+
+  const applyLock = useCallback(updated => {
+    setRecord(current => current?.id === updated.id ? { ...current, updatedAt: updated.updatedAt,
+      payload: { ...current.payload, locked: updated.payload.locked } } : current);
+    setPayload(previous => ({ ...previous, locked: updated.payload.locked }));
+    refreshRevisions();
+  }, [refreshRevisions]);
 
   // Library profiles load the editable record and direct context first. Media,
   // history and derived story usage have separate reads after first render.
@@ -542,7 +565,7 @@ function IngredientEditor() {
   }, [id, detailView]);
 
   const handleSave = async () => {
-    if (!record || identityReadOnly || unlocking) return;
+    if (!record || identityReadOnly || unlocking || characterActionBusy) return;
     const submittedId = record.id;
     const submittedGeneration = activeVisitRef.current.generation;
     const submittedName = name;
@@ -552,6 +575,14 @@ function IngredientEditor() {
     if (!trimmedName) {
       toast.error('Name is required');
       return;
+    }
+    if (record.type === 'character') {
+      const required = { stats: ['label', 'stat label'], colorPalette: ['name', 'swatch name'], props: ['name', 'prop name'],
+        expressions: ['name', 'expression name'], handGestures: ['name', 'gesture name'] };
+      const incomplete = Object.entries(required).find(([key, [field]]) => (Array.isArray(payload[key]) ? payload[key] : []).some(row =>
+        row && typeof row === 'object' && !String(row[field] || '').trim()
+        && Object.entries(row).some(([name, value]) => name !== 'id' && typeof value === 'string' && value.trim())));
+      if (incomplete) { toast.error(`Complete the ${incomplete[1][1]} or remove its unfinished row before saving.`); return; }
     }
     setSaving(true);
     const updated = await updateCatalogIngredient(submittedId, {
@@ -654,11 +685,8 @@ function IngredientEditor() {
   // Grouped "character sheet" sections for the rich canon types
   // (character/place/object); light types (idea/scene/concept) have none and
   // fall back to the flat field list below.
-  const coreCharacterFields = new Set(['role', 'physicalDescription', 'personality', 'background', 'notes']);
-  const sections = record.type === 'character' && showCharacterEditor
-    ? (typeDef.editorSections || []).map((section) => ({ ...section, fields: section.fields.filter(([key]) => coreCharacterFields.has(key)) })).filter((section) => section.fields.length)
-    : typeDef.editorSections || null;
-  const editableLists = (typeDef.editableListFields || []).filter((field) => !showCharacterEditor || record.type !== 'character' || field.key === 'aliases');
+  const sections = typeDef.editorSections || null;
+  const editableLists = typeDef.editableListFields || [];
   // A user-defined type has no hardcoded editor sections and carries
   // generically-shaped editorFields ({ key, label, widget }); render the
   // generic field renderer for it. System types keep their existing branches.
@@ -672,7 +700,7 @@ function IngredientEditor() {
 
   // Ownership, rather than usage-list order, supplies the style context.
   const universeRef = record.universeContext?.owner || null;
-  const ownerCharacter = ownerUniverse?.characters?.find((entry) => entry.ingredientId === record.id);
+  const ownerCharacter = ownerUniverse?.characters?.find((entry) => entry.id === ownerEntryId);
 
   // Library routes split the page into the library's tabs; the plain
   // /catalog/:type/:id route (and a record opened under the wrong library)
@@ -734,8 +762,10 @@ function IngredientEditor() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            {FORM_TYPES.has(record.type) && <CatalogLockButton key={record.id} record={record}
+              disabled={saving || lookSaving || unlocking || characterActionBusy || mergeBusy} onPendingChange={setUnlocking} onChanged={applyLock} />}
             {isDirty && <span className="text-xs text-port-warning" role="status">Unsaved changes</span>}
-            <button type="button" onClick={handleSave} disabled={saving || lookSaving || unlocking || mergeBusy || identityReadOnly || !!externalDetails}
+            <button type="button" onClick={handleSave} disabled={saving || lookSaving || unlocking || characterActionBusy || mergeBusy || identityReadOnly || !!externalDetails}
               className="inline-flex items-center gap-1.5 min-h-[40px] px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white text-sm font-medium">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
             </button>
@@ -775,7 +805,7 @@ function IngredientEditor() {
         <TabPills
           tabs={tabs}
           activeTab={activeTab}
-          onChange={(tabId) => navigate(detailTabPath(library, record.id, tabId))}
+          onChange={(tabId) => navigate(`${detailTabPath(library, record.id, tabId)}${search}`)}
           ariaLabel={`${library.label} record sections`}
           className="w-full min-w-0 shrink-0"
         />
@@ -792,9 +822,9 @@ function IngredientEditor() {
         <CatalogUniversePanel key={`universe-${record.id}`} ingredient={record} context={record.universeContext}
           onContextChange={applyUniverseContext} readOnly={identityReadOnly} forkBlocked={record.sharedIdentity?.reason === 'CATALOG_IDENTITY_FENCED'} unsaved={isDirty || saving || lookSaving} />
 
-        {activeTab === 'profile' && (
-          <>
-            <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6 space-y-4">
+        {profileVisited && (
+          <div hidden={activeTab !== 'profile'} className="space-y-4">
+            {record.type !== 'character' && <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6 space-y-4">
               <div className={coverUrl ? 'grid grid-cols-1 md:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] gap-5 items-start' : ''}>
                 {coverUrl && (
                   <figure className="min-w-0 rounded-lg border border-port-border bg-port-bg overflow-hidden">
@@ -839,36 +869,60 @@ function IngredientEditor() {
               {!isUserType && Array.isArray(typeDef.editableListFields) && typeDef.editableListFields.length > 0 && (
                 <fieldset disabled={identityReadOnly}><EditableListFields fields={editableLists} payload={payload} onChange={updatePayload} /></fieldset>
               )}
-            </div>
+            </div>}
 
-            {FORM_TYPES.has(record.type) && (
+            {record.type !== 'character' && FORM_TYPES.has(record.type) && (
               <fieldset disabled={identityReadOnly} className="min-w-0">
                 <CatalogFormsEditor type={record.type} payload={payload} onChange={updatePayload} />
               </fieldset>
             )}
-            {FORM_TYPES.has(record.type) && <RevealTimingField entry={{ ...payload, id: record.id }}
+            {record.type !== 'character' && FORM_TYPES.has(record.type) && <RevealTimingField entry={{ ...payload, id: record.id }}
               editable={!identityReadOnly && payload.locked !== true} onPatch={(patch) => setPayload((previous) => ({ ...previous, ...patch }))} />}
 
-            {record.type === 'character' && (
-              <>
-                <button type="button" onClick={() => setShowCharacterEditor((shown) => !shown)}
-                  className="px-3 py-2 rounded border border-port-accent text-port-accent text-sm">{showCharacterEditor ? 'Close character sheet' : 'Edit full character sheet'}</button>
-                {showCharacterEditor ? <CharacterDetailEditor entry={{ ...payload, id: ownerCharacter?.id || record.id, name }}
-                  universeId={ownerCharacter ? ownerUniverseId : null} characters={ownerUniverse?.characters || []}
-                  onPatch={(patch) => setPayload((previous) => ({ ...previous, ...patch }))}
-                  disabled={identityReadOnly || payload.locked === true} saveHint="Use Save to save your character edits" />
-                  : <CatalogCharacterCanon payload={payload} />}
-                {!tabs && <ReferenceSheetPanel payload={payload} universeRef={universeRef} />}
-                {/* Trained-LoRA link + dataset entry point. The catalog id IS the
-                    ingredientId the trained sidecars carry; the universe entryId
-                    isn't known on this surface, so the chip links an existing
-                    dataset rather than offering find-or-create. */}
-                <div className="bg-port-card border border-port-border rounded-lg p-4">
-                  <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Character LoRA</div>
-                  <CharacterLoraChip ingredientId={record.id} />
-                </div>
-              </>
-            )}
+            {record.type === 'character' && <CharacterDetailEditor
+              draftMode="change" navigationId={record.id} onPageChange={onCharacterPageChange}
+              entry={{ ...payload, id: ownerCharacter?.id || record.id, name }}
+              universeId={ownerCharacter ? ownerUniverseId : null} characters={ownerUniverse?.characters || []}
+              contextLoading={!!ownerUniverseId && !ownerUniverse && !ownerContextError}
+              disabled={identityReadOnly || characterActionBusy} actionsDisabled={payload.locked === true || isDirty || saving || unlocking || lookSaving}
+              onPatch={(patch) => setPayload((previous) => ({ ...previous, ...patch }))}
+              saveHint="Use Save to save your character edits"
+              portrait={coverUrl ? <CatalogImagePreview key={coverUrl} src={coverUrl} fallbackSrc={coverUrl.replace('/data/images/', '/data/image-refs/')}
+                alt={`${record.name || 'Character'} cover`} className="w-full max-h-64 object-contain rounded" loading="eager" /> : null}
+              identityControls={<div className="space-y-3">
+                <div><label htmlFor="ingredient-name" className="block text-xs text-gray-400 mb-1">Name</label>
+                  <input id="ingredient-name" value={name} maxLength={200} disabled={identityReadOnly || characterActionBusy} onChange={event => setName(event.target.value)}
+                    className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" /></div>
+                <div><label htmlFor="ingredient-tags" className="block text-xs text-gray-400 mb-1">Tags</label>
+                  <fieldset disabled={identityReadOnly || characterActionBusy}><TagPicker id="ingredient-tags" value={tags} onChange={setTags} /></fieldset></div>
+                {ownerUniverseId && !contextRequested && <button type="button" onClick={() => setContextRequested(true)}
+                  className="min-h-11 text-xs text-port-accent">Load universe creative tools</button>}
+                {ownerContextError && <p role="alert" className="text-xs text-port-warning">{ownerContextError}
+                  <button type="button" onClick={() => setContextVersion(previous => previous + 1)} className="ml-1 underline">Retry context</button></p>}
+                {ownerCharacter && <CharacterCanonActions key={ownerCharacter.id} universe={ownerUniverse} entry={ownerCharacter}
+                  applyDisabled={identityReadOnly || payload.locked === true}
+                  disabled={identityReadOnly || payload.locked === true || isDirty || saving || unlocking || lookSaving || !!externalDetails}
+                  onPendingChange={setCharacterActionBusy} onPatch={patch => setPayload(previous => ({ ...previous, ...patch }))}
+                  onChanged={updated => {
+                    if (updated) setOwnerUniverse(updated);
+                    getCatalogIngredientDetails(id, { silent: true, view: detailView }).then(details => {
+                      if (!mountedRef.current || details?.ingredient?.id !== editSnapshot.current.id) return;
+                      if (editSnapshot.current.dirty) setExternalDetails(details); else applyDetails(details);
+                      refreshRevisions();
+                    }).catch(error => toast.error(error.message || 'Could not refresh the character.'));
+                  }} />}
+              </div>}
+              storyExtra={<fieldset disabled={identityReadOnly || characterActionBusy}><EditableListFields fields={editableLists.filter(field => field.key === 'aliases')} payload={payload} onChange={updatePayload} /></fieldset>}
+            >
+              <fieldset disabled={identityReadOnly || characterActionBusy}><CatalogFormsEditor type={record.type} payload={payload} onChange={updatePayload} /></fieldset>
+              <RevealTimingField entry={{ ...payload, id: record.id }} editable={!identityReadOnly && !characterActionBusy && payload.locked !== true}
+                onPatch={patch => setPayload(previous => ({ ...previous, ...patch }))} />
+              {!tabs && <ReferenceSheetPanel payload={payload} universeRef={universeRef} />}
+              <div className="bg-port-card border border-port-border rounded-lg p-3">
+                <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Character LoRA</div>
+                <CharacterLoraChip ingredientId={record.id} />
+              </div>
+            </CharacterDetailEditor>}
 
             {record.type === 'object' && <ObjectAttachmentsEditor entry={{ ...payload, id: record.id, name }}
               characters={ownerUniverse?.characters || []} disabled={identityReadOnly || payload.locked === true}
@@ -885,16 +939,12 @@ function IngredientEditor() {
               onAdd={handleAddRelation}
               onRemove={handleRemoveRelation}
             />
-          </>
+          </div>
         )}
 
         <div hidden={activeTab !== 'sheets' && activeTab !== 'looks'}>
-          <CatalogUnlockNotice key={record.id} record={record} disabled={saving || lookSaving || identityReadOnly} onPendingChange={setUnlocking}
-            onUnlocked={(updated) => {
-              setRecord((current) => current?.id === updated.id
-                ? { ...current, updatedAt: updated.updatedAt, payload: { ...current.payload, locked: false } } : current);
-              setPayload((current) => ({ ...current, locked: false }));
-            }} />
+          <CatalogUnlockNotice key={record.id} record={record} disabled={saving || lookSaving || unlocking || characterActionBusy || identityReadOnly} onPendingChange={setUnlocking}
+            onUnlocked={applyLock} />
         </div>
 
         {mediaTab !== 'profile' && (mediaError || !mediaReady) && <div role="status" className="text-sm text-gray-400">
@@ -952,6 +1002,17 @@ function IngredientEditor() {
             canonImageRefs={[payload.primaryImageRef, ...(Array.isArray(payload.imageRefs) ? payload.imageRefs : [])].filter((ref) =>
               !media.some((m) => (m.kind === 'portrait' || m.kind === 'reference') && m.mediaKey === ref))}
             primaryImageRef={payload.primaryImageRef}
+            canonRemoval={universeRef && FORM_TYPES.has(record.type) ? {
+              recordId: record.id, universeId: universeRef.refId, kind: record.type,
+              disabled: identityReadOnly || saving || isDirty || lookSaving || unlocking,
+              onRemoved: () => {
+                getCatalogIngredientDetails(id, { silent: true, view: detailView }).then(details => {
+                  if (!mountedRef.current || details?.ingredient?.id !== editSnapshot.current.id) return;
+                  if (editSnapshot.current.dirty) setExternalDetails(details); else applyDetails(details);
+                  refreshMediaRef.current?.(); refreshRevisions();
+                }).catch(error => toast.error(error.message));
+              },
+            } : null}
             missingMedia={missingMedia}
             onAttach={handleAttachMedia}
             onSetPortrait={handleSetPortrait}
@@ -1547,7 +1608,7 @@ function GenerateImageControl({ ingredientId, name, description, universeId, onC
   );
 }
 
-function MediaPanel({ readOnly = false, referenceLibrary = null, media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
+function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = null, media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false); // upload or transcription in flight
@@ -1679,7 +1740,7 @@ function MediaPanel({ readOnly = false, referenceLibrary = null, media, canonIma
       {canonImages.length > 0 && (
         <div className="mt-3 space-y-2">
           <h3 className="text-xs font-semibold text-gray-300">Canon images</h3>
-          <p className="text-xs text-gray-500">Existing canon references, shown read-only.</p>
+          <p className="text-xs text-gray-500">Existing canon references. Removing a reference keeps its image asset.</p>
           <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
             {canonImages.map((filename) => (
               <figure key={filename} className="min-w-0 rounded border border-port-border overflow-hidden bg-port-bg">
@@ -1688,6 +1749,7 @@ function MediaPanel({ readOnly = false, referenceLibrary = null, media, canonIma
                   className="w-full aspect-square object-contain" />
                 <figcaption className="text-xs text-gray-400 p-2 break-words">
                   {filename === primaryImageRef ? 'Primary canon reference' : 'Canon reference'}
+                  {canonRemoval && <CanonReferenceRemoval key={filename} {...canonRemoval} filename={filename} />}
                 </figcaption>
               </figure>
             ))}

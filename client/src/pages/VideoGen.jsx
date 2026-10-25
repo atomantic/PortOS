@@ -1,3 +1,5 @@
+import A2vLoraStageControls from '../components/videoGen/A2vLoraStageControls';
+import { isDefaultA2vLoraStages } from '../lib/videoLoraStages';
 import { useRunwayCatalog } from '../hooks/useRunwayCatalog.js';
 import RunwayCatalogStatus from '../components/imageGen/RunwayCatalogStatus.jsx';
 import RunwayVideoInputPanel from '../components/videoGen/RunwayVideoInputPanel.jsx';
@@ -260,6 +262,7 @@ export default function VideoGen() {
     modelId, handleModelChange, currentModel, visibleModels,
     loraFamily, videoLoras, loraUnavailableHint,
     selectedLoras, setSelectedLoras,
+    a2vLoraStageStrengths, setA2vLoraStageStrengths,
     width, height, handleResolutionChange,
     numFrames, setNumFrames, fps, setFps, chunks, setChunks,
     chunkPrompts, setChunkPromptAt, chainingActive,
@@ -1635,6 +1638,11 @@ export default function VideoGen() {
             />
           )}
 
+          {(hostedLane || remoteTarget.isRemote) && !isDefaultA2vLoraStages(a2vLoraStageStrengths) && (
+            <A2vLoraStageControls value={a2vLoraStageStrengths} onChange={setA2vLoraStageStrengths}
+              supported={false} disabled={generating} loras={selectedLoras} />
+          )}
+
           {isGrok ? (
             <div className="grid grid-cols-2 gap-3">
               <FormField label="Clip length" labelClassName="block text-xs font-medium text-gray-400 mb-1">
@@ -1928,6 +1936,16 @@ export default function VideoGen() {
                   prompt={isGrok ? null : envelopedPrompt}
                   disabled={generating}
                 />
+              </div>
+            )}
+
+
+            {((mode === 'a2v' && currentModel?.a2vLoraStageCapable && selectedLoras.length > 0)
+              || !isDefaultA2vLoraStages(a2vLoraStageStrengths)) && !remoteTarget.isRemote && (
+              <div className="col-span-2 sm:col-span-3">
+                <A2vLoraStageControls value={a2vLoraStageStrengths} onChange={setA2vLoraStageStrengths}
+                  supported={mode === 'a2v' && currentModel?.a2vLoraStageCapable && selectedLoras.length > 0}
+                  disabled={generating} loras={selectedLoras} />
               </div>
             )}
 

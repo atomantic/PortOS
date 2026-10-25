@@ -1,3 +1,4 @@
+import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from './videoLoraStageValidation.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { federatedSourceAudioSchema } from './federatedMediaWire.js';
 import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
@@ -1526,6 +1527,9 @@ export const federatedMediaVideoJobSubmissionBaseSchema = federatedMediaJobRouti
   durationSec: true, durationMode: true,
 }).extend({
   kind: z.literal('video'),
+  a2vLoraStageStrengths: a2vLoraStageStrengthsSchema.refine(isDefaultA2vLoraStages, {
+    message: 'Federated video does not support per-stage user LoRA strengths',
+  }).optional(),
   prompt: z.string().trim().min(1).max(4000),
   negativePrompt: z.string().trim().max(4000).optional(),
   width: z.number().int().min(64).max(2048).optional(),

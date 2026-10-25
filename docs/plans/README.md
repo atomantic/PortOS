@@ -31,3 +31,7 @@ and the topic docs elsewhere under `docs/`.
 - [2026-10-25 — Casting detail performance](./2026-10-25-casting-detail-performance.md):
   measured payload/query scaling, lean first render and lazy secondary reads,
   with explicit limits on live performance claims.
+
+- [2026-10-25 — shared character workspace](./2026-10-25-character-workspace.md):
+  rich shared cards and one compact canonical editor with explicit drafts,
+  bounded context reads and atomic locks.

@@ -17,13 +17,12 @@
  * README rule, and a node-builtin module has no business in a browser barrel.
  */
 
-import { execSync } from 'child_process';
+import { trackedFiles } from '../../../scripts/lib/trackedFiles.js';
 
 const isTest = (f) => f.includes('.test.');
 
 function gitTracked(clientRoot) {
-  const out = execSync('git ls-files src', { cwd: clientRoot, encoding: 'utf8' });
-  return out.trim().split('\n');
+  return trackedFiles(clientRoot, ['src']);
 }
 
 /** Git-tracked non-test `.jsx` under `client/src`. */

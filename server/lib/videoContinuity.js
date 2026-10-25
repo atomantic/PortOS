@@ -12,7 +12,7 @@
  *   'window' — hand the prior chunk's LAST N FRAMES to LTX-2's
  *              ExtendPipeline.extend_from_video, which conditions on that
  *              window's latent (motion AND appearance) instead of a still.
- *              Only the `ltx2` runtime has the pipeline, so every other
+ *              The `ltx2` and `ltx25` runtimes have the pipeline; every other
  *              runtime degrades to 'frame'.
  *
  * Why a WINDOW and not the whole prior clip. `extend_from_video` returns
@@ -56,42 +56,46 @@ export const MIN_CONTEXT_FRAMES = 0;
  */
 export const MAX_CONTEXT_FRAMES = 121;
 
-/**
- * The LTX-2 VAE's temporal compression: one latent frame decodes to 8 pixel
- * frames (the first latent carries the extra anchor frame, which is why a
- * clip's pixel length is 8k+1 rather than 8k).
- *
- * This is a property of LTX-2's VAE, not a general one — everything derived
- * from it below is only valid for the runtime in CONTEXT_WINDOW_RUNTIMES. A
- * second runtime joining that set has to bring its own stride, and the failure
- * mode if it doesn't is a wrongly-sized trim rather than an error, so make the
- * stride per-runtime at that point instead of reusing this constant.
- */
-export const LATENT_FRAME_STRIDE = 8;
+// Timing belongs to a verified runtime contract, not to a mutable capability
+// set. H3's history packing and frame grid differ from LTX's even though both
+// can condition on images; a future adapter must bring its own output layout.
+const LTX_CONTINUATION = Object.freeze({
+  temporalContext: true,
+  latentFrameStride: 8,
+  outputLayout: 'echoed-history-prefix',
+  unavailableReason: null,
+});
+const CONTINUATION_CONTRACTS = Object.freeze({
+  ltx2: LTX_CONTINUATION,
+  ltx25: LTX_CONTINUATION,
+  minimax_h3: Object.freeze({
+    temporalContext: false,
+    unavailableReason: 'The pinned H3 MLX helper has no verified video/audio history-conditioning adapter.',
+  }),
+  minimax_h3_cuda: Object.freeze({
+    temporalContext: false,
+    unavailableReason: 'The pinned H3 CUDA helper has no verified video/audio history-conditioning adapter.',
+  }),
+});
+const UNAVAILABLE_CONTINUATION = Object.freeze({
+  temporalContext: false,
+  unavailableReason: 'This runtime has no verified temporal continuation contract.',
+});
 
-/**
- * Runtimes whose helper can condition on a source *video* rather than a still.
- * `ltx2` / `ltx25` route to ExtendPipeline.extend_from_video; the `minimax_h3`
- * runtimes, `wan22`, `fastvideo` and `mlx_video` have no equivalent and take
- * the 'frame' path.
- *
- * Kept here rather than in `videoGen/modeContract.js` — that module's "declare
- * every runtime gate in one table" rule is about mode/source pairings that
- * REJECT a request at two boundaries, which is what had drifted. This never
- * rejects: an unsupported runtime silently gets the 'frame' path.
- *
- * And deliberately NOT derived from the registry's `supportedModes` (#3737),
- * even though every entry now resolves one: `mlx_video` declares `'extend'`
- * too, but implements it by extracting a last frame and running i2v — there is
- * no pipeline there to hand a video to. `supportedModes.includes('extend')`
- * would therefore route mlx_video chains down a path its helper cannot honor.
- * The two questions genuinely differ: "can the user pick Extend mode?" vs "can
- * this runtime condition on a source VIDEO?", and only the latter belongs here.
- */
-export const CONTEXT_WINDOW_RUNTIMES = new Set(['ltx2', 'ltx25']);
+/** Verified temporal capability and timing; unavailable runtimes expose no stride. */
+export const continuationContract = (runtime) => (Object.hasOwn(CONTINUATION_CONTRACTS, runtime)
+  ? CONTINUATION_CONTRACTS[runtime] : UNAVAILABLE_CONTINUATION);
 
-/** True when the model's runtime exposes a video-conditioned extend path. */
-export const supportsContextWindow = (model) => CONTEXT_WINDOW_RUNTIMES.has(model?.runtime);
+/** True only when the runtime has a verified video-history continuation path. */
+export const supportsContextWindow = (model) => continuationContract(model?.runtime).temporalContext;
+
+const echoedHistoryContract = (runtime) => {
+  const contract = continuationContract(runtime);
+  if (!contract.temporalContext || contract.outputLayout !== 'echoed-history-prefix') {
+    throw new Error(`Temporal continuation unavailable for ${runtime ?? 'unknown runtime'}: ${contract.unavailableReason}`);
+  }
+  return contract;
+};
 
 /**
  * Normalize a caller-supplied context-frame count.
@@ -126,14 +130,18 @@ export const resolveContinuityStrategy = ({ model, contextFrames }) => (
  * `numFrames` pixel frames. No leading +1: the context window already supplies
  * the anchor frame. Floors at 1 so a too-small request still renders something.
  */
-export const extendLatentFrames = (numFrames) => {
+export const extendLatentFrames = (numFrames, runtime) => {
+  const { latentFrameStride } = echoedHistoryContract(runtime);
   const n = Number(numFrames);
   if (!Number.isFinite(n)) return 1;
-  return Math.max(1, Math.floor(n / LATENT_FRAME_STRIDE));
+  return Math.max(1, Math.floor(n / latentFrameStride));
 };
 
 /** Pixel frames an `extendLatents`-latent extension contributes to the output. */
-export const extendedPixelFrames = (extendLatents) => Math.max(0, Math.floor(Number(extendLatents) || 0)) * LATENT_FRAME_STRIDE;
+export const extendedPixelFrames = (extendLatents, runtime) => {
+  const { latentFrameStride } = echoedHistoryContract(runtime);
+  return Math.max(0, Math.floor(Number(extendLatents) || 0)) * latentFrameStride;
+};
 
 /**
  * How many leading frames of an extend render are echoed context that the
@@ -149,9 +157,9 @@ export const extendedPixelFrames = (extendLatents) => Math.max(0, Math.floor(Num
  * output no longer than the extension, a nonsensical count) — the caller must
  * treat 0 as "leave the chunk alone", never as "trim everything".
  */
-export const contextPrefixFrames = ({ totalFrames, extendLatents }) => {
+export const contextPrefixFrames = ({ runtime, totalFrames, extendLatents }) => {
   const total = Number(totalFrames);
-  const newFrames = extendedPixelFrames(extendLatents);
+  const newFrames = extendedPixelFrames(extendLatents, runtime);
   if (!Number.isFinite(total) || total <= 0 || newFrames <= 0) return 0;
   return Math.max(0, total - newFrames);
 };
@@ -188,12 +196,13 @@ export const tailWindowStartFrame = ({ totalFrames, frames }) => {
  * source, or a source whose tail the model skipped by more than a latent (it
  * truncated the context, so which frames it kept is not something to guess at).
  */
-export const planExtendSplice = ({ sourceFrames, outputFrames, extendLatents }) => {
+export const planExtendSplice = ({ runtime, sourceFrames, outputFrames, extendLatents }) => {
+  const { latentFrameStride } = echoedHistoryContract(runtime);
   const source = Math.floor(Number(sourceFrames));
   const total = Number(outputFrames);
-  const keepFrames = contextPrefixFrames({ totalFrames: total, extendLatents });
+  const keepFrames = contextPrefixFrames({ runtime, totalFrames: total, extendLatents });
   if (!Number.isFinite(source) || source <= 0 || keepFrames <= 0) return null;
-  if (keepFrames > source || source - keepFrames >= LATENT_FRAME_STRIDE) return null;
+  if (keepFrames > source || source - keepFrames >= latentFrameStride) return null;
   return {
     keepFrames,
     newStartFrame: keepFrames,
