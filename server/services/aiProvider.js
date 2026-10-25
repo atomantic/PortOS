@@ -1,4 +1,4 @@
-import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
+import { EXECUTION_OPTIONS_ERROR, resolveExecutionOptions } from '../lib/executionOptions.js';
 import { awaitWithAbort } from '../lib/abortTimeout.js';
 /**
  * Shared AI provider utilities for LLM calls.
@@ -398,7 +398,10 @@ async function callCodexSubscription(provider, model, prompt, {
         usage: turn.usage,
         model: turn.model,
         effort: turn.effort,
-        ...(turn.executionOptions ? { executionOptions: turn.executionOptions } : {}),
+        ...(turn.executionOptions ? { executionOptions: { ...turn.executionOptions, ...resolveExecutionOptions(
+          { source: 'provider', options: provider.executionSelectionDefaults ?? provider.executionOptions },
+          { source: 'selection', options: provider.executionSelectionOptions },
+        ) } } : {}),
         effortClamped: turn.effortClamped,
         clampReason: turn.clampReason,
       } };

@@ -257,6 +257,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
         workspacePath,
         appName: resolvedAppName,
         injectedMemories,
+        executionOptions: executionAttribution,
       });
       await registerAgent(agentId, task.id, buildAgentRegistration({
         task,
