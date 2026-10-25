@@ -1157,6 +1157,25 @@ describe('completion after its originating task was removed', () => {
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
   });
 
+  it.each(['merged', 'open', 'missing', 'unreadable', 'unreadable-integration'])('restores the exact removed task PR expectation without a saved URL: %s', async mode => {
+    const { state, original } = fixture();
+    delete state.metadata.reviewLoopMergeTarget;
+    original.metadata.prCompletion = 'review-then-merge';
+    findPullRequestForBranch.mockResolvedValue(mode === 'unreadable' ? { status: 'unavailable' }
+      : mode === 'missing' ? { status: 'none' }
+        : { status: 'found', url: 'https://github.com/example/repo/pull/7', detail: mode === 'open' ? 'OPEN' : 'MERGED' });
+    if (mode === 'unreadable-integration') readRetirementForgeEvidence.mockRejectedValue(new Error('forge unavailable'));
+    const result = await resumeAgentCompletionRetirement('agent-1');
+    expect(findPullRequestForBranch).toHaveBeenCalledWith(BRANCH, expect.objectContaining({ cwd: '/repo' }));
+    expect(result.verified).toBe(mode === 'merged');
+    if (mode === 'merged') expect(settleAbsentTaskCompletion).toHaveBeenCalledWith('agent-1', state);
+    else expect(settleAbsentTaskCompletion).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    expect(replayAgentCompletionCleanup).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+  });
+
   it.each(['verified', 'unreadable-task', 'ambiguous-replay'])('sweeps a removed originating task through the existing absence proof: %s', async mode => {
     const { state } = fixture();
     readBranchCompletionPolicies.mockResolvedValue([state]);

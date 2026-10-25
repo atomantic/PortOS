@@ -358,7 +358,7 @@ export async function verifyAgentRepoState(input) {
       if (!original) {
         const snapshot = await readAbsentTaskSnapshot(input.agentState);
         if (!snapshot) return skipped('cleanup-task-unavailable');
-        input = { ...input, task: snapshot, originTaskAbsent: true };
+        input = { ...input, task: snapshot, prExpected: input.prExpected || isTruthyMeta(snapshot.metadata?.openPR), originTaskAbsent: true };
         return verifyRunBranches({ ...input, success: true, cleanupWarnings: [] });
       }
       const current = await recoverCompletionTaskHandoff(input.agentState) || original;
