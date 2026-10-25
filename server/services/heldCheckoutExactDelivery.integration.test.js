@@ -130,3 +130,77 @@ describe('exact delivered head retirement with capped historical API (real Git)'
       if (scenario === 'dirty') expect(await readFile(join(path, 'feature.txt'), 'utf8')).toContain('wanted local edit');
     });
 });
+
+// Uniquely catches an older detached original whose commits were rewritten in
+// its delivered PR: exact-SHA alias matching strands it despite all work landing.
+describe('rewritten detached original retirement (real Git)', () => {
+  it.each(['represented', 'unique-work', 'reverted', 'dirty', 'active', 'custom-driver', 'changed-after-review'])(
+    'requires current complete delivery and preserves every existing gate: %s', async scenario => {
+      scratch = await realpath(await mkdtemp(join(tmpdir(), 'detached-delivery-')));
+      const repo = join(scratch, 'repo'); await materializeGitRepo(repo);
+      const remote = fixture.remote = join(scratch, 'origin.git'); await execGit(['init', '--bare', remote], scratch);
+      await execGit(['remote', 'add', 'origin', remote], repo);
+      const branch = 'delivery/candidate'; const path = join(repo, '.claude', 'worktrees', 'original');
+      await execGit(['worktree', 'add', '-b', 'original', path, 'main'], repo);
+      await writeFile(join(path, 'feature.txt'), 'delivered feature\n');
+      await execGit(['add', 'feature.txt'], path); await execGit(['commit', '-m', 'original feature'], path);
+      const original = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+      await execGit(['switch', '--detach', original], path);
+      await execGit(['switch', '-c', branch, 'main'], repo);
+      await writeFile(join(repo, 'unrelated.txt'), 'later delivery context\n');
+      await execGit(['add', 'unrelated.txt'], repo); await execGit(['commit', '-m', 'delivery context'], repo);
+      await execGit(['cherry-pick', original], repo);
+      if (scenario === 'reverted') await execGit(['revert', '--no-edit', 'HEAD'], repo);
+      const delivered = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
+      expect(delivered).not.toBe(original);
+      await execGit(['switch', 'main'], repo); await execGit(['merge', '--no-ff', branch, '-m', 'merge delivery'], repo);
+      await execGit(['push', 'origin', 'main', branch], repo);
+      const merge = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
+      fixture.refs = { main: merge }; fixture.calls = []; fixture.owners = [];
+      fixture.pr = { url: 'https://github.com/example/repo/pull/42', state: 'MERGED', headRefName: branch,
+        headRefOid: delivered, isCrossRepository: false, baseRefName: 'main', mergeCommit: { oid: merge } };
+      fixture.detail = { head: { sha: delivered }, base: { ref: 'main' }, merged: true, merge_commit_sha: merge,
+        commits: 401, changed_files: 501 };
+      fixture.app = { id: 'app-detached', repoPath: repo };
+      fixture.policies = [{ id: 'completed-original', status: 'completed', result: { success: true }, metadata: {
+        workspacePath: repo, claimBranches: [branch], prCompletionPolicy: 'review-then-merge' } }];
+      fixture.schedulePath = join(scratch, 'schedule.json');
+      await writeFile(fixture.schedulePath, JSON.stringify({ tasks: {}, executions: {} }));
+      if (scenario === 'unique-work') {
+        await writeFile(join(path, 'wanted.txt'), 'undelivered original work\n');
+        await execGit(['add', 'wanted.txt'], path); await execGit(['commit', '-m', 'wanted continuation'], path);
+      }
+      if (scenario === 'dirty') await writeFile(join(path, 'feature.txt'), 'wanted dirty edit\n');
+      if (scenario === 'active') fixture.owners = [{ id: 'live', status: 'running', metadata: {
+        isWorktree: true, sourceWorkspace: repo, workspacePath: path } }];
+      if (scenario === 'custom-driver') await execGit(['config', 'merge.custom.driver', 'exit 0'], repo);
+      const head = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+      const release = { branch: null, path, head, locked: false, lockReason: null };
+      await recordBranchReconcileOutcome(fixture.app.id, { status: 'incomplete', remaining: [{ ...release, reason: 'worktree-unmanaged-location' }] });
+      const opts = { cosDir: join(scratch, 'cos'), readAgents: async () => fixture.owners }; await mkdir(opts.cosDir);
+      const prepared = await prepareInventoriedCheckoutRetirement({ appId: fixture.app.id, release, prUrl: fixture.pr.url }, opts);
+      if (!['represented', 'dirty', 'changed-after-review'].includes(scenario)) {
+        expect(prepared.ok, JSON.stringify(prepared)).toBe(false);
+        expect((await listWorktrees(repo)).some(row => resolve(row.path) === resolve(path))).toBe(true);
+        return;
+      }
+      expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: {
+        comparison: { disposition: 'integrated', exactMergedDelivery: false, representedDetachedDelivery: true },
+        forge: { detachedRepresentation: { sourceHead: original, deliveredHead: delivered } },
+      } });
+      if (scenario === 'changed-after-review') await writeFile(join(path, 'feature.txt'), 'new local work after review\n');
+      const retired = await retireInventoriedCheckout({ appId: fixture.app.id, release,
+        review: { prUrl: fixture.pr.url, digest: prepared.review.digest, acceptSuperseded: false } }, opts);
+      if (['dirty', 'changed-after-review'].includes(scenario)) {
+        expect(retired.ok).toBe(false);
+        expect((await listWorktrees(repo)).some(row => resolve(row.path) === resolve(path))).toBe(true);
+        return;
+      }
+      expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: false });
+      expect((await listWorktrees(repo)).some(row => resolve(row.path) === resolve(path))).toBe(false);
+      const outcome = await getBranchReconcileOutcome(fixture.app.id);
+      expect(outcome.remaining.some(row => row.path === path)).toBe(false);
+      expect(outcome.retired).toEqual(expect.arrayContaining([expect.objectContaining({ path, head, checkoutOnly: true, branchDeleted: false })]));
+      expect((await execGit(['rev-parse', branch], repo)).stdout.trim()).toBe(delivered);
+    });
+});

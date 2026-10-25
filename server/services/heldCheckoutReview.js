@@ -2,6 +2,7 @@
  * policy write or saved grant: missing local objects require a separate fetch.
  */
 import { createHash } from 'node:crypto';
+import { devNull } from 'node:os';
 import { execGit } from '../lib/execGit.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
@@ -10,6 +11,31 @@ const oid = value => typeof value === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})
 const safePath = value => typeof value === 'string' && value.length > 0 && !value.includes('\0') && !value.startsWith('/') && !value.split('/').some(part => part === '..' || part === '.');
 const git = (args, cwd) => execGit(args, cwd, { maxBuffer: 4 * 1024 * 1024,
   env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0' } }).then(r => r.stdout);
+
+/** A rewritten detached original is delivered only when its complete bounded
+ * linear change set adds nothing to the selected merged PR's tree. Patch-id
+ * matches alone are insufficient: a later revert must keep the original. */
+async function detachedDeliveryProof(repoPath, sourceHead, deliveredHead) {
+  if (!oid(sourceHead) || !oid(deliveredHead) || sourceHead === deliveredHead) return null;
+  const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_GRAFT_FILE: devNull };
+  const run = async args => (await execGit(['--no-replace-objects', '-c', 'core.commitGraph=false', ...args], repoPath,
+    { env, timeout: 5000, maxBuffer: 65536 })).stdout.trim();
+  // A configured custom merge driver could execute code or invent a matching
+  // result. This proof never invokes one, even when attributes request it.
+  const drivers = await execGit(['config', '--get-regexp', '^merge\\..*\\.driver$'], repoPath,
+    { env, timeout: 2000, maxBuffer: 16384, ignoreExitCode: true });
+  if (drivers.exitCode !== 1 || drivers.stdout) throw new Error('retirement-detached-proof-unavailable');
+  const bases = (await run(['merge-base', '--all', sourceHead, deliveredHead])).split('\n');
+  if (bases.length !== 1 || !oid(bases[0])) throw new Error('retirement-detached-proof-unavailable');
+  const base = bases[0];
+  const rows = (await run(['rev-list', '--parents', '--max-count=65', `${base}..${sourceHead}`])).split('\n').filter(Boolean);
+  if (rows.length > 64 || rows.some(row => row.split(' ').length !== 2)) throw new Error('retirement-detached-proof-unavailable');
+  const targetTree = await run(['rev-parse', `${deliveredHead}^{tree}`]);
+  const tree = await run(['-c', 'merge.renames=false', '-c', 'merge.directoryRenames=false', 'merge-tree',
+    '--write-tree', `--merge-base=${base}`, sourceHead, deliveredHead]);
+  if (!oid(targetTree) || tree !== targetTree) throw new Error('retirement-detached-content-undelivered');
+  return { sourceHead, deliveredHead, base, targetTree, sourceCommits: rows.length };
+}
 
 /** Selects the merged PR for an exact local tip. Selection is not proof: callers
  * re-read the PR with `readRetirementForgeEvidence` before acting on it.
@@ -60,7 +86,7 @@ export async function findMergedPullRequest(repoPath, branch, tip, { forgeAccoun
   return { url: historical[0].url, mergedAt: null };
 }
 
-export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { forgeAccount = null, exactAliasHead = null, sourceSupersessionHead = null, exactDeliveredHead = null, requirePublishedSupersession = false } = {}) {
+export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { forgeAccount = null, exactAliasHead = null, sourceSupersessionHead = null, exactDeliveredHead = null, requirePublishedSupersession = false, detachedSourceHead = null } = {}) {
   const origin = await getOriginInfo(repoPath);
   const parsed = parsePullRequestUrl(prUrl);
   if (!origin || !parsed || parsed.host !== origin.host || `${parsed.owner}/${parsed.repo}` !== origin.fullName) {
@@ -82,7 +108,8 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
   const supersession = typeof branch === 'string' && oid(sourceSupersessionHead);
   // Explicit whole-checkout review may name a local repair alias, but only
   // when its exact tip is the merged PR head. Similar names are never evidence.
-  const alias = remote.headRefName !== branch && oid(exactAliasHead) && exactAliasHead === remote.headRefOid;
+  const detachedCandidate = branch === null && oid(detachedSourceHead) && detachedSourceHead === exactAliasHead;
+  const alias = remote.headRefName !== branch && oid(exactAliasHead) && (exactAliasHead === remote.headRefOid || detachedCandidate);
   if (remote.url !== prUrl || remote.state !== 'MERGED' || (remote.headRefName !== branch && !alias && !supersession)
     || remote.isCrossRepository !== false || !oid(remote.headRefOid) || !oid(remote.mergeCommit?.oid)) {
     throw new Error('retirement-pr-not-matching-merged');
@@ -101,11 +128,14 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
   if (detail.head?.sha !== remote.headRefOid || detail.base?.ref !== targetBranch || detail.merged !== true) {
     throw new Error('retirement-original-scope-unavailable');
   }
+  const detachedRepresentation = detachedCandidate && detachedSourceHead !== remote.headRefOid
+    ? await detachedDeliveryProof(repoPath, detachedSourceHead, remote.headRefOid) : null;
   const exactDelivery = !supersession && oid(exactDeliveredHead) && exactDeliveredHead === remote.headRefOid;
   let scope;
-  if (exactDelivery) {
+  if (exactDelivery || detachedRepresentation) {
     if (detail.merge_commit_sha !== remote.mergeCommit.oid) throw new Error('retirement-pr-not-matching-merged');
-    scope = { scopeProof: 'exact-delivered-head' };
+    scope = detachedRepresentation ? { scopeProof: 'represented-detached-head', detachedRepresentation }
+      : { scopeProof: 'exact-delivered-head' };
   } else {
     if (!Number.isInteger(detail.changed_files) || detail.changed_files < 1 || detail.changed_files > 3000
       || !Number.isInteger(detail.commits) || detail.commits < 1 || detail.commits > 250) {
@@ -172,12 +202,16 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
 export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, kind, contentFingerprint, administrationFingerprint, policy, preservedSource = null }, {
   readForge = readRetirementForgeEvidence, forgeAccount = null,
 } = {}) {
-  const forge = await readForge(repoPath, release.branch, prUrl, { forgeAccount, ...(!kind && { exactDeliveredHead: release.head }) });
+  const forge = await readForge(repoPath, release.branch, prUrl, { forgeAccount, ...(!kind && { exactDeliveredHead: release.head }),
+    ...(!release.branch && { exactAliasHead: release.head, detachedSourceHead: release.head }) });
   if (!forge || !oid(forge.prHead) || !oid(forge.mergeCommit) || !oid(forge.defaultHead)) throw new Error('retirement-forge-unreadable');
   const targetHead = forge.targetHead ?? forge.defaultHead;
   if (!oid(targetHead) || (forge.targetHead && (typeof forge.targetBranch !== 'string' || !forge.targetBranch))) throw new Error('retirement-forge-unreadable');
   if (release.branch === forge.defaultBranch || release.branch === forge.targetBranch) throw new Error('protected-branch');
-  if (!kind && release.head === forge.prHead && forge.scopeProof === 'exact-delivered-head') {
+  const represented = !kind && !release.branch && forge.scopeProof === 'represented-detached-head'
+    && forge.detachedRepresentation?.sourceHead === release.head
+    && JSON.stringify(await detachedDeliveryProof(repoPath, release.head, forge.prHead)) === JSON.stringify(forge.detachedRepresentation);
+  if (!kind && ((release.head === forge.prHead && forge.scopeProof === 'exact-delivered-head') || represented)) {
     // Exact delivery needs no historical patch scope. The merged head and its
     // actual target are independently bound to local objects and this digest.
     await Promise.all([...new Set([release.head, forge.mergeCommit, targetHead, forge.defaultHead])]
@@ -185,7 +219,7 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
     await git(['merge-base', '--is-ancestor', forge.mergeCommit, targetHead], repoPath)
       .catch(() => { throw new Error(forge.targetBranch ? 'retirement-merge-not-in-target' : 'retirement-merge-not-in-default'); });
     const evidence = { repoPath, release, forge, contentFingerprint, administrationFingerprint, policy,
-      comparison: { base: release.head, paths: [], localPatch: '', difference: '', exactMergedDelivery: true, disposition: 'integrated' } };
+      comparison: { base: release.head, paths: [], localPatch: '', difference: '', exactMergedDelivery: !represented, ...(represented && { representedDetachedDelivery: true }), disposition: 'integrated' } };
     return { digest: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'), ...evidence };
   }
   if (!oid(forge.changeBase) || !oid(forge.firstCommit) || !Array.isArray(forge.changedPaths)
