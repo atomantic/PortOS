@@ -1,3 +1,4 @@
+import { isRetirementOnlyRecovery, settleRetirementRecoveryBeforeSpawn } from './retirementRecoveryCompletion.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState } from './cosState.js';
 import { hasActiveTaskOwner } from './agentState.js';
@@ -118,6 +119,11 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
   }
   if (!isClaimableBy(task.metadata, instanceId)) {
     console.log(`🔒 Task ${task.id} is claimed by instance ${getClaimOwner(task.metadata)} (live lease) — skipping spawn on ${instanceId}`);
+    return null;
+  }
+
+  if (isRetirementOnlyRecovery(task) && await settleRetirementRecoveryBeforeSpawn(task)) {
+    await releaseAppReviewMarker(task.metadata?.app);
     return null;
   }
 

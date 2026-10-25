@@ -195,7 +195,12 @@ beforeEach(() => {
   findPullRequestForBranch.mockResolvedValue({ status: 'none', url: null, detail: null });
   findMergeRequestForBranch.mockResolvedValue({ status: 'none', url: null, detail: null });
   notificationExists.mockResolvedValue(false);
-  addTask.mockResolvedValue({ id: 'task-recovery-1' });
+  addTask.mockImplementation(async payload => {
+    const created = { ...payload, id: 'task-recovery-1', metadata: payload.metadata };
+    const existing = getTaskById.getMockImplementation();
+    getTaskById.mockImplementation(async id => id === created.id ? created : existing?.(id));
+    return created;
+  });
   localBranch(false);
 });
 
@@ -607,6 +612,8 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(payload.context).toContain('ok:true and branchDeleted:true');
     expect(payload.context).not.toMatch(/git (?:worktree (?:remove|unlock|prune)|branch -[dD]|push[^\n]*--delete)|--remove-source-branch/);
     expect(payload.metadata.retirementReview).toEqual({ appId: 'demo-app', release: RELEASE, createdAt: CREATED_AT });
+    expect(recordRepoStateRecovery).toHaveBeenCalledWith('agent-1', { taskId: 'task-recovery-1', branch: BRANCH,
+      repoPath: '/repo', retirementReview: payload.metadata.retirementReview }, { claimRun: true });
     expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('demo-app', expect.objectContaining({
       retirementObligations: [{ ...RELEASE, reason: 'retirement-review-pending' }],
     }));
