@@ -28,6 +28,7 @@ vi.mock('./cosState.js', () => ({
 
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: vi.fn(async () => Object.values(mockCosState.state?.agents || {})) }));
 const recoveryTasks = vi.hoisted(() => new Map());
+vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./cosTaskStore.js', () => ({
   getTaskById: vi.fn(async id => recoveryTasks.get(id) || null),
   getTaskView: vi.fn(async () => ({ user: { tasks: [...recoveryTasks.values()] }, cos: { tasks: [] } })),
@@ -98,7 +99,7 @@ vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await import
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -600,6 +601,39 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(archived.metadata.completedCheckouts).toEqual([receipt]);
     await completeAgent(agentId, { success: true });
     expect(captureCompletedCheckouts).toHaveBeenCalledTimes(1);
+  });
+
+  it('atomically persists removed-task ledger and verification settlement without changing the execution result', async () => {
+    const id = 'removed-task-completion';
+    const startedAt = '2026-01-01T00:00:00Z';
+    const completedAt = '2026-01-01T00:01:00Z';
+    const stages = Object.fromEntries(['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report']
+      .map(key => [key, { status: 'done' }]));
+    stages.worktree = { status: 'held' };
+    const record = { id, taskId: 'removed-original', status: 'completed', startedAt, completedAt,
+      result: { success: false, executionSuccess: true, cleanupPending: true }, metadata: {
+        instanceId: 'fixture-local', repoStateVerification: { status: 'pending' },
+        completedCheckouts: [{ branch: 'synthetic-owned-checkout', head: 'a'.repeat(40) }],
+        completionCleanup: { version: 1, status: 'pending', stages,
+          replay: { version: 1, kind: 'replay', bytes: 123, sha256: 'b'.repeat(64) } } } };
+    mockCosState.state.agents[id] = record;
+    const directory = join(mockCosState.agentsDir, completedAt.slice(0, 10), id);
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, 'metadata.json'), JSON.stringify(record));
+    const expected = structuredClone(record);
+    recoveryTasks.set(record.taskId, { id: record.taskId, status: 'in_progress' });
+    expect(await settleAbsentTaskCompletion(id, expected)).toBe(false);
+    recoveryTasks.delete(record.taskId);
+    expect(await settleAbsentTaskCompletion(id, { ...expected, metadata: { ...expected.metadata,
+      completedCheckouts: [{ branch: 'different-checkout' }] } })).toBe(false);
+    expect(await settleAbsentTaskCompletion(id, expected)).toBe(true);
+    const persisted = JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8'));
+    expect(persisted.metadata.completionCleanup).toMatchObject({ status: 'completed', stages: { worktree: { status: 'done' } } });
+    expect(persisted.metadata.completionCleanup).not.toHaveProperty('replay');
+    expect(persisted.metadata.repoStateVerification.status).toBe('completed');
+    expect(persisted.result).toEqual(record.result);
+    expect(recoveryTasks.has(record.taskId)).toBe(false);
+    expect(await settleAbsentTaskCompletion(id, expected)).toBe(false);
   });
 
   it('drops replay inputs from durable terminal ledgers without erasing independent preservation holds', async () => {
