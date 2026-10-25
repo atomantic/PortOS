@@ -48,4 +48,4 @@ image-generation paths below are useful entry points when tracing render jobs.
 | `appProcessStatus.js` | PM2-backed managed-app status projections, expected-exit policy, and custom PM2 home resolution. |
 | `forkReviewMergeTarget.js` | Captures a fresh fork review target from the base repository’s live PR; admission verifies the registered target, live task, exact checkout head, fork remote/upstream and live forge identity. |
 
-| `providerExecutionOptions.js` | Route-specific Codex speed capability inspection and per-dispatch option preparation. |
+| `providerExecutionOptions.js` | Explicit source-linked execution selection creation; compatibility exports for capability inspection and dispatch preparation. |

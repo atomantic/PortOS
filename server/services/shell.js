@@ -205,6 +205,7 @@ function adoptPtySession(sessionId, ptyProcess, options = {}) {
     kind: options.kind || 'shell',
     agentId: options.agentId || null,
     command: options.command || null,
+    ...(options.executionOptions ? { executionOptions: options.executionOptions } : {}),
     onData: options.onData || null,
     onExit: options.onExit || null,
     // Keeps the session out of the interactive cap count and out of Shell's
@@ -673,6 +674,7 @@ export function listAllSessions(forSocket = null) {
       kind: session.kind,
       agentId: session.agentId,
       command: session.command,
+      ...(session.executionOptions ? { executionOptions: session.executionOptions } : {}),
       external: !!session.external,
       attached: forSocket
         ? (!!session.socket && session.socket !== forSocket)

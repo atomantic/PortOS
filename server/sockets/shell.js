@@ -1,3 +1,4 @@
+import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
 import * as shellService from '../services/shell.js';
 import { getProviderById } from '../services/providers.js';
 import { prepareExecutionOptions } from '../lib/providerExecutionOptions.js';
@@ -26,11 +27,13 @@ export const registerShellHandlers = (socket, _io) => {
       const providerId = typeof options?.providerId === 'string' ? options.providerId : null;
       let initialCommand = options?.initialCommand || undefined;
       let env;
+      let executionOptions;
       if (providerId) {
         let provider = await getProviderById(providerId).catch(() => null);
         if (provider) {
           const prepared = await prepareExecutionOptions(provider, provider.defaultModel, undefined, 'run', { cwd });
           provider = prepared.provider;
+          if (Object.keys(prepared.attribution.requested).length) executionOptions = prepared.attribution;
         }
         const launch = buildTuiShellLaunch(provider);
         if (!launch) {
@@ -40,7 +43,7 @@ export const registerShellHandlers = (socket, _io) => {
         initialCommand = launch.commandLine;
         env = launch.env;
       }
-      const sessionId = shellService.createShellSession(socket, { cwd, env });
+      const sessionId = shellService.createShellSession(socket, { cwd, env, ...(executionOptions ? { executionOptions } : {}) });
       if (sessionId) {
         socket.emit('shell:started', { sessionId });
         if (initialCommand) {
@@ -51,7 +54,8 @@ export const registerShellHandlers = (socket, _io) => {
       }
     } catch (err) {
       const message = err?.message ?? String(err);
-      console.error(`❌ Socket handler error [shell:start]: ${message}`);
+      if (err.code === EXECUTION_OPTIONS_ERROR) console.log(`🚫 Shell execution option refused: ${message}`);
+      else console.error(`❌ Socket handler error [shell:start]: ${message}`);
       socket.emit('shell:error', { error: message });
     }
   });

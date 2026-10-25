@@ -1,3 +1,4 @@
+import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
 /**
  * Local-LLM code review backend for the Review Loop's `lmstudio` / `ollama` / `mtplx`
  * reviewer kinds. The follow-up agent (a CLI like Claude / Antigravity / Codex)
@@ -1010,7 +1011,7 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
     if (budgetMs === null) return { ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', error: 'The configured review budget is exhausted.' }
     result = await withAbortTimeout(budgetMs, signal => awaitWithAbort(callProviderAISimple({ ...provider, apiKey: provider.apiKey, timeout: budgetMs, fallbackProvider: null }, model,
       prompt, { max_tokens: 8192, allowModelRecovery: false, signal, deadlineMs: reviewBudget?.deadline }), signal))
-      .catch(() => ({ error: 'Reviewer preparation or execution failed within its shared budget.', code: reviewBudget && Date.now() >= reviewBudget.deadline ? 'REVIEW_BUDGET_EXHAUSTED' : 'REVIEW_BATCH_FAILED' }))
+      .catch((error) => error.code === EXECUTION_OPTIONS_ERROR ? { error: error.message, code: error.code } : ({ error: 'Reviewer preparation or execution failed within its shared budget.', code: reviewBudget && Date.now() >= reviewBudget.deadline ? 'REVIEW_BUDGET_EXHAUSTED' : 'REVIEW_BATCH_FAILED' }))
   } else {
     if (!transport.transport) return { ok: false, code: transport.code, error: transport.error }
     const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js')
@@ -1036,7 +1037,7 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
       if (remainingMs === null) return { error: 'The configured review budget is exhausted.', code: 'REVIEW_BUDGET_EXHAUSTED' }
       return runCliProviderPrompt({ provider, model, prompt, cwd, timeoutMs: remainingMs, bootstrapEnv, exactPins: true,
         safetyProfile, codeReview: true })
-    }).catch(() => ({ error: 'Reviewer credential setup or execution failed.', code: reviewBudget && Date.now() >= reviewBudget.deadline ? 'REVIEW_BUDGET_EXHAUSTED' : 'REVIEW_BATCH_FAILED' }))
+    }).catch((error) => error.code === EXECUTION_OPTIONS_ERROR ? { error: error.message, code: error.code } : ({ error: 'Reviewer credential setup or execution failed.', code: reviewBudget && Date.now() >= reviewBudget.deadline ? 'REVIEW_BUDGET_EXHAUSTED' : 'REVIEW_BATCH_FAILED' }))
       .finally(() => isolatedCwd && rm(isolatedCwd, { recursive: true, force: true }))
     // A failed headless command request is a configuration fault, not a verdict.
     // Replace vendor prose with a bounded remedy before health or bridge output.
@@ -1066,10 +1067,10 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
       const errorEvent = events.findLast(event => event.type === 'error' || event.is_error)
       const final = events.findLast(event => event.type === 'result')
       if (errorEvent && (!final || final.is_error)) {
-        result = { error: errorEvent.error || errorEvent.message || 'Reviewer returned an error event.', stderr: result.stderr, text: result.text }
+        result = { ...result, error: errorEvent.error || errorEvent.message || 'Reviewer returned an error event.', stderr: result.stderr, text: result.text }
       } else {
         result = final?.is_error || typeof final?.result !== 'string'
-          ? { error: 'Reviewer returned no successful final result.', stderr: result.stderr, text: result.text }
+          ? { ...result, error: 'Reviewer returned no successful final result.', stderr: result.stderr, text: result.text }
           : { ...result, text: final.result }
       }
     }

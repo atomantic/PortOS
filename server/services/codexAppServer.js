@@ -913,7 +913,17 @@ export async function runCodexTextTurn({
     const [account, requirements, catalog, configuration] = await raceCodexAbort(Promise.all([
       sendRequest(owner, CODEX_RPC.accountRead, {}, REQUEST_TIMEOUT_MS),
       sendRequest(owner, 'configRequirements/read', {}, REQUEST_TIMEOUT_MS),
-      listCodexModels({ fresh: true }),
+      (async () => {
+        const models = [];
+        let cursor;
+        for (let page = 0; page < MODEL_LIST_MAX_PAGES; page++) {
+          const result = normalizeCodexModels(await sendRequest(owner, CODEX_TURN_RPC.modelList, cursor ? { cursor } : {}, REQUEST_TIMEOUT_MS));
+          models.push(...result.models);
+          cursor = result.nextCursor;
+          if (!cursor) return { models };
+        }
+        throw executionOptionsError('The model capability catalog did not finish paginating.');
+      })(),
       sendRequest(owner, 'config/read', { includeLayers: false, cwd }, REQUEST_TIMEOUT_MS),
     ]), signal);
     if (!['chatgpt', 'chatgptAuthTokens'].includes(account?.account?.type)

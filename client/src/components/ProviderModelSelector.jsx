@@ -209,7 +209,7 @@ export default function ProviderModelSelector({
   // falls back to) — everything below describes what a run would actually use.
   const lookupId = effectiveProviderId ?? selectedProviderId;
   const [resolvedPreset, setResolvedPreset] = useState(null);
-  const needsPreset = Boolean(lookupId) && !isCompositeProviderId(lookupId) && !localProviderList.some((provider) => provider.id === lookupId);
+  const needsPreset = typeof lookupId === 'string' && lookupId.startsWith('selection-') && !isCompositeProviderId(lookupId) && !localProviderList.some((provider) => provider.id === lookupId);
   useEffect(() => {
     let active = true;
     if (needsPreset) request(`/providers/${encodeURIComponent(lookupId)}`, { silent: true })

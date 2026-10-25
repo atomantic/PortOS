@@ -279,6 +279,17 @@ describe('cosTaskStore.getUserTasks / getCosTasks', () => {
     expect(result.tasks[0].priority).toBe('HIGH');
   });
 
+  it('round-trips explicit Standard across task persistence and retry without adding a default tier', async () => {
+    const created = await addTask({ description: 'Explicit execution request', provider: 'codex', executionOptions: { serviceTier: 'standard' } }, 'user');
+    __resetTaskCache();
+    expect((await getTaskById(created.id)).metadata.executionOptions).toEqual({ serviceTier: 'standard' });
+    await updateTask(created.id, { status: 'pending', metadata: { retryCount: 1 } }, 'user');
+    __resetTaskCache();
+    expect((await getTaskById(created.id)).metadata.executionOptions).toEqual({ serviceTier: 'standard' });
+    const ordinary = await addTask({ description: 'Existing default behavior' }, 'user');
+    expect(ordinary.metadata).not.toHaveProperty('executionOptions');
+  });
+
   it('retains an inbox account binding through normal task intake and a fresh persisted read', async () => {
     const binding = { accountId: 'inbox-b', host: 'github.com', login: 'inbox-user', origin: 'user' };
     const created = await addTask({ description: 'Resolve an example inbox thread', metadata: {

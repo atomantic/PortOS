@@ -59,8 +59,10 @@ export default function AgentJobProviderFields({
         effectiveProviderId={effectiveProviderId}
         selectedModel={data.model || ''}
         availableModels={availableModels}
-        onProviderChange={providerId => onChange({ providerId, model: '', effort: '' })}
+        onProviderChange={providerId => onChange({ providerId, model: '', effort: '', ...(data.executionOptions !== undefined ? { executionOptions: {} } : {}) })}
         onModelChange={model => onChange(patchWithActiveProvider({ model }))}
+        executionOptions={data.executionOptions}
+        onExecutionOptionsChange={executionOptions => onChange(patchWithActiveProvider({ executionOptions }))}
         effort={data.effort || ''}
         onEffortChange={effort => onChange(patchWithActiveProvider({ effort }))}
         compact

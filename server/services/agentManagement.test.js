@@ -1265,6 +1265,14 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
     expect(updateTask).not.toHaveBeenCalled();
   });
 
+  it('carries an explicit Standard resume override and clears stale options when switching providers', async () => {
+    await resumeAgent('agent-paused-1', { executionOptions: { serviceTier: 'standard' } });
+    expect(reviveBlockedTask).toHaveBeenCalledWith('task-abc', { metadata: { executionOptions: { serviceTier: 'standard' } } }, 'user');
+    reviveBlockedTask.mockClear();
+    await resumeAgent('agent-paused-1', { provider: 'claude' });
+    expect(reviveBlockedTask).toHaveBeenCalledWith('task-abc', expect.objectContaining({ metadata: expect.objectContaining({ provider: 'claude', executionOptions: {} }) }), 'user');
+  });
+
   it('reports the branch the shared transition resumed on', async () => {
     reviveBlockedTask.mockResolvedValueOnce({ metadata: { existingBranch: 'cos/task-abc/agent-paused-1' } });
     await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({

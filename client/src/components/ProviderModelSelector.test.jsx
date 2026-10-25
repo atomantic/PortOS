@@ -8,6 +8,7 @@ vi.mock('../services/apiLocalLlm', () => ({ getToolUseModels: (...a) => getToolU
 
 vi.mock('../services/apiCore.js', () => ({ request: vi.fn().mockResolvedValue({ options: [] }) }));
 
+import { request } from '../services/apiCore.js';
 import ProviderModelSelector from './ProviderModelSelector';
 import { providerModeSelectionPolicy } from '../utils/providers.js';
 import { __resetToolUseModelIdsCache } from '../hooks/useToolUseModelIds.js';
@@ -38,6 +39,25 @@ function renderSelector(props = {}) {
 }
 
 describe('ProviderModelSelector', () => {
+  it('saves speed as a real provider reference for legacy consumers and restores their model and effort pins', async () => {
+    const preset = { id: 'selection-example', name: 'Fast requested', type: 'cli', command: 'codex', executionSourceProviderId: 'codex', executionOptions: { serviceTier: 'fast' }, executionSelectionOptions: { serviceTier: 'fast' } };
+    request.mockImplementation(async (_url, options) => options?.method === 'POST' ? preset : { options: [{ key: 'serviceTier', label: 'Speed', values: ['standard', 'fast'] }] });
+    const onProviderChange = vi.fn();
+    const onModelChange = vi.fn();
+    const onEffortChange = vi.fn();
+    const props = { providers: [{ id: 'codex', name: 'Codex', type: 'cli', command: 'codex' }], selectedProviderId: 'codex', selectedModel: 'm1', effort: 'high', onProviderChange, onModelChange, onEffortChange };
+    let view;
+    await act(async () => { view = renderSelector(props); });
+    await act(async () => { fireEvent.change(screen.getByLabelText('Speed'), { target: { value: 'fast' } }); });
+    expect(onProviderChange).toHaveBeenCalledWith(preset.id);
+    expect(request).toHaveBeenCalledWith(expect.stringContaining('/execution-options/selection'), expect.objectContaining({ body: JSON.stringify({ model: 'm1', executionOptions: { serviceTier: 'fast' } }) }));
+    await act(async () => { view.rerender(<ProviderModelSelector {...props} selectedProviderId={preset.id} availableModels={['m1']} />); });
+    expect(onModelChange).toHaveBeenLastCalledWith('m1');
+    expect(onEffortChange).toHaveBeenLastCalledWith('high');
+    expect(screen.getByLabelText('Speed').value).toBe('fast');
+    request.mockResolvedValue({ options: [] });
+  });
+
   it('alphabetizes string and named model options without changing the selected model or catalog', () => {
     const models = Object.freeze(['Zulu', { id: 'z-id', name: 'alpha' }, 'Beta']);
     const onModelChange = vi.fn();

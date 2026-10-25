@@ -1,3 +1,4 @@
+import ExecutionOptionsAttribution from '../components/providers/ExecutionOptionsAttribution.jsx';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Bot, Maximize2, Minimize2 } from 'lucide-react';
 import * as api from '../services/api';
@@ -229,6 +230,7 @@ function PortosShellView() {
       )}
 
       {/* Session tabs */}
+      <ExecutionOptionsAttribution value={sessions.find(session => session.sessionId === activeSessionId)?.executionOptions} />
       {!isFullscreen && sessions.length > 0 && (
         <ShellSessionTabs
           sessions={sessions}

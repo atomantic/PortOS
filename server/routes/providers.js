@@ -1,3 +1,5 @@
+import { EXECUTION_OPTION_DEFINITIONS } from '../lib/executionOptions.js';
+import { harnessForProvider } from '../lib/providerHarnesses.js';
 import { executionOptionSelectionSchema, providerExecutionOptionsQuerySchema } from '../lib/validation.js';
 import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
@@ -208,6 +210,7 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
     // decorating spreads above dropped it — re-carried here so `hasApiKey`
     // reports the key the run would actually use (#7564).
     apiKey: provider?.apiKey,
+    executionOptionKeys: Object.values(EXECUTION_OPTION_DEFINITIONS).filter(option => option.harnesses.includes(harnessForProvider(provider)?.id)).map(option => option.key),
     // The UNION of the two refresh paths, because the button asks only
     // whether SOME path can serve this record. Which one actually serves it is
     // decided in `POST /:id/refresh-models`, and the two must stay in step or

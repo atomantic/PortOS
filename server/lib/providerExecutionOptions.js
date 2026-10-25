@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { buildCodexAuthModeArgs, isCodexCommand } from './codex.js';
-import { codexOssLocalProvider } from './providerModels.js';
+import { codexOssLocalProvider, extractBakedModel } from './providerModels.js';
 import { EXECUTION_OPTION_DEFINITIONS, resolveExecutionOptions, executionOptionsError } from './executionOptions.js';
 import { probeCodexModelsViaAppServer } from './aiToolkit/internal/codexModelListProbe.js';
 import { prepareCliSpawn } from './bufferedSpawn.js';
@@ -16,9 +16,18 @@ async function inspectExecutionOptionCapabilities(provider, model, context = {})
       || (provider.args || []).some((arg) => /forced_login_method|model_provider|service_tier|features\.(?:fast_mode|ultrafast_mode)|^--?(?:profile|p|cd|C|oss|local-provider)(?:=|$)/.test(arg))) {
     return { ...descriptor, reason: 'Speed requires a Codex CLI or TUI route explicitly authenticated with ChatGPT.' };
   }
+  const bakedModel = extractBakedModel(provider.args);
+  if (bakedModel && model && model !== 'codex-configured-default' && bakedModel !== model) return { ...descriptor, reason: 'The selected model conflicts with provider args; remove the baked model pin before selecting speed.' };
+  const configArgs = [];
+  for (let index = 0; index < (provider.args || []).length; index++) {
+    const arg = provider.args[index];
+    if (arg === '-c' || arg === '--config') {
+      if (typeof provider.args[index + 1] === 'string') configArgs.push(arg, provider.args[++index]);
+    } else if (arg.startsWith('--config=')) configArgs.push(arg);
+  }
   const invocation = prepareCliSpawn(provider.command, [
     ...(provider.ignoreUserConfig === true ? ['--ignore-user-config'] : []),
-    ...buildCodexAuthModeArgs(provider), 'app-server',
+    ...configArgs, ...buildCodexAuthModeArgs(provider), 'app-server',
   ], { ...process.env, ...provider.envVars });
   const details = await probeCodexModelsViaAppServer(invocation.command, invocation.args, provider, { includeDetails: true, cwd: context.cwd, ...(Number.isFinite(context.timeoutMs) ? { timeoutMs: Math.max(1, Math.min(15000, context.timeoutMs)) } : {}) }).catch(() => null);
   if (!details) return { ...descriptor, reason: 'This runtime could not verify speed capabilities. Refresh capabilities or update Codex.' };
@@ -29,7 +38,7 @@ async function inspectExecutionOptionCapabilities(provider, model, context = {})
   }
   const explicit = model && model !== 'codex-configured-default';
   if (!explicit && (provider.args || []).includes('resume')) return { ...descriptor, reason: 'Choose an explicit model before changing a resumed session speed.' };
-  const actualModel = explicit ? model : details.config?.models?.new_thread?.model || details.config?.model
+  const actualModel = explicit ? model : bakedModel || details.config?.models?.new_thread?.model || details.config?.model
     || details.models.find((item) => item.isDefault)?.id;
   const entry = details.models.find((item) => item.id === actualModel || item.model === actualModel);
   const tiers = entry?.serviceTiers;
