@@ -13,11 +13,10 @@ import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { execFile } from '../lib/childProcess.js';
 import { dirname, join } from 'path';
-import { ownFixtureWork } from '../lib/ownedFixtureWork.js';
 import { readRetirementCheckoutIdentity, isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
-import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownFixtureWork } from '../lib/mockPathsDataRoot.js';
 import { PATHS } from '../lib/paths.js';
 
 // Local branch deletion archives the common reflog using PATHS.cos, independently
@@ -26,9 +25,8 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 const owned = ownFixtureWork();
 const it = owned.tests(vitestIt);
 const beforeEach = (body, ...options) => vitestBeforeEach(owned.wrap('setup', body), ...options);
-let cleanup;
-vitestBeforeEach(async () => { await cleanup; owned.reset(); });
-afterAll(async () => { await cleanup; await cleanupTempDataRoots(); });
+vitestBeforeEach(() => owned.prepare());
+afterAll(() => owned.finish(cleanupTempDataRoots));
 
 // Fixed phase names and aggregates only: diagnostics must never expose fixture
 // paths, Git arguments, captured bytes or an unbounded per-command transcript.
@@ -162,7 +160,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     });
   });
   afterEach(({ task }) => {
-    cleanup = (async () => {
+    return owned.cleanup(async () => {
       const report = state => {
         const trace = receiptTiming.current;
         if (!trace) return;
@@ -182,8 +180,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         receiptTiming.current = null;
         if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       }
-    })();
-    return cleanup;
+    });
   });
 
   /** A locked checkout outside the managed roots holding unique uncommitted work. */
