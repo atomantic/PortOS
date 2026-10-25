@@ -1076,8 +1076,8 @@ function testStateCacheSchema(value, filename) {
       && (result.lastRun === undefined || cacheNumber(result.lastRun)))));
   return cacheMap(value.projects, project => cacheFields(project, ['modules', 'globalSetup', 'files'])
     && Array.isArray(project.modules) && project.modules.every(file => typeof file === 'string' && !file.includes('\0'))
-    && Array.isArray(project.globalSetup) && cacheRecord(project.files)
-    && [project.globalSetup, ...Object.values(project.files)].every(indices => Array.isArray(indices)
+    && (project.globalSetup === undefined || Array.isArray(project.globalSetup)) && cacheRecord(project.files)
+    && [...(project.globalSetup === undefined ? [] : [project.globalSetup]), ...Object.values(project.files)].every(indices => Array.isArray(indices)
       && indices.every(index => Number.isSafeInteger(index) && index >= 0 && index < project.modules.length)));
 }
 
