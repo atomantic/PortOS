@@ -244,7 +244,8 @@ function completedCleanupForRetirement(policy, input) {
     && (result.executionSuccess === true || result.cleanupDeliveryVerified === true) && result.validationPassed !== false
     && result.taskOutcome?.recovery?.mode === 'cleanup' && input.verifiedPrHead === input.tip && !!input.tip
     && (integratedLegacyCleanup || agent.metadata?.completedCheckouts?.some(row => (row.version === 1 || (row.version === 2 && completedCheckoutReceiptValid(agent, row))) && row.agentId === agent.id
-      && row.repoPath === input.repoPath && row.branch === input.branch && row.path === input.checkoutPath
+      && sameReviewedPath(row.repoPath, input.repoPath, input) && row.branch === input.branch
+      && sameReviewedPath(row.path, input.checkoutPath, input)
       && row.head === input.tip && row.incarnation?.pointer && row.incarnation?.gitdir));
 }
 

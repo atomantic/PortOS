@@ -2087,7 +2087,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(injected.policies[0].metadata.branchCompletionPolicy).toBeUndefined();
   });
 
-  it('retires a resumed merged checkout without promoting failed attempts or accepting unrelated generations', async () => {
+  it.each(['canonical', 'normalized-spelling'])('retires a resumed merged checkout without promoting failed attempts or accepting unrelated generations: %s', async spelling => {
     const c = await reviewedCheckout('resumed-cleanup', { normalMerge: true });
     await execGit(['worktree', 'unlock', c.path], repo);
     Object.assign(c.release, { locked: false, lockReason: null });
@@ -2108,6 +2108,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
           resumedFromAgentId: index ? ['failed', 'cleanup'][index - 1] : null,
           completedCheckouts: [{ version: 1, agentId: id, startedAt, capturedAt: startedAt, ...captured, path }] } };
     });
+    if (spelling === 'normalized-spelling') {
+      for (const agent of attempts) {
+        for (const row of agent.metadata.completedCheckouts) {
+          row.repoPath += '/.';
+          row.path += '/.';
+        }
+      }
+    }
     injected.policies = attempts;
     const original = structuredClone(attempts);
     // A missing link, a different task or physical generation, and a real
