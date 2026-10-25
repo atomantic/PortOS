@@ -151,8 +151,8 @@ describe('training-run source details', () => {
       description: 'example-model · completed',
     });
     expect(detail.items.find(item => item.name === 'orphan-run')).toMatchObject({ sourceUnavailable: 'Run record no longer available' });
-    await purgeCategory('training-runs', { subPath: 'example-run' });
-    expect(existsSync(dataPath('training-runs', 'example-run'))).toBe(false);
+    await expect(purgeCategory('training-runs', { subPath: 'example-run' })).rejects.toMatchObject({ status: 403, code: 'CATEGORY_NOT_PURGEABLE' });
+    expect(existsSync(dataPath('training-runs', 'example-run'))).toBe(true);
     expect(existsSync(dataPath('training-runs', 'orphan-run', 'checkpoint.bin'))).toBe(true);
   });
 

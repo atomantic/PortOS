@@ -404,6 +404,13 @@ describe('getProviderQuotas', () => {
     expect(getImageGenQuota).toHaveBeenCalledWith({ enabledModes: ['agy'] });
   });
 
+  it('forwards the requested period to getImageGenQuota', async () => {
+    getAllProviders.mockResolvedValueOnce({ activeProvider: null, providers: [] });
+    getSettings.mockResolvedValueOnce({ imageGen: { agy: { enabled: true } } });
+    await getProviderQuotas({ period: 'week' });
+    expect(getImageGenQuota).toHaveBeenCalledWith({ enabledModes: ['agy'], period: 'week' });
+  });
+
   it('omits the image-gen card entirely when only local image gen is on', async () => {
     getAllProviders.mockResolvedValueOnce({ activeProvider: null, providers: [] });
     getSettings.mockResolvedValueOnce({ imageGen: { local: { enabled: true } } });

@@ -140,9 +140,13 @@ router.put('/fleet-billing', asyncHandler(async (req, res) => {
 // every provider's TUI scrape. An id that no longer resolves to an enabled
 // family answers with an empty list — the card is gone, not broken.
 router.get('/providers', asyncHandler(async (req, res) => {
-  const { refresh: refreshParam, family } = validateRequest(providerUsageQuerySchema, req.query);
+  const { refresh: refreshParam, family, period } = validateRequest(providerUsageQuerySchema, req.query);
   const refresh = refreshParam === '1' || refreshParam === 'true';
-  const providers = await getProviderQuotas({ wait: refresh ? WAIT.FRESH : WAIT.NEVER, family: family ?? null });
+  const providers = await getProviderQuotas({
+    wait: refresh ? WAIT.FRESH : WAIT.NEVER,
+    family: family ?? null,
+    ...(period ? { period } : {}),
+  });
   res.json({ providers });
 }));
 

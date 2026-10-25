@@ -451,6 +451,7 @@ export * from './gitCommitProbe.js';
 export * from './gitForge.js';
 export * from './gitOutputParsers.js';
 export * from './gitRemote.js';
+export * from './gitRepositoryIdentity.js';
 export * from './gitStaleLock.js';
 export * from './githubNotificationAudit.js';
 export * from './githubNotificationParse.js';
@@ -959,6 +960,7 @@ export * from './brainLinkLocalFields.js';
 
 export * from './branchRetirementArchive.js';
 export * from './reconcileRetirementEvidence.js';
+export * from './legacyRetirementTransition.js';
 export * from './retirementCheckoutObservation.js';
 
 export * from './checkoutRetirementAdmission.js';
@@ -975,3 +977,5 @@ export * from './issueClaimEvidence.js';
 export * from './codeReviewBatches.js';
 export * from './realityStarterV1.js';
 export * from './universeStarters.js';
+
+export * from './retiredLoraTraining.js';

@@ -1696,7 +1696,8 @@ export const usageRollingCostQuerySchema = z.object({
  * isn't paid for every provider at once. */
 export const providerUsageQuerySchema = z.object({
   refresh: z.enum(['0', '1', 'true', 'false']).optional(),
-  family: z.string().regex(/^[a-z0-9-]{1,32}$/, 'family must be a provider family id').optional()
+  family: z.string().regex(/^[a-z0-9-]{1,32}$/, 'family must be a provider family id').optional(),
+  period: z.enum(['24h', '7d', '30d', 'week', 'month', 'reset']).optional(),
 });
 
 /** Body for POST /api/usage/messages — token counts persist forever, so
@@ -2915,20 +2916,21 @@ export const launchVideoStoryboardSchema = z.object({
 export const htmlCompositionRenderSchema = z.object({
   launchVideo: launchVideoOptionsSchema.optional(),
   synthesizeMusic: z.boolean().optional(),
-  // Master synthesized and library music to -14 LUFS / -1.5 dBTP (#10249); false keeps the bed as supplied.
+  // Master synthesized, library and uploaded audio to -14 LUFS / -1.5 dBTP; false keeps the bed as supplied.
   masterLoudness: z.boolean().optional(),
   // Overrides the page's own portosComposition.motionBlur when present (#9080).
   motionBlur: htmlCompositionMotionBlurChoiceSchema.optional(),
   directory: z.string().min(1).max(1024).refine(value => !value.startsWith('/') && !value.includes('\\') && !value.includes(':') && !value.split('/').some(part => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename').optional(),
+  audioUpload: z.string().min(1).max(255).regex(/^[^/\\\0]+$/, 'audioUpload must be an uploaded audio filename').refine(value => value !== '.' && value !== '..', 'audioUpload must be an uploaded audio filename').optional(),
   // Several aspect ratios of one timeline, rendered in sequence on one page.
   // Omitted, the job renders the composition's own width/height as before.
   formats: launchVideoFormatListSchema.optional(),
   // A proof renders a silent contact sheet for review instead of the video;
   // `format` checks one declared framing, defaulting to the composition's own.
   proof: z.object({ everySec: z.number().min(0.25).max(10).default(1), format: launchVideoFormatSchema.optional() }).strict().optional(),
-}).refine(value => !(value.synthesizeMusic && value.musicTrack), 'Choose synthesized music or a library track, not both')
-  .refine(value => !(value.proof && (value.synthesizeMusic || value.musicTrack)), 'A proof is silent; omit synthesizeMusic and musicTrack')
+}).refine(value => [value.synthesizeMusic, value.musicTrack, value.audioUpload].filter(Boolean).length <= 1, 'Choose synthesized music, a library track, or uploaded audio')
+  .refine(value => !(value.proof && (value.synthesizeMusic || value.musicTrack || value.audioUpload)), 'A proof is silent; omit synthesizeMusic, musicTrack and audioUpload')
   .refine(value => !(value.proof && value.formats), 'A proof checks one framing; use proof.format instead of formats');
 
 // GET /api/html-composition/beats — a Music-library filename, same shape as

@@ -40,6 +40,7 @@ image-generation paths below are useful entry points when tracing render jobs.
 | `creativeDirector/firstPassGen.js` | Gracefully gated first-pass portraits and scene frames. |
 | `universeCharacterSheet.js` | Character reference-sheet render and completion workflow. |
 | `loraDatasetGenerate.js` | Training-image render and dataset lifecycle. |
+| `dataMaintenance.js` | Allowlisted retired-data inventory, expiring previews and explicit serialized removal with active-work refusal. |
 | `sprites/reference.js` | Sprite reference candidate rendering and provenance. |
 | `deckRender.js` | Deck card image render jobs. |
 | `fableLoom/production.js` | FableLoom production render planning and enqueueing. |

@@ -4,17 +4,18 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import vm from 'vm';
 
-const state = vi.hoisted(() => ({ dataRoot: null, job: null, html: '' }));
+const state = vi.hoisted(() => ({ dataRoot: null, job: null, html: '', track: null }));
 
 vi.mock('../../lib/paths.js', async () => {
   const actual = await vi.importActual('../../lib/paths.js');
-  return { ...actual, PATHS: new Proxy(actual.PATHS, { get: (target, prop) => (prop === 'data' ? state.dataRoot : target[prop]) }) };
+  return { ...actual, PATHS: new Proxy(actual.PATHS, { get: (target, prop) => (prop === 'data' ? state.dataRoot : prop === 'uploads' ? join(state.dataRoot, 'uploads') : target[prop]) }) };
 });
 vi.mock('./jobStore.js', () => ({
   isCodeAnimationJobId: (id) => /^[0-9a-f-]{36}$/.test(id),
   getCodeAnimationJobRecord: async () => state.job,
   readCodeAnimationHtml: async () => state.html,
 }));
+vi.mock('../tracks/index.js', () => ({ getTrack: async () => state.track }));
 
 const { startCodeAnimationExport } = await import('./export.js');
 
@@ -121,11 +122,42 @@ describe('startCodeAnimationExport', () => {
     await expect(readFile(join(state.dataRoot, enqueueDirectory(), 'dependencies.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('exports uploaded-audio and over-long films with explanatory notes', async () => {
-    state.job = { ...state.job, audioUrl: '/api/uploads/take.wav', frame: { ...state.job.frame, durationSeconds: 180 } };
-    const result = await startCodeAnimationExport(JOB_ID, { enqueueJob, beatGrid: vi.fn() });
-    expect(result.notes).toHaveLength(2);
-    expect(Object.keys(enqueueJob.mock.calls[0][0].params)).toEqual(['directory']);
+  it('includes uploaded audio and its beat grid, retaining the duration-cap note', async () => {
+    state.job = { ...state.job, audioUrl: '/api/uploads/Take%20A.wav', frame: { ...state.job.frame, durationSeconds: 180 } };
+    const beatGrid = vi.fn(async () => ({ bpm: 120, beats: [0.5] }));
+    const result = await startCodeAnimationExport(JOB_ID, { enqueueJob, beatGrid });
+    expect(result.notes).toEqual(['The export is capped at 120s; this animation runs 180s.']);
+    expect(beatGrid).toHaveBeenCalledWith('Take A.wav', 'upload');
+    expect(enqueueJob).toHaveBeenCalledWith({ kind: 'html-composition', params: { directory: lastDirectory, audioUpload: 'Take A.wav' } });
+    expect(await readFile(join(state.dataRoot, lastDirectory, 'index.html'), 'utf8')).toContain('"bpm":120');
+  });
+
+  it('uses a generated soundtrack in preference to the original uploaded audio', async () => {
+    state.job = { ...state.job, audioUrl: '/api/uploads/original.wav', soundtrack: { trackId: 'soundtrack-track' } };
+    state.track = { id: 'soundtrack-track', audioFilename: 'Generated Score.wav' };
+    await startCodeAnimationExport(JOB_ID, { enqueueJob, beatGrid: vi.fn(async () => null) });
+    expect(enqueueJob).toHaveBeenCalledWith({ kind: 'html-composition', params: { directory: lastDirectory, musicTrack: 'Generated Score.wav' } });
+  });
+
+  it('refuses a missing upload instead of queueing a silent export', async () => {
+    state.job = { ...state.job, audioUrl: '/api/uploads/missing.wav' };
+    await expect(startCodeAnimationExport(JOB_ID, { enqueueJob })).rejects.toMatchObject({ code: 'AUDIO_NOT_FOUND' });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it.each(['/api/uploads/%2e%2e%2fprivate.wav', '/api/uploads/%00.wav', '/api/uploads/%zz.wav', 'https://example.com/audio.wav'])(
+    'refuses an invalid saved audio URL: %s', async audioUrl => {
+      state.job = { ...state.job, audioUrl };
+      await expect(startCodeAnimationExport(JOB_ID, { enqueueJob })).rejects.toMatchObject({ code: 'AUDIO_NOT_FOUND' });
+      expect(enqueueJob).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps an animation without audio silent', async () => {
+    state.job = { ...state.job, audioUrl: null, input: { soundtrack: 'none' } };
+    const result = await startCodeAnimationExport(JOB_ID, { enqueueJob });
+    expect(result.notes).toEqual(['No soundtrack was requested; the export is intentionally silent.']);
+    expect(enqueueJob).toHaveBeenCalledWith({ kind: 'html-composition', params: { directory: lastDirectory } });
   });
 
   it('removes the staging directory when the render cannot be queued', async () => {

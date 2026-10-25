@@ -1,3 +1,4 @@
+import { refuseRetiredTraining, TRAINING_RETIRED_MESSAGE, assertRetiredDataAvailable } from '../../lib/retiredLoraTraining.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Media Job Queue — lane-aware FIFO for media generation jobs.
@@ -922,6 +923,13 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
           // cleanup. finish deliberately retains any uncertain ownership.
           await permit.finish();
         }));
+        continue;
+      }
+      // Never dispatch a queued trainer after upgrade. A verified survivor below
+      // is observed to completion without launching a replacement process.
+      if (j.kind === 'training' && j.status === 'queued' && !j.params?.reattach) {
+        archive.push({ ...j, status: 'canceled', error: TRAINING_RETIRED_MESSAGE, completedAt: new Date().toISOString() });
+        restartedFailedIds.push(j.id);
         continue;
       }
       if (j.status === 'running' && maintenance.held()) {
@@ -2040,6 +2048,7 @@ async function assertMusicVideoJobPolicy(kind, params) {
 }
 
 export async function enqueueJob({ kind, params, owner = null }) {
+  if (kind === 'training') refuseRetiredTraining();
   await assertMusicVideoJobPolicy(kind, params);
   if (params?.musicVideo?.sceneId) {
     const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
@@ -2076,6 +2085,7 @@ export async function enqueueJob({ kind, params, owner = null }) {
       return laneQueue.length + liveCount + 1;
     })(),
   };
+  assertRetiredDataAvailable();
   job.admitting = true;
   queue.push(job);
   try {

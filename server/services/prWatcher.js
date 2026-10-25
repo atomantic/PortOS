@@ -453,8 +453,7 @@ async function recoverHeldCleanup(app, entry, binding) {
 Repository: ${app.repoPath}
 Checkout: ${binding.worktreePath}
 Retained reason: ${entry.cleanup.reason}
-Archive: ${entry.cleanup.archiveDir || 'not yet verified'}
-Repair preservation prerequisites for only this checkout, leaving final worktree/ref removal to its receipt coordinator. Do not delete the checkout or refs yourself. Re-read live ownership, locks, head and completion policy. Preserve every unique tracked, untracked and ignored byte and verify recovery evidence before removal. Never infer inactivity from an absent process or missing registry entry. Do not reopen or merge the PR, change the primary checkout, bypass unmanaged-location guards, remove another agent’s lock, or discard content. If retirement is not authorized, retain the checkout and record the exact owner, blocker and next step.`,
+Repair only the blocker for this checkout and leave removal to the retirement service. Do not copy the checkout into an archive. Do not delete the checkout or refs yourself. Re-read live ownership, locks, head and completion policy. A merged clean checkout is removed in place; a dirty, unmerged, protected, or live-owned checkout stays. Never infer inactivity from an absent process or missing registry entry. Do not reopen or merge the PR, change the primary checkout, bypass unmanaged-location guards, remove another agent’s lock, or discard content. If retirement is not authorized, retain the checkout and record the exact owner, blocker and next step.`,
   }, 'user').catch(() => null);
   return task?.id ? { ...entry, cleanup: { ...entry.cleanup, recoveryTaskId: task.id } } : entry;
 }
@@ -471,7 +470,7 @@ async function finishMergedReceipt(app, entry, binding) {
     release: { path: binding.worktreePath, head: binding.headSha, branch: entry.prBranch, locked: false, lockReason: null },
   }, { forgeAccount: app.forgeAccount ?? null }).catch(error => ({ ok: false, reason: error.message }));
   if (result.ok && result.branchDeleted) {
-    console.log(`🧹 Pending PR #${entry.prNumber}: merged checkout archived and retired`);
+    console.log(`🧹 Pending PR #${entry.prNumber}: merged checkout removed`);
     return null;
   }
   const attempts = (entry.cleanup?.attempts || 0) + 1;
@@ -482,7 +481,7 @@ async function finishMergedReceipt(app, entry, binding) {
     ...(result.archiveDir ? { archiveDir: result.archiveDir } : {}) };
   if (!entry.cleanup || cleanup.status === 'held') {
     await notifyPendingMergeTimeout(app, entry, null,
-      `PR #${entry.prNumber} is merged. Its receipt still owns cleanup: ${reason}. The checkout is preserved unless a verified archive is recorded. Pending cleanup retries every 30 minutes, up to ${MAX_PENDING_MERGE_TICKS} attempts; held cleanup requires explicit recovery and will not retry automatically.`);
+      `PR #${entry.prNumber} is merged. Its receipt still owns cleanup: ${reason}. The checkout stays until the retirement service removes a merged clean tree. Pending cleanup retries every 30 minutes, up to ${MAX_PENDING_MERGE_TICKS} attempts; held cleanup requires explicit recovery and will not retry automatically.`);
   }
   return { ...entry, cleanup };
 }

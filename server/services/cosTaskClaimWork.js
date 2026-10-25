@@ -24,6 +24,7 @@ import { resolveAppPrCompletion } from '../lib/prDisposition.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getAppTaskTypeOverrides } from './apps.js';
 import { getCodeReviewDefaults } from './codeReview.js';
+import { preflightClaimReviewers } from './claimReviewerPreflight.js';
 import {
   appendClaimOverrideContext,
   appendPrefetchedIssueContext,
@@ -53,7 +54,7 @@ import {
  * prompt. Shared by `buildClaimWorkTask` and the work-item picker route, so the
  * items offered are scanned with the SAME author filter the claim agent will use.
  *
- * @returns {Promise<{ metadata: object, interval: object }>}
+ * @returns {Promise<{ metadata: object, interval: object, appOverrideMetadata: object }>}
  */
 export async function resolveClaimWorkMetadata(app, taskType = 'claim-work') {
   const taskSchedule = await import('./taskSchedule.js');
@@ -71,7 +72,7 @@ export async function resolveClaimWorkMetadata(app, taskType = 'claim-work') {
   );
   const sanitizedAppMeta = sanitizeTaskMetadata(strippedAppOverride);
   if (sanitizedAppMeta) Object.assign(metadata, sanitizedAppMeta);
-  return { metadata, interval };
+  return { metadata, interval, appOverrideMetadata: sanitizedAppMeta || {} };
 }
 
 /**
@@ -185,7 +186,7 @@ export async function buildClaimWorkTask(app, {
   // The tracker probe (a `git` shell-out), the configured claim-work metadata,
   // and the Code Review Defaults are mutually independent — only the prompt-body
   // read below depends on them, so overlap the three.
-  const [wt, { metadata, interval }, codeReviewDefaults] = await Promise.all([
+  const [wt, { metadata, interval, appOverrideMetadata }, codeReviewDefaults] = await Promise.all([
     resolveAppWorkTracker(app),
     resolveClaimWorkMetadata(app),
     getCodeReviewDefaults().catch(() => null)
@@ -208,6 +209,9 @@ export async function buildClaimWorkTask(app, {
     reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts,
     prCompletion: effectivePrCompletion
   });
+  const reviewerIdentityNotice = await preflightClaimReviewers(app, claimReviewers, {
+    metadata, appOverrideMetadata, explicit: { usernames, optionalReviewers }, taskType: 'claim-work',
+  });
   const {
     reviewers: reviewersList,
     reviewerModels: promptReviewerModels,
@@ -225,7 +229,7 @@ export async function buildClaimWorkTask(app, {
   const targetRef = normalizeWorkItemRef(target);
   const swarmBlock = targetRef ? '' : resolveSwarmBlock(promptTaskType, metadata.swarmCount);
 
-  const prompt = applyAppPlaceholders(`${swarmBlock}${template}`, app)
+  const prompt = reviewerIdentityNotice + applyAppPlaceholders(`${swarmBlock}${template}`, app)
     // Function-form replacers so literal `$`/`$1` in the substituted text isn't
     // interpreted as a backreference (see the scheduler's same-pattern note).
     .replace(/\{reviewers\}/g, () => reviewersCsv || 'none')
@@ -274,7 +278,7 @@ export async function buildClaimWorkTask(app, {
  * prompt builder resolves the same list back off the task record (#4770).
  */
 async function resolveClaimReviewerPrompt(app) {
-  const [{ metadata }, codeReviewDefaults] = await Promise.all([
+  const [{ metadata, appOverrideMetadata }, codeReviewDefaults] = await Promise.all([
     resolveClaimWorkMetadata(app),
     getCodeReviewDefaults().catch(() => null)
   ]);
@@ -283,12 +287,13 @@ async function resolveClaimReviewerPrompt(app) {
   // resolving from the defaults alone would silently drop a pinned override.
   const effectivePrCompletion = metadata?.prCompletion ?? resolveAppPrCompletion(app, metadata);
   const config = claimReviewersFrom(metadata, codeReviewDefaults, { prCompletion: effectivePrCompletion });
+  const reviewerIdentityNotice = await preflightClaimReviewers(app, config, { metadata, appOverrideMetadata });
   const { reviewers: list, reviewerModels, reviewerEfforts, csv } = config;
   return {
     csv,
     taskMetadata: reviewerConfigMetadata(config),
     effortBlock: appendReviewerEffortBlock(list, reviewerEfforts, reviewerModels),
-    localReviewerBlock: buildLocalReviewerInstructions(list, reviewerModels, reviewerEfforts, { enforceIsolation: true }),
+    localReviewerBlock: reviewerIdentityNotice + buildLocalReviewerInstructions(list, reviewerModels, reviewerEfforts, { enforceIsolation: true }),
   };
 }
 

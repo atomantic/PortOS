@@ -2,13 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 
 const getCharacterLoras = vi.fn();
-const createLoraDataset = vi.fn();
-const listLoraDatasets = vi.fn();
 
 vi.mock('../../services/api', () => ({
   getCharacterLoras: (...args) => getCharacterLoras(...args),
-  createLoraDataset: (...args) => createLoraDataset(...args),
-  listLoraDatasets: (...args) => listLoraDatasets(...args),
 }));
 
 const mockNavigate = vi.fn();
@@ -23,10 +19,9 @@ describe('CharacterLoraChip', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getCharacterLoras.mockResolvedValue([]);
-    listLoraDatasets.mockResolvedValue([]);
   });
 
-  it('shows a Retry — not "Train LoRA" — when the LoRA read fails, and shows "Train LoRA" after retry', async () => {
+  it('shows a Retry — not "Train LoRA" — when the LoRA read fails, and stays retired after retry', async () => {
     getCharacterLoras.mockRejectedValueOnce(new Error('Server unavailable'));
 
     render(
@@ -49,10 +44,10 @@ describe('CharacterLoraChip', () => {
     });
 
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(screen.getByRole('button', { name: /Train LoRA/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Train LoRA/i })).toBeNull();
   });
 
-  it('renders LoRA chip and "Dataset" button only after a successful read', async () => {
+  it('preserves the inference adapter link without a training entry point', async () => {
     getCharacterLoras.mockResolvedValueOnce([
       { filename: 'alice.safetensors', triggerWords: ['alice_lora'] },
     ]);
@@ -69,7 +64,7 @@ describe('CharacterLoraChip', () => {
 
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByText('LoRA · alice_lora')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Dataset/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Dataset/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /Train LoRA/i })).toBeNull();
   });
 });

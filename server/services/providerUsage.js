@@ -890,8 +890,8 @@ const fetchFamilyQuota = (family, { wait, providers }) =>
  * therefore unified with what peers published for the same family before it is
  * returned — see `lib/fleetQuotas.js` for the two merge rules.
  */
-export async function getProviderQuotas({ wait = WAIT.CACHED, family = null } = {}) {
-  const cards = await readProviderQuotas({ wait, family });
+export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, period } = {}) {
+  const cards = await readProviderQuotas({ wait, family, period });
   // Publish this machine's reading to the fleet and fold in every peer's. The
   // two are independent — the peer read excludes our own slot — so they
   // overlap. Recording is awaited rather than fired off so a caller that
@@ -913,7 +913,7 @@ export async function getProviderQuotas({ wait = WAIT.CACHED, family = null } = 
 }
 
 /** The local readings, before any federated merge. */
-async function readProviderQuotas({ wait, family }) {
+async function readProviderQuotas({ wait, family, period }) {
   const result = await getAllProviders();
   const providers = Array.isArray(result) ? result : (result?.providers || []);
   const enabled = providers.filter((p) => p?.enabled && p.ollamaBacked !== true && p.lmstudioBacked !== true && p.mtplxBacked !== true && p.llamaBacked !== true && p.vllmBacked !== true && p.sglangBacked !== true);
@@ -931,7 +931,7 @@ async function readProviderQuotas({ wait, family }) {
   const now = Date.now();
   const prune = (cards) => cards.map((card) => stampReadAt(pruneExpiredWindows(card, now), now));
   if (family && family !== IMAGE_GEN_FAMILY) return prune(familyCards);
-  const imageCard = await fetchImageGenQuota();
+  const imageCard = await fetchImageGenQuota({ period });
   return prune(imageCard ? [...familyCards, imageCard] : familyCards);
 }
 
@@ -945,7 +945,7 @@ async function readProviderQuotas({ wait, family }) {
  * Never rejects — a broken read must not 500 the whole usage page, and no card
  * is a better answer than a card asserting a quota state we failed to read.
  */
-const fetchImageGenQuota = async () => {
+const fetchImageGenQuota = async ({ period } = {}) => {
   // A settings read that FAILS is not "no cloud backend enabled" — without it
   // we can't tell which backends to report, and silently dropping the card is
   // indistinguishable from the user running local-only. Say so in the log.
@@ -956,7 +956,7 @@ const fetchImageGenQuota = async () => {
   // Only quota-window backends — a fal.ai-only install has no quota to show.
   const enabledModes = enabledCloudImageModes(settings).filter(isQuotaTrackedImageMode);
   if (!enabledModes.length) return null; // no quota-tracked cloud image backend → no card
-  return getImageGenQuota({ enabledModes }).catch((err) => {
+  return getImageGenQuota({ enabledModes, ...(period ? { period } : {}) }).catch((err) => {
     console.error(`❌ Image-gen quota card failed: ${err?.message || err}`);
     return null;
   });

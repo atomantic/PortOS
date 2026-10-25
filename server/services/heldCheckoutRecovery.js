@@ -1,3 +1,4 @@
+import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 /**
  * Operator-scoped retirement of a merged checkout that branch reconciliation
@@ -10,13 +11,9 @@ import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObserva
  * matches it. A lock's age, an absent process or its prose never establish
  * release: a changed lock, HEAD or branch is an ownership change and refuses.
  *
- * Before any mutation every unique byte is archived under
- * `data/cos/held-checkout-archives/`: a standalone bundle of the original commit history, the staged and unstaged diffs, raw bytes of tracked files that differ
- * from their index blob, and verbatim copies of untracked AND ignored files
- * (symlinks as recorded targets). The archive is verified by hash against the
- * checkout, and the checkout's content hashes must not move between archive and
- * removal. A live owner, manual completion handoff, unreadable state or archive
- * failure leaves the checkout, its lock and its branch exactly as found.
+ * A merged, clean checkout is removed in place. Dirty, unmerged, protected,
+ * and live-owner checkouts stay where they are. Retirement does not copy the
+ * checkout, its ignored files, or its commit history.
  */
 
 import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
@@ -32,9 +29,14 @@ import { execGit } from '../lib/execGit.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { backupSlug } from './supersededBackup.js';
-import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch } from './worktreeManager.js';
+import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch, classifyWorktreeDirt } from './worktreeManager.js';
 import { getDefaultBranch, hasBranchMergeEvidence } from './git.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArchive } from './cosClaimOwnership.js';
+
+/** Unlocked recheck between ownership sections. Does not copy the checkout. */
+export async function releaseCheckoutWithoutArchive(_context, prepare) {
+  return prepare();
+}
 
 export const heldCheckoutArchiveRoot = (cosDir = PATHS.cos) => join(cosDir, 'held-checkout-archives');
 
@@ -306,6 +308,34 @@ async function historicalCheckoutAbsent(release, trees) {
   return !present && trees.length > 0 && !trees.some(tree => tree.path === release.path || (release.branch && shortBranch(tree.branch) === release.branch));
 }
 
+/** Read existing no-archive service receipts, scoped to the original repository
+ * and physical checkout generation. Never infer removal from absence alone. */
+async function completedServiceRetirement(repoPath, release) {
+  if (!/^[a-f0-9]{64}$/.test(release.checkoutIdentity || '')) return null;
+  const [{ loadSchedule }, { getAppById }] = await Promise.all([
+    import('./taskScheduleStore.js'), import('./apps.js'),
+  ]);
+  const schedule = await loadSchedule();
+  const root = await realpath(repoPath).catch(() => null);
+  if (!root) return null;
+  const found = new Map();
+  for (const [appId, record] of Object.entries(schedule.executions?.['task:branch-reconcile']?.perApp || {})) {
+    const receipts = matchingRetirementReceipts(record.branchReconcileOutcome, release).filter(row => row.archiveDir == null
+      && row.checkoutIdentity === release.checkoutIdentity && Date.parse(row.retiredAt) >= Date.parse(release.createdAt));
+    if (!receipts.length) continue;
+    const app = await getAppById(appId);
+    if (!app?.repoPath || await realpath(app.repoPath).catch(() => null) !== root) continue;
+    for (const row of receipts) {
+      const key = JSON.stringify([row.branch, row.path, row.head, row.checkoutIdentity, row.retiredAt, row.branchDeleted]);
+      found.set(key, row);
+    }
+  }
+  if (found.size !== 1) return null;
+  const [key, receipt] = [...found][0];
+  return { kind: 'service-retirement-receipt', archiveDir: null, receipt,
+    evidenceDigest: createHash('sha256').update(key).digest('hex') };
+}
+
 /** Completion audits have a server-captured checkout generation, but may never
  * have entered the scheduled retirement queue. Reuse its archive verifier
  * without creating an obligation or inventing a branch-deletion receipt.
@@ -319,6 +349,12 @@ export async function findMissingCheckoutPreservation({ repoPath, release }, opt
     return ref.exitCode === 1 && await historicalCheckoutAbsent(release, trees);
   };
   if (!await absent()) return null;
+  const receipt = await completedServiceRetirement(repoPath, release).catch(() => null);
+  if (receipt) return { ...receipt, recheck: async () => {
+    if (!await absent()) return false;
+    const fresh = await completedServiceRetirement(repoPath, release).catch(() => null);
+    return fresh?.evidenceDigest === receipt.evidenceDigest;
+  } };
   const root = heldCheckoutArchiveRoot(opts.cosDir);
   const info = await lstat(root).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
   if (!info?.isDirectory()) return null;
@@ -637,7 +673,7 @@ const reviewForgeOptions = (release, kind, opts) => ({ forgeAccount: opts.forgeA
   ...(!release.branch && { exactAliasHead: release.head }),
   ...(kind === 'source-supersession' && { sourceSupersessionHead: release.head }) });
 
-async function reviewCurrentCheckout({ repoPath, release, prUrl, kind, unlocked = false }, opts = {}) {
+async function matchReviewTarget({ repoPath, release, kind, unlocked = false }, opts) {
   if (kind && kind !== 'source-supersession') return { ok: false, reason: 'retirement-review-kind-unavailable' };
   if (kind && !release.branch) return { ok: false, reason: 'retirement-source-branch-required' };
   if (PROTECTED_BRANCHES.includes(release.branch)) return { ok: false, reason: 'protected-branch' };
@@ -646,7 +682,14 @@ async function reviewCurrentCheckout({ repoPath, release, prUrl, kind, unlocked 
   const owner = await ownerReason({ repoPath, tree: matched.tree, branch: release.branch,
     readAgents: opts.readAgents || readClaimOwnershipAgents, reviewed: true });
   if (owner) return { ok: false, reason: owner };
-  const { buildCheckoutRetirementReview, readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+  return { ok: true, tree: matched.tree };
+}
+
+async function readCheckoutReviewPrerequisites(input, opts) {
+  const { repoPath, release, prUrl, kind } = input;
+  const matched = await matchReviewTarget(input, opts);
+  if (!matched.ok) return matched;
+  const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
   const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl, reviewForgeOptions(release, kind, opts))
     .catch(error => ({ error }));
   if (forge?.error) return { ok: false, reason: /^retirement-[a-z-]+$/.test(forge.error.message) ? forge.error.message : 'retirement-forge-unavailable' };
@@ -664,11 +707,65 @@ async function reviewCurrentCheckout({ repoPath, release, prUrl, kind, unlocked 
   }
   const policy = await retirementPolicy(repoPath, policyBranch, opts, identity);
   if (policy.reason) return { ok: false, reason: policy.reason };
-  return archiveSnapshots(matched.tree, repoPath, null, archiveWork(opts.signal))
+  return { ok: true, tree: matched.tree, forge, policy };
+}
+
+async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { tree, forge, policy }, opts) {
+  const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
+  return archiveSnapshots(tree, repoPath, null, archiveWork(opts.signal))
     .then(([content, administration]) => buildCheckoutRetirementReview({ repoPath, release, prUrl, kind,
       contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge }))
     .then(review => ({ ok: true, review }), error => archiveLimitRefusal(error) || ({ ok: false,
       reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-local-evidence-unavailable' }));
+}
+
+async function reviewCurrentCheckout(input, opts = {}) {
+  const prerequisites = await readCheckoutReviewPrerequisites(input, opts);
+  return prerequisites.ok ? buildCurrentCheckoutReview(input, prerequisites, opts) : prerequisites;
+}
+
+async function previewCheckoutIdentity(path) {
+  const pointer = await readRetirementCheckoutIdentity(path);
+  if (!pointer) return null;
+  const gitdir = await realpath((await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim());
+  const info = await lstat(gitdir, { bigint: true });
+  if (!info.isDirectory() || await readRetirementCheckoutIdentity(path) !== pointer) return null;
+  return JSON.stringify([pointer, gitdir, String(info.dev), String(info.ino), String(info.birthtimeNs)]);
+}
+
+/** Preview is evidence, never a retirement reservation or mutation grant. Keep
+ * forge calls, hashing and diff construction outside the process-wide queue. */
+async function previewCurrentCheckout(input, opts) {
+  const matched = await withClaimOwnershipLock(() => matchReviewTarget(input, opts));
+  if (!matched.ok) return matched;
+  const { repoPath, release, prUrl, kind } = input;
+  const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+  const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl,
+    reviewForgeOptions(release, kind, opts)).catch(error => ({ error }));
+  const localOptions = { ...opts, readForge: async () => forge };
+  const captured = await withClaimOwnershipLock(async () => {
+    const prerequisites = await readCheckoutReviewPrerequisites(input, localOptions);
+    if (!prerequisites.ok) return prerequisites;
+    const identity = await previewCheckoutIdentity(release.path).catch(() => null);
+    return identity && (!release.checkoutIdentity || await readRetirementCheckoutIdentity(release.path) === release.checkoutIdentity)
+      ? { ...prerequisites, identity }
+      : { ok: false, reason: 'checkout-identity-changed' };
+  });
+  if (!captured.ok) return captured;
+  const prepared = await buildCurrentCheckoutReview(input, captured, localOptions);
+  if (!prepared.ok) return prepared;
+  return withClaimOwnershipLock(async () => {
+    // Bind even legacy inventory rows to the generation captured before hashing.
+    const current = await readCheckoutReviewPrerequisites(input, localOptions);
+    if (!current.ok) return current;
+    if (await previewCheckoutIdentity(release.path).catch(() => null) !== captured.identity) {
+      return { ok: false, reason: 'checkout-identity-changed' };
+    }
+    if (JSON.stringify(current.policy) !== JSON.stringify(captured.policy)) {
+      return { ok: false, reason: 'retirement-review-changed' };
+    }
+    return prepared;
+  });
 }
 
 /** Host-control-gated preview of one inventory row; may fetch missing proof objects. */
@@ -680,7 +777,7 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
   release = bindInventoriedRelease(outcome, release);
   if (!release) return { ok: false, reason: 'release-not-in-inventory' };
   const reviewOptions = { ...opts, forgeAccount: app.forgeAccount ?? null };
-  const review = () => withClaimOwnershipLock(() => reviewCurrentCheckout({ repoPath: app.repoPath, release, prUrl, kind }, reviewOptions));
+  const review = () => previewCurrentCheckout({ repoPath: app.repoPath, release, prUrl, kind }, reviewOptions);
   let prepared = await review();
   if (prepared.reason === 'retirement-local-objects-missing') {
     // A remote default may advance while local refs stay put. Acquire only its
@@ -1232,14 +1329,14 @@ export async function inspectCheckoutRetirementOwnership({ repoPath, release, re
 }
 
 /**
- * Archive and retire one held checkout under an operator's scoped release.
+ * Remove one held checkout under an operator's scoped release. Nothing is copied.
  *
  * @param {{ repoPath: string, release: { path: string, head: string, branch: string|null, locked: boolean, lockReason: string|null } }} input
  * @param {{ cosDir?: string, readAgents?: () => Promise<object[]|null> }} [opts]
- * @returns {Promise<{ ok: true, archiveDir: string, branchDeleted: boolean, branchRetainedReason?: string } | { ok: false, reason: string, detail?: string, archiveDir?: string }>}
+ * @returns {Promise<{ ok: true, branchDeleted: boolean, checkoutIdentity?: string, branchRetainedReason?: string } | { ok: false, reason: string, detail?: string }>}
  */
 async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
-  const { cosDir = PATHS.cos, readAgents = readClaimOwnershipAgents } = opts;
+  const { readAgents = readClaimOwnershipAgents } = opts;
   // Only the unattended merged-retirement caller sets this, and only without a review.
   const mergedObligationSettled = !review && opts.settleMergedReviewObligation === true;
   const branch = release.branch ?? null;
@@ -1261,45 +1358,65 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
       const { tree } = first;
       const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
       if (!checkoutIdentity || (release.checkoutIdentity && release.checkoutIdentity !== checkoutIdentity)) return refuse('checkout-identity-changed');
-      const merged = branch
+      // A reviewed checkout can be integrated on the forge while local main still
+      // lags (squash, or a reset default). Local ancestry remains the proof when
+      // no review was supplied. Supersession acceptance never covers that lag.
+      const locallyMerged = branch
         ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
         : await isAncestor(repoPath, tree.head, defaultBranch);
-      if (!merged && !review) return refuse('not-merged-on-recheck');
+      if (!locallyMerged && !review) return refuse('not-merged-on-recheck');
+      const porcelain = await execGit(['status', '--porcelain'], tree.path).then(r => r.stdout, () => null);
+      if (porcelain === null) return refuse('worktree-status-unavailable');
+      if (!classifyWorktreeDirt(porcelain).clean) return refuse('worktree-dirty');
       const reviewed = review ? await reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind }, opts) : null;
       if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed', reviewed.archiveLimit, reviewed.nextAction);
-      if (reviewed?.review.comparison.disposition === 'review-supersession' && review.acceptSuperseded !== true) return refuse('retirement-supersession-not-accepted');
+      const disposition = reviewed?.review.comparison.disposition;
+      if (disposition === 'review-supersession' && (!locallyMerged || review.acceptSuperseded !== true)) return refuse('retirement-supersession-not-accepted');
+      if (!locallyMerged && disposition !== 'integrated') return refuse('not-merged-on-recheck');
       const owner = await ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled });
       if (owner) return refuse(owner);
       return { fence: { repoPath, path: tree.path, branch }, tree, reviewed, checkoutIdentity };
     },
-    archive: async ({ tree, reviewed }) => {
-      const archive = await archiveCheckout({ repoPath, tree, branch, defaultBranch, release, cosDir, review: reviewed?.review, work: archiveWork(opts.signal) })
-        .catch(error => ({ error }));
-      if (!archive.error) return { archive };
-      const capacityRefusal = archiveLimitRefusal(archive.error);
-      if (capacityRefusal) return { result: capacityRefusal };
-      console.error(`❌ held-checkout recovery: archive failed for ${tree.path}, checkout kept: ${archive.error.message}`);
-      return { result: { ok: false, reason: 'archive-failed', detail: archive.error.message } };
+    archive: async ({ tree }) => {
+      try {
+        await releaseCheckoutWithoutArchive({ repoPath, path: tree.path, branch }, async () => {
+          if (opts.signal?.aborted) throw new Error('retirement-archive-cancelled');
+          const status = await execGit(['status', '--porcelain'], tree.path).then(r => r.stdout, () => null);
+          if (status === null) throw new Error('worktree-status-unavailable');
+          if (!classifyWorktreeDirt(status).clean) throw new Error('worktree-dirty');
+          const mergedNow = branch
+            ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
+            : await isAncestor(repoPath, tree.head, defaultBranch);
+          // Finish re-reads the review. A forge-integrated detached or lagging
+          // checkout is not an ancestor of local main yet.
+          if (!mergedNow && !review) throw new Error('not-merged-on-recheck');
+          return null;
+        });
+        return { archive: { disposable: true } };
+      } catch (error) {
+        const reason = ['worktree-dirty', 'not-merged-on-recheck', 'worktree-status-unavailable', 'retirement-archive-cancelled'].includes(error.message)
+          ? error.message : 'checkout-not-disposable';
+        return { result: { ok: false, reason, ...(reason === 'checkout-not-disposable' && error.message && { detail: error.message }) } };
+      }
     },
-    finish: async ({ tree, reviewed, checkoutIdentity }, archive) => {
-      const result = await finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, archive, checkoutIdentity, mergedObligationSettled }, opts);
+    finish: async ({ tree, reviewed, checkoutIdentity }) => {
+      const result = await finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, defaultBranch, checkoutIdentity, mergedObligationSettled }, opts);
       return result.ok ? { ...result, checkoutIdentity } : result;
     },
   });
 }
 
-/** The second critical section: re-prove the release, ownership and archived bytes, then remove. */
-async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, archive, checkoutIdentity, mergedObligationSettled = false }, opts) {
+/** The second critical section: re-prove the release, ownership and a clean tree, then remove. */
+async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, defaultBranch, checkoutIdentity, mergedObligationSettled = false }, opts) {
   const { readAgents = readClaimOwnershipAgents } = opts;
-  // Archiving takes time; never unlock a lock that changed hands meanwhile.
-  if (opts.signal?.aborted) return { ok: false, reason: 'retirement-archive-cancelled', archiveDir: archive.dir };
+  if (opts.signal?.aborted) return { ok: false, reason: 'retirement-archive-cancelled' };
   const second = await matchRelease(repoPath, release);
-  if (!second.tree) return { ok: false, reason: second.reason, archiveDir: archive.dir };
-  if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return { ok: false, reason: 'checkout-identity-changed', archiveDir: archive.dir };
+  if (!second.tree) return { ok: false, reason: second.reason };
+  if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return { ok: false, reason: 'checkout-identity-changed' };
   await opts.beforeMutation?.();
   if (release.locked) {
     const unlocked = await execGit(['worktree', 'unlock', tree.path], repoPath).then(() => true, () => false);
-    if (!unlocked) return { ok: false, reason: 'worktree-unlock-failed', archiveDir: archive.dir };
+    if (!unlocked) return { ok: false, reason: 'worktree-unlock-failed' };
   }
   let capacityRefusal;
   const verifyRemoval = async (holder) => {
@@ -1308,20 +1425,23 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     if (!await matchesObservedCheckoutIncarnation(repoPath, release)) return 'checkout-identity-changed';
     if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return 'checkout-identity-changed';
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
-    const [reason, fresh] = await Promise.all([
+    const [reason, fresh, porcelain] = await Promise.all([
       ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled }),
       review ? reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind, unlocked: release.locked }, opts) : null,
+      execGit(['status', '--porcelain'], tree.path).then(r => r.stdout, () => null),
     ]);
     if (fresh && !fresh.ok) { capacityRefusal = fresh; return fresh.reason; }
     if (fresh && fresh.review.digest !== review.digest) return 'retirement-review-changed';
-    // The byte comparisons stay last so nothing else ages between them and removal.
-    const [current, administration] = await archiveSnapshots(tree, repoPath, null, archiveWork(opts.signal))
-      .catch(error => { capacityRefusal = archiveLimitRefusal(error); return []; });
-    if (!administration || !current) return capacityRefusal?.reason || 'checkout-content-changed';
-    if (administration.fingerprint !== archive.administrationFingerprint) return 'checkout-administration-changed';
+    if (porcelain === null || !classifyWorktreeDirt(porcelain).clean) return 'worktree-dirty';
+    const locallyMerged = branch
+      ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
+      : await isAncestor(repoPath, tree.head, defaultBranch);
+    const disposition = fresh?.review?.comparison?.disposition;
+    if (disposition === 'review-supersession' && (!locallyMerged || review.acceptSuperseded !== true)) return 'retirement-supersession-not-accepted';
+    if (!locallyMerged && disposition !== 'integrated') return 'not-merged-on-recheck';
     if (reason) return reason;
     if (opts.signal?.aborted) return 'retirement-archive-cancelled';
-    return current?.fingerprint === archive.fingerprint ? null : 'checkout-content-changed';
+    return null;
   };
   const removal = await forceRemoveWorktreeDir(repoPath, tree.path, {
     label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval, beforeMutation: opts.beforeMutation,
@@ -1333,13 +1453,13 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
       const args = ['worktree', 'lock', ...(release.lockReason != null ? ['--reason', release.lockReason] : []), tree.path];
       await execGit(args, repoPath).catch(err => console.warn(`⚠️ held-checkout recovery: could not restore lock on ${tree.path}: ${err.message}`));
     }
-    return { ...(capacityRefusal || { ok: false, reason: removal.reason || 'worktree-remove-failed' }), archiveDir: archive.dir };
+    return capacityRefusal || { ok: false, reason: removal.reason || 'worktree-remove-failed' };
   }
-  console.log(`🧹 held-checkout recovery: retired ${tree.path} (archive: ${archive.dir})`);
-  if (!branch) return { ok: true, archiveDir: archive.dir, branchDeleted: false };
+  console.log(`🧹 held-checkout recovery: retired ${tree.path}`);
+  if (!branch) return { ok: true, branchDeleted: false };
 
   const hold = await ownerReason({ repoPath, tree: { ...tree, path: null }, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled });
-  if (hold) return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: hold };
+  if (hold) return { ok: true, branchDeleted: false, branchRetainedReason: hold };
   if (review) {
     const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
     const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, branch, review.prUrl, reviewForgeOptions(release, review.kind, opts)).catch(() => null);
@@ -1347,15 +1467,15 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     const identity = await integratedPolicyReviewIdentity(repoPath, release, review.prUrl, forge, captured);
     const policy = identity ? await retirementPolicy(repoPath, branch, opts, identity) : null;
     if (JSON.stringify(policy) !== JSON.stringify(reviewed.review.policy) || JSON.stringify(forge) !== JSON.stringify(reviewed.review.forge)) {
-      return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: 'retirement-evidence-changed' };
+      return { ok: true, branchDeleted: false, branchRetainedReason: 'retirement-evidence-changed' };
     }
   }
   // A new checkout/commit cannot be deleted by a stale name-only operation.
   const holders = await listWorktrees(repoPath).catch(() => null);
-  if (!holders || holders.some(holder => shortBranch(holder.branch) === branch)) return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: 'branch-has-new-holder' };
+  if (!holders || holders.some(holder => shortBranch(holder.branch) === branch)) return { ok: true, branchDeleted: false, branchRetainedReason: 'branch-has-new-holder' };
   const deleted = await deleteCompletedLocalBranch(repoPath, branch, release.head, { beforeMutation: opts.beforeMutation });
-  if (!deleted) return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: 'branch-ref-changed-or-delete-failed' };
-  return { ok: true, archiveDir: archive.dir, branchDeleted: true };
+  if (!deleted) return { ok: true, branchDeleted: false, branchRetainedReason: 'branch-ref-changed-or-delete-failed' };
+  return { ok: true, branchDeleted: true };
 }
 
 const sameRelease = (entry, release) => entry.path === release.path && entry.head === release.head
@@ -1437,7 +1557,7 @@ export async function retirePendingMergeCheckout({ repoPath, release, prUrl, exp
     const { recordWorkspaceCheckoutRetirement } = await import('./taskSchedule.js');
     await recordWorkspaceCheckoutRetirement(repoPath, {
       path: release.path, branch: release.branch ?? null, head: release.head,
-      branchDeleted: result.branchDeleted, archiveDir: result.archiveDir, checkoutIdentity: result.checkoutIdentity,
+      branchDeleted: result.branchDeleted, ...(result.archiveDir && { archiveDir: result.archiveDir }), checkoutIdentity: result.checkoutIdentity,
     });
   }
   return result;
@@ -1467,7 +1587,8 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   }
   if (result.ok) {
     await taskSchedule.recordHeldCheckoutRetirement(appId, {
-      path: release.path, branch: release.branch ?? null, head: release.head, branchDeleted: result.branchDeleted, archiveDir: result.archiveDir, checkoutIdentity: result.checkoutIdentity,
+      path: release.path, branch: release.branch ?? null, head: release.head, branchDeleted: result.branchDeleted,
+      ...(result.archiveDir && { archiveDir: result.archiveDir }), checkoutIdentity: result.checkoutIdentity,
     });
   }
   return result;

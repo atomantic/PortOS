@@ -559,25 +559,58 @@ async function cancelStage(stage, child, closed, signal) {
   return IS_WIN32 ? { settled: true } : sweepStageGroup(child.pid);
 }
 
+/** Bounded diagnostic only: ps is never evidence that an owned group is absent. */
+function describeStageGroup(pgid, timeoutMs) {
+  const result = spawnSync('ps', ['-A', '-o', 'pid=,pgid=,stat='], {
+    encoding: 'utf8', timeout: Math.min(1000, timeoutMs), maxBuffer: 1024 * 1024,
+  });
+  if (result.error || result.status !== 0) return `unavailable (${result.error?.code ?? result.status ?? result.signal ?? 'unknown'})`;
+  const members = result.stdout.split('\n').map(line => line.trim().split(/\s+/))
+    .filter(([, group]) => Number(group) === pgid);
+  // No command lines, arguments, identities, or unrelated processes in evidence.
+  return members.slice(0, 16).map(([pid, , state]) => `${pid}:${state}`).join(',')
+    + (members.length > 16 ? ',…' : '') || 'none observed';
+}
+
 /**
- * Kill whatever is still in a stage's process group once its leader exited:
- * a descendant that ignored a signal or outlived its launcher keeps running
- * (and writing to inherited descriptors) into the next stage or past pregate.
- * ESRCH is the proof the group is empty. POSIX only. Resolves
- * `{ settled, lingered?, reason? }`.
+ * Kill whatever outlived a stage leader. Only ESRCH for the exact owned group
+ * proves settlement. Darwin can return EPERM for an existing zombie-only
+ * group (XNU killpg1 filters SZOMB); wait for reaping with read-only probes,
+ * within the original deadline, rather than mistaking refusal for permission
+ * trouble or treating zombies/ps output as proof of absence.
  */
-async function sweepStageGroup(pgid) {
-  const deadline = Date.now() + STAGE_SETTLE_MS;
+export async function sweepStageGroup(pgid, {
+  kill = process.kill, now = Date.now, wait = delay, inspect = describeStageGroup,
+} = {}) {
+  const deadline = now() + STAGE_SETTLE_MS;
+  const membership = () => inspect(pgid, Math.max(1, deadline - now()));
   for (let attempt = 0; ; attempt += 1) {
     try {
-      process.kill(-pgid, 'SIGKILL');
+      kill(-pgid, 'SIGKILL');
     } catch (error) {
-      return error.code === 'ESRCH'
-        ? { settled: true, lingered: attempt > 0 }
-        : { settled: false, reason: `group kill failed (${error.code ?? 'unknown'})` };
+      if (error.code === 'ESRCH') return { settled: true, lingered: attempt > 0 };
+      const refusal = `group kill failed (${error.code ?? 'unknown'})`;
+      if (error.code !== 'EPERM') return { settled: false, reason: `${refusal}; pgid=${pgid}; members=${membership()}` };
+      let members;
+      let lingered = attempt > 0;
+      for (;;) {
+        let probe = 'present';
+        try {
+          kill(-pgid, 0);
+        } catch (probeError) {
+          if (probeError.code === 'ESRCH') return { settled: true, lingered };
+          probe = probeError.code ?? 'unknown';
+        }
+        lingered = true;
+        members ??= membership();
+        if (!['present', 'EPERM'].includes(probe) || now() >= deadline) {
+          return { settled: false, reason: `${refusal}; pgid=${pgid}; probe=${probe}; members=${members}` };
+        }
+        await wait(Math.min(25, Math.max(0, deadline - now())));
+      }
     }
-    if (Date.now() >= deadline) return { settled: false, reason: 'group members remained after SIGKILL' };
-    await delay(25);
+    if (now() >= deadline) return { settled: false, reason: 'group members remained after SIGKILL' };
+    await wait(25);
   }
 }
 
@@ -607,7 +640,7 @@ async function runStage(stage, owner, { repoRoot = REPO_ROOT } = {}) {
   if (cancellation) return { ...outcome, pid: child.pid, interrupted, ...await cancellation };
   if (IS_WIN32 || !child.pid) return { ...outcome, pid: child.pid };
   const sweep = await sweepStageGroup(child.pid);
-  if (sweep.lingered) writeSync(2, `⚠️ Stage "${stage.name}" exited with processes still running in its group; killed them.\n`);
+  if (sweep.lingered) writeSync(2, `⚠️ Stage "${stage.name}" exited before its process group settled; verified group exit.\n`);
   return { ...outcome, pid: child.pid, ...(sweep.settled ? {} : { unsettled: sweep.reason }) };
 }
 

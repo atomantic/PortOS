@@ -803,6 +803,7 @@ const RUNNER_EXCLUDED_FIXTURES = /^server\/fixtures\//;
 const runnerForTest = (path) => {
   if (!isTestFile(path) || RUNNER_EXCLUDED_FIXTURES.test(path)) return null;
   if (isClientRunnerFile(path)) return 'client';
+  if (resolveDbTestFiles([path]).length > 0) return 'db';
   if (isServerRunnerFile(path)) return 'server';
   return null;
 };
@@ -1309,7 +1310,7 @@ function buildSuitePlan(changedFiles, {
       : skippedRunner();
 
   const dbTests = new Set(resolveDbTestFiles(trackedFiles));
-  const db = serverFiles.some((path) => dbTests.has(path))
+  const db = selectedTests.some((path) => dbTests.has(path))
     || executable.some((path) => DB_RISK_RULES.some((rule) => rule.test(path)))
     || serverSources.some((path) => dbDependencies === null || dbDependencies.includes(path));
 

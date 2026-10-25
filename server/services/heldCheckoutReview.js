@@ -161,15 +161,19 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
     git(['diff', '--binary', '--no-ext-diff', '--no-textconv', base, release.head], repoPath),
   ]);
   const localPaths = localPathsOut.split('\0').filter(Boolean);
-  const paths = [...new Set([...forge.changedPaths, ...localPaths])].sort();
+  // An exact merged PR head can carry previously merged/squashed history and
+  // upstream merges before its first listed commit. Those inherited files are
+  // not this PR's change scope. Older/replacement source heads still need the
+  // complete local patch comparison so unpublished work cannot disappear.
+  const paths = [...new Set(release.head === forge.prHead && !kind
+    ? forge.changedPaths : [...forge.changedPaths, ...localPaths])].sort();
   const difference = paths.length ? await git(['--literal-pathspecs', 'diff', '--binary', '--no-ext-diff', '--no-textconv', release.head, forge.defaultHead, '--', ...paths], repoPath) : '';
-  // Historical ancestry/cherry equivalence does not establish that current
-  // code still implements the original work (it may have been strengthened or
-  // reverted). Exact affected-file equality is the mechanical case; differences
-  // require the operator's explicit supersession judgment on the displayed diff.
-  const mechanicallyEquivalent = difference === '' && kind !== 'source-supersession';
+  // Exact delivered PR heads remain delivered after later changes to shared
+  // files. Older/replacement heads still need content equivalence or review.
+  const exactMergedDelivery = !kind && release.head === forge.prHead;
+  const mechanicallyEquivalent = (difference === '' || exactMergedDelivery) && kind !== 'source-supersession';
   const evidence = { repoPath, release, forge, contentFingerprint, administrationFingerprint, policy,
     ...(kind && { kind }),
-    comparison: { base, paths, localPatch, difference, disposition: mechanicallyEquivalent ? 'integrated' : 'review-supersession' } };
+    comparison: { base, paths, localPatch, difference, exactMergedDelivery, disposition: mechanicallyEquivalent ? 'integrated' : 'review-supersession' } };
   return { digest: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'), ...evidence };
 }

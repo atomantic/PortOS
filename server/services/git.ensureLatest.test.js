@@ -53,19 +53,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('ensureLatest on a diverged checkout', (
       expect(r.conflict).toBe(true);
       expect(r.error).not.toMatch(/rebase-merge directory/);
       expect(r.error).not.toMatch(/hint:/);
-      expect(r.error).toMatch(/CONFLICT|could not apply/);
+      expect(r.error).toMatch(/CONFLICT|could not apply|already in progress/);
     }
-    expect(rebaseDirExists(repo)).toBe(false);
+    expect(rebaseDirExists(repo)).toBe(true);
   });
 
-  it('drops local commits that only touch PortOS-owned .quality.json and lands on origin', async () => {
+  it('preserves conflicting PortOS-owned commits for explicit recovery', async () => {
     const repo = await diverge('.quality.json');
-    const r = await ensureLatest(repo);
-    expect(r).toMatchObject({ success: true, conflict: false });
-    expect(r.droppedLocalCommits).toHaveLength(1);
-    const head = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
-    const upstream = (await execGit(['rev-parse', 'origin/main'], repo)).stdout.trim();
-    expect(head).toBe(upstream);
+    const before = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
+    expect(await ensureLatest(repo)).toMatchObject({ success: false, conflict: true, error: expect.stringContaining('preserved') });
+    expect((await execGit(['rev-parse', 'refs/heads/main'], repo)).stdout.trim()).toBe(before);
+    expect(rebaseDirExists(repo)).toBe(true);
   });
 
   it('keeps local commits that touch anything besides PortOS-owned files', async () => {
@@ -74,7 +72,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('ensureLatest on a diverged checkout', (
     const before = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
     const r = await ensureLatest(repo);
     expect(r.conflict).toBe(true);
-    expect((await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim()).toBe(before);
+    expect((await execGit(['rev-parse', 'refs/heads/main'], repo)).stdout.trim()).toBe(before);
   });
 
   it('leaves someone else\'s in-progress rebase alone', async () => {

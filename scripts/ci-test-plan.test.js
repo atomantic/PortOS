@@ -538,8 +538,16 @@ it('requests DB verification for every suite in the real canonical inventory wit
   for (const suite of dbTests) {
     const plan = buildCiTestPlan([suite], inputs);
     expect(plan, suite).toMatchObject({ full: false, db: true, server: { mode: 'files' } });
-    expect(plan.server.files, suite).toContain(suite);
+    expect(plan.server.files, suite).not.toContain(suite);
   }
+});
+
+it('keeps PostgreSQL tests out of ordinary server runner selection and routes them to the DB stage (#13455)', () => {
+  const dbSuite = 'server/services/githubNotifications.db.test.js';
+  const plan = buildCiTestPlan([dbSuite], { trackedFiles: [dbSuite] });
+  expect(plan.server.files).not.toContain(dbSuite);
+  expect(plan.server.mode).toBe('skip');
+  expect(plan.db).toBe(true);
 });
 
 it('requests DB verification for the real deck, model pin and backup source contracts', () => {

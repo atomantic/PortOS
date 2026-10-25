@@ -118,3 +118,5 @@ Comms & voice: [beeper](./features/beeper.md) · [messages-browser-send](./featu
 - [Tool-free model delegation](SANDBOX_DELEGATION.md) — approved API workers, context packets, and advisory fidelity evaluation for Persistent Mind.
 
 - [Runway model catalog](RUNWAY_MODELS.md) — supported operations, public schema source, caching, refresh and workflow limits.
+
+- [Data Maintenance](DATA_MAINTENANCE.md) — retained retired-feature storage, LoRA training retirement and explicit removal.

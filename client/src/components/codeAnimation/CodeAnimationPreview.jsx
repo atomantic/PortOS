@@ -318,7 +318,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
             type="button"
             onClick={handleExport}
             disabled={exporting || exportStarting}
-            title="Render every frame server-side through renderFrame(t) — no dropped frames, H.264 MP4 in Media History"
+            title="Render every frame with the selected audio track — no dropped frames, H.264 MP4 in Media History"
             className={BUTTON_PRIMARY}
           >
             {exporting || exportStarting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />}

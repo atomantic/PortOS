@@ -1015,8 +1015,8 @@ async function updatePinnedSubmodules(dir) {
  *      refuse outright with DIRTY_WORKTREE.
  *   4. Reconcile submodules again after the parent pull, because a new commit
  *      can advance a gitlink while leaving its worktree at the old commit.
- *   5. On conflict, abort any in-progress rebase and report `conflict: true`
- *      rather than throwing, so the caller can hand the mess to a CoS agent.
+ *   5. On conflict, preserve the operation and report `conflict: true`
+ *      so an agent or operator can inspect it and explicitly recover.
  *
  * A zero exit status is NOT enough to call the rebase clean. `--autostash`
  * re-applies the stash after the rebase finishes, and git only WARNS when that
@@ -1024,8 +1024,7 @@ async function updatePinnedSubmodules(dir) {
  * exits 0 with conflict markers in the working tree. So a successful rebase is
  * confirmed by asking git for unmerged paths, not by its exit code; otherwise
  * the caller would build and restart on a broken tree. There is no rebase to
- * abort in that state (it already completed), which is why the abort below sits
- * on the non-zero path only.
+ * abort in that state (it already completed).
  *
  * @param {string} dir
  * @returns {Promise<{success: boolean, branch: string, output: string, conflict: boolean, rebased?: boolean, error?: string}>}
@@ -1034,7 +1033,14 @@ export async function updateDefaultBranch(dir) {
   return withCheckoutMutation(dir, () => updateDefaultBranchAdmitted(dir));
 }
 
+// Process-local lanes cannot exclude CLI actors or their conflict-resolution
+// edits, even within a rebase this request started. Git has no conditional abort.
+const SHARED_REBASE_RECOVERY = 'Git operation state and any autostash were preserved. Inspect git status and save any conflict-resolution edits before explicitly continuing or aborting the operation.';
+
 async function updateDefaultBranchAdmitted(dir) {
+  if (await rebaseInProgress(dir)) {
+    return { success: false, branch: await getBranch(dir), output: '', conflict: true, error: `A rebase is already in progress. ${SHARED_REBASE_RECOVERY}` };
+  }
   // Git splits a failed pull across both streams — fetch progress and rebase
   // instructions on stderr, the `CONFLICT (content): …` lines naming the files
   // on stdout — so an `stderr || stdout` pick would drop exactly the part that
@@ -1104,6 +1110,9 @@ async function updateDefaultBranchAdmitted(dir) {
 
   const fastForward = await execGit(['pull', '--ff-only', 'origin', branch], dir, { ignoreExitCode: true });
   output += fastForward.stdout + fastForward.stderr;
+  if (await rebaseInProgress(dir) || fastForward.terminated) {
+    return { success: false, branch, output, conflict: true, error: `${bothStreams(fastForward, 'Pull did not complete.')} ${SHARED_REBASE_RECOVERY}` };
+  }
   if (fastForward.exitCode === 0) {
     const submoduleError = await reconcileSubmodules();
     if (submoduleError) return submoduleError;
@@ -1123,10 +1132,11 @@ async function updateDefaultBranchAdmitted(dir) {
 
   const rebase = await execGit(['pull', '--rebase', '--autostash', 'origin', branch], dir, { ignoreExitCode: true });
   output += rebase.stdout + rebase.stderr;
-  if (rebase.exitCode === 0) {
+  const activeRebase = await rebaseInProgress(dir);
+  if (rebase.exitCode === 0 && !rebase.terminated && !activeRebase) {
     const unmerged = await execGit(['diff', '--name-only', '--diff-filter=U'], dir, { ignoreExitCode: true });
     const conflicted = unmerged.stdout.trim().split('\n').filter(Boolean);
-    if (!conflicted.length) {
+    if (unmerged.exitCode === 0 && !unmerged.terminated && !conflicted.length) {
       const submoduleError = await reconcileSubmodules();
       if (submoduleError) return submoduleError;
       return { success: true, branch, output, conflict: false, rebased: true };
@@ -1136,31 +1146,22 @@ async function updateDefaultBranchAdmitted(dir) {
       branch,
       output,
       conflict: true,
-      error: `re-applying the autostashed local changes conflicted in: ${conflicted.join(', ')}`
+      error: conflicted.length
+        ? `re-applying the autostashed local changes conflicted in: ${conflicted.join(', ')}`
+        : bothStreams(unmerged, 'Could not verify local changes after rebasing.')
     };
   }
 
-  const rebaseLock = clearStaleGitLock(rebase.stderr);
-  // A rebase killed mid-flight can leave `.git/rebase-merge`/`rebase-apply`
-  // behind alongside the lock, so abort it here too — otherwise the next
-  // attempt fails immediately on "rebase already in progress" instead of the
-  // clean retry this error promises.
-  await execGit(['rebase', '--abort'], dir, { ignoreExitCode: true });
-  if (rebaseLock) {
-    return {
-      success: false,
-      branch,
-      output,
-      conflict: true,
-      error: `Cleared an abandoned git lock (${rebaseLock}) left by a killed git process. The rebase onto origin/${branch} did not complete — retry the update now that the lock is clear.`
-    };
-  }
+  const rebaseLock = Number.isInteger(rebase.exitCode) && !rebase.terminated && !activeRebase
+    && clearStaleGitLock(rebase.stderr);
   return {
     success: false,
     branch,
     output,
     conflict: true,
-    error: bothStreams(rebase, `rebase onto origin/${branch} failed`)
+    error: rebaseLock
+      ? `Cleared an abandoned git lock (${rebaseLock}). The rebase did not complete; inspect the checkout before retrying. ${SHARED_REBASE_RECOVERY}`
+      : `${bothStreams(rebase, `rebase onto origin/${branch} did not complete`)} ${SHARED_REBASE_RECOVERY}`
   };
 }
 
@@ -1208,12 +1209,8 @@ async function rebaseAndPushDefaultBranchAdmitted(dir) {
   // Fetch + rebase is the explicit-origin equivalent of pull --rebase. Avoid
   // pull.ff / upstream configuration and never move dirty work via autostash.
   const rebased = await execGit(['rebase', '--no-autostash', remoteRef], dir, { ignoreExitCode: true });
-  if (rebased.exitCode !== 0) {
-    const aborted = Number.isInteger(rebased.exitCode) && !rebased.terminated && await rebaseInProgress(dir)
-      ? await execGit(['rebase', '--abort'], dir, { ignoreExitCode: true }) : null;
-    const recovery = aborted && aborted.exitCode !== 0
-      ? ` Rebase abort failed: ${gitResultError(aborted, 'Inspect the checkout before retrying.')}` : '';
-    return refused(`${gitResultError(rebased, 'Rebase failed; nothing was pushed.')}${recovery}`);
+  if (rebased.exitCode !== 0 || rebased.terminated || await rebaseInProgress(dir)) {
+    return refused(`${gitResultError(rebased, 'Rebase did not complete.')} ${SHARED_REBASE_RECOVERY} Nothing was pushed.`);
   }
   if (await getBranch(dir) !== branch) return refused('The checked-out branch changed; nothing was pushed.');
   const verifiedHead = (await execGit(['rev-parse', '--verify', `refs/heads/${branch}^{commit}`], dir)).stdout.trim();
@@ -1233,25 +1230,33 @@ async function syncBranchAdmitted(dir, branch = null) {
   if (branch) assertSafeRef(branch);
   const refused = error => ({ success: false, pulled: false, pushed: false, error });
   const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], dir)).stdout.trim();
-  if ([...SEQUENCER_STATE.map(([marker]) => marker), 'MERGE_HEAD', 'sequencer']
-    .some(marker => existsSync(join(gitDir, marker)))) {
+  const operationInProgress = () => [...SEQUENCER_STATE.map(([marker]) => marker), 'MERGE_HEAD', 'sequencer']
+    .some(marker => existsSync(join(gitDir, marker)));
+  if (operationInProgress()) {
     return refused('Finish the Git operation already in progress before syncing.');
   }
   const currentBranch = branch || await getBranch(dir);
   const pullResult = await execGit(['pull', '--rebase', '--autostash', 'origin', currentBranch], dir, { ignoreExitCode: true });
   if (pullResult.exitCode !== 0 || pullResult.terminated) {
-    // Only a settled command can own recovery. An interrupted Git process may
-    // still have hooks/helpers running; leave its state for explicit recovery.
+    // The API lane does not exclude Git CLI actors. Even a request-specific
+    // reflog proves only who started a rebase, not who now owns its edits. Git
+    // has no generation-conditioned abort, so a check followed by --abort can
+    // still discard another actor's work. Preserve shared-checkout recovery.
     const settled = Number.isInteger(pullResult.exitCode) && !pullResult.terminated;
-    const clearedLock = settled && clearStaleGitLock(pullResult.stderr);
-    const aborted = settled && await rebaseInProgress(dir)
-      ? await execGit(['rebase', '--abort'], dir, { ignoreExitCode: true }) : null;
-    const recovery = aborted && aborted.exitCode !== 0
-      ? ` Rebase abort failed: ${gitResultError(aborted, 'Inspect the checkout before retrying.')}` : '';
+    const activeOperation = operationInProgress();
+    const clearedLock = settled && !activeOperation && clearStaleGitLock(pullResult.stderr);
+    const recovery = activeOperation
+      ? ' Git operation state and any autostash were preserved. Inspect git status and save any conflict-resolution edits before explicitly continuing or aborting the operation; nothing was pushed.' : '';
     const error = clearedLock
       ? `Cleared an abandoned git lock (${clearedLock}) left by a killed git process. The pull did not complete — inspect the checkout before retrying the sync.`
       : gitResultError(pullResult, 'Pull failed; nothing was pushed.');
     return refused(`${error}${recovery}`);
+  }
+
+  // A separate actor can start an operation during pull, including one with
+  // staged resolutions that lets pull exit zero. It still must not be pushed.
+  if (operationInProgress()) {
+    return refused('A Git operation is in progress after pulling. Its state and edits were preserved; inspect git status and finish that operation before syncing again. Nothing was pushed.');
   }
 
   // Autostash reapplication can conflict after Git has exited successfully.
@@ -1294,9 +1299,8 @@ export function hasChangelogDir(dir) {
  */
 
 // One pre-task pull per checkout at a time. Several agents for the same app
-// prep concurrently; without this the second one's `rebase` hits the first's
-// `.git/rebase-merge` and its failure-path `rebase --abort` then tears down the
-// FIRST agent's in-flight rebase.
+// prep concurrently; serialize them so a later request sees any stopped
+// operation at preflight instead of launching Git on top of it.
 const ensureLatestTails = new Map();
 
 export async function ensureLatest(dir) {
@@ -1321,16 +1325,6 @@ function ensureLatestAdmitted(dir) {
   return run;
 }
 
-// Files PortOS itself owns in a managed app's checkout. The quality publisher
-// lands them through a PR, so origin is authoritative; a local commit that only
-// touches them is a stale leftover (an older publisher committed on the live
-// checkout) and is safe to drop when it blocks the pull. Imported lazily: only
-// a conflicting pull needs it, and git.js is reached by hundreds of suites.
-async function portosOwnedCheckoutFiles() {
-  const { APP_QUALITY_SNAPSHOT_FILENAME, APP_QUALITY_LEGACY_SNAPSHOT_FILENAME } = await import('./appQualitySnapshotFormat.js');
-  return new Set([APP_QUALITY_SNAPSHOT_FILENAME, APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]);
-}
-
 async function rebaseInProgress(dir) {
   for (const name of ['rebase-merge', 'rebase-apply']) {
     const res = await execGit(['rev-parse', '--git-path', name], dir, { ignoreExitCode: true });
@@ -1338,23 +1332,6 @@ async function rebaseInProgress(dir) {
     if (gitPath && existsSync(resolve(dir, gitPath))) return true;
   }
   return false;
-}
-
-// When the only thing the local branch adds over origin is PortOS-owned files,
-// move the branch to origin (`reset --keep` refuses rather than clobbering
-// anything uncommitted). Returns the dropped commit subjects, or null when the
-// local side carries anything else.
-async function dropPortosOwnedLocalCommits(dir, branch) {
-  const upstream = `origin/${branch}`;
-  const changed = await execGit(['diff', '--name-only', `${upstream}...HEAD`], dir, { ignoreExitCode: true });
-  if (changed.exitCode !== 0) return null;
-  const files = changed.stdout.split('\n').map(f => f.trim()).filter(Boolean);
-  const owned = await portosOwnedCheckoutFiles();
-  if (!files.length || !files.every(f => owned.has(f))) return null;
-  const log = await execGit(['log', '--format=%h %s', `${upstream}..HEAD`], dir, { ignoreExitCode: true });
-  const reset = await execGit(['reset', '--keep', upstream], dir, { ignoreExitCode: true });
-  if (reset.exitCode !== 0) return null;
-  return log.stdout.split('\n').map(l => l.trim()).filter(Boolean);
 }
 
 // git's rebase failure output is a multi-line block of `hint:` advice with a
@@ -1419,7 +1396,10 @@ async function ensureLatestUnserialized(dir) {
 
   // Try fast-forward merge first (safest — no rewrite)
   const mergeResult = await execGit(['merge', '--ff-only', `origin/${currentBranch}`], dir, { ignoreExitCode: true });
-  const mergeOk = !mergeResult.stderr?.includes('fatal') && !mergeResult.stderr?.includes('Not possible to fast-forward');
+  if (await rebaseInProgress(dir) || mergeResult.terminated) {
+    return { success: false, branch: currentBranch, conflict: true, error: `${summarizeRebaseConflict(mergeResult)} ${SHARED_REBASE_RECOVERY}` };
+  }
+  const mergeOk = mergeResult.exitCode === 0;
 
   if (mergeOk) {
     return { success: true, branch: currentBranch, conflict: false, error: null };
@@ -1440,37 +1420,17 @@ async function ensureLatestUnserialized(dir) {
 
   // Fast-forward failed — local branch has diverged. Try rebase.
   const rebaseResult = await execGit(['rebase', `origin/${currentBranch}`], dir, { ignoreExitCode: true });
-  // `fatal:` (git's prefix for an abandoned-lock failure, matching `mergeOk`
-  // above) alongside the existing conflict/error markers — without it a lock
-  // failure here read as a silent success.
-  const rebaseOk = !rebaseResult.stderr?.includes('fatal')
-    && !rebaseResult.stderr?.includes('CONFLICT')
-    && !rebaseResult.stderr?.includes('error:');
-
-  if (!rebaseOk) {
-    // A rebase killed mid-flight can leave `.git/rebase-merge`/`rebase-apply`
-    // behind alongside a lock, so abort it regardless of the cause before
-    // deciding how to report the failure.
-    const rebaseLock = clearStaleGitLock(rebaseResult.stderr);
-    await execGit(['rebase', '--abort'], dir, { ignoreExitCode: true });
-    if (rebaseLock) {
-      return {
-        success: false,
-        branch: currentBranch,
-        conflict: true,
-        error: `Cleared an abandoned git lock (${rebaseLock}) left by a killed git process. The rebase onto origin/${currentBranch} did not complete — retry now that the lock is clear.`
-      };
-    }
-    const dropped = await dropPortosOwnedLocalCommits(dir, currentBranch);
-    if (dropped) {
-      console.warn(`⚠️ Dropped ${dropped.length} stale local PortOS-owned commit(s) on ${currentBranch} in ${dir} to match origin: ${dropped.join('; ')}`);
-      return { success: true, branch: currentBranch, conflict: false, error: null, droppedLocalCommits: dropped };
-    }
+  const activeRebase = await rebaseInProgress(dir);
+  if (rebaseResult.exitCode !== 0 || rebaseResult.terminated || activeRebase) {
+    const rebaseLock = Number.isInteger(rebaseResult.exitCode) && !rebaseResult.terminated && !activeRebase
+      && clearStaleGitLock(rebaseResult.stderr);
     return {
       success: false,
       branch: currentBranch,
       conflict: true,
-      error: `branch ${currentBranch} has diverged from origin and rebase has conflicts: ${summarizeRebaseConflict(rebaseResult)}`
+      error: rebaseLock
+        ? `Cleared an abandoned git lock (${rebaseLock}). The rebase did not complete; inspect the checkout before retrying. ${SHARED_REBASE_RECOVERY}`
+        : `branch ${currentBranch} has diverged from origin and rebase did not complete: ${summarizeRebaseConflict(rebaseResult)} ${SHARED_REBASE_RECOVERY}`
     };
   }
 
