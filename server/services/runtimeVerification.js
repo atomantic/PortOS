@@ -62,8 +62,18 @@ export async function resolveRuntimeVerificationUpdate(task, outcome, agentId) {
   const now = new Date().toISOString();
   const owner = await getAgentRecord(agentId);
   const live = await getTaskById(task.id);
-  const replay = live?.status === 'blocked' && live.metadata?.runtimeVerificationId === `${task.id}:${agentId}`
-    && live.metadata?.runtimeVerification?.agentId === agentId;
+  const priorDecision = live?.metadata?.runtimeVerification;
+  const boundedReplay = priorDecision?.status === 'satisfied' && priorDecision.agentId === agentId
+    && live.metadata.runtimeVerificationId === `${task.id}:${agentId}` && !live.metadata.blocker
+    && priorDecision.prUrl === outcome.recovery.prUrl && priorDecision.requiredCommit === outcome.recovery.requiredCommit
+    && matchesCompletionTaskDispatch(owner, { ...live, metadata: { ...live.metadata, ...priorDecision.dispatch } })
+    && ['lastSpawnedAt', 'totalSpawnCount'].every(key => live.metadata[key] != null
+      && String(live.metadata[key]) === String(priorDecision.dispatch?.[key]))
+    && ((live.status === 'blocked' && live.metadata.blockedCategory === 'task-recovery-exhausted'
+      && live.metadata.deliveryDecisionAgentId === agentId)
+      || (live.status === 'in_progress' && live.metadata.retryPendingCleanup === agentId));
+  const replay = boundedReplay || (live?.status === 'blocked' && live.metadata?.runtimeVerificationId === `${task.id}:${agentId}`
+    && priorDecision?.agentId === agentId && priorDecision.status === 'waiting');
   if (!live || owner?.taskId !== task.id || (!replay && (live.status !== 'in_progress'
     || !matchesCompletionTaskDispatch(owner, live)))) throw new Error('Runtime verification dispatch ownership is unverified');
   task = live;
@@ -75,9 +85,12 @@ export async function resolveRuntimeVerificationUpdate(task, outcome, agentId) {
     expectedTask: structuredClone({ description: task.description, priority: task.priority, metadata: task.metadata }),
     recoveryOwner: { id: agentId, startedAt: owner.startedAt },
   };
+  if (boundedReplay) return { status: task.status, metadata: { ...task.metadata }, runtimeRecoveryContext };
+  const dispatch = Object.fromEntries(['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount']
+    .filter(key => task.metadata?.[key] !== undefined).map(key => [key, task.metadata[key]]));
   const prior = task.metadata?.runtimeVerification;
   // Replaying finalization retains the original dispatch identity and evidence.
-  const same = prior?.agentId === agentId && task.metadata?.runtimeVerificationId === `${task.id}:${agentId}`;
+  const same = prior?.status === 'waiting' && prior.agentId === agentId && task.metadata?.runtimeVerificationId === `${task.id}:${agentId}`;
   let prerequisite = same ? prior : { version: 1, status: 'waiting', taskId: task.id, agentId,
     lastSpawnedAt: task.metadata?.lastSpawnedAt || null,
     totalSpawnCount: String(task.metadata?.totalSpawnCount ?? ''), requestedAt: now,
@@ -96,15 +109,15 @@ export async function resolveRuntimeVerificationUpdate(task, outcome, agentId) {
         const update = resolveUndeliveredTaskUpdate(task, { ...remaining,
           reason: `The required fix is already running; runtime recovery cannot resolve the remaining blocker. ${outcome.reason}` }, agentId);
         return { ...update, runtimeRecoveryContext, metadata: { ...update.metadata,
-          runtimeVerification: undefined, runtimeVerificationId: undefined, runtimeVerificationReadyAgentId: undefined } };
+          runtimeVerification: { ...prerequisite, status: 'satisfied', dispatchStatus: task.status, dispatch },
+          runtimeVerificationId: `${task.id}:${agentId}`, runtimeVerificationReadyAgentId: undefined } };
       }
       reason = await prerequisiteReason(prerequisite);
     } else reason = 'Runtime prerequisite retained: merged-fix integration evidence is unreadable or invalid';
   }
   return { status: 'blocked', runtimeRecoveryContext, metadata: { ...task.metadata,
     runtimeVerificationId: `${task.id}:${agentId}`, runtimeVerification: { ...prerequisite, dispatchStatus: task.status,
-      dispatch: Object.fromEntries(['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount']
-        .filter(key => task.metadata?.[key] !== undefined).map(key => [key, task.metadata[key]])) },
+      dispatch },
     deliveryDecisionAgentId: agentId, blockedCategory: CATEGORY, blockedAt: same ? task.metadata.blockedAt : now,
     blockedReason: reason, taskOutcome: outcome,
     ...clearedRetryHoldMetadata(),

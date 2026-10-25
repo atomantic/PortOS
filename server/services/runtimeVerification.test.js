@@ -103,9 +103,18 @@ describe('persisted runtime continuation', () => {
     expect(retained).toMatchObject({ status: 'blocked', metadata: { blockedCategory: 'task-recovery-exhausted',
       failureCount: '3', totalSpawnCount: '4', existingBranch: 'claim/issue-123' } });
     expect(retained.metadata.taskOutcome.reason).toContain('already running');
-    expect(retained.metadata).not.toHaveProperty('runtimeVerification');
+    expect(retained.metadata.runtimeVerification.status).toBe('satisfied');
     expect(retained.metadata.taskOutcome).not.toHaveProperty('recovery');
     expect(await sweepRuntimeVerifications()).toEqual({ resumed: [] });
+    // The task write committed, but terminal agent publication was interrupted.
+    __resetTaskCache();
+    const replay = await resolveRuntimeVerificationUpdate(task, outcome(), 'agent-example');
+    expect(replay).toMatchObject({ status: 'blocked', metadata: {
+      failureCount: '3', totalSpawnCount: '4', taskOutcome: retained.metadata.taskOutcome } });
+    await updateTask(task.id, replay, 'internal', replay.runtimeRecoveryContext);
+    expect((await getTaskById(task.id)).metadata.failureCount).toBe('3');
+    await updateTask(task.id, { metadata: { totalSpawnCount: 5 } }, 'internal');
+    await expect(resolveRuntimeVerificationUpdate(task, outcome(), 'agent-example')).rejects.toThrow('dispatch ownership');
   });
 
   it('replays an existing stale-boot prerequisite after the update without charging another failure', async () => {

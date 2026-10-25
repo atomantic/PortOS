@@ -536,6 +536,54 @@ describe('recovery output-hook dispatch (#3182)', () => {
     } finally { forge.mockRestore(); gitRead.mockRestore(); }
   });
 
+  it.each(['normal', 'recovered'])('preserves the bounded already-running decision through %s completion and interrupted replay', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: TASK.id, taskType: 'internal', status: 'in_progress', metadata: {
+      totalSpawnCount: 3, failureCount: 2, lastSpawnedAt: '2026-09-10T00:00:00Z',
+    } };
+    let live = structuredClone(task);
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.completionTaskDispatch = { taskId: task.id, taskType: 'internal',
+      expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, task.metadata[key] ?? null]) };
+    getTaskById.mockImplementation(async () => live);
+    updateTask.mockImplementation(async (_id, update) => {
+      live = { ...live, ...update, metadata: { ...live.metadata, ...update.metadata } };
+      return live;
+    });
+    mergedTarget.getOriginInfo.mockResolvedValue({ isGithub: true, host: 'github.com', fullName: 'example/PortOS' });
+    const github = await import('./github.js');
+    const git = await import('../lib/execGit.js');
+    const boot = await import('./installState.js');
+    const forge = vi.spyOn(github, 'execGh').mockImplementation(async args => JSON.stringify(args[0] === 'pr'
+      ? { state: 'MERGED', url: 'https://github.com/example/PortOS/pull/123', headRefOid: 'a'.repeat(40), mergeCommit: { oid: 'c'.repeat(40) }, baseRefName: 'main' }
+      : { defaultBranchRef: { name: 'main' } }));
+    const gitRead = vi.spyOn(git, 'execGit').mockResolvedValue({ stdout: 'd'.repeat(40), exitCode: 0 });
+    const taskOutcome = { status: 'blocked', reason: 'Retirement remains unverified.',
+      recovery: { mode: 'runtime', prUrl: 'https://github.com/example/PortOS/pull/123', requiredCommit: 'a'.repeat(40) } };
+    boot.__setBootCommitForTest('c'.repeat(40));
+    try {
+      persistedAgent.metadata.taskOutcome = taskOutcome;
+      persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+      if (mode === 'recovered') {
+        completeAgent.mockRejectedValueOnce(new Error('interrupted terminal write'));
+        await expect(retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0 }))
+          .rejects.toThrow('interrupted terminal write');
+        expect(live.metadata.failureCount).toBe(3);
+      }
+      const result = mode === 'normal'
+        ? await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+          finalSummary: JSON.stringify({ summary: taskOutcome.reason, taskOutcome }) })
+        : await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0 });
+      expect(result).toMatchObject({ success: false, taskOutcome: { reason: expect.stringContaining('already running') } });
+      expect(result.taskOutcome).not.toHaveProperty('recovery');
+      expect(live).toMatchObject({ status: 'blocked', metadata: { blockedCategory: 'task-recovery-exhausted',
+        failureCount: 3, totalSpawnCount: 3, runtimeVerification: { status: 'satisfied' } } });
+      expect(live.metadata.taskOutcome).toEqual(result.taskOutcome);
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ taskOutcome: result.taskOutcome }));
+      expect(addTask).not.toHaveBeenCalled();
+    } finally { boot.__setBootCommitForTest(null); forge.mockRestore(); gitRead.mockRestore(); }
+  });
+
   it('stops recovered runtime finalization when its conditional prerequisite write loses ownership', async () => {
     isProgrammaticIoTaskType.mockReturnValue(false);
     const task = { id: TASK.id, taskType: 'internal', status: 'in_progress', metadata: { totalSpawnCount: 1 } };
