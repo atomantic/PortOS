@@ -16,6 +16,7 @@ import { readdirSync, statSync } from 'node:fs';
 import { join, posix, sep } from 'node:path';
 import { BROWSER_SUITES } from './browserSuites.js';
 import { DB_TEST_INCLUDE } from './dbTestFiles.js';
+import { WORKSPACE_TEST_CACHE_ROOTS } from '../../server/lib/workspaceTestCacheRoots.js';
 
 /**
  * Directories never walked: exactly what both Vitest configs exclude at any
@@ -67,9 +68,9 @@ export function browserOwnerExcludes({ env = process.env } = {}) {
  * directory (where the recorded-dependency depfile lands).
  */
 export const TEST_SCOPES = Object.freeze({
-  server: { workspace: 'server', script: 'test:ci', cacheDir: '.cache/vitest' },
-  client: { workspace: 'client', script: 'test:ci', cacheDir: '.cache/vitest' },
-  db: { workspace: 'server', script: 'test:db:ci', cacheDir: '.cache/vitest-db' },
+  server: { ...WORKSPACE_TEST_CACHE_ROOTS.server, script: 'test:ci' },
+  client: { ...WORKSPACE_TEST_CACHE_ROOTS.client, script: 'test:ci' },
+  db: { ...WORKSPACE_TEST_CACHE_ROOTS.db, script: 'test:db:ci' },
 });
 
 /** The workspace directory a scope runs in (`db` -> `server`); an unknown name passes through. */

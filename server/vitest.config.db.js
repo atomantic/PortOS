@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
+import { WORKSPACE_TEST_CACHE_ROOTS } from './lib/workspaceTestCacheRoots.js';
 import { applyRunnerSelection, vitestRunnerSelection } from '../scripts/vitestCiPool.js';
 import { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
 import { bootstrapVitestTempRoot } from '../scripts/lib/vitestTempRoot.js';
@@ -47,10 +48,10 @@ export { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
 const config = defineConfig({
   server: { watch: VITEST_WATCH_OPTIONS },
   // Anchor to the config, even when --root or the caller cwd differs.
-  cacheDir: fileURLToPath(new URL('./.cache/vitest-db', import.meta.url)),
+  cacheDir: fileURLToPath(new URL(`./${WORKSPACE_TEST_CACHE_ROOTS.db.cacheDir}`, import.meta.url)),
   test: {
     // Vitest 5's module cache is separate from Vite cacheDir; dependencies may be shared by worktrees.
-    fsModuleCachePath: fileURLToPath(new URL('./.cache/vitest-db/modules', import.meta.url)),
+    fsModuleCachePath: fileURLToPath(new URL(`./${WORKSPACE_TEST_CACHE_ROOTS.db.cacheDir}/modules`, import.meta.url)),
     // Environment teardown also owns collection-only/skipped suite fixtures.
     environment: fileURLToPath(new URL('./test/mediaRegistryEnvironment.js', import.meta.url)),
     testTimeout: process.platform === 'win32' ? 30000 : 15000,

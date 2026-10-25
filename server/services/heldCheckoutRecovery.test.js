@@ -1161,6 +1161,75 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return { path, release, admin, opts, forge, prepare, confirm };
   }
 
+  async function moduleCache(checkout, { count = 1, bytes = 26 * 1024 * 1024, ignored = true,
+    tagged = true, name = 'a'.repeat(40), metadata = { lockfileHash: 'b'.repeat(40) } } = {}) {
+    if (ignored) await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
+    const root = join(checkout.path, 'server/.cache/vitest/modules');
+    await mkdir(root, { recursive: true });
+    if (tagged) await writeFile(join(root, 'CACHEDIR.TAG'),
+      'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.\n');
+    await writeFile(join(root, '_metadata.json'), JSON.stringify(metadata));
+    for (let i = 0; i < count; i++) {
+      const path = join(root, count === 1 ? name : i.toString(16).padStart(40, '0'));
+      await writeFile(path, 'synthetic compiled module\n');
+      await truncate(path, bytes);
+    }
+    return root;
+  }
+
+  it.each(['file', 'total'])('retires a reviewed checkout with verified disposable module cache beyond the archive %s budget', async limit => {
+    const c = await reviewedCheckout(`disposable-cache-${limit}`);
+    await moduleCache(c, limit === 'total' ? { count: 12, bytes: 22 * 1024 * 1024 } : {});
+    const prepared = await c.prepare();
+    expect(prepared).toMatchObject({ ok: true, review: { comparison: { disposition: 'integrated' } } });
+    const retired = await c.confirm(prepared.review);
+    expect(retired).toMatchObject({ ok: true, branchDeleted: true });
+    expect(retired.archiveDir ?? null).toBeNull();
+    expect(existsSync(c.path)).toBe(false);
+    expect(await registered(c.path)).toBe(false);
+    expect(await archives()).toEqual([]);
+  });
+
+  it.each(['untagged', 'unique-file', 'untracked', 'unknown-metadata'])(
+    'retains large content that only resembles disposable module cache: %s', async kind => {
+      const c = await reviewedCheckout(`unverified-cache-${kind}`);
+      const root = await moduleCache(c, { tagged: kind !== 'untagged', ignored: kind !== 'untracked',
+        name: kind === 'unique-file' ? 'wanted-dataset.bin' : 'a'.repeat(40),
+        metadata: kind === 'unknown-metadata' ? { wanted: 'unique user data' } : undefined });
+      expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-archive-limit-exceeded' });
+      expect(await registered(c.path)).toBe(true);
+      expect((await stat(join(root, kind === 'unique-file' ? 'wanted-dataset.bin' : 'a'.repeat(40)))).size).toBe(26 * 1024 * 1024);
+      expect(await archives()).toEqual([]);
+    });
+
+  it('keeps archive creation limits intact even for a tagged disposable cache', async () => {
+    const c = await reviewedCheckout('archive-cache-budget');
+    await moduleCache(c);
+    await expect(preserveMergedCheckout(repo, { path: c.path, branch: `refs/heads/${c.release.branch}`, head: c.release.head }, 'main', { cosDir }))
+      .rejects.toThrow('retirement-archive-limit-exceeded');
+    expect(await registered(c.path)).toBe(true);
+    expect(await archives()).toEqual([]);
+  });
+
+  it('never follows a cache directory link or removes the outside content', async () => {
+    const c = await reviewedCheckout('linked-cache');
+    await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
+    const outside = join(scratch, 'wanted-outside-cache');
+    await mkdir(outside);
+    const wanted = join(outside, 'a'.repeat(40));
+    await writeFile(wanted, 'wanted outside bytes');
+    await truncate(wanted, 26 * 1024 * 1024);
+    const before = await sha256File(wanted);
+    const root = join(c.path, 'server/.cache/vitest');
+    await mkdir(root, { recursive: true });
+    await symlink(outside, join(root, 'modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true);
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
+    expect(await sha256File(wanted)).toBe(before);
+    expect(await archives()).toEqual([]);
+  });
+
   it('settles an absent original generation from its existing service receipt without any checkout archive', async () => {
     const c = await reviewedCheckout('receipt-no-archive');
     const checkoutIdentity = await readRetirementCheckoutIdentity(c.path);

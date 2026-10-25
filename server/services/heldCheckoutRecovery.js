@@ -1,5 +1,6 @@
 import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
+import { WORKSPACE_TEST_CACHE_ROOTS } from '../lib/workspaceTestCacheRoots.js';
 /**
  * Operator-scoped retirement of a merged checkout that branch reconciliation
  * reported but cannot retire on its own (#12002): one outside the managed
@@ -43,11 +44,13 @@ export const heldCheckoutArchiveRoot = (cosDir = PATHS.cos) => join(cosDir, 'hel
 const evidenceHash = value => createHash('sha256').update(value).digest('hex');
 const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
 
-function checkArchiveBudget(content, administration) {
-  // Creation and recovery share one byte budget across both snapshots.
+function checkArchiveBudget(content, administration, allowDisposableCache = false) {
+  // Historical creation/recovery share one byte budget across both snapshots.
+  // Only current no-archive review can exempt independently recognized caches.
   let total = 0;
   for (const snapshot of [content, administration]) for (const file of snapshot.files) {
     if (!Number.isSafeInteger(file.bytes) || file.bytes < 0) throw new Error('archive-file-proof-invalid');
+    if (allowDisposableCache && file.disposableCache === true) continue;
     checkArchiveSize('combined', file.bytes, total += file.bytes);
   }
   checkArchiveSize('combined', 0, total);
@@ -712,7 +715,7 @@ async function readCheckoutReviewPrerequisites(input, opts) {
 
 async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { tree, forge, policy }, opts) {
   const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
-  return archiveSnapshots(tree, repoPath, null, archiveWork(opts.signal))
+  return archiveSnapshots(tree, repoPath, null, archiveWork(opts.signal), true)
     .then(([content, administration]) => buildCheckoutRetirementReview({ repoPath, release, prUrl, kind,
       contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge }))
     .then(review => ({ ok: true, review }), error => archiveLimitRefusal(error) || ({ ok: false,
@@ -839,11 +842,35 @@ async function rawBlobId(source, size, format, work) {
  * on anything that cannot be archived faithfully, before any copy is made.
  * The fingerprint is compared again immediately before removal.
  */
-async function snapshotContent(path, work = archiveWork()) {
+const VITEST_CACHE_TAG = 'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.';
+const VITEST_MODULE_CACHE_ROOTS = Object.values(WORKSPACE_TEST_CACHE_ROOTS).map(cache => `${cache.workspace}/${cache.cacheDir}/modules`);
+const cacheInspectionFailure = error => {
+  if (['retirement-archive-cancelled', 'retirement-archive-work-limit-exceeded', 'archive-manifest-budget-exceeded'].includes(error.message)) throw error;
+  return false;
+};
+
+/** Recognize only ignored, tagged Vitest module artifacts, never arbitrary ignored files. */
+async function disposableModuleCache(path, rel, ignored, verified, work) {
+  if (!ignored.has(rel)) return false;
+  const root = VITEST_MODULE_CACHE_ROOTS.find(cache => rel.startsWith(`${cache}/`)
+    && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(rel.slice(cache.length + 1)));
+  if (!root || !ignored.has(`${root}/CACHEDIR.TAG`) || !ignored.has(`${root}/_metadata.json`)) return false;
+  if (!verified.has(root)) verified.set(root, (async () => {
+    const tag = await archiveBytes(await archiveFile(path, join(path, root, 'CACHEDIR.TAG')), work, 2048);
+    const metadata = JSON.parse((await archiveBytes(await archiveFile(path, join(path, root, '_metadata.json')), work, 4096)).toString('utf8'));
+    return tag.toString('utf8').startsWith(VITEST_CACHE_TAG) && Object.keys(metadata).length === 1
+      && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(metadata.lockfileHash);
+  })().catch(cacheInspectionFailure));
+  if (!await verified.get(root)) return false;
+  // Check every directory component; a cache-shaped symlink is not cache evidence.
+  return archiveFile(path, join(path, rel)).then(() => true, cacheInspectionFailure);
+}
+
+async function snapshotContent(path, work = archiveWork(), allowDisposableCache = false) {
   work.check();
   // These reads are independent and each Git spawn is mostly launch latency, so
   // they run together; every destructive boundary re-reads this snapshot anyway.
-  const [unmerged, stageOut, tagged, indexDiff, worktreeDiff, objectFormat, others] = await Promise.all([
+  const [unmerged, stageOut, tagged, indexDiff, worktreeDiff, objectFormat, others, ignoredFiles] = await Promise.all([
     git(['ls-files', '-u', '-z'], path),
     git(['ls-files', '--stage', '-z'], path),
     git(['ls-files', '-v', '-z'], path),
@@ -855,6 +882,7 @@ async function snapshotContent(path, work = archiveWork()) {
     git(['-c', 'diff.autoRefreshIndex=false', 'diff', '--binary', '--no-textconv', '--no-ext-diff'], path, true),
     git(['rev-parse', '--show-object-format'], path),
     git(['ls-files', '--others', '-z'], path),
+    allowDisposableCache ? git(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], path) : '',
   ]);
   if (unmerged.length) throw new Error('unmerged index entries cannot be archived');
   const stage = zLines(stageOut);
@@ -874,11 +902,18 @@ async function snapshotContent(path, work = archiveWork()) {
   if (hidden) throw new Error(`${hidden.slice(2)} hides working-tree changes from Git`);
 
   const files = [];
+  const ignored = new Set(zLines(ignoredFiles));
+  const verifiedCaches = new Map();
   let total = 0;
   const addFile = async (rel, info, extra = {}) => {
-    total += info.size;
-    checkArchiveSize('content', info.size, total);
-    const file = { path: rel, bytes: info.size, sha256: await archiveHash(join(path, rel), work), ...extra };
+    if (!extra.disposableCache) {
+      total += info.size;
+      checkArchiveSize('content', info.size, total);
+    }
+    // Current no-archive review still hashes every byte with bounded streaming,
+    // metadata and elapsed-work budgets. Historical archive limits stay intact.
+    const file = { path: rel, bytes: info.size,
+      sha256: await archiveHash(join(path, rel), work, extra.disposableCache ? Infinity : MAX_FILE_BYTES), ...extra };
     work.add(file);
     files.push(file);
   };
@@ -905,7 +940,10 @@ async function snapshotContent(path, work = archiveWork()) {
       work.add(link);
       symlinks.push(link);
     }
-    else if (info.isFile()) await addFile(rel, info);
+    else if (info.isFile()) {
+      const disposableCache = allowDisposableCache && await disposableModuleCache(path, rel, ignored, verifiedCaches, work);
+      await addFile(rel, info, disposableCache ? { disposableCache: true } : {});
+    }
     else throw new Error(`${rel} is not a regular file`);
   }
   const fingerprint = createHash('sha256').update(indexDiff).update('\0').update(worktreeDiff).update('\0')
@@ -972,14 +1010,14 @@ async function missingCheckoutAdministration(repoPath, path) {
   return roots[0];
 }
 
-async function archiveSnapshots(tree, repoPath, missingRoot, work = archiveWork()) {
+async function archiveSnapshots(tree, repoPath, missingRoot, work = archiveWork(), allowDisposableCache = false) {
   work = work.metadataScope();
   if (!missingRoot) {
-    const snapshots = await Promise.all([snapshotContent(tree.path, work), snapshotAdministration(tree.path, null, work)]);
+    const snapshots = await Promise.all([snapshotContent(tree.path, work, allowDisposableCache), snapshotAdministration(tree.path, null, work)]);
     work.check();
     // Capture already charged metadata; apply the reader's layout checks too.
     for (const snapshot of snapshots) validateArchiveEntries(snapshot, work, false);
-    checkArchiveBudget(...snapshots);
+    checkArchiveBudget(...snapshots, allowDisposableCache);
     return snapshots;
   }
   const present = await lstat(tree.path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });

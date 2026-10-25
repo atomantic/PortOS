@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
+import { WORKSPACE_TEST_CACHE_ROOTS } from '../server/lib/workspaceTestCacheRoots.js';
 import { bootstrapVitestTempRoot } from '../scripts/lib/vitestTempRoot.js';
 import { VITEST_WATCH_OPTIONS } from '../scripts/lib/vitestWatch.js';
 import { CLIENT_TEST_EXCLUDE, CLIENT_TEST_INCLUDE } from '../scripts/lib/workspaceTests.js';
@@ -13,7 +14,7 @@ const RUN_TEMP_ROOT = bootstrapVitestTempRoot();
 const config = defineConfig({
   server: { watch: VITEST_WATCH_OPTIONS },
   // Anchor to the config, even when --root or the caller cwd differs.
-  cacheDir: fileURLToPath(new URL('./.cache/vitest', import.meta.url)),
+  cacheDir: fileURLToPath(new URL(`./${WORKSPACE_TEST_CACHE_ROOTS.client.cacheDir}`, import.meta.url)),
   plugins: [react()],
   resolve: {
     // Share Three.js without bypassing its package exports with a directory alias.
@@ -21,7 +22,7 @@ const config = defineConfig({
   },
   test: {
     // Vitest 5's module cache is separate from Vite cacheDir; dependencies may be shared by worktrees.
-    fsModuleCachePath: fileURLToPath(new URL('./.cache/vitest/modules', import.meta.url)),
+    fsModuleCachePath: fileURLToPath(new URL(`./${WORKSPACE_TEST_CACHE_ROOTS.client.cacheDir}/modules`, import.meta.url)),
     globalSetup: [fileURLToPath(new URL('../scripts/vitestTempRootSetup.js', import.meta.url))],
     env: {
       TMPDIR: RUN_TEMP_ROOT,

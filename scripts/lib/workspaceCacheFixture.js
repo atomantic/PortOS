@@ -57,6 +57,7 @@ function checkout(host, name, workspace, configName, dependencies) {
   // Copy the real config so import.meta.url names THIS checkout; its existing
   // helpers stay shared read-only, just like dependencies in an ordinary worktree.
   copyFileSync(join(REPO, workspace, configName), join(root, configName));
+  link(join(REPO, 'server/lib/workspaceTestCacheRoots.js'), workspace === 'server' ? join(root, 'lib/workspaceTestCacheRoots.js') : join(parent, 'server/lib/workspaceTestCacheRoots.js'));
   for (const file of ['lib/vitestTempRoot.js', 'lib/testProcessAttribution.js', 'lib/dbTestFiles.js', 'lib/browserSuites.js', 'lib/workspaceTests.js', 'vitestCiPool.js', 'vitestTempRootSetup.js']) {
     link(join(REPO, 'scripts', file), join(parent, 'scripts', file));
   }
