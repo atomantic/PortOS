@@ -128,6 +128,7 @@ function basisFor(project, includeEvents = true) {
     trackId: project.trackId || null,
     uploadedAudioFilename: project.uploadedAudioFilename || null,
     audioAnalysis: project.audioAnalysis || null,
+    ...(typeof project.lyricOverlayEnabled === 'boolean' ? { lyricOverlayEnabled: project.lyricOverlayEnabled } : {}),
     lyricCues: project.lyricCues || null,
     lyricMarkers: project.lyricMarkers || null,
     scenes: project.scenes || [],
@@ -275,7 +276,7 @@ function generatedFiles(manifest) {
 async function priorManifest(project) {
   const pointer = project.composition?.documentDraft || project.composition?.document;
   if (pointer?.source?.kind !== 'generated') throw fail('Generate a mixed-media document before revising a section', 'NO_GENERATED_DOCUMENT', 409);
-  const files = await readDocumentFiles({ ...project, composition: { ...project.composition, document: pointer } });
+  const files = await readDocumentFiles({ ...project, composition: { ...project.composition, document: pointer } }, { requireLyricVisibility: false });
   const file = files.get('manifest.json');
   if (!file) throw fail('The generated document manifest is missing', 'COMPOSITION_DOCUMENT_MISSING', 409);
   const manifest = JSON.parse(await readFile(file.abs, 'utf8'));

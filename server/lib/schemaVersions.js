@@ -758,8 +758,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // song), which a v22 re-plan or split rebuilds without. Optional, no backfill.
   // v24 = the panel's art as the shot's frame reference (`scene.panelArt`),
   // which a v23 re-plan or split rebuilds without. Optional, no backfill.
-  // A field added to these normalizers later needs v25.
-  musicVideoProjects: 24,
+  // v25 = per-project automatic lyric-overlay visibility; older renderers ignore it.
+  // Optional, no migration or backfill; absent retains legacy rendering.
+  // A field added to these normalizers later needs v26.
+  musicVideoProjects: 25,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

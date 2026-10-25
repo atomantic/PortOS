@@ -79,16 +79,16 @@ export async function buildLyricPlaythroughPreview(project, { overlay = false } 
   if (!cues.some((cue) => finite(cue?.startSec) && isNonBlankStr(cue?.text))) {
     throw new ServerError('Align the words before playing the lyrics through', { status: 409, code: 'NO_TIMED_LYRICS' });
   }
-  return buildDocumentPreview(playthroughProject(project, durationSec), { files: overlay ? await readLyricOverlayDocumentFiles() : await readTemplateDocumentFiles('layered') });
+  return buildDocumentPreview(playthroughProject(project, durationSec, !overlay), { files: overlay ? await readLyricOverlayDocumentFiles() : await readTemplateDocumentFiles('layered') });
 }
 
 // Only the song, the words, the shots' timing and the opening title card: no composition, overlay text,
 // narrative events or film look of the project's own. The look would filter the whole page, and on the
 // transparent overlay that dims the frames under the words.
-function playthroughProject(project, durationSec) {
+function playthroughProject(project, durationSec, timingOnly = false) {
   const shots = timedShots(project.scenes);
   const scenes = shots.length ? shots : lyricScenes(project.lyricCues || [], project.lyricMarkers, durationSec);
-  return { ...project, scenes, composition: { mode: 'document', textCues: [] }, filmLook: null };
+  return { ...project, ...(timingOnly ? { lyricOverlayEnabled: true } : {}), scenes, composition: { mode: 'document', textCues: [] }, filmLook: null };
 }
 
 /**

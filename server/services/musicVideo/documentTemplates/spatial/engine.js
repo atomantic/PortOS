@@ -1,5 +1,7 @@
 import * as toonWorld from './toonWorld.js';
 
+// portos-lyric-overlay-visibility: 1
+
 export function mount(THREE) {
 
 const mv = window.PORTOS_MV;
@@ -25,6 +27,7 @@ function layout(size) {
 }
 layout({ width, height });
 function drawWords(t) {
+  if (mv.composition?.lyricOverlayEnabled === false) return;
   const cue = (mv.lyrics || []).find((line) => t >= line.startSec && t < (line.endSec ?? line.startSec + 4));
   if (!cue) return;
   text.save();

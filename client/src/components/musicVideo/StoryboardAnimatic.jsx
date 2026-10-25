@@ -516,7 +516,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     .find((scene) => scene.videoHistoryId && sceneVisualLayer(scene, { layered }) === 'footage');
   const leadFile = useVideoFileSrc(layered ? lead?.videoHistoryId : null, { geometry: true });
   const stillFps = leadFile.fps || ANIMATIC_FPS;
-  const lyricsAvailable = hasTimedLyrics(project);
+  const lyricsAvailable = project.lyricOverlayEnabled !== false && hasTimedLyrics(project);
   const { overlay, failed, capture: captureLyrics } = useLyricOverlay({ project, enabled: lyricsAvailable && lyricsOn, audioRef, time });
   // The cutting room floor outro: it plays when the song ends, and Ending plays it straight away; playing or seeking the song leaves it.
   const outro = useMusicVideoStatsOutro({ projectId: project.id, seconds: statsOutroSeconds(project.statsOutro), audioRef });

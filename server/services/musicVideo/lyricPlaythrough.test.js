@@ -50,6 +50,16 @@ describe('lyric timing playthrough', () => {
     composition: { mode: 'document', textCues: [{ text: 'Overlay', startSec: 0, endSec: 5 }], overlay: { enabled: true } },
   };
 
+  it('shows the timing check when picture overlays are off, but keeps the picture overlay off', async () => {
+    const hidden = { ...project, lyricOverlayEnabled: false };
+    const check = portosData((await buildLyricPlaythroughPreview(hidden)).html);
+    const picture = portosData((await buildLyricPlaythroughPreview(hidden, { overlay: true })).html);
+    expect(check.composition.lyricOverlayEnabled).toBe(true);
+    expect(picture.composition.lyricOverlayEnabled).toBe(false);
+    expect(check.lyrics).toEqual(picture.lyrics);
+    expect(hidden.lyricCues).toEqual(project.lyricCues);
+  });
+
   it('needs the analysis and at least one timed line', async () => {
     await expect(buildLyricPlaythroughPreview({ ...project, audioAnalysis: null })).rejects.toMatchObject({ status: 409, code: 'NOT_ANALYZED' });
     await expect(buildLyricPlaythroughPreview({ ...project, lyricCues: [cue('untimed', null)] })).rejects.toMatchObject({ status: 409, code: 'NO_TIMED_LYRICS' });

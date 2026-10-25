@@ -297,6 +297,8 @@ function rollNumbers(text, k) {
  *   dataBacking  how a data readout stays legible: 'plate' (an ink plate behind it,
  *                the default) or 'outline' (each word ringed in ink, no plate)
  */
+// portos-lyric-overlay-visibility: 1
+
 export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
   const T = LYRIC_TIMING;
   const fps = mv?.render?.fps || 24;
@@ -309,7 +311,8 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
     .filter((s) => finite(s?.startSec) && finite(s?.endSec) && s.endSec > s.startSec)
     .slice().sort((a, b) => a.startSec - b.startSec);
   const sceneAt = (t) => scenes.filter((s) => s.startSec <= t + 1e-6 && t < s.endSec).pop() || null;
-  const source = (Array.isArray(options.lines) ? options.lines : (mv?.lyrics || []))
+  const source = (Array.isArray(options.lines) ? options.lines
+    : mv?.composition?.lyricOverlayEnabled === false ? [] : (mv?.lyrics || []))
     .filter((l) => l && String(l.text || '').trim());
   const roles = resolveLineRoles(source, {
     lyricMarkers: options.lines ? [] : mv?.lyricMarkers,

@@ -52,7 +52,7 @@ export const MUSIC_VIDEO_LYRIC_ROLES = ['line', 'hook', 'stamp', 'data'];
  */
 export function composedDrawsLyrics(project) {
   const composition = project?.composition;
-  if (composition?.mode !== 'composed') return false;
+  if (project?.lyricOverlayEnabled === false || composition?.mode !== 'composed') return false;
   const timed = (cue) => cue?.text && Number.isFinite(cue.startSec) && Number.isFinite(cue.endSec);
   if ((composition.textCues || []).some((cue) => timed(cue) && cue.emphasis !== 'hero')) return false;
   return (Array.isArray(project.lyricCues) ? project.lyricCues : [])

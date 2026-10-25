@@ -15,6 +15,7 @@
  * This file is yours once copied into a project: add project-specific cards
  * (title cards, diagrams, outros) in CARDS below and key them from scene labels.
  */
+// portos-lyric-overlay-visibility: 1
 (() => {
   'use strict';
   const MV = window.PORTOS_MV;

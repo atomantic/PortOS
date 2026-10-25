@@ -252,6 +252,7 @@ export function buildSongDocument(project, timeline = buildCodeTimeline(project)
     downbeats: timeline.downbeats,
     features: features.success ? features.data : null,
     sections,
+    ...(typeof project?.lyricOverlayEnabled === 'boolean' ? { lyricOverlayEnabled: project.lyricOverlayEnabled } : {}),
     lyrics: lines,
   };
 }

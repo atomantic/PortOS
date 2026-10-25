@@ -47,7 +47,7 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
   const suspectCues = (project.lyricCues || []).filter((cue) => cue.suspect);
   const playable = mode === 'vocal' && timed && !!project.audioAnalysis && !!audioUrl && !aligning;
   return (
-    <div className="space-y-2" id="mv-lyric-timing">
+    <div className="space-y-2">
       <fieldset className="flex flex-wrap gap-3 text-sm">
         <legend className="sr-only">Song content</legend>
         <label className="flex min-h-[44px] items-center gap-2 sm:min-h-0">
