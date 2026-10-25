@@ -9,6 +9,7 @@ import { completionSentinelPresent } from './agentCompletionSentinel.js';
 import { hasClaimCheckoutBindings } from './completedCheckoutEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { sameRetirementObservation } from '../lib/reconcileRetirementEvidence.js';
+import { resolveRetirementApp } from './retirementAppScope.js';
 /**
  * Agent Repo-State Verification
  *
@@ -311,7 +312,7 @@ export async function verifyAgentRepoState(input) {
     const outcomes = result.branches || [result];
     const unsupported = prStaysOpen(input.task) ? { skipReason: 'leave-open-cleanup-unsupported' } : outcomes.find(item => [REPO_STATE_SKIPS.DISABLED, REPO_STATE_SKIPS.NOT_WORKTREE,
       REPO_STATE_SKIPS.PERSISTENT_WORKTREE, REPO_STATE_SKIPS.DISCARDED_WORKTREE,
-      'retirement-app-unavailable', 'retirement-policy-not-legacy-completed'].includes(item.skipReason)
+      'retirement-app-unavailable', 'retirement-app-ambiguous', 'retirement-policy-not-legacy-completed'].includes(item.skipReason)
       || (item.skipReason === 'cleanup-delivery-unverified' && (['OPEN', 'CLOSED'].includes(item.observed?.prState)
         || (item.observed?.prState === null && item.observed?.prUrl === null && item.observed?.unreadable?.length === 0))));
     if (cleanupPending && unsupported) {
@@ -711,11 +712,11 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
  * through the retirement gate; anything else is an undelivered branch.
  */
 async function settleDivergedBranch(ctx) {
-  const { agentId, app, sourceWorkspace, branchName, worktreePath, observed, issues, blockWith } = ctx;
+  const { agentId, appId, app, sourceWorkspace, branchName, worktreePath, observed, issues, blockWith } = ctx;
   if (observed.prState !== 'MERGED' || !(observed.worktreePresent || observed.localBranchPresent)) {
     return settleUndeliveredBranch(ctx);
   }
-  const prepared = await prepareRecoveryRetirement({ agentId, app, sourceWorkspace, branchName, worktreePath, observed })
+  const prepared = await prepareRecoveryRetirement({ agentId, appId, app, sourceWorkspace, branchName, worktreePath, observed })
     .catch(() => ({ reason: 'retirement-review-unavailable' }));
   if (!prepared.retirement) {
     const held = await blockWith(prepared.reason, { issues, observed });
@@ -723,7 +724,7 @@ async function settleDivergedBranch(ctx) {
     emitLog('info', `⏸️ Repo-state retirement retained ${branchName}: ${prepared.reason}`, { agentId, branchName });
     return held;
   }
-  if (prepared.integrated) return retireIntegratedCheckout(ctx, prepared.retirement);
+  if (prepared.integrated) return retireIntegratedCheckout({ ...ctx, appId: prepared.appId }, prepared.retirement);
   // A recovery successor cannot start a new lineage with a fresh budget.
   if (ctx.task?.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup') {
     return ctx.blockWith('cleanup-successor-review-unresolved', { issues: ctx.issues, observed: ctx.observed });
@@ -788,7 +789,16 @@ async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWo
 /** Persist the exact obligation before preview, so refusal or restart cannot
  * lose it. The preview supplies evidence for review, never deletion authority.
  */
-async function prepareRecoveryRetirement({ agentId, app, sourceWorkspace, branchName, worktreePath, observed }) {
+async function prepareRecoveryRetirement({ agentId, appId, app: taskApp, sourceWorkspace, branchName, worktreePath, observed }) {
+  // A task naming an app is bound to exactly that app: a missing or mismatched one
+  // refuses rather than falling through to another. Only an app-less task resolves
+  // the managed app from the trusted repository, and only on one exact match.
+  let app = taskApp;
+  if (!appId) {
+    const scope = await resolveRetirementApp(sourceWorkspace);
+    if (!scope.app) return { reason: scope.reason };
+    app = scope.app;
+  }
   if (!app?.id || !app.repoPath || resolve(app.repoPath) !== resolve(sourceWorkspace)) return { reason: 'retirement-app-unavailable' };
   const trees = await listWorktrees(sourceWorkspace);
   const matches = trees.filter(tree => tree.branch?.replace(/^refs\/heads\//, '') === branchName
@@ -826,7 +836,7 @@ async function prepareRecoveryRetirement({ agentId, app, sourceWorkspace, branch
   }
   if (!['integrated', 'review-supersession'].includes(prepared.review?.comparison?.disposition)
     || typeof prepared.review.comparison.localPatch !== 'string' || typeof prepared.review.comparison.difference !== 'string') return { reason: 'retirement-comparison-unavailable' };
-  return { integrated: prepared.review.forge?.prHead === release.head && prepared.review.comparison?.disposition === 'integrated' && prepared.review.comparison.difference === '',
+  return { appId: app.id, integrated: prepared.review.forge?.prHead === release.head && prepared.review.comparison?.disposition === 'integrated' && prepared.review.comparison.difference === '',
     retirement: { release, createdAt: obligation.createdAt, prUrl: observed.prUrl, digest: prepared.review.digest,
       cognition: (await import('./branchReconcileRetirement.js')).retirementCognitiveIdentity(prepared.review, release, observed.prUrl) } };
 }

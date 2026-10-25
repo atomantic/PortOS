@@ -20,7 +20,7 @@
  */
 
 import { scheduleExecutionFieldsSchema } from '../lib/scheduleExecutionFieldsValidation.js';
-import { unresolvedRetirements, retainRetirementObligations, sameRetirementCheckout, sameRetirementObservation, matchingRetirementReceipts, hasRetirementReceipt } from '../lib/reconcileRetirementEvidence.js';
+import { unresolvedRetirements, retainRetirementObligations, sameRetirementCheckout, sameRetirementObservation, matchingRetirementReceipts, hasRetirementReceipt, retirementReceiptSettles } from '../lib/reconcileRetirementEvidence.js';
 import { applyLegacyRetirementResolutions } from '../lib/legacyRetirementTransition.js';
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 import { isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
@@ -1002,7 +1002,10 @@ const RETIRED_CHECKOUTS_KEPT = 20;
  * where its archive went. Status is untouched: only the next sweep can say the
  * repository converged.
  */
-export async function recordHeldCheckoutRetirement(appId, { path, branch, branchDeleted, head, archiveDir, checkoutIdentity }) {
+export async function recordHeldCheckoutRetirement(appId, { path, branch, branchDeleted, head, archiveDir, checkoutIdentity, checkoutOnly = false }) {
+  // Only a branchless checkout can be settled without a deleted branch; the
+  // receipt then records exactly that and never claims a deletion.
+  const checkoutOnlyReceipt = checkoutOnly === true && !branch && branchDeleted !== true;
   return updateSchedule(async (schedule) => {
     const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
     const outcome = record.branchReconcileOutcome || {};
@@ -1015,13 +1018,15 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
       receipt.archiveDir ?? receipt.checkoutIdentity ?? null,
       receipt.path, receipt.branch ?? null, receipt.head,
       receipt.branchDeleted === true,
+      // Appended only for checkout-only receipts so every persisted identity keeps its hash.
+      ...(receipt.checkoutOnly === true ? ['checkout-only'] : []),
     ])).digest('hex');
     const receipts = { ...(outcome.retirementReceiptIdentities || {}) };
     const evidence = { ...(outcome.retirementReceiptEvidence || {}) };
     for (const receipt of outcome.retired || []) {
       const recordedArchive = receipt.archiveDir ?? null;
       const archiveKept = recordedArchive === null || (typeof recordedArchive === 'string' && recordedArchive.length > 0);
-      if (receipt.branchDeleted === true && receipt.retiredAt && archiveKept) {
+      if (retirementReceiptSettles(receipt) && receipt.retiredAt && archiveKept) {
         const normalized = { ...receipt, archiveDir: recordedArchive };
         receipts[identity(normalized)] ??= receipt.retiredAt;
         evidence[identity(normalized)] ??= normalized;
@@ -1029,8 +1034,8 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     }
     const recordedArchive = archiveDir ?? null;
     const archiveKept = recordedArchive === null || (typeof recordedArchive === 'string' && recordedArchive.length > 0);
-    const receiptId = branchDeleted === true && archiveKept
-      ? identity({ path, branch, head, archiveDir: recordedArchive, branchDeleted, checkoutIdentity }) : null;
+    const receiptId = (branchDeleted === true || checkoutOnlyReceipt) && archiveKept
+      ? identity({ path, branch, head, archiveDir: recordedArchive, branchDeleted, checkoutIdentity, checkoutOnly: checkoutOnlyReceipt }) : null;
     if (receiptId && receipts[receiptId]) {
       // Keep the original timestamp. Fill a missing checkout identity so a
       // later inventory row can match the receipt that already settled this tuple.
@@ -1043,7 +1048,8 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     }
     const retiredAt = new Date().toISOString();
     if (receiptId) receipts[receiptId] = retiredAt;
-    const receipt = { path, ...(branch && { branch }), head, branchDeleted, archiveDir: recordedArchive, retiredAt, ...(checkoutIdentity && { checkoutIdentity }) };
+    const receipt = { path, ...(branch && { branch }), head, branchDeleted: checkoutOnlyReceipt ? false : branchDeleted, archiveDir: recordedArchive, retiredAt,
+      ...(checkoutOnlyReceipt && { checkoutOnly: true }), ...(checkoutIdentity && { checkoutIdentity }) };
     const retired = [receipt, ...(outcome.retired || [])].slice(0, RETIRED_CHECKOUTS_KEPT);
     if (receiptId) evidence[receiptId] = receipt;
     const retirementObligations = unresolvedRetirements({ ...outcome, retired, retirementReceiptEvidence: evidence });

@@ -69,6 +69,7 @@ vi.mock('./gitlab.js', () => ({
   findMergeRequestForBranch: vi.fn().mockResolvedValue({ status: 'none', url: null, detail: null }),
 }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn().mockResolvedValue({ id: 'demo-app', name: 'Demo App' }) }));
+vi.mock('./retirementAppScope.js', () => ({ resolveRetirementApp: vi.fn() }));
 vi.mock('./notifications.js', () => ({
   addNotification: vi.fn().mockResolvedValue({}),
   exists: vi.fn().mockResolvedValue(false),
@@ -98,6 +99,7 @@ import { hasBranchMergeEvidence, resolveForgeForRepo } from './git.js';
 import { findPullRequestForBranch, execGh, getPullRequestState } from './github.js';
 import { findMergeRequestForBranch } from './gitlab.js';
 import { getAppById } from './apps.js';
+import { resolveRetirementApp } from './retirementAppScope.js';
 import { addNotification, exists as notificationExists } from './notifications.js';
 import { emitLog } from './cosEvents.js';
 import { readPendingMergePrs } from './prWatcher.js';
@@ -482,6 +484,51 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(retireInventoriedCheckout).toHaveBeenCalledWith(expect.objectContaining({ review: expect.objectContaining({ acceptSuperseded: false }) }), expect.objectContaining({ beforeMutation: expect.any(Function) }));
     expect(addTask).not.toHaveBeenCalled();
     expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'verified', reason: 'retirement-receipt-verified' }));
+  });
+
+  describe('app scope for retirement (#13405)', () => {
+    const mergedLeftover = () => {
+      existsSync.mockReturnValue(true);
+      localBranch(true);
+      listWorktrees.mockResolvedValue([{ ...RELEASE, branch: `refs/heads/${BRANCH}` }]);
+      findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
+      prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    };
+    const appless = () => run({ task: task({ app: undefined, appName: undefined }) });
+
+    it('resolves the one managed app from the trusted repository for an app-less task', async () => {
+      mergedLeftover();
+      resolveRetirementApp.mockResolvedValue({ app: { id: 'repo-app', repoPath: '/repo' } });
+      expect(await appless()).toMatchObject({ verified: true, recoveryTaskId: null });
+      expect(resolveRetirementApp).toHaveBeenCalledWith('/repo');
+      expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('repo-app', expect.objectContaining({
+        retirementObligations: [{ ...RELEASE, reason: 'retirement-review-pending' }],
+      }));
+      expect(prepareInventoriedCheckoutRetirement).toHaveBeenCalledWith(expect.objectContaining({ appId: 'repo-app' }));
+      expect(retireInventoriedCheckout).toHaveBeenCalledWith(expect.objectContaining({ appId: 'repo-app' }), expect.any(Object));
+    });
+
+    it.each(['retirement-app-ambiguous', 'retirement-app-unavailable'])('retains an app-less task whose repository scope is %s', async reason => {
+      mergedLeftover();
+      resolveRetirementApp.mockResolvedValue({ reason });
+      expect(await appless()).toMatchObject({ verified: false, skipReason: reason });
+      expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();
+      expect(prepareInventoriedCheckoutRetirement).not.toHaveBeenCalled();
+      expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['missing', null],
+      ['mismatched', { id: 'demo-app', repoPath: '/other' }],
+    ])('never falls through to another app when the named app is %s', async (_name, app) => {
+      mergedLeftover();
+      getAppById.mockResolvedValue(app);
+      resolveRetirementApp.mockResolvedValue({ app: { id: 'repo-app', repoPath: '/repo' } });
+      expect(await run()).toMatchObject({ verified: false, skipReason: 'retirement-app-unavailable' });
+      expect(resolveRetirementApp).not.toHaveBeenCalled();
+      expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();
+      expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    });
   });
 
   it('files ONE recovery task for a leftover worktree and branch after a merged PR', async () => {

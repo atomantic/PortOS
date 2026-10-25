@@ -29,7 +29,7 @@ afterAll(async () => {
   await cleanupTempDataRoots();
 });
 
-const injected = vi.hoisted(() => ({ statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, forge: {}, gitSpawns: [], gitInFlight: new Set(), phase: null }));
+const injected = vi.hoisted(() => ({ statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, failScheduleWrite: false, forge: {}, gitSpawns: [], gitInFlight: new Set(), phase: null }));
 vi.mock('../lib/execGit.js', async (importOriginal) => {
   const actual = await importOriginal();
   const observe = run => async (args, cwd, options) => {
@@ -82,7 +82,10 @@ vi.mock('../lib/execGit.js', async (importOriginal) => {
 vi.mock('./apps.js', () => ({ getAllApps: async () => [injected.app], getAppById: async id => injected.app?.id === id ? injected.app : null }));
 vi.mock('./taskScheduleStore.js', async importOriginal => ({
   ...await importOriginal(), loadSchedule: async () => injected.schedule,
-  updateSchedule: async mutate => (await mutate(injected.schedule)).result,
+  updateSchedule: async mutate => {
+    if (injected.failScheduleWrite) throw new Error('synthetic receipt persistence failure');
+    return (await mutate(injected.schedule)).result;
+  },
 }));
 vi.mock('./cosState.js', () => ({
   readAgentsStateForSafetyCheck: async () => ({ trusted: injected.owners !== null,
@@ -135,7 +138,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
 
   beforeEach(async () => {
     await Promise.all(pendingPhases);
-    Object.assign(injected, { statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, forge: {}, gitSpawns: [], gitInFlight: new Set(), phase: null });
+    Object.assign(injected, { statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, failScheduleWrite: false, forge: {}, gitSpawns: [], gitInFlight: new Set(), phase: null });
     slowReport = setTimeout(() => {
       const now = Date.now();
       const running = [...injected.gitInFlight].map(({ args, startedAt }) => `git ${args.slice(0, 3).join(' ')} (${now - startedAt}ms)`).join('; ') || 'none';
@@ -682,6 +685,66 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(existsSync(join(unreadable, 'unfinished.txt'))).toBe(true);
     expect(existsSync(clean)).toBe(false);
     expect(result.cleaned).toContain(clean.replaceAll('\\', '/'));
+  });
+
+  describe('detached checkout receipts (#13405)', () => {
+    /** A clean managed detached checkout that a previous scan already inventoried. */
+    async function inventoriedDetached() {
+      const taskSchedule = await import('./taskSchedule.js');
+      const path = join(repo, '.claude', 'worktrees', 'clean-detached');
+      await execGit(['worktree', 'add', '--detach', path, 'main'], repo);
+      const gitPath = await gitCheckoutPath(path);
+      const head = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+      const release = { path: gitPath, head, detached: true, managed: true, checkoutIdentity: await readRetirementCheckoutIdentity(path) };
+      const unrelated = { branch: 'feature/unexplained', head, reason: 'branch-held' };
+      await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'checkout-retained' }, unrelated] });
+      return { taskSchedule, path, release, unrelated };
+    }
+    const sweep = (options = {}) => reconcile(repo, { activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] }, ...options });
+
+    it('settles a retired detached checkout before the next inventory without claiming a branch deletion', async () => {
+      const { taskSchedule, path, release, unrelated } = await inventoriedDetached();
+      const result = await sweep({ appId: 'app-1' });
+      expect(result.cleaned).toContain(release.path);
+      expect(existsSync(path)).toBe(false);
+      const first = await taskSchedule.getBranchReconcileOutcome('app-1');
+      expect(first.retired).toEqual([expect.objectContaining({ path: release.path, head: release.head, checkoutIdentity: release.checkoutIdentity,
+        branchDeleted: false, checkoutOnly: true, archiveDir: null })]);
+      expect(first.retired[0]).not.toHaveProperty('branch');
+      const next = await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+      expect(next.retired).toEqual(first.retired);
+      expect(next.retirementObligations).toEqual([expect.objectContaining({ branch: unrelated.branch })]);
+    });
+
+    it('leaves a removed detached checkout a missing-source obligation when its receipt cannot be stored', async () => {
+      const { taskSchedule, path, release, unrelated } = await inventoriedDetached();
+      injected.failScheduleWrite = true;
+      const result = await sweep({ appId: 'app-1' });
+      expect(existsSync(path)).toBe(false);
+      expect(result.cleaned).not.toContain(release.path);
+      expect(result.detachedWorktrees).toContainEqual(expect.objectContaining({ path: release.path, reason: 'retirement-receipt-unverified' }));
+      injected.failScheduleWrite = false;
+      expect((await taskSchedule.getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+      const next = await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+      expect(next.retirementObligations).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: release.path, reason: 'retirement-provenance-unverified' }),
+        expect.objectContaining({ branch: unrelated.branch }),
+      ]));
+    });
+
+    it('does not let a recreated same-path detached checkout borrow the old checkout-only receipt', async () => {
+      const { taskSchedule, path, release, unrelated } = await inventoriedDetached();
+      await sweep({ appId: 'app-1' });
+      const retired = (await taskSchedule.getBranchReconcileOutcome('app-1')).retired;
+      await execGit(['worktree', 'add', '--detach', path, 'main'], repo);
+      const recreated = { ...release, checkoutIdentity: await readRetirementCheckoutIdentity(path), reason: 'retirement-receipt-unverified' };
+      expect(recreated.checkoutIdentity).not.toBe(release.checkoutIdentity);
+      await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [recreated, unrelated] });
+      const next = await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+      expect(next.retired).toEqual(retired);
+      expect(next.retirementObligations).toContainEqual(expect.objectContaining({ path: recreated.path, checkoutIdentity: recreated.checkoutIdentity }));
+      expect(existsSync(path)).toBe(true);
+    });
   });
 
   it('preserves a prunable checkout whose missing pointer makes Git report the parent clean', async () => {
