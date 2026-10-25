@@ -15,7 +15,7 @@
  * suite never writes outside the OS temp dir, and never near a real checkout.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, readFile, readdir, symlink } from 'fs/promises';
+import { mkdtemp, rm, writeFile, readFile, readdir, realpath, symlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, sep } from 'path';
@@ -143,7 +143,8 @@ describe('execGit refuses to guess a working directory', () => {
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('gitTestRepo refuses non-temp targets', () => {
   it('materializeGitRepo git-inits a temp dir but leaves a non-temp dir untouched', async () => {
     // BYPASS PROBE — guard permits: the helper really does create a repo.
-    const allowed = await scratchDir();
+    // Native realpath expands a Windows TEMP root's DOS short-name alias.
+    const allowed = await realpath(await scratchDir());
     await materializeGitRepo(allowed);
     expect(existsSync(join(allowed, '.git'))).toBe(true);
 

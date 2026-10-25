@@ -1,4 +1,5 @@
 import { realpath } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
@@ -52,7 +53,9 @@ async function verifyCurrentRetirement(input) {
       const reservation = parent.metadata?.repoCleanupRecoveries?.[release.branch];
       const { completedCheckoutReceiptValid } = await import('./completedCheckoutEvidence.js');
       const captured = parent.metadata?.completedCheckouts?.find(row => completedCheckoutReceiptValid(parent, row)
-        && row.branch === release.branch && row.path === release.path && row.head === release.head
+        // Git inventory and realpath use different separators on Windows. The
+        // retired checkout is gone; compare spellings without filesystem reads.
+        && row.branch === release.branch && typeof row.path === 'string' && resolve(row.path) === resolve(release.path) && row.head === release.head
         && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer) === release.checkoutIdentity);
       if (reservation?.taskId === task.id && reservation.observation === origin.observation && captured) repoPath = captured.repoPath;
     }
