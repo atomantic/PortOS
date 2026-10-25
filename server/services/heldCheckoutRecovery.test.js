@@ -23,6 +23,39 @@ import { PATHS } from '../lib/paths.js';
 vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-held-branch-archives-') }));
 afterAll(cleanupTempDataRoots);
 
+// Fixed phase names and aggregates only: diagnostics must never expose fixture
+// paths, Git arguments, captured bytes or an unbounded per-command transcript.
+const receiptTiming = vi.hoisted(() => ({
+  current: null,
+  async run(phase, work) {
+    const trace = this.current;
+    if (!trace) return work();
+    const started = performance.now();
+    const row = trace.phases[phase] ??= { count: 0, ms: 0, maxMs: 0, active: 0 };
+    row.active++;
+    try { return await work(); }
+    finally {
+      const elapsed = performance.now() - started;
+      row.active--;
+      row.count++;
+      row.ms += elapsed;
+      row.maxMs = Math.max(row.maxMs, elapsed);
+    }
+  },
+}));
+
+// Keep the real ownership queue, archive and destructive guards. Only time the
+// existing callbacks, including queue wait in retirement-total's remainder.
+vi.mock('./cosClaimOwnershipState.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, retireWithUnlockedArchive: options => receiptTiming.run('retirement-total', () => actual.retireWithUnlockedArchive({
+    ...options,
+    admit: (...args) => receiptTiming.run('ownership-admission', () => options.admit(...args)),
+    archive: (...args) => receiptTiming.run('preservation', () => options.archive(...args)),
+    finish: (...args) => receiptTiming.run('destructive-settlement', () => options.finish(...args)),
+  })) };
+});
+
 const SYMLINKS = process.platform !== 'win32';
 const retirementFaults = vi.hoisted(() => ({ onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null }));
 const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [] }));
@@ -45,7 +78,9 @@ vi.mock('../lib/execGit.js', async importOriginal => {
       if (injected.fetchRemote) args = args.map(arg => arg === 'https://github.com/example/repo.git' ? injected.fetchRemote : arg);
     }
     try {
-      const result = await actual.execGit(args, cwd, options);
+      const phase = options?.env?.GIT_NO_REPLACE_OBJECTS === '1' ? 'independent-object-proof'
+        : args.includes('bundle') ? 'bundle' : 'other-git';
+      const result = await receiptTiming.run(phase, () => actual.execGit(args, cwd, options));
       if (injected.onPreviewEvidence && args[0] === '--literal-pathspecs' && args[1] === 'diff') await injected.onPreviewEvidence();
       if (injected.onArchiveRef && args[0] === 'update-ref' && args[1]?.startsWith('refs/portos/archive/')) await injected.onArchiveRef();
       if (injected.onProof && args.includes('--bare') && options?.env?.GIT_NO_REPLACE_OBJECTS === '1') await injected.onProof();
@@ -76,10 +111,10 @@ vi.mock('./branchCompletionPolicy.js', async (importOriginal) => {
 vi.mock('./taskScheduleStore.js', async (importOriginal) => ({
   ...await importOriginal(),
   loadSchedule: async () => injected.schedule,
-  updateSchedule: async mutate => {
+  updateSchedule: mutate => receiptTiming.run('schedule-persistence', async () => {
     if (++retirementFaults.scheduleWrites === retirementFaults.failScheduleWrite) throw new Error('synthetic receipt persistence failure');
     return (await mutate(injected.schedule)).result;
-  },
+  }),
 }));
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
@@ -93,23 +128,45 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   let repo;
   let external;
   let cosDir;
+  let receiptWork;
   const noOwners = async () => [];
 
-  beforeEach(async () => {
-    Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
-    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null });
-    scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
-    const safeRepo = join(scratch, 'repo');
-    await mkdir(safeRepo);
-    await materializeGitRepo(safeRepo, { identity: { email: 'test@example.com', name: 'Test' } });
-    repo = (await execGit(['rev-parse', '--show-toplevel'], safeRepo)).stdout.trim() || safeRepo;
-    external = join(scratch, 'elsewhere');
-    cosDir = join(scratch, 'cos');
-    await mkdir(external);
-    injected.app.repoPath = repo;
+  beforeEach(async ({ task }) => {
+    receiptWork = null;
+    receiptTiming.current = task.name.startsWith('settles a normally merged checkout before the next scan')
+      ? { entryPoint: task.name.endsWith('cleanupMerged') ? 'cleanupMerged' : 'early reaper', started: performance.now(), phases: {} } : null;
+    await receiptTiming.run('fixture-setup', async () => {
+      Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
+      Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null });
+      scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
+      const safeRepo = join(scratch, 'repo');
+      await mkdir(safeRepo);
+      await materializeGitRepo(safeRepo, { identity: { email: 'test@example.com', name: 'Test' } });
+      repo = (await execGit(['rev-parse', '--show-toplevel'], safeRepo)).stdout.trim() || safeRepo;
+      external = join(scratch, 'elsewhere');
+      cosDir = join(scratch, 'cos');
+      await mkdir(external);
+      injected.app.repoPath = repo;
+    });
   });
-  afterEach(async () => {
-    await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  afterEach(async ({ task }) => {
+    const report = state => {
+      const trace = receiptTiming.current;
+      if (!trace) return;
+      const phases = Object.entries(trace.phases).map(([phase, row]) =>
+        `${phase}=${Math.round(row.ms)}ms/${row.count} max=${Math.round(row.maxMs)}ms active=${row.active}`).join('; ');
+      console.log(`⏱️ merged-receipt ${trace.entryPoint} ${state}: ${Math.round(performance.now() - trace.started)}ms; ${phases}`);
+    };
+    const failed = Boolean(task.result?.errors?.length);
+    if (failed) report('before-settlement');
+    // Vitest's deadline rejects its wrapper, not the async fixture. Never erase
+    // the repo while archive/proof/removal work from this exact case is running.
+    try { await receiptWork?.catch(() => {}); }
+    finally {
+      if (failed || process.env.PORTOS_PROFILE_HELD_RECEIPT === '1') report('settled');
+      receiptTiming.current = null;
+      await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
   });
 
   /** A locked checkout outside the managed roots holding unique uncommitted work. */
@@ -182,38 +239,47 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   // Both automatic retirement entry points used to omit their receipt, so the
   // next persisted scan manufactured a missing-source obligation after archival.
-  it.each(['cleanupMerged', 'early reaper'])('settles a normally merged checkout before the next scan through %s', async entryPoint => {
-    const branch = 'feature/merged-receipt';
-    const path = join(repo, '.claude', 'worktrees', 'merged-receipt');
-    await mkdir(dirname(path), { recursive: true });
-    await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
-    await writeFile(join(path, '.gitignore'), 'ignored.txt\n');
-    await execGit(['add', '.gitignore'], path);
-    await execGit(['commit', '-m', 'fixture ignore rule'], path);
-    await execGit(['merge', '--ff-only', branch], repo);
-    await writeFile(join(path, 'ignored.txt'), 'synthetic ignored checkout bytes');
-    const holder = (await (await import('./worktreeManager.js')).listWorktrees(repo)).find(tree => tree.branch === `refs/heads/${branch}`);
-    const release = { branch, path: holder.path, head: holder.head, locked: false, lockReason: null };
-    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release,
-      checkoutIdentity: await readRetirementCheckoutIdentity(path), reason: 'checkout-retained' }] });
-    const options = { appId: 'app-1', activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: noOwners } };
-    if (entryPoint === 'cleanupMerged') {
-      const result = await (await import('./branchReconcile.js')).cleanupMerged(repo, 'main', [{ branch, worktreePath: holder.path }], options);
-      expect(result).toMatchObject({ cleaned: [branch], skipped: [] });
-    } else {
-      const result = await (await import('./worktreeManager.js')).reapMergedWorktrees(repo, options);
-      expect(result.reaped).toEqual([expect.objectContaining({ branch, branchDeleted: true })]);
-      expect(result.skipped).toEqual([]);
-    }
-    expect(existsSync(path)).toBe(false);
-    expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
-    const first = await getBranchReconcileOutcome('app-1');
-    expect(first.retired).toEqual([expect.objectContaining({ branch, path: holder.path, head: holder.head, branchDeleted: true, archiveDir: null })]);
-    expect(await archives()).toEqual([]);
-    await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
-    const next = await getBranchReconcileOutcome('app-1');
-    expect(next).toMatchObject({ remaining: [], retirementObligations: [] });
-    expect(next.retired).toEqual(first.retired);
+  it.each(['cleanupMerged', 'early reaper'])('settles a normally merged checkout before the next scan through %s', entryPoint => {
+    receiptWork = (async () => {
+      const branch = 'feature/merged-receipt';
+      const path = join(repo, '.claude', 'worktrees', 'merged-receipt');
+      const holder = await receiptTiming.run('merged-fixture', async () => {
+        await mkdir(dirname(path), { recursive: true });
+        await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
+        await writeFile(join(path, '.gitignore'), 'ignored.txt\n');
+        await execGit(['add', '.gitignore'], path);
+        await execGit(['commit', '-m', 'fixture ignore rule'], path);
+        await execGit(['merge', '--ff-only', branch], repo);
+        await writeFile(join(path, 'ignored.txt'), 'synthetic ignored checkout bytes');
+        return (await (await import('./worktreeManager.js')).listWorktrees(repo)).find(tree => tree.branch === `refs/heads/${branch}`);
+      });
+      const release = { branch, path: holder.path, head: holder.head, locked: false, lockReason: null };
+      await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release,
+        checkoutIdentity: await readRetirementCheckoutIdentity(path), reason: 'checkout-retained' }] });
+      const options = { appId: 'app-1', activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: noOwners } };
+      await receiptTiming.run('cleanup-with-import', async () => {
+        if (entryPoint === 'cleanupMerged') {
+          const result = await (await import('./branchReconcile.js')).cleanupMerged(repo, 'main', [{ branch, worktreePath: holder.path }], options);
+          expect(result).toMatchObject({ cleaned: [branch], skipped: [] });
+        } else {
+          const result = await (await import('./worktreeManager.js')).reapMergedWorktrees(repo, options);
+          expect(result.reaped).toEqual([expect.objectContaining({ branch, branchDeleted: true })]);
+          expect(result.skipped).toEqual([]);
+        }
+      });
+      await receiptTiming.run('receipt-and-next-scan-readback', async () => {
+        expect(existsSync(path)).toBe(false);
+        expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
+        const first = await getBranchReconcileOutcome('app-1');
+        expect(first.retired).toEqual([expect.objectContaining({ branch, path: holder.path, head: holder.head, branchDeleted: true, archiveDir: null })]);
+        expect(await archives()).toEqual([]);
+        await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+        const next = await getBranchReconcileOutcome('app-1');
+        expect(next).toMatchObject({ remaining: [], retirementObligations: [] });
+        expect(next.retired).toEqual(first.retired);
+      });
+    })();
+    return receiptWork;
   });
 
   it('settles a normally retired branch-only row while retaining unrelated unexplained disappearance', async () => {

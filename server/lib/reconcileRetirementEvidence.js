@@ -1,5 +1,6 @@
 /** Exact checkout obligations survive scans until fresh service preservation evidence. */
-export const sameRetirementCheckout = (left, right) => left.branch === right.branch && left.path === right.path && left.head === right.head;
+// A detached checkout has no branch: absent, null and undefined are the same observation.
+export const sameRetirementCheckout = (left, right) => (left.branch ?? null) === (right.branch ?? null) && left.path === right.path && left.head === right.head;
 
 export const sameRetirementObservation = (left, right) => sameRetirementCheckout(left, right)
   && (left.checkoutIdentity || null) === (right.checkoutIdentity || null);
@@ -10,8 +11,15 @@ export const isRetirementObligation = row => ['retirement-review-pending', 'reti
 const retirementArchiveRecorded = row => row?.archiveDir == null
   || (typeof row.archiveDir === 'string' && row.archiveDir.length > 0);
 
+/** A receipt settles a checkout by deleting its branch, or — for a detached
+ * checkout, which has no branch to delete — by an explicit checkout-only removal.
+ * Checkout-only never settles a branch-bearing row and never claims a deletion.
+ */
+export const retirementReceiptSettles = row => row?.branchDeleted === true
+  || (row?.checkoutOnly === true && row.branchDeleted === false && !row.branch);
+
 export const matchingRetirementReceipts = (outcome, release) => [...(outcome?.retired || []), ...Object.values(outcome?.retirementReceiptEvidence || {})].filter(row =>
-  sameRetirementCheckout(row, release) && row.branchDeleted === true
+  sameRetirementCheckout(row, release) && retirementReceiptSettles(row)
   && retirementArchiveRecorded(row)
   && Number.isFinite(Date.parse(row.retiredAt)));
 
