@@ -33,7 +33,7 @@ export default function MaintenancePanel() {
   const unknown = !status || ['unknown', 'unavailable'].includes(status.state);
   return <section className="bg-port-card border border-port-border rounded-xl p-5 space-y-3" aria-labelledby="maintenance-heading">
     <h3 id="maintenance-heading" className="font-semibold text-port-text">Graceful maintenance</h3>
-    <p role="status" className="text-sm">{status ? ({ normal: 'Normal — new work can start', draining: 'Draining — letting active work finish', ready: 'Ready — maintenance hold is active', unavailable: 'Recovery needed — new work is held', unknown: 'Readiness unknown' }[status.state]) : 'Loading maintenance status…'}</p>
+    <p role="status" className="text-sm">{status ? ({ normal: 'Normal — new work can start', draining: 'Draining — waiting for completion or verification of recorded operations', ready: 'Ready — maintenance hold is active', unavailable: 'Recovery needed — new work is held', unknown: 'Readiness unknown' }[status.state]) : 'Loading maintenance status…'}</p>
     <p className="text-sm text-port-text-muted">New agents, mind turns and renders wait. Active work finishes, including saving and cleanup. Queues and existing scheduling policies are preserved.</p>
     {status?.cause && <div className="rounded border border-port-border p-3 space-y-2 text-sm">
       <p>{recoveryCauses[status.cause] || 'The maintenance journal needs recovery.'}</p>

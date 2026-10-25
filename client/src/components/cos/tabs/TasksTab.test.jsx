@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, act, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../hooks/useAssignableInstances', () => ({ default: () => ({ instances: [], isFederated: false }) }));
@@ -49,7 +49,7 @@ describe('TasksTab spawning window', () => {
   // registerAgent always stamps it. See server/lib/cosSpawnWindow.js.
   const liveAgent = (id, taskId, ageMs = 0) => ({ id, status: 'running', taskId, startedAt: new Date(Date.now() - ageMs).toISOString() });
 
-  it('separates cleanup-held user and system tasks from running work', async () => {
+  it('keeps incomplete cleanup in the normal task groups without a finalization section', async () => {
     const heldTask = id => ({ id, description: `Finalize ${id}`, status: 'in_progress',
       metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: `agent-${id}` } });
     renderTab({
@@ -57,13 +57,12 @@ describe('TasksTab spawning window', () => {
       agents: [{ id: 'agent-sys-rl-example', taskId: 'sys-rl-example', status: 'completed' }],
     });
 
-    const user = await screen.findByRole('region', { name: 'User tasks finalizing delivery' });
-    const system = screen.getByRole('region', { name: 'System tasks finalizing delivery' });
-    expect(within(user).getByText('Finalize task-example')).toBeInTheDocument();
-    expect(within(system).getByText('Finalize sys-rl-example')).toBeInTheDocument();
-    expect(within(system).getByRole('button', { name: /Status: finalizing/ })).toBeInTheDocument();
-    expect(screen.queryByText(/^Active \(/)).toBeNull();
-    expect(screen.queryByText(/^Active agent /)).toBeNull();
+    expect(await screen.findByText('Finalize task-example')).toBeInTheDocument();
+    expect(screen.getByText('Finalize sys-rl-example')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /finalizing delivery/i })).toBeNull();
+    expect(screen.getAllByText('Active (1)')).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /Status: cleanup incomplete/ })).toHaveLength(2);
+
   });
 
   it('keeps an actual running agent active even if an old cleanup marker remains', async () => {
@@ -78,7 +77,7 @@ describe('TasksTab spawning window', () => {
     expect(screen.queryByRole('region', { name: /finalizing delivery/ })).toBeNull();
   });
 
-  it('shows the exact cleanup owner, last check and retry gate, and animates only live recovery', async () => {
+  it('shows the exact cleanup failure and owner in normal task groups and animates only live work', async () => {
     const task = { id: 'task-held', description: 'Deliver example change', status: 'in_progress',
       metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-owner' } };
     const owner = { id: 'agent-owner', taskId: task.id, status: 'completed', metadata: {
@@ -87,11 +86,11 @@ describe('TasksTab spawning window', () => {
     }, result: { taskOutcome: { reason: 'The archive still needs verification.' } } };
     const view = activity => <MemoryRouter><TasksTab tasks={{ user: { tasks: [task] }, cos: { tasks: [] } }}
       agents={[{ ...owner, deliveryActivity: activity }, { id: 'agent-other', taskId: task.id, status: 'completed' }]}
-      completionRecovery={{ blockedReason: 'CoS is paused', nextRunAt: null, intervalMs: 1800000, batchSize: 10 }}
       onRefresh={vi.fn()} providers={[]} apps={[]} /></MemoryRouter>;
     const { rerender } = render(view(null));
-    expect(await screen.findByText(/Automatic recovery is waiting: CoS is paused/)).toBeInTheDocument();
-    expect(screen.getByText(/Waiting for delivery recovery — agent is not running/)).toBeInTheDocument();
+    expect(await screen.findByText('Deliver example change')).toBeInTheDocument();
+    expect(screen.queryByText(/recovery sweep|recovery schedule/i)).toBeNull();
+    expect(screen.getByText(/Execution ended; delivery or cleanup still needs repair/)).toBeInTheDocument();
     expect(screen.getByText('Last check: preservation unverified.')).toBeInTheDocument();
     expect(screen.getByText(/Last checked:/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /View recovery task/ })).toHaveAttribute('href', '/cos/tasks?task=task-recovery');
@@ -101,7 +100,7 @@ describe('TasksTab spawning window', () => {
     expect(screen.getByText('Checking repository preservation')).toBeInTheDocument();
     expect(screen.getByLabelText('Delivery activity').querySelector('.animate-spin')).not.toBeNull();
     rerender(view(null));
-    expect(screen.getByText(/agent is not running/)).toBeInTheDocument();
+    expect(screen.getByText(/Execution ended; delivery or cleanup still needs repair/)).toBeInTheDocument();
     expect(screen.getByLabelText('Delivery activity').querySelector('.animate-spin')).toBeNull();
   });
 

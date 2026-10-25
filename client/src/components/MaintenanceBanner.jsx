@@ -5,7 +5,7 @@ export default function MaintenanceBanner() {
   const { status } = useMaintenance({ mode: 'banner' });
   if (!status || status.state === 'normal') return null;
   const label = status.state === 'ready' ? 'Maintenance ready — new work is held.'
-    : status.state === 'draining' ? `Maintenance draining — ${formatCount(status.blockerCount)} operation(s) finishing.`
+    : status.state === 'draining' ? `Maintenance draining — ${formatCount(status.blockerCount)} recorded operation(s) awaiting completion verification.`
     : status.state === 'unavailable' ? 'Maintenance recovery needed — new work is held.'
     : 'Maintenance readiness unknown.';
   return <div role="status" className="px-4 py-2 text-sm bg-port-card border-b border-port-border">{label} <Link className="underline" to="/settings/general">View maintenance</Link></div>;

@@ -355,7 +355,17 @@ async function runCompletionCleanupSteps(context, { onStepError }) {
   if (!Object.values(STEP_ERROR_POLICY).includes(onStepError)) throw new Error(`Unknown completion-cleanup step error policy: ${onStepError}`);
   if (cleanupRuns.has(context.agentId)) return cleanupRuns.get(context.agentId);
   const run = withDeliveryActivity(context.agentId, 'Processing completion handoffs and workspace cleanup',
-    () => performCompletionCleanupSteps(context, onStepError));
+    async () => {
+      if (context.agentState?.status === 'completed') {
+        // A delayed duplicate can arrive after the first replay left the
+        // single-flight map. Re-read its durable stages inside this turn.
+        const lifecycle = await import('./cosAgentLifecycle.js');
+        const current = await lifecycle.getAgentRecord(context.agentId);
+        if (!current || current.startedAt !== context.agentState.startedAt) return;
+        context = { ...context, agentState: current };
+      }
+      return performCompletionCleanupSteps(context, onStepError);
+    });
   cleanupRuns.set(context.agentId, run);
   try { return await run; } finally { cleanupRuns.delete(context.agentId); }
 }
@@ -443,7 +453,9 @@ async function performCompletionCleanupSteps(context, onStepError) {
     if (await completionSentinelPresent(context.agentId, state?.metadata?.workspacePath)) throw new Error('completion-sentinel-generation-pending');
     return completeWorktreeCleanup(context);
   },
-    !stages.worktree || stages.worktree.retryable === true);
+    // Workspace retirement revalidates identity, ownership, delivery and bytes on
+    // every attempt. A pre-release hold is not an unknown external side effect.
+    !stages.worktree || stages.worktree.retryable === true || stages.worktree.status === 'held');
   if (['done', 'held'].includes(stages.worktree?.status)) {
     await runStep('report', 'Cleanup warning reporting', () => reportWorktreeCleanupWarnings({ ...context, cleanupWarnings }));
   }

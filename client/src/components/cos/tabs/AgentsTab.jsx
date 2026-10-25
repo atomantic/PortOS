@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router';
+import { useParams, useSearchParams } from 'react-router';
 import { Trash2, Search, X, MessageSquare } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -15,7 +15,6 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { agentResumeMessage } from '../../../lib/agentResumeOutcome';
 import { isAgentFeedbackEligible } from '../../../lib/cosAgentFeedback';
 import { formatCount } from '../../../utils/formatters';
-import { DeliveryRecoverySchedule } from '../DeliveryStatus';
 
 // What each `resumeAgent` outcome actually did (server modes, agentManagement.js).
 // `already-active` and `superseded` deliberately queue NOTHING — the task is already
@@ -40,7 +39,7 @@ const RESUME_MESSAGES = {
 const needsAgentFeedback = isAgentFeedbackEligible;
 const FEEDBACK_EVENTS = ['cos:agent:feedback', 'cos:agent:completed'];
 
-export default function AgentsTab({ completionRecovery, agentsLoaded = true, agentsError = null, onRetryAgents, completedRevision = 0, agents, onRefresh, liveOutputs, providers, providersLoaded, apps }) {
+export default function AgentsTab({ agentsLoaded = true, agentsError = null, onRetryAgents, completedRevision = 0, agents, onRefresh, liveOutputs, providers, providersLoaded, apps }) {
   const { agentId } = useParams();
   const mounted = useMounted();
   const [deletedIds, setDeletedIds] = useState(() => new Set());
@@ -204,8 +203,7 @@ export default function AgentsTab({ completionRecovery, agentsLoaded = true, age
   // Running agents come from props (real-time via parent socket updates)
   const runningAgents = agents.filter(a => a.status === 'running' && !deletedIds.has(a.id));
   const pausedAgents = agents.filter(a => a.status === 'paused' && !deletedIds.has(a.id));
-  const finalizingAgents = useMemo(() => agents.filter(agent => agent.deliveryPending && !deletedIds.has(agent.id)), [agents, deletedIds]);
-  const finalizingIds = useMemo(() => new Set(finalizingAgents.map(agent => agent.id)), [finalizingAgents]);
+  const pendingDeliveryAgents = useMemo(() => agents.filter(agent => agent.deliveryPending && !deletedIds.has(agent.id)), [agents, deletedIds]);
   // Completed agents still in state (recently completed, not yet archived)
   const recentCompleted = agents.filter(a => a.status === 'completed');
   // Merge recent completed (from state) with loaded (from disk), deduplicate
@@ -213,7 +211,7 @@ export default function AgentsTab({ completionRecovery, agentsLoaded = true, age
     const seen = new Set();
     const merged = [];
     const addAgent = (agent) => {
-      if (seen.has(agent.id) || deletedIds.has(agent.id) || finalizingIds.has(agent.id)) return;
+      if (seen.has(agent.id) || deletedIds.has(agent.id)) return;
       seen.add(agent.id);
       const feedback = feedbackUpdates[agent.id];
       merged.push(feedback ? { ...agent, feedback } : agent);
@@ -224,7 +222,7 @@ export default function AgentsTab({ completionRecovery, agentsLoaded = true, age
     for (const agent of loadedAgents) addAgent(agent);
 
     return merged.sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0));
-  }, [recentCompleted, loadedAgents, feedbackUpdates, deletedIds, finalizingIds]);
+  }, [recentCompleted, loadedAgents, feedbackUpdates, deletedIds]);
 
   const totalCount = history.total ?? allCompleted.length;
 
@@ -287,7 +285,7 @@ export default function AgentsTab({ completionRecovery, agentsLoaded = true, age
           </div>
         )}
         {!agentsLoaded && !agentsError && <div role="status">Loading active agents…</div>}
-        {runningAgents.length === 0 && finalizingAgents.length === 0 && agentsLoaded && !agentsError && (
+        {runningAgents.length === 0 && agentsLoaded && !agentsError && (
           <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             No active agents. Start CoS and add tasks to see agents working.
           </div>
@@ -308,21 +306,6 @@ export default function AgentsTab({ completionRecovery, agentsLoaded = true, age
           </div>
         )}
       </div>
-
-      {finalizingAgents.length > 0 && (
-        <section aria-label="Finalizing delivery" className="space-y-2">
-          <h3 className="text-lg font-semibold text-white">Finalizing delivery</h3>
-          <DeliveryRecoverySchedule recovery={completionRecovery} />
-          {finalizingAgents.map(agent => (
-            <div key={agent.id} className="space-y-1">
-              <Link to={`/cos/tasks?task=${encodeURIComponent(agent.taskId)}`} className="inline-block text-sm text-port-accent hover:underline [overflow-wrap:anywhere]">
-                View task {agent.taskId}
-              </Link>
-              <AgentCard agent={agent} completed durations={durations} onFeedbackChange={handleFeedbackChange} />
-            </div>
-          ))}
-        </section>
-      )}
 
       {/* Paused Agents */}
       {pausedAgents.length > 0 && (
@@ -358,8 +341,8 @@ export default function AgentsTab({ completionRecovery, agentsLoaded = true, age
             </h3>
             <button
               onClick={() => setConfirmingClear(true)}
-              disabled={finalizingAgents.length > 0}
-              title={finalizingAgents.length > 0 ? 'Wait for delivery verification and cleanup to finish' : undefined}
+              disabled={pendingDeliveryAgents.length > 0}
+              title={pendingDeliveryAgents.length > 0 ? 'Wait for delivery verification and cleanup to finish' : undefined}
               className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 text-sm text-gray-500 hover:text-port-error transition-colors disabled:opacity-50 sm:min-h-0 sm:min-w-0"
               aria-label="Clear all completed agents"
             >
@@ -441,7 +424,9 @@ export default function AgentsTab({ completionRecovery, agentsLoaded = true, age
           )}
           <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-[repeat(auto-fit,minmax(32rem,1fr))]">
             {filteredCompleted.map(agent => (
-              <AgentCard key={agent.id} agent={agent} completed onDelete={handleDelete} onResume={handleResumeClick} onFeedbackChange={handleFeedbackChange} />
+              <AgentCard key={agent.id} agent={agent} completed durations={durations}
+                onDelete={agent.deliveryPending ? undefined : handleDelete}
+                onResume={agent.deliveryPending ? undefined : handleResumeClick} onFeedbackChange={handleFeedbackChange} />
             ))}
             {filteredCompleted.length === 0 && (feedbackFilter !== 'all' || searchQuery) && (
               <div className="col-span-full bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">

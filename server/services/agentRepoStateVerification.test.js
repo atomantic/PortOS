@@ -347,6 +347,22 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(state.result).toEqual({ success: false, executionSuccess: true, cleanupPending: true });
   });
 
+  it('replays a failed no-PR run cleanup at owner release without promoting its original result', async () => {
+    const state = { id: 'failed-no-pr', taskId: 'failed-task', status: 'completed',
+      result: { success: false, executionSuccess: true, taskOutcome: { status: 'blocked' } },
+      metadata: { completionCleanup: { status: 'pending' } } };
+    getAgentRecord.mockResolvedValue(state);
+    getTaskById.mockResolvedValue({ id: 'failed-task', taskType: 'internal', status: 'blocked', metadata: { failureCount: 3 } });
+    const before = JSON.stringify(state);
+    expect(await resumeAgentCompletionRetirement(state.id)).toMatchObject({ cleanupReplayed: true,
+      verified: false, skipReason: 'original-result-preserved' });
+    expect(replayAgentCompletionCleanup).toHaveBeenCalledWith(state);
+    expect(recordRepoStateVerification).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    expect(JSON.stringify(state)).toBe(before);
+  });
+
   it('waits out a pre-release owner-active audit and immediately verifies again after release', async () => {
     const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
       startedAt: CREATED_AT, capturedAt: CREATED_AT };

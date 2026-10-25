@@ -1380,13 +1380,23 @@ async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis) {
   // failure is exactly the work CoS is meant to diagnose for itself. The pure
   // policy is called directly (rather than via `resolveAutoInvestigationApproval`)
   // so the backlog already read for the dedup scan above serves both.
-  const { approvalRequired, loopReason, approvalReason } = resolveInvestigationApproval({
+  let { approvalRequired, loopReason, approvalReason } = resolveInvestigationApproval({
     fingerprint, tasks: allTasks, recentCreations: recentInvestigationCreations(now), now
   });
   // The blocked-system watcher owns durable backoff; a repeat failure must not
   // allocate another blocked task asking the user to supervise machine recovery.
   const systemRecovery = analysis.blockedSystemRecovery === true;
   if (systemRecovery && approvalRequired) return null;
+  if (systemRecovery) {
+    // Missing configuration never grants unattended system-repair execution.
+    // Circuit and repeat-failure refusals above remain independent boundaries.
+    const { getConfig } = await import('./cosState.js');
+    const config = await getConfig().catch(() => null);
+    if (config?.autoApproveInvestigations !== true) {
+      approvalRequired = true;
+      approvalReason = 'system-investigation-approval-required';
+    }
+  }
   let targetInstanceId;
   if (systemRecovery) {
     const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
@@ -1416,7 +1426,7 @@ async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis) {
   const actionBlock = approvalRequired
     ? [
         `## What to approve\n${remedy}`,
-        `## Why this is held for you\n${LOOP_REASON_PROSE[loopReason]}`
+        `## Why this is held for you\n${LOOP_REASON_PROSE[loopReason] || 'Auto-approve investigations is disabled or unavailable on this instance. Approve this scoped investigation before it can run.'}`
       ].join('\n\n')
     : systemRecovery
       ? `## What to do\nResolve the affected work and investigate its root cause. Repair demonstrated code defects with regression tests, required PR review, CI and merge delivery; reuse an active fix rather than duplicate it. Record external permission or transient causes accurately without inventing a code defect. Preserve original work, approvals and retry/spawn budgets. Do not requeue or mark the original task complete by hand.\n\n${remedy}`
@@ -1467,7 +1477,7 @@ ${unblocks}`;
   // description-level dedup returning an existing task is not a new creation.
   if (!investigationTask.duplicate) noteInvestigationFiled(now);
 
-  emitLog('info', `Created investigation task ${investigationTask.id} for failed agent ${agentId} — ${loopReason ? `held for approval (${loopReason})` : 'auto-approved'}`, {
+  emitLog('info', `Created investigation task ${investigationTask.id} for failed agent ${agentId} — ${approvalRequired ? `held for approval (${loopReason || approvalReason})` : 'auto-approved'}`, {
     agentId,
     taskId: investigationTask.id,
     errorCategory: category,

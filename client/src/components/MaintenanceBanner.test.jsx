@@ -11,7 +11,7 @@ describe('MaintenanceBanner', () => {
   it('uses the coarse banner mode and renders the draining blocker count', () => {
     show({ state: 'draining', blockerCount: 3 });
     expect(fixture.options).toEqual({ mode: 'banner' });
-    expect(screen.getByRole('status')).toHaveTextContent('3 operation(s) finishing');
+    expect(screen.getByRole('status')).toHaveTextContent('3 recorded operation(s) awaiting completion verification');
   });
   it('renders nothing for normal operation and a warning for unavailable state', () => {
     const { container, unmount } = show({ state: 'normal', blockerCount: 0 });
