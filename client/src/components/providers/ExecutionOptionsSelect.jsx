@@ -2,13 +2,13 @@ import { useEffect, useId, useState } from 'react';
 import { request } from '../../services/apiCore.js';
 
 /** Capability-driven controls; unsupported saved pins remain clearable. */
-export default function ExecutionOptionsSelect({ provider, model, value, onChange, disabled, className, fieldClassName }) {
+export default function ExecutionOptionsSelect({ provider, model, value, onChange, disabled, className, fieldClassName, inspect = false }) {
   const id = useId();
   const [snapshot, setSnapshot] = useState(null);
   const [refresh, setRefresh] = useState(0);
   const providerId = provider?.id;
-  const shouldInspect = /(?:^|[\\/])codex(?:\.exe)?$/i.test(provider?.command || '')
-    || provider?.executionOptionKeys?.length > 0 || Object.keys(value || {}).length > 0 || Object.keys(provider?.executionOptions || {}).length > 0;
+  const shouldInspect = inspect || provider?.executionOptionKeys?.length > 0
+    || Object.keys(value || {}).length > 0 || Object.keys(provider?.executionOptions || {}).length > 0;
   const routeKey = JSON.stringify([providerId, provider?.type, provider?.command, provider?.args, provider?.codexAuthMode, provider?.ignoreUserConfig, provider?.enabled, provider?.gatewayBacked, provider?.credentialBootstrapId]);
   useEffect(() => {
     let active = true;

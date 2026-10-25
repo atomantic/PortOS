@@ -45,7 +45,7 @@ describe('ProviderModelSelector', () => {
     const onProviderChange = vi.fn();
     const onModelChange = vi.fn();
     const onEffortChange = vi.fn();
-    const props = { providers: [{ id: 'codex', name: 'Codex', type: 'cli', command: 'codex' }], selectedProviderId: 'codex', selectedModel: 'm1', effort: 'high', onProviderChange, onModelChange, onEffortChange };
+    const props = { providers: [{ id: 'codex', name: 'Codex', type: 'cli', command: 'codex', executionOptionKeys: ['serviceTier'] }], selectedProviderId: 'codex', selectedModel: 'm1', effort: 'high', onProviderChange, onModelChange, onEffortChange };
     let view;
     await act(async () => { view = renderSelector(props); });
     await act(async () => { fireEvent.change(screen.getByLabelText('Speed'), { target: { value: 'fast' } }); });

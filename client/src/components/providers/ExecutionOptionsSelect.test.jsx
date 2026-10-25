@@ -5,6 +5,13 @@ import { request } from '../../services/apiCore.js';
 vi.mock('../../services/apiCore.js', () => ({ request: vi.fn() }));
 
 describe('execution speed selection', () => {
+  it('does not guess capability support from the command name on an unadvertised route', () => {
+    request.mockClear();
+    render(<ExecutionOptionsSelect provider={{ id: 'codex', command: 'codex', type: 'cli' }} onChange={() => {}} />);
+    expect(request).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Speed')).not.toBeInTheDocument();
+  });
+
   it('keeps Standard separate from inheritance and explains Fast usage', async () => {
     request.mockResolvedValue({ options: [{ key: 'serviceTier', label: 'Speed', values: ['standard', 'fast'], help: 'Fast may consume more subscription usage or credits.' }] });
     const onChange = vi.fn();

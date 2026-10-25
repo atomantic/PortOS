@@ -944,6 +944,7 @@ describe('provider reasoning defaults', () => {
         name: 'Codex',
         type: 'cli',
         command: 'codex',
+        executionOptionKeys: ['serviceTier'],
         enabled: true,
         models: ['gpt-5'],
         defaultModel: 'gpt-5',
