@@ -12,7 +12,7 @@ const mentionsCanon = (value, entryId) => {
   ) || (typeof item === 'object' && mentionsCanon(item, entryId)));
 };
 
-export async function findCanonDependencies(universeId, kind, entryId) {
+async function findCanonDependencies(universeId, kind, entryId) {
   const { rows: stories } = await query('SELECT id, name, data FROM fableloom_stories WHERE universe_id = $1 AND deleted = false', [universeId]);
   const uses = stories.filter((story) => mentionsCanon(story.data, entryId)).map((story) => ({
     refKind: 'fableloom', refId: story.id, refName: story.name, role: 'canon', resolved: true, derived: true,

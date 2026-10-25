@@ -85,7 +85,7 @@ export async function createOwnedPrimitive(input, universeId, operationKey) {
 
 // Container links preserve legacy records, but new cross-universe use of an
 // explicitly owned identity requires an intentional fork.
-export async function assertPrimitiveUniverse(id, universeId, { client, role } = {}) {
+async function assertPrimitiveUniverse(id, universeId, { client, role } = {}) {
   const refs = await refsFor(id, client ? client.query.bind(client) : query);
   if (role && refs.some((ref) => ref.refKind === 'universe' && ref.refId === universeId && ref.role === role && !ref.retained)) return;
   const context = catalogUniverseContext(refs);

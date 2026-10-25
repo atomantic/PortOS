@@ -13,7 +13,7 @@ vi.mock('./catalogDB/ingredients.js', () => ({ getIngredientIdentityIds: async (
 vi.mock('./canonUsage.js', () => ({ getUniverseCanonUsage: async () => ({
   characters: { 'chr-1': [{ seriesId: 'series-1', seriesName: 'Example series', issueIds: ['issue-1'] }] },
 }) }));
-import { assertCanonRemovable, assertUniversePrimitivesRemovable, findCanonDependencies, listPrimitiveUsages } from './catalogPrimitiveUsage.js';
+import { assertCanonRemovable, assertUniversePrimitivesRemovable, listPrimitiveUsages } from './catalogPrimitiveUsage.js';
 import { query } from '../lib/db.js';
 
 beforeEach(() => {
@@ -42,7 +42,7 @@ describe('catalog usage across canonical consumers', () => {
     await expect(assertCanonRemovable('world-1', 'character', 'chr-1')).rejects.toMatchObject({ status: 409, code: 'UNIVERSE_CANON_IN_USE' });
     state.stories.push({ id: 'loom-object', universeId: 'world-1', data: { visualCanon: { objectIds: ['obj-1'] } } });
     await expect(assertCanonRemovable('world-1', 'object', 'obj-1')).rejects.toMatchObject({ code: 'UNIVERSE_CANON_IN_USE' });
-    expect(await findCanonDependencies('world-1', 'object', 'unreferenced')).toEqual([]);
+    await expect(assertCanonRemovable('world-1', 'object', 'unreferenced')).resolves.toBeUndefined();
     await expect(assertCanonRemovable('world-1', 'character', 'unreferenced')).resolves.toBeUndefined();
     await expect(assertUniversePrimitivesRemovable('world-1')).rejects.toMatchObject({ status: 409, code: 'UNIVERSE_PRIMITIVES_IN_USE' });
     await expect(assertUniversePrimitivesRemovable('unreferenced')).resolves.toBeUndefined();

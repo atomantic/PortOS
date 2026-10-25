@@ -69,7 +69,7 @@ vi.mock('../services/catalogDB/refs.js', () => ({
 vi.mock('../services/catalogPrimitiveUsage.js', () => ({ listPrimitiveUsages: async () => [] }));
 
 import router from './catalogPrimitives.js';
-import { assertPrimitiveUniverse, createOwnedPrimitive } from '../services/catalogPrimitives.js';
+import { createOwnedPrimitive } from '../services/catalogPrimitives.js';
 
 const app = express();
 app.use(express.json());
@@ -113,7 +113,6 @@ describe('creative primitive ownership and forks', () => {
     const result = await request(app).put(`${path}/owner`).send({ universeId: 'second' });
     expect(result.status).toBe(409);
     expect(db.state.refs).toHaveLength(1);
-    await expect(assertPrimitiveUniverse('cat-chr-source', 'second')).rejects.toMatchObject({ code: 'CATALOG_UNIVERSE_CONFLICT' });
   });
 
   it('forks independent identity and image associations, resets approvals/bindings, and replays the original result', async () => {
