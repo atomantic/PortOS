@@ -795,6 +795,7 @@ export * from './zodCompat.js';
 // === Test support (consumed by *.test.js files) ===
 export * from './gitTestRepo.js';
 export * from './mockPathsDataRoot.js';
+export * from './ownedFixtureWork.js';
 export * from './settingsTestUtil.js';
 export * from './dbTestGate.js';
 export * from './browserSuiteGate.js';

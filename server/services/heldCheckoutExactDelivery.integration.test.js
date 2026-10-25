@@ -1,9 +1,10 @@
 /** Capped forge scope must not strand an exact delivered clean checkout. */
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
+import { ownFixtureWork } from '../lib/ownedFixtureWork.js';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -12,8 +13,8 @@ vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { 
 vi.mock('./cos.js', () => ({}));
 vi.mock('../lib/execGit.js', async original => {
   const actual = await original();
-  return { ...actual, execGit: (args, cwd, options) => actual.execGit(
-    args.includes('fetch') ? args.map(arg => arg === 'https://github.com/example/repo.git' ? fixture.remote : arg) : args, cwd, options) };
+  return { ...actual, execGit: (args, cwd, options) => owned.run('git', () => actual.execGit(
+    args.includes('fetch') ? args.map(arg => arg === 'https://github.com/example/repo.git' ? fixture.remote : arg) : args, cwd, options)) };
 });
 vi.mock('./apps.js', () => ({ getAppById: async () => fixture.app }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ host: 'github.com', fullName: 'example/repo', isGithub: true }) }));
@@ -42,9 +43,28 @@ const { listWorktrees } = await import('./worktreeManager.js');
 const { prepareInventoriedCheckoutRetirement, retireInventoriedCheckout, inspectCheckoutRetirementOwnership } = await import('./heldCheckoutRecovery.js');
 const { _createInitializedCheckoutRecovery } = await import('./initializedCheckoutRecovery.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
-afterAll(cleanupTempDataRoots);
+const owned = ownFixtureWork();
+const it = owned.tests(vitestIt);
 let scratch;
-afterEach(async () => { if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); });
+let cleanup;
+beforeEach(async () => {
+  await cleanup;
+  owned.reset();
+  scratch = null;
+});
+afterEach(({ task }) => {
+  cleanup = (async () => {
+    const report = () => console.log(`⏱️ exact-delivery fixture: ${owned.summary()}`);
+    if (task.result?.errors?.length) report();
+    try { await owned.drain(); }
+    finally {
+      if (task.result?.errors?.length || process.env.PORTOS_PROFILE_RETIREMENT_FIXTURE === '1') report();
+      if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 3 });
+    }
+  })();
+  return cleanup;
+});
+afterAll(async () => { await cleanup; await cleanupTempDataRoots(); });
 
 describe('exact delivered head retirement with capped historical API (real Git)', () => {
   it.each(['exact', 'exact-initialized', 'wrong-head', 'unpublished', 'wrong-base', 'wrong-target', 'wrong-merge-proof', 'missing-object', 'remote-change', 'dirty', 'active', 'supersession'])(

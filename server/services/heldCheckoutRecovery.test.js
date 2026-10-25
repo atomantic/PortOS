@@ -5,7 +5,7 @@
  * does not copy the checkout. Historical archives written by preserveMergedCheckout
  * remain readable.
  */
-import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { describe, it as vitestIt, expect, beforeEach as vitestBeforeEach, afterEach, afterAll, vi } from 'vitest';
 import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { execFile } from '../lib/childProcess.js';
 import { dirname, join } from 'path';
+import { ownFixtureWork } from '../lib/ownedFixtureWork.js';
 import { readRetirementCheckoutIdentity, isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
@@ -22,7 +23,12 @@ import { PATHS } from '../lib/paths.js';
 // Local branch deletion archives the common reflog using PATHS.cos, independently
 // of the checkout archive's explicit cosDir option.
 vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-held-branch-archives-') }));
-afterAll(cleanupTempDataRoots);
+const owned = ownFixtureWork();
+const it = owned.tests(vitestIt);
+const beforeEach = (body, ...options) => vitestBeforeEach(owned.wrap('setup', body), ...options);
+let cleanup;
+vitestBeforeEach(async () => { await cleanup; owned.reset(); });
+afterAll(async () => { await cleanup; await cleanupTempDataRoots(); });
 
 // Fixed phase names and aggregates only: diagnostics must never expose fixture
 // paths, Git arguments, captured bytes or an unbounded per-command transcript.
@@ -81,7 +87,7 @@ vi.mock('../lib/execGit.js', async importOriginal => {
     try {
       const phase = options?.env?.GIT_NO_REPLACE_OBJECTS === '1' ? 'independent-object-proof'
         : args.includes('bundle') ? 'bundle' : 'other-git';
-      const result = await receiptTiming.run(phase, () => actual.execGit(args, cwd, options));
+      const result = await receiptTiming.run(phase, () => owned.run('git', () => actual.execGit(args, cwd, options)));
       if (injected.onPreviewEvidence && args[0] === '--literal-pathspecs' && args[1] === 'diff') await injected.onPreviewEvidence();
       if (injected.onArchiveRef && args[0] === 'update-ref' && args[1]?.startsWith('refs/portos/archive/')) await injected.onArchiveRef();
       if (injected.onProof && args.includes('--bare') && options?.env?.GIT_NO_REPLACE_OBJECTS === '1') await injected.onProof();
@@ -136,6 +142,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   const noOwners = async () => [];
 
   beforeEach(async ({ task }) => {
+    scratch = null;
     receiptWork = null;
     const remoteSquash = task.name.startsWith('fetches a remote-only squash commit');
     receiptTiming.current = remoteSquash || task.name.startsWith('settles a normally merged checkout before the next scan')
@@ -154,24 +161,29 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       injected.app.repoPath = repo;
     });
   });
-  afterEach(async ({ task }) => {
-    const report = state => {
-      const trace = receiptTiming.current;
-      if (!trace) return;
-      const phases = Object.entries(trace.phases).map(([phase, row]) =>
-        `${phase}=${Math.round(row.ms)}ms/${row.count} max=${Math.round(row.maxMs)}ms active=${row.active}`).join('; ');
-      console.log(`⏱️ merged-receipt ${trace.entryPoint} ${state}: ${Math.round(performance.now() - trace.started)}ms; ${phases}`);
-    };
-    const failed = Boolean(task.result?.errors?.length);
-    if (failed) report('before-settlement');
-    // Vitest's deadline rejects its wrapper, not the async fixture. Never erase
-    // the repo while archive/proof/removal work from this exact case is running.
-    try { await receiptWork?.catch(() => {}); }
-    finally {
-      if (failed || process.env.PORTOS_PROFILE_HELD_RECEIPT === '1') report('settled');
-      receiptTiming.current = null;
-      await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-    }
+  afterEach(({ task }) => {
+    cleanup = (async () => {
+      const report = state => {
+        const trace = receiptTiming.current;
+        if (!trace) return;
+        const phases = Object.entries(trace.phases).map(([phase, row]) =>
+          `${phase}=${Math.round(row.ms)}ms/${row.count} max=${Math.round(row.maxMs)}ms active=${row.active}`).join('; ');
+        console.log(`⏱️ merged-receipt ${trace.entryPoint} ${state}: ${Math.round(performance.now() - trace.started)}ms; ${phases}`);
+      };
+      const failed = Boolean(task.result?.errors?.length);
+      const fixtureReport = () => console.log(`⏱️ retirement fixture: ${owned.summary()}`);
+      if (failed) { report('before-settlement'); fixtureReport(); }
+      // Vitest's deadline rejects its wrapper, not the async fixture. Never erase
+      // the repo while archive/proof/removal work from this exact case is running.
+      try { await owned.drain(); await receiptWork; }
+      finally {
+        if (failed || process.env.PORTOS_PROFILE_HELD_RECEIPT === '1') report('settled');
+        if (failed || process.env.PORTOS_PROFILE_RETIREMENT_FIXTURE === '1') fixtureReport();
+        receiptTiming.current = null;
+        if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      }
+    })();
+    return cleanup;
   });
 
   /** A locked checkout outside the managed roots holding unique uncommitted work. */
@@ -453,7 +465,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   describe('bounded historical evidence', () => {
     beforeEach(cleanupTempDataRoots);
-    afterEach(cleanupTempDataRoots);
+    afterEach(async () => { await owned.drain(); await cleanupTempDataRoots(); });
 
     it('bounds persisted recovery diagnostics across obligations and unrelated archives while verifying the exact matching archive', async () => {
       const { release, saved } = await historicalArchive();
@@ -1973,20 +1985,20 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     // Retain main's separate fixture/retirement/proof phases and their existing
     // 30-second budgets while exercising more than 1,000 files in both snapshots.
     beforeEach(async () => {
-      c = await reviewedCheckout('file-count-admitted', { normalMerge: true });
+      c = await owned.run('many-file-checkout', () => reviewedCheckout('file-count-admitted', { normalMerge: true }));
       const directory = join(c.path, 'private-files');
       await mkdir(directory);
-      await Promise.all(Array.from({ length: 1050 }, (_, i) => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')));
+      await owned.run('payload-writes', () => Promise.all(Array.from({ length: 1050 }, (_, i) => owned.run('file-write', () => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')))));
       if (process.platform !== 'win32') await chmod(join(directory, 'item-1049'), 0o755);
       const privateDir = join(c.admin, 'private-files');
       await mkdir(privateDir);
-      await Promise.all(Array.from({ length: 60 }, (_, i) => writeFile(join(privateDir, `item-${i}`), 'private recovery bytes\n')));
-      prepared = await c.prepare();
+      await owned.run('admin-writes', () => Promise.all(Array.from({ length: 60 }, (_, i) => owned.run('file-write', () => writeFile(join(privateDir, `item-${i}`), 'private recovery bytes\n')))));
+      prepared = await owned.run('many-file-preview', () => c.prepare());
       expect(prepared.ok).toBe(true);
     });
 
     beforeEach(async () => {
-      retired = await c.confirm(prepared.review);
+      retired = await owned.run('many-file-confirm', () => c.confirm(prepared.review));
       expect(retired).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
     });
 
