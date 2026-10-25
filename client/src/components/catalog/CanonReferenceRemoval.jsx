@@ -26,9 +26,9 @@ export default function CanonReferenceRemoval({ recordId, universeId, kind, file
     });
   };
   return <div className="space-y-1">
-    {armed ? <ConfirmButtonPair confirmText="Remove reference" ariaLabel={`Remove canon reference ${filename}`} busy={pending}
+    {armed && !disabled ? <ConfirmButtonPair confirmText="Remove reference" ariaLabel={`Remove canon reference ${filename}`} busy={pending}
       onConfirm={remove} onCancel={() => setArmed(false)} prompt="Remove reference; the image asset is kept." />
-      : <button type="button" disabled={disabled} onClick={() => setArmed(true)} className="min-h-11 text-xs text-port-error disabled:opacity-40">Remove reference</button>}
+      : <button type="button" aria-label={`Remove reference ${filename}`} disabled={disabled} onClick={() => setArmed(true)} className="min-h-11 text-xs text-port-error disabled:opacity-40">Remove reference</button>}
     {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
   </div>;
 }

@@ -42,7 +42,7 @@ export default function UniverseCharacterGrid({ context }) {
         const card = cards.cards[entry.ingredientId];
         const ingredient = card || { id: entry.ingredientId || null, type: 'character', name: entry.name, payload: entry };
         const to = entry.ingredientId ? `/casting/${encodeURIComponent(entry.ingredientId)}?${new URLSearchParams({ returnTo: `${pathname}${search}` })}` : null;
-        return <UniverseCharacterCard key={entry.id} entry={entry} ingredient={ingredient} unavailable={!card || !!cards.error} to={to} context={context}
+        return <UniverseCharacterCard key={entry.id} entry={entry} ingredient={ingredient} unavailable={!card || !!cards.error || cards.missing.includes(entry.ingredientId)} to={to} context={context}
           onUpdated={updated => { cards.update(updated); onCatalogLockChanged?.(entry.id, updated); }} />;
       })}
     </ul>

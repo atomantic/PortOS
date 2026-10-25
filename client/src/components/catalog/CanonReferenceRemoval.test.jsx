@@ -10,7 +10,7 @@ it('confirms explicit reference removal using the owning embedded ID and preserv
   removeUniverseCanonImageRef.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
   const onRemoved = vi.fn();
   render(<CanonReferenceRemoval recordId="example-catalog" universeId="example-universe" kind="character" filename="example.png" onRemoved={onRemoved} />);
-  fireEvent.click(screen.getByRole('button', { name: 'Remove reference' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Remove reference example.png' }));
   expect(removeUniverseCanonImageRef).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Remove reference' }));
   await waitFor(() => expect(removeUniverseCanonImageRef).toHaveBeenCalledWith('example-universe', 'character', 'example-entry', 'example.png', { silent: true }));
@@ -22,7 +22,7 @@ describe('reference removal admission', () => {
   it('does not guess an embedded target when the owner no longer contains it', async () => {
     getUniverse.mockResolvedValue({ id: 'example-universe', characters: [] }); removeUniverseCanonImageRef.mockClear();
     render(<CanonReferenceRemoval recordId="missing" universeId="example-universe" kind="character" filename="example.png" onRemoved={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Remove reference' })); fireEvent.click(screen.getByRole('button', { name: 'Remove reference' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove reference example.png' })); fireEvent.click(screen.getByRole('button', { name: 'Remove reference' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('no longer has');
     expect(removeUniverseCanonImageRef).not.toHaveBeenCalled();
   });
@@ -34,7 +34,7 @@ it('resolves an ordinary local alias by canonical ID while retaining the origina
   getCatalogIngredientCards.mockResolvedValue([{ id: 'local-alias', canonicalId: 'survivor', payload: {}, sharedIdentity: null }]);
   removeUniverseCanonImageRef.mockResolvedValue({});
   render(<CanonReferenceRemoval recordId="survivor" universeId="example-universe" kind="character" filename="example.png" onRemoved={vi.fn()} />);
-  fireEvent.click(screen.getByRole('button', { name: 'Remove reference' })); fireEvent.click(screen.getByRole('button', { name: 'Remove reference' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Remove reference example.png' })); fireEvent.click(screen.getByRole('button', { name: 'Remove reference' }));
   await waitFor(() => expect(removeUniverseCanonImageRef).toHaveBeenCalledWith('example-universe', 'character', 'stable-entry', 'example.png', { silent: true }));
 });
 
@@ -44,7 +44,7 @@ it('refuses an ambiguous direct-plus-alias binding without removing any referenc
   getCatalogIngredientCards.mockResolvedValue([{ id: 'local-alias', canonicalId: 'survivor', payload: {}, sharedIdentity: null }]);
   removeUniverseCanonImageRef.mockClear();
   render(<CanonReferenceRemoval recordId="survivor" universeId="example-universe" kind="character" filename="example.png" onRemoved={vi.fn()} />);
-  fireEvent.click(screen.getByRole('button', { name: 'Remove reference' })); fireEvent.click(screen.getByRole('button', { name: 'Remove reference' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Remove reference example.png' })); fireEvent.click(screen.getByRole('button', { name: 'Remove reference' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('Multiple canon entries');
   expect(removeUniverseCanonImageRef).not.toHaveBeenCalled();
 });
