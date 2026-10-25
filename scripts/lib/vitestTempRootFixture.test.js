@@ -1,7 +1,14 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, watch } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
+
+vi.mock('node:fs', async original => {
+  const actual = await original();
+  return { ...actual, watch: vi.fn(actual.watch) };
+});
+
 import { runFixtureToCompletion, waitForFixtureReady } from './vitestTempRootFixture.js';
 
 describe('waitForFixtureReady', () => {
@@ -18,6 +25,26 @@ describe('waitForFixtureReady', () => {
       await expect(pending).resolves.toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects and closes ownership when the readiness watcher fails asynchronously', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'fixture-watch-error-'));
+    const watcher = new EventEmitter();
+    watcher.close = vi.fn();
+    vi.mocked(watch).mockReturnValueOnce(watcher);
+    vi.useFakeTimers();
+    try {
+      const failure = Object.assign(new Error('controlled watcher failure'), { code: 'EMFILE' });
+      const pending = waitForFixtureReady(join(directory, 'ready'));
+      const rejected = expect(pending).rejects.toBe(failure);
+      watcher.emit('error', failure);
+      await rejected;
+      expect(watcher.close).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 
