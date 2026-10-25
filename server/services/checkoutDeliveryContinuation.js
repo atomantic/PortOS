@@ -30,9 +30,11 @@ async function historicalMerge(repoPath, prUrl, forgeAccount) {
  */
 export async function readCheckoutDeliveryContinuations(input, agents, opts = {}) {
   const { repoPath, branch, checkoutPath, tip, prUrl, verifiedPrHead, checkoutIncarnation, retirementForge } = input;
+  const targetHead = retirementForge?.targetHead ?? retirementForge?.defaultHead;
+  const targetBranch = retirementForge?.targetBranch ?? retirementForge?.defaultBranch;
   if (!Array.isArray(agents) || !checkoutIncarnation?.pointer || !checkoutIncarnation.gitdir
     || verifiedPrHead !== tip || !oid(tip) || retirementForge?.prUrl !== prUrl
-    || retirementForge.prHead !== tip || !oid(retirementForge.defaultHead)) return [];
+    || retirementForge.prHead !== tip || !oid(targetHead)) return [];
   const candidates = agents.filter(agent => agent?.status === 'completed'
     && (agent.result?.success === true || agent.result?.executionSuccess === true)
     && agent.result.executionSuccess !== false && agent.result.validationPassed !== false
@@ -43,7 +45,7 @@ export async function readCheckoutDeliveryContinuations(input, agents, opts = {}
   const ancestor = (older, newer) => oid(older) && oid(newer)
     ? execGit(['--no-replace-objects', '-c', 'core.commitGraph=false', 'merge-base', '--is-ancestor', older, newer],
       repoPath, { env: proofEnv }).then(() => true, () => false) : false;
-  if (!await ancestor(retirementForge.mergeCommit, retirementForge.defaultHead)) return [];
+  if (!await ancestor(retirementForge.mergeCommit, targetHead)) return [];
   const evidence = [];
   const historical = new Map();
   // Bounded sequential forge reads, only for a matching completed execution
@@ -67,9 +69,9 @@ export async function readCheckoutDeliveryContinuations(input, agents, opts = {}
       (opts.readHistoricalMerge || historicalMerge)(repoPath, originalPrUrl, opts.forgeAccount));
     const old = await historical.get(originalPrUrl);
     if (old?.url !== originalPrUrl || old.state !== 'MERGED' || old.isCrossRepository !== false
-      || old.headRefName !== branch || old.baseRefName !== retirementForge.defaultBranch
+      || old.headRefName !== branch || old.baseRefName !== targetBranch
       || !await ancestor(old.headRefOid, rows[0].head)
-      || !await ancestor(old.mergeCommit?.oid, retirementForge.defaultHead)) continue;
+      || !await ancestor(old.mergeCommit?.oid, targetHead)) continue;
     evidence.push({ kind: 'continued-merged-delivery', agentId: agent.id, originalPrUrl, originalPrHead: old.headRefOid,
       originalMergeCommit: old.mergeCommit.oid, capturedHead: rows[0].head,
       capturedAt: rows[0].capturedAt, prUrl, tip, checkoutIncarnation });
