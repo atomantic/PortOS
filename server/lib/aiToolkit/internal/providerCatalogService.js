@@ -245,6 +245,7 @@ export function createProviderCatalogService({
   sampleFile = null,
   defaultSamplePath,
   cliProbeTimeouts = {},
+  withProviderWrite = work => work(),
 }) {
   const lookupTimeoutMs = cliProbeTimeouts.lookup ?? CLI_COMMAND_LOOKUP_TIMEOUT_MS;
   const versionTimeoutMs = cliProbeTimeouts.version ?? CLI_VERSION_PROBE_TIMEOUT_MS;
@@ -428,8 +429,10 @@ export function createProviderCatalogService({
     async refreshProviderModels(id) {
       const catalog = await this.fetchProviderModelCatalog(id);
       if (catalog === null) return null;
-      const previous = (await this.getProviderById(id))?.modelContextWindows;
-      return this.updateProvider(id, modelCatalogUpdate(catalog, previous));
+      return withProviderWrite(async () => {
+        const previous = (await this.getProviderById(id))?.modelContextWindows;
+        return this.updateProvider(id, modelCatalogUpdate(catalog, previous));
+      });
     },
 
     async refreshProviderModelsBatch(ids) {
@@ -475,23 +478,25 @@ export function createProviderCatalogService({
       const updated = groups.filter(group => group.status === 'updated');
       if (updated.length === 0) return groups;
 
-      const fresh = await loadProviders();
-      let changed = false;
-      for (const group of updated) {
-        for (const id of group.ids) {
-          const provider = fresh.providers[id];
-          if (!provider) continue;
-          const modes = providerModeGroups(Object.values(fresh.providers)).find(entries => entries.some(entry => entry.id === id));
-          for (const mode of modes || [provider]) {
-            fresh.providers[mode.id] = {
-              ...mode,
-              ...modelCatalogUpdate(group.catalog, mode.modelContextWindows),
-            };
+      await withProviderWrite(async () => {
+        const fresh = await loadProviders();
+        let changed = false;
+        for (const group of updated) {
+          for (const id of group.ids) {
+            const provider = fresh.providers[id];
+            if (!provider) continue;
+            const modes = providerModeGroups(Object.values(fresh.providers)).find(entries => entries.some(entry => entry.id === id));
+            for (const mode of modes || [provider]) {
+              fresh.providers[mode.id] = {
+                ...mode,
+                ...modelCatalogUpdate(group.catalog, mode.modelContextWindows),
+              };
+            }
+            changed = true;
           }
-          changed = true;
         }
-      }
-      if (changed) await saveProviders(fresh);
+        if (changed) await saveProviders(fresh);
+      });
       return groups;
     },
 

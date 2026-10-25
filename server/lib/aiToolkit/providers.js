@@ -61,6 +61,20 @@ export function createProviderService(config = {}) {
     cachedModelIds,
     resolveCompositeProvider,
   } = state;
+  const writes = new AsyncLocalStorage();
+  let tail = Promise.resolve();
+  const withProviderWrite = (work) => {
+    if (writes.getStore()?.active) return work();
+    const queued = tail.then(() => {
+      const lease = { active: true };
+      return writes.run(lease, async () => {
+        try { return await work(); }
+        finally { lease.active = false; }
+      });
+    });
+    tail = queued.catch(() => {});
+    return queued;
+  };
   const crud = createProviderCrudService({
     loadProviders,
     saveProviders,
@@ -83,24 +97,14 @@ export function createProviderService(config = {}) {
     sampleFile,
     defaultSamplePath: DEFAULT_SAMPLE_PATH,
     cliProbeTimeouts: config.cliProbeTimeouts,
+    withProviderWrite,
   });
   const service = { ...crud, ...catalog };
-  const writes = new AsyncLocalStorage();
-  let tail = Promise.resolve();
   for (const name of ['setActiveProvider', 'createProvider', 'createProviderModes', 'createProviderTuiMode',
-    'updateProvider', 'applyProviderPatches', 'deleteProvider', 'refreshProviderModels', 'refreshProviderModelsBatch']) {
+    'updateProvider', 'applyProviderPatches', 'deleteProvider']) {
     const operation = service[name];
     service[name] = function (...args) {
-      if (writes.getStore()?.active) return operation.apply(service, args);
-      const queued = tail.then(() => {
-        const lease = { active: true };
-        return writes.run(lease, async () => {
-          try { return await operation.apply(service, args); }
-          finally { lease.active = false; }
-        });
-      });
-      tail = queued.catch(() => {});
-      return queued;
+      return withProviderWrite(() => operation.apply(service, args));
     };
   }
   return service;

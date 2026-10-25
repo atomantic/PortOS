@@ -2480,7 +2480,6 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride, reques
     metadata.effort = interval.effort;
   }
   if (interval.executionOptions !== undefined) metadata.executionOptions = interval.executionOptions;
-  if (interval.executionOptions !== undefined) metadata.executionOptions = interval.executionOptions;
   applyOneProviderPin(metadata, appPin);
   if (appPin?.executionOptions !== undefined) metadata.executionOptions = appPin.executionOptions;
   applyOneProviderPin(metadata, hookOverride);

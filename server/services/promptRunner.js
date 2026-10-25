@@ -1522,7 +1522,7 @@ async function executeProviderRunOnce({
   // and `effectiveModel` must be re-resolved against the fallback's
   // defaults so the response value reflects what actually ran.
   let executionAttribution;
-  if (executionOptions || effectiveProvider.executionOptions) {
+  if (Object.keys(executionOptions || {}).length || Object.keys(effectiveProvider.executionOptions || {}).length) {
     const { prepareExecutionOptions } = await import('../lib/providerExecutionOptions.js');
     const prepared = await prepareExecutionOptions(effectiveProvider, effectiveModel, executionOptions, 'run', { cwd: effectiveCwd });
     effectiveProvider = prepared.provider;

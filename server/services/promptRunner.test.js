@@ -1448,6 +1448,7 @@ describe('promptRunner — retry-with-fallback', () => {
     // 'fb-model' default (the pin must win).
     expect(ranModel).toBe('pinned-fb-model');
     expect(out.model).toBe('pinned-fb-model');
+    expect(runner.patchRunMetadata.mock.calls.some(([, patch]) => Object.hasOwn(patch, 'executionOptions'))).toBe(false);
   });
 
   it('retries with fallback when primary API fails', async () => {

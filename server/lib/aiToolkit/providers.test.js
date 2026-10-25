@@ -42,6 +42,27 @@ describe('Provider Service', () => {
     expect((await providerService.getAllProviders()).providers.map(provider => provider.id)).toEqual(expect.arrayContaining(['one', 'two', 'three']));
   });
 
+  it.each(['refreshProviderModels', 'refreshProviderModelsBatch'])('allows edits during %s probes and preserves them when saving the catalog', async method => {
+    await providerService.createProvider({ id: 'refreshable', name: 'Before', type: 'api', enabled: true, models: ['old'] });
+    let releaseProbe;
+    let enteredProbe;
+    const entered = new Promise(resolve => { enteredProbe = resolve; });
+    const probe = new Promise(resolve => { releaseProbe = resolve; });
+    vi.spyOn(providerService, 'fetchProviderModelCatalog').mockImplementation(() => { enteredProbe(); return probe; });
+    const refreshing = providerService[method](method.endsWith('Batch') ? ['refreshable'] : 'refreshable');
+    await entered;
+    try {
+      await providerService.updateProvider('refreshable', { name: 'Edited during probe' });
+      await providerService.setActiveProvider('refreshable');
+    } finally {
+      releaseProbe({ models: ['new'] });
+    }
+    await refreshing;
+    const reload = createProviderService({ dataDir: TEST_DATA_DIR, providersFile: 'providers.json' });
+    expect(await reload.getProviderById('refreshable')).toMatchObject({ name: 'Edited during probe', models: ['new'] });
+    expect((await reload.getAllProviders()).activeProvider).toBe('refreshable');
+  });
+
   it('shares provider settings across modes while preserving mode-specific launch settings and IDs', async () => {
     await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example-tui', providers: {
       example: {
