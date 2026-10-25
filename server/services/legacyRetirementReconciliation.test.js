@@ -49,12 +49,15 @@ async function delivered({ rebased = false, changed = false } = {}) {
 }
 
 describe('legacy retirement transition at the persisted reconciliation boundary', () => {
-  it.each(['squash', 'rebased', 'changed-patch', 'active-owner', 'foreign-owner', 'live-checkout', 'new-incident'])(
+  it.each(['squash', 'rebased', 'changed-patch', 'active-owner', 'human-handoff', 'foreign-owner', 'live-checkout', 'new-incident'])(
     'reconciles historical delivery without asserting unrecorded removal: %s', async scenario => {
       const { row, forge } = await delivered({ rebased: ['rebased', 'changed-patch'].includes(scenario), changed: scenario === 'changed-patch' });
       const outcome = { status: 'incomplete', retirementObligations: [row], remaining: [row], retired: [] };
       if (scenario !== 'new-incident') markLegacyRetirements(outcome);
       const owners = scenario === 'active-owner' ? [{ id: 'current-owner', status: 'running', metadata: { claimBranches: [row.branch] } }] : [];
+      if (scenario === 'human-handoff') owners.push({ id: 'human-owner', status: 'completed', metadata: {
+        branchCompletionPolicy: { branch: row.branch, completion: 'leave-open' },
+      } });
       if (scenario === 'foreign-owner') {
         const other = join(root, 'independent-clone');
         await mkdir(other); await execGit(['init'], other);

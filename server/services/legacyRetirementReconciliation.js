@@ -6,6 +6,7 @@ import { spawn } from '../lib/childProcess.js';
 import { execGit } from '../lib/execGit.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
+import { explicitPrCompletion, PR_COMPLETIONS } from '../lib/prDisposition.js';
 import { legacyRetirementKey } from '../lib/legacyRetirementTransition.js';
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
@@ -25,8 +26,11 @@ async function protectedOwner(agents, row, repoPath, identities) {
   };
   for (const agent of agents) {
     const m = agent.metadata || {};
+    const completion = (m.branchCompletionPolicy?.branch === row.branch ? m.branchCompletionPolicy.completion : null)
+      || m.prCompletionPolicy || explicitPrCompletion({ type: m.taskType, metadata: { ...m, analysisType: m.taskAnalysisType } });
+    const handoff = completion && ![PR_COMPLETIONS.REVIEW_THEN_MERGE, PR_COMPLETIONS.MERGE_ON_GREEN].includes(completion);
     if (!(branches(agent).includes(row.branch) || samePath(m.workspacePath, row.path))
-      || !(agent.status !== 'completed' || ['leave-open', 'review-only', 'draft'].includes(m.prCompletionPolicy))) continue;
+      || !(agent.status !== 'completed' || handoff)) continue;
     const source = m.sourceWorkspace || m.primaryCheckoutBaseline?.path;
     if (source && !samePath(source, repoPath)) {
       const [local, owner] = await Promise.all([identity(repoPath), identity(source)]);
