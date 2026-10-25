@@ -178,7 +178,10 @@ review obligation whose commits are already on the default branch (ancestor or
 patch-equivalent) is removed in place: no PR identity, owner
 history or agent review is needed, and the retirement
 service re-proves merge evidence and ownership under its fence. Nothing is copied
-into an archive. Human handoffs
+into an archive. Git-ignored payload is checked separately: unverified ignored
+files retain the checkout and branch, while recognized disposable module caches
+and links retain their existing policy. Historical recovery archives and
+unfinished quarantine journals remain available after setup. Human handoffs
 and unreadable policy stay held. Other completed local review obligations become bounded
 `REVIEW_RETIREMENT` tasks after a fresh merged-PR preview accepts their policy,
 checkout identity and ownership. The task records the exact release and review

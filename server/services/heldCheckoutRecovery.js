@@ -1,6 +1,8 @@
 import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { WORKSPACE_TEST_CACHE_ROOTS } from '../lib/workspaceTestCacheRoots.js';
+import { isAgentScratchPath, matchesScratchRoot } from '../lib/agentScratchPaths.js';
+import { WORKTREE_NODE_MODULES_MARKER } from '../lib/worktreeNodeModules.js';
 /**
  * Operator-scoped retirement of a merged checkout that branch reconciliation
  * reported but cannot retire on its own (#12002): one outside the managed
@@ -34,9 +36,34 @@ import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch, clas
 import { getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence } from './git.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArchive } from './cosClaimOwnership.js';
 
-/** Unlocked recheck between ownership sections. Does not copy the checkout. */
-export async function releaseCheckoutWithoutArchive(_context, prepare) {
-  return prepare();
+/** No archive is needed only when Git-ignored payload is independently disposable. */
+export async function releaseCheckoutWithoutArchive(context, prepare) {
+  const prepared = await prepare();
+  await assertNoUniqueIgnoredCheckoutPayload(context.path, execGit, context.ignoredPaths);
+  return prepared;
+}
+
+/** Git cleanliness alone omits ignored files. Links retain their target bytes. */
+export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGit, ignoredPaths = []) {
+  const present = await lstat(path).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!present) return;
+  const result = await runGit(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], path,
+    { maxBuffer: GIT_OUTPUT_BYTES, bufferOutput: true });
+  if ((result.exitCode !== undefined && result.exitCode !== 0)
+    || (!Buffer.isBuffer(result.stdout) && typeof result.stdout !== 'string')) throw new Error('worktree-status-unavailable');
+  const ignored = new Set(zLines(Buffer.isBuffer(result.stdout) ? archiveText(result.stdout) : result.stdout));
+  const work = archiveWork();
+  const verifiedCaches = new Map();
+  for (const listed of ignored) {
+    const { rel, info } = await listedContentEntry(path, listed, work);
+    if (info.isSymbolicLink() || isAgentScratchPath(rel) || matchesScratchRoot(rel, ignoredPaths)) continue;
+    if (rel === `node_modules/${WORKTREE_NODE_MODULES_MARKER}` && info.isFile() && info.size === 0) continue;
+    if (info.isFile() && await disposableModuleCache(path, rel, ignored, verifiedCaches, work)) continue;
+    throw new Error('checkout-ignored-payload-unverified');
+  }
 }
 
 export const heldCheckoutArchiveRoot = (cosDir = PATHS.cos) => join(cosDir, 'held-checkout-archives');
@@ -860,7 +887,7 @@ const cacheInspectionFailure = error => {
 async function disposableModuleCache(path, rel, ignored, verified, work) {
   if (!ignored.has(rel)) return false;
   const root = VITEST_MODULE_CACHE_ROOTS.find(cache => rel.startsWith(`${cache}/`)
-    && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(rel.slice(cache.length + 1)));
+    && /^(?:[a-f0-9]{40}|[a-f0-9]{64}|CACHEDIR\.TAG|_metadata\.json)$/.test(rel.slice(cache.length + 1)));
   if (!root || !ignored.has(`${root}/CACHEDIR.TAG`) || !ignored.has(`${root}/_metadata.json`)) return false;
   if (!verified.has(root)) verified.set(root, (async () => {
     const tag = await archiveBytes(await archiveFile(path, join(path, root, 'CACHEDIR.TAG')), work, 2048);
@@ -1456,7 +1483,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
         });
         return { archive: { disposable: true } };
       } catch (error) {
-        const reason = ['worktree-dirty', 'not-merged-on-recheck', 'worktree-status-unavailable', 'retirement-archive-cancelled'].includes(error.message)
+        const reason = ['worktree-dirty', 'not-merged-on-recheck', 'worktree-status-unavailable', 'retirement-archive-cancelled', 'checkout-ignored-payload-unverified'].includes(error.message)
           ? error.message : 'checkout-not-disposable';
         return { result: { ok: false, reason, ...(reason === 'checkout-not-disposable' && error.message && { detail: error.message }) } };
       }

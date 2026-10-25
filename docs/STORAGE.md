@@ -1202,10 +1202,14 @@ readable and Gmail/API IDs retain their existing meaning.
 PortOS no longer writes `data/cos/held-checkout-archives/`,
 `data/cos/branch-retirement-archives/`, or
 `data/cos/initialized-checkout-retirements/`. A merged, clean checkout is
-removed in place. Setup migration 442 deletes those three directories and
-leaves sibling checkouts such as `data/cos/worktrees/` and `data/cos/agents/`
-alone. Historical restore helpers can still read a journal that already exists
-on disk before that migration runs. See
+removed in place only after checking ignored payload as well as Git status.
+Unverified ignored files keep the checkout and branch in place; independently
+recognized disposable caches retain their existing policy.
+Migration 442 preserves all three historical roots and sibling checkouts such
+as `data/cos/worktrees/` and `data/cos/agents/`. Historical archives can contain
+the only unpublished bytes, quarantined originals or unfinished recovery
+journals. Stopping new archive writes does not authorize deleting that data;
+historical restore helpers remain available without a setup-time purge. See
 [branch reconciliation](./features/branch-reconciliation.md#retiring-a-held-checkout).
 
 `<canonical-common-git-dir>/portos-checkout-admission/` is a separate file-primary
