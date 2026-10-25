@@ -454,6 +454,28 @@ describe('operator-owned device policy lifecycle', () => {
     expect(saved.version).toBe(2);
   });
 
+  it('keeps live sessions for capability-only enrollment and metadata/no-op edits, then restarts for effective admission changes', async () => {
+    await ensureTailcatServe(deps);
+    const legacy = children.at(-1);
+    const approved = await approveTailcatDevice({ label: 'Phone', publicKey: keyA }, deps);
+    expect(legacy.kill).not.toHaveBeenCalled();
+    await revokeTailcatDevice(approved.devices[0].id, deps);
+    await setTailcatDeviceEnforcement(false, deps);
+    expect(legacy.kill).not.toHaveBeenCalled();
+    expect(children).toHaveLength(1);
+    await approveTailcatDevice({ label: 'Phone', publicKey: keyA }, deps);
+    await setTailcatDeviceEnforcement(true, deps);
+    expect(legacy.kill).toHaveBeenCalled();
+    const protectedChild = children.at(-1);
+    await approveTailcatDevice({ label: 'Renamed phone', publicKey: keyA }, deps);
+    await setTailcatDeviceEnforcement(true, deps);
+    expect(protectedChild.kill).not.toHaveBeenCalled();
+    expect(children).toHaveLength(2);
+    await approveTailcatDevice({ label: 'Tablet', publicKey: keyB }, deps);
+    expect(protectedChild.kill).toHaveBeenCalled();
+    expect(deps.startServe.mock.lastCall[0].approvedKeys).toEqual([keyA, keyB]);
+  });
+
   it('preserves the old listener and policy when saving revocation fails', async () => {
     await approveTailcatDevice({ label: 'Phone', publicKey: keyA }, deps);
     await setTailcatDeviceEnforcement(true, deps);

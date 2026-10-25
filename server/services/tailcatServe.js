@@ -238,7 +238,10 @@ export function setTailcatDeviceEnforcement(enabled, options = {}) {
 function changeDevicePolicy(update, options) {
   return withLifecycle(async () => {
     const entry = await readServeEntry() ?? { devices: [], enabled: false };
-    await patchServeEntry(update(entry));
+    const next = await patchServeEntry(update(entry));
+    // Metadata-only edits cannot change admission or justify dropping sessions.
+    if (next.enabled && liveServe && !liveServe.exited && !liveServe.stopping
+      && liveServe.policy === policyIdentity(next)) return getTailcatDevices();
     // Persist before cutting sessions; a failed save never reports revocation.
     // Even a previously failed replacement remains retryable with the new policy.
     await terminateLiveServe();

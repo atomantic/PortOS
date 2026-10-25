@@ -481,9 +481,11 @@ rejects that device's reconnects only when enforcement is enabled.
 An enforced listener passes the complete approved-key set in `--allow`. Empty
 sets suspend serving instead of passing an empty flag (which Tailcat treats as
 allow-all). Approval, revocation, mode changes, boot restoration, and retry share
-one serialized lifecycle. Each change saves the policy first, waits for the old
-process to exit (escalating to kill if necessary), and starts the replacement
-with the saved server key and PSK. Terminating that process cuts its HTTP,
+one serialized lifecycle. Each change saves the policy first. Changes to the
+admitted-key set or enforcement mode wait for the old process to exit (escalating to kill if necessary), and starts the replacement
+with the saved server key and PSK. Metadata-only edits, capability-only
+enrollment/revocation, and no-op mode changes keep a healthy running listener
+and its sessions intact. Terminating that process cuts its HTTP,
 keepalive, and WebSocket connections. Approved devices must reconnect, and
 PortOS authentication and remote host-control checks continue to apply.
 

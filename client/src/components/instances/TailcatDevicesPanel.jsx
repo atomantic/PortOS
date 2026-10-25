@@ -37,7 +37,7 @@ export default function TailcatDevicesPanel() {
             : enforcement.state === 'suspended' ? 'Access suspended: no approved devices. No clients can connect.'
               : 'Device policy saved; listener enforcement is not confirmed. Check serve status and retry.'}
       </p>
-      <p className="text-xs text-gray-500">Changing device access restarts an enabled listener and disconnects current sessions. Approved devices can reconnect. Keep the server address private.</p>
+      <p className="text-xs text-gray-500">Changing enforced access restarts an enabled listener and disconnects current sessions. Metadata-only edits keep sessions running. Approved devices can reconnect. Keep the server address private.</p>
       {(status?.devices ?? []).map(device => (
         <div key={device.id} className="border border-port-border rounded p-2 min-w-0">
           <div className="flex flex-wrap items-center gap-2 text-xs">
