@@ -511,17 +511,24 @@ async function resumeCompletionAudits() {
       replayAttempts: attempt, retryAt: new Date(Date.now() + Math.min(30 * 60_000, 60_000 * 2 ** Math.min(attempt - 1, 5))).toISOString() });
     const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
     const { getAgentRecord } = await import('./cosAgentLifecycle.js');
-    await replayAgentCompletionCleanup(original).catch(error => emitLog('warn', `Completion cleanup deferred for ${original.id}: ${error.message}`, { agentId: original.id }));
-    const agent = await getAgentRecord(original.id || original.agentId).catch(() => null) || original;
-    const task = await getTaskById(agent.taskId).catch(() => null);
-    // Move missing tasks to the back of the next pass; they cannot grant authority.
+    let agent = await getAgentRecord(original.id || original.agentId).catch(() => null) || original;
+    const lookup = await getTaskById(agent.taskId).then(task => ({ task, readable: true }), () => ({ task: null, readable: false }));
+    const task = lookup.task;
+    // Definite absence may use the existing immutable-snapshot receipt proof.
+    // An unreadable task is not absent, and neither case replays external stages.
     if (!task) {
-      const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
-      await recordRepoStateVerification(agent.id || agent.agentId, { status: 'pending',
-        checkedAt: new Date().toISOString(), reasons: ['task-unavailable'] });
+      const resumed = lookup.readable && agent.result?.cleanupPending === true
+        ? await resumeAgentCompletionRetirement(agent.id || agent.agentId).catch(() => null) : null;
+      if (!resumed?.verified) {
+        const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+        await recordRepoStateVerification(agent.id || agent.agentId, { status: 'pending',
+          checkedAt: new Date().toISOString(), reasons: [resumed?.skipReason || 'task-unavailable'] });
+      }
       checked++;
       continue;
     }
+    await replayAgentCompletionCleanup(agent).catch(error => emitLog('warn', `Completion cleanup deferred for ${agent.id}: ${error.message}`, { agentId: agent.id }));
+    agent = await getAgentRecord(agent.id || agent.agentId).catch(() => null) || agent;
     await verifyAgentRepoState({ agentId: agent.id || agent.agentId, agentState: agent, task,
       success: agent.result?.success === true, prExpected: isTruthyMeta(task.metadata?.openPR) || !!task.metadata?.reviewLoopPRUrl || !!agent.metadata?.reviewLoopMergeTarget?.url })
       .catch(error => emitLog('warn', `Completion recovery deferred for ${agent.id}: ${error.message}`, { agentId: agent.id }));
