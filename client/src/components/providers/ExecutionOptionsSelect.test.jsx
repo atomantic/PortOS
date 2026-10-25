@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import ExecutionOptionsSelect from './ExecutionOptionsSelect.jsx';
 import { request } from '../../services/apiCore.js';
 vi.mock('../../services/apiCore.js', () => ({ request: vi.fn() }));
@@ -22,6 +22,20 @@ describe('execution speed selection', () => {
     expect(onChange).toHaveBeenLastCalledWith({ serviceTier: 'standard' });
     fireEvent.change(select, { target: { value: '' } });
     expect(onChange).toHaveBeenLastCalledWith({});
+  });
+
+  it('keeps advertised controls available to retry a failed capability request without a saved pin', async () => {
+    request.mockRejectedValueOnce(new Error('Capability request failed'));
+    const onChange = vi.fn();
+    render(<ExecutionOptionsSelect provider={{ id: 'example', executionOptionKeys: ['serviceTier'] }} value={{}} onChange={onChange} />);
+    expect(await screen.findByText('Execution capabilities could not be verified.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Speed').value).toBe('');
+
+    request.mockResolvedValue({ options: [{ key: 'serviceTier', label: 'Speed', values: ['standard', 'fast'] }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh capabilities' }));
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Fast' })).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('Speed'), { target: { value: 'fast' } });
+    expect(onChange).toHaveBeenCalledWith({ serviceTier: 'fast' });
   });
 
   it('keeps an unsupported saved selection visible and clearable', async () => {

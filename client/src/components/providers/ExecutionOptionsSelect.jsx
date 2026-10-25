@@ -21,7 +21,7 @@ export default function ExecutionOptionsSelect({ provider, model, value, onChang
   }, [providerId, model, routeKey, refresh, shouldInspect]);
   const capabilities = snapshot?.providerId === providerId && snapshot?.model === model && snapshot?.routeKey === routeKey ? snapshot.data : null;
   const descriptors = capabilities?.options || [];
-  const keys = [...new Set([...descriptors.map((option) => option.key), ...Object.keys(value || {}), ...Object.keys(provider?.executionOptions || {})])];
+  const keys = [...new Set([...(provider?.executionOptionKeys || []), ...descriptors.map((option) => option.key), ...Object.keys(value || {}), ...Object.keys(provider?.executionOptions || {})])];
   if (!keys.length) return null;
   return keys.map((key) => {
     const descriptor = descriptors.find((option) => option.key === key);
