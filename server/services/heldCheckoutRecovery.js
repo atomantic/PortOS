@@ -868,6 +868,19 @@ async function disposableModuleCache(path, rel, ignored, verified, work) {
   return archiveFile(path, join(path, rel)).then(() => true, cacheInspectionFailure);
 }
 
+// Git for Windows can enumerate junction descendants. Inspect components in
+// order so Node's lstat sees the link before hashing any target bytes.
+async function listedContentEntry(path, listed, work) {
+  const parts = listed.replace(/\/$/, '').split('/');
+  for (let i = 0; i < parts.length; i++) {
+    work.check();
+    const rel = parts.slice(0, i + 1).join('/');
+    const info = await lstat(join(path, rel));
+    if (info.isSymbolicLink() || i === parts.length - 1) return { rel, info };
+    if (!info.isDirectory()) throw new Error(`${rel} is not a directory`);
+  }
+}
+
 async function snapshotContent(path, work = archiveWork(), allowDisposableCache = false) {
   work.check();
   // These reads are independent and each Git spawn is mostly launch latency, so
@@ -932,15 +945,18 @@ async function snapshotContent(path, work = archiveWork(), allowDisposableCache 
     if (await rawBlobId(join(path, rel), info.size, format, work) !== blob) await addFile(rel, info, { tracked: true });
   }
   const symlinks = [];
-  for (const rel of zLines(others)) {
-    work.check();
+  const links = new Set();
+  for (const listed of zLines(others)) {
+    const { rel, info } = await listedContentEntry(path, listed, work);
+    if (links.has(rel)) continue;
     // `ls-files --others` names a nested repository as `dir/` without its files.
-    if (rel.endsWith('/')) throw new Error(`nested repository at ${rel} cannot be archived`);
-    const info = await lstat(join(path, rel));
+    // A junction may also have a trailing slash; classify the link first.
+    if (!info.isSymbolicLink() && listed.endsWith('/')) throw new Error(`nested repository at ${rel} cannot be archived`);
     if (info.isSymbolicLink()) {
       const link = { path: rel, target: archiveText(await readlink(join(path, rel), { encoding: 'buffer' })) };
       work.add(link);
       symlinks.push(link);
+      links.add(rel);
     }
     else if (info.isFile()) {
       const disposableCache = allowDisposableCache && await disposableModuleCache(path, rel, ignored, verifiedCaches, work);

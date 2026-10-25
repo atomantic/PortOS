@@ -58,7 +58,7 @@ vi.mock('./cosClaimOwnershipState.js', async importOriginal => {
 
 const SYMLINKS = process.platform !== 'win32';
 const retirementFaults = vi.hoisted(() => ({ onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null }));
-const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [] }));
+const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null }));
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
@@ -84,6 +84,9 @@ vi.mock('../lib/execGit.js', async importOriginal => {
       if (injected.onPreviewEvidence && args[0] === '--literal-pathspecs' && args[1] === 'diff') await injected.onPreviewEvidence();
       if (injected.onArchiveRef && args[0] === 'update-ref' && args[1]?.startsWith('refs/portos/archive/')) await injected.onArchiveRef();
       if (injected.onProof && args.includes('--bare') && options?.env?.GIT_NO_REPLACE_OBJECTS === '1') await injected.onProof();
+      if (injected.onOtherFiles && args[0] === 'ls-files' && args[1] === '--others') {
+        return { ...result, stdout: Buffer.from(injected.onOtherFiles(result.stdout.toString())) };
+      }
       return result;
     }
     catch (error) {
@@ -137,7 +140,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       ? { entryPoint: task.name.endsWith('cleanupMerged') ? 'cleanupMerged' : 'early reaper', started: performance.now(), phases: {} } : null;
     await receiptTiming.run('fixture-setup', async () => {
       Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
-      Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null });
+      Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null, onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null });
       scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
       const safeRepo = join(scratch, 'repo');
       await mkdir(safeRepo);
@@ -1280,7 +1283,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it('never follows a cache directory link or removes the outside content', async () => {
+  it.each(['native', 'traversed', 'directory'])('never follows a cache directory link or removes the outside content: %s listing', async listing => {
     const c = await reviewedCheckout('linked-cache');
     await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
     const outside = join(scratch, 'wanted-outside-cache');
@@ -1292,9 +1295,18 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const root = join(c.path, 'server/.cache/vitest');
     await mkdir(root, { recursive: true });
     await symlink(outside, join(root, 'modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    if (listing !== 'native') {
+      // Git for Windows can enumerate junction descendants as ordinary files.
+      // Reproduce that boundary on every OS while retaining a real link.
+      injected.onOtherFiles = output => [...output.split('\0').filter(rel => rel && !rel.startsWith('server/.cache/vitest/modules')),
+        ...(listing === 'directory' ? ['server/.cache/vitest/modules/']
+          : [`server/.cache/vitest/modules/${'a'.repeat(40)}`, 'server/.cache/vitest/modules/missing'])].join('\0') + '\0';
+    }
     const prepared = await c.prepare();
-    expect(prepared.ok).toBe(true);
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true });
     expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(c.path)).toBe(false);
+    expect(await registered(c.path)).toBe(false);
     expect(await sha256File(wanted)).toBe(before);
     expect(await archives()).toEqual([]);
   });
