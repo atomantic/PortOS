@@ -2,6 +2,12 @@
 
 One prompt in, a finished music video out. The Music Video page's **Autonomous** entry point (and the `music-video-autopilot` scheduled task) starts a server-owned run that does everything the hand-driven flow asks you to set up first: it writes the creative brief, the lyrics and a mood board, makes the song (in Suno, or on this machine), and produces the video with the tools you allowed. Song-writing checkpoints are optional. Production requires revision-bound approval of the visual guide and lyric-timed storyboard. An animated proof is an optional check; it never holds the final render. Authenticated sessions may grant automatic planning approvals.
 
+## Automatic lyric overlays
+
+In **Setup → Time and verify**, turn off **Show automatic lyric overlays** for a cinematic video that uses lyrics as timing and story inputs without displaying them. The per-project `lyricOverlayEnabled` boolean is accepted by project creation and update; omitted means legacy behavior. A scoped update containing only `{ "lyricOverlayEnabled": false }` preserves the renderer, aligned cues, shot decisions, selected assets and history. Timing verification still shows the words deliberately. This preference does not prohibit lip-sync or change existing shots.
+
+Picture previews, excerpts and final renders omit the automatic lyric pass. New planning skips inferred lyric cards and treatment-generated lyric captions while retaining beat and word anchors. Authored text cues, title cards and text baked into footage are independent. Document compositions must bundle a lyric renderer (`lyricType.js` or the spatial `engine.js`) declaring `// portos-lyric-overlay-visibility: 1`; an older or custom runtime is refused while overlays are off, rather than silently ignoring the preference. Update/import a new immutable document version with the current runtime before rendering; never overwrite an existing version in place. Code authors can still read timed lyrics for motion and must follow the project's text direction.
+
 ## Pipeline
 
 ```

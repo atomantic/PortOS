@@ -138,13 +138,13 @@ async function threeCandidate(source) {
 }
 
 // Run the staged module's real scene/post logic; only the GPU and DOM are doubles.
-async function threeRuntime(document, { reference = false, fontGate = Promise.resolve(), titleGate = Promise.resolve(), failDrawAt = null } = {}) {
+async function threeRuntime(document, { reference = false, fontGate = Promise.resolve(), titleGate = Promise.resolve(), failDrawAt = null, lyricOverlayEnabled = true } = {}) {
   const THREE = await import('three');
-  const traces = [], copies = [], renders = [], finishing = [], events = [], resources = [], overlap = [];
+  const traces = [], copies = [], renders = [], finishing = [], events = [], resources = [], overlap = [], words = [];
   let clock = 0, slow = false, rendererDisposed = false;
   const makeCanvas = name => {
     const context = { reset() {}, save() {}, restore() {}, strokeText() {},
-      fillText(label) { if (label.startsWith('{')) { traces.push(JSON.parse(label)); if (slow) clock += 100; } },
+      fillText(label) { if (label.startsWith('{')) { traces.push(JSON.parse(label)); if (slow) clock += 100; } else words.push(label); },
       drawImage(back) { if (name !== 'back') copies.push([name, back.width, back.height]); },
     };
     return { width: 0, height: 0, getContext: () => context };
@@ -174,7 +174,8 @@ async function threeRuntime(document, { reference = false, fontGate = Promise.re
   const sandbox = { THREE: { ...THREE, WebGLRenderer }, GeometryTHREE: THREE, setTimeout, clearTimeout,
     performance: { now: () => clock }, requestAnimationFrame: () => 1, cancelAnimationFrame() {},
     document: { getElementById: id => id === 'world' ? world : type, createElement: () => makeCanvas('back'), fonts: { load: () => fontGate } },
-    PORTOS_MV: { render: { width: 1920, height: 1080, fps: 24, durationSec: 1 }, song: {} },
+    PORTOS_MV: { render: { width: 1920, height: 1080, fps: 24, durationSec: 1 }, song: {}, composition: { lyricOverlayEnabled },
+      lyrics: [{ text: 'Example lyric', startSec: 0, endSec: 1 }] },
     PORTOS_MV_EVENT_STATE: (_song, t) => ({ t: t >= 0.2 && t < 0.4 ? 0.2 : Math.floor(t * 24) / 24,
       hold: t >= 0.2 && t < 0.4, activeEvents: [], reactiveGain: 0 }),
     __portosFilmLook: { frame: t => finishing.push(['look', t]), playback() {} },
@@ -190,11 +191,22 @@ async function threeRuntime(document, { reference = false, fontGate = Promise.re
   const source = (await readFile(join(root, reference ? 'engine-reference.js' : 'engine.js'), 'utf8'))
     .replace("import * as toonWorld from './toonWorld.js';", '').replaceAll('export function ', 'function ');
   runInContext(`${source}\nmount(THREE);`, context);
-  return { composition: sandbox.portosComposition, api: sandbox.portosComposition.previewPlayback, traces, copies, renders, finishing, events, resources, overlap,
+  return { words, composition: sandbox.portosComposition, api: sandbox.portosComposition.previewPlayback, traces, copies, renders, finishing, events, resources, overlap,
     page: { evaluate: source => runInContext(source, context) }, slow: () => { slow = true; }, disposed: () => rendererDisposed };
 }
 
 describe('treatment-driven mixed-media document authoring', () => {
+  it('keeps authored Three text while hiding the spatial host lyric pass', async () => {
+    const document = await threeCandidate();
+    const shown = await threeRuntime(document);
+    const hidden = await threeRuntime(document, { lyricOverlayEnabled: false });
+    await shown.composition.seek(0.5);
+    await hidden.composition.seek(0.5);
+    expect(shown.words).toContain('Example lyric');
+    expect(hidden.words).toEqual([]);
+    expect(hidden.traces).toEqual(shown.traces);
+  });
+
   it('packages Three through the complete-frame producer without changing exact subframe or hold rendering', async () => {
     const document = await threeCandidate(), root = join(PATHS.data, document.directory);
     expect(JSON.parse(await readFile(join(root, 'preview-playback.json'), 'utf8'))).toEqual({ version: 1, contract: 'portos-complete-frame-v1' });

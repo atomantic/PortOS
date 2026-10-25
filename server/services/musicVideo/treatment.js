@@ -658,6 +658,7 @@ const withPlannedScenes = (project, planned) => {
 };
 
 function textCueCandidates(project, treatment) {
+  if (project.lyricOverlayEnabled === false) return [];
   const scenes = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
   const cues = (project.lyricCues || []).filter((c) => isNonBlankStr(c?.text) && isTime(c.startSec));
   const hooks = hookLines(cues);

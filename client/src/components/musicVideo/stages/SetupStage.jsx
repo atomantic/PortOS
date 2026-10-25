@@ -3,6 +3,7 @@ import TrackPanel from '../TrackPanel.jsx';
 import AnalysisPanel from '../AnalysisPanel.jsx';
 import LyricsPanel from '../LyricsPanel.jsx';
 import LyricTimingCheck from '../LyricTimingCheck.jsx';
+import LyricOverlaySetting from '../LyricOverlaySetting.jsx';
 import ReviseSongCard from '../ReviseSongCard.jsx';
 import { AnalyzeAction } from '../ProjectActionGroups.jsx';
 import { Check } from 'lucide-react';
@@ -121,7 +122,8 @@ export default function SetupStage({ board }) {
             aligning={aligningLyrics}
           />
         </SongStep>
-        <SongStep number={4} title="Time and verify" done={lyrics.verified || lyrics.ok}>
+        <SongStep id="mv-lyric-timing" number={4} title="Time and verify" done={lyrics.verified || lyrics.ok}>
+          <LyricOverlaySetting key={project.id} project={project} onUpdated={board.replaceProject} />
           {!lyrics.instrumental && (
             <AlignWords
               disabled={cues.length === 0 || !projectHasAudio(project)}

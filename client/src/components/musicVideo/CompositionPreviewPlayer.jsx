@@ -70,7 +70,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const appliedSeek = useRef(null);
   const filmLook = lyrics ? null : (project.filmLook ?? null);
   const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
-  const revision = lyrics ? playthroughVersion(project) : doc ? `${doc.directory}|${doc.updatedAt || ''}` : null;
+  const revision = lyrics ? playthroughVersion(project) : doc ? `${doc.directory}|${doc.updatedAt || ''}${project.lyricOverlayEnabled === false ? '|lyrics-off' : ''}` : null;
   const request = useMemo(() => {
     if (!wanted || !revision || !doc) return null;
     return {

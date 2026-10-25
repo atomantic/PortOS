@@ -159,6 +159,7 @@ export function buildProjectRecord(input, { id, now }) {
     midiTranscription: null,
     // #8964 — editable timed lyric cues + phrase annotations (timed against
     // the current audio source) and the shot planner's pacing range.
+    ...(typeof input.lyricOverlayEnabled === 'boolean' ? { lyricOverlayEnabled: input.lyricOverlayEnabled } : {}),
     lyricCues: Array.isArray(input.lyricCues) ? normalizeLyricCues(input.lyricCues) : [],
     // Section headers + stage directions read off the lyric sheet, anchored to
     // cue indices (lyricMarkers.js). Present only when the sheet had any, so a

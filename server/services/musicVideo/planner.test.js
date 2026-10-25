@@ -633,6 +633,8 @@ describe('directed planner', () => {
 
   async function runDirected(project, options = { seedPrompts: false }) {
     getProject.mockResolvedValue(project);
+    const { addScenes } = await import('./projectsLogic.js');
+    addProjectScenes.mockImplementation(async (_id, inputs) => addScenes(project, inputs));
     // Exercise the real validated addScenes transform on a fresh record. A
     // concurrent composition edit must survive the same atomic persistence.
     mutateProjectRecord.mockImplementation(async (_id, transform) => transform({
@@ -640,6 +642,15 @@ describe('directed planner', () => {
     }));
     return planProject('mv-1', options);
   }
+
+  it('plans picture shots when lyric overlays are off without banning supported performance', async () => {
+    const project = { ...directedProject(), lyricOverlayEnabled: false };
+    const { project: planned } = await runDirected(project);
+    expect(planned.scenes.some((scene) => scene.visualLayer === 'card')).toBe(false);
+    expect(planned.scenes.some((scene) => scene.shotMode === 'performance')).toBe(true);
+    expect(planned.scenes.map((scene) => [scene.startSec, scene.endSec])).toEqual(Array.from({ length: 16 }, (_, i) => [i * 5, (i + 1) * 5]));
+    expect(planned.lyricCues).toEqual(project.lyricCues);
+  });
 
   it('persists mapped sets/looks, supported performances and renderable cards without changing cuts', async () => {
     const project = directedProject();

@@ -128,6 +128,7 @@ function basisFor(project, includeEvents = true) {
     trackId: project.trackId || null,
     uploadedAudioFilename: project.uploadedAudioFilename || null,
     audioAnalysis: project.audioAnalysis || null,
+    ...(typeof project.lyricOverlayEnabled === 'boolean' ? { lyricOverlayEnabled: project.lyricOverlayEnabled } : {}),
     lyricCues: project.lyricCues || null,
     lyricMarkers: project.lyricMarkers || null,
     scenes: project.scenes || [],

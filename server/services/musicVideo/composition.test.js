@@ -105,6 +105,15 @@ describe('composedLyricWindows', () => {
     expect(composedLyricWindows(project({ mode: 'composed', textCues: [hero] }), 20)).toHaveLength(2);
   });
 
+  it('suppresses automatic overlay windows without consuming timed lyrics or authored text', () => {
+    const hidden = { ...project({ mode: 'composed', textCues: [] }), lyricOverlayEnabled: false };
+    expect(composedLyricWindows(hidden, 20)).toEqual([]);
+    expect(hidden.lyricCues).toEqual(lyricCues);
+    expect(composedLyricWindows({ ...hidden, lyricOverlayEnabled: true }, 20)).toHaveLength(2);
+    const title = { id: 'title', text: 'Example title', startSec: 0, endSec: 1, emphasis: 'hero' };
+    expect(projectTypographyPlan({ ...hidden, composition: { mode: 'composed', textCues: [title] } }, [], [], 20).cues).toHaveLength(1);
+  });
+
   it('leaves the lyrics to subtitle cues, and to every other render mode', () => {
     const subtitle = { id: 's', text: 'my own line', startSec: 0, endSec: 2, emphasis: 'subtitle' };
     expect(composedLyricWindows(project({ mode: 'composed', textCues: [subtitle] }), 20)).toEqual([]);
