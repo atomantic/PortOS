@@ -170,7 +170,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
         if (png && png.length <= 2 * 1024 * 1024) await writeFile(join(destination, `${name}.png`), png);
       }
       const filters = [];
-      for (const key of ['frozen', 'serialized', 'beforeScreenshot', 'afterScreenshot', 'afterUpload']) {
+      for (const key of ['frozen', 'serialized', 'beforeScreenshot', 'afterScreenshot', 'afterUpload', 'beforeFilterCommit', 'afterFilterCommit']) {
         if (!metadata[key]) continue;
         const { filter, ...snapshot } = metadata[key];
         const signature = JSON.stringify(filter);
@@ -430,7 +430,21 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     expect(after.filter).not.toEqual(before.filter);
     await page.evaluate(() => window.releaseCapture());
     await page.waitForFunction(() => window.uploads.length > 0 || window.captureErrors.length > 0);
-    expect(await page.evaluate(() => window.uploads.length)).toBe(0);
+    const uploaded = await page.evaluate(() => window.uploads.at(-1));
+    if (uploaded) {
+      // A regressed guard must retain the rejected control's actual pixels,
+      // rather than the earlier, successful provisional-filter capture.
+      captureEvidence = { label: 'deferred filter negative control', platform: process.platform,
+        arch: process.arch, browser: fixture.browser.version(), ffmpegVersion,
+        beforeFilterCommit: before, afterFilterCommit: after,
+        frozen: await page.evaluate(() => window.captureFrozen),
+        serialized: await page.evaluate(() => window.captureSerialized),
+        saved: Buffer.from(uploaded), beforeScreenshot: await page.evaluate(() => window.previewMetadata()),
+        displayed: await page.getByLabel('Storyboard animatic', { exact: true }).locator(':scope > div').first().screenshot(),
+        afterScreenshot: await page.evaluate(() => window.previewMetadata()),
+      };
+    }
+    expect(Boolean(uploaded)).toBe(false);
     expect(await page.evaluate(() => window.captureErrors.at(-1))).toContain('Preview changed during capture');
     expect(Buffer.compare(provisional, await capture('committed filter at same resized box'))).not.toBe(0);
   });

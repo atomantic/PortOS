@@ -130,6 +130,16 @@ upload, and saving after the commit must again match the display. This separates
 filter-only mutation from the previously covered geometry-change guard. It
 demonstrates a stale-filter path without attributing the historical incident to it.
 
+The original helper was also tested against this filter-only negative control
+on macOS arm64, Chrome 156.0.8078.48. It incorrectly uploaded, and the retained
+[saved PNG](../validation/13644-dissolve-control/saved.png) and
+[displayed PNG](../validation/13644-dissolve-control/displayed.png) have mean
+channel error `2.8507715133531155`. The [frame record](../validation/13644-dissolve-control/frame.json)
+shows unchanged geometry, song frame 84 and both paused-canvas fingerprints,
+with filter revision 0 changing to 1. These three synthetic artifacts total
+less than 1 MiB. The current helper rejects that same commit instead of uploading;
+the negative control does not reproduce the original Linux error near 39.
+
 On Linux arm64, Chromium 156.0.8078.47, FFmpeg 5.1.9, Node 26.12.1, the natural
 matrix also passed using the original pre-#13643 capture helper from
 `d56e183a1e91891ac27af6cbca9fc2de3130b785` with the new diagnostics:
