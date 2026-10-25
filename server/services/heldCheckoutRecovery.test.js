@@ -137,8 +137,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   beforeEach(async ({ task }) => {
     receiptWork = null;
-    receiptTiming.current = task.name.startsWith('settles a normally merged checkout before the next scan')
-      ? { entryPoint: task.name.endsWith('cleanupMerged') ? 'cleanupMerged' : 'early reaper', started: performance.now(), phases: {} } : null;
+    const remoteSquash = task.name.startsWith('fetches a remote-only squash commit');
+    receiptTiming.current = remoteSquash || task.name.startsWith('settles a normally merged checkout before the next scan')
+      ? { entryPoint: remoteSquash ? 'remote squash receipt' : task.name.endsWith('cleanupMerged') ? 'cleanupMerged' : 'early reaper', started: performance.now(), phases: {} } : null;
     await receiptTiming.run('fixture-setup', async () => {
       Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
       Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null, onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null });
@@ -2096,20 +2097,20 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   it('fetches a remote-only squash commit for receipt proof without advancing any local branch', async () => {
     const base = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
-    const c = await heldCheckout('remote-merge', { branch: 'feature/remote-merge', beforeLock: async tree => {
-      await writeFile(join(tree, 'feature.txt'), 'remote feature\n');
-      await execGit(['add', 'feature.txt'], tree);
-      await execGit(['commit', '-m', 'feature awaiting remote merge'], tree);
-    } });
-    await execGit(['worktree', 'unlock', c.path], repo);
-    await makeClean(c.path);
-    const release = { ...c.release, locked: false, lockReason: null };
+    // This proof needs a clean, unlocked checkout. Avoid constructing dirty,
+    // locked recovery state and cleaning it again before the actual boundary.
+    const tree = join(external, 'remote-merge');
+    const branch = 'feature/remote-merge';
+    await execGit(['worktree', 'add', '-b', branch, tree, 'main'], repo);
+    await writeFile(join(tree, 'feature.txt'), 'remote feature\n');
+    await execGit(['add', 'feature.txt'], tree);
+    await execGit(['commit', '-m', 'feature awaiting remote merge'], tree);
+    const [path, head] = (await execGit(['rev-parse', '--show-toplevel', 'HEAD'], tree)).stdout.trim().split(/\r?\n/);
+    const release = { path, branch, head, locked: false, lockReason: null };
     const remote = join(scratch, 'remote');
     await execGit(['clone', '--no-hardlinks', repo, remote], scratch);
-    await execGit(['config', 'user.email', 'test@example.com'], remote);
-    await execGit(['config', 'user.name', 'Test'], remote);
-    await execGit(['merge', '--squash', 'origin/feature/remote-merge'], remote);
-    await execGit(['commit', '-m', 'remote squash merge'], remote);
+    await execGit(['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'merge', '--squash', 'origin/feature/remote-merge'], remote);
+    await execGit(['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '-m', 'remote squash merge'], remote);
     const merged = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
     expect((await execGit(['cat-file', '-e', `${merged}^{commit}`], repo, { ignoreExitCode: true })).exitCode)
       .not.toBe(0);
@@ -2119,9 +2120,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const forge = { repository: 'github.com/example/repo', prUrl, prHead: release.head,
       mergeCommit: merged, defaultHead: merged, defaultBranch: 'main', remoteHead: null,
       changedPaths: ['feature.txt'], changeBase: base, firstCommit: release.head };
-    const result = await retirePendingMergeCheckout({ repoPath: repo, release, prUrl, expectedHeadSha: release.head }, {
+    receiptWork = retirePendingMergeCheckout({ repoPath: repo, release, prUrl, expectedHeadSha: release.head }, {
       cosDir, readAgents: noOwners, readForge: async () => forge, forgeAccount: 'synthetic-account',
     });
+    const result = await receiptWork;
     expect(result).toMatchObject({ ok: true, branchDeleted: true });
     expect((await execGit(['rev-parse', 'main'], repo)).stdout.trim()).toBe(base);
     expect(existsSync(join(repo, '.git', 'FETCH_HEAD'))).toBe(false);
@@ -2132,7 +2134,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(injected.fetches[0].options).toMatchObject({ timeout: 30_000,
       env: { GH_TOKEN: 'synthetic-account-token', GIT_TERMINAL_PROMPT: '0' } });
     expect(result.archiveDir).toBeUndefined();
-    expect(existsSync(c.path)).toBe(false);
+    expect(existsSync(release.path)).toBe(false);
     expect(await archives()).toEqual([]);
   });
 

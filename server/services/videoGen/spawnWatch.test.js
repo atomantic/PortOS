@@ -404,7 +404,7 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
       await spawnAndWatchVideo(params);
       await abort();
       child = retry;
-      child.stdout.emit('data', Buffer.from(JSON.stringify({ video_path: '/mock/videos/first.mp4', batch_index: 0, seed: 42 }) + '\n'));
+      child.stdout.emit('data', Buffer.from(JSON.stringify({ video_path: join('/mock/videos', 'first.mp4'), batch_index: 0, seed: 42 }) + '\n'));
       await closeChild(0);
       expect(mocks.history).toHaveLength(1);
       expect(JSON.parse(saved).entries).toEqual([]);
