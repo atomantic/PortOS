@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -1383,6 +1384,7 @@ describe.skipIf(!pyBin)('generate_ltx2.py block streaming (#6499)', () => {
   // real pin whose wrapper merely swallows the kwarg without forwarding it
   // is not misreported as capable.
   const STREAMING_PIPELINE = [
+    'runner.configure_prompt_encode_policy = lambda active: None',
     'class StreamingPipe:',
     '    def __init__(self, model_dir, low_ram_streaming=False, **kw):',
     '        self.model_dir = model_dir',
@@ -1695,6 +1697,7 @@ describe.skipIf(!pyBin)('generate_ltx2.py block streaming (#6499)', () => {
     expect(report).toEqual({
       pipeline: 'one-stage', requestedMode: 'auto', active: false, supports: true,
       reason: 'physical memory is above the 24 GiB auto-stream ceiling',
+      encodePolicy: { mode: 'resident', calls: 0 },
     });
     expect(report.peakMb).toBeUndefined();
   });
@@ -1789,5 +1792,70 @@ shutil.rmtree(tmp)
 `);
     // num_frames / 24 + 0.25s of tail, offset consumed into the cut.
     expect(out.trim().split(/\r?\n/)).toEqual(['4.2917 0.0 True', '4.2917 True', '4.9583']);
+  });
+});
+
+describe.skipIf(!pyBin)('generate_ltx2.py split prompt residency (#13613)', () => {
+  // These catch lazy weight retention, preloading through BasePipeline, CFG
+  // lane cleanup and policy leakage across deliveries at the shared boundary.
+  it.each(['markers-before', 'markers-after', 'gemma3', 'failures'])('preserves embeddings and resource lifetimes: %s', (scenario) => {
+    const result = JSON.parse(runPython(`${importRunner}
+import runpy, json
+fixture = runpy.run_path(str(script.parent / 'fixtures' / 'ltx_prompt_encoding.py'))
+print(json.dumps(fixture['exercise'](runner, ${JSON.stringify(scenario)})))
+`));
+    expect(result.equivalent).toBe(true);
+    expect(result.balancedMarkers).toBe(true);
+    expect(result.report).toMatchObject({ pipeline: 'ic-lora', active: true, encodePolicy: { mode: 'split' } });
+  });
+
+  it('requires reassessing the lifecycle whenever the runtime is re-pinned', () => {
+    const runtimes = readFileSync(join(dirname(script), '../server/services/videoGen/runtimes.js'), 'utf8');
+    const expected = runtimes.match(/export const LTX25_EXPECTED_REVISION = '([a-f0-9]+)'/)[1];
+    expect(runPython(`${importRunner}\nprint(runner._SPLIT_PROMPT_REVISION)`).trim()).toBe(expected);
+  });
+
+  it('refuses to report a configured split that no prompt actually used', () => {
+    const output = runPython(`${importRunner}
+runner._STREAMING_POLICY = {"active": True}
+runner._PROMPT_ENCODE_POLICY = {"mode": "split", "calls": 0}
+try:
+    runner.report_streaming_policy()
+except RuntimeError as exc:
+    print(str(exc))
+else:
+    raise AssertionError('unused optimization reported')
+`);
+    expect(output).toContain('no prompt reached the adapter');
+  });
+
+  it('refuses uninspected source, including missing source, before construction', () => {
+    const output = runPython(`${importRunner}
+from types import SimpleNamespace
+import tempfile, hashlib
+try:
+    runner._split_prompt_runtime_supported(SimpleNamespace())
+except RuntimeError as exc:
+    assert 'unsupported' in str(exc)
+else:
+    raise AssertionError('missing source accepted')
+with tempfile.TemporaryDirectory() as tmp:
+    source = Path(tmp) / 'blocks.py'
+    source.write_text('inspected fixture')
+    blocks = SimpleNamespace(__file__=str(source))
+    runner._SPLIT_PROMPT_BLOCKS_SHA256 = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert runner._split_prompt_runtime_supported(blocks)
+    source.write_text('locally changed source')
+    try:
+        runner._split_prompt_runtime_supported(blocks)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError('modified source accepted')
+    runner._LEGACY_PROMPT_BLOCKS_SHA256 = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert runner._split_prompt_runtime_supported(blocks) is False
+print('verified')
+`);
+    expect(output.trim()).toBe('verified');
   });
 });

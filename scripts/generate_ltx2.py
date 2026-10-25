@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import hashlib
 import importlib
 import inspect
 import json
@@ -599,6 +600,108 @@ def enforce_prompt_token_limit(encoder, prompt: str) -> None:
         )
 
 
+# Source fingerprints of utils/blocks.py read at the shipped pins. Checking the
+# file also refuses locally modified lifecycle code despite an unchanged HEAD.
+_SPLIT_PROMPT_BLOCKS_SHA256 = "4ffe1779fc416d3cb45c5828ee7f86468100f2a60a94de455069dcf2c62a9925"
+_LEGACY_PROMPT_BLOCKS_SHA256 = "e0765177397d5677c5855b6ded558bc471f9432605481606bb123e80b197ac7a"
+_SPLIT_PROMPT_REVISION = "57952288076766abe27dda3a774b2c24f7346977"
+_PROMPT_ENCODE_POLICY = {"mode": "resident", "calls": 0}
+
+
+def _split_prompt_runtime_supported(blocks) -> bool:
+    """Accept the inspected 2.5 lifecycle; keep the shipped 2.3 path unchanged."""
+    source = getattr(blocks, "__file__", None)
+    digest = hashlib.sha256(Path(source).read_bytes()).hexdigest() if source else None
+    if digest == _LEGACY_PROMPT_BLOCKS_SHA256:
+        return False
+    if digest != _SPLIT_PROMPT_BLOCKS_SHA256:
+        raise RuntimeError(
+            "Split prompt encoding requires the inspected LTX-2.5 blocks source "
+            f"at {_SPLIT_PROMPT_REVISION}; installed lifecycle is unsupported."
+        )
+    return True
+
+
+def configure_prompt_encode_policy(active: bool) -> None:
+    """Install before pipeline construction, with per-render activation/reset.
+
+    load() is patched too: BasePipeline preloads it before calling encode().
+    Wrappers consult the current policy so a later resident run uses the original
+    load/encode methods, regardless of marker/encoder-override installation order.
+    """
+    global _PROMPT_ENCODE_POLICY
+    _PROMPT_ENCODE_POLICY = {"mode": "resident", "calls": 0}
+    if not active:
+        return
+    from ltx_pipelines_mlx.utils import blocks
+
+    if not _split_prompt_runtime_supported(blocks):
+        _PROMPT_ENCODE_POLICY["mode"] = "legacy-resident"
+        return
+    cls = blocks.PromptEncoder
+    if not getattr(cls.load, "_portos_split_prompt", False):
+        original_load, original_encode = cls.load, cls.encode
+        marked = getattr(original_encode, "_portos_prompt_encode_markers", False)
+        if marked:
+            original_encode = original_encode.__wrapped__
+
+        @functools.wraps(original_load)
+        def load(self):
+            if _PROMPT_ENCODE_POLICY["mode"] != "split":
+                return original_load(self)
+            try:
+                if self._feature_extractor is not None:
+                    raise RuntimeError("Split prompt encoding found a resident connector")
+                if self._text_encoder is None:
+                    path, encoder_class = self._text_encoder_source()
+                    self._text_encoder = encoder_class()
+                    self._text_encoder.load(path)
+                    blocks.aggressive_cleanup()
+            except BaseException:
+                self.free()
+                raise
+
+        @functools.wraps(original_encode)
+        def encode(self, prompt):
+            if _PROMPT_ENCODE_POLICY["mode"] != "split":
+                return original_encode(self, prompt)
+            hidden, mask = None, None
+            try:
+                self.load()
+                enforce_prompt_token_limit(self, prompt)
+                hidden, mask = self._text_encoder.encode_all_layers(
+                    prompt, max_length=gemma_max_length(),
+                )
+                # MLX evaluation severs the lazy dependencies on model weights.
+                # Both the entire hidden-state tree and mask must finish BEFORE
+                # dropping the model or allocating any connector weights.
+                blocks._materialize(hidden, mask)
+                self._text_encoder = None
+                blocks.aggressive_cleanup()
+
+                self._feature_extractor = blocks.GemmaFeaturesExtractorV2()
+                weights = blocks.load_split_safetensors(
+                    self.model_dir / "connector.safetensors", prefix="connector.",
+                )
+                self._feature_extractor.connector.load_weights(list(weights.items()))
+                del weights
+                video, audio = self._feature_extractor(hidden, attention_mask=mask)
+                blocks._materialize(video, audio)
+                _PROMPT_ENCODE_POLICY["calls"] += 1
+                return video, audio
+            finally:
+                hidden, mask = None, None
+                # Always release, even for encode() or free_after=False callers:
+                # retaining either tower would defeat the next lane's split.
+                self.free()
+
+        load._portos_split_prompt = True
+        cls.load, cls.encode = load, encode
+        if marked:
+            install_prompt_encode_markers()
+    _PROMPT_ENCODE_POLICY["mode"] = "split"
+
+
 def install_prompt_encode_markers() -> None:
     """Bracket every Gemma prompt encode with the two STAGE: markers.
 
@@ -633,9 +736,10 @@ def install_prompt_encode_markers() -> None:
         try:
             # The tokenizer only exists after load(); upstream's encode() calls it
             # first and it is idempotent, so loading here costs nothing extra.
-            if callable(getattr(self, "load", None)):
-                self.load()
-            enforce_prompt_token_limit(self, prompt)
+            if _PROMPT_ENCODE_POLICY["mode"] != "split":
+                if callable(getattr(self, "load", None)):
+                    self.load()
+                enforce_prompt_token_limit(self, prompt)
             return original(self, prompt, *args, **kwargs)
         finally:
             print(PROMPT_ENCODE_END_MARKER, file=sys.stderr, flush=True)
@@ -2369,6 +2473,7 @@ def configure_streaming_policy(args: argparse.Namespace, pipeline_cls, pipeline_
             "weights rather than silently rendering resident and claiming a memory "
             "ceiling this run did not keep."
         )
+    configure_prompt_encode_policy(policy["active"])
     _STREAMING_POLICY = policy
     _STREAMING_PIPELINE_LABEL = pipeline_label
     if policy["active"]:
@@ -2426,7 +2531,10 @@ def report_streaming_policy() -> None:
     """
     if not _STREAMING_POLICY:
         return
-    report = {"pipeline": _STREAMING_PIPELINE_LABEL, **_STREAMING_POLICY}
+    report = {"pipeline": _STREAMING_PIPELINE_LABEL, **_STREAMING_POLICY,
+              "encodePolicy": dict(_PROMPT_ENCODE_POLICY)}
+    if _PROMPT_ENCODE_POLICY["mode"] == "split" and not _PROMPT_ENCODE_POLICY["calls"]:
+        raise RuntimeError("Split prompt encoding was configured but no prompt reached the adapter")
     if _STREAMING_POLICY.get("active"):
         try:
             import mlx.core as mx
