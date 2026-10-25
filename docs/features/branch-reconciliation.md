@@ -95,6 +95,39 @@ remain prerequisites to removal. The checkout is not copied into an archive.
 Initialized checkouts retain their separate workflow; this mode does not bypass
 its gates.
 
+### Preserved superseded prototypes
+
+A closed prototype can be replaced by different code without its original
+commits ever becoming ancestors of the replacement. Do not merge obsolete code
+or claim it was merged just to make cleanup eligible. An operator may instead
+request `kind: "preserved-supersession"` with the replacement merged PR, inspect
+the exact source/replacement differences, and confirm the returned digest with
+`acceptSuperseded: true` and that same kind.
+
+This narrower mode requires an exact same-repository published source ref and
+one closed, unmerged source PR at that head. Missing, advanced, reopened,
+ambiguous or foreign source evidence refuses removal. An index with resolve-undo conflict stages remains held. Every private recovery
+commit must be reachable from the published source head. Existing owner,
+completion-policy, inventory-generation and final content checks still apply.
+
+Before removal, the service durably retains at most 64 KiB of non-cache files
+and private Git evidence in the local schedule record. It also retains symlink
+metadata. Only independently recognized module cache artifacts and a clean,
+reconstructible index/checkout pointers are omitted. The aggregate encoded evidence store is bounded to 1 MiB. Stale, unconsumed
+preparations are pruned; completed preservation evidence is never evicted just
+to make room. Larger evidence or a full store remains
+in its original checkout; this mode does not copy a repository or create an
+archive directory. Preparation is replayable and does not settle an obligation
+or claim deletion. A completed service removal records
+`disposition: "superseded-preserved"`, bound to that preparation digest, instead
+of claiming merged delivery. Ordinary merged cleanup does not use this mode.
+
+To recover the prototype, fetch the recorded source ref, verify the exact head,
+and create a new checkout. Retained small files and symlink metadata are audit
+and recovery evidence; old Git registration pointers/locks must never be copied
+into a recreated checkout as if it were the previous incarnation. The published
+source branch is retained; local retirement does not delete it remotely.
+
 ### Held archive work budgets
 
 Review fingerprints still apply these byte budgets and can refuse with

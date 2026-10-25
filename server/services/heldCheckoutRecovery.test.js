@@ -1233,6 +1233,119 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return { path, release, admin, opts, forge, prepare, confirm };
   }
 
+  // Uniquely catches the gap between exact merged delivery and an abandoned
+  // prototype whose implementation was replaced rather than merged verbatim.
+  it.each([false, true])('retires an explicitly accepted published prototype only after durable small-evidence preservation, replacement changed=%s', async superseded => {
+    const c = await reviewedCheckout('published-prototype', { superseded });
+    c.forge.prHead = c.forge.mergeCommit;
+    c.forge.firstCommit = c.forge.mergeCommit;
+    c.forge.changeBase = (await execGit(['rev-parse', `${c.forge.mergeCommit}^`], repo)).stdout.trim();
+    c.forge.sourceSupersessionHead = c.release.head;
+    c.forge.remoteHead = `${c.release.head}\trefs/heads/${c.release.branch}`;
+    c.forge.sourcePreservation = { head: c.release.head, remoteRef: `refs/heads/${c.release.branch}`,
+      prUrl: 'https://github.com/example/repo/pull/41' };
+    await writeFile(join(c.path, 'ignored.txt'), 'small private prototype evidence');
+    const input = { appId: 'app-1', release: c.release, prUrl: c.forge.prUrl, kind: 'preserved-supersession' };
+    const prepared = await prepareInventoriedCheckoutRetirement(input, c.opts);
+    expect(prepared, prepared.reason).toMatchObject({ ok: true, review: { comparison: { disposition: 'review-supersession', exactMergedDelivery: false } } });
+    const review = { prUrl: c.forge.prUrl, kind: input.kind, digest: prepared.review.digest, acceptSuperseded: false };
+    expect(await retireInventoriedCheckout({ appId: input.appId, release: c.release, review }, c.opts))
+      .toMatchObject({ ok: false, reason: 'retirement-supersession-not-accepted' });
+    expect(existsSync(c.path)).toBe(true);
+    retirementFaults.onRemove = async () => {
+      const outcome = await getBranchReconcileOutcome('app-1');
+      const saved = outcome.supersededSourceEvidence[review.digest].proof;
+      expect(saved.source.files).toContainEqual(expect.objectContaining({ path: 'ignored.txt',
+        data: Buffer.from('small private prototype evidence').toString('base64') }));
+      expect(outcome.retired || []).toEqual([]);
+    };
+    review.acceptSuperseded = true;
+    const { recordSupersededCheckoutPreservation } = await import('./taskSchedule.js');
+    // Abandoned preparations have no receipt and no current inventory holder;
+    // they must not grow the schedule on every future preparation.
+    injected.schedule.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome.supersededSourceEvidence = {
+      stale: { proof: { release: { path: '/synthetic/absent', branch: 'old', head: 'a'.repeat(40) }, data: 'x'.repeat(1024 * 1024) } },
+    };
+    expect(await recordSupersededCheckoutPreservation('app-1', c.release, prepared.review)).toBe(true);
+    expect(Object.keys((await getBranchReconcileOutcome('app-1')).supersededSourceEvidence)).toEqual([review.digest]);
+    const preservedAt = (await getBranchReconcileOutcome('app-1')).supersededSourceEvidence[review.digest].preservedAt;
+    // Simulate restart after preparation but before removal: replay uses saved
+    // evidence, creates no receipt early, and preserves the original timestamp.
+    injected.schedule = JSON.parse(JSON.stringify(injected.schedule));
+    expect(await recordSupersededCheckoutPreservation('app-1', c.release, prepared.review)).toBe(true);
+    expect((await getBranchReconcileOutcome('app-1')).supersededSourceEvidence[review.digest].preservedAt).toBe(preservedAt);
+    expect(await retireInventoriedCheckout({ appId: input.appId, release: c.release, review }, c.opts))
+      .toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(c.path)).toBe(false);
+    const outcome = await getBranchReconcileOutcome('app-1');
+    expect(outcome.retired).toContainEqual(expect.objectContaining({ head: c.release.head,
+      disposition: 'superseded-preserved', supersessionDigest: review.digest, archiveDir: null }));
+    await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+    expect((await getBranchReconcileOutcome('app-1')).retirementObligations).toEqual([]);
+    expect(await archives()).toEqual([]);
+  });
+
+  it.each(['changed-source', 'persistence-failure', 'preservation-capacity'])('preserves the original when supersession confirmation encounters %s', async scenario => {
+    const c = await reviewedCheckout(`prototype-confirm-${scenario}`, { superseded: true });
+    c.forge.prHead = c.forge.mergeCommit;
+    c.forge.firstCommit = c.forge.mergeCommit;
+    c.forge.changeBase = (await execGit(['rev-parse', `${c.forge.mergeCommit}^`], repo)).stdout.trim();
+    c.forge.sourceSupersessionHead = c.release.head;
+    c.forge.remoteHead = `${c.release.head}\trefs/heads/${c.release.branch}`;
+    c.forge.sourcePreservation = { head: c.release.head, remoteRef: `refs/heads/${c.release.branch}`, prUrl: 'https://github.com/example/repo/pull/41' };
+    const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release: c.release,
+      prUrl: c.forge.prUrl, kind: 'preserved-supersession' }, c.opts);
+    expect(prepared, prepared.reason).toMatchObject({ ok: true });
+    if (scenario === 'changed-source') c.forge.remoteHead = null;
+    else if (scenario === 'persistence-failure') retirementFaults.failScheduleWrite = retirementFaults.scheduleWrites + 1;
+    else {
+      const outcome = injected.schedule.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome;
+      outcome.supersededSourceEvidence = { completed: { proof: { data: 'x'.repeat(1024 * 1024) } } };
+      outcome.retirementReceiptEvidence = { completed: { supersessionDigest: 'completed' } };
+    }
+    const result = await retireInventoriedCheckout({ appId: 'app-1', release: c.release,
+      review: { prUrl: c.forge.prUrl, kind: 'preserved-supersession', digest: prepared.review.digest, acceptSuperseded: true } }, c.opts);
+    expect(result).toMatchObject({ ok: false, reason: scenario === 'changed-source'
+      ? 'retirement-source-not-published' : 'checkout-not-disposable' });
+    expect(existsSync(c.path)).toBe(true);
+    expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+    if (scenario === 'preservation-capacity') expect((await getBranchReconcileOutcome('app-1'))
+      .supersededSourceEvidence.completed.proof.data).toHaveLength(1024 * 1024);
+  });
+
+  it.each(['unpublished-source', 'private-commit', 'large-private-file', 'index-recovery'])('keeps a prototype with %s', async scenario => {
+    const c = await reviewedCheckout(`prototype-${scenario}`, { superseded: true });
+    c.forge.prHead = c.forge.mergeCommit;
+    c.forge.firstCommit = c.forge.mergeCommit;
+    c.forge.changeBase = (await execGit(['rev-parse', `${c.forge.mergeCommit}^`], repo)).stdout.trim();
+    c.forge.sourceSupersessionHead = c.release.head;
+    c.forge.remoteHead = `${c.release.head}\trefs/heads/${c.release.branch}`;
+    c.forge.sourcePreservation = { head: c.release.head, remoteRef: `refs/heads/${c.release.branch}`, prUrl: 'https://github.com/example/repo/pull/41' };
+    if (scenario === 'unpublished-source') c.forge.remoteHead = null;
+    if (scenario === 'large-private-file') await writeFile(join(c.path, 'ignored.txt'), Buffer.alloc(64 * 1024 + 1));
+    if (scenario === 'index-recovery') {
+      const blob = (await execGit(['rev-parse', 'HEAD:feature.txt'], c.path)).stdout.trim();
+      await new Promise((resolve, reject) => {
+        const child = execFile('git', ['update-index', '--index-info'], { cwd: c.path }, error => error ? reject(error) : resolve());
+        child.stdin.end(`0 ${'0'.repeat(40)}\tfeature.txt\n${[1, 2, 3].map(stage => `100644 ${blob} ${stage}\tfeature.txt\n`).join('')}`);
+      });
+      await execGit(['add', 'feature.txt'], c.path);
+      expect((await execGit(['ls-files', '--resolve-undo'], c.path)).stdout).toContain('feature.txt');
+    }
+    if (scenario === 'private-commit') {
+      const unique = (await execGit(['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'unpublished private work'], c.path)).stdout.trim();
+      await writeFile(join(c.admin, 'ORIG_HEAD'), `${unique}\n`);
+    }
+    const result = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release: c.release,
+      prUrl: c.forge.prUrl, kind: 'preserved-supersession' }, c.opts);
+    expect(result).toMatchObject({ ok: false, reason: scenario === 'unpublished-source' ? 'retirement-source-not-published'
+      : scenario === 'private-commit' ? 'retirement-source-private-work-unpublished'
+        : scenario === 'index-recovery' ? 'retirement-source-index-recovery-unpublished' : 'retirement-source-evidence-too-large' });
+    expect(existsSync(c.path)).toBe(true);
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+  });
+
   async function moduleCache(checkout, { count = 1, bytes = 26 * 1024 * 1024, ignored = true,
     tagged = true, name = 'a'.repeat(40), metadata = { lockfileHash: 'b'.repeat(40) } } = {}) {
     if (ignored) await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
