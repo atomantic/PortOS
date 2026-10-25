@@ -1,4 +1,4 @@
-import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
+import { EXECUTION_OPTIONS_ERROR, resolveExecutionOptions } from '../lib/executionOptions.js';
 import { isLoopbackEndpoint } from '../lib/localEndpoint.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
@@ -1061,6 +1061,7 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
         fallbackResult = await executeProviderRunOnce({
           ...args,
           provider: fallback,
+          executionOptions: resolveExecutionOptions({ source: 'provider', options: args.provider?.executionOptions }, { source: 'run', options: args.executionOptions }).requested,
           model: picked.model ?? undefined,
           // A step in the global fallback list may pin its own effort; the
           // primary's effort belongs to the primary's model, so it is not inherited.
@@ -1522,10 +1523,11 @@ async function executeProviderRunOnce({
   // defaults so the response value reflects what actually ran.
   let executionAttribution;
   if (executionOptions || effectiveProvider.executionOptions) {
-    const { prepareExecutionOptions } = await import('./providerExecutionOptions.js');
-    const prepared = await prepareExecutionOptions(effectiveProvider, effectiveModel, executionOptions);
+    const { prepareExecutionOptions } = await import('../lib/providerExecutionOptions.js');
+    const prepared = await prepareExecutionOptions(effectiveProvider, effectiveModel, executionOptions, 'run', { cwd: effectiveCwd });
     effectiveProvider = prepared.provider;
     executionAttribution = prepared.attribution;
+    effectiveModel = prepared.attribution.model || effectiveModel;
   }
   let runId = callerRunId;
   if (!runId) {

@@ -309,6 +309,8 @@ export function createProviderServiceState(config = {}) {
       defaultModel: providerData.defaultModel || null,
       effort: providerData.effort || null,
       ...(providerData.executionOptions ? { executionOptions: providerData.executionOptions } : {}),
+      ...(providerData.executionSelectionRoot === true ? { executionSelectionRoot: true } : {}),
+      ...(providerData.executionSourceProviderId ? { executionSourceProviderId: providerData.executionSourceProviderId } : {}),
       lightModel: providerData.lightModel || null,
       mediumModel: providerData.mediumModel || null,
       heavyModel: providerData.heavyModel || null,

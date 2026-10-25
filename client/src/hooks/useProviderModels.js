@@ -38,7 +38,7 @@ const sourceModels = (provider, withEffort) => {
 function preferredInitialProvider(providers, activeProviderId, { allowDefault = false } = {}) {
   const active = providers.find(provider => provider.id === activeProviderId);
   if (active || allowDefault) return active || null;
-  return providers.find(isTuiProvider) || providers[0] || null;
+  return providers.find((provider) => !(provider.executionSourceProviderId || provider.executionSelectionRoot) && isTuiProvider(provider)) || providers.find((provider) => !(provider.executionSourceProviderId || provider.executionSelectionRoot)) || null;
 }
 
 /**
@@ -181,7 +181,10 @@ export default function useProviderModels({ filter, allowDefault = false, presel
   const compositeSelected = isCompositeProviderId(selectedProviderId);
   const catalog = useProviderCatalog(compositeSelected);
   const providersWithSelection = useMemo(() => {
-    if (!compositeSelected) return providers;
+    if (!compositeSelected) {
+      const created = api.getCreatedExecutionSelection?.(selectedProviderId);
+      return created && !providers.some((provider) => provider.id === selectedProviderId) ? [...providers, created] : providers;
+    }
     const resolved = catalog.resolveRef(selectedProviderId);
     return resolved ? [...providers, resolved] : providers;
   }, [providers, compositeSelected, selectedProviderId, catalog.resolveRef]);
@@ -248,7 +251,7 @@ export default function useProviderModels({ filter, allowDefault = false, presel
       setSelectedModel('');
       return;
     }
-    const p = providers.find(pr => pr.id === id);
+    const p = providers.find(pr => pr.id === id) || api.getCreatedExecutionSelection?.(id);
     setSelectedModel(pickInitialModel(p));
   }, [providers, allowDefault, pickInitialModel]);
 

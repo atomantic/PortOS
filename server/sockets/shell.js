@@ -1,5 +1,6 @@
 import * as shellService from '../services/shell.js';
 import { getProviderById } from '../services/providers.js';
+import { prepareExecutionOptions } from '../lib/providerExecutionOptions.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import {
   shellAttachSchema,
@@ -26,7 +27,11 @@ export const registerShellHandlers = (socket, _io) => {
       let initialCommand = options?.initialCommand || undefined;
       let env;
       if (providerId) {
-        const provider = await getProviderById(providerId).catch(() => null);
+        let provider = await getProviderById(providerId).catch(() => null);
+        if (provider) {
+          const prepared = await prepareExecutionOptions(provider, provider.defaultModel, undefined, 'run', { cwd });
+          provider = prepared.provider;
+        }
         const launch = buildTuiShellLaunch(provider);
         if (!launch) {
           socket.emit('shell:error', { error: `Provider '${providerId}' is not a launchable TUI provider` });

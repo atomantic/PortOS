@@ -122,6 +122,35 @@ afterEach(async () => {
 const handshake = async () => awaitRequest(child, 'initialize', {});
 
 describe('running a text turn', () => {
+  it.each(['fast', 'standard'])('requests %s for this turn while keeping effective speed unconfirmed', async (speed) => {
+    const promise = runCodexTextTurn({ prompt: 'hello', model: 'model-alpha', executionOptions: { serviceTier: speed } });
+    await handshake();
+    const answered = new Set();
+    const answerMetadata = () => {
+      for (const request of [...child.written]) {
+        if (answered.has(request.id)) continue;
+        const responses = {
+          'account/read': { account: { type: 'chatgpt' } },
+          'configRequirements/read': { requirements: null },
+          'model/list': { data: [{ id: 'model-alpha', model: 'model-alpha', serviceTiers: [{ id: 'fast' }] }] },
+          'config/read': { config: { model_provider: 'openai' } },
+        };
+        if (responses[request.method]) {
+          answered.add(request.id);
+          child.reply(request, responses[request.method]);
+        }
+      }
+    };
+    child.on('request-written', answerMetadata);
+    answerMetadata();
+    await driveTurn(child, { deltas: ['ok'] });
+    expect((await promise).executionOptions).toMatchObject({ requested: { serviceTier: speed }, effective: {}, confirmation: 'requested/unconfirmed' });
+    expect(child.lastRequest('turn/start').params.serviceTierForTurn).toBe(speed === 'standard' ? 'default' : 'fast');
+    expect(child.lastRequest('thread/start').params).toMatchObject({ sandbox: 'read-only', approvalPolicy: 'never', config: { mcp_servers: {}, features: { fast_mode: true } } });
+    expect(child.written.some(frame => frame.method?.startsWith('config/'))).toBe(true);
+    expect(child.written.some(frame => frame.method?.includes('write'))).toBe(false);
+  });
+
   it('confines the turn to an empty directory with no tools, no network, and no writes', async () => {
     // This is the boundary that lets a Brain/JIRA summary use the same record
     // as the coding harness without writes or network access. Local reads stay

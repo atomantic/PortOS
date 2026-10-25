@@ -1,49 +1,39 @@
-import { buildCodexAuthModeArgs, isCodexCommand } from '../lib/codex.js';
-import { codexOssLocalProvider } from '../lib/providerModels.js';
-import { EXECUTION_OPTION_DEFINITIONS, resolveExecutionOptions, executionOptionsError } from '../lib/executionOptions.js';
-import { probeCodexModelsViaAppServer } from '../lib/aiToolkit/internal/codexModelListProbe.js';
-import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
+import { createHash } from 'node:crypto';
+import { getProviderById, createProvider } from './providers.js';
+import { resolveExecutionOptions, executionOptionsError } from '../lib/executionOptions.js';
+import { prepareExecutionOptions } from '../lib/providerExecutionOptions.js';
+export { getExecutionOptionCapabilities, prepareExecutionOptions } from '../lib/providerExecutionOptions.js';
 
-/** A read-only runtime probe; never sends a prompt or starts a model turn. */
-export async function getExecutionOptionCapabilities(provider, model) {
-  const descriptor = { version: 1, options: [], reason: null };
-  if (!isCodexCommand(provider?.command) || !['cli', 'tui'].includes(provider?.type)
-      || provider.codexAuthMode !== 'chatgpt' || codexOssLocalProvider(provider)
-      || provider.gatewayBacked || provider.credentialBootstrap || provider.credentialBootstrapId
-      || (provider.args || []).some((arg) => /forced_login_method|model_provider|service_tier|features\.(?:fast_mode|ultrafast_mode)/.test(arg))) {
-    return { ...descriptor, reason: 'Speed requires a Codex CLI or TUI route explicitly authenticated with ChatGPT.' };
-  }
-  if (!model || model === 'codex-configured-default') {
-    return { ...descriptor, reason: 'Choose an explicit model to verify speed availability.' };
-  }
-  const invocation = prepareCliSpawn(provider.command, [
-    ...(provider.ignoreUserConfig === true ? ['--ignore-user-config'] : []),
-    ...buildCodexAuthModeArgs(provider), 'app-server',
-  ], { ...process.env, ...provider.envVars });
-  const models = await probeCodexModelsViaAppServer(invocation.command, invocation.args, provider, { includeDetails: true });
-  const entry = models.find((item) => item.id === model || item.model === model);
-  const tiers = entry?.serviceTiers;
-  if (!Array.isArray(tiers)) return { ...descriptor, reason: 'This runtime did not advertise model speed capabilities.' };
-  const fast = tiers.some((tier) => tier.id === 'fast' || tier.id === 'priority');
-  return { ...descriptor, options: [{ ...EXECUTION_OPTION_DEFINITIONS.serviceTier,
-    values: fast ? ['standard', 'fast'] : ['standard'] }] };
-}
+let selectionWriteTail = Promise.resolve();
 
-export async function prepareExecutionOptions(provider, model, options, source = 'run') {
-  const attribution = resolveExecutionOptions(
-    { source: 'provider', options: provider.executionOptions },
-    { source, options },
-  );
-  if (Object.keys(attribution.requested).length === 0) return { provider, attribution };
-  const capabilities = await getExecutionOptionCapabilities(provider, model)
-    .catch(() => { throw executionOptionsError('Execution speed capabilities could not be verified; retry capability inspection before dispatch.'); });
-  for (const [key, value] of Object.entries(attribution.requested)) {
-    if (!capabilities.options.find((option) => option.key === key)?.values.includes(value)) {
-      throw executionOptionsError(capabilities.reason || `Execution option ${key}=${value} is unsupported by this route and model`);
+/** A real preset reference keeps legacy selectors and saved jobs lossless. */
+export function createExecutionOptionSelection(providerId, model, executionOptions) {
+  const write = selectionWriteTail.then(async () => {
+    let source = await getProviderById(providerId);
+    if (!source) throw executionOptionsError('Execution selection source was not found');
+    if (source.executionSourceProviderId) source = await getProviderById(source.executionSourceProviderId);
+    if (!source) throw executionOptionsError('Execution selection source is unavailable');
+    const options = resolveExecutionOptions({ source: 'selection', options: executionOptions }).requested;
+    if (!Object.keys(options).length) return source;
+    await prepareExecutionOptions(source, model, options, 'selection');
+    if (source.id.includes('@')) {
+      const rootId = `selection-source-${createHash('sha256').update(source.id).digest('hex').slice(0, 20)}`;
+      source = await getProviderById(rootId) || await createProvider({ ...source, apiKey: source.apiKey ?? '',
+        id: rootId, executionSelectionRoot: true });
     }
-  }
-  const copy = { ...provider, executionOptions: attribution.requested,
-    executionOptionSupport: Object.fromEntries(capabilities.options.map((option) => [option.key, option.values])) };
-  if (provider.apiKey) Object.defineProperty(copy, 'apiKey', { value: provider.apiKey, enumerable: false });
-  return { provider: copy, attribution };
+
+    const digest = createHash('sha256').update(JSON.stringify([source.id, Object.entries(options).sort()])).digest('hex').slice(0, 24);
+    const id = `selection-${digest}`;
+    const existing = await getProviderById(id);
+    if (existing) {
+      if (existing.executionSourceProviderId !== source.id || JSON.stringify(existing.executionSelectionOptions ?? existing.executionOptions) !== JSON.stringify(options)) throw executionOptionsError('Execution selection id conflicts with another provider');
+      return existing;
+    }
+    // Persist the ordinary preset snapshot for older installs; current readers resolve the source on each read.
+    await createProvider({ ...source, apiKey: source.apiKey ?? '', id, name: `${source.name} (${Object.values(options).join(', ')} requested)`,
+      enabled: true, executionSourceProviderId: source.id, executionOptions: options });
+    return getProviderById(id);
+  });
+  selectionWriteTail = write.catch(() => {});
+  return write;
 }

@@ -159,13 +159,14 @@ export default function AgentsTab({ completionRecovery, agentsLoaded = true, age
   // A PAUSED agent resumes IN PLACE (see `resumeAgent` in agentManagement.js):
   // the server requeues that agent's own task on the worktree its run left behind.
   // A COMPLETED agent's task is long settled, so it still gets a fresh one.
-  const handleResumeSubmit = async ({ description, context, model, provider, effort, app, type = 'user', screenshots }) => {
+  const handleResumeSubmit = async ({ description, context, model, provider, effort, executionOptions, app, type = 'user', screenshots }) => {
     const payload = {
       description,
       context,
       model: model || undefined,
       provider: provider || undefined,
       effort: effort || undefined,
+      executionOptions,
       app: app || undefined,
       screenshots
     };

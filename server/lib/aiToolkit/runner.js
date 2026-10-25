@@ -1,3 +1,4 @@
+import { resolveExecutionOptions, executionOptionsError } from './internal/executionOptions.js';
 import { mkdir, readFile, readdir, rm } from 'fs/promises';
 import { atomicWrite } from './internal/atomicWrite.js';
 import { evaluateSecretEndpoint } from './endpointGuard.js';
@@ -278,6 +279,7 @@ export function createRunnerService(config = {}) {
         source = 'devtools',
         fallbackProviderId = null,
         effort = null,
+        executionOptions,
         requestCapabilities = null,
         screenshots = [],
         allowFallback = true,
@@ -287,6 +289,13 @@ export function createRunnerService(config = {}) {
         throw new Error('Provider service not configured');
       }
 
+      const requestedProvider = await providerService.getProviderById(providerId);
+      const optionRequest = resolveExecutionOptions(
+        { source: 'provider', options: requestedProvider?.executionSelectionDefaults ?? requestedProvider?.executionOptions },
+        { source: 'selection', options: requestedProvider?.executionSelectionOptions },
+        { source: 'run', options: executionOptions },
+      );
+      const hasExecutionOptions = Object.keys(optionRequest.requested).length > 0;
       let effectiveProviderId = providerId;
       let usedFallback = false;
       // Model hint to run on the fallback provider when we proactively swap
@@ -300,7 +309,7 @@ export function createRunnerService(config = {}) {
       });
 
       if (providerStatusService && !providerStatusService.isAvailable(providerId)) {
-        if (!allowFallback) {
+        if (!allowFallback || hasExecutionOptions) {
           const status = providerStatusService.getStatus(providerId) || {};
           throw new Error(`Provider ${providerId} is unavailable (${status.reason || 'unknown'}) and fallback is disabled`);
         }
@@ -339,7 +348,8 @@ export function createRunnerService(config = {}) {
         }
       }
 
-      const provider = await providerService.getProviderById(effectiveProviderId);
+      const provider = effectiveProviderId === providerId ? requestedProvider : await providerService.getProviderById(effectiveProviderId);
+      if (hasExecutionOptions && provider?.type === 'api') throw executionOptionsError('This API transport does not support these execution options');
       if (!provider) {
         throw new Error('Provider not found');
       }
@@ -371,6 +381,7 @@ export function createRunnerService(config = {}) {
         usedFallback,
         model: recordModel,
         effort,
+        ...(hasExecutionOptions ? { executionOptions: optionRequest } : {}),
         workspacePath,
         workspaceName,
         source,

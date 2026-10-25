@@ -1070,7 +1070,7 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
       } else {
         result = final?.is_error || typeof final?.result !== 'string'
           ? { error: 'Reviewer returned no successful final result.', stderr: result.stderr, text: result.text }
-          : { text: final.result }
+          : { ...result, text: final.result }
       }
     }
   }
@@ -1090,7 +1090,7 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
       ...(result.code ? { code: result.code } : {}),
     }
   }
-  return { ok: true, backend, model, effort: effort || provider.effort || null, content: result.text.trim(), finishReason: normalizeReviewFinishReason(result.finishReason), responseLengthChars: result.text.length }
+  return { ok: true, backend, model, ...(result.executionOptions ? { executionOptions: result.executionOptions } : {}), effort: effort || provider.effort || null, content: result.text.trim(), finishReason: normalizeReviewFinishReason(result.finishReason), responseLengthChars: result.text.length }
 }
 
 async function runReviewerCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit = true, baseUrl: requestedBaseUrl = null, cwd, isolateFromCheckout = false, allowUnconfined = false, diffSizeBytes = null, providerSnapshot = null, reviewBudget = null }) {

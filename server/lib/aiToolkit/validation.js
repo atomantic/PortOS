@@ -108,6 +108,8 @@ export const providerSchema = z.object({
   // Empty string is the UI's "use the provider/CLI default" sentinel.
   effort: providerEffort,
   executionOptions: executionOptionsSchema.optional(),
+  executionSourceProviderId: providerRefSchema.optional(),
+  executionSelectionRoot: z.boolean().optional(),
   lightModel: z.string().nullable().optional(),
   mediumModel: z.string().nullable().optional(),
   heavyModel: z.string().nullable().optional(),
@@ -346,6 +348,7 @@ export const runSchema = z.object({
   type: z.enum(['ai', 'command']).optional().default('ai'),
   providerId: providerRefSchema.optional(),
   model: z.string().optional(),
+  executionOptions: executionOptionsSchema.optional(),
   workspacePath: z.string().optional(),
   workspaceName: z.string().optional(),
   command: z.string().optional(),

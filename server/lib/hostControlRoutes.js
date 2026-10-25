@@ -799,6 +799,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // credentials; installing or launching runtimes; signing a CLI in or out.
   // `PUT /api/providers/:id` also matches `/active` and `/bootstraps`.
   'GET /api/providers/:id/execution-options',
+  'POST /api/providers/:id/execution-options/selection',
   'POST /api/providers',
   'PUT /api/providers/:id',
   'POST /api/providers/:id/modes/tui',

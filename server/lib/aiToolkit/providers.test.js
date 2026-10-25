@@ -24,6 +24,24 @@ describe('Provider Service', () => {
     if (TEST_DATA_DIR) await rm(TEST_DATA_DIR, { recursive: true, force: true });
   });
 
+  it('reloads source-linked speed selections, follows source edits and refuses missing routes', async () => {
+    await providerService.createProvider({ id: 'codex-source', name: 'Codex source', type: 'cli', command: 'codex', enabled: true, models: ['alpha'], defaultModel: 'alpha' });
+    await providerService.createProvider({ id: 'speed-selection', name: 'Fast requested', type: 'cli', command: 'codex', enabled: true, executionSourceProviderId: 'codex-source', executionOptions: { serviceTier: 'fast' } });
+    const reload = createProviderService({ dataDir: TEST_DATA_DIR, providersFile: 'providers.json' });
+    expect(await reload.getProviderById('speed-selection')).toMatchObject({ command: 'codex', executionOptions: { serviceTier: 'fast' }, executionSelectionOptions: { serviceTier: 'fast' } });
+    expect((await reload.getProviderById('codex-source')).executionOptions).toBeUndefined();
+    await reload.updateProvider('codex-source', { defaultModel: 'beta', enabled: false });
+    expect(await reload.getProviderById('speed-selection')).toMatchObject({ defaultModel: 'beta', enabled: false });
+    await expect(reload.updateProvider('speed-selection', { command: 'another' })).rejects.toThrow('source provider');
+    await reload.deleteProvider('codex-source');
+    expect(await reload.getProviderById('speed-selection')).toMatchObject({ enabled: false, unavailableReason: expect.any(String) });
+  });
+
+  it('serializes overlapping provider mutations without losing either record', async () => {
+    await Promise.all(['one', 'two', 'three'].map(id => providerService.createProvider({ id, name: id, type: 'api', enabled: true })));
+    expect((await providerService.getAllProviders()).providers.map(provider => provider.id)).toEqual(expect.arrayContaining(['one', 'two', 'three']));
+  });
+
   it('shares provider settings across modes while preserving mode-specific launch settings and IDs', async () => {
     await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example-tui', providers: {
       example: {

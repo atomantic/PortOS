@@ -334,7 +334,10 @@ const describeSpawnFailure = (spawnError, command) =>
 export async function executeCliRun(options) {
   const permit = maintenance.admit('cli-run', options.runId, { continuation: true });
   try { return await permit.run(() => executeAdmittedCliRun(options, permit)); }
-  catch (err) { permit.finish(); throw err; }
+  catch (err) {
+    if (err.code === 'EXECUTION_OPTIONS_UNSUPPORTED') await finalizeRunRecord({ runId: options.runId, output: '', exitCode: 1, success: false, error: err.message, startTime: Date.now(), reportFailure: false });
+    await permit.finish(); throw err;
+  }
 }
 
 async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, screenshots = [], onData, onComplete, timeout, toolFree = false, beforeExecute }, permit) {
@@ -347,6 +350,13 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
   const metadataPath = join(runDir, 'metadata.json');
 
   const startTime = Date.now();
+  if (provider?.executionOptions && !provider.executionOptionAttribution) {
+    const { prepareExecutionOptions } = await import('../lib/providerExecutionOptions.js');
+    const prepared = await prepareExecutionOptions(provider, provider.defaultModel, undefined, 'provider', { cwd: workspacePath });
+    provider = prepared.provider;
+    await patchRunMetadata(runId, { executionOptions: prepared.attribution, model: prepared.provider.defaultModel });
+  }
+
   let output = '';
   // Codex writes its final answer to stdout; stderr is a diagnostic transcript
   // containing the input prompt. Keep both in logs, but never parse stderr.

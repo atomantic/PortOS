@@ -72,7 +72,8 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       },
     });
   }
-  const { provider, selectedModel, modelSelection } = resolution;
+  const { provider, modelSelection } = resolution;
+  let { selectedModel } = resolution;
   const privateSecurity = isPrivateSecurityTask(task);
   const executionProfile = task.metadata?.executionProfile;
   const publicReviewPosture = publicReviewPostureForProfile(executionProfile);
@@ -170,14 +171,17 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       ? `${basePrompt}\n\n${formatPublicReviewInputPrompt(publicReviewPromptData)}`
       : basePrompt;
     const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
-    let requestedProvider = applyTaskGenerationOverrides(provider, task.metadata);
+    const executionOptions = modelSelection.orchestrationExecutionOptions ?? task.metadata?.executionOptions;
+    let requestedProvider = applyTaskGenerationOverrides(provider, { ...task.metadata, executionOptions });
     let executionAttribution;
     if (requestedProvider.executionOptions && Object.keys(requestedProvider.executionOptions).length) {
-      const { prepareExecutionOptions } = await import('./providerExecutionOptions.js');
-      const prepared = await prepareExecutionOptions(provider, selectedModel, task.metadata?.executionOptions, 'task');
+      const { prepareExecutionOptions } = await import('../lib/providerExecutionOptions.js');
+      const prepared = await prepareExecutionOptions(provider, selectedModel, executionOptions, 'task', { cwd: workspacePath });
       requestedProvider.executionOptions = prepared.provider.executionOptions;
       requestedProvider.executionOptionSupport = prepared.provider.executionOptionSupport;
+      requestedProvider.executionOptionAttribution = prepared.attribution;
       executionAttribution = prepared.attribution;
+      selectedModel = prepared.provider.defaultModel || selectedModel;
     }
     if (notificationAuth.env) {
       // This copy exists only for this launch. The stored provider and agent/run

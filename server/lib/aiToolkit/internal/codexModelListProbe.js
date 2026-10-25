@@ -47,7 +47,7 @@ export function probeCodexModelsViaAppServer(command, args, provider, options = 
     }, timeoutMs);
     timer.unref?.();
     try {
-      child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], env: childEnv, windowsHide: true });
+      child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], env: childEnv, windowsHide: true, ...(options.cwd ? { cwd: options.cwd } : {}) });
     } catch (err) {
       settle(new Error(`${label} failed to spawn: ${err?.message || err}`));
       return;
@@ -57,8 +57,16 @@ export function probeCodexModelsViaAppServer(command, args, provider, options = 
     child.on('exit', (code, signal) => settle(new Error(`${label} exited prematurely with code ${code ?? signal}`)));
 
     let buffer = '';
+    let accountType = null;
+    let requirements = null;
+    let config = null;
+    let modelRequestId = options.includeDetails ? 10 : 2;
+    let pages = 0;
+    const collected = [];
+    const send = (id, method, params = {}) => child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
     child.stdout?.on('data', (chunk) => {
       buffer += chunk.toString();
+      if (buffer.length > 4 * 1024 * 1024) { settle(new Error(`${label} model catalog frame exceeded its bound`)); return; }
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
       for (const line of lines) {
@@ -67,14 +75,37 @@ export function probeCodexModelsViaAppServer(command, args, provider, options = 
         try {
           const msg = JSON.parse(trimmed);
           if (msg.id === 1) {
+            if (msg.error) { settle(new Error(`${label} initialize failed`)); return; }
             child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} }) + '\n');
-            child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'model/list', params: {} }) + '\n');
-          } else if (msg.id === 2) {
-            if (msg.error) {
-              settle(new Error(`${label} model/list error: ${msg.error.message || JSON.stringify(msg.error)}`));
-              return;
+            if (options.includeDetails) send(3, 'account/read');
+            else send(modelRequestId, 'model/list');
+          } else if (options.includeDetails && msg.id === 3) {
+            if (msg.error) { settle(new Error('Execution capabilities require account/read support')); return; }
+            accountType = msg.result?.account?.type || msg.result?.account?.authMethod || null;
+            send(4, 'configRequirements/read');
+          } else if (options.includeDetails && msg.id === 4) {
+            if (msg.error || !Object.hasOwn(msg.result || {}, 'requirements')) {
+              settle(new Error('Execution capabilities require configRequirements/read support')); return;
             }
-            const rawModels = msg.result?.data || msg.result?.models || [];
+            requirements = msg.result.requirements;
+            send(5, 'config/read', { includeLayers: false, ...(options.cwd ? { cwd: options.cwd } : {}) });
+          } else if (options.includeDetails && msg.id === 5) {
+            if (msg.error || !msg.result?.config) { settle(new Error('Execution capabilities require config/read support')); return; }
+            config = msg.result.config;
+            send(modelRequestId, 'model/list');
+          } else if (msg.id === modelRequestId) {
+            if (msg.error) { settle(new Error(`${label} model/list error: ${msg.error.message || 'unknown failure'}`)); return; }
+            const page = msg.result?.data || msg.result?.models;
+            if (!Array.isArray(page)) { settle(new Error(`${label} returned no model array`)); return; }
+            collected.push(...page);
+            pages++;
+            if (msg.result.nextCursor) {
+              if (pages >= 32) { settle(new Error(`${label} model catalog pagination did not settle`)); return; }
+              modelRequestId += options.includeDetails ? 1 : 100;
+              send(modelRequestId, 'model/list', { cursor: msg.result.nextCursor });
+              continue;
+            }
+            const rawModels = collected;
             const ids = rawModels
               .filter((m) => !m.hidden)
               .map((m) => (typeof m === 'string' ? m : m?.id || m?.model))
@@ -83,7 +114,7 @@ export function probeCodexModelsViaAppServer(command, args, provider, options = 
               settle(new Error(`${label} returned no model ids`));
               return;
             }
-            settle(null, options.includeDetails ? rawModels.filter((m) => !m.hidden) : withCodexShippedModels(ids));
+            settle(null, options.includeDetails ? { models: rawModels.filter((m) => !m.hidden), accountType, requirements, config } : withCodexShippedModels(ids));
             return;
           }
         } catch { /* not JSON, or not a message we're waiting on — ignore */ }

@@ -910,7 +910,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // execute a task without its required review. Gate only task synchronization.
   // v9 = strict large-input PR review fallback pins and complete linked issue
   // evidence. Older peers may clip that evidence or substitute a smaller model.
-  cosTasks: 9,
+  // v10 = executionOptions and execution-selection provider references. Older
+  // peers would ignore an explicit Standard/Fast override when claiming a task.
+  cosTasks: 10,
   // v1 = the Eidoverse foundation promote-candidate envelope (#7455, epic
   // #7453) — authorized to cross the federation layer by the federated
   // Eidoverse foundations ADR (docs/decisions/2026-09-18-federated-eidoverse-foundations.md).

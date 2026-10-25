@@ -1,3 +1,4 @@
+import ExecutionOptionsAttribution from '../../providers/ExecutionOptionsAttribution.jsx';
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Link } from 'react-router';
 import {
@@ -961,6 +962,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           </div>
         )}
 
+        <ExecutionOptionsAttribution value={agent.metadata?.executionOptions} />
         {/* Agent configuration badges */}
         {(providerConfigBadges.length > 0 || CONFIG_BADGE_KEYS.some(key => agent.metadata?.[key]) || agent.metadata?.effort) && (
           <div className="flex items-center gap-1.5 flex-wrap mb-2">

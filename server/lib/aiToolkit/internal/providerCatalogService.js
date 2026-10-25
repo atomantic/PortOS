@@ -223,7 +223,7 @@ export function createProviderCatalogService({
   return {
     async testProvider(id) {
       const data = await loadProviders();
-      const provider = withGatewayApiKey(data.providers[id], data.providers);
+      const provider = data.providers[id]?.executionSourceProviderId ? await this.getProviderById(id) : withGatewayApiKey(data.providers[id], data.providers);
       if (!provider) return { success: false, error: 'Provider not found' };
 
       if (provider.type === 'cli' || provider.type === 'tui') {
@@ -351,7 +351,7 @@ export function createProviderCatalogService({
 
     async fetchProviderModelCatalog(id) {
       const data = await loadProviders();
-      const provider = withGatewayApiKey(data.providers[id], data.providers);
+      const provider = data.providers[id]?.executionSourceProviderId ? await this.getProviderById(id) : withGatewayApiKey(data.providers[id], data.providers);
       if (!provider) return null;
 
       let fetched = null;

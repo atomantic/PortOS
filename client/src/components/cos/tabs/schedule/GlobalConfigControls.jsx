@@ -1,3 +1,4 @@
+import ExecutionOptionsSelect from '../../../providers/ExecutionOptionsSelect.jsx';
 import { useState, useEffect, useMemo } from 'react';
 import useFieldDraft from '../../../../hooks/useFieldDraft';
 import { RotateCcw, AlertCircle } from 'lucide-react';
@@ -95,6 +96,8 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     providerId: selectedProviderId,
     model: selectedModel,
     effort: selectedEffort,
+    executionOptions: selectedExecutionOptions,
+    changeExecutionOptions: handleExecutionOptionsChange,
     provider: selectedProvider,
     defaultProviderLabel,
     availableModels,
@@ -574,6 +577,9 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             hint="How hard the model reasons per turn — higher is slower and costlier but more thorough"
             className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
           />
+          <ExecutionOptionsSelect provider={selectedProvider} model={effectiveModelFor(selectedProvider, selectedModel)}
+            value={selectedExecutionOptions} onChange={handleExecutionOptionsChange} disabled={updating || !providersLoaded}
+            className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm" />
         </>
       )}
 

@@ -1005,3 +1005,5 @@ deleted records remain untouched. Future automatic upgrades need their own
 migration with explicit recognition of the outgoing shipped defaults.
 
 | `executionOptions.js` | Bounded execution-option definitions, validation, precedence and requested/effective attribution. |
+
+| `providerExecutionOptions.js` | Read-only runtime capabilities and per-dispatch execution-option preparation. |

@@ -259,3 +259,14 @@ export const saveProviderFallbacks = (entries, options) => request('/provider-fa
   body: JSON.stringify({ entries }),
   ...options
 });
+
+const executionSelections = new Map();
+export const getCreatedExecutionSelection = (id) => executionSelections.get(id);
+export const saveExecutionOptionSelection = (id, model, executionOptions, options = {}) => request(`/providers/${encodeURIComponent(id)}/execution-options/selection`, {
+  ...options, method: 'POST', body: JSON.stringify({ model: model || undefined, executionOptions }),
+}).then((selection) => {
+  invalidateProviders();
+  executionSelections.set(selection.id, selection);
+  if (executionSelections.size > 200) executionSelections.delete(executionSelections.keys().next().value);
+  return selection;
+});

@@ -1,3 +1,4 @@
+import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
 import { awaitWithAbort } from '../lib/abortTimeout.js';
 /**
  * Shared AI provider utilities for LLM calls.
@@ -68,7 +69,7 @@ async function resolveProviderFor(requestedProviderId, accept) {
     const active = providers.find(p => p.id === all.activeProvider);
     if (accept(active)) return active;
   }
-  return providers.find(isAPI) || null;
+  return providers.find((provider) => !(provider.executionSourceProviderId || provider.executionSelectionRoot) && isAPI(provider)) || null;
 }
 
 /**
@@ -358,6 +359,10 @@ async function resolveExplicitFallback(provider) {
 async function callCodexSubscription(provider, model, prompt, {
   statusOp, doneLabel, elapsedSec, throughput, timeout, responseSchema, signal,
 }) {
+  if (Object.keys(provider.executionOptions || {}).length && ['CODEX_HOME', 'CODEX_API_KEY', 'OPENAI_API_KEY', 'OPENAI_BASE_URL'].some((key) => provider.envVars?.[key])) {
+    const { executionOptionsError } = await import('../lib/executionOptions.js');
+    throw executionOptionsError('This provider has a separate authentication environment; use its native Codex route for speed options.');
+  }
   const {
     benchCodexTextTransport,
     getCodexTextTransportBench,
@@ -379,6 +384,7 @@ async function callCodexSubscription(provider, model, prompt, {
       prompt,
       model: model || provider.defaultModel || null,
       effort: provider.effort || null,
+      executionOptions: provider.executionOptions,
       timeoutMs: timeout,
       responseSchema,
       signal,
@@ -392,11 +398,13 @@ async function callCodexSubscription(provider, model, prompt, {
         usage: turn.usage,
         model: turn.model,
         effort: turn.effort,
+        ...(turn.executionOptions ? { executionOptions: turn.executionOptions } : {}),
         effortClamped: turn.effortClamped,
         clampReason: turn.clampReason,
       } };
     }
 
+    if (turn.error.code === EXECUTION_OPTIONS_ERROR) throw turn.error;
     reason = turn.error.message;
     const category = classifyCodexTransportError(turn.error);
     // A caller who pressed Stop is not a provider fault. Benching would take the
@@ -494,6 +502,10 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     __statusOp = null,
   } = options;
   if (signal?.aborted || (Number.isFinite(deadlineMs) && Date.now() >= deadlineMs)) return { error: 'Provider request deadline expired.' };
+  if (Object.keys(provider.executionOptions || {}).length && !isSubscriptionText(provider)) {
+    const { executionOptionsError } = await import('../lib/executionOptions.js');
+    throw executionOptionsError('Execution speed is unsupported on this API route.');
+  }
   if (provider.type !== 'api' && !isSubscriptionText(provider)) {
     return { error: 'This operation requires an API-based provider' };
   }

@@ -130,7 +130,8 @@ export function buildCodexOssArgs(provider, existingArgs = []) {
  * Per-run tier config overrides user config without writing it. Standard is
  * Codex's explicit `default` request value, not an absent setting. A pinned
  * provider argv is refused rather than claiming a conflicting option applied.
- * Capability evidence must come from this route's current model/list result.
+ * This builds requested syntax, including previews. Execution entrypoints must
+ * validate current account/model capabilities before launching it.
  */
 export function buildCodexExecutionOptionArgs(provider, existingArgs = []) {
   const options = provider?.executionOptions;
@@ -140,14 +141,11 @@ export function buildCodexExecutionOptionArgs(provider, existingArgs = []) {
     throw executionOptionsError('Unsupported Codex execution options');
   }
   if (!isCodexCommand(provider?.command) || !['cli', 'tui'].includes(provider?.type)
-      || provider?.codexAuthMode !== 'chatgpt' || codexOssLocalProvider(provider)) {
+      || (provider?.codexAuthMode && provider.codexAuthMode !== 'chatgpt') || codexOssLocalProvider(provider)) {
     throw executionOptionsError('Codex speed requires a ChatGPT-authenticated Codex CLI or TUI route');
   }
   if (existingArgs.some((arg) => /(?:forced_login_method|model_provider|service_tier|features\.(?:fast_mode|ultrafast_mode)|fast_default_opt_out)/.test(arg))) {
     throw executionOptionsError('Execution speed conflicts with provider args; remove the baked speed configuration');
-  }
-  if (provider.executionOptionSupport?.serviceTier?.includes(tier) !== true) {
-    throw executionOptionsError('Execution speed is unsupported or unverified for this runtime, model and account; refresh capabilities');
   }
   return ['-c', `service_tier="${tier === 'standard' ? 'default' : 'fast'}"`,
     '-c', 'features.fast_mode=true'];

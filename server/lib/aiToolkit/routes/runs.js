@@ -1,3 +1,4 @@
+import { resolveExecutionOptions } from '../internal/executionOptions.js';
 import { Router } from 'express';
 import { runSchema, validate, sanitizeScreenshotRefs } from '../validation.js';
 import { ToolkitHttpError, defaultAsyncHandler } from '../internal/httpError.js';
@@ -28,7 +29,7 @@ export function createRunsRoutes(runnerService, options = {}) {
     if (!result.success) {
       throw new ServerError('Invalid run data', { status: 400, code: 'VALIDATION_ERROR', context: { details: result.errors } });
     }
-    const { providerId, model, prompt, workspacePath, workspaceName, timeout, screenshots } = result.data;
+    const { providerId, model, prompt, workspacePath, workspaceName, timeout, screenshots, executionOptions } = result.data;
     console.log(`🚀 POST /runs - provider: ${providerId}, model: ${model}, workspace: ${workspaceName}`);
 
     if (!providerId) {
@@ -73,7 +74,8 @@ export function createRunsRoutes(runnerService, options = {}) {
       workspacePath,
       workspaceName,
       timeout,
-      screenshots: safeScreenshots
+      screenshots: safeScreenshots,
+      ...(executionOptions !== undefined ? { executionOptions } : {}),
     });
 
     const { runId, provider, metadata, timeout: effectiveTimeout } = runData;
@@ -90,8 +92,8 @@ export function createRunsRoutes(runnerService, options = {}) {
       : model;
     // CLI/TUI executors read defaultModel for their argv and run-started hooks.
     // Pin the requested (or fallback) model without changing the saved provider.
-    const executionProvider = (runModel && runModel !== provider.defaultModel)
-      ? { ...provider, defaultModel: runModel }
+    const executionProvider = (executionOptions !== undefined || (runModel && runModel !== provider.defaultModel))
+      ? { ...provider, ...(runModel ? { defaultModel: runModel } : {}), ...(executionOptions !== undefined ? { executionOptions: resolveExecutionOptions({ source: 'provider', options: provider.executionOptions }, { source: 'run', options: executionOptions }).requested } : {}) }
       : provider;
     // Gateway credentials are attached non-enumerably on provider reads. A
     // spread drops them; retain that execution-only key without exposing it to

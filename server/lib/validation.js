@@ -3153,4 +3153,6 @@ export const modelDownloadParamsSchema = z.object({ modelId: z.string().min(1).m
 export const icLoraDownloadParamsSchema = z.object({ mode: z.string().min(1).max(256) });
 export const textEncoderDownloadParamsSchema = z.object({ id: z.string().min(1).max(256) });
 
-export const providerExecutionOptionsQuerySchema = z.object({ model: z.string().trim().max(512).optional() }).strict();
+export const providerExecutionOptionsQuerySchema = z.object({ model: z.string().trim().max(512).optional(), refresh: z.enum(['true', 'false']).optional() }).strict();
+
+export const executionOptionSelectionSchema = z.object({ model: z.string().trim().max(512).optional(), executionOptions: executionOptionsSchema }).strict();

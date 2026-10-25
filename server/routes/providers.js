@@ -1,4 +1,4 @@
-import { providerExecutionOptionsQuerySchema } from '../lib/validation.js';
+import { executionOptionSelectionSchema, providerExecutionOptionsQuerySchema } from '../lib/validation.js';
 import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
 import { tuiModeAddition } from '../lib/providerModePairing.js';
@@ -764,12 +764,19 @@ export function createPortOSProviderRoutes(aiToolkit) {
    * `effort` become the preset's defaults; a `+<bootstrap>` suffix becomes
    * its `credentialBootstrapId`.
    */
+  router.post('/:id/execution-options/selection', asyncHandler(async (req, res) => {
+    const { model, executionOptions } = validateRequest(executionOptionSelectionSchema, req.body ?? {});
+    const { createExecutionOptionSelection } = await import('../services/providerExecutionOptions.js');
+    const selection = await createExecutionOptionSelection(req.params.id, model, executionOptions);
+    res.json(presentProvider(await providerService.getProviderById(selection.id), await detectSystemCapabilities()));
+  }));
+
   router.get('/:id/execution-options', asyncHandler(async (req, res) => {
-    const { model } = validateRequest(providerExecutionOptionsQuerySchema, req.query);
+    const { model, refresh } = validateRequest(providerExecutionOptionsQuerySchema, req.query);
     const provider = await providerService.getProviderById(req.params.id);
     if (!provider) throw new ServerError('Provider not found', { status: 404 });
     const { getExecutionOptionCapabilities } = await import('../services/providerExecutionOptions.js');
-    res.json(await getExecutionOptionCapabilities(provider, model));
+    res.json(await getExecutionOptionCapabilities(provider, model, { fresh: refresh === 'true' }));
   }));
 
   router.post('/presets', asyncHandler(async (req, res) => {

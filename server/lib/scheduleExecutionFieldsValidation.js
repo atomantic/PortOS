@@ -1,3 +1,4 @@
+import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { z } from 'zod';
 import { providerRefFieldSchema } from './zodCompat.js';
 
@@ -6,4 +7,5 @@ export const scheduleExecutionFieldsSchema = z.object({
   prompt: z.string().nullable().optional(),
   providerId: providerRefFieldSchema.nullable().optional(),
   model: z.string().nullable().optional(),
+  executionOptions: executionOptionsSchema.optional(),
 });

@@ -152,6 +152,7 @@ const orchestrationRoleSchema = z.object({
   // Per-role reasoning effort. The architect's own rung for its planning pass;
   // for the implementer it is the DEFAULT a spec's `REASONING:` line overrides.
   effort: z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional()),
+  executionOptions: executionOptionsSchema.optional(),
 }).strict();
 
 export const orchestrationProfileSchema = z.object(
@@ -534,6 +535,7 @@ export const createCosJobSchema = z.object({
   // back to the provider default. Forwarded into the generated task's metadata as
   // `effort` by generateTaskFromJob; no-op'd at spawn for non-effort providers.
   effort: effortUpdateSchema,
+  executionOptions: executionOptionsSchema.optional(),
   // Optional managed-app scope. Empty string from the UI picker → null so a PUT
   // can actively un-scope a job back to global (updateJob only skips `undefined`,
   // so undefined would silently preserve the old scope). Absent key stays
@@ -642,6 +644,7 @@ export const createTaskTemplateSchema = z.object({
   provider: providerRefFieldSchema.optional(),
   model: z.string().max(200).optional(),
   effort: z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional()),
+  executionOptions: executionOptionsSchema.optional(),
   app: z.string().max(200).optional(),
   slashdoCommand: z.preprocess(emptyToUndefined, slashdoCommandSchema.optional()),
   settings: taskTemplateSettingsSchema.optional(),
@@ -659,6 +662,7 @@ export const taskTemplateFromTaskSchema = z.object({
     provider: providerRefFieldSchema.optional(),
     model: z.string().max(200).optional(),
     effort: z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional()),
+    executionOptions: executionOptionsSchema.optional(),
     app: z.string().max(200).optional(),
   }),
   templateName: z.string().trim().min(1).max(120).optional(),
@@ -805,6 +809,7 @@ export const codeReviewSettingsSchema = z.object({
     backend: z.preprocess(emptyToUndefined, z.enum(LOCAL_LLM_REVIEWERS).optional()),
     model: z.string().max(MAX_REVIEWER_MODEL_LENGTH).optional(),
     effort: z.preprocess(emptyToUndefined, z.string().optional()),
+    executionOptions: executionOptionsSchema.optional(),
     fileIssue: z.boolean().optional(),
     queueTask: z.boolean().optional(),
     followUpOn: z.preprocess(emptyToUndefined, z.enum(GOAL_FIDELITY_FOLLOW_UP_TRIGGERS).optional()),
@@ -865,6 +870,7 @@ const largeInputFallbackSchema = z.object({
   providerId: z.string().trim().min(1).max(200).optional(),
   model: z.string().trim().min(1).max(200).optional(),
   effort: z.enum(EFFORT_LEVELS).optional(),
+  executionOptions: executionOptionsSchema.optional(),
 }).strict();
 
 function sanitizePipelineStage(raw) {

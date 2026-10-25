@@ -2,13 +2,13 @@
 export const EXECUTION_OPTIONS_VERSION = 1;
 export const EXECUTION_OPTIONS_ERROR = 'EXECUTION_OPTIONS_UNSUPPORTED';
 export function executionOptionsError(message) {
-  return Object.assign(new Error(message), { code: EXECUTION_OPTIONS_ERROR });
+  return Object.assign(new Error(message), { code: EXECUTION_OPTIONS_ERROR, status: 400 });
 }
 export const EXECUTION_OPTION_DEFINITIONS = Object.freeze({
   serviceTier: Object.freeze({
     key: 'serviceTier', type: 'enum', label: 'Speed', harnesses: ['codex'],
     values: ['standard', 'fast'], default: null, inheritance: 'per-key',
-    help: 'Fast may consume more subscription usage or credits. Availability depends on the model and account.',
+    help: 'Fast may consume more subscription usage or credits. Saved schedules use this choice on future runs; it does not enable or reschedule a job. Availability depends on the model and account.',
   }),
 });
 
@@ -38,4 +38,10 @@ export function resolveExecutionOptions(...layers) {
   }
   return { version: EXECUTION_OPTIONS_VERSION, requested, effective: {}, provenance,
     confirmation: Object.keys(requested).length ? 'requested/unconfirmed' : 'default/unconfirmed' };
+}
+
+/** Resume preserves explicit task/run overrides without pinning inherited defaults. */
+export function taskExecutionOptions(value) {
+  if (value?.version !== EXECUTION_OPTIONS_VERSION) return value == null ? undefined : validateExecutionOptions(value);
+  return Object.fromEntries(Object.entries(value.requested || {}).filter(([key]) => ['task', 'run'].includes(value.provenance?.[key])));
 }

@@ -2,7 +2,7 @@ import { buildVendorSpawnConfig } from '../lib/providerVendors.js';
 import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { probeCodexModelsViaAppServer } from '../lib/aiToolkit/internal/codexModelListProbe.js';
-import { getExecutionOptionCapabilities, prepareExecutionOptions } from './providerExecutionOptions.js';
+import { getExecutionOptionCapabilities, prepareExecutionOptions } from '../lib/providerExecutionOptions.js';
 import { buildCliArgs } from '../lib/cliProviderArgs.js';
 import { buildTuiInvocation } from '../lib/tuiHandshake.js';
 import { resolveExecutionOptions } from '../lib/executionOptions.js';
@@ -15,7 +15,7 @@ const provider = { id: 'codex', command: 'codex', type: 'cli', codexAuthMode: 'c
 
 beforeEach(() => {
   vi.clearAllMocks();
-  probeCodexModelsViaAppServer.mockResolvedValue([{ id: model, serviceTiers: [{ id: 'fast' }] }]);
+  probeCodexModelsViaAppServer.mockResolvedValue({ accountType: 'chatgpt', requirements: null, config: {}, models: [{ id: model, serviceTiers: [{ id: 'fast' }] }] });
 });
 
 describe('execution options at dispatch', () => {
@@ -61,7 +61,7 @@ describe('execution options at dispatch', () => {
   });
 
   it('refuses conflicting provider config instead of reporting it applied', async () => {
-    await expect(prepareExecutionOptions({ ...provider, args: ['-c', 'service_tier="fast"'] }, model, { serviceTier: 'standard' })).rejects.toThrow('ChatGPT');
+    await expect(prepareExecutionOptions({ ...provider, args: ['-c', 'service_tier="fast"'] }, model, { serviceTier: 'standard' })).rejects.toThrow('conflicts with provider args');
   });
 
   it('rejects unknown options and preserves explicit Standard in precedence', () => {
@@ -74,16 +74,15 @@ describe('execution options at dispatch', () => {
     { ...provider, type: 'api' },
     { ...provider, command: 'claude' },
     { ...provider, codexAuthMode: 'api' },
-    { ...provider, codexAuthMode: undefined },
   ])('refuses unsupported/fallback routes without sending a model turn', async (route) => {
     await expect(prepareExecutionOptions(route, model, { serviceTier: 'fast' })).rejects.toThrow('ChatGPT');
     expect(probeCodexModelsViaAppServer).not.toHaveBeenCalled();
   });
 
   it('does not treat an old runtime or unadvertised model as Fast capable', async () => {
-    probeCodexModelsViaAppServer.mockResolvedValue([{ id: model }]);
+    probeCodexModelsViaAppServer.mockResolvedValue({ accountType: 'chatgpt', config: {}, models: [{ id: model }] });
     await expect(prepareExecutionOptions(provider, model, { serviceTier: 'fast' })).rejects.toThrow('did not advertise');
-    probeCodexModelsViaAppServer.mockResolvedValue([{ id: model, serviceTiers: [] }]);
+    probeCodexModelsViaAppServer.mockResolvedValue({ accountType: 'chatgpt', config: {}, models: [{ id: model, serviceTiers: [] }] });
     await expect(prepareExecutionOptions(provider, model, { serviceTier: 'fast' })).rejects.toThrow('unsupported');
     expect((await getExecutionOptionCapabilities(provider, model)).options[0].values).toEqual(['standard']);
   });
