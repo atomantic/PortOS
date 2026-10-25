@@ -177,7 +177,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
   const ownership = deps.ownership || (async input => (await import('./heldCheckoutRecovery.js')).inspectCheckoutRetirementOwnership(input));
   const admission = async () => deps.admission || await import('../lib/checkoutRetirementAdmission.js');
   const forge = deps.forge || (async (ctx, release, prUrl) => (await import('./heldCheckoutReview.js')).readRetirementForgeEvidence(
-    ctx.repoPath, release.branch, prUrl, { forgeAccount: ctx.forgeAccount, exactAliasHead: release.head }));
+    ctx.repoPath, release.branch, prUrl, { forgeAccount: ctx.forgeAccount, exactAliasHead: release.head, exactDeliveredHead: release.head }));
   const comparison = deps.comparison || (async (ctx, release, prUrl, snapshot, policy, forgeFacts) => {
     const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
     const run = () => buildCheckoutRetirementReview({ repoPath: ctx.repoPath, release, prUrl,

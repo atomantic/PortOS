@@ -10,7 +10,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { PR_COMPLETIONS, explicitPrCompletion } from '../lib/prDisposition.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
-import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
+import { checkoutSeedSchema, completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
 import { isDeepStrictEqual } from 'node:util';
 
 const samePath = (a, b) => typeof a === 'string' && typeof b === 'string'
@@ -165,26 +165,31 @@ function reviewedOrphanCheckout(policy, input) {
       && row.head === input.tip && row.incarnation?.pointer && row.incarnation?.gitdir);
 }
 
-// An orphan's captured generation may belong to a different checkout of the
+// A completed owner's captured generation may belong to a different checkout of the
 // same delivered head. It cannot transfer its cleanup obligation to an explicit
 // detached-copy review. Keep its result and original cleanup record unchanged.
 const sameReviewedPath = (a, b, input) => samePath(a, b)
   || (typeof a === 'string' && typeof b === 'string' && Boolean(input.checkoutIdentities?.[a])
     && input.checkoutIdentities[a] === input.checkoutIdentities[b]);
 
-function completedOrphanSibling(policy, input) {
+function completedDetachedSiblingCapture(policy, input) {
   const agent = policy.agent;
+  const normalCleanup = agent.result?.executionSuccess === true && agent.result.validationPassed === true
+    && agent.result.cleanupPending === true && agent.result.taskOutcome?.recovery?.mode === 'cleanup';
   if (!/^[a-f0-9]{64}$/.test(input.detachedCheckoutIdentity || '')
     || input.verifiedPrHead !== input.tip || !input.tip || retirementPr(policy) !== input.prUrl
-    || (policy.tip && policy.tip !== input.tip) || agent.status !== 'completed' || agent.result?.orphaned !== true
-    || agent.result.validationPassed === false || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE) return false;
-  return agent.metadata?.completedCheckouts?.some(row => row.version === 2 && completedCheckoutReceiptValid(agent, row)
+    || (policy.tip && policy.tip !== input.tip) || agent.status !== 'completed' || (agent.result?.orphaned !== true && !normalCleanup)
+    || agent.result.validationPassed === false || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE) return null;
+  const captures = agent.metadata?.completedCheckouts?.filter(row => (row.version === 2 || (normalCleanup && row.version === 1)) && completedCheckoutReceiptValid(agent, row)
     && sameReviewedPath(row.repoPath, input.repoPath, input) && row.branch === input.branch && row.head === input.tip
     && sameReviewedPath(row.path, agent.metadata.workspacePath, input) && !sameReviewedPath(row.path, input.checkoutPath, input)
     && !sameReviewedPath(row.path, input.repoPath, input) && row.incarnation?.pointer
     && createHash('sha256').update(JSON.stringify(['dev', 'ino', 'birthtimeNs'].map(key => row.incarnation.pointer[key])))
-      .digest('hex') !== input.detachedCheckoutIdentity) === true;
+      .digest('hex') !== input.detachedCheckoutIdentity);
+  return captures?.length === 1 ? captures[0] : null;
 }
+
+const completedDetachedSibling = (policy, input) => Boolean(completedDetachedSiblingCapture(policy, input));
 
 function reviewedIncarnation(input, policies) {
   if (!isAbsolute(input.checkoutPath || '') || samePath(input.checkoutPath, input.repoPath)
@@ -242,8 +247,50 @@ function completedCleanupForRetirement(policy, input) {
     && (result.executionSuccess === true || result.cleanupDeliveryVerified === true) && result.validationPassed !== false
     && result.taskOutcome?.recovery?.mode === 'cleanup' && input.verifiedPrHead === input.tip && !!input.tip
     && (integratedLegacyCleanup || agent.metadata?.completedCheckouts?.some(row => (row.version === 1 || (row.version === 2 && completedCheckoutReceiptValid(agent, row))) && row.agentId === agent.id
-      && row.repoPath === input.repoPath && row.branch === input.branch && row.path === input.checkoutPath
+      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && samePath(row.path, input.checkoutPath)
       && row.head === input.tip && row.incarnation?.pointer && row.incarnation?.gitdir));
+}
+
+/** A retry moves the original checkout rather than creating another generation.
+ * A completed cleanup successor can settle its captured ancestors' retirement
+ * obligations; their execution failures and task budgets remain historical facts.
+ */
+function resumedCleanupPolicies(policies, input) {
+  if (input.verifiedPrHead !== input.tip) return policies;
+  const byId = new Map(policies.map(policy => [policy.agent.id, policy]));
+  const proofs = new Map();
+  const receipt = (policy, incarnation) => {
+    const agent = policy.agent;
+    if (agent.status !== 'completed' || !agent.taskId || agent.result?.validationPassed === false
+      || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE || retirementPr(policy) !== input.prUrl
+      || (policy.tip && policy.tip !== input.tip)) return null;
+    const rows = agent.metadata?.completedCheckouts?.filter(row => completedCheckoutReceiptValid(agent, row)
+      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && row.head === input.tip
+      && samePath(row.path, agent.metadata.workspacePath) && isDeepStrictEqual(row.incarnation, incarnation));
+    return rows?.length === 1 ? rows[0] : null;
+  };
+  for (const successor of policies) {
+    // A detached copy never owned this task's original generation. Validate
+    // its completed sibling first, then compare ancestors within that captured
+    // original generation; retain the copy identity on the derived proof.
+    const sibling = completedDetachedSiblingCapture(successor, input);
+    if (sibling && !checkoutSeedSchema.shape.incarnation.safeParse(sibling.incarnation).success) continue;
+    const context = sibling ? { ...input, checkoutPath: sibling.path, checkoutIncarnation: sibling.incarnation } : input;
+    if (!context.checkoutIncarnation || !completedCleanupForRetirement(successor, context) || !receipt(successor, context.checkoutIncarnation)) continue;
+    let child = successor;
+    const seen = new Set([child.agent.id]);
+    while (child.agent.metadata?.resumedFromAgentId) {
+      const parent = byId.get(child.agent.metadata.resumedFromAgentId);
+      if (!parent || seen.has(parent.agent.id) || parent.agent.taskId !== successor.agent.taskId
+        || !(Date.parse(parent.agent.completedAt) <= Date.parse(child.agent.startedAt)) || !receipt(parent, context.checkoutIncarnation)) break;
+      seen.add(parent.agent.id);
+      proofs.set(parent.agent.id, { successorAgentId: successor.agent.id, taskId: successor.agent.taskId,
+        checkoutIncarnation: context.checkoutIncarnation,
+        ...(sibling && { detachedCheckoutIdentity: input.detachedCheckoutIdentity }) });
+      child = parent;
+    }
+  }
+  return policies.map(policy => proofs.has(policy.agent.id) ? { ...policy, resumedCleanup: proofs.get(policy.agent.id) } : policy);
 }
 
 /** Operator review settles successful completed review obligations. PR-bound
@@ -255,14 +302,16 @@ export function reviewedRetirementPolicy(input) {
   // unrelated history; a current checkout's handoff must never be filtered out.
   const decision = completionDecision({ ...input, prUrl: undefined });
   if (decision.reason === unavailable) return { reason: decision.reason };
-  const incarnation = reviewedIncarnation(input, decision.policies || []);
-  const policies = incarnation?.current || decision.policies || [];
+  const resumed = resumedCleanupPolicies(decision.policies || [], input);
+  const incarnation = reviewedIncarnation(input, resumed);
+  const policies = incarnation?.current || resumed;
   if (policies.some(p => p.completion === PR_COMPLETIONS.LEAVE_OPEN)) return { reason: held };
   if (policies.some(p => p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input)
-    && !reviewedOrphanCheckout(p, input) && !completedOrphanSibling(p, input) && !continuedDelivery(p, input))
+    && !reviewedOrphanCheckout(p, input) && !completedDetachedSibling(p, input) && !continuedDelivery(p, input) && !p.resumedCleanup)
     || p.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
     || (retirementPr(p) && !continuedDelivery(p, input)
-      && ((!incarnation && !completedOrphanSibling(p, input)) || retirementPr(p) !== input.prUrl))
+      && ((!incarnation && !completedDetachedSibling(p, input)
+        && !(input.detachedCheckoutIdentity && p.resumedCleanup?.detachedCheckoutIdentity === input.detachedCheckoutIdentity)) || retirementPr(p) !== input.prUrl))
     || (reviewTarget(p) && (reviewTarget(p).branch !== input.branch || (p.prUrl && p.prUrl !== reviewTarget(p).url)))
     || (incarnation && p.tip && p.tip !== input.tip && !continuedDelivery(p, input)))) {
     return { reason: 'retirement-policy-not-legacy-completed' };
@@ -270,9 +319,10 @@ export function reviewedRetirementPolicy(input) {
   return { reason: null, ...(input.integratedCleanupHead && { integratedCleanupHead: input.integratedCleanupHead }), policies: policies.map(p => ({
     id: p.agent.id || p.agent.agentId, startedAt: p.agent.startedAt,
     completedAt: p.agent.completedAt, status: p.agent.status, success: p.agent.result.success,
+    ...(p.resumedCleanup && { resumedCleanup: p.resumedCleanup }),
     ...(continuedDelivery(p, input) && { continuedDelivery: continuedDelivery(p, input) }),
     ...(reviewedOrphanCheckout(p, input) && { orphanedExecution: true }),
-    ...(completedOrphanSibling(p, input) && { orphanedSibling: true, detachedCheckoutIdentity: input.detachedCheckoutIdentity }),
+    ...(completedDetachedSibling(p, input) && { ...(p.agent.result?.orphaned === true ? { orphanedSibling: true } : { completedSibling: true }), detachedCheckoutIdentity: input.detachedCheckoutIdentity }),
     branch: p.branch, completion: p.completion,
     ...(incarnation && { prUrl: retirementPr(p) ?? null, tip: p.tip ?? null, workspacePath: p.agent.metadata?.workspacePath ?? null }),
   })).sort((a, b) => String(a.id).localeCompare(String(b.id))),

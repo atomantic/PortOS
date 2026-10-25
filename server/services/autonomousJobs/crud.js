@@ -1,3 +1,4 @@
+import { CLAIM_WORKFLOW_AUDIT_ID, CLAIM_WORKFLOW_AUDIT_JOB } from './claimWorkflowAudit.js';
 /**
  * Autonomous Jobs — CRUD and accessors.
  *
@@ -176,6 +177,13 @@ async function updateJob(jobId, updates) {
       if (updates[field] !== undefined) {
         job[field] = updates[field]
       }
+    }
+
+    if (jobId === CLAIM_WORKFLOW_AUDIT_ID) {
+      job.appId = CLAIM_WORKFLOW_AUDIT_JOB.appId
+      job.type = 'agent'
+      job.taskMetadata = CLAIM_WORKFLOW_AUDIT_JOB.taskMetadata
+      job.formFields = CLAIM_WORKFLOW_AUDIT_JOB.formFields
     }
 
     // Recalculate intervalMs if interval changed

@@ -4,19 +4,19 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { EventEmitter } from 'events';
 
-// Mock child_process so testProvider's command-resolution branch runs against a
-// controllable `which`/`where` + version probe instead of the host's real PATH.
+// Synthetic command results drive real spawn/stream lifecycle observation.
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, execFile: vi.fn(), spawn: vi.fn() };
+  return { ...actual, spawn: vi.fn() };
 });
 
-import { execFile, spawn } from 'child_process';
+import { spawn } from 'child_process';
 import { createProviderService } from './providers.js';
 import { pinPlatform } from '../testHelper.js';
 
 // Temp dir, NOT a cwd-rooted one — see providerStatus.test.js (#3823).
 let TEST_DATA_DIR;
+const commandResult = vi.fn();
 
 describe('testProvider — cli command resolution (cross-platform PATH)', () => {
   let providerService;
@@ -31,10 +31,31 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
     restorePlatform = pinPlatform(process.platform);
     TEST_DATA_DIR = await mkdtemp(join(tmpdir(), 'portos-cli-resolve-'));
     providerService = createProviderService({ dataDir: TEST_DATA_DIR, providersFile: 'providers.json' });
-    vi.mocked(spawn).mockImplementation(() => {
-      const child = new EventEmitter();
-      child.kill = vi.fn();
-      queueMicrotask(() => child.emit('close', 0));
+    vi.mocked(spawn).mockImplementation((command, args, options) => {
+      if (command === 'taskkill') {
+        const killer = new EventEmitter();
+        killer.kill = vi.fn();
+        queueMicrotask(() => killer.emit('close', 0));
+        return killer;
+      }
+      let child;
+      const original = commandResult(command, args, options, (error, stdout, stderr) => {
+        queueMicrotask(() => {
+          if (stdout) child.stdout.emit('data', stdout);
+          if (stderr) child.stderr.emit('data', stderr);
+          if (error && typeof error.code === 'string') child.emit('error', error);
+          child.emit('exit', error?.code ?? 0, error?.signal ?? null);
+          child.emit('close', error?.code ?? 0, error?.signal ?? null);
+        });
+      });
+      child = original instanceof EventEmitter ? original : new EventEmitter();
+      for (const [key, value] of Object.entries(original || {})) if (key !== 'once') child[key] = value;
+      for (const name of ['stdout', 'stderr']) {
+        const stream = new EventEmitter();
+        stream.setEncoding = () => stream;
+        stream.destroy = child[name]?.destroy ?? vi.fn();
+        child[name] = stream;
+      }
       return child;
     });
     // testProvider's win32 path now ALSO does its own filesystem-based
@@ -54,12 +75,11 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
     restorePlatform();
     process.env.PATH = originalPath;
     if (fakePathDir) await rm(fakePathDir, { recursive: true, force: true });
-    vi.mocked(execFile).mockReset();
+    commandResult.mockReset();
     if (TEST_DATA_DIR) await rm(TEST_DATA_DIR, { recursive: true, force: true });
   });
 
-  // execFile's callback is always its last argument; options vary between the
-  // lookup and version calls, so find the callback positionally.
+  // Synthetic command results can either complete or withhold their callback.
   const lastCallback = (args) => args[args.length - 1];
 
   const mockOwnedGroupCleanup = (pid) => {
@@ -90,7 +110,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
   // Drive the mocked execFile: `lookup` is the stdout the which/where call emits,
   // `version` is the stdout the resolved-binary --version probe emits.
   const stubExec = ({ lookup, version = 'claude 1.0.0\n' }) => {
-    vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
+    commandResult.mockImplementation((cmd, ...rest) => {
       const cb = lastCallback(rest);
       if (cmd === 'which' || cmd === 'where') {
         if (lookup === null) return cb(new Error('not found'));
@@ -117,15 +137,15 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
     expect(result.path).toBe('C:\\Users\\Joe\\.local\\bin\\claude.exe');
     expect(result.version).toBe('claude 1.0.0');
     // The lookup must have gone through `where`, never `which`, on Windows.
-    const lookupCmds = vi.mocked(execFile).mock.calls.map((c) => c[0]);
+    const lookupCmds = commandResult.mock.calls.map((c) => c[0]);
     expect(lookupCmds).toContain('where');
     expect(lookupCmds).not.toContain('which');
-    const lookupCall = vi.mocked(execFile).mock.calls.find((c) => c[0] === 'where');
+    const lookupCall = commandResult.mock.calls.find((c) => c[0] === 'where');
     expect(lookupCall?.[2]).toMatchObject({ timeout: 0, windowsHide: true });
     expect(lookupCall?.[2]).not.toHaveProperty('killSignal');
     // Successful completion means the direct process has exited. Do not run
     // taskkill against its possibly reused PID on the normal path.
-    expect(spawn).not.toHaveBeenCalled();
+    expect(vi.mocked(spawn).mock.calls.some(([command]) => command === 'taskkill')).toBe(false);
   });
 
   it('takes the first line when `where` returns multiple matches', async () => {
@@ -153,7 +173,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
 
     expect(result.success).toBe(true);
     expect(result.path).toBe(join(fakePathDir, 'opencode.cmd'));
-    const versionCall = vi.mocked(execFile).mock.calls.find((c) => c[0] !== 'where' && c[0] !== 'which');
+    const versionCall = commandResult.mock.calls.find((c) => c[0] !== 'where' && c[0] !== 'which');
     // The re-resolved .cmd target can't be launched directly under
     // shell:false even with the explicit extension (Node refuses it
     // outright post-CVE-2024-27980) — it's wrapped through cmd.exe /c,
@@ -191,7 +211,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
 
     await providerService.testProvider(p.id);
 
-    const versionCall = vi.mocked(execFile).mock.calls.find((c) => c[0] !== 'where' && c[0] !== 'which');
+    const versionCall = commandResult.mock.calls.find((c) => c[0] !== 'where' && c[0] !== 'which');
     expect(versionCall?.[0]).toBe('C:\\Users\\Joe\\.local\\bin\\claude.exe');
     expect(versionCall?.[1]).toEqual(['--version']);
   });
@@ -205,7 +225,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
 
     expect(result.success).toBe(true);
     expect(result.path).toBe('/usr/local/bin/claude');
-    const lookupCmds = vi.mocked(execFile).mock.calls.map((c) => c[0]);
+    const lookupCmds = commandResult.mock.calls.map((c) => c[0]);
     expect(lookupCmds).toContain('which');
     expect(lookupCmds).not.toContain('where');
   });
@@ -223,13 +243,11 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
 
   it('reports a timed-out command lookup separately from a missing command', async () => {
     pinPlatform('linux');
-    vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
+    commandResult.mockImplementation((cmd, ...rest) => {
       const cb = lastCallback(rest);
       if (cmd !== 'which') throw new Error(`Unexpected command: ${cmd}`);
-      // Node's execFile timeout callback has code=null and exposes `killed`
-      // plus the signal; it does not set code=ETIMEDOUT.
       const err = Object.assign(new Error('Command failed: which slow-which'), {
-        code: null,
+        code: 'ETIMEDOUT',
         killed: true,
         signal: 'SIGKILL',
       });
@@ -242,8 +260,8 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/Timed out looking up command 'slow-which'/);
     expect(result.error).not.toMatch(/not found/);
-    expect(vi.mocked(execFile).mock.calls[0][2]).toMatchObject({ timeout: 0 });
-    expect(vi.mocked(execFile).mock.calls).toHaveLength(1);
+    expect(commandResult.mock.calls[0][2]).toMatchObject({ timeout: 0 });
+    expect(commandResult.mock.calls).toHaveLength(1);
   });
 
   it('does not start the version probe when lookup cleanup is unconfirmed', async () => {
@@ -253,7 +271,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
       error.code = 'EPERM';
       throw error;
     });
-    vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
+    commandResult.mockImplementation((cmd, ...rest) => {
       const cb = lastCallback(rest);
       if (cmd !== 'which') throw new Error(`Unexpected command after unsafe lookup: ${cmd}`);
       cb(null, '/usr/local/bin/slow-which\n', '');
@@ -272,38 +290,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
 
     expect(result).toMatchObject({ success: false });
     expect(result.error).toMatch(/cleanup after looking up/);
-    expect(vi.mocked(execFile).mock.calls).toHaveLength(1);
-  });
-
-  it('treats Node execFile timeout results as a spawned CLI with no version', async () => {
-    pinPlatform('linux');
-    vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
-      const cb = lastCallback(rest);
-      if (cmd === 'which') return cb(null, '/usr/local/bin/slow-cli\n', '');
-      mockOwnedGroupCleanup(4321);
-      const err = Object.assign(new Error('Command failed: slow-cli --version'), {
-        code: null,
-        killed: true,
-        signal: 'SIGKILL',
-      });
-      cb(err);
-      return {
-        pid: 4321,
-        kill: vi.fn(),
-        stdin: { destroy: vi.fn() },
-        stdout: { destroy: vi.fn() },
-        stderr: { destroy: vi.fn() },
-        once: vi.fn(),
-      };
-    });
-    const p = await makeCliProvider('slow-cli');
-
-    const result = await providerService.testProvider(p.id);
-
-    expect(result).toMatchObject({ success: true, path: '/usr/local/bin/slow-cli', version: 'available' });
-    const versionCalls = vi.mocked(execFile).mock.calls.filter(([cmd]) => cmd !== 'which' && cmd !== 'where');
-    expect(versionCalls).toHaveLength(1);
-    expect(versionCalls[0][1]).toEqual(['--version']);
+    expect(commandResult.mock.calls).toHaveLength(1);
   });
 
   it('does not report a timed-out CLI as available when cleanup cannot be confirmed', async () => {
@@ -313,11 +300,11 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
       error.code = 'EPERM';
       throw error;
     });
-    vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
+    commandResult.mockImplementation((cmd, ...rest) => {
       const cb = lastCallback(rest);
       if (cmd === 'which') return cb(null, '/usr/local/bin/slow-cli\n', '');
       cb(Object.assign(new Error('Command failed: slow-cli --version'), {
-        code: null,
+        code: 'ETIMEDOUT',
         killed: true,
         signal: 'SIGKILL',
       }));
@@ -346,7 +333,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
     let versionProbeStarted;
     let hangingChild;
     const started = new Promise((resolve) => { versionProbeStarted = resolve; });
-    vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
+    commandResult.mockImplementation((cmd, ...rest) => {
       const cb = lastCallback(rest);
       const options = rest[rest.length - 2];
       if (cmd === 'which') return cb(null, '/usr/local/bin/never-exits\n', '');
@@ -375,8 +362,51 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
     expect(hangingChild.stdin.destroy).toHaveBeenCalledOnce();
     expect(hangingChild.stdout.destroy).toHaveBeenCalledOnce();
     expect(hangingChild.stderr.destroy).toHaveBeenCalledOnce();
-    const versionCalls = vi.mocked(execFile).mock.calls.filter(([cmd]) => cmd !== 'which' && cmd !== 'where');
+    const versionCalls = commandResult.mock.calls.filter(([cmd]) => cmd !== 'which' && cmd !== 'where');
     expect(versionCalls).toHaveLength(1);
+  });
+
+  it.each([false, true])('retains unknown group inspection until confirmed exit (persistent=%s)', async persistent => {
+    pinPlatform('linux');
+    vi.useFakeTimers();
+    let reads = 0;
+    const started = Promise.withResolvers();
+    vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      if (signal === 'SIGKILL') return true;
+      throw Object.assign(new Error('controlled group inspection'), {
+        code: persistent || reads++ === 0 ? 'EPERM' : 'ESRCH',
+      });
+    });
+    commandResult.mockImplementation((command, _args, _options, callback) => {
+      if (command === 'which') return callback(null, '/usr/local/bin/slow-cli\n', '');
+      started.resolve();
+      return { pid: 4321, kill: vi.fn() };
+    });
+    const provider = await makeCliProvider('slow-cli');
+    const resultPromise = providerService.testProvider(provider.id);
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(11_100);
+    const result = await resultPromise;
+    expect(result.success).toBe(!persistent);
+    if (persistent) expect(result.error).toMatch(/process cleanup could not be confirmed/);
+    else expect(result.version).toBe('available');
+    expect(process.kill.mock.calls.filter(([, signal]) => signal === 'SIGKILL')).toHaveLength(1);
+  });
+
+  it('bounds stream output while retaining process-group cleanup and version fallback', async () => {
+    pinPlatform('linux');
+    commandResult.mockImplementation((command, args, _options, callback) => {
+      if (command === 'which') return callback(null, '/usr/local/bin/noisy-cli\n', '');
+      const child = makeProbeChild();
+      callback(null, args[0] === '--version' ? 'x'.repeat(1024 * 1024 + 1) : 'noisy-cli 1.0');
+      return child;
+    });
+    const provider = await makeCliProvider('noisy-cli');
+    expect(await providerService.testProvider(provider.id)).toMatchObject({ success: true, version: 'noisy-cli 1.0' });
+    expect(commandResult.mock.calls.filter(([command]) => command !== 'which').map(([, args]) => args))
+      .toEqual([['--version'], ['-v']]);
+    expect(vi.mocked(spawn).mock.calls.every(([, , options]) => options.detached === true)).toBe(true);
+    expect(process.kill).toHaveBeenCalledWith(expect.any(Number), 'SIGKILL');
   });
 
   it('does not taskkill a Windows probe PID after its parent exited before timeout', async () => {
@@ -386,7 +416,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
     let versionProbeStarted;
     let hangingChild;
     const started = new Promise((resolve) => { versionProbeStarted = resolve; });
-    vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
+    commandResult.mockImplementation((cmd, ...rest) => {
       const cb = lastCallback(rest);
       if (cmd === 'where') return cb(null, 'C:\\tools\\slow-cli.exe\r\n', '');
       hangingChild = new EventEmitter();
@@ -396,7 +426,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
       hangingChild.stdout = { destroy: vi.fn() };
       hangingChild.stderr = { destroy: vi.fn() };
       versionProbeStarted(rest[rest.length - 2]);
-      // The direct process exits but its descendant retains the execFile pipes,
+      // The direct process exits but its descendant retains the probe pipes,
       // so the callback never fires and the watchdog owns the timeout.
       return hangingChild;
     });
@@ -410,17 +440,17 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
 
     expect(result).toMatchObject({ success: false });
     expect(result.error).toMatch(/process cleanup could not be confirmed/);
-    expect(spawn).not.toHaveBeenCalled();
+    expect(vi.mocked(spawn).mock.calls.some(([command]) => command === 'taskkill')).toBe(false);
     expect(hangingChild.kill).not.toHaveBeenCalled();
   });
 
   it('falls back to "available" when the binary spawns but supports no version flag', async () => {
     pinPlatform('linux');
-    vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
+    commandResult.mockImplementation((cmd, ...rest) => {
       const cb = lastCallback(rest);
       if (cmd === 'which' || cmd === 'where') return cb(null, '/usr/local/bin/claude\n', '');
       // The binary ran (it's spawnable) but exited non-zero on the unknown flag —
-      // a numeric exit code is how Node surfaces a non-zero exit from execFile.
+      // a numeric exit code distinguishes execution from a spawn failure.
       const e = new Error('Command failed: claude --version'); e.code = 1;
       const child = makeProbeChild();
       cb(e);
@@ -436,7 +466,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
 
   it('reports failure when the resolved path cannot be spawned (Windows .cmd/.bat shim)', async () => {
     pinPlatform('win32');
-    vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
+    commandResult.mockImplementation((cmd, ...rest) => {
       const cb = lastCallback(rest);
       if (cmd === 'which' || cmd === 'where') return cb(null, 'C:\\Users\\Joe\\AppData\\npm\\claude.cmd\r\n', '');
       // Simulate a genuinely unspawnable shim even after resolveWindowsExecutable

@@ -167,6 +167,26 @@ describe('resolvePlanStages', () => {
     expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'server tests']);
   });
 
+  it('runs each focused structural guard once while retaining direct regressions in both workspaces', () => {
+    const plan = planWith({
+      server: { mode: 'files', files: ['server/guard.test.js', 'server/service.test.js'], sources: [] },
+      client: { mode: 'files', files: ['client/src/guard.test.js'], sources: [] }
+    });
+    const guardPlan = {
+      server: { files: ['server/guard.test.js'] },
+      client: { files: ['client/src/guard.test.js'] }
+    };
+    const stages = resolvePlanStages(plan, { guardPlan });
+    expect(stages.map(stage => stage.name)).toEqual([
+      'hidden-content scan', 'server structural guards', 'client structural guards', 'server tests'
+    ]);
+    for (const scope of ['server', 'client']) {
+      const files = stages.filter(stage => stage.suite === scope).flatMap(stage => JSON.parse(stage.env.CI_TEST_FILES));
+      expect(files).toEqual(plan[scope].files);
+    }
+    expect(plan.server.files).toEqual(['server/guard.test.js', 'server/service.test.js']);
+  });
+
   it.each(['related', 'full'])('runs shared guards before every costly %s stage without changing the broad selection', (mode) => {
     const tracked = ['server/lib/index.test.js', ALWAYS_RUN_TESTS[0], 'client/src/fooConventions.test.js'];
     const plan = planWith({

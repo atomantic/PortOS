@@ -83,6 +83,7 @@ vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
 
 import { inspectOrQueueCompletedReview } from './repoCleanupRecovery.js';
 import { readLocalBranchPresence, readCheckoutPathPresence } from './repoCleanupObservation.js';
+import { readRetirementForgeEvidence } from './heldCheckoutReview.js';
 import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
@@ -168,6 +169,8 @@ beforeEach(() => {
   retryCompletionCheckoutCapture.mockReset().mockResolvedValue(false);
   getAgentRecord.mockReset().mockResolvedValue(null);
   findMissingCheckoutPreservation.mockResolvedValue(null);
+  recordCleanupOutcome.mockReset().mockResolvedValue(true);
+  readRetirementForgeEvidence.mockReset().mockResolvedValue({ prHead: HEAD, mergeCommit: '3'.repeat(40), defaultHead: '2'.repeat(40) });
   inspectOrQueueCompletedReview.mockResolvedValue({ disposition: 'held', reason: 'delivery-ci-or-review-pending' });
   readBranchCompletionPolicies.mockResolvedValue([]);
   updateTask.mockReset().mockResolvedValue({ status: 'completed' });
@@ -192,7 +195,12 @@ beforeEach(() => {
   findPullRequestForBranch.mockResolvedValue({ status: 'none', url: null, detail: null });
   findMergeRequestForBranch.mockResolvedValue({ status: 'none', url: null, detail: null });
   notificationExists.mockResolvedValue(false);
-  addTask.mockResolvedValue({ id: 'task-recovery-1' });
+  addTask.mockImplementation(async payload => {
+    const created = { ...payload, id: 'task-recovery-1', metadata: payload.metadata };
+    const existing = getTaskById.getMockImplementation();
+    getTaskById.mockImplementation(async id => id === created.id ? created : existing?.(id));
+    return created;
+  });
   localBranch(false);
 });
 
@@ -218,6 +226,56 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     expect(updateTask).not.toHaveBeenCalled();
     expect(recordRepoStateVerification).not.toHaveBeenCalled();
+  });
+
+  it('settles an exhausted original cleanup owner after merge verification without another dispatch', async () => {
+    const blocked = { ...task(), status: 'blocked', metadata: { ...task().metadata,
+      blockedCategory: 'task-recovery-exhausted', deliveryDecisionAgentId: 'agent-1',
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1', failureCount: '3', totalSpawnCount: '3', lastSpawnedAt: CREATED_AT } };
+    const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE,
+      head: HEAD, startedAt: CREATED_AT, capturedAt: CREATED_AT, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const state = { ...agentState({ completedCheckouts: [completed], completionCleanup: { version: 1, status: 'pending' },
+      reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7', branch: BRANCH },
+      completionTaskDispatch: { taskId: 'task-1', taskType: 'user', expected: [['lastSpawnedAt', CREATED_AT], ['totalSpawnCount', 3]] } }),
+      id: 'agent-1', taskId: 'task-1', status: 'completed',
+      result: { success: false, executionSuccess: true, cleanupPending: true } };
+    const original = structuredClone(blocked);
+    getTaskById.mockResolvedValue(blocked);
+    state.metadata.isPersistentWorktree = true;
+    expect(await run({ success: false, agentState: state, task: blocked })).toMatchObject({ verified: false });
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(releaseRetryHold).not.toHaveBeenCalled();
+    delete state.metadata.isPersistentWorktree;
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/7', detail: { state: 'MERGED' } });
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    listWorktrees.mockResolvedValue([RELEASE]);
+    readCompletedCheckoutIdentity.mockResolvedValue(completed);
+    expect(await run({ success: false, agentState: state, task: blocked })).toMatchObject({ skipReason: 'cleanup-budget-exhausted' });
+    expect(addTask).not.toHaveBeenCalled();
+    existsSync.mockReturnValue(false);
+    localBranch(false);
+    listWorktrees.mockResolvedValue([]);
+    findMissingCheckoutPreservation.mockResolvedValue({ archiveDir: null, evidenceDigest: 'a'.repeat(64), recheck: async () => true });
+    for (const [key, value] of [['blocker', 'operator hold'], ['blockedCategory', 'task-approval'], ['totalSpawnCount', '4'],
+      ['deliveryRecoveryAgentId', 'another-owner']]) {
+      const prior = blocked.metadata[key]; blocked.metadata[key] = value;
+      expect(await run({ success: false, agentState: state, task: blocked })).toMatchObject({ skipReason: 'cleanup-owner-changed' });
+      expect(updateTask).not.toHaveBeenCalled();
+      if (prior === undefined) delete blocked.metadata[key]; else blocked.metadata[key] = prior;
+    }
+    updateTask.mockResolvedValueOnce({ statusChanged: true });
+    expect(await run({ success: false, agentState: state, task: blocked })).toMatchObject({ skipReason: 'cleanup-task-settlement-unverified' });
+    expect(await run({ success: false, agentState: state, task: blocked })).toMatchObject({ verified: true });
+    expect(updateTask).toHaveBeenLastCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', {
+      expectedStatus: 'blocked', expectedTask: { description: blocked.description, priority: blocked.priority, metadata: blocked.metadata },
+      recoveryOwner: { id: 'agent-1', startedAt: CREATED_AT }, preserveRetryBudget: true,
+    });
+    expect(blocked).toEqual(original);
+    expect(state.result).toEqual({ success: false, executionSuccess: true, cleanupPending: true });
+    expect(addTask).not.toHaveBeenCalled();
+    expect(releaseRetryHold).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
   });
 
   it('transfers a cleanup handoff that cannot retire a human leave-open branch', async () => {
@@ -282,7 +340,7 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(addTask).not.toHaveBeenCalled();
     expect(inspectOrQueueCompletedReview).not.toHaveBeenCalled();
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
-    expect(findMissingCheckoutPreservation).toHaveBeenCalledWith(expect.objectContaining({ release: expect.objectContaining({ checkoutIdentity: expect.stringMatching(/^[a-f0-9]{64}$/) }) }));
+    expect(findMissingCheckoutPreservation).not.toHaveBeenCalled();
     expect(state.result).toEqual({ success: false, executionSuccess: true, cleanupPending: true });
   });
 
@@ -362,53 +420,44 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it.each([[], ['Branch preserved by ordinary cleanup']])('settles its cleanup handoff after archive and integration proof despite warnings %j', async cleanupWarnings => {
-    const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
-      startedAt: CREATED_AT, capturedAt: CREATED_AT };
-    const state = { ...agentState({ completedCheckouts: [completed],
-      reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' }, repoStateVerification: { status: 'pending' } }),
-      result: { success: false, cleanupPending: true } };
-    await run({ success: false, agentState: state, cleanupWarnings });
-    expect(updateTask).not.toHaveBeenCalled();
-    findMissingCheckoutPreservation.mockResolvedValue({ archiveDir: '/example/archive', evidenceDigest: 'a'.repeat(64), recheck: async () => true });
-    expect(await run({ success: false, agentState: state, cleanupWarnings })).toMatchObject({ verified: true });
+  it.each([[], ['Branch preserved by ordinary cleanup']])('settles a merged, absent checkout cleanup handoff without a backup receipt despite warnings %j', async cleanupWarnings => {
+    const state = { ...agentState({ reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' },
+      repoStateVerification: { status: 'pending' } }), result: { success: false, cleanupPending: true } };
+    expect(await run({ success: false, agentState: state, cleanupWarnings })).toMatchObject({ verified: true, skipReason: null });
     expect(updateTask).toHaveBeenLastCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', {
       expectedStatus: 'in_progress', expectedMetadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' },
     });
+    expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', {
+      status: 'verified', reason: 'already-absent-merged', branch: BRANCH, path: WORKTREE,
+      prUrl: 'https://github.com/example/repo/pull/7', committedIntegrationVerified: true,
+    });
+    expect(recordRepoStateVerification).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({ status: 'completed' }));
+    expect(findMissingCheckoutPreservation).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it('settles an absent completed checkout from verified original-generation archive evidence without deleting or queueing work', async () => {
-    const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
-      startedAt: CREATED_AT, capturedAt: CREATED_AT };
-    const state = agentState({ completedCheckouts: [completed], reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' }, repoStateVerification: { status: 'pending' } });
-    const recheck = vi.fn(async () => true);
-    findMissingCheckoutPreservation.mockResolvedValue({ archiveDir: '/example/archive', evidenceDigest: 'a'.repeat(64), recheck });
-    expect(await run({ agentState: state })).toMatchObject({ verified: true, skipReason: null });
-    expect(findMissingCheckoutPreservation).toHaveBeenCalledWith({ repoPath: '/repo', release: { ...RELEASE, createdAt: CREATED_AT } });
-    expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({
-      status: 'verified', reason: 'already-absent-preservation-verified', head: HEAD,
-      preservation: expect.objectContaining({ capturedAt: CREATED_AT, evidenceDigest: 'a'.repeat(64) }),
-    }));
-    expect(recordRepoStateVerification).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({ status: 'completed' }));
+  it.each(['unavailable', 'unmerged', 'not-integrated'])('keeps absent checkout delivery unverified when merge proof is %s', async scenario => {
+    if (scenario === 'unavailable') readRetirementForgeEvidence.mockRejectedValue(new Error('forge unavailable'));
+    if (scenario === 'unmerged') getPullRequestState.mockResolvedValueOnce({ status: 'known', state: 'OPEN' });
+    if (scenario === 'not-integrated') execGit.mockResolvedValue({ exitCode: 1, stdout: '' });
+    expect(await run({ agentState: agentState({ reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } }) }))
+      .toMatchObject({ verified: false, skipReason: 'absent-checkout-integration-unverified' });
+    expect(recordCleanupOutcome).not.toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'verified' }));
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['write-refused', 'checkout-reappeared', 'ref-reappeared', 'owner-changed'])('does not settle absent checkout delivery when %s', async scenario => {
+    if (scenario === 'write-refused') recordCleanupOutcome.mockResolvedValueOnce(false);
+    if (scenario === 'checkout-reappeared') readCheckoutPathPresence.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    if (scenario === 'ref-reappeared') readLocalBranchPresence.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    if (scenario === 'owner-changed') readClaimOwnershipAgents.mockResolvedValueOnce([]).mockResolvedValueOnce(null);
+    const state = { ...agentState({ reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } }),
+      result: { success: false, cleanupPending: true } };
+    expect(await run({ success: false, agentState: state })).toMatchObject({ verified: false, skipReason: 'absent-checkout-settlement-unverified' });
+    expect(updateTask).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
-    recordCleanupOutcome.mockResolvedValueOnce(false);
-    expect(await run({ agentState: state })).toMatchObject({ verified: false, skipReason: 'already-absent-preservation-unverified' });
-    recheck.mockResolvedValue(false);
-    expect(await run({ agentState: state })).toMatchObject({ verified: false, skipReason: 'already-absent-preservation-unverified' });
-    findMissingCheckoutPreservation.mockResolvedValue(null);
-    expect(await run({ agentState: state })).toMatchObject({ verified: false, skipReason: 'already-absent-preservation-unverified' });
-  });
-
-  it('withholds absent-checkout settlement for a receipt from an earlier execution generation', async () => {
-    const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
-      startedAt: '2025-01-01T00:00:00.000Z', capturedAt: CREATED_AT };
-    const state = agentState({ completedCheckouts: [completed], reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } });
-    findMissingCheckoutPreservation.mockResolvedValue({ archiveDir: '/example/archive', evidenceDigest: 'a'.repeat(64), recheck: async () => true });
-    expect(await run({ agentState: state })).toMatchObject({ verified: false });
-    expect(findMissingCheckoutPreservation).not.toHaveBeenCalled();
-    expect(recordCleanupOutcome).not.toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'verified' }));
   });
 
   it.each([['broken leaf symlink', true], ['unreadable EACCES leaf', null]])('never treats %s as absent or verified cleanup', async (_name, presence) => {
@@ -416,7 +465,7 @@ describe('verifyAgentRepoState — clean runs', () => {
     const result = await run();
     expect(result.verified).toBe(false);
     expect(result.observed?.worktreePresent).toBe(presence);
-    expect(result.skipReason).not.toBe('already-absent-preservation-unverified');
+    expect(recordCleanupOutcome).not.toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'verified' }));
     expect(addTask).not.toHaveBeenCalled();
   });
 
@@ -437,14 +486,6 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it('keeps missing checkout/ref integration separate from unavailable private content preservation', async () => {
-    const state = agentState({ reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } });
-    for (let i = 0; i < 70; i++) expect(await run({ agentState: state })).toMatchObject({ verified: false, skipReason: 'already-absent-preservation-unverified' });
-    expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({ status: 'already-absent', committedIntegrationVerified: true }));
-    expect(addTask).not.toHaveBeenCalled();
-    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
-  });
-
   it('does not associate a stored foreign-repository PR number with this repository', async () => {
     localBranch(true);
     existsSync.mockReturnValue(true);
@@ -458,8 +499,8 @@ describe('verifyAgentRepoState — clean runs', () => {
 
     const result = await run();
 
-    expect(result.verified).toBe(false);
-    expect(result.skipReason).toBe('already-absent-preservation-unverified');
+    expect(result.verified).toBe(true);
+    expect(result.skipReason).toBeNull();
     expect(result.issues).toEqual([]);
     expect(addTask).not.toHaveBeenCalled();
     expect(addNotification).not.toHaveBeenCalled();
@@ -510,6 +551,19 @@ describe('verifyAgentRepoState — divergent runs', () => {
       }));
       expect(prepareInventoriedCheckoutRetirement).toHaveBeenCalledWith(expect.objectContaining({ appId: 'repo-app' }));
       expect(retireInventoriedCheckout).toHaveBeenCalledWith(expect.objectContaining({ appId: 'repo-app' }), expect.any(Object));
+    });
+
+    it('carries a resolved app scope through cognitive retirement dispatch and its server binding', async () => {
+      mergedLeftover();
+      resolveRetirementApp.mockResolvedValue({ app: { id: 'repo-app', repoPath: '/repo' } });
+      prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: review() });
+      expect(await appless()).toMatchObject({ verified: false, recoveryTaskId: 'task-recovery-1' });
+      expect(addTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'repo-app',
+        metadata: expect.objectContaining({ retirementReview: { appId: 'repo-app', release: RELEASE, createdAt: CREATED_AT } }),
+      }), 'internal');
+      expect(recordRepoStateRecovery).toHaveBeenCalledWith('agent-1', expect.objectContaining({
+        retirementReview: { appId: 'repo-app', release: RELEASE, createdAt: CREATED_AT },
+      }), { claimRun: true });
     });
 
     it.each(['retirement-app-ambiguous', 'retirement-app-unavailable'])('retains an app-less task whose repository scope is %s', async reason => {
@@ -571,6 +625,8 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(payload.context).toContain('ok:true and branchDeleted:true');
     expect(payload.context).not.toMatch(/git (?:worktree (?:remove|unlock|prune)|branch -[dD]|push[^\n]*--delete)|--remove-source-branch/);
     expect(payload.metadata.retirementReview).toEqual({ appId: 'demo-app', release: RELEASE, createdAt: CREATED_AT });
+    expect(recordRepoStateRecovery).toHaveBeenCalledWith('agent-1', { taskId: 'task-recovery-1', branch: BRANCH,
+      repoPath: '/repo', retirementReview: payload.metadata.retirementReview }, { claimRun: true });
     expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('demo-app', expect.objectContaining({
       retirementObligations: [{ ...RELEASE, reason: 'retirement-review-pending' }],
     }));
@@ -874,8 +930,8 @@ describe('verifyAgentRepoState — never fires', () => {
     resolveForgeForRepo.mockResolvedValue({ cli: 'glab', env: null });
     findMergeRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://gitlab.example.com/mr/4', detail: 'merged' });
     const result = await run();
-    expect(result.verified).toBe(false);
-    expect(result.skipReason).toBe('already-absent-preservation-unverified');
+    expect(result.verified).toBe(true);
+    expect(result.skipReason).toBeNull();
   });
 });
 
@@ -940,10 +996,11 @@ describe('verifyAgentRepoState — every hold records the reason it returns', ()
   });
 
   it('settles a receipt-less swarm branch from delivery evidence once its checkout and ref are gone', async () => {
+    listWorktrees.mockResolvedValue([{ path: '/repo', branch: 'main', head: HEAD }]);
     const state = agentState({ isWorktree: false, worktreeBranch: null, workspacePath: '/repo', claimPicksOwnBranch: true, claimBranches: ['claim/issue-11'] });
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/11', detail: 'MERGED' });
-    expect((await run({ agentState: state })).branches).toEqual([expect.objectContaining({ branch: 'claim/issue-11', skipReason: 'already-absent-preservation-unverified' })]);
-    expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({ branch: 'claim/issue-11', path: null, status: 'already-absent' }));
+    expect((await run({ agentState: state })).branches).toEqual([expect.objectContaining({ branch: 'claim/issue-11', verified: true, skipReason: null })]);
+    expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({ branch: 'claim/issue-11', path: null, status: 'verified', reason: 'already-absent-merged' }));
     // A holder or an unreadable ref keeps the identity hold.
     listWorktrees.mockResolvedValue([{ ...RELEASE, branch: 'refs/heads/claim/issue-11' }]);
     expect((await run({ agentState: state })).branches[0].skipReason).toBe('claim-checkout-identity-unverified');
@@ -1028,7 +1085,7 @@ describe('durable completion replay', () => {
     getTaskById.mockResolvedValue(task());
     findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'MERGED', url: 'https://github.com/example/repo/pull/7' });
     expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 1 });
-    expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'pending' }));
+    expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'completed' }));
     expect(addTask).not.toHaveBeenCalled();
   });
   it('backs off repeated machine recovery across restarts without creating tasks', async () => {
@@ -1084,7 +1141,6 @@ describe('completion after its originating task was removed', () => {
     localBranch(false);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/7',
       detail: { state: 'MERGED', number: 7 } });
-    findMissingCheckoutPreservation.mockResolvedValue({ evidenceDigest: 'a'.repeat(64), recheck: async () => true });
     settleAbsentTaskCompletion.mockResolvedValue(true);
     return { state, original, captured };
   };
@@ -1101,12 +1157,8 @@ describe('completion after its originating task was removed', () => {
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
   });
 
-  it('keeps absent work pending when its independent retirement receipt is missing or its settlement races', async () => {
+  it('keeps merged absent work pending when its completion settlement races', async () => {
     fixture();
-    findMissingCheckoutPreservation.mockResolvedValue(null);
-    expect(await resumeAgentCompletionRetirement('agent-1')).toMatchObject({ verified: false });
-    expect(settleAbsentTaskCompletion).not.toHaveBeenCalled();
-    findMissingCheckoutPreservation.mockResolvedValue({ recheck: async () => true });
     settleAbsentTaskCompletion.mockResolvedValue(false);
     expect(await resumeAgentCompletionRetirement('agent-1')).toMatchObject({ verified: false,
       skipReason: 'cleanup-receipt-settlement-unverified' });

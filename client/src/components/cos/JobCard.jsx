@@ -569,7 +569,7 @@ export default function JobCard({
                   onChange={dataInputs => setEditData(d => ({ ...d, dataInputs }))}
                 />
               )}
-              {isAgentJobType(editData.type) && (
+              {isAgentJobType(editData.type) && !job.portosOnly && (
                 <JobFormFieldsEditor
                   fields={editData.formFields}
                   onChange={formFields => setEditData(d => ({ ...d, formFields }))}

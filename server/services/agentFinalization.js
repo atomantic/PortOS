@@ -1,3 +1,4 @@
+import { isRetirementOnlyRecovery, verifyRetirementRecoveryCompletion } from './retirementRecoveryCompletion.js';
 import { storeCompletionData, completionReplayInput } from './agentCompletionData.js';
 import { prepareCompletionTaskHandoff, recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
 import { hasClaimCheckoutBindings } from './completedCheckoutEvidence.js';
@@ -134,8 +135,9 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  *
  * @returns {Promise<boolean|null|'skip-learning'>}
  */
-export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null }) {
+export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null }) {
   if (terminatedByUser) return null;
+  if (isRetirementOnlyRecovery(task)) return (retirementCompletion || await verifyRetirementRecoveryCompletion(task))?.status === 'verified';
   if (success && mergedReviewFollowUp?.status === 'verified') return true;
   const taskType = task?.taskType || 'user';
   // The SCHEDULED type (`metadata.analysisType`) if any, else the queue category —
@@ -1282,7 +1284,9 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   });
 
   if (Number(task?.metadata?.auditDispositionVersion) === 1 && recoveredHook?.auditDisposition?.status !== 'complete') effectiveSuccess = false;
-  const recoveredValidation = isProgrammaticIoTaskType(resolveTaskHookType(task))
+  const retirementCompletion = isRetirementOnlyRecovery(task) ? await verifyRetirementRecoveryCompletion(task) : null;
+  const recoveredValidation = retirementCompletion ? retirementCompletion.status === 'verified'
+    : isProgrammaticIoTaskType(resolveTaskHookType(task))
     ? resolveProgrammaticIoVerdict({ success: effectiveSuccess, hookResult: recoveredHook })
     : agent.result?.validationPassed ?? null;
   // A disposition never erases a recorded failed delivery gate. A saved pass,
@@ -1290,7 +1294,8 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   const validationPassed = recoveredValidation !== false && (mergedReviewFollowUp || claimDisposition)
     ? mergedReviewFollowUp || claimDisposition.status === 'verified' ? true : null
     : recoveredValidation;
-  const taskOutcome = reportedOutcome ? resolveTaskOutcome({ reported: reportedOutcome,
+  const taskOutcome = reportedOutcome || retirementCompletion ? resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
+    ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedOutcome,
     success: effectiveSuccess, validationPassed, noCommitDeclared: declaresNoCommitCriterion(task) }) : null;
   if (['blocked', 'incomplete'].includes(taskOutcome?.status)) effectiveSuccess = false;
 
@@ -1340,6 +1345,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     taskOutcome,
     validationPassed,
     ...(claimDisposition ? { claimDisposition } : {}),
+    ...(retirementCompletion ? { retirementCompletion } : {}),
     exitCode,
     duration,
     orphaned: true,
@@ -1911,7 +1917,9 @@ export async function finalizeAgent({
   // a local backend for it.
   // A verified stand-down is judged from tracker state. A partial landed diff
   // cannot prove the still-open issue's root cause and must not launch follow-ups.
+  const retirementCompletion = isRetirementOnlyRecovery(task) ? await verifyRetirementRecoveryCompletion(task) : null;
   const fidelity = deliveredVerdict.success && !isPrivateSecurityTask(task) && claimDisposition?.status !== 'verified'
+    && retirementCompletion?.status !== 'verified'
     ? await evaluateGoalFidelity({ task, workspacePath, startedAt: runStartedAt })
       .catch(err => {
         emitLog('warn', `Goal-fidelity review failed for ${agentId}: ${err.message}`, { agentId });
@@ -2002,13 +2010,15 @@ export async function finalizeAgent({
     emptyBranchInconclusiveEvidence: prEvidence.emptyBranchInconclusiveEvidence,
     claimDisposition,
     mergedReviewFollowUp,
+    retirementCompletion,
   })
     .catch(err => {
       emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });
       return null;
     });
 
-  const taskOutcome = resolveTaskOutcome({ reported: reportedTaskOutcome, success: verdict.success,
+  const taskOutcome = resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
+    ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedTaskOutcome, success: verdict.success,
     validationPassed, branchProvenEmpty, noChangeAllowed: permitsNoChangeCompletion(task),
     noCommitDeclared: declaresNoCommitCriterion(task) });
   const outcomeHeld = ['blocked', 'incomplete'].includes(taskOutcome?.status);
@@ -2068,6 +2078,7 @@ export async function finalizeAgent({
     requireCheckoutSettlement: deliverySuccess && taskUpdate.status === 'completed' && cleanupEligible
       && resolvePrCompletion(task.metadata) === PR_COMPLETIONS.REVIEW_THEN_MERGE,
     ...(claimDisposition ? { claimDisposition } : {}),
+    ...(retirementCompletion ? { retirementCompletion } : {}),
     ...(['task-approval', 'task-recovery-exhausted', 'runtime-verification'].includes(taskUpdate.metadata?.blockedCategory)
       || taskUpdate.metadata?.retryPendingCleanup === agentId || taskUpdate.metadata?.deliveryRecoveryAgentId === agentId
       ? { deliveryRecoveryOwned: true } : {}),

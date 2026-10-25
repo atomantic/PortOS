@@ -170,6 +170,7 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, 
     stages.push({ name: 'shipped prompt history', suite: 'prompt-history', script: 'migrations/check-shipped-prompt-history.js', args: [], env: {} });
   }
 
+  const guardedFiles = { server: new Set(), client: new Set() };
   const scopeEnv = { server: { PORTOS_CI_BROWSER_OWNER: 'unit', PORTOS_TEST_QUIET: '1' }, client: {} };
   if (guardPlan) {
     for (const scope of ['server', 'client']) {
@@ -177,6 +178,7 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, 
       const files = selected.mode === 'skip' ? [] : guardPlan[scope].files
         .filter(file => selected.mode === 'full' || selected.files.includes(file));
       if (files.length === 0) continue;
+      files.forEach(file => guardedFiles[scope].add(file));
       stages.push({
         name: `${scope} structural guards`, suite: scope, guard: true, files,
         script: 'run-ci-tests.js', args: [scope],
@@ -200,6 +202,13 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, 
   ['server', 'client'].forEach((scope) => {
     const scoped = plan[scope];
     if (scoped.mode === 'skip') return;
+    // Exact local file plans already ran these guards above. Do not depend on
+    // the memo to suppress a second invocation of tree-scanning tests. Broad
+    // related/full plans retain their original selection and CI semantics.
+    const files = scoped.mode === 'files'
+      ? scoped.files.filter(file => !guardedFiles[scope].has(file))
+      : scoped.files;
+    if (scoped.mode === 'files' && files.length === 0 && scoped.sources.length === 0) return;
     stages.push({
       name: `${scope} tests`,
       suite: scope,
@@ -208,7 +217,7 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, 
       env: {
         ...scopeEnv[scope],
         CI_TEST_MODE: scoped.mode,
-        CI_TEST_FILES: JSON.stringify(scoped.files),
+        CI_TEST_FILES: JSON.stringify(files),
         CI_TEST_SOURCES: JSON.stringify(scoped.sources),
         PORTOS_PREGATE_GUARDS: '',
         // Same base the planner just used. The import-growth guard fails

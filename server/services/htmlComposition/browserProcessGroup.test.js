@@ -158,3 +158,15 @@ it('keeps failed or incomplete diagnostic reads distinct from an empty group', a
   expect(await observeBrowserProcessGroup(group, 500)).toBe('unavailable');
   expect(signal).not.toHaveBeenCalled();
 });
+
+it.skipIf(process.platform === 'win32')('keeps signed BSD UID rows observable and matches their unsigned Node credential identity', async () => {
+  vi.spyOn(process, 'geteuid').mockReturnValue(4294967294);
+  vi.spyOn(process, 'getuid').mockReturnValue(4294967294);
+  observation.read.mockResolvedValue({ stdout: [
+    `${process.pid} 1 1 -2 -2 S`,
+    `${group} ${process.pid} ${group} -2 -2 S`,
+    '23456 1 77777 -1 -1 R',
+  ].join('\n') });
+  expect(await observeBrowserProcessGroup(group, 500)).toBe('leader:sleeping|parent:same|group:same|uid:same|ruid:same|live:1|zombies:0|foreignUid:0|states:sleeping:1|capped:false');
+  expect(signal).not.toHaveBeenCalled();
+});
