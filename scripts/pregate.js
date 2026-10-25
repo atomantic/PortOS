@@ -11,10 +11,10 @@
 
 import { spawn, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeSync } from 'fs';
-import { constants, tmpdir } from 'os';
+import { constants, homedir, tmpdir } from 'os';
 import { setTimeout as delay } from 'timers/promises';
 import { execFileSync } from 'child_process';
-import { dirname, join, resolve } from 'path';
+import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
 import { ALWAYS_RUN_TESTS, structuralTestsFor } from './ci-test-plan.js';
@@ -836,13 +836,15 @@ async function main() {
     }
 
     console.error('❌ Dependency consistency preflight failed; lint/tests have not run.');
-    for (const { label, linked, owner, issues } of dependencyProblems) {
+    for (const { label, linked, owner, directoryAvailable, issues } of dependencyProblems) {
       console.error(`  ${label} (${linked ? 'linked' : 'owned'} node_modules):\n${issues.map(issue => `    ${issue}`).join('\n')}`);
-      if (primaryCheckout && (linked || issues.some(i => i.includes('missing') || i.includes('unreadable')))) {
+      if (primaryCheckout && (!linked || !directoryAvailable)) {
         console.error(`    Worktree dependency dir is missing or unlinked for ${label}. Re-link with: node scripts/link-worktree-deps.js ${primaryCheckout} ${REPO_ROOT}`);
       } else {
+        const home = homedir();
+        const displayOwner = owner === home ? '~' : owner.startsWith(`${home}${sep}`) ? `~${owner.slice(home.length)}` : owner;
         console.error(linked
-          ? `    Reconcile dependencies in the owning source checkout (${owner}), with a full development install (npm ci --include=dev), or validate in a separate clone with its own locked installs. Never run npm install/ci through worktree links.`
+          ? `    Reconcile dependencies in the owning source checkout (${JSON.stringify(displayOwner)}), with a full development install (npm ci --include=dev), or validate in a separate clone with its own locked installs. Never run npm install/ci through worktree links.`
           : `    Reconcile this checkout's dependencies from its committed lockfiles (npm ci --include=dev in the owning workspace), then rerun pregate.`);
       }
     }
