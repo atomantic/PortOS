@@ -11,6 +11,7 @@ import Pill from '../ui/Pill';
 import { startTailcatServe, retryTailcatServe, stopTailcatServe } from '../../services/api';
 import { useTailcatServe } from './TailcatServeProvider';
 import TailcatAddress from './TailcatAddress';
+import TailcatDevicesPanel from './TailcatDevicesPanel';
 import { PORTS } from '../../lib/ports';
 import { timeAgo } from '../../utils/formatters';
 
@@ -18,7 +19,7 @@ const STATUS_TONE = { active: 'success', pending: 'muted', failed: 'warning', st
 const STATUS_ICON = { active: CheckCircle2, pending: Clock, failed: AlertCircle, stopped: Clock };
 
 export default function TailcatServePanel({ onChange, compact = false }) {
-  const { status, busy, run: runServe } = useTailcatServe();
+  const { status, busy, error, refetch, run: runServe } = useTailcatServe();
   const run = async (fn, message) => {
     if (await runServe(fn, message)) onChange?.();
   };
@@ -52,6 +53,10 @@ export default function TailcatServePanel({ onChange, compact = false }) {
         </>
       )}
 
+      {error && <div role="alert" className="text-xs text-port-error mb-2">
+        Could not read Tailcat status. An operator session or genuine local connection is required.
+        <button type="button" onClick={() => refetch()} className="ml-2 underline">Reload Tailcat status</button>
+      </div>}
       <div className="bg-port-bg border border-port-border rounded-lg p-3">
         <div className="flex flex-wrap items-center gap-2">
           <Pill tone={tone} size="xs" bordered={false} icon={StatusIcon}>
@@ -92,7 +97,7 @@ export default function TailcatServePanel({ onChange, compact = false }) {
                 {busy ? 'Working...' : 'Restart serve'}
               </button>
             )}
-            {status?.live && (
+            {(status?.live || status?.enabled) && (
               <button
                 type="button"
                 onClick={() => run(() => stopTailcatServe(), 'Tailcat serve stopped')}
@@ -115,6 +120,8 @@ export default function TailcatServePanel({ onChange, compact = false }) {
             {status.relayObservedAt && <span> · {timeAgo(status.relayObservedAt)}</span>}
           </p>
         )}
+
+        <TailcatDevicesPanel />
 
         <TailcatAddress address={status?.tcAddress} preview={status?.tcAddressRedacted} disabled={busy} />
 

@@ -423,11 +423,16 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/instances/provision-cert',
   // Tailcat: installs the binary (brew / go install) and starts the relay
   // processes; serve opens the remote ingress and reveals its bearer address.
-  // GET status and the DELETEs (they stop a relay) stay open.
+  // Serve capabilities and device trust management require operator authority.
   'POST /api/instances/peers/tailcat',
   'POST /api/instances/peers/tailcat/forwards/:id/retry',
   'POST /api/instances/peers/tailcat/serve',
   'POST /api/instances/peers/tailcat/serve/retry',
+  'GET /api/instances/peers/tailcat/serve',
+  'GET /api/instances/peers/tailcat/devices',
+  'POST /api/instances/peers/tailcat/devices',
+  'PATCH /api/instances/peers/tailcat/devices/enforcement',
+  'DELETE /api/instances/peers/tailcat/devices/:id',
 
   // Apps: create/edit choose the repo path and the start/build commands; the
   // lifecycle and launch routes run them under PM2 or the native launcher.

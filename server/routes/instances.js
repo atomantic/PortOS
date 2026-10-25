@@ -19,6 +19,7 @@ import * as tailcatPeer from '../services/tailcatPeer.js';
 import * as tailcatServe from '../services/tailcatServe.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
 import { federatedMediaPeerSettingsSchema, optionalBooleanMap, validateRequest } from '../lib/validation.js';
+import { tailcatDeviceApprovalSchema, tailcatDeviceEnforcementSchema } from '../lib/tailcatValidation.js';
 import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { isPeerBasicBootstrapRequest } from '../lib/apiAccessPolicy.js';
 import { requestHasHostControl } from '../services/authGate.js';
@@ -321,7 +322,8 @@ router.delete('/peers/tailcat/forwards/:id', asyncHandler(async (req, res) => {
 // GET /api/instances/peers/tailcat/serve — this node's managed tailcat serve status.
 // Returns the full tc address when known so the operator can Copy it out of band
 // (our own serve capability — unlike peer forwards, which stay redacted).
-router.get('/peers/tailcat/serve', asyncHandler(async (_req, res) => {
+router.get('/peers/tailcat/serve', asyncHandler(async (req, res) => {
+  await requireTailcatOperator(req);
   res.json(await tailcatServe.getTailcatServeStatus());
 }));
 
@@ -345,6 +347,32 @@ router.delete('/peers/tailcat/serve', asyncHandler(async (_req, res) => {
   res.json(await tailcatServe.stopTailcatServe({ disable: true }));
 }));
 
+
+async function requireTailcatOperator(req) {
+  if (isCrossOrigin(req) || !(await verifyRequestSession(req) || requestHasHostControl(req))) {
+    throw new ServerError('Operator authority required', { status: 403, code: 'HOST_CONTROL_FORBIDDEN' });
+  }
+}
+
+// Public identities and trust settings are available only to delegated operators.
+router.get('/peers/tailcat/devices', asyncHandler(async (req, res) => {
+  await requireTailcatOperator(req);
+  res.json(await tailcatServe.getTailcatDevices());
+}));
+
+router.post('/peers/tailcat/devices', asyncHandler(async (req, res) => {
+  const data = validateRequest(tailcatDeviceApprovalSchema, req.body);
+  res.json(await tailcatServe.approveTailcatDevice(data));
+}));
+
+router.patch('/peers/tailcat/devices/enforcement', asyncHandler(async (req, res) => {
+  const data = validateRequest(tailcatDeviceEnforcementSchema, req.body);
+  res.json(await tailcatServe.setTailcatDeviceEnforcement(data.enabled));
+}));
+
+router.delete('/peers/tailcat/devices/:id', asyncHandler(async (req, res) => {
+  res.json(await tailcatServe.revokeTailcatDevice(req.params.id));
+}));
 
 // POST /api/instances/peers — add a peer
 router.post('/peers', asyncHandler(async (req, res) => {

@@ -2,6 +2,10 @@ vi.mock('./tailcatIngress.js', () => ({ ensureTailcatIngress: vi.fn().mockResolv
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
+  approveTailcatDevice,
+  revokeTailcatDevice,
+  setTailcatDeviceEnforcement,
+  getTailcatDevices,
   parseServeListenAddr,
   ensureServeKey,
   startServeProcess,
@@ -394,4 +398,178 @@ it('rejects direct main-port serving before spawning or installing', async () =>
   await expect(ensureTailcatServe({ localPort: 5555, ensureInstalled })).rejects.toMatchObject({ code: 'TAILCAT_SERVE_BAD_PORT' });
   expect(spawnFn).not.toHaveBeenCalled();
   expect(ensureInstalled).not.toHaveBeenCalled();
+});
+
+describe('operator-owned device policy lifecycle', () => {
+  const keyA = `nodekey:${'1'.repeat(64)}`;
+  const keyB = `nodekey:${'2'.repeat(64)}`;
+  let saved;
+  let children;
+  let deps;
+  beforeEach(() => {
+    _resetLiveServeForTests();
+    vi.clearAllMocks();
+    saved = { version: 1, serve: null };
+    children = [];
+    readJSONFile.mockImplementation(async () => saved);
+    atomicWrite.mockImplementation(async (_path, data) => { saved = data; });
+    deps = {
+      ensureInstalled: async () => ({ bin: '/example/tailcat' }),
+      primeDerpMap: async () => ({}),
+      ensureKey: async () => ({}),
+      startServe: vi.fn(async (options) => {
+        const child = fakeChild();
+        children.push(child);
+        return { ...options, child, tcAddress: EXAMPLE_TC };
+      }),
+    };
+  });
+  afterEach(() => { _resetLiveServeForTests(); vi.useRealTimers(); });
+
+  it('migrates legacy posture explicitly, applies approved keys, and suspends after last-device revocation across boot/retry', async () => {
+    expect(await ensureTailcatServe(deps)).toMatchObject({ enforcement: { enabled: false, state: 'capability-only' } });
+    expect(deps.startServe.mock.lastCall[0].approvedKeys).toBeNull();
+    const first = await approveTailcatDevice({ label: 'Example phone', publicKey: keyA }, deps);
+    expect(first).not.toHaveProperty('tcAddress');
+    const idA = first.devices[0].id;
+    await approveTailcatDevice({ label: 'Example tablet', publicKey: keyB }, deps);
+    await setTailcatDeviceEnforcement(true, deps);
+    expect(deps.startServe.mock.lastCall[0].approvedKeys).toEqual([keyA, keyB]);
+    expect(await getTailcatDevices()).toMatchObject({ enforcement: { state: 'enforced', approvedCount: 2 } });
+    const old = children.at(-1);
+    const revoked = await revokeTailcatDevice(idA, deps);
+    expect(old.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(revoked.devices.find(device => device.id === idA).revokedAt).toBeTruthy();
+    expect(deps.startServe.mock.lastCall[0]).toMatchObject({ keyName: 'portos-api', approvedKeys: [keyB] });
+    const idB = revoked.devices.find(device => device.publicKey === keyB).id;
+    const starts = deps.startServe.mock.calls.length;
+    expect(await revokeTailcatDevice(idB, deps)).toMatchObject({ live: false, enabled: true, status: 'suspended', enforcement: { state: 'suspended' } });
+    expect(deps.startServe).toHaveBeenCalledTimes(starts);
+    expect(await retryTailcatServe(deps)).toMatchObject({ live: false, status: 'suspended' });
+    _resetLiveServeForTests();
+    expect(await restoreServe(deps)).toEqual({ restored: false, reason: 'no-approved-devices' });
+    expect(deps.startServe).toHaveBeenCalledTimes(starts);
+    await approveTailcatDevice({ label: 'Recovered tablet', publicKey: keyB }, deps);
+    expect(await getTailcatDevices()).toMatchObject({ live: true, enforcement: { state: 'enforced', approvedCount: 1 } });
+    expect(saved.version).toBe(2);
+  });
+
+  it('keeps live sessions for capability-only enrollment and metadata/no-op edits, then restarts for effective admission changes', async () => {
+    await ensureTailcatServe(deps);
+    const legacy = children.at(-1);
+    const approved = await approveTailcatDevice({ label: 'Phone', publicKey: keyA }, deps);
+    expect(legacy.kill).not.toHaveBeenCalled();
+    await revokeTailcatDevice(approved.devices[0].id, deps);
+    await setTailcatDeviceEnforcement(false, deps);
+    expect(legacy.kill).not.toHaveBeenCalled();
+    expect(children).toHaveLength(1);
+    await approveTailcatDevice({ label: 'Phone', publicKey: keyA }, deps);
+    await setTailcatDeviceEnforcement(true, deps);
+    expect(legacy.kill).toHaveBeenCalled();
+    const protectedChild = children.at(-1);
+    await approveTailcatDevice({ label: 'Renamed phone', publicKey: keyA }, deps);
+    await setTailcatDeviceEnforcement(true, deps);
+    expect(protectedChild.kill).not.toHaveBeenCalled();
+    expect(children).toHaveLength(2);
+    await approveTailcatDevice({ label: 'Tablet', publicKey: keyB }, deps);
+    expect(protectedChild.kill).toHaveBeenCalled();
+    expect(deps.startServe.mock.lastCall[0].approvedKeys).toEqual([keyA, keyB]);
+  });
+
+  it('preserves the old listener and policy when saving revocation fails', async () => {
+    await approveTailcatDevice({ label: 'Phone', publicKey: keyA }, deps);
+    await setTailcatDeviceEnforcement(true, deps);
+    await ensureTailcatServe(deps);
+    const old = children.at(-1);
+    atomicWrite.mockRejectedValueOnce(new Error('Example disk failure'));
+    await expect(revokeTailcatDevice(saved.serve.devices[0].id, deps)).rejects.toThrow('Example disk failure');
+    expect(old.kill).not.toHaveBeenCalled();
+    expect((await getTailcatDevices()).devices[0].revokedAt).toBeNull();
+  });
+
+  it('retains revocation after replacement failure and enforces it on retry/boot', async () => {
+    await approveTailcatDevice({ label: 'Phone', publicKey: keyA }, deps);
+    await approveTailcatDevice({ label: 'Tablet', publicKey: keyB }, deps);
+    await setTailcatDeviceEnforcement(true, deps);
+    await ensureTailcatServe(deps);
+    const old = children.at(-1);
+    deps.startServe.mockRejectedValueOnce(new Error('Example replacement failure'));
+    await expect(revokeTailcatDevice(saved.serve.devices[0].id, deps)).rejects.toMatchObject({ code: 'TAILCAT_SERVE_FAILED' });
+    expect(old.kill).toHaveBeenCalled();
+    expect(await getTailcatDevices()).toMatchObject({ live: false, status: 'failed', enforcement: { state: 'pending' } });
+    await retryTailcatServe(deps);
+    expect(deps.startServe.mock.lastCall[0].approvedKeys).toEqual([keyB]);
+    _resetLiveServeForTests();
+    expect(await restoreServe(deps)).toEqual({ restored: true });
+    expect(deps.startServe.mock.lastCall[0].approvedKeys).toEqual([keyB]);
+  });
+
+  it('waits for actual exit before replacing the listener or reporting success', async () => {
+    await approveTailcatDevice({ label: 'Phone', publicKey: keyA }, deps);
+    await approveTailcatDevice({ label: 'Tablet', publicKey: keyB }, deps);
+    await setTailcatDeviceEnforcement(true, deps);
+    await ensureTailcatServe(deps);
+    const old = children.at(-1);
+    old.kill.mockImplementation(() => { old.killed = true; return true; });
+    const starts = deps.startServe.mock.calls.length;
+    let completed = false;
+    const changing = revokeTailcatDevice(saved.serve.devices[0].id, deps).then(() => { completed = true; });
+    await vi.waitFor(() => expect(old.kill).toHaveBeenCalledWith('SIGTERM'));
+    expect(completed).toBe(false);
+    expect(deps.startServe).toHaveBeenCalledTimes(starts);
+    expect(await getTailcatDevices()).toMatchObject({ live: true, enforcement: { state: 'pending' } });
+    old.emit('exit', 0, 'SIGTERM');
+    await changing;
+    expect(deps.startServe.mock.lastCall[0].approvedKeys).toEqual([keyB]);
+  });
+
+  it('escalates termination and reports incomplete revocation when even kill has no confirmed exit', async () => {
+    await approveTailcatDevice({ label: 'Phone', publicKey: keyA }, deps);
+    await setTailcatDeviceEnforcement(true, deps);
+    await ensureTailcatServe(deps);
+    const old = children.at(-1);
+    old.kill.mockImplementation(() => { old.killed = true; return true; });
+    vi.useFakeTimers();
+    const changing = revokeTailcatDevice(saved.serve.devices[0].id, deps);
+    const refused = expect(changing).rejects.toMatchObject({ code: 'TAILCAT_STOP_UNCONFIRMED' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(old.kill).toHaveBeenCalledWith('SIGTERM');
+    await vi.advanceTimersByTimeAsync(4_000);
+    await refused;
+    expect(old.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(await getTailcatDevices()).toMatchObject({ live: true, enforcement: { state: 'pending', approvedCount: 0 } });
+    old.emit('exit', 0, 'SIGKILL');
+    expect(await retryTailcatServe(deps)).toMatchObject({ live: false, status: 'suspended' });
+  });
+
+  it('fails closed on malformed/future policy rather than restoring capability-only access', async () => {
+    for (const data of [
+      { version: 2, serve: { enabled: true } },
+      { version: 2, serve: { enabled: true, deviceEnforcement: 'true', devices: [] } },
+      { version: 3, serve: null },
+    ]) {
+      saved = data;
+      await expect(restoreServe(deps)).rejects.toThrow();
+    }
+    expect(deps.startServe).not.toHaveBeenCalled();
+  });
+
+  it('passes a nonempty canonical allowlist and requires JSON readiness for protected listeners', async () => {
+    const child = fakeChild();
+    const spawnFn = vi.fn(() => child);
+    const started = startServeProcess({ bin: '/example/tailcat', approvedKeys: [keyA], spawnFn,
+      addrFile: '/tmp/portos-tailcat-example.addr', mkdirFn: async () => {}, readFileFn: async () => EXAMPLE_TC });
+    await vi.waitFor(() => expect(spawnFn).toHaveBeenCalled());
+    expect(spawnFn.mock.lastCall[1]).toContain(`--allow=${keyA}`);
+    let ready = false;
+    void started.then(() => { ready = true; });
+    child.stderr.emit('data', EXAMPLE_TC);
+    await Promise.resolve();
+    expect(ready).toBe(false);
+    child.stdout.emit('data', JSON.stringify({ listenAddr: EXAMPLE_TC }));
+    await started;
+    const deniedSpawn = vi.fn();
+    await expect(startServeProcess({ bin: '/example/tailcat', approvedKeys: [], spawnFn: deniedSpawn })).rejects.toThrow('requires approved public keys');
+    expect(deniedSpawn).not.toHaveBeenCalled();
+  });
 });

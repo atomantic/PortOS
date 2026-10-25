@@ -14,6 +14,7 @@
  * record, never federated, and never committed.
  */
 
+import { createHash } from 'node:crypto';
 import { instanceEvents } from './instanceEvents.js';
 import { ensureTailcatIngress } from './tailcatIngress.js';
 import { mkdir, readFile, unlink } from 'node:fs/promises';
@@ -28,6 +29,7 @@ import { safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.
 import { ensureTailcatInstalled, primeDerpMapCache } from './tailcatRuntime.js';
 import {
   isValidTcAddress,
+  isValidNodePublicKey,
   redactTcAddress,
   redactTailcatDiagnostics,
 } from '../lib/tailcatAddress.js';
@@ -40,7 +42,8 @@ const SERVE_READY_MS = 20_000;
 const DIAGNOSTIC_TAIL_CHARS = 4096;
 const GENKEY_TIMEOUT_MS = 60_000;
 const RELAY_OBSERVATION_MS = 5 * 60 * 1000;
-const DEFAULT_DATA = { version: 1, serve: null };
+const DEFAULT_DATA = { version: 2, serve: null };
+const MAX_DEVICES = 100;
 
 const withLock = createMutex();
 const withLifecycle = createMutex();
@@ -126,12 +129,32 @@ function normalizeServeEntry(entry) {
     : DEFAULT_KEY_NAME;
   // Old managed entries targeted the main API. Never restore that authority.
   const localPort = DEFAULT_LOCAL_PORT;
-  const status = ['active', 'failed', 'stopped', 'pending'].includes(entry.status)
+  const status = ['active', 'failed', 'stopped', 'pending', 'suspended'].includes(entry.status)
     ? entry.status
     : 'stopped';
   const tcAddress = isValidTcAddress(entry.tcAddress) ? entry.tcAddress.trim() : null;
+  // Invalid policy never becomes capability-only or an empty, permissive list.
+  if ((entry.deviceEnforcement !== undefined && typeof entry.deviceEnforcement !== 'boolean')
+    || (entry.devices !== undefined && (!Array.isArray(entry.devices) || entry.devices.length > MAX_DEVICES))) {
+    throw new ServerError('Invalid Tailcat device policy', { status: 503 });
+  }
+  const devices = (entry.devices ?? []).map((device) => {
+    if (!isValidNodePublicKey(device?.publicKey) || device.id !== deviceId(device.publicKey)
+      || typeof device.label !== 'string' || !device.label.trim() || device.label.length > 100
+      || !validTimestamp(device.approvedAt)
+      || (device.revokedAt !== null && !validTimestamp(device.revokedAt))) {
+      throw new ServerError('Invalid Tailcat device identity', { status: 503 });
+    }
+    return { id: device.id, label: device.label, publicKey: device.publicKey,
+      approvedAt: device.approvedAt, revokedAt: device.revokedAt };
+  });
+  if (new Set(devices.map(device => device.id)).size !== devices.length) {
+    throw new ServerError('Duplicate Tailcat device identity', { status: 503 });
+  }
   return {
     enabled: entry.enabled === true,
+    deviceEnforcement: entry.deviceEnforcement === true,
+    devices,
     status,
     localPort,
     keyName,
@@ -143,18 +166,103 @@ function normalizeServeEntry(entry) {
   };
 }
 
+function validTimestamp(value) {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+function deviceId(publicKey) {
+  return createHash('sha256').update(publicKey).digest('hex');
+}
+
+function allowedKeys(entry) {
+  return entry?.deviceEnforcement ? entry.devices.filter(device => device.revokedAt === null).map(device => device.publicKey).sort() : null;
+}
+
+function policyIdentity(entry) {
+  return JSON.stringify(allowedKeys(entry));
+}
+
+function deviceState(entry, live) {
+  const keys = allowedKeys(entry);
+  const enabled = entry?.deviceEnforcement === true;
+  return {
+    devices: entry?.devices ?? [],
+    enforcement: {
+      enabled,
+      state: !enabled ? 'capability-only'
+        : live && !liveServe.stopping && liveServe.policy === policyIdentity(entry) ? 'enforced'
+          : keys.length === 0 && !live ? 'suspended' : 'pending',
+      approvedCount: (entry?.devices ?? []).filter(device => device.revokedAt === null).length,
+    },
+  };
+}
+
+/** Device management never returns the server capability. */
+export async function getTailcatDevices() {
+  const status = await getTailcatServeStatus();
+  delete status.tcAddress;
+  return status;
+}
+
+export function approveTailcatDevice({ label, publicKey }, options = {}) {
+  if (!isValidNodePublicKey(publicKey) || typeof label !== 'string' || !label.trim() || label.trim().length > 100) {
+    throw new ServerError('A label and client nodekey public key are required', { status: 400 });
+  }
+  return changeDevicePolicy((entry) => {
+    const id = deviceId(publicKey);
+    const existing = entry.devices.find(device => device.id === id);
+    if (!existing && entry.devices.length >= MAX_DEVICES) {
+      throw new ServerError('Tailcat device limit reached', { status: 409 });
+    }
+    const device = { id, label: label.trim(), publicKey,
+      approvedAt: existing?.revokedAt === null ? existing.approvedAt : new Date().toISOString(), revokedAt: null };
+    return { devices: [...entry.devices.filter(device => device.id !== id), device] };
+  }, options);
+}
+
+export function revokeTailcatDevice(id, options = {}) {
+  return changeDevicePolicy((entry) => {
+    if (!entry.devices.some(device => device.id === id)) {
+      throw new ServerError('Tailcat device not found', { status: 404 });
+    }
+    return { devices: entry.devices.map(device => device.id === id
+      ? { ...device, revokedAt: device.revokedAt ?? new Date().toISOString() } : device) };
+  }, options);
+}
+
+export function setTailcatDeviceEnforcement(enabled, options = {}) {
+  if (typeof enabled !== 'boolean') throw new ServerError('Enforcement must be boolean', { status: 400 });
+  return changeDevicePolicy(() => ({ deviceEnforcement: enabled }), options);
+}
+
+function changeDevicePolicy(update, options) {
+  return withLifecycle(async () => {
+    const entry = await readServeEntry() ?? { devices: [], enabled: false };
+    const next = await patchServeEntry(update(entry));
+    // Metadata-only edits cannot change admission or justify dropping sessions.
+    if (next.enabled && liveServe && !liveServe.exited && !liveServe.stopping
+      && liveServe.policy === policyIdentity(next)) return getTailcatDevices();
+    // Persist before cutting sessions; a failed save never reports revocation.
+    // Even a previously failed replacement remains retryable with the new policy.
+    await terminateLiveServe();
+    if (entry.enabled) await ensureServe({ ...options, keyName: entry.keyName });
+    return getTailcatDevices();
+  });
+}
+
 async function loadServeData() {
   const data = await readJSONFile(SERVE_FILE, DEFAULT_DATA, { strict: true, logError: false })
     .catch(() => { throw new ServerError('Could not read tailcat serve storage', { status: 503 }); });
-  if (data?.version !== 1) {
+  if (![1, 2].includes(data?.version)
+    || (data.version === 2 && data.serve && (typeof data.serve.deviceEnforcement !== 'boolean' || !Array.isArray(data.serve.devices)))) {
     throw new ServerError('Invalid tailcat serve storage', { status: 503 });
   }
-  return { version: 1, serve: normalizeServeEntry(data.serve) };
+  return { version: 2, serve: normalizeServeEntry(data.serve) };
 }
 
 async function saveServeEntry(entry) {
   await ensureDir(PATHS.data);
-  await atomicWrite(SERVE_FILE, { version: 1, serve: entry });
+  await atomicWrite(SERVE_FILE, { version: 2, serve: entry });
   instanceEvents.emit('tailcat:serve:changed');
 }
 
@@ -167,6 +275,8 @@ async function patchServeEntry(patch) {
   return withLock(async () => {
     const current = await readServeEntry() || {
       enabled: false,
+      deviceEnforcement: false,
+      devices: [],
       status: 'stopped',
       localPort: DEFAULT_LOCAL_PORT,
       keyName: DEFAULT_KEY_NAME,
@@ -205,9 +315,10 @@ async function markServeFailed(error) {
  */
 export async function getTailcatServeStatus() {
   const entry = await readServeEntry();
-  const live = !!(liveServe?.child && !liveServe.child.killed);
+  const live = !!(liveServe?.child && !liveServe.exited);
   if (!entry) {
     return {
+      ...deviceState(null, false),
       enabled: false,
       status: 'stopped',
       live: false,
@@ -226,6 +337,7 @@ export async function getTailcatServeStatus() {
     };
   }
   return {
+    ...deviceState(entry, live),
     enabled: entry.enabled,
     status: live ? 'active' : (entry.status === 'active' ? 'stopped' : entry.status),
     live,
@@ -305,10 +417,16 @@ export async function startServeProcess({
   readyMs = SERVE_READY_MS,
   readFileFn = readFile,
   mkdirFn = mkdir,
+  approvedKeys = null,
 } = {}) {
   if (shuttingDown) throw new Error('PortOS is shutting down');
   if (localPort !== DEFAULT_LOCAL_PORT) {
     throw new ServerError('Managed Tailcat serve must use the remote ingress port', { status: 400, code: 'TAILCAT_SERVE_BAD_PORT' });
+  }
+
+  if (approvedKeys !== null && (!Array.isArray(approvedKeys) || approvedKeys.length === 0
+    || approvedKeys.some(key => !isValidNodePublicKey(key)))) {
+    throw new ServerError('An enforced Tailcat listener requires approved public keys', { status: 409 });
   }
 
   await mkdirFn(dirname(addrFile), { recursive: true }).catch(() => null);
@@ -316,7 +434,8 @@ export async function startServeProcess({
 
   const child = spawnFn(
     bin,
-    ['serve', '--verbose', '--full-address', '--json', `--key=${keyName}`, String(localPort)],
+    ['serve', '--verbose', '--full-address', '--json', `--key=${keyName}`,
+      ...(approvedKeys === null ? [] : [`--allow=${approvedKeys.join(',')}`]), String(localPort)],
     safeChildProcessOptions({
       env: safeChildProcessEnv({ TAILCAT_ADDR_FILE: addrFile }),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -365,6 +484,7 @@ export async function startServeProcess({
       finish();
       return;
     }
+    if (approvedKeys !== null) return;
     const fromFile = await readFileFn(addrFile, 'utf8').then(
       (text) => parseServeListenAddr(text),
       () => null,
@@ -387,7 +507,7 @@ export async function startServeProcess({
     if (settled) return;
     stderrTail = (stderrTail + String(chunk)).slice(-DIAGNOSTIC_TAIL_CHARS);
     // Human line often includes the address before --json flushes; harvest it.
-    const fromErr = parseServeListenAddr(stderrTail);
+    const fromErr = approvedKeys === null ? parseServeListenAddr(stderrTail) : null;
     if (fromErr) {
       resolvedAddr = fromErr;
       finish();
@@ -397,12 +517,14 @@ export async function startServeProcess({
   });
   child.on('error', () => finish(new Error('tailcat serve process failed')));
   child.once('exit', (code, signal) => {
+    child.tailcatExited = true;
     if (!settled) {
       finish(new Error(`tailcat serve exited early (code=${code}, signal=${signal})`));
     }
   });
 
   await ready;
+  if (child.tailcatExited) throw new Error('Tailcat exited before startup completed');
 
   console.log(
     `🐈 tailcat serve listening for PortOS :${localPort} (${redactTcAddress(resolvedAddr)}, key=${keyName})`,
@@ -421,14 +543,50 @@ function killLiveServe() {
   }
 }
 
-function trackServe(child, localPort, keyName) {
-  liveServe = { child, localPort, keyName };
+/** Wait for process exit: child.killed only means a signal was sent. */
+async function terminateLiveServe() {
+  const owned = liveServe;
+  if (!owned) return;
+  const { child } = owned;
+  owned.stopping = true;
+  await new Promise((resolve, reject) => {
+    let timer;
+    const finished = () => {
+      clearTimeout(timer);
+      child.removeListener('exit', finished);
+      if (liveServe === owned) liveServe = null;
+      child.disposeTailcatRelay?.();
+      instanceEvents.emit('tailcat:serve:changed');
+      resolve();
+    };
+    if (owned.exited) return finished();
+    child.once('exit', finished);
+    timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* terminal process boundary */ }
+      if (owned.exited) return;
+      timer = setTimeout(() => {
+        child.removeListener('exit', finished);
+        reject(new ServerError('Tailcat has not stopped; device policy is saved but revocation is incomplete', {
+          status: 503, code: 'TAILCAT_STOP_UNCONFIRMED',
+        }));
+      }, 2_000);
+    }, 2_000);
+    try { child.kill('SIGTERM'); } catch { /* escalate on the bounded timer */ }
+  });
+}
+
+function trackServe(child, localPort, keyName, entry) {
+  if (child.tailcatExited || child.exitCode != null || child.signalCode != null) {
+    throw new Error('Tailcat exited before its listener could be tracked');
+  }
+  liveServe = { child, localPort, keyName, policy: policyIdentity(entry), exited: false, stopping: false };
   const owned = liveServe;
   child.on('tailcat:relay', () => {
     if (liveServe === owned && !child.killed) instanceEvents.emit('tailcat:serve:changed');
   });
   child.on('exit', (code, signal) => {
-    if (liveServe !== owned) return;
+    owned.exited = true;
+    if (liveServe !== owned || owned.stopping) return;
     // Serialize the terminal write behind startup persistence. Retry/stop may
     // already own the lifecycle lock, in which case their newer state wins.
     void withLifecycle(async () => {
@@ -479,8 +637,10 @@ async function ensureServe({
     });
   });
 
+  const policy = await readServeEntry();
+  const approvedKeys = allowedKeys(policy);
   if (liveServe?.child && !liveServe.child.killed
-    && liveServe.localPort === port && liveServe.keyName === key) {
+    && liveServe.localPort === port && liveServe.keyName === key && liveServe.policy === policyIdentity(policy)) {
     const entry = await readServeEntry();
     await persist({
       enabled: true,
@@ -494,15 +654,19 @@ async function ensureServe({
     return getTailcatServeStatus();
   }
 
-  killLiveServe();
+  await terminateLiveServe();
+  if (approvedKeys?.length === 0) {
+    await persist({ status: 'suspended' });
+    return getTailcatServeStatus();
+  }
 
   try {
     await ensureIngress();
     const { bin } = await ensureInstalled();
     await Promise.resolve().then(primeDerpMap).catch(() => null);
     await ensureKey({ bin, keyName: key });
-    const started = await startServe({ bin, localPort: port, keyName: key });
-    trackServe(started.child, started.localPort, started.keyName);
+    const started = await startServe({ bin, localPort: port, keyName: key, approvedKeys });
+    trackServe(started.child, started.localPort, started.keyName, policy);
     await persist({
       enabled: true,
       status: 'active',
@@ -512,11 +676,13 @@ async function ensureServe({
       lastError: null,
       lastErrorAt: null,
     });
+    if (liveServe.exited) throw new Error('Tailcat exited while saving startup state');
     started.child.on('exit', () => {
       console.log(`🐈 tailcat serve stopped (${redactTcAddress(started.tcAddress)})`);
     });
     return getTailcatServeStatus();
   } catch (err) {
+    await terminateLiveServe();
     await markServeFailed(err);
     throw err instanceof ServerError
       ? err
@@ -530,7 +696,7 @@ async function ensureServe({
 export function retryTailcatServe(options = {}) {
   return withLifecycle(async () => {
     const entry = await readServeEntry();
-    killLiveServe();
+    await terminateLiveServe();
     return ensureServe({
       localPort: entry?.localPort || DEFAULT_LOCAL_PORT,
       keyName: entry?.keyName || DEFAULT_KEY_NAME,
@@ -545,7 +711,7 @@ export function retryTailcatServe(options = {}) {
  */
 export function stopTailcatServe({ disable = true } = {}) {
   return withLifecycle(async () => {
-    killLiveServe();
+    await terminateLiveServe();
     const entry = await readServeEntry();
     if (!entry && !disable) {
       return getTailcatServeStatus();
@@ -581,30 +747,12 @@ async function restoreTailcatServe({
   if (liveServe) return { restored: false, reason: 'already-live' };
 
   try {
-    await ensureIngress();
-    const { bin } = await ensureInstalled();
-    await Promise.resolve().then(primeDerpMap).catch(() => null);
-    await ensureKey({ bin, keyName: entry.keyName });
-    const started = await startServe({
-      bin,
-      localPort: entry.localPort,
-      keyName: entry.keyName,
-    });
-    trackServe(started.child, started.localPort, started.keyName);
-    await patchServeEntry({
-      enabled: true,
-      status: 'active',
-      localPort: started.localPort,
-      keyName: started.keyName,
-      tcAddress: started.tcAddress || entry.tcAddress,
-      lastError: null,
-      lastErrorAt: null,
-    });
-    console.log(`🐈 Restored tailcat serve on :${started.localPort}`);
-    return { restored: true };
+    await ensureServe({ localPort: entry.localPort, keyName: entry.keyName,
+      ensureIngress, ensureInstalled, primeDerpMap, ensureKey, startServe });
+    return (await getTailcatServeStatus()).live
+      ? { restored: true } : { restored: false, reason: 'no-approved-devices' };
   } catch (err) {
     console.log(`⚠️ tailcat serve restore failed — ${redactTailcatDiagnostics(err.message)}`);
-    await markServeFailed(err);
     return { restored: false, error: redactTailcatDiagnostics(err.message) };
   }
 }

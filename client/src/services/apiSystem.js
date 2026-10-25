@@ -455,7 +455,7 @@ export const addTailcatPeer = (data) => request('/instances/peers/tailcat', { me
 export const getTailcatForwards = (options) => request('/instances/peers/tailcat/forwards', options);
 export const retryTailcatForward = (id, data = {}) => request(`/instances/peers/tailcat/forwards/${id}/retry`, { method: 'POST', body: JSON.stringify(data) });
 export const forgetTailcatForward = (id) => request(`/instances/peers/tailcat/forwards/${id}`, { method: 'DELETE' });
-// Managed tailcat serve on this node (PORTS.API). Status may include the full
+// Managed tailcat serve on this node (PORTS.TAILCAT_INGRESS). Status may include the full
 // tc address so the operator can Copy it — this is our own serve capability.
 export const getTailcatServe = (options) => request('/instances/peers/tailcat/serve', options);
 export const startTailcatServe = (data) => request('/instances/peers/tailcat/serve', { method: 'POST', body: JSON.stringify(data || {}) });
@@ -635,3 +635,7 @@ export const getPeerExecutionStatus = (data, options) => request('/peer-administ
 export const getPeerCatalogReviews = (options) => request('/peer-administration/catalog-reviews', options);
 export const getPeerCatalogReview = (backend, catalogKey, options) => request(`/peer-administration/catalog-review?backend=${encodeURIComponent(backend)}&catalogKey=${encodeURIComponent(catalogKey)}`, options);
 export const savePeerCatalogReview = (data, options) => request('/peer-administration/catalog-review', { ...options, method: 'PUT', body: JSON.stringify(data) });
+
+export const approveTailcatDevice = (data, options) => request('/instances/peers/tailcat/devices', { ...options, method: 'POST', body: JSON.stringify(data) });
+export const revokeTailcatDevice = (id, options) => request(`/instances/peers/tailcat/devices/${id}`, { ...options, method: 'DELETE' });
+export const setTailcatDeviceEnforcement = (enabled, options) => request('/instances/peers/tailcat/devices/enforcement', { ...options, method: 'PATCH', body: JSON.stringify({ enabled }) });

@@ -23,7 +23,7 @@ export function TailcatServeProvider({ children }) {
     const data = await getTailcatServe({ silent: true, signal });
     if (!signal.aborted && !operation.current.busy && generation === operation.current.generation) setStatus(data);
   }, []);
-  const { refetch } = useSocketResource(load, { events: SERVE_EVENTS });
+  const { refetch, error } = useSocketResource(load, { events: SERVE_EVENTS });
 
   const run = async (fn, successMessage) => {
     if (operation.current.busy) return null;
@@ -32,7 +32,7 @@ export function TailcatServeProvider({ children }) {
     setBusy(true);
     // API wrappers own failure toasts. A failed action keeps the last receipt.
     const result = await Promise.resolve().then(fn).catch(() => null);
-    if (result && mounted.current) setStatus(result);
+    if (result && mounted.current) setStatus(previous => ({ ...previous, ...result }));
     operation.current.busy = false;
     if (!mounted.current) return result;
     setBusy(false);
@@ -45,7 +45,7 @@ export function TailcatServeProvider({ children }) {
     return result;
   };
 
-  return <ServeContext.Provider value={{ status, busy, run }}>{children}</ServeContext.Provider>;
+  return <ServeContext.Provider value={{ status, busy, run, error, refetch }}>{children}</ServeContext.Provider>;
 }
 
 export const useTailcatServe = () => useContext(ServeContext);

@@ -506,6 +506,7 @@ export * from './syncIntegrity.js';
 export * from './syncWire.js';
 export * from './tailscale.js';
 export * from './tailcatAddress.js';
+export * from './tailcatValidation.js';
 export * from './tailcatVersion.js';
 export * from './xPostMedia.js';
 
