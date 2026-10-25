@@ -202,7 +202,7 @@ it('does not settle other branch cleanup from one historical merged-and-absent b
 
 it('retains a cleanup-only task hold when preservation or another obligation is unverified', () => {
   const agent = { result: { success: true, executionSuccess: true, cleanupPending: true,
-    taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } }, metadata: {
+    taskOutcome: { status: 'incomplete', reason: 'Cleanup verification remains pending.', recovery: { mode: 'cleanup' } } }, metadata: {
     cleanupOutcome: { status: 'already-absent', reason: 'already-absent-preservation-unverified', committedIntegrationVerified: true },
   } };
   const view = render(<AgentResultLine agent={agent} />);
