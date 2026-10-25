@@ -1,14 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 vi.mock('../lib/fileUtils.js', async importOriginal => {
   const { makePathsProxy, lazyTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
   return makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-retirement-run-evidence-') });
 });
-import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
-import { rmGuarded } from '../lib/fileUtils.js';
+import { cleanupTempDataRoots, createTempDataRoot } from '../lib/mockPathsDataRoot.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { readCompletionData } from './agentCompletionData.js';
 import { captureRunValidationArtifacts, retainRunValidationArtifacts } from './retirementRunValidation.js';
@@ -16,7 +14,7 @@ let root, release, agent, content;
 const bytes = Buffer.from('Synthetic retained validation output.');
 const digest = value => createHash('sha256').update(value).digest('hex');
 beforeAll(async () => {
-  root = await mkdtemp(join(tmpdir(), 'portos-run-retirement-'));
+  root = createTempDataRoot('portos-run-retirement-');
   await mkdir(join(root, 'checkout', '.cache'), { recursive: true });
   await writeFile(join(root, 'checkout', '.git'), 'gitdir: synthetic');
   await writeFile(join(root, 'checkout', '.cache', 'verification.log'), bytes);
@@ -29,7 +27,7 @@ beforeAll(async () => {
   }] } };
   content = { files: [{ path: '.cache/verification.log', bytes: bytes.length, sha256: digest(bytes) }, { path: 'private-user-file.bin', bytes: 8, sha256: 'b'.repeat(64) }] };
 });
-afterAll(async () => { await cleanupTempDataRoots(); await rmGuarded(root, { recursive: true, force: true }); });
+afterAll(cleanupTempDataRoots);
 const capture = policies => captureRunValidationArtifacts(root, release, content, { readPolicies: async () => policies });
 const review = captured => ({ release, comparison: { disposition: 'integrated' }, forge: { prHead: release.head, mergeCommit: 'b'.repeat(40), prUrl: 'https://example.test/pull/1' }, validationArtifacts: captured });
 describe('completed-run evidence retention before checkout retirement', () => {
