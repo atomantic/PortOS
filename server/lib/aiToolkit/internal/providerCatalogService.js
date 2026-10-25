@@ -41,7 +41,8 @@ function waitForProbeGroupExit(pid) {
         process.kill(-pid, 0);
       } catch (err) {
         if (err?.code === 'ESRCH') return resolve(true);
-        return resolve(false);
+        // A just-signalled group can be temporarily uninspectable. Keep
+        // observing within the same deadline; unknown never confirms exit.
       }
       if (Date.now() >= deadline) return resolve(false);
       const timer = setTimeout(check, 25);
@@ -119,6 +120,35 @@ async function killOwnedProbe(child, killSignal, directExited = false) {
   return waitForProbeGroupExit(child.pid);
 }
 
+// execFile does not forward `detached` to spawn. A bounded probe must own
+// a real POSIX group, including descendants that retain its output pipes.
+function spawnProbe(file, args, { detached }, callback) {
+  const child = spawn(file, args, { detached, timeout: 0, windowsHide: true });
+  const output = { stdout: '', stderr: '' };
+  const sizes = { stdout: 0, stderr: 0 };
+  let completed = false;
+  const finish = error => {
+    if (completed) return;
+    completed = true;
+    callback(error, output.stdout, output.stderr);
+  };
+  for (const name of ['stdout', 'stderr']) {
+    child[name]?.setEncoding('utf8');
+    child[name]?.on('data', chunk => {
+      if (completed) return;
+      // Preserve execFile's default per-stream output budget.
+      sizes[name] += Buffer.byteLength(chunk);
+      if (sizes[name] > 1024 * 1024) {
+        finish(Object.assign(new Error('Probe output exceeded its buffer'), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }));
+      } else output[name] += chunk;
+    });
+  }
+  child.once('error', finish);
+  child.once('close', (code, signal) => finish(code === 0 && signal == null ? null
+    : Object.assign(new Error('Probe command failed'), { code, signal })));
+  return child;
+}
+
 function execFileBounded(file, args, { timeout, killSignal = 'SIGTERM' }) {
   return new Promise((resolve) => {
     let child = null;
@@ -147,13 +177,12 @@ function execFileBounded(file, args, { timeout, killSignal = 'SIGTERM' }) {
     timer.unref?.();
 
     try {
-      child = execFile(file, args, {
+      child = spawnProbe(file, args, {
         windowsHide: true,
         timeout: 0,
         ...(process.platform === 'win32' ? {} : { detached: true }),
       }, (error, stdout, stderr) => {
-        // execFile callbacks are asynchronous in Node. Deferring the handling
-        // also keeps synchronous test doubles from racing child assignment.
+        // Defer stream/error completion until child assignment is visible.
         queueMicrotask(() => {
           const timedOut = error?.code === 'ETIMEDOUT'
             || (error?.killed === true && error?.signal === killSignal);
@@ -162,12 +191,11 @@ function execFileBounded(file, args, { timeout, killSignal = 'SIGTERM' }) {
           else {
             // The executable can exit after daemonizing a helper that still
             // holds the probe's stdio pipes. Clean the owned process group/tree
-            // even when execFile reports a normal exit. On Windows, the direct
-            // process has already exited by this callback; taskkill against its
-            // PID could target a reused PID, so only confirm the direct child.
-            cleanupPromise ||= process.platform === 'win32'
+            // even after a normal exit. Windows may taskkill a still-live child
+            // on output overflow, but never reuse a PID after its exit event.
+            cleanupPromise ||= process.platform === 'win32' && directExited
               ? Promise.resolve(true)
-              : killOwnedProbe(child, killSignal, true);
+              : killOwnedProbe(child, killSignal, directExited);
             cleanupPromise.then(
               cleanupConfirmed => finish({ ...result, timedOut: false, cleanupConfirmed }),
               () => finish({ ...result, timedOut: false, cleanupConfirmed: false }),
