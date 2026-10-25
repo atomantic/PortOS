@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
@@ -777,7 +778,7 @@ async function settleDivergedBranch(ctx) {
   if (ctx.task?.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup') {
     return ctx.blockWith('cleanup-successor-review-unresolved', { issues: ctx.issues, observed: ctx.observed });
   }
-  return fileDivergenceRecovery(ctx, prepared.retirement);
+  return fileDivergenceRecovery({ ...ctx, appId: prepared.appId }, prepared.retirement);
 }
 
 async function retireIntegratedCheckout({ appId, observed, issues, record, blockWith }, retirement) {
@@ -1005,8 +1006,21 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     const duplicate = await getTaskById(created.id).catch(() => null);
     const origin = duplicate?.metadata?.recoveryOrigin;
     const target = duplicate?.metadata?.recoveryMergeTarget;
-    if (!mergeTarget || origin?.parentAgentId !== agentId || origin?.parentTaskId !== task?.id
-      || origin?.subsystem !== 'repository-cleanup' || target?.url !== mergeTarget.url || target?.branch !== branchName) return null;
+    if (origin?.parentAgentId !== agentId || origin?.parentTaskId !== task?.id
+      || origin?.subsystem !== 'repository-cleanup'
+      || (!retirement && (!mergeTarget || target?.url !== mergeTarget.url || target?.branch !== branchName))) return null;
+  }
+  if (retirement && created?.id) {
+    const { getTaskById } = await import('./cosTaskStore.js');
+    const persisted = await getTaskById(created.id);
+    const target = { appId, release: retirement.release, createdAt: retirement.createdAt };
+    if (persisted?.metadata?.recoveryOrigin?.parentAgentId !== agentId
+      || persisted.metadata.recoveryOrigin.parentTaskId !== task?.id
+      || !isDeepStrictEqual(persisted.metadata.retirementReview, target)) return null;
+    const { recordRepoStateRecovery } = await import('./cosAgentLifecycle.js');
+    const bound = await recordRepoStateRecovery(agentId, { taskId: created.id, branch: branchName,
+      retirementReview: target, repoPath: sourceWorkspace }, { claimRun: true });
+    if (!bound) throw new Error('retirement-recovery-binding-unavailable');
   }
   if (mergeTarget && created?.id) {
     // Admission's trust anchor: task metadata is API-writable, so only this

@@ -8,7 +8,8 @@ import { parsePullRequestUrl } from '../lib/gitForge.js';
 
 const oid = value => typeof value === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(value);
 const safePath = value => typeof value === 'string' && value.length > 0 && !value.includes('\0') && !value.startsWith('/') && !value.split('/').some(part => part === '..' || part === '.');
-const git = (args, cwd) => execGit(args, cwd, { maxBuffer: 4 * 1024 * 1024 }).then(r => r.stdout);
+const git = (args, cwd) => execGit(args, cwd, { maxBuffer: 4 * 1024 * 1024,
+  env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0' } }).then(r => r.stdout);
 
 /** Selects the merged PR for an exact local tip. Selection is not proof: callers
  * re-read the PR with `readRetirementForgeEvidence` before acting on it.
@@ -59,7 +60,7 @@ export async function findMergedPullRequest(repoPath, branch, tip, { forgeAccoun
   return { url: historical[0].url, mergedAt: null };
 }
 
-export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { forgeAccount = null, exactAliasHead = null, sourceSupersessionHead = null } = {}) {
+export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { forgeAccount = null, exactAliasHead = null, sourceSupersessionHead = null, exactDeliveredHead = null } = {}) {
   const origin = await getOriginInfo(repoPath);
   const parsed = parsePullRequestUrl(prUrl);
   if (!origin || !parsed || parsed.host !== origin.host || `${parsed.owner}/${parsed.repo}` !== origin.fullName) {
@@ -93,33 +94,43 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
     if (!Array.isArray(open)) throw new Error('retirement-forge-unavailable');
     if (open.length) throw new Error('retirement-source-delivery-open');
   }
-  // A current-main merge base loses the original scope after a normal merge.
-  // Use complete original PR metadata, and refuse API caps or ambiguous roots.
+  // Nonexact/supersession review needs complete historical scope. Exact head
+  // delivery instead binds fresh PR/merge facts without enumerating that scope.
   const pullPath = `repos/${origin.fullName}/pulls/${parsed.number}`;
   const detail = await api(pullPath);
-  if (detail.head?.sha !== remote.headRefOid || detail.base?.ref !== targetBranch || detail.merged !== true
-    || !Number.isInteger(detail.changed_files) || detail.changed_files < 1 || detail.changed_files > 3000
-    || !Number.isInteger(detail.commits) || detail.commits < 1 || detail.commits > 250) {
+  if (detail.head?.sha !== remote.headRefOid || detail.base?.ref !== targetBranch || detail.merged !== true) {
     throw new Error('retirement-original-scope-unavailable');
   }
-  const pages = async suffix => {
-    const value = await read(['api', '--hostname', origin.host, '--paginate', '--slurp', `${pullPath}/${suffix}?per_page=100`]);
-    if (!Array.isArray(value) || !value.every(Array.isArray)) throw new Error('retirement-original-scope-unavailable');
-    return value.flat();
-  };
-  const files = await pages('files');
-  const commits = await pages('commits');
-  if (files.length !== detail.changed_files || commits.length !== detail.commits
-    || new Set(files.map(file => file.filename)).size !== files.length
-    || new Set(commits.map(commit => commit.sha)).size !== commits.length
-    || !commits.every(commit => oid(commit.sha)) || commits.at(-1)?.sha !== remote.headRefOid
-    || commits[0]?.parents?.length !== 1 || !oid(commits[0].parents[0].sha)
-    || files.some(file => !safePath(file.filename) || (file.status === 'renamed' && !safePath(file.previous_filename)))) {
-    throw new Error('retirement-original-scope-unavailable');
+  const exactDelivery = !supersession && oid(exactDeliveredHead) && exactDeliveredHead === remote.headRefOid;
+  let scope;
+  if (exactDelivery) {
+    if (detail.merge_commit_sha !== remote.mergeCommit.oid) throw new Error('retirement-pr-not-matching-merged');
+    scope = { scopeProof: 'exact-delivered-head' };
+  } else {
+    if (!Number.isInteger(detail.changed_files) || detail.changed_files < 1 || detail.changed_files > 3000
+      || !Number.isInteger(detail.commits) || detail.commits < 1 || detail.commits > 250) {
+      throw new Error('retirement-original-scope-unavailable');
+    }
+    const pages = async suffix => {
+      const value = await read(['api', '--hostname', origin.host, '--paginate', '--slurp', `${pullPath}/${suffix}?per_page=100`]);
+      if (!Array.isArray(value) || !value.every(Array.isArray)) throw new Error('retirement-original-scope-unavailable');
+      return value.flat();
+    };
+    const files = await pages('files');
+    const commits = await pages('commits');
+    if (files.length !== detail.changed_files || commits.length !== detail.commits
+      || new Set(files.map(file => file.filename)).size !== files.length
+      || new Set(commits.map(commit => commit.sha)).size !== commits.length
+      || !commits.every(commit => oid(commit.sha)) || commits.at(-1)?.sha !== remote.headRefOid
+      || commits[0]?.parents?.length !== 1 || !oid(commits[0].parents[0].sha)
+      || files.some(file => !safePath(file.filename) || (file.status === 'renamed' && !safePath(file.previous_filename)))) {
+      throw new Error('retirement-original-scope-unavailable');
+    }
+    const changedPaths = [...new Set(files.flatMap(file => file.status === 'renamed' ? [file.filename, file.previous_filename] : [file.filename]))].sort();
+    const changeBase = commits[0].parents[0].sha;
+    const firstCommit = commits[0].sha;
+    scope = { changedPaths, changeBase, firstCommit };
   }
-  const changedPaths = [...new Set(files.flatMap(file => file.status === 'renamed' ? [file.filename, file.previous_filename] : [file.filename]))].sort();
-  const changeBase = commits[0].parents[0].sha;
-  const firstCommit = commits[0].sha;
   const target = await api(`repos/${origin.fullName}/git/ref/heads/${encodeURIComponent(defaultBranch)}`);
   if (!oid(target.object?.sha)) throw new Error('retirement-default-unreadable');
   const delivery = targetBranch === defaultBranch ? target
@@ -133,7 +144,7 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
     .catch(() => { throw new Error('retirement-remote-ref-unreadable'); })).trim() : null;
   if (publishedRemoteHead && publishedRemoteHead !== `${remote.headRefOid}\trefs/heads/${remote.headRefName}`) throw new Error('retirement-remote-head-changed');
   return { repository: `${origin.host}/${origin.fullName}`, prUrl, prHead: remote.headRefOid,
-    mergeCommit: remote.mergeCommit.oid, changedPaths, changeBase, firstCommit, defaultBranch, defaultHead: target.object.sha,
+    mergeCommit: remote.mergeCommit.oid, ...scope, defaultBranch, defaultHead: target.object.sha,
     ...(targetBranch !== defaultBranch && { targetBranch, targetHead: delivery.object.sha }), remoteHead: remoteHead || null,
     ...(alias || supersession ? { ...(alias && { exactAliasHead }), ...(supersession && { sourceSupersessionHead }),
       publishedBranch: remote.headRefName, publishedRemoteHead: publishedRemoteHead || null } : {}) };
@@ -145,11 +156,22 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
 export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, kind, contentFingerprint, administrationFingerprint, policy }, {
   readForge = readRetirementForgeEvidence, forgeAccount = null,
 } = {}) {
-  const forge = await readForge(repoPath, release.branch, prUrl, { forgeAccount });
+  const forge = await readForge(repoPath, release.branch, prUrl, { forgeAccount, ...(!kind && { exactDeliveredHead: release.head }) });
   if (!forge || !oid(forge.prHead) || !oid(forge.mergeCommit) || !oid(forge.defaultHead)) throw new Error('retirement-forge-unreadable');
   const targetHead = forge.targetHead ?? forge.defaultHead;
   if (!oid(targetHead) || (forge.targetHead && (typeof forge.targetBranch !== 'string' || !forge.targetBranch))) throw new Error('retirement-forge-unreadable');
   if (release.branch === forge.defaultBranch || release.branch === forge.targetBranch) throw new Error('protected-branch');
+  if (!kind && release.head === forge.prHead && forge.scopeProof === 'exact-delivered-head') {
+    // Exact delivery needs no historical patch scope. The merged head and its
+    // actual target are independently bound to local objects and this digest.
+    await Promise.all([...new Set([release.head, forge.mergeCommit, targetHead, forge.defaultHead])]
+      .map(head => git(['cat-file', '-e', `${head}^{commit}`], repoPath).catch(() => { throw new Error('retirement-local-objects-missing'); })));
+    await git(['merge-base', '--is-ancestor', forge.mergeCommit, targetHead], repoPath)
+      .catch(() => { throw new Error(forge.targetBranch ? 'retirement-merge-not-in-target' : 'retirement-merge-not-in-default'); });
+    const evidence = { repoPath, release, forge, contentFingerprint, administrationFingerprint, policy,
+      comparison: { base: release.head, paths: [], localPatch: '', difference: '', exactMergedDelivery: true, disposition: 'integrated' } };
+    return { digest: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'), ...evidence };
+  }
   if (!oid(forge.changeBase) || !oid(forge.firstCommit) || !Array.isArray(forge.changedPaths)
     || !forge.changedPaths.length || !forge.changedPaths.every(safePath)) throw new Error('retirement-original-scope-unavailable');
   // Independent reads run together (each Git spawn is mostly launch latency);
