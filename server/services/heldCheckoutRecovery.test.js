@@ -2148,12 +2148,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
           completedCheckouts: [{ version: 1, agentId: id, startedAt, capturedAt: startedAt, ...captured, path }] } };
     });
     injected.policies = attempts;
+    // Git and realpath can spell the same Windows path differently. Exercise
+    // equivalent receipt paths on every platform, retaining the real identity.
+    const receipt = attempts[2].metadata.completedCheckouts[0];
+    receipt.repoPath += '/.';
+    receipt.path += '/.';
     const original = structuredClone(attempts);
     // A missing link, a different task or physical generation, and a real
     // validation/human hold cannot be released by a later successful execution.
     for (const [target, key, value] of [[attempts[2].metadata, 'resumedFromAgentId', null],
       [attempts[0], 'taskId', 'other-task'], [attempts[0].result, 'validationPassed', false],
       [attempts[0].metadata, 'prCompletionPolicy', 'leave-open'],
+      [receipt, 'repoPath', join(scratch, 'unrelated-repo')],
+      [receipt, 'path', join(external, 'unrelated-checkout')],
       [attempts[0].metadata.completedCheckouts[0], 'head', 'b'.repeat(40)],
       [attempts[0].metadata.completedCheckouts[0], 'incarnation', { pointer: { ino: 'other' } }]]) {
       const prior = target[key]; target[key] = value;
