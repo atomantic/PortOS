@@ -553,6 +553,19 @@ describe('verifyAgentRepoState — divergent runs', () => {
       expect(retireInventoriedCheckout).toHaveBeenCalledWith(expect.objectContaining({ appId: 'repo-app' }), expect.any(Object));
     });
 
+    it('carries a resolved app scope through cognitive retirement dispatch and its server binding', async () => {
+      mergedLeftover();
+      resolveRetirementApp.mockResolvedValue({ app: { id: 'repo-app', repoPath: '/repo' } });
+      prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: review() });
+      expect(await appless()).toMatchObject({ verified: false, recoveryTaskId: 'task-recovery-1' });
+      expect(addTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'repo-app',
+        metadata: expect.objectContaining({ retirementReview: { appId: 'repo-app', release: RELEASE, createdAt: CREATED_AT } }),
+      }), 'internal');
+      expect(recordRepoStateRecovery).toHaveBeenCalledWith('agent-1', expect.objectContaining({
+        retirementReview: { appId: 'repo-app', release: RELEASE, createdAt: CREATED_AT },
+      }), { claimRun: true });
+    });
+
     it.each(['retirement-app-ambiguous', 'retirement-app-unavailable'])('retains an app-less task whose repository scope is %s', async reason => {
       mergedLeftover();
       resolveRetirementApp.mockResolvedValue({ reason });

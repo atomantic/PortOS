@@ -778,7 +778,7 @@ async function settleDivergedBranch(ctx) {
   if (ctx.task?.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup') {
     return ctx.blockWith('cleanup-successor-review-unresolved', { issues: ctx.issues, observed: ctx.observed });
   }
-  return fileDivergenceRecovery(ctx, prepared.retirement);
+  return fileDivergenceRecovery({ ...ctx, appId: prepared.appId }, prepared.retirement);
 }
 
 async function retireIntegratedCheckout({ appId, observed, issues, record, blockWith }, retirement) {
