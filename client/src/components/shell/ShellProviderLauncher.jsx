@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Bot, ChevronDown, Search, Terminal, AlertTriangle, Settings2 } from 'lucide-react';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
@@ -68,6 +68,8 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
   const [error, setError] = useState(null);
   const [query, setQuery] = useState('');
   const containerRef = useRef(null);
+  const selectionGeneration = useRef(0);
+  useEffect(() => () => { selectionGeneration.current += 1; }, []);
 
   const launchable = launchableProviders(providers);
   const tokens = tokenizeQuery(query);
@@ -84,7 +86,14 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
     contentDeps: [visible.length, loading],
   });
 
-  const close = () => { setOpen(false); setQuery(''); setSelection(null); setError(null); };
+  const close = () => {
+    selectionGeneration.current += 1;
+    setOpen(false); setQuery(''); setSelection(null); setError(null); setSaving(false);
+  };
+  const selectProvider = (provider) => {
+    selectionGeneration.current += 1;
+    setSelection(provider); setError(null); setSaving(false);
+  };
   // The panel is portaled to <body>, so it is not a descendant of the trigger
   // container — a single-ref containment check would read every click inside
   // the panel (including typing in the filter) as an outside click.
@@ -183,7 +192,7 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
                 </div>
                 <div className="text-[11px] font-mono text-gray-500 truncate">{provider.tuiCommandLine}</div>
               </button>
-              <button type="button" aria-label={`Execution options for ${provider.name || provider.id}`} className="p-3 text-gray-400" onClick={() => { setSelection(provider); setError(null); }}><Settings2 size={14} /></button>
+              <button type="button" aria-label={`Execution options for ${provider.name || provider.id}`} className="p-3 text-gray-400" onClick={() => selectProvider(provider)}><Settings2 size={14} /></button>
               </div>
             ))}
           </div>
@@ -192,11 +201,17 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
             <p className="text-sm text-gray-200 mb-2">{selection.name}</p>
             <ExecutionOptionsSelect provider={selection} model={selection.defaultModel} value={selection.executionSelectionOptions || {}} disabled={saving}
               onChange={async (options) => {
+                const generation = selectionGeneration.current;
                 setSaving(true);
                 setError(null);
-                try { setSelection(await saveExecutionOptionSelection(selection.id, selection.defaultModel, options, { silent: true })); }
-                catch (err) { setError(err.message); }
-                finally { setSaving(false); }
+                try {
+                  const saved = await saveExecutionOptionSelection(selection.id, selection.defaultModel, options, { silent: true });
+                  if (generation === selectionGeneration.current) setSelection(saved);
+                } catch (err) {
+                  if (generation === selectionGeneration.current) setError(err.message);
+                } finally {
+                  if (generation === selectionGeneration.current) setSaving(false);
+                }
               }} className="w-full bg-port-card border border-port-border rounded p-2 text-sm" />
             {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
             <button type="button" disabled={saving} className="mt-2 text-sm text-port-accent" onClick={() => handlePick(selection.id)}>Launch selected configuration</button>

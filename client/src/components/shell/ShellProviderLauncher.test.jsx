@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
+import { saveExecutionOptionSelection } from '../../services/apiProviders.js';
+
+vi.mock('../../services/apiProviders.js', () => ({ saveExecutionOptionSelection: vi.fn() }));
+vi.mock('../../services/apiCore.js', () => ({ request: vi.fn().mockResolvedValue({ options: [{ key: 'serviceTier', label: 'Speed', values: ['standard', 'fast'] }] }) }));
+
 import ShellProviderLauncher, { launchableProviders } from './ShellProviderLauncher';
 
 const tui = (overrides = {}) => ({
@@ -53,6 +58,41 @@ describe('ShellProviderLauncher', () => {
     fireEvent.click(screen.getByText('Claude Code TUI'));
     // The ID is the whole point: the server pairs it with the provider's env.
     expect(onLaunch).toHaveBeenCalledWith('claude-code-tui');
+  });
+
+  it('launches the saved configuration when its selection is still current', async () => {
+    const provider = tui({ executionOptionKeys: ['serviceTier'] });
+    saveExecutionOptionSelection.mockResolvedValueOnce({ ...provider, id: 'saved-fast', executionSelectionOptions: { serviceTier: 'fast' } });
+    const onLaunch = open({ providers: [provider] });
+    fireEvent.click(screen.getByLabelText('Execution options for Claude Code TUI'));
+    await screen.findByRole('option', { name: 'Fast' });
+    fireEvent.change(screen.getByLabelText('Speed'), { target: { value: 'fast' } });
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Launch selected configuration' }));
+    expect(onLaunch).toHaveBeenCalledWith('saved-fast');
+  });
+
+  it.each(['switch provider', 'close and reopen'])('ignores an earlier configuration save after %s', async (change) => {
+    let finishSave;
+    saveExecutionOptionSelection.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+    const first = tui({ id: 'first', name: 'First', executionOptionKeys: ['serviceTier'] });
+    const second = tui({ id: 'second', name: 'Second', executionOptionKeys: ['serviceTier'] });
+    const onLaunch = open({ providers: [first, second] });
+    fireEvent.click(screen.getByLabelText('Execution options for First'));
+    await screen.findByRole('option', { name: 'Fast' });
+    fireEvent.change(screen.getByLabelText('Speed'), { target: { value: 'fast' } });
+    expect(screen.getByRole('button', { name: 'Launch selected configuration' })).toBeDisabled();
+
+    if (change === 'close and reopen') {
+      fireEvent.keyDown(window, { key: 'Escape' });
+      fireEvent.click(screen.getByLabelText('Launch an AI CLI'));
+    }
+    const expected = change === 'switch provider' ? second : first;
+    fireEvent.click(screen.getByLabelText(`Execution options for ${expected.name}`));
+    await act(async () => { finishSave({ ...first, id: 'first-fast', executionSelectionOptions: { serviceTier: 'fast' } }); });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Launch selected configuration' }));
+    expect(onLaunch).toHaveBeenCalledWith(expected.id);
   });
 
   it('shows the resolved command line so the user sees what will run', () => {
