@@ -745,7 +745,7 @@ async function readCheckoutReviewPrerequisites(input, opts) {
     readAgents: opts.readAgents || readClaimOwnershipAgents, reviewed: true });
   if (namedOwner) return { ok: false, reason: namedOwner };
   const identity = await integratedPolicyReviewIdentity(repoPath, release, prUrl, forge);
-  if (!identity) return { ok: false, reason: 'retirement-local-objects-missing' };
+  if (!identity) return { ok: false, reason: 'retirement-local-objects-missing', proofForge: forge };
   if (!release.branch) {
     identity.detachedCheckoutIdentity = await readRetirementCheckoutIdentity(release.path);
     if (!identity.detachedCheckoutIdentity) return { ok: false, reason: 'checkout-identity-changed' };
@@ -871,11 +871,16 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
   const review = () => previewCurrentCheckout({ repoPath: app.repoPath, release, prUrl, kind }, reviewOptions);
   let prepared = await review();
   if (prepared.reason === 'retirement-local-objects-missing') {
-    // A remote default may advance while local refs stay put. Acquire only its
-    // validated proof objects; then repeat every owner/policy/content check.
-    const fetched = await fetchRetirementProofObjects(app.repoPath, release, prUrl, null, { ...reviewOptions, ...reviewForgeOptions(release, kind, reviewOptions) });
+    // Fetch the object set that this attempt actually needs. Independently
+    // rereading a moving default here and in the retry can chase three different
+    // snapshots and leave an otherwise completed job waiting indefinitely.
+    const proofForge = prepared.proofForge;
+    const proofOptions = proofForge
+      ? { ...reviewOptions, readForge: async () => proofForge }
+      : reviewOptions;
+    const fetched = await fetchRetirementProofObjects(app.repoPath, release, prUrl, null, { ...proofOptions, ...reviewForgeOptions(release, kind, proofOptions) });
     if (!fetched.ok) return fetched;
-    prepared = await review();
+    prepared = await previewCurrentCheckout({ repoPath: app.repoPath, release, prUrl, kind }, proofOptions);
   }
   if (!kind && release.branch && prepared.reason === 'retirement-policy-not-legacy-completed') {
     // Recover only a previously registered physical generation after fresh

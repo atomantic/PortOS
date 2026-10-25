@@ -2094,6 +2094,38 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
   });
 
+  it('fetches the same moving-default snapshot that its preparation retries, then rechecks mutation freshly', async () => {
+    const c = await reviewedCheckout('moving-proof-snapshot');
+    const originalMain = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
+    const remote = join(scratch, 'moving-proof-remote');
+    await execGit(['clone', '--no-hardlinks', repo, remote], scratch);
+    await execGit(['config', 'user.email', 'test@example.com'], remote);
+    await execGit(['config', 'user.name', 'Test'], remote);
+    const heads = [];
+    for (const message of ['first default', 'second default', 'third default']) {
+      await execGit(['commit', '--allow-empty', '-m', message], remote);
+      heads.push((await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim());
+    }
+    await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+    injected.fetchRemote = remote;
+    let reads = 0;
+    c.opts.readForge = async () => ({ ...c.forge, defaultHead: heads[Math.min(reads++, heads.length - 1)] });
+    const prepared = await c.prepare();
+    expect(prepared.reason, JSON.stringify(prepared)).toBeUndefined();
+    expect(prepared.ok).toBe(true);
+    expect(prepared.review.forge.defaultHead).toBe(heads[0]);
+    expect(reads).toBe(1);
+    expect(injected.fetches).toHaveLength(1);
+    expect(injected.fetches[0].args).toContain(heads[0]);
+    expect((await execGit(['rev-parse', 'main'], repo)).stdout.trim()).toBe(originalMain);
+    expect(existsSync(join(repo, '.git', 'FETCH_HEAD'))).toBe(false);
+    const changed = await c.confirm(prepared.review);
+    expect(changed.ok).toBe(false);
+    expect(reads).toBeGreaterThan(1);
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+  });
+
   it('fetches a remote-only squash commit for receipt proof without advancing any local branch', async () => {
     const base = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
     const c = await heldCheckout('remote-merge', { branch: 'feature/remote-merge', beforeLock: async tree => {

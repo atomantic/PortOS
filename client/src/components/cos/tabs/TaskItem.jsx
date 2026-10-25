@@ -159,6 +159,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
   // registration ordering for why the two disagree.
   const finalizing = task.status === 'in_progress' && isDeliveryCleanupHeld(task.metadata) && agent?.status !== 'running';
   const displayStatus = finalizing ? 'finalizing' : spawning ? 'in_progress' : task.status;
+  const statusLabel = finalizing ? 'cleanup incomplete' : displayStatus;
   const idScope = isSystem ? 'sys' : 'user';
   // Either queue. A USER row can hold too: a row the importer had to RECOVER is
   // withheld from the unattended spawn and keeps that hold (#7300, #7367). Gating the button on `isSystem` would leave it pending with
@@ -446,7 +447,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
             }
           }}
           className="mt-0.5 hover:scale-110 transition-transform"
-          aria-label={`Status: ${displayStatus}. Click to mark as ${task.status === 'completed' || task.status === 'blocked' ? 'pending' : 'completed'}`}
+          aria-label={`Status: ${statusLabel}. Click to mark as ${task.status === 'completed' || task.status === 'blocked' ? 'pending' : 'completed'}`}
         >
           {statusIcons[displayStatus]}
         </button>
