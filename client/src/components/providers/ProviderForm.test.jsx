@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { request } from '../../services/apiCore.js';
 
 const api = vi.hoisted(() => ({
   createProvider: vi.fn(),
@@ -16,6 +17,7 @@ const toast = vi.hoisted(() => ({
 }));
 
 vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiCore.js', () => ({ request: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: toast }));
 
 import ProviderForm from './ProviderForm';
@@ -36,6 +38,33 @@ describe('ProviderForm', () => {
     vi.clearAllMocks();
     api.createProvider.mockResolvedValue({});
     api.updateProvider.mockResolvedValue({});
+    request.mockResolvedValue({ options: [{ key: 'serviceTier', label: 'Speed', values: ['standard', 'fast'] }] });
+  });
+
+  it('requires saved connection settings before offering execution capabilities and keeps old defaults clearable', async () => {
+    renderForm({ provider: {
+      id: 'example-codex', name: 'Example Codex', type: 'cli', command: 'codex',
+      codexAuthMode: 'chatgpt', defaultModel: 'example-model',
+      executionOptionKeys: ['serviceTier'], executionOptions: { serviceTier: 'fast' },
+    } });
+    switchTab('Models');
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Fast' })).toBeInTheDocument());
+    switchTab('Connection');
+    fireEvent.change(screen.getByLabelText('Codex authentication'), { target: { value: 'api' } });
+    request.mockClear();
+    await act(async () => { switchTab('Models'); });
+
+    expect(screen.getByText('Save connection changes before refreshing execution capabilities.')).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Fast' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'fast (unsupported)' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Refresh capabilities' })).toBeDisabled();
+    expect(request).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Speed'), { target: { value: '' } });
+    expect(screen.getByRole('option', { name: 'Inherit / default' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Update Provider|Save/i }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalledWith('example-codex', expect.objectContaining({
+      codexAuthMode: 'api', executionOptions: {},
+    })));
   });
 
   it('renders every editor tab', () => {

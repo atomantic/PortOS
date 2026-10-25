@@ -1405,7 +1405,7 @@ it('keeps the current cleanup verdict primary and labels stale report and warnin
   api.getCosAgent.mockResolvedValue({ ...current, output: [] });
   render(<MemoryRouter><AgentCard agent={current} completed /></MemoryRouter>);
   expect(screen.getByText('Code merged.')).toBeInTheDocument();
-  expect(screen.getByText('Local worktree already removed; merged delivery confirmed.')).toBeInTheDocument();
+  expect(screen.getByText('The local worktree is already gone; preservation still needs verification.')).toBeInTheDocument();
   expect(screen.getByText('Cleanup queued: old-internal-code').closest('details')).not.toHaveAttribute('open');
   expect(screen.queryByText('Cleanup is queued with the checkout preserved.')).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));

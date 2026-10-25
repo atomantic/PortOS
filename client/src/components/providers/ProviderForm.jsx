@@ -214,6 +214,18 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
       ...liveHardwareFor(formData),
     },
   }, daemonReadiness?.contextWindows), daemonReadiness?.runtimeContextWindow);
+  // Capability requests inspect the saved connection, so edited routing must
+  // be saved before its speed settings can be verified. Old pins stay clearable.
+  const executionConnectionChanged = provider && (
+    formData.type !== (provider.type || 'cli')
+    || formData.command !== (provider.command || '')
+    || JSON.stringify(argList(formData.args)) !== JSON.stringify(provider.args || [])
+    || formData.codexAuthMode !== (provider.codexAuthMode || '')
+    || formData.ignoreUserConfig !== (provider.ignoreUserConfig === true)
+    || formData.enabled !== (provider.enabled !== false)
+    || JSON.stringify(formData.envVars) !== JSON.stringify(provider.envVars || {})
+    || formData.credentialBootstrapCommand !== (provider.credentialBootstrap?.command || '')
+  );
   // Scoped by the same Model Access policy `ProviderModelAccess` previews above,
   // so the Default Model + tier selects can't offer a model the policy hides —
   // they used to read straight off `mergedModels` and ignore the policy entirely.
@@ -1131,7 +1143,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
               </FormField>
 
               {provider?.id && <div>
-                <ExecutionOptionsSelect provider={provider} model={formData.defaultModel} value={formData.executionOptions}
+                <ExecutionOptionsSelect provider={{ ...capabilityProvider, args: argList(formData.args), executionOptions: undefined }} model={formData.defaultModel} value={formData.executionOptions}
+                  inspectionBlockedReason={executionConnectionChanged ? 'Save connection changes before refreshing execution capabilities.' : null}
                   onChange={executionOptions => setFormData(current => ({ ...current, executionOptions }))}
                   className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm" />
                 <p className="text-xs text-gray-500">Saved execution defaults apply to future runs, including scheduled jobs using this preset.</p>

@@ -60,8 +60,7 @@ export default function AgentResultLine({ agent, className = '' }) {
 }
 
 function isCleanupComplete(cleanup) {
-  return cleanup?.status === 'verified' || (cleanup?.status === 'already-absent'
-    && cleanup.committedIntegrationVerified === true && (cleanup.total == null || cleanup.total === 1));
+  return cleanup?.status === 'verified' && (cleanup.unresolved == null || cleanup.unresolved === 0);
 }
 
 function CleanupStatus({ cleanup, outcome }) {
@@ -74,7 +73,7 @@ function CleanupStatus({ cleanup, outcome }) {
   return (
     <div>
       <div>{verified ? mergedAbsent ? 'Local worktree already removed; merged delivery confirmed.' : 'Local cleanup confirmed; preservation verified.'
-        : absent ? mergedAbsent ? 'Other repository cleanup still needs verification.' : 'The local worktree is already gone; code delivery still needs verification.'
+        : absent ? mergedAbsent ? cleanup.total > 1 ? 'Other repository cleanup still needs verification.' : 'The local worktree is already gone; preservation still needs verification.' : 'The local worktree is already gone; code delivery still needs verification.'
           : blocked ? 'Local cleanup is blocked. PortOS has not confirmed safe removal.'
             : 'Local cleanup is pending; preservation and removal are not yet confirmed.'}</div>
       {!verified && <div>{owners ? <>Next: wait for the current owner to finish.<CleanupHolders owners={cleanup.owners} /></>

@@ -12,6 +12,7 @@ const preservedBranch = () => ({ archiveDir: '/branch-archive', verify: async ()
 const preserveBranchMock = vi.fn(async () => preservedBranch());
 vi.mock('../lib/branchRetirementArchive.js', () => ({ preserveBranchRetirement: (...args) => preserveBranchMock(...args) }));
 vi.mock('./heldCheckoutRecovery.js', () => ({
+  assertNoUniqueIgnoredCheckoutPayload: async () => {},
   preserveMergedCheckout: (...args) => preserveCheckoutMock(...args),
   releaseCheckoutWithoutArchive: (...args) => releaseCheckoutMock(...args),
 }));

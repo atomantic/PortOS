@@ -1,11 +1,105 @@
-import { useState } from 'react';
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { StrictMode, useState } from 'react';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ReviewerPicker from './ReviewerPicker';
 import { typeSettled } from '../../test/settledInput';
+import * as providersApi from '../../services/apiProviders.js';
+import * as apiCore from '../../services/apiCore.js';
 
 describe('ReviewerPicker', () => {
+  describe('execution option saves while reviewers change', () => {
+    const token = 'provider:example-codex';
+    const provider = { id: 'example-codex', name: 'Example Codex', type: 'cli', command: 'codex', enabled: true,
+      defaultModel: 'gpt-6-astra', models: ['gpt-6-astra', 'gpt-5.6-sol'], executionOptionKeys: ['serviceTier'] };
+    const selection = { ...provider, id: 'fast-preset', name: 'Example Fast', executionSourceProviderId: provider.id,
+      executionSelectionOptions: { serviceTier: 'fast' } };
+
+    afterEach(() => vi.restoreAllMocks());
+
+    const beginSave = async () => {
+      let resolve;
+      const pending = new Promise((done) => { resolve = done; });
+      const save = vi.spyOn(providersApi, 'saveExecutionOptionSelection').mockReturnValue(pending);
+      vi.spyOn(apiCore, 'request').mockResolvedValue({ options: [{ key: 'serviceTier', label: 'Speed', values: ['fast'] }] });
+      const onChange = vi.fn();
+      function Form() {
+        const [showPicker, setShowPicker] = useState(true);
+        const [config, setConfig] = useState({ reviewers: [token, 'claude'], reviewerModels: { [token]: 'gpt-6-astra' },
+          reviewerEfforts: { [token]: 'medium' } });
+        return <>
+          <button type="button" onClick={() => setShowPicker(value => !value)}>{showPicker ? 'Hide reviewers' : 'Show reviewers'}</button>
+          {showPicker && <ReviewerPicker {...config} modelOptions={{ providers: [provider], optionsByReviewer: { [token]: provider.models } }}
+            onChange={value => { onChange(value); setConfig(value); }} />}
+        </>;
+      }
+      render(<StrictMode><Form /></StrictMode>);
+      await act(async () => {});
+      fireEvent.change(screen.getByLabelText('Speed'), { target: { value: 'fast' } });
+      expect(save).toHaveBeenCalledWith(provider.id, 'gpt-6-astra', { serviceTier: 'fast' }, { silent: true });
+      return { onChange, finish: () => act(async () => { resolve(selection); }) };
+    };
+
+    it('does not apply a save from a picker that was closed and reopened', async () => {
+      const { onChange, finish } = await beginSave();
+      fireEvent.click(screen.getByRole('button', { name: 'Hide reviewers' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Show reviewers' }));
+      await finish();
+      expect(onChange).not.toHaveBeenCalled();
+      expect(screen.getByLabelText('Remove Example Codex')).toBeInTheDocument();
+    });
+
+    it('does not restore a reviewer removed while its execution options are saving', async () => {
+      const { onChange, finish } = await beginSave();
+      fireEvent.click(screen.getByLabelText('Remove Example Codex'));
+      await finish();
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange.mock.lastCall[0].reviewers).toEqual(['claude']);
+      expect(screen.queryByLabelText('Remove Example Fast')).not.toBeInTheDocument();
+    });
+
+    it('does not apply an earlier save after the same reviewer is removed and added again', async () => {
+      const { onChange, finish } = await beginSave();
+      fireEvent.click(screen.getByLabelText('Remove Example Codex'));
+      fireEvent.change(screen.getByLabelText('Add AI provider'), { target: { value: provider.id } });
+      await finish();
+      expect(onChange).toHaveBeenCalledTimes(2);
+      expect(screen.getByLabelText('Remove Example Codex')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Remove Example Fast')).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ['model', 'Model for Example Codex', 'gpt-5.6-sol'],
+      ['effort', 'Reasoning effort for Example Codex', 'high'],
+    ])('drops the saved selection when its reviewer %s changed in flight', async (_field, label, value) => {
+      const { onChange, finish } = await beginSave();
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+      await finish();
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(screen.getByLabelText(label)).toHaveValue(value);
+      expect(screen.queryByLabelText('Remove Example Fast')).not.toBeInTheDocument();
+    });
+
+    it('remaps the saved reviewer into the latest configuration without losing other edits', async () => {
+      const { onChange, finish } = await beginSave();
+      fireEvent.change(screen.getByLabelText('Model for Claude'), { target: { value: 'claude-sonnet-4-6' } });
+      fireEvent.change(screen.getByLabelText('Reasoning effort for Claude'), { target: { value: 'high' } });
+      fireEvent.click(screen.getByLabelText('Make Example Codex non-blocking'));
+      fireEvent.change(screen.getByLabelText('Max review rounds for Example Codex'), { target: { value: '2' } });
+      fireEvent.change(screen.getByLabelText('Add local / CLI'), { target: { value: 'copilot' } });
+      await finish();
+      expect(onChange.mock.lastCall[0]).toMatchObject({
+        reviewers: ['provider:fast-preset', 'claude', 'copilot'],
+        optionalReviewers: ['provider:fast-preset'],
+        reviewerModels: { 'provider:fast-preset': 'gpt-6-astra', claude: 'claude-sonnet-4-6' },
+        reviewerEfforts: { 'provider:fast-preset': 'medium', claude: 'high' },
+        reviewerMaxRounds: { 'provider:fast-preset': 2 },
+      });
+      expect(screen.getByLabelText('Model for Claude')).toHaveValue('claude-sonnet-4-6');
+      expect(screen.getByLabelText('Remove Copilot')).toBeInTheDocument();
+    });
+  });
+
   it('clears an incompatible provider effort when its model changes and announces why', () => {
     const provider = { id: 'example-codex', name: 'Example Codex', command: 'codex', enabled: true,
       defaultModel: 'gpt-5.6-sol', models: ['gpt-5.6-sol', 'gpt-6-astra'] };

@@ -225,6 +225,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   async function supersededCheckout() {
     const { release } = await heldCheckout('superseded', { branch: 'feature/superseded' });
+    await rm(join(release.path, 'ignored.txt'));
     await execGit(['worktree', 'unlock', release.path], repo);
     await execGit(['add', 'initial.txt'], release.path);
     await writeFile(join(release.path, 'initial.txt'), 'unstaged original work\n');
@@ -253,7 +254,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         await execGit(['add', '.gitignore'], path);
         await execGit(['commit', '-m', 'fixture ignore rule'], path);
         await execGit(['merge', '--ff-only', branch], repo);
-        await writeFile(join(path, 'ignored.txt'), 'synthetic ignored checkout bytes');
         return (await (await import('./worktreeManager.js')).listWorktrees(repo)).find(tree => tree.branch === `refs/heads/${branch}`);
       });
       const release = { branch, path: holder.path, head: holder.head, locked: false, lockReason: null };
@@ -358,6 +358,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect((await execGit(['rev-parse', release.branch], repo)).stdout.trim()).toBe(release.head);
     expect(await archives()).toEqual([]);
     expect((await getBranchReconcileOutcome('app-1'))?.retired || []).toEqual([]);
+  });
+
+  it('retains ignored payload that the superseded patch backup does not preserve', async () => {
+    const { entry, release } = await supersededCheckout();
+    await writeFile(join(release.path, 'ignored.txt'), 'sole unpublished bytes');
+    const result = await reapSuperseded(entry);
+    expect(result.reaped).toEqual([]);
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0].reason).toContain('checkout-ignored-payload-unverified');
+    expect(await readFile(join(release.path, 'ignored.txt'), 'utf8')).toBe('sole unpublished bytes');
+    expect(await registered(release.path)).toBe(true);
+    expect((await execGit(['rev-parse', release.branch], repo)).stdout.trim()).toBe(release.head);
+    expect(await archives()).toEqual([]);
   });
 
   it('keeps a superseded checkout when its untracked backup cannot be copied', async () => {
@@ -1180,7 +1193,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(existsSync(handoff.path)).toBe(true);
     expect(await archives()).toEqual([]);
   });
-  async function reviewedCheckout(name, { superseded = false, gitlink = false, normalMerge = false, featurePath = 'feature.txt', featureBody = 'original feature\n', multipleCommits = false, targetBranch = 'main' } = {}) {
+  async function reviewedCheckout(name, { superseded = false, gitlink = false, normalMerge = false, featurePath = 'feature.txt', featureBody = 'original feature\n', multipleCommits = false, targetBranch = 'main', ignoredPayload = false } = {}) {
     if (targetBranch !== 'main') await execGit(['switch', '-c', targetBranch, 'main'], repo);
     let firstCommit;
     let changeBase;
@@ -1212,9 +1225,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         await execGit(['commit', '-am', 'strengthen implementation'], repo);
       }
     } });
-    // Ignored bytes stay on disk and out of porcelain. They are not an archive.
+    // Successful retirement fixtures contain no wanted ignored payload.
     await execGit(['checkout', '--', '.'], path);
     await execGit(['clean', '-fd'], path);
+    if (!ignoredPayload) await rm(join(path, 'ignored.txt'));
     const [main, admin] = (await Promise.all([
       execGit(['rev-parse', 'main'], repo), execGit(['rev-parse', '--absolute-git-dir'], path),
     ])).map(result => result.stdout.trim());
@@ -1274,8 +1288,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     injected.schedule = JSON.parse(JSON.stringify(injected.schedule));
     expect(await recordSupersededCheckoutPreservation('app-1', c.release, prepared.review)).toBe(true);
     expect((await getBranchReconcileOutcome('app-1')).supersededSourceEvidence[review.digest].preservedAt).toBe(preservedAt);
-    expect(await retireInventoriedCheckout({ appId: input.appId, release: c.release, review }, c.opts))
-      .toMatchObject({ ok: true, branchDeleted: true });
+    const retirement = await retireInventoriedCheckout({ appId: input.appId, release: c.release, review }, c.opts);
+    expect(retirement, retirement.reason || retirement.detail).toMatchObject({ ok: true, branchDeleted: true });
     expect(existsSync(c.path)).toBe(false);
     const outcome = await getBranchReconcileOutcome('app-1');
     expect(outcome.retired).toContainEqual(expect.objectContaining({ head: c.release.head,
@@ -1285,7 +1299,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['changed-source', 'persistence-failure', 'preservation-capacity'])('preserves the original when supersession confirmation encounters %s', async scenario => {
+  it.each(['changed-source', 'persistence-failure', 'preservation-capacity', 'changed-private-evidence', 'changed-preservation'])('preserves the original when supersession confirmation encounters %s', async scenario => {
     const c = await reviewedCheckout(`prototype-confirm-${scenario}`, { superseded: true });
     c.forge.prHead = c.forge.mergeCommit;
     c.forge.firstCommit = c.forge.mergeCommit;
@@ -1293,11 +1307,25 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     c.forge.sourceSupersessionHead = c.release.head;
     c.forge.remoteHead = `${c.release.head}\trefs/heads/${c.release.branch}`;
     c.forge.sourcePreservation = { head: c.release.head, remoteRef: `refs/heads/${c.release.branch}`, prUrl: 'https://github.com/example/repo/pull/41' };
+    const mutateAfterPreservation = scenario === 'changed-private-evidence' || scenario === 'changed-preservation';
+    if (mutateAfterPreservation) await writeFile(join(c.path, 'ignored.txt'), 'original private evidence');
     const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release: c.release,
       prUrl: c.forge.prUrl, kind: 'preserved-supersession' }, c.opts);
     expect(prepared, prepared.reason).toMatchObject({ ok: true });
     if (scenario === 'changed-source') c.forge.remoteHead = null;
     else if (scenario === 'persistence-failure') retirementFaults.failScheduleWrite = retirementFaults.scheduleWrites + 1;
+    else if (mutateAfterPreservation) {
+      let mutations = 0;
+      c.opts.beforeMutation = async () => {
+        // Admission is first; the second boundary follows durable preservation.
+        if (++mutations !== 2) return;
+        const saved = (await getBranchReconcileOutcome('app-1')).supersededSourceEvidence[prepared.review.digest];
+        const file = saved.proof.source.files.find(entry => entry.scope === 'content' && entry.path === 'ignored.txt');
+        expect(file.data).toBe(Buffer.from('original private evidence').toString('base64'));
+        if (scenario === 'changed-private-evidence') await writeFile(join(c.path, 'ignored.txt'), 'changed private evidence');
+        else file.data = Buffer.from('changed saved evidence').toString('base64');
+      };
+    }
     else {
       const outcome = injected.schedule.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome;
       outcome.supersededSourceEvidence = { completed: { proof: { data: 'x'.repeat(1024 * 1024) } } };
@@ -1305,11 +1333,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     }
     const result = await retireInventoriedCheckout({ appId: 'app-1', release: c.release,
       review: { prUrl: c.forge.prUrl, kind: 'preserved-supersession', digest: prepared.review.digest, acceptSuperseded: true } }, c.opts);
-    expect(result).toMatchObject({ ok: false, reason: scenario === 'changed-source'
-      ? 'retirement-source-not-published' : 'checkout-not-disposable' });
+    const reasons = { 'changed-source': 'retirement-source-not-published', 'changed-private-evidence': 'retirement-review-changed',
+      'changed-preservation': 'retirement-source-preservation-unavailable' };
+    expect(result).toMatchObject({ ok: false, reason: reasons[scenario] || 'checkout-not-disposable' });
     expect(existsSync(c.path)).toBe(true);
     expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
     expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+    if (mutateAfterPreservation) {
+      expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe(scenario === 'changed-private-evidence'
+        ? 'changed private evidence' : 'original private evidence');
+      expect(await lockText(c.path)).toBe(c.release.lockReason);
+    }
     if (scenario === 'preservation-capacity') expect((await getBranchReconcileOutcome('app-1'))
       .supersededSourceEvidence.completed.proof.data).toHaveLength(1024 * 1024);
   });
@@ -1362,6 +1396,21 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return root;
   }
 
+  it.each(['reviewed', 'merged'])('retains ignored payload through the %s retirement boundary', async mode => {
+    const c = await reviewedCheckout(`ignored-payload-${mode}`, { normalMerge: true, ignoredPayload: true });
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true);
+    expect((await execGit(['status', '--porcelain'], c.path)).stdout.trim()).toBe('');
+    const result = mode === 'reviewed' ? await c.confirm(prepared.review)
+      : await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, { ...c.opts, settleMergedReviewObligation: true });
+    expect(result).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+    expect(await archives()).toEqual([]);
+  });
+
   it.each(['file', 'total'])('retires a reviewed checkout with verified disposable module cache beyond the archive %s budget', async limit => {
     const c = await reviewedCheckout(`disposable-cache-${limit}`);
     await moduleCache(c, limit === 'total' ? { count: 12, bytes: 22 * 1024 * 1024 } : {});
@@ -1372,6 +1421,22 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(retired.archiveDir ?? null).toBeNull();
     expect(existsSync(c.path)).toBe(false);
     expect(await registered(c.path)).toBe(false);
+    expect(await archives()).toEqual([]);
+  });
+
+  it('retains an ignored validation receipt beside a verified disposable module cache', async () => {
+    const c = await reviewedCheckout('cache-with-receipt');
+    await moduleCache(c, { bytes: 32 });
+    const receiptDir = join(c.path, 'server/.cache/pregate');
+    await mkdir(receiptDir, { recursive: true });
+    const receipt = join(receiptDir, 'report.json');
+    await writeFile(receipt, '{"validatedTree":"unpublished-evidence"}');
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true);
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
+    expect(await readFile(receipt, 'utf8')).toBe('{"validatedTree":"unpublished-evidence"}');
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
     expect(await archives()).toEqual([]);
   });
 
@@ -1540,7 +1605,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     ['pointer', 'checkout-identity-changed'],
     ['administration', 'checkout-identity-changed'],
   ])('refuses preview when %s changes during unlocked evidence construction', async (change, reason) => {
-    const c = await reviewedCheckout(`preview-race-${change}`);
+    const c = await reviewedCheckout(`preview-race-${change}`, { ignoredPayload: true });
     let owners = [];
     c.opts.readAgents = async () => owners;
     injected.onPreviewEvidence = async () => {
@@ -1794,14 +1859,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
     expect(await archives()).toEqual([]);
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
-    // Ignored bytes are not dirt. An unattended merged retirement removes the
-    // checkout instead of copying those bytes into an archive.
+    // Unattended cleanup must also preserve bytes omitted from Git status.
     const removed = await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, {
       ...c.opts, settleMergedReviewObligation: true,
     });
-    expect(removed).toMatchObject({ ok: true, branchDeleted: true });
+    expect(removed).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
     expect(removed.archiveDir).toBeUndefined();
-    expect(existsSync(c.path)).toBe(false);
+    expect(await Promise.all(files.map(sha256File))).toEqual(hashes);
+    expect(await registered(c.path)).toBe(true);
     expect(await archives()).toEqual([]);
   });
 
@@ -1826,12 +1891,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
     beforeEach(async () => {
       retired = await c.confirm(prepared.review);
-      expect(retired).toMatchObject({ ok: true, branchDeleted: true });
+      expect(retired).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
     });
 
-    it('removes the checkout without copying more than 1000 ignored files', async () => {
+    it('retains more than 1000 ignored files and their original checkout without copying', async () => {
       expect(retired.archiveDir).toBeUndefined();
-      expect(existsSync(c.path)).toBe(false);
+      expect(await readFile(join(c.path, 'private-files', 'item-1049'), 'utf8')).toBe('retained ignored bytes\n');
+      expect(await registered(c.path)).toBe(true);
+      expect(await lockText(c.path)).toBe(c.release.lockReason);
+      expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
       expect(await archives()).toEqual([]);
     });
   });
@@ -1885,6 +1953,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(prepared.ok).toBe(true);
     const file = join(c.path, 'ignored.txt');
     const bytes = 25 * 1024 * 1024 + 1;
+    await writeFile(file, 'synthetic ignored payload');
     await truncate(file, bytes);
     const hash = await sha256File(file);
     const before = await getBranchReconcileOutcome('app-1');
@@ -1902,9 +1971,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
       return;
     }
-    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(result).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
     expect(result.archiveDir).toBeUndefined();
-    expect(existsSync(c.path)).toBe(false);
+    expect(await sha256File(file)).toBe(hash);
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
     expect(await archives()).toEqual([]);
   });
 
@@ -1919,6 +1990,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     let changedHash;
     const result = await c.confirm(prepared.review, { beforeMutation: async () => {
       if (++mutations === 2) {
+        await writeFile(file, 'synthetic ignored payload');
         await truncate(file, bytes);
         changedHash = await sha256File(file);
       }
@@ -1946,7 +2018,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   });
 
   it('refreshes missing operator-review proof objects after remote main moves without accepting the old digest or advancing refs', async () => {
-    const c = await reviewedCheckout('advanced-default');
+    const c = await reviewedCheckout('advanced-default', { ignoredPayload: true });
     const before = await c.prepare();
     expect(before.ok).toBe(true);
     const oldMain = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
@@ -2057,7 +2129,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(result).toMatchObject({ ok: false, reason: 'claim-owner-active' });
     expect(result.archiveDir).toBeUndefined();
     expect(await registered(c.release.path)).toBe(true);
-    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await readFile(join(c.path, 'feature.txt'), 'utf8')).toBe('original feature\n');
     expect(await archives()).toEqual([]);
   });
 
@@ -2622,7 +2694,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   it.each(['head-mismatch', 'same-checkout-failed', 'ambiguous-history', 'current-manual', 'current-active', 'checkout-alias', 'primary-alias'])(
     'keeps the full original checkout when reused-branch proof changes: %s', async change => {
-      const c = await reviewedCheckout('quality-held');
+      const c = await reviewedCheckout('quality-held', { ignoredPayload: true });
       const current = reusedBranchOwners(c);
       const prepared = await c.prepare();
       expect(prepared.ok).toBe(true);
@@ -2644,7 +2716,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     });
 
   it('preserves the checkout and inventory when private administration is recreated behind an unchanged Git pointer', async () => {
-    const c = await reviewedCheckout('replaced-administration');
+    const c = await reviewedCheckout('replaced-administration', { ignoredPayload: true });
     await writeFile(join(c.path, 'untracked.txt'), 'untracked work\n');
     const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
     const identity = await readCompletedCheckoutIdentity({ repoPath: repo, ...c.release, allowLocked: true });
@@ -2834,7 +2906,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     }
     else {
       await execGit(['worktree', 'add', '--detach', path, c.release.head], repo);
-      await writeFile(join(path, 'ignored.txt'), 'distinct detached work\n');
     }
     // Real inventories use Git's observed spelling. Windows temp paths can
     // differ from that registration (including short names and drive casing).
@@ -2930,7 +3001,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const result = await c.confirm(prepared.review, { readForge: async () => ({ ...c.forge, remoteHead: ++reads === 1 ? null : c.release.head }) });
     expect(result).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
     expect(result.archiveDir).toBeUndefined();
-    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await readFile(join(c.path, 'feature.txt'), 'utf8')).toBe('original feature\n');
     expect(await archives()).toEqual([]);
     expect(await registered(c.release.path)).toBe(true);
     expect(await lockText(c.release.path)).toBe(c.release.lockReason);

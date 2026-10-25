@@ -2,7 +2,7 @@ import { useEffect, useId, useState } from 'react';
 import { request } from '../../services/apiCore.js';
 
 /** Capability-driven controls; unsupported saved pins remain clearable. */
-export default function ExecutionOptionsSelect({ provider, model, value, onChange, disabled, className, fieldClassName }) {
+export default function ExecutionOptionsSelect({ provider, model, value, onChange, disabled, className, fieldClassName, inspectionBlockedReason }) {
   const id = useId();
   const [snapshot, setSnapshot] = useState(null);
   const [refresh, setRefresh] = useState(0);
@@ -12,16 +12,17 @@ export default function ExecutionOptionsSelect({ provider, model, value, onChang
   const routeKey = JSON.stringify([providerId, provider?.type, provider?.command, provider?.args, provider?.codexAuthMode, provider?.ignoreUserConfig, provider?.enabled, provider?.gatewayBacked, provider?.credentialBootstrapId]);
   useEffect(() => {
     let active = true;
-    if (providerId && shouldInspect) {
+    if (providerId && shouldInspect && !inspectionBlockedReason) {
       request(`/providers/${encodeURIComponent(providerId)}/execution-options?model=${encodeURIComponent(model || '')}${refresh ? '&refresh=true' : ''}`, { silent: true })
         .then((data) => { if (active) setSnapshot({ providerId, model, routeKey, data }); })
         .catch(() => { if (active) setSnapshot({ providerId, model, routeKey, data: { options: [], reason: 'Execution capabilities could not be verified.' } }); });
     }
     return () => { active = false; };
-  }, [providerId, model, routeKey, refresh, shouldInspect]);
-  const capabilities = snapshot?.providerId === providerId && snapshot?.model === model && snapshot?.routeKey === routeKey ? snapshot.data : null;
+  }, [providerId, model, routeKey, refresh, shouldInspect, inspectionBlockedReason]);
+  const capabilities = inspectionBlockedReason ? { options: [], reason: inspectionBlockedReason }
+    : snapshot?.providerId === providerId && snapshot?.model === model && snapshot?.routeKey === routeKey ? snapshot.data : null;
   const descriptors = capabilities?.options || [];
-  const keys = [...new Set([...descriptors.map((option) => option.key), ...Object.keys(value || {}), ...Object.keys(provider?.executionOptions || {})])];
+  const keys = [...new Set([...(provider?.executionOptionKeys || []), ...descriptors.map((option) => option.key), ...Object.keys(value || {}), ...Object.keys(provider?.executionOptions || {})])];
   if (!keys.length) return null;
   return keys.map((key) => {
     const descriptor = descriptors.find((option) => option.key === key);
@@ -41,7 +42,7 @@ export default function ExecutionOptionsSelect({ provider, model, value, onChang
         {unsupported && <option value={saved} disabled>{saved} (unsupported)</option>}
         {descriptor?.values.map((setting) => <option key={setting} value={setting}>{setting.charAt(0).toUpperCase() + setting.slice(1)}</option>)}
       </select>
-      <button type="button" className="text-xs text-port-accent mt-1" disabled={disabled} onClick={() => setRefresh((current) => current + 1)}>Refresh capabilities</button>
+      <button type="button" className="text-xs text-port-accent mt-1" disabled={disabled || !!inspectionBlockedReason} onClick={() => setRefresh((current) => current + 1)}>Refresh capabilities</button>
       <p className="text-xs text-gray-500 mt-1">{unsupported || !descriptor?.values.length ? capabilities?.reason || 'This saved option is unsupported or unverified for the selected route and model.' : descriptor?.help}</p>
     </div>;
   });

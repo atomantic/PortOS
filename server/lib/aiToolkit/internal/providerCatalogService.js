@@ -427,11 +427,14 @@ export function createProviderCatalogService({
     },
 
     async refreshProviderModels(id) {
-      const catalog = await this.fetchProviderModelCatalog(id);
+      const data = await loadProviders();
+      const sourceId = data.providers[id]?.executionSourceProviderId || id;
+      const catalog = await this.fetchProviderModelCatalog(sourceId);
       if (catalog === null) return null;
       return withProviderWrite(async () => {
-        const previous = (await this.getProviderById(id))?.modelContextWindows;
-        return this.updateProvider(id, modelCatalogUpdate(catalog, previous));
+        const previous = (await this.getProviderById(sourceId))?.modelContextWindows;
+        const updated = await this.updateProvider(sourceId, modelCatalogUpdate(catalog, previous));
+        return updated && sourceId !== id ? this.getProviderById(id) : updated;
       });
     },
 
@@ -443,19 +446,20 @@ export function createProviderCatalogService({
       const groups = [];
       const byKey = new Map();
       for (const id of requested) {
-        const provider = data.providers[id];
+        const sourceId = data.providers[id]?.executionSourceProviderId || id;
+        const provider = data.providers[sourceId];
         if (!provider) {
-          groups.push({ ids: [id], leadId: id, status: 'missing' });
+          groups.push({ ids: [id], leadId: sourceId, status: 'missing' });
           continue;
         }
-        const key = ollamaRefreshGroupKey(provider);
-        const existing = key ? byKey.get(key) : null;
+        const key = ollamaRefreshGroupKey(provider) || `source:${sourceId}`;
+        const existing = byKey.get(key);
         if (existing) {
           existing.ids.push(id);
           continue;
         }
-        const group = { ids: [id], leadId: id, status: 'missing' };
-        if (key) byKey.set(key, group);
+        const group = { ids: [id], leadId: sourceId, status: 'missing' };
+        byKey.set(key, group);
         groups.push(group);
       }
 
@@ -482,7 +486,8 @@ export function createProviderCatalogService({
         const fresh = await loadProviders();
         let changed = false;
         for (const group of updated) {
-          for (const id of group.ids) {
+          const sourceIds = new Set(group.ids.map(id => fresh.providers[id]?.executionSourceProviderId || id));
+          for (const id of sourceIds) {
             const provider = fresh.providers[id];
             if (!provider) continue;
             const modes = providerModeGroups(Object.values(fresh.providers)).find(entries => entries.some(entry => entry.id === id));

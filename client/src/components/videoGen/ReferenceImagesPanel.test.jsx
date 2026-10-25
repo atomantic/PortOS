@@ -26,6 +26,28 @@ describe('ReferenceImagesPanel', () => {
     expect(p.onAddAudio).toHaveBeenCalledWith(file);
   });
 
+  it('keeps older loaded renders visible and selectable beyond the first fifty clips', () => {
+    const history = Array.from({ length: 60 }, (_, index) => ({ id: `v${index + 1}`, prompt: `Prior render ${index + 1}` }));
+    const onPickVideo = vi.fn();
+    render(<ReferenceImagesPanel {...props()} maxVideos={1} videoIds={['v60']} history={history} onPickVideo={onPickVideo} />);
+    const select = screen.getByLabelText('Reference clip 1');
+    expect(select.value).toBe('v60');
+    expect(screen.getByRole('option', { name: 'Prior render 60' }).selected).toBe(true);
+    fireEvent.change(select, { target: { value: 'v51' } });
+    expect(onPickVideo).toHaveBeenCalledWith(0, 'v51');
+  });
+
+  it('shows a resumed clip outside the loaded history and lets the user clear it', () => {
+    const onPickVideo = vi.fn();
+    render(<ReferenceImagesPanel {...props()} maxVideos={1} videoIds={['older-selected-clip']} history={[{ id: 'recent', prompt: 'Recent render' }]} onPickVideo={onPickVideo} />);
+    const select = screen.getByLabelText('Reference clip 1');
+    expect(select.value).toBe('older-selected-clip');
+    expect(screen.getByRole('option', { name: /older-selected-clip.*not in loaded history/i }).selected).toBe(true);
+    expect(onPickVideo).not.toHaveBeenCalled();
+    fireEvent.change(select, { target: { value: '' } });
+    expect(onPickVideo).toHaveBeenCalledWith(0, '');
+  });
+
   it('numbers rows after the input image and routes pick/remove by row index', () => {
     const p = props();
     render(<ReferenceImagesPanel {...p} files={['a.png', '']} />);

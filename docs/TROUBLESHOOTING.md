@@ -656,8 +656,10 @@ does not by itself prove the checkout was retired on purpose.
 Trace the deletion actor and command separately from the PR's merge actor.
 Current retirement does not copy the checkout. Older directories
 `data/cos/held-checkout-archives/` and `data/cos/branch-retirement-archives/`
-are removed by setup migration 442, so a new retirement will not leave a
-manifest there. Do not reconstruct a partial checkout as proof, delete another
+remain available after setup; migration 442 preserves historical recovery data.
+A new retirement will not leave a manifest there. Existing copies may be the
+only recovery source and must not be deleted merely because new copies are no
+longer written. Do not reconstruct a partial checkout as proof, delete another
 checkout, or clear the obligation merely because the source is gone. If
 provenance cannot be recovered, retain the evidence and missing source identity
 in the owning issue; #13271 records such an unresolved case without attributing

@@ -4,7 +4,7 @@ vi.mock('../lib/retirementCheckoutObservation.js', () => ({
 import { readRetirementCheckoutIdentity, isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { pinPlatform } from '../lib/testHelper.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 const persisted = vi.hoisted(() => ({ json: '{}', hostType: null, rejectDirectoryOpen: false, syntheticModes: false, fileSyncs: 0 }));
@@ -314,6 +314,43 @@ describe('initialized checkout removal', () => {
     expect(await fixture.service.retire(await reviewed())).toEqual({ ok: false, reason: 'worktree-status-unavailable' });
     expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
     expect(await readdir(root)).toEqual([]);
+  });
+
+  it.each(['parent', 'module'])('retains sole ignored payload in the %s despite clean Git status', async location => {
+    const checkout = join(root, 'checkout');
+    const payloadRoot = location === 'module' ? join(checkout, 'vendor') : checkout;
+    await mkdir(payloadRoot, { recursive: true });
+    const sentinel = join(payloadRoot, 'unpublished.bin');
+    const bytes = Buffer.from([0, 255, 128, 42]);
+    await writeFile(sentinel, bytes);
+    fixture.snapshot.modules = location === 'module' ? [{ path: 'vendor' }] : [];
+    fixture.deps.execGit.mockImplementation(async (args, cwd) => ({ exitCode: 0,
+      stdout: args[0] === 'ls-files' && cwd === payloadRoot ? 'unpublished.bin\0' : '' }));
+    const currentRelease = { ...release, path: checkout };
+    const prepared = await fixture.service.review({ appId: 'app', release: currentRelease, prUrl });
+    const result = await fixture.service.retire({ appId: 'app', release: currentRelease,
+      review: { prUrl, digest: prepared.review.digest } });
+    expect(result).toEqual({ ok: false, reason: 'checkout-ignored-payload-unverified' });
+    expect(await readFile(sentinel)).toEqual(bytes);
+    expect(fixture.deps.execGit.mock.calls.some(([args]) => args[0] === 'worktree')).toBe(false);
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
+  });
+
+  it('preserves the original directory when Git refuses removal even if its toplevel matches', async () => {
+    const sentinel = join(root, 'original.txt');
+    await writeFile(sentinel, 'original checkout bytes');
+    fixture.deps.execGit.mockImplementation(async args => ({
+      exitCode: args[0] === 'worktree' ? 1 : 0,
+      stdout: args[0] === 'rev-parse' ? root : '',
+    }));
+    const currentRelease = { ...release, path: root };
+    const prepared = await fixture.service.review({ appId: 'app', release: currentRelease, prUrl });
+    expect(await fixture.service.retire({ appId: 'app', release: currentRelease,
+      review: { prUrl, digest: prepared.review.digest } })).toEqual({ ok: false, reason: 'checkout-not-removed' });
+    expect(await readFile(sentinel, 'utf8')).toBe('original checkout bytes');
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
   });
 
   it('does not remove a different toplevel when worktree removal fails', async () => {

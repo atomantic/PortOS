@@ -349,7 +349,12 @@ export async function _startTestChromeWithRetry({ launch, discard, onProc = () =
       return await wait(proc);
     } catch (error) {
       if (attempt + 1 >= attempts || !/^Test Chrome did not start within/.test(error?.message)) throw error;
-      await discard(proc);
+      try {
+        await discard(proc);
+      } catch (discardError) {
+        const discardMessage = discardError?.message ?? 'Test Chrome discard failed';
+        throw new AggregateError([error, discardError], `${error.message}; ${discardMessage}`, { cause: error });
+      }
     }
   }
 }
@@ -449,11 +454,11 @@ export function _testBrowserCleanupSettled(proc) {
   return !proc || settledTestChromeProcesses.has(proc);
 }
 
-// The owned Chrome may still write downloads into the root until it exits.
-// Remove only the directory created above, and keep it as evidence when exit
-// is unconfirmed or the path no longer names that directory. No path in text.
-function removeTestArtifactsRoot({ path, dev, ino }, childSettled) {
+// Chrome and its helpers can write downloads until both child and group settle.
+// Remove only the directory created above; retain uncertain ownership as evidence.
+function removeTestArtifactsRoot({ path, dev, ino }, childSettled, detachedGroupSettled) {
   if (!childSettled) return 'skipped; owned child exit unconfirmed, root preserved';
+  if (!detachedGroupSettled) return 'skipped; detached process group unsettled, root preserved';
   const current = lstatSync(path, { throwIfNoEntry: false });
   if (current) {
     if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== dev || current.ino !== ino) {
@@ -507,7 +512,7 @@ export async function _cleanupTestBrowser({ browser, proc, artifacts, cleanup, s
     try { proc?.stderr?.destroy(); } catch (error) { cleanupFailure('stderr', error); }
     if (artifacts) {
       try {
-        const failure = removeTestArtifactsRoot(artifacts, childSettled && detachedGroupSettled);
+        const failure = removeTestArtifactsRoot(artifacts, childSettled, detachedGroupSettled);
         if (failure) errors.push(new Error(`Test Chrome artifacts cleanup ${failure}`));
       } catch (error) { cleanupFailure('artifacts', error); }
     }
