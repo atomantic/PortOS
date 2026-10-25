@@ -124,6 +124,10 @@ const backupSupersededBranchMock = vi.fn(async (_repoPath, branch) => ({
   manifest: 'manifest.json',
   untracked: []
 }));
+vi.mock('./taskSchedule.js', () => ({
+  recordWorkspaceCheckoutRetirement: vi.fn(async () => null),
+  recordHeldCheckoutRetirement: vi.fn(async (_appId, receipt) => ({ retired: [{ ...receipt, archiveDir: null }] })),
+}));
 vi.mock('./supersededBackup.js', () => ({
   backupSupersededBranch: (...args) => backupSupersededBranchMock(...args)
 }));
@@ -142,6 +146,7 @@ import {
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
 import { preserveMergedCheckout, releaseCheckoutWithoutArchive } from './heldCheckoutRecovery.js';
+import { recordHeldCheckoutRetirement, recordWorkspaceCheckoutRetirement } from './taskSchedule.js';
 import { withClaimOwnershipLock, checkoutRetirementFenceReason } from './cosClaimOwnership.js';
 import { hasCompletedCheckoutEvidence } from './completedCheckoutEvidence.js';
 import { execGit } from '../lib/execGit.js';
@@ -2111,6 +2116,39 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
     expect(result.cleaned).toContain(path);
     expect(preserveMergedCheckout).not.toHaveBeenCalled();
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalled();
+  });
+
+  it('settles a removed detached tree with a checkout-only receipt that never claims a branch deletion', async () => {
+    const path = '/repo/data/cos/worktrees/agent-1234abcd';
+    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
+    stubGit();
+    const res = await reconcile('/repo', { appId: 'app-1' });
+    expect(res.cleaned).toContain(path);
+    expect(recordHeldCheckoutRetirement).toHaveBeenCalledWith('app-1', expect.objectContaining({
+      path, head: 'bbb222', branchDeleted: false, checkoutOnly: true,
+    }));
+    expect(recordHeldCheckoutRetirement.mock.calls[0][1]).not.toHaveProperty('branch');
+  });
+
+  it('settles only a stored inventory row when no managed app is known', async () => {
+    const path = '/repo/data/cos/worktrees/agent-1234abcd';
+    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
+    stubGit();
+    const res = await reconcile('/repo');
+    expect(res.cleaned).toContain(path);
+    expect(recordHeldCheckoutRetirement).not.toHaveBeenCalled();
+    expect(recordWorkspaceCheckoutRetirement).toHaveBeenCalledWith('/repo', expect.objectContaining({ path, checkoutOnly: true, branchDeleted: false }));
+  });
+
+  it.each(['rejected', 'unreadback'])('keeps a removed detached tree unresolved when its receipt write is %s', async failure => {
+    const path = '/repo/data/cos/worktrees/agent-1234abcd';
+    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
+    stubGit();
+    if (failure === 'rejected') recordHeldCheckoutRetirement.mockRejectedValueOnce(new Error('synthetic receipt persistence failure'));
+    else recordHeldCheckoutRetirement.mockResolvedValueOnce({ retired: [] });
+    const res = await reconcile('/repo', { appId: 'app-1' });
+    expect(res.cleaned).not.toContain(path);
+    expect(res.detachedWorktrees).toContainEqual(expect.objectContaining({ path, reason: 'retirement-receipt-unverified' }));
   });
 
   it.each([
