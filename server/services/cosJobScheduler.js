@@ -465,7 +465,13 @@ export async function executeScheduledJob(jobId) {
         return;
       } catch (err) {
         clearSpawningJob(jobId);
-        emitLog('error', `Failed to fire autonomous job: ${job.name} - ${err?.message || err}`, { jobId, category: job.category });
+        // Configuration/refusal holds are expected, not incidents for the
+        // error-driven investigator. Keep the next normal occurrence armed.
+        if (err?.status === 400 || err?.status === 409) {
+          emitLog('info', `Autonomous job withheld: ${job.name} - ${err.message}`, { jobId, category: job.category });
+        } else {
+          emitLog('error', `Failed to fire autonomous job: ${job.name} - ${err?.message || err}`, { jobId, category: job.category });
+        }
         await recordJobGateSkip(jobId).catch(skipErr =>
           console.error(`❌ Failed to record failure-skip for ${jobId}: ${skipErr.message}`)
         );
