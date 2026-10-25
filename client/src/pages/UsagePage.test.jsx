@@ -768,4 +768,15 @@ describe('UsagePage image accounting', () => {
     await act(async () => { socket.emit('image-gen:completed', { mode: 'codex' }); });
     await waitFor(() => expect(api.getUsage.mock.calls.length).toBe(reads + 1));
   });
+
+  it('renders PageHeader with the BarChart3 icon', async () => {
+    api.getUsage.mockResolvedValue(usage);
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    const heading = screen.getByRole('heading', { level: 1, name: 'Subscription Usage' });
+    expect(heading).toBeInTheDocument();
+    const icon = heading.parentElement?.parentElement?.querySelector('svg');
+    expect(icon).toBeInTheDocument();
+    expect(icon).toHaveClass('lucide-chart-column');
+    await act(async () => {});
+  });
 });
