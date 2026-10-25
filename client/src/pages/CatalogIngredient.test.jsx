@@ -71,7 +71,6 @@ vi.mock('../services/apiCatalog', () => ({
   restoreCatalogIngredientRevision: vi.fn(),
   uploadCatalogIngredientMediaFile: vi.fn(),
   listCatalogIngredientMedia: vi.fn(async () => []),
-  listCatalogIngredientMissingMedia: vi.fn(async () => ({ missing: [] })),
   attachCatalogIngredientMedia: vi.fn(),
   setCatalogIngredientPortrait: vi.fn(),
   detachCatalogIngredientMedia: vi.fn(),

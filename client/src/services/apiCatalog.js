@@ -182,9 +182,6 @@ export const unlinkCatalogIngredientRelation = (id, body, options) =>
 export const listCatalogIngredientMedia = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}/media`, options);
 
-export const listCatalogIngredientMissingMedia = (id, options) =>
-  request(`/catalog/ingredients/${enc(id)}/media/missing`, options);
-
 export const attachCatalogIngredientMedia = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/media`, { method: 'POST', body: JSON.stringify(body), ...options });
 
