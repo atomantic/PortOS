@@ -1480,7 +1480,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   // Normal tests generate state caches as well as compiled modules. Only their
   // tagged producer schema may pass the actual destructive retirement boundary.
-  it.each(['results', 'dependencies', 'unknown-field', 'bad-version', 'bad-project', 'bad-index', 'untagged', 'untracked', 'sidecar'])(
+  it.each(['results', 'dependencies', 'dependencies-no-setup', 'bad-setup', 'unknown-field', 'bad-version', 'bad-project', 'bad-index', 'untagged', 'untracked', 'sidecar'])(
     'recognizes only the actual tagged Vitest state producer: %s', async kind => {
       const c = await reviewedCheckout(`state-cache-${kind}`);
       const root = join(c.path, 'server/.cache/vitest/vitest');
@@ -1488,10 +1488,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       if (kind !== 'untracked') await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
       if (kind !== 'untagged') await writeFile(join(root, 'CACHEDIR.TAG'),
         'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.\n# For information about cache directory tags see https://bford.info/cachedir/\n');
-      const dependencies = ['dependencies', 'bad-index'].includes(kind);
+      const dependencies = ['dependencies', 'dependencies-no-setup', 'bad-setup', 'bad-index'].includes(kind);
       const value = { version: 1, projects: { parallel: dependencies
         ? { modules: ['services/feature.js'], globalSetup: [], files: { 'services/feature.test.js': [kind === 'bad-index' ? 99 : 0] } }
         : { files: { 'services/feature.test.js': { failed: false, duration: 12, lastRun: 12345 } } } } };
+      if (kind === 'dependencies-no-setup') delete value.projects.parallel.globalSetup;
+      if (kind === 'bad-setup') value.projects.parallel.globalSetup = 'unique user content';
       if (kind === 'unknown-field') value.wanted = 'unique user content';
       if (kind === 'bad-version') value.version = 99;
       if (kind === 'bad-project') value.projects.parallel = { wanted: 'unique user content' };
@@ -1501,7 +1503,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       const prepared = await c.prepare();
       expect(prepared.ok).toBe(true);
       const retired = await c.confirm(prepared.review);
-      if (['results', 'dependencies'].includes(kind)) {
+      if (['results', 'dependencies', 'dependencies-no-setup'].includes(kind)) {
         expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
         expect(await registered(c.path)).toBe(false);
       } else {
