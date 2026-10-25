@@ -1299,6 +1299,14 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     success: effectiveSuccess, validationPassed, noCommitDeclared: declaresNoCommitCriterion(task) }) : null;
   if (['blocked', 'incomplete'].includes(taskOutcome?.status)) effectiveSuccess = false;
 
+  const savedCleanup = isDeliveryCleanupHeld(task?.metadata) && task.metadata.deliveryRecoveryAgentId === agent.id;
+  const cleanupAllowed = savedCleanup || (executionSuccess && validationPassed !== false
+    && (agent.metadata?.isWorktree === true || hasClaimCheckoutBindings(agent.metadata)));
+  const recoveryOutcome = !cleanupAllowed && taskOutcome?.recovery?.mode === 'cleanup' ? { ...taskOutcome, recovery: undefined } : taskOutcome;
+  let recoveryUpdate = deliveryHeld && !refused && !isPrivateSecurity && task?.id && task.status !== 'completed'
+    ? await resolveDeliveryRecoveryUpdate(task, recoveryOutcome, agent.id) : null;
+  if (recoveryUpdate?.runtimeRecoveryContext) taskOutcome = recoveryUpdate.metadata.taskOutcome;
+
   if (agent.metadata?.runId) {
     const bufferedOutput = Array.isArray(agent.output)
       ? agent.output.map((entry) => typeof entry === 'string' ? entry : entry?.line).filter(Boolean).join('\n')
@@ -1315,13 +1323,6 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     );
   }
 
-  const savedCleanup = isDeliveryCleanupHeld(task?.metadata) && task.metadata.deliveryRecoveryAgentId === agent.id;
-  const cleanupAllowed = savedCleanup || (executionSuccess && validationPassed !== false
-    && (agent.metadata?.isWorktree === true || hasClaimCheckoutBindings(agent.metadata)));
-  const recoveryOutcome = !cleanupAllowed && taskOutcome?.recovery?.mode === 'cleanup' ? { ...taskOutcome, recovery: undefined } : taskOutcome;
-  let recoveryUpdate = deliveryHeld && !refused && !isPrivateSecurity && task?.id && task.status !== 'completed'
-    ? await resolveDeliveryRecoveryUpdate(task, recoveryOutcome, agent.id) : null;
-  if (recoveryUpdate?.runtimeRecoveryContext) taskOutcome = recoveryUpdate.metadata.taskOutcome;
   let recoveryOwnershipLost = false;
   if (recoveryUpdate) {
     const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user', {

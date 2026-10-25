@@ -543,6 +543,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
     } };
     let live = structuredClone(task);
     persistedAgent.taskId = task.id;
+    persistedAgent.metadata.runId = 'run-example';
     persistedAgent.metadata.completionTaskDispatch = { taskId: task.id, taskType: 'internal',
       expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, task.metadata[key] ?? null]) };
     getTaskById.mockImplementation(async () => live);
@@ -571,7 +572,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
         expect(live.metadata.failureCount).toBe(3);
       }
       const result = mode === 'normal'
-        ? await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+        ? await finalizeAgent({ agentId: persistedAgent.id, runId: 'run-example', task, success: true, exitCode: 0,
           finalSummary: JSON.stringify({ summary: taskOutcome.reason, taskOutcome }) })
         : await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0 });
       expect(result).toMatchObject({ success: false, taskOutcome: { reason: expect.stringContaining('already running') } });
@@ -580,6 +581,9 @@ describe('recovery output-hook dispatch (#3182)', () => {
         failureCount: 3, totalSpawnCount: 3, runtimeVerification: { status: 'satisfied' } } });
       expect(live.metadata.taskOutcome).toEqual(result.taskOutcome);
       expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ taskOutcome: result.taskOutcome }));
+      const runWrites = completeAgentRun.mock.calls.filter(args => args[0] === 'run-example');
+      expect(runWrites.length).toBeGreaterThan(0);
+      for (const args of runWrites) expect(args.at(-1).taskOutcome).toEqual(result.taskOutcome);
       expect(addTask).not.toHaveBeenCalled();
     } finally { boot.__setBootCommitForTest(null); forge.mockRestore(); gitRead.mockRestore(); }
   });
