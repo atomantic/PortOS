@@ -80,6 +80,7 @@ const runtimeProbes = vi.hoisted(() => ({
 vi.mock('../services/videoGen/runtimes.js', async (importOriginal) => ({
   ...(await importOriginal()),
   ...runtimeProbes,
+  resolveA2vLoraStageCapable: vi.fn(async () => true),
   resolveByovRuntimeLoraCapable: vi.fn(async (runtime) => runtime === 'minimax_h3' && loraCapability.capable),
 }));
 
@@ -1322,6 +1323,7 @@ describe('videoGen routes', () => {
         // prompt-only round-trip would 400 rather than assert anything. Its
         // own case is below.
         'i2vReferenceMode',
+        'a2vLoraStageStrengths',
         'tiling',
         // Not in the it.each table above: the route deliberately DROPS the
         // stock/default value from persisted params, so the generic round-trip
@@ -1530,6 +1532,47 @@ describe('videoGen routes', () => {
         payload: { jobId: 'mock-video-job' },
       }));
       expect(JSON.stringify(recordUserAction.mock.calls[0][0])).not.toContain('a cat');
+    });
+
+    it('carries the requested motion/refine multipliers from HTTP through the queue to helper arguments without changing prompt or audio', async () => {
+      const { buildArgs } = await import('../services/videoGen/renderArgs.js');
+      videoGenService.listVideoModels.mockReturnValueOnce([{ id: 'ltx25', runtime: 'ltx25', supportedModes: ['a2v'] }]);
+      const prompt = '  A paper singer says hello.  ';
+      setPendingUpload({ fieldname: 'audioFile', path: '/tmp/synthetic-voice.wav', originalname: 'voice.wav', mimetype: 'audio/wav', size: 128 });
+      const response = await request(app).post('/api/video-gen/').send({
+        prompt, mode: 'a2v', modelId: 'ltx25', a2vLoraStageStrengths: '[0,1]',
+        loraFilenames: ['style.safetensors'], loraScales: [0.7],
+      });
+      expect(response.status).toBe(200);
+      const { params } = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0];
+      expect(params).toMatchObject({ prompt, a2vLoraStageStrengths: [0, 1], loras: [{ filename: 'style.safetensors', scale: 0.7 }] });
+      const command = buildArgs({ ...params, model: { runtime: 'ltx25' }, ltxModelPath: '/mock/model', outputPath: '/tmp/output.mp4',
+        loras: [{ path: '/mock/style.safetensors', strength: 0.7 }] });
+      expect(command.args[command.args.indexOf('--a2v-lora-stage-strengths') + 1]).toBe('[0,1]');
+      expect(command.args[command.args.indexOf('--prompt') + 1]).toBe(prompt);
+      expect(command.args[command.args.indexOf('--audio') + 1]).toBe(params.audioFilePath);
+      for (const strengths of [undefined, [1, 1]]) {
+        const legacy = buildArgs({ ...params, a2vLoraStageStrengths: strengths, model: { runtime: 'ltx25' },
+          ltxModelPath: '/mock/model', outputPath: '/tmp/output.mp4' });
+        expect(legacy.args).not.toContain('--a2v-lora-stage-strengths');
+      }
+    });
+
+    it.each([[[-0.1, 1]], [[0, 1.1]], [[0]], [[false, 1]], [['0', 1]], ['broken-json']])(
+      'rejects malformed stage strengths %j before queue admission', async (strengths) => {
+        const response = await request(app).post('/api/video-gen/').send({ prompt: 'an invented singer', a2vLoraStageStrengths: strengths });
+        expect(response.status).toBe(400);
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      });
+
+    it.each([
+      { backend: 'grok' }, { mediaProviderPeerId: 'peer-example' }, { mode: 'text' },
+    ])('refuses a non-default stage request on an incompatible lane: %j', async (overrides) => {
+      const response = await request(app).post('/api/video-gen/').send({
+        prompt: 'an invented singer', a2vLoraStageStrengths: [0, 1], ...overrides,
+      });
+      expect(response.status).toBe(400);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
     it('translates the universal loraFilenames/loraScales contract into internal { filename, scale } params', async () => {

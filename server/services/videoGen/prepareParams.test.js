@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { resolve as resolvePath } from 'path';
+import { resolveA2vLoraStageCapable } from './runtimes.js';
+vi.mock('./runtimes.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolveA2vLoraStageCapable: vi.fn(async () => true),
+}));
 
 // These assertions describe the COMPOSITION of a staged path, not its
 // separator. prepareParams builds them with path.join/resolve, which emit '\'
@@ -927,5 +932,19 @@ describe('prepareVideoGenParams — standalone fal lip sync', () => {
     getSettings.mockResolvedValueOnce(falSettings());
     await expect(prepare({ backend: 'fal', falModelId: LIPSYNC, mode: 'text' }, { audioFile: upload('audioFile', 'line.wav') }))
       .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+  });
+});
+
+
+describe('A2V user-LoRA stage admission on retries', () => {
+  const params = { modelId: 'example-a2v', mode: 'a2v', a2vLoraStageStrengths: [0, 1],
+    loras: [{ filename: 'example.safetensors', scale: 0.8 }], audioFilePath: '/mock/audio.wav', fps: 24, numFrames: 25 };
+  it('refuses an unavailable stage seam and an unsupported CUDA runtime before replacing history', async () => {
+    listVideoModels.mockReturnValue([{ id: params.modelId, runtime: 'ltx25', supportedModes: ['a2v'] }]);
+    resolveA2vLoraStageCapable.mockResolvedValueOnce(false);
+    await expect(validateVideoRetryParams(params)).rejects.toMatchObject({ code: 'A2V_LORA_STAGES_UNSUPPORTED' });
+    listVideoModels.mockReturnValue([{ id: params.modelId, runtime: 'ltx25_cuda', supportedModes: ['a2v'] }]);
+    await expect(validateVideoRetryParams(params)).rejects.toMatchObject({ code: 'A2V_LORA_STAGES_UNSUPPORTED' });
+    await expect(validateVideoRetryParams({ ...params, a2vLoraStageStrengths: [0, NaN] })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
   });
 });

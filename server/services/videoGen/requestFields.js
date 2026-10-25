@@ -10,6 +10,7 @@ export const VIDEO_GEN_LOCAL_ONLY_FIELDS = Object.freeze({
   BATCH_SIZE: 'batchSize',
   IMAGE_STRENGTH: 'imageStrength',
   I2V_REFERENCE_MODE: 'i2vReferenceMode',
+  A2V_LORA_STAGE_STRENGTHS: 'a2vLoraStageStrengths',
   TILING: 'tiling',
   TEXT_ENCODER_ID: 'textEncoderId',
   SPEED_PROFILE_ID: 'speedProfileId',

@@ -70,3 +70,10 @@ describe('buildFederatedMediaRequest', () => {
       .toThrow(/unsupported kind audio/);
   });
 });
+
+
+it('refuses explicit user LoRA stages at the shared peer-request boundary instead of dropping them', () => {
+  expect(() => buildFederatedMediaRequest({ kind: 'video', params: {
+    modelId: 'example-video', prompt: 'a paper singer', a2vLoraStageStrengths: [0, 1],
+  } })).toThrow();
+});

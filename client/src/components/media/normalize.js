@@ -247,6 +247,7 @@ export function getRenderConfigForItem(item) {
       draftDecode: raw.draftDecode,
       loraFilenames: pickLoraFilenames(raw),
       loraScales: raw.loraScales ?? raw.lora_scales,
+      a2vLoraStageStrengths: raw.a2vLoraStageStrengths,
     };
   }
   return {};

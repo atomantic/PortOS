@@ -664,5 +664,149 @@ class FakeStreamingICPipeline:
         return stage_1, stage_2
 
 
+class FakeA2vPipeline:
+    def __init__(self, factory, *, reload_refine=False, failure=None, distilled=None):
+        self.factory = factory
+        self.distilled = distilled
+        self.reload_refine = reload_refine
+        self.failure = failure
+        self.dit = None
+        self._loaded = False
+        self.distilled_calls = 0
+
+    def _load_transformer_with_optional_streaming(self, _path):
+        assert not self._pending_loras
+        return self.factory()
+
+    def _denoise_stage1(self, x):
+        if self.failure == "motion":
+            raise RuntimeError("motion failed")
+        return self.dit(x)
+
+    def _fuse_distilled_lora(self, dit):
+        self.distilled_calls += 1
+        if self.reload_refine:
+            self.dit = self._load_transformer_with_optional_streaming("refine")
+        if self.failure == "refine":
+            raise KeyboardInterrupt("cancelled at refine")
+        if self.distilled is not None:
+            runtime.attach_adapters(self.dit, [("distilled.safetensors", self.distilled, 0.6)], tag="distilled")
+
+    def generate_and_save(self, x):
+        self.dit = self._load_transformer_with_optional_streaming("motion")
+        self._loaded = True
+        motion = self._denoise_stage1(x)
+        self._fuse_distilled_lora(self.dit)
+        detail = self.dit(x)
+        mx.eval(motion, detail)
+        return motion, detail
+
+
+class A2vStageContractTest(unittest.TestCase):
+    def setUp(self):
+        self.device = mx.default_device()
+        mx.set_default_device(mx.cpu)
+
+    def tearDown(self):
+        mx.set_default_device(self.device)
+
+    def test_user_schedule_is_reversible_on_packed_float_and_streamed_targets_without_accumulation(self):
+        # CPU-only toy projections: no model downloads or GPU allocations.
+        for kind in ("packed", "float", "streamed"):
+            for reload in (False, True):
+                with self.subTest(kind=kind, reload=reload):
+                    streamed = kind == "streamed"
+                    factory = (lambda: streaming_fixture()[0]) if streamed else lambda: fixture_model(quantize=kind == "packed")
+                    files = {"a/style.safetensors": user_adapter() if streamed else adapter(scale=4e-3),
+                             "b/style.safetensors": ic_adapter() if streamed else adapter(scale=2e-3)}
+                    specs = [("a/style.safetensors", 0.8), ("b/style.safetensors", 0.4)]
+                    x = mx.ones((1, DIM if streamed else IN))
+                    baseline = factory()(x)
+                    full = factory()
+                    runtime.attach_adapters(full, [(path, files[path], scale) for path, scale in specs])
+                    expected_detail = full(x)
+                    pipe, report = FakeA2vPipeline(factory, reload_refine=reload), runtime.AdapterReport()
+                    restore = runtime.install_pipeline_adapters(pipe, specs, report=report, status=lambda _: None,
+                                                               load_adapter=files.__getitem__, user_stage_strengths=[0, 1])
+                    for _ in range(2):
+                        motion, detail = pipe.generate_and_save(x)
+                        self.assertTrue(allclose(motion, baseline))
+                        self.assertTrue(allclose(detail, expected_detail))
+                        self.assertFalse(allclose(detail, baseline))
+                    self.assertEqual(pipe.distilled_calls, 2)
+                    self.assertEqual(sorted((entry["strength"], entry["stages"]) for entry in report.entries),
+                                     [(0.0, ["stage-1"]), (0.0, ["stage-1"]), (0.4, ["stage-2"]), (0.8, ["stage-2"])])
+                    # A same-basename pair remains distinct, and no private path escapes.
+                    self.assertNotIn("a/", repr(report.entries))
+                    self.assertNotIn("b/", repr(report.entries))
+                    if not streamed:
+                        reference = factory().transformer_blocks[0].attn1.to_q
+                        actual = pipe.dit.transformer_blocks[0].attn1.to_q
+                        self.assertTrue(allclose(actual.weight, reference.weight))
+                    restore()
+                    runtime.release_pipeline_adapters(pipe)
+                    self.assertIsNone(pipe.dit)
+                    for name in ("_denoise_stage1", "_fuse_distilled_lora", "_load_transformer_with_optional_streaming", "_pending_loras"):
+                        self.assertNotIn(name, pipe.__dict__)
+
+    def test_stage_hooks_restore_and_release_after_failure_or_cancellation_without_retaining_a_transformer(self):
+        import weakref
+        import gc
+        for failure in ("motion", "refine"):
+            refs = []
+            def factory():
+                model = fixture_model()
+                refs.append(weakref.ref(model))
+                return model
+            pipe = FakeA2vPipeline(factory, failure=failure)
+            restore = runtime.install_pipeline_adapters(pipe, [("user.safetensors", 0.7)],
+                report=runtime.AdapterReport(), status=lambda _: None,
+                load_adapter=lambda _: adapter(), user_stage_strengths=[0.25, 0.75])
+            with self.assertRaises((RuntimeError, KeyboardInterrupt)):
+                try:
+                    pipe.generate_and_save(mx.ones((1, IN)))
+                finally:
+                    restore()
+                    runtime.release_pipeline_adapters(pipe)
+            gc.collect()
+            self.assertTrue(all(ref() is None for ref in refs))
+            self.assertFalse(pipe._loaded)
+
+    def test_stage_schedule_never_scales_the_distilled_adapter(self):
+        for quantized in (False, True):
+            factory = lambda: fixture_model(quantize=quantized)
+            user, distilled = adapter(scale=4e-3), adapter(scale=2e-3)
+            pipe = FakeA2vPipeline(factory, distilled=distilled)
+            restore = runtime.install_pipeline_adapters(pipe, [("user.safetensors", 0.8)],
+                report=runtime.AdapterReport(), status=lambda _: None, load_adapter=lambda _: user,
+                user_stage_strengths=[0, 0])
+            x = mx.ones((1, IN))
+            motion, detail = pipe.generate_and_save(x)
+            reference = factory()
+            baseline = reference(x)
+            runtime.attach_adapters(reference, [("distilled.safetensors", distilled, 0.6)])
+            self.assertTrue(allclose(motion, baseline))
+            self.assertTrue(allclose(detail, reference(x)))
+            self.assertFalse(allclose(detail, baseline))
+            restore()
+            runtime.release_pipeline_adapters(pipe)
+
+    def test_default_stage_input_keeps_legacy_fusion_and_does_not_install_stage_hooks(self):
+        for strengths in (None, [1, 1]):
+            pipe = FakeA2vPipeline(lambda: fixture_model(quantize=False))
+            report = runtime.AdapterReport()
+            restore = runtime.install_pipeline_adapters(pipe, [("user.safetensors", 0.8)],
+                report=report, status=lambda _: None, load_adapter=lambda _: adapter(),
+                user_stage_strengths=strengths)
+            self.assertNotIn("_denoise_stage1", pipe.__dict__)
+            self.assertNotIn("_fuse_distilled_lora", pipe.__dict__)
+            motion, detail = pipe.generate_and_save(mx.ones((1, IN)))
+            self.assertTrue(allclose(motion, detail))
+            self.assertEqual(report.entries[0]["strategy"], runtime.STRATEGY_FUSED)
+            self.assertEqual(report.entries[0]["stages"], ["all"])
+            restore()
+            runtime.release_pipeline_adapters(pipe)
+
+
 if __name__ == "__main__":
     unittest.main()

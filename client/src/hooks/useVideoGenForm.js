@@ -143,6 +143,7 @@ export function useVideoGenForm({
     batchSize, setBatchSize,
     seed, setSeed,
     selectedLoras, setSelectedLoras,
+    a2vLoraStageStrengths, setA2vLoraStageStrengths,
     selectedUniverse, setSelectedUniverse,
     sizeManuallySetRef,
     speedProfileId, setSpeedProfileId,
@@ -1149,6 +1150,7 @@ export function useVideoGenForm({
     setSpeedProfileId(speedProfileIdFromRecord(item.speedProfileId));
     setDraftDecode(draftDecodeFromRecord(item.draftDecode));
     setStreamingMode(videoStreamingModeFromRecord(item.streamingMode));
+    setA2vLoraStageStrengths(item.a2vLoraStageStrengths ?? [1, 1]);
     // disableAudio: always set explicitly (true/false) so the toggle reliably
     // matches the remixed render. Skipping the false branch would leave the
     // toggle stuck ON when the user remixes a clip that had audio enabled.
@@ -1273,6 +1275,7 @@ export function useVideoGenForm({
     setSpeedProfileId(speedProfileIdFromRecord(p.speedProfileId));
     setDraftDecode(draftDecodeFromRecord(p.draftDecode));
     setStreamingMode(videoStreamingModeFromRecord(p.streamingMode));
+    setA2vLoraStageStrengths(p.a2vLoraStageStrengths ?? [1, 1]);
     if (typeof p.disableAudio === 'boolean') setDisableAudio(p.disableAudio);
     if (p.mode === 'grok') {
       // Grok job: 'grok' is the queue discriminator, not a semantic video
@@ -1388,7 +1391,7 @@ export function useVideoGenForm({
     numFrames, fps, steps, guidanceScale, seed, batchSize,
     currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode, streamingMode,
     disableAudio, noMusic, imageStrength, i2vReferenceMode,
-    keyframesActive, keyframes, loraFamily, selectedLoras,
+    keyframesActive, keyframes, loraFamily, selectedLoras, a2vLoraStageStrengths,
     lastImageFile, lastImageUpload, extendFromVideoId, audioFile,
     icModeActive, icImageKind, icReferenceFile, icReferenceVideoId,
     icReferenceImageFiles, icStrength, icSkipStage2, referenceImageFiles, referenceVideoIds, referenceAudioFiles,
@@ -1427,6 +1430,7 @@ export function useVideoGenForm({
     modelId, handleModelChange, currentModel, visibleModels,
     loraFamily, videoLoras, loraUnavailableHint,
     selectedLoras, setSelectedLoras,
+    a2vLoraStageStrengths, setA2vLoraStageStrengths,
     // Sampler / output
     width, height, handleResolutionChange,
     numFrames, setNumFrames,

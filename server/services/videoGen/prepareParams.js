@@ -1,3 +1,4 @@
+import { validateA2vLoraStages } from './loraStages.js';
 /**
  * prepareVideoGenParams — pre-dispatch preparation for POST /video-gen.
  *
@@ -122,6 +123,8 @@ export async function validateVideoRetryParams(params = {}) {
     model = knownModels.find((entry) => entry.id === modelId);
   }
   model = model && withHardwareCompatibility(model, capabilities, model.hardwareRequirements);
+  await validateA2vLoraStages({ strengths: params.a2vLoraStageStrengths, model,
+    mode: params.mode, hasLoras: params.loras?.length > 0 });
   if (!model) {
     throw new ServerError(`Unknown modelId: ${modelId}`, { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' });
   }
@@ -376,6 +379,9 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
     capabilities,
     effectiveModel.hardwareRequirements,
   );
+  await validateA2vLoraStages({ strengths: body.a2vLoraStageStrengths, model: effectiveModel,
+    backend, mode: body.mode, hasLoras: body.loraFilenames?.length > 0 })
+    .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; });
   // Validate modelId before staging (when supplied). Without this the queue
   // would happily accept a typo'd modelId and fail asynchronously inside
   // the worker — leaving a persisted, doomed queue entry.

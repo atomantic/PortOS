@@ -1,3 +1,4 @@
+import { isDefaultA2vLoraStages } from './videoLoraStages.js';
 import { composeStyledPrompt, stylePromptAdditions } from './composeStyledPrompt';
 import { universeStylePreset, withUniverseLabel } from './universeStylePreset.js';
 import { isLtx2FamilyRuntime } from './runnerFamilies';
@@ -385,5 +386,10 @@ export function buildVideoGenSubmission(args) {
       effectiveDisableAudio: supportsVideoAudioControls(currentModel) && disableAudio,
       beats: liveBeats(chainingActive, chunkPrompts, chunks, withEnvelope),
     });
+  // Preserve an explicit schedule across backend/model switches: the server
+  // must refuse unsupported execution instead of silently dropping this choice.
+  if (!isDefaultA2vLoraStages(args.a2vLoraStageStrengths)) {
+    payload.a2vLoraStageStrengths = JSON.stringify(args.a2vLoraStageStrengths);
+  }
   return additions.length ? { ...payload, promptAdditions: additions } : payload;
 }
