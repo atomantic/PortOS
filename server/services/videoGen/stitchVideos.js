@@ -106,7 +106,18 @@ export async function stitchVideos(videoIds, opts = {}) {
   if (!Array.isArray(videoIds) || videoIds.length < 2) {
     throw new ServerError('Need at least 2 videos to stitch', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const ffmpeg = await findFfmpeg();
+
+  const hasTrims = Boolean(trims && (
+    (typeof trims.values === 'function' && Array.from(trims.values()).some((t) => Number(t?.startFrame) > 0)) ||
+    (typeof trims === 'object' && Object.values(trims).some((t) => Number(t?.startFrame) > 0))
+  ));
+
+  let ffmpeg;
+  try {
+    ffmpeg = await findFfmpeg(hasTrims ? { requiredEncoder: 'libx264' } : {});
+  } catch (err) {
+    throw new ServerError(err.message, { status: 500, code: err.code || 'FFMPEG_FAILED' });
+  }
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
   const history = await loadHistory();
@@ -137,6 +148,8 @@ export async function stitchVideos(videoIds, opts = {}) {
       frames: Number.isFinite(frames) && frames >= 0 ? frames : null,
     };
   });
+
+  const cutCount = trimPlan.filter((t) => t?.startFrame > 0).length;
 
   const listFile = join(tmpdir(), `concat-${id}.txt`);
   // Set before the write, not after: `writeFile` creates and truncates the
@@ -185,7 +198,6 @@ export async function stitchVideos(videoIds, opts = {}) {
 
   // Inputs with a real cut, as opposed to the measurement-only entries. Zero
   // means the demuxer can do the job.
-  const cutCount = trimPlan.filter((t) => t?.startFrame > 0).length;
   // Tracks whether the cuts actually made it into the output, so `numFrames`
   // below reports the timeline that exists rather than the one we asked for.
   let trimsApplied = cutCount > 0;

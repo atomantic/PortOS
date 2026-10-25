@@ -50,7 +50,12 @@ const withColorTag = async (chain) => {
 export const padSourceForUpscale = async (sourcePath, outPath, {
   width, height, padFrames = 0, fps, signal,
 } = {}) => {
-  const ffmpeg = await findFfmpeg();
+  let ffmpeg;
+  try {
+    ffmpeg = await findFfmpeg({ requiredEncoder: 'libx264' });
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
   if (!ffmpeg) return { ok: false, reason: 'ffmpeg not found' };
   if (!(Number(fps) > 0)) return { ok: false, reason: 'source frame rate unknown' };
   return runFfmpegProcess({
@@ -84,7 +89,12 @@ export const padSourceForUpscale = async (sourcePath, outPath, {
 export const finalizeUpscaleOutput = async (renderedPath, outPath, {
   width, height, frameCount, audioSourcePath, signal,
 } = {}) => {
-  const ffmpeg = await findFfmpeg();
+  let ffmpeg;
+  try {
+    ffmpeg = await findFfmpeg({ requiredEncoder: 'libx264' });
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
   if (!ffmpeg) return { ok: false, reason: 'ffmpeg not found' };
   if (!(Number(width) > 0) || !(Number(height) > 0) || !(Number(frameCount) > 0)) {
     return { ok: false, reason: 'upscale output geometry unknown' };
