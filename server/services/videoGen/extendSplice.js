@@ -133,7 +133,12 @@ export async function spliceExtendSource({ sourcePath, outputPath, extendLatents
   };
   if (!sourcePath || !existsSync(sourcePath)) return skip('source file missing');
   if (!outputPath || !existsSync(outputPath)) return skip('rendered file missing');
-  const ffmpeg = await findFfmpeg();
+  let ffmpeg;
+  try {
+    ffmpeg = await findFfmpeg({ requiredEncoder: 'libx264' });
+  } catch (err) {
+    return skip(err.message);
+  }
   if (!ffmpeg) return skip('ffmpeg not found');
   // A relaunched render rewrites outputPath, so a master left by an earlier
   // attempt no longer describes it.

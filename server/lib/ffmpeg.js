@@ -17,6 +17,7 @@ import { ensureDir, PATHS } from './fileUtils.js';
 import { safeChildProcessOptions, whichFirst } from './processEnv.js';
 
 const execFileAsync = promisify(execFile);
+const isWindows = () => process.platform === 'win32';
 const IS_WIN = process.platform === 'win32';
 
 // Validate that a sidecar/history-supplied filename is a safe basename under
@@ -29,22 +30,257 @@ export const safeUnder = (root, name) => {
   return fullPath.startsWith(rootResolved) ? fullPath : null;
 };
 
-// ffmpeg discovery is async (which/where takes ~10ms+) and the result is
-// stable once found — cache the first hit so subsequent calls don't re-shell-out.
-// A miss is NOT cached: ffmpeg installed later (npm run setup:motion, brew) must
-// be picked up by the running server without a restart.
+// Cached encoder capabilities keyed by normalized binary path:
+// Map<string, { identityKey: string, encoders: Set<string> }>
+const encoderCapabilityCache = new Map();
+
 let cachedFfmpegPath;
-export const findFfmpeg = async () => {
-  if (cachedFfmpegPath !== undefined) return cachedFfmpegPath;
-  const candidates = IS_WIN
+let testPlatformCandidates = null;
+
+/** Test hook: override platform candidate paths for isolated testing. */
+export const __setPlatformCandidatesForTest = (candidates) => {
+  testPlatformCandidates = Array.isArray(candidates) ? [...candidates] : null;
+};
+
+/**
+ * Reset ffmpeg discovery and capability caches.
+ * Allows newly-installed binaries or in-place upgrades to be recognized without server restart.
+ */
+export const resetFfmpegCache = () => {
+  cachedFfmpegPath = undefined;
+  cachedFfprobePath = undefined;
+  encoderCapabilityCache.clear();
+  testPlatformCandidates = null;
+};
+export const __resetFfmpegCache = resetFfmpegCache;
+export const _probeEncoderCapability = (...args) => probeEncoderCapability(...args);
+export const _enumerateFfmpegCandidates = () => enumerateFfmpegCandidates();
+
+/**
+ * Probe a candidate ffmpeg executable for supported encoders.
+ * Distinguishes supported, unsupported, and inconclusive results.
+ * Caches successful capability evidence against binary identity (path + mtimeMs + size + ino).
+ * Inconclusive results (probe failure / timeout) are NEVER cached.
+ *
+ * @param {string} bin
+ * @param {string} requiredEncoder
+ * @returns {Promise<{ supported: boolean, inconclusive: boolean, timedOut?: boolean, reason?: string, fromCache?: boolean }>}
+ */
+async function probeEncoderCapability(bin, requiredEncoder, { timeoutMs = 5000 } = {}) {
+  if (!bin || typeof bin !== 'string') {
+    return { supported: false, inconclusive: false, reason: 'invalid binary' };
+  }
+  const win = isWindows();
+  const binKey = win ? resolvePath(bin).toLowerCase() : resolvePath(bin);
+
+  let st;
+  try {
+    st = statSync(bin);
+  } catch (err) {
+    return { supported: false, inconclusive: false, reason: `binary inaccessible: ${err.message}` };
+  }
+
+  const identityKey = `${binKey}:${st.mtimeMs}:${st.size}:${st.ino}`;
+  const cached = encoderCapabilityCache.get(binKey);
+  if (cached && cached.identityKey === identityKey) {
+    const supported = cached.encoders.has(requiredEncoder.toLowerCase());
+    return { supported, inconclusive: false, fromCache: true };
+  }
+
+  let stdout;
+  try {
+    const res = await execFileAsync(bin, ['-hide_banner', '-encoders'], safeChildProcessOptions({
+      timeout: timeoutMs,
+      maxBuffer: 4 * 1024 * 1024,
+    }));
+    stdout = String(res?.stdout || '');
+  } catch (err) {
+    const isTimeout = Boolean(err.killed || err.code === 'ETIMEDOUT' || /timed\s*out/i.test(String(err.message || '')));
+    return {
+      supported: false,
+      inconclusive: true,
+      timedOut: isTimeout,
+      reason: isTimeout ? 'probe timed out' : `probe failed: ${err.message}`,
+      fromCache: false,
+    };
+  }
+
+  const encoders = new Set();
+  const lines = stdout.split(/\r?\n/);
+  for (const line of lines) {
+    const match = line.match(/^\s*[a-zA-Z.]{6}\s+([a-zA-Z0-9_-]+)/);
+    if (match) {
+      encoders.add(match[1].toLowerCase());
+    }
+  }
+
+  // Cache successful capability evidence against binary identity
+  encoderCapabilityCache.set(binKey, { identityKey, encoders });
+
+  const supported = encoders.has(requiredEncoder.toLowerCase());
+  return { supported, inconclusive: false, fromCache: false };
+}
+
+/**
+ * Enumerate potential ffmpeg candidates in existing precedence order:
+ * 1. Fixed platform candidate paths (Windows or POSIX)
+ * 2. PATH resolution via whichFirst('ffmpeg')
+ * 3. Any additional candidates in PATH directories
+ * Deduplicated by normalized path.
+ */
+async function enumerateFfmpegCandidates() {
+  if (testPlatformCandidates) return [...testPlatformCandidates];
+  const win = isWindows();
+  const platformCandidates = win
     ? ['C:\\ffmpeg\\bin\\ffmpeg.exe', 'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe']
     : ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg'];
-  for (const p of candidates) {
-    if (existsSync(p)) { cachedFfmpegPath = p; return p; }
+
+  const candidates = [];
+  const seen = new Set();
+
+  const addCandidate = (p) => {
+    if (!p || typeof p !== 'string') return;
+    const key = win ? resolvePath(p).toLowerCase() : resolvePath(p);
+    if (!seen.has(key)) {
+      seen.add(key);
+      candidates.push(p);
+    }
+  };
+
+  for (const c of platformCandidates) addCandidate(c);
+
+  const whichHit = await whichFirst('ffmpeg').catch(() => null);
+  if (whichHit) addCandidate(whichHit);
+
+  const pathVal = process.env.PATH || '';
+  const delimiter = win ? ';' : ':';
+  const dirs = pathVal.split(delimiter).filter(Boolean);
+  const exeName = win ? 'ffmpeg.exe' : 'ffmpeg';
+  for (const rawDir of dirs) {
+    const dir = rawDir.replace(/^"(.*)"$/, '$1');
+    addCandidate(join(dir, exeName));
   }
-  const found = await whichFirst('ffmpeg');
-  if (found) cachedFfmpegPath = found;
-  return found;
+
+  return candidates;
+}
+
+/**
+ * Discover an ffmpeg binary on the host.
+ *
+ * When `requiredEncoder` is omitted:
+ * Chooses the first existing platform candidate, falling back to PATH.
+ * Free for decoding, audio and copy-only callers without imposing codec requirements.
+ *
+ * When `requiredEncoder` is specified:
+ * Probes candidates in precedence order and selects the first one whose encoder listing
+ * contains the requested codec.
+ * If no candidate satisfies the requirement, yields an actionable prerequisite error:
+ * - 'ffmpeg not found on PATH' if no ffmpeg binary exists
+ * - 'ffmpeg build does not support required encoder: <codec>' if inspected binaries lack the codec
+ * - 'ffmpeg encoder capability probe timed out' / 'probe failed' if an inconclusive probe occurred
+ *
+ * @param {{ requiredEncoder?: string }} [options]
+ * @returns {Promise<string|null>}
+ */
+export const findFfmpeg = async ({ requiredEncoder, timeoutMs = 5000, candidates: customCandidates } = {}) => {
+  const candidatesList = customCandidates || (testPlatformCandidates ? [...testPlatformCandidates] : null);
+  const win = isWindows();
+  const platformCandidates = testPlatformCandidates || (win
+    ? ['C:\\ffmpeg\\bin\\ffmpeg.exe', 'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe']
+    : ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg']);
+
+  if (!requiredEncoder) {
+    if (candidatesList) {
+      for (const p of candidatesList) {
+        if (existsSync(p)) return p;
+      }
+      return null;
+    }
+
+    if (cachedFfmpegPath && existsSync(cachedFfmpegPath)) {
+      let hasHigherPriority = false;
+      const cachedKey = win ? resolvePath(cachedFfmpegPath).toLowerCase() : resolvePath(cachedFfmpegPath);
+      for (const p of platformCandidates) {
+        const pKey = win ? resolvePath(p).toLowerCase() : resolvePath(p);
+        if (pKey === cachedKey) break;
+        if (existsSync(p)) {
+          hasHigherPriority = true;
+          cachedFfmpegPath = p;
+          return p;
+        }
+      }
+      if (!hasHigherPriority) return cachedFfmpegPath;
+    }
+
+    for (const p of platformCandidates) {
+      if (existsSync(p)) {
+        cachedFfmpegPath = p;
+        return p;
+      }
+    }
+
+    const found = await whichFirst('ffmpeg').catch(() => null);
+    if (found && existsSync(found)) {
+      cachedFfmpegPath = found;
+      return found;
+    }
+
+    const pathVal = process.env.PATH || '';
+    const delimiter = win ? ';' : ':';
+    const dirs = pathVal.split(delimiter).filter(Boolean);
+    const exeName = win ? 'ffmpeg.exe' : 'ffmpeg';
+    for (const rawDir of dirs) {
+      const dir = rawDir.replace(/^"(.*)"$/, '$1');
+      const candidate = join(dir, exeName);
+      if (existsSync(candidate)) {
+        cachedFfmpegPath = candidate;
+        return candidate;
+      }
+    }
+
+    cachedFfmpegPath = undefined;
+    return null;
+  }
+
+  const reqEnc = String(requiredEncoder).trim();
+  const candidates = candidatesList || await enumerateFfmpegCandidates();
+
+  let inconclusiveFailure = null;
+  let existingCandidateCount = 0;
+  const inspected = [];
+
+  for (const bin of candidates) {
+    if (!existsSync(bin)) continue;
+    existingCandidateCount++;
+    inspected.push(bin);
+
+    const probe = await probeEncoderCapability(bin, reqEnc, { timeoutMs });
+    if (probe.supported) {
+      return bin;
+    }
+    if (probe.inconclusive && !inconclusiveFailure) {
+      inconclusiveFailure = probe;
+    }
+  }
+
+  if (existingCandidateCount === 0) {
+    throw Object.assign(new Error('ffmpeg not found on PATH'), { code: 'FFMPEG_MISSING' });
+  }
+
+  if (inconclusiveFailure) {
+    const msg = inconclusiveFailure.timedOut
+      ? 'ffmpeg encoder capability probe timed out'
+      : `ffmpeg encoder capability probe failed: ${inconclusiveFailure.reason}`;
+    throw Object.assign(new Error(msg), {
+      code: inconclusiveFailure.timedOut ? 'FFMPEG_PROBE_TIMED_OUT' : 'FFMPEG_PROBE_FAILED',
+      details: inconclusiveFailure,
+    });
+  }
+
+  throw Object.assign(new Error(`ffmpeg build does not support required encoder: ${reqEnc}`), {
+    code: 'FFMPEG_CODEC_MISSING',
+    inspected,
+  });
 };
 
 const vfrSyncProbes = new Map();
@@ -201,7 +437,7 @@ export const findFfprobe = async () => {
   // Windows and let callers spawn ffmpeg as if it were ffprobe (audio
   // probing then always reports "no audio"). dirname-based join sidesteps
   // the casing question entirely.
-  const probe = join(dirname(ffmpeg), IS_WIN ? 'ffprobe.exe' : 'ffprobe');
+  const probe = join(dirname(ffmpeg), isWindows() ? 'ffprobe.exe' : 'ffprobe');
   if (existsSync(probe)) { cachedFfprobePath = probe; return probe; }
   cachedFfprobePath = await whichFirst('ffprobe');
   return cachedFfprobePath;
@@ -796,7 +1032,12 @@ export const trimVideoFromFrame = async (videoPath, outPath, { startFrame, fps }
   const start = Math.max(0, Math.floor(Number(startFrame) || 0));
   const rate = Number(fps);
   if (!Number.isFinite(rate) || rate <= 0) return { ok: false, reason: `invalid fps: ${fps}` };
-  const ffmpeg = await findFfmpeg();
+  let ffmpeg;
+  try {
+    ffmpeg = await findFfmpeg({ requiredEncoder: 'libx264' });
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
   if (!ffmpeg) return { ok: false, reason: 'ffmpeg not found' };
 
   const inPlace = resolvePath(videoPath) === resolvePath(outPath);
@@ -1124,7 +1365,12 @@ export const upscaleVideo2x = async (videoPath) => {
   if (!existsSync(videoPath)) {
     return { ok: false, reason: 'video file missing' };
   }
-  const ffmpeg = await findFfmpeg();
+  let ffmpeg;
+  try {
+    ffmpeg = await findFfmpeg({ requiredEncoder: 'libx264' });
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
   if (!ffmpeg) return { ok: false, reason: 'ffmpeg not found' };
   // -2 keeps the dimension on an even multiple (libx264 requires even
   // dimensions); pairing iw*2:-2 with the lanczos flag gives a clean

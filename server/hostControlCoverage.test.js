@@ -1395,7 +1395,7 @@ describe('host-control coverage of mounted mutating routes (#12952)', () => {
 // --- GET routes that reach host-process work (#13097) ---
 
 // Site reasons: one reviewed binding, which ends the trace for every GET.
-const HOST_QUERY = 'Runs one fixed read-only host query (sysctl, nvidia-smi, vm_stat, ps or a process listing, lsof/netstat, du/find, `which`, `defaults read`, an is-running AppleScript, `tailscale status`, `ffmpeg -filters` or `-list_devices`); the caller chooses no command, argument or path, and host state does not change.';
+const HOST_QUERY = 'Runs one fixed read-only host query (sysctl, nvidia-smi, vm_stat, ps or a process listing, lsof/netstat, du/find, `which`, `defaults read`, an is-running AppleScript, `tailscale status`, `ffmpeg -filters`, `-encoders` or `-list_devices`); the caller chooses no command, argument or path, and host state does not change.';
 const VERSION_PROBE = 'Runs an installed tool or interpreter only to check it (`--version`, `brew list`, `--probe`, or a fixed `python -c` import or version script); the executable is PortOS-managed or comes from code or gated settings, and the check installs, starts and changes nothing.';
 const ICLOUD_HEAL = 'Asks iCloud (`brctl download`) to download the evicted file PortOS is already reading; the caller names no path and nothing else runs.';
 const GIT_PROBE = 'Runs a fixed read-only git or gh query (`rev-parse`, `remote get-url`, `status`, `gh api user` or `rate_limit`) and changes no repository or remote state.';
@@ -1416,6 +1416,7 @@ const REVIEWED_PROCESS_SITES = [
   ['server/lib/detachedSpawn.js#processMatches', HOST_QUERY],
   ['server/lib/detachedSpawn.js#queryWin32Command', HOST_QUERY],
   ['server/lib/detachedSpawn.js#snapshotProcesses', HOST_QUERY],
+  ['server/lib/ffmpeg.js#probeEncoderCapability', HOST_QUERY],
   ['server/lib/ffmpeg.js#supportsSetparamsFilter', HOST_QUERY],
   ['server/lib/fileCore.js#dirSize', HOST_QUERY],
   ['server/lib/fullDiskAccess.js#defaultReadProcess', HOST_QUERY],
