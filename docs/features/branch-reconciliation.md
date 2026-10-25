@@ -164,6 +164,23 @@ for that exact checkout generation or recover the original data from backup, the
 retry reconciliation. Failure never fabricates a retirement receipt or authorizes
 deletion of a checkout, branch or archive.
 
+## Completing a merged job
+
+Normal merged-work cleanup belongs to the completing job. After durable signal
+ingestion and exact checkout capture, the server stops that job's finished
+writer, releases its execution binding, and awaits deterministic retirement and
+receipt verification. An already merged exact head does not create a cognitive
+review or cleanup job. A genuine delivery follow-up wakes its original parent
+directly when it completes; duplicate observations coalesce, and a pre-release
+audit cannot substitute its stale owner-active result for the post-release
+check. Scheduled reconciliation is a crash/restart and legacy fallback.
+
+Cognitive investigation is reserved for actual unexplained failures. Its contract
+includes resolving the affected work within original authority and budgets,
+repairing demonstrated root code defects with regression coverage and normal PR
+delivery, and reusing active fixes. External permission and transient causes are
+recorded accurately rather than turned into invented code defects.
+
 ## Explicit initialized-checkout retirement
 
 Automatic cleanup continues to retain initialized submodules. The separate
@@ -183,9 +200,13 @@ Git layouts fail closed. It does not deinitialize a module.
    `git worktree remove --force`. If that fails, it removes the directory only
    when `rev-parse --show-toplevel` resolves to the release path, then deletes
    the local branch with the same exact-head lease as other completed branches.
-   Any other disposition, including accepted supersession, returns
-   `not-merged-on-recheck` and leaves the checkout. No transaction directory is
-   created.
+   An exact merged PR head is integrated once freshly verified default history
+   contains the actual merge commit, even when later commits changed shared files.
+   This is deterministic delivery evidence and needs no manual supersession
+   acceptance or update of the primary checkout. It never covers a newer local
+   tip, replacement delivery or missing merge evidence. Other dispositions
+   return `not-merged-on-recheck` and leave the checkout. No transaction directory
+   is created.
 
 Journals already stored under `data/cos/initialized-checkout-retirements/` keep
 the historical quarantine restore path below. Setup migration 442 deletes that

@@ -1637,6 +1637,12 @@ export async function init() {
     }
   });
 
+  // A delivery follow-up owns a parent continuation, not a new cron obligation.
+  // Replay of the same completed observation is safe: the parent verifier binds
+  // its exact cleanup owner and receipt, and coalesces concurrent wake-ups.
+  const { bindCompletionRetirementEvents } = await import('./agentRepoStateVerification.js');
+  bindCompletionRetirementEvents(cosEvents);
+
   // Contributor remediation retains its forge hand-back when blocked. Ordinary
   // merge follow-ups stay in automated recovery rather than the human inbox.
   cosEvents.on('tasks:changed', (data) => {

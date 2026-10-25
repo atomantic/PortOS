@@ -170,6 +170,7 @@ const WORKTREE_DISPOSITIONS = Object.freeze({
   'stand-down': Object.freeze({}),
   'stand-down-uncertain': Object.freeze({}),
   'stranded-pr-handoff': Object.freeze({}),
+  'delivered-pr': Object.freeze({ merge: false }),
   'merge-or-preserve': Object.freeze({}),
 });
 
@@ -182,6 +183,8 @@ export function resolveWorktreeDisposition({ isWorktree, success, prCreation, di
     if (success) {
       if (prClaimVerdict?.category === PR_MISSING_CATEGORY) name = 'open-pr';
       else name = prClaimWasVerified(prClaimVerdict) ? 'stand-down' : 'stand-down-uncertain';
+    } else if (prClaimVerdict?.mergedExactHead === true) {
+      name = 'delivered-pr';
     } else if (prClaimVerdict?.status === 'found' && prClaimVerdict.url) {
       name = 'stranded-pr-handoff';
     }
@@ -234,8 +237,15 @@ async function probeWorktreePr(context, success) {
   const { findPullRequestForBranch } = await import('./github.js');
   const forge = await git.resolveForgeForRepo(worktreePath).catch(() => null);
   if (!forge) return { status: 'unavailable' };
-  return findPullRequestForBranch(worktreeBranch, { cwd: worktreePath, env: forge.env || null })
+  const found = await findPullRequestForBranch(worktreeBranch, { cwd: worktreePath, env: forge.env || null })
     .catch(() => ({ status: 'unavailable' }));
+  if (found.status === 'found' && String(found.detail).toUpperCase() === 'MERGED' && found.headRefOid
+    && !leavesPrForHuman(context.originalTask)) {
+    const tip = await execGit(['rev-parse', '--verify', `refs/heads/${worktreeBranch}`], context.sourceWorkspace,
+      { ignoreExitCode: true }).catch(() => null);
+    if (tip?.exitCode === 0 && tip.stdout.trim() === found.headRefOid) return { ...found, mergedExactHead: true };
+  }
+  return found;
 }
 
 async function runCleanupAgentWorktree(agentId, success, options = {}) {
@@ -259,6 +269,9 @@ async function runCleanupAgentWorktree(agentId, success, options = {}) {
       return discardAgentWorktree(context);
     case 'open-pr':
       return openWorktreePullRequest(context);
+    case 'delivered-pr':
+      await mergeOrPreserveWorktree({ ...context, skipMerge: true }, disposition);
+      break;
     case 'stranded-pr-handoff': {
       const released = await mergeOrPreserveWorktree(context, disposition);
       if (released?.cleanupIncomplete) {

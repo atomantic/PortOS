@@ -101,6 +101,37 @@ describe('test process ownership boundaries', () => {
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
+  it.each(['recovered', 'changed-root', 'reused', 'unreadable'])(
+    'rechecks withheld cleanup after a transient inspection without signaling changed ownership: %s', mode => {
+      const host = mkdtempSync(join(tmpdir(), 'recovery-transient-'));
+      const root = join(host, 'pvt-owned'); mkdirSync(root);
+      writeFileSync(join(root, '.owner.pid'), '999999 0\n');
+      const ancestors = [{ pid: process.pid, ppid: process.ppid }, { pid: process.ppid, ppid: 1 }];
+      const child = { pid: 900001, ppid: 1, start: 'original', args: ['node'],
+        env: { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: root } };
+      let reads = 0;
+      let time = 0;
+      let signaled = false;
+      const read = () => {
+        reads++;
+        if (reads === 1) return [...ancestors, child];
+        if (reads === 2) return [...ancestors, { ...child, env: {} }];
+        if (mode === 'unreadable') return null;
+        if (signaled) return ancestors;
+        return [...ancestors, { ...child,
+          start: mode === 'reused' ? 'replacement' : child.start,
+          env: mode === 'changed-root' ? { ...child.env, PORTOS_TEST_TEMP_ROOT: join(host, 'pvt-other') } : child.env }];
+      };
+      const kill = vi.fn(() => { signaled = true; });
+      try {
+        const result = killTestProcessesUnder(root, { read, probe: () => false, probePid: () => !signaled,
+          kill, now: () => time, wait: ms => { time += ms; }, settlementMs: 50 });
+        expect(result).toBe(mode === 'recovered' ? 1 : 0);
+        if (mode === 'recovered') expect(kill).toHaveBeenCalledExactlyOnceWith(child.pid, 'SIGKILL');
+        else expect(kill).not.toHaveBeenCalled();
+      } finally { rmSync(host, { recursive: true, force: true }); }
+    });
+
   it.each(['live', 'gone'])('requires terminal proof before ignoring an incomplete %s process row', mode => {
     const host = mkdtempSync(join(tmpdir(), 'recovery-unrelated-'));
     const dead = join(host, 'pvt-dead');
