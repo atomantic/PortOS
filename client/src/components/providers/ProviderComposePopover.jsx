@@ -267,7 +267,7 @@ export default function ProviderComposePopover({
           </FormField>
         )}
 
-        {compositeId && <ExecutionOptionsSelect inspect provider={{ id: compositeId }} model={model || null}
+        {compositeId && <ExecutionOptionsSelect provider={{ id: compositeId, executionOptionKeys: selectedHarness?.executionOptionKeys }} model={model || null}
           value={executionOptions} onChange={setExecutionOptions} disabled={saving} className={SELECT_CLASS} />}
 
         {bootstrapEligible && (

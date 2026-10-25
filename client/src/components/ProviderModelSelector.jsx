@@ -508,7 +508,7 @@ export default function ProviderModelSelector({
         </div>
       )}
       {selectedProvider && (
-          <ExecutionOptionsSelect inspect={providerFromCatalog} fieldClassName={fieldClass} provider={selectedProvider} model={effectiveModel}
+          <ExecutionOptionsSelect fieldClassName={fieldClass} provider={selectedProvider} model={effectiveModel}
             value={onExecutionOptionsChange ? executionOptions : selectedProvider.executionSourceProviderId ? selectedProvider.executionSelectionOptions ?? selectedProvider.executionOptions : undefined} onChange={changeExecutionOptions}
             disabled={disabled || loading || executionOptionsSaving || composingSelection || selectedProvider.enabled === false || Boolean(providerAllowed && !providerAllowed(selectedProvider))} className={selectClass} />
       )}

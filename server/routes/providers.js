@@ -185,6 +185,8 @@ const withTuiLaunchCommand = (provider) => {
  * the toolkit keeps its copy so it stays correct standalone. Both decorate on
  * the way out only — the field is never persisted.
  */
+const executionOptionKeysForHarness = id => Object.values(EXECUTION_OPTION_DEFINITIONS).filter(option => option.harnesses.includes(id)).map(option => option.key);
+
 const presentProvider = (provider, capabilities = captureSystemCapabilities()) => {
   const decorated = withProviderHardwareCompatibility(
     withTuiLaunchCommand(withRefreshCapability(provider)),
@@ -210,7 +212,7 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
     // decorating spreads above dropped it — re-carried here so `hasApiKey`
     // reports the key the run would actually use (#7564).
     apiKey: provider?.apiKey,
-    executionOptionKeys: Object.values(EXECUTION_OPTION_DEFINITIONS).filter(option => option.harnesses.includes(harnessForProvider(provider)?.id)).map(option => option.key),
+    executionOptionKeys: executionOptionKeysForHarness(harnessForProvider(provider)?.id),
     // The UNION of the two refresh paths, because the button asks only
     // whether SOME path can serve this record. Which one actually serves it is
     // decided in `POST /:id/refresh-models`, and the two must stay in step or
@@ -715,7 +717,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.get('/catalog', asyncHandler(async (_req, res) => {
     const { buildProviderCatalog } = await import('../services/compositeProviders.js');
     const [catalog, data, capabilities] = await Promise.all([buildProviderCatalog(), providerService.getAllProviders(), detectSystemCapabilities()]);
-    res.json({ ...catalog, presets: data.providers.map((provider) => presentProvider(provider, capabilities)) });
+    res.json({ ...catalog, harnesses: (catalog.harnesses || []).map(harness => ({ ...harness, executionOptionKeys: executionOptionKeysForHarness(harness.id) })), presets: data.providers.map((provider) => presentProvider(provider, capabilities)) });
   }));
 
   /** Per-harness enablement (#7564): the user's word, else PATH detection, `direct` always on. */
