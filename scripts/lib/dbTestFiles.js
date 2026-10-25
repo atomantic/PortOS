@@ -81,6 +81,8 @@ const exactFiles = new Set(patterns.filter((pattern) => !pattern.includes('*')))
 const globs = patterns.filter((pattern) => pattern.includes('*'));
 
 /** Resolve the canonical, server-rooted include patterns without loading Vitest. */
-export const resolveDbTestFiles = (files) => files.filter((file) => (
-  exactFiles.has(file) || globs.some((pattern) => posix.matchesGlob(file, pattern))
-));
+export const resolveDbTestFiles = (files) => files.filter((file) => {
+  const serverPath = file.startsWith('server/') ? file : posix.normalize(posix.join('server', file));
+  return exactFiles.has(file) || exactFiles.has(serverPath)
+    || globs.some((pattern) => posix.matchesGlob(file, pattern) || posix.matchesGlob(serverPath, pattern));
+});
