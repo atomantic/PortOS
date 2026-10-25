@@ -2126,6 +2126,88 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(injected.policies[0].metadata.branchCompletionPolicy).toBeUndefined();
   });
 
+  it('proves rewritten delivery only for the captured completed resume lineage before retirement', async () => {
+    const c = await reviewedCheckout('rewritten-resume', { normalMerge: true });
+    await execGit(['worktree', 'unlock', c.path], repo);
+    Object.assign(c.release, { locked: false, lockReason: null });
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
+    const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+    const captured = await readCompletedCheckoutIdentity({ repoPath: repo, ...c.release });
+    const base = (await execGit(['rev-parse', `${c.release.head}^`], repo)).stdout.trim();
+    const rewritten = (await execGit(['commit-tree', `${c.release.head}^{tree}`, '-p', base, '-m', 'before review rewrite'], repo)).stdout.trim();
+    const attempts = ['predecessor', 'successor'].map((id, index) => {
+      const startedAt = `2026-03-01T0${index}:00:00.000Z`;
+      const path = index ? c.path : join(external, 'original-before-move');
+      return { id, taskId: 'same-original-task', status: 'completed', startedAt,
+        completedAt: `2026-03-01T0${index}:01:00.000Z`,
+        result: { success: false, executionSuccess: true, validationPassed: index ? true : null,
+          ...(index && { cleanupPending: true, taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } }) },
+        metadata: { sourceWorkspace: repo, workspacePath: path, worktreeBranch: c.release.branch,
+          prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { branch: c.release.branch, url: c.forge.prUrl },
+          resumedFromAgentId: index ? 'predecessor' : null,
+          completedCheckouts: [{ version: 1, agentId: id, startedAt, capturedAt: startedAt, ...captured,
+            path, head: index ? c.release.head : rewritten }] } };
+    });
+    injected.policies = attempts;
+    const unchanged = structuredClone(attempts);
+    // A changed patch and an additional dropped patch must not be mistaken for
+    // a rebase, even with the exact same trusted resume/physical lineage.
+    const rejected = [];
+    const scratchCheckout = join(external, 'unmatched-original');
+    await execGit(['worktree', 'add', '--detach', scratchCheckout, base], repo);
+    await writeFile(join(scratchCheckout, 'feature.txt'), 'changed original patch\n');
+    await execGit(['add', 'feature.txt'], scratchCheckout);
+    await execGit(['commit', '-m', 'changed original patch'], scratchCheckout);
+    rejected.push((await execGit(['rev-parse', 'HEAD'], scratchCheckout)).stdout.trim());
+    await execGit(['checkout', '--detach', rewritten], scratchCheckout);
+    await writeFile(join(scratchCheckout, 'dropped.txt'), 'wanted undelivered patch\n');
+    await execGit(['add', 'dropped.txt'], scratchCheckout);
+    await execGit(['commit', '-m', 'undelivered additional patch'], scratchCheckout);
+    rejected.push((await execGit(['rev-parse', 'HEAD'], scratchCheckout)).stdout.trim());
+    await execGit(['worktree', 'remove', scratchCheckout], repo);
+    rejected.push((await execGit(['commit-tree', `${c.release.head}^{tree}`, '-p', base, '-p', c.release.head, '-m', 'ambiguous original merge'], repo)).stdout.trim());
+    const row = attempts[0].metadata.completedCheckouts[0];
+    for (const head of rejected) {
+      row.head = head;
+      expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-policy-not-legacy-completed' });
+      expect(await registered(c.path)).toBe(true);
+    }
+    row.head = rewritten;
+    for (const [target, key, value] of [[attempts[0], 'taskId', 'other-task'], [attempts[0], 'status', 'running'],
+      [attempts[0].metadata.reviewLoopMergeTarget, 'url', 'https://github.com/example/repo/pull/43'],
+      [attempts[0].metadata, 'prCompletionPolicy', 'leave-open'],
+      [row, 'incarnation', { pointer: { ino: 'different' } }]]) {
+      const prior = target[key]; target[key] = value;
+      const refused = await c.prepare();
+      expect(refused, `${key}: ${JSON.stringify(refused)}`).toMatchObject({ ok: false });
+      expect(await registered(c.path)).toBe(true);
+      target[key] = prior;
+    }
+    // An explicit original-head policy must bind the captured old head, rather
+    // than being replaced with the rewritten tip to make the review pass.
+    attempts[0].metadata.branchCompletionPolicy = { branch: c.release.branch, completion: 'review-then-merge',
+      prUrl: c.forge.prUrl, tip: 'b'.repeat(40) };
+    expect(await c.prepare()).toMatchObject({ ok: false });
+    attempts[0].metadata.branchCompletionPolicy.tip = rewritten;
+    const boundPolicy = await c.prepare();
+    expect(boundPolicy, JSON.stringify(boundPolicy)).toMatchObject({ ok: true });
+    delete attempts[0].metadata.branchCompletionPolicy;
+    const prepared = await c.prepare();
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { policy: { policies: [
+      { id: 'predecessor', success: false, resumedCleanup: { successorAgentId: 'successor' } },
+      { id: 'successor', success: false },
+    ] } } });
+    const retired = await c.confirm(prepared.review);
+    expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(c.path)).toBe(false);
+    expect(retired.archiveDir ?? null).toBeNull();
+    expect(await archives()).toEqual([]);
+    expect(injected.policies).toEqual(unchanged);
+    expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
+      branch: c.release.branch, head: c.release.head, branchDeleted: true, archiveDir: null,
+    }));
+  });
+
   it('retires a resumed merged checkout without promoting failed attempts or accepting unrelated generations', async () => {
     const c = await reviewedCheckout('resumed-cleanup', { normalMerge: true });
     await execGit(['worktree', 'unlock', c.path], repo);
