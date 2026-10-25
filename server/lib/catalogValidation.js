@@ -901,7 +901,7 @@ export const catalogIngredientDetailQuerySchema = z.object({
 }).strip();
 
 export const catalogIngredientCardsQuerySchema = z.object({
-  ids: csvIdsParam({ max: 50, maxIdLength: 80 }).refine(ids => Array.isArray(ids) && ids.length > 0, 'Ingredient ids are required'),
-}).strict();
+  ids: csvIdsParam({ max: 50, maxIdLength: 80 }),
+}).strict().refine(query => Array.isArray(query.ids) && query.ids.length > 0, { path: ['ids'], message: 'Ingredient ids are required' });
 
 export const catalogIngredientLockSchema = z.object({ locked: z.boolean() }).strict();
