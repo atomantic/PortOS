@@ -320,7 +320,9 @@ export const WINDOWS_RISK_RULES = [
   /^server\/lib\/agentGuard\//,
   /^server\/cos-runner\//,
   /^server\/services\/(?:shell|pm2|appBuilder)\b/,
-  /^server\/services\/agentTuiSpawning(?:\.test)?\.js$/,
+  // Prompt delivery moved into this subtree; keep its Windows launch coverage.
+  /^server\/services\/agentTuiSpawning(?:\/|(?:\.test)?\.js$)/,
+  /^server\/services\/tuiPromptRunner(?:\.test)?\.js$/,
   /^server\/services\/htmlComposition\/ownedBrowser(?:\.test)?\.js$/,
   /^server\/services\/autonomousJobs\/execution\.shellSpawn/,
   // The voice fine-tuning service spawns a real Python trainer and settles the

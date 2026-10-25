@@ -2747,7 +2747,7 @@ describe('spawnTuiAgent runtime', () => {
       PASTE_TO_ENTER_FALLBACK_MS,
       PASTE_VERIFY_WINDOW_MS,
       PASTE_VERIFY_POLL_MS,
-      PASTE_MARKER_POLL_MS,
+      PASTE_TO_ENTER_MIN_DELAY_MS,
     } = await vi.importActual('../lib/tuiHandshake.js');
 
     runSpawn({ prompt: 'evaluate our animation prompts and generate drafts' });
@@ -2771,13 +2771,15 @@ describe('spawnTuiAgent runtime', () => {
     await capturedOnData(Buffer.from('[Pasted Content 12345 chars]\n'));
     await flushMicrotasks();
 
-    // Codex's patient first attempt is still waiting for that chip, so the
-    // submit fires on the next marker poll.
-    await vi.advanceTimersByTimeAsync(PASTE_MARKER_POLL_MS);
-    await flushMicrotasks();
-
     const enterWrites = () => vi.mocked(shellService.writeToSession).mock.calls
       .filter(([id, data]) => id === SESSION_ID && data === '\r');
+    // The chip cancels re-paste immediately, but Enter waits for its output to
+    // settle even when confirmation arrives during retry backoff.
+    expect(enterWrites()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(PASTE_TO_ENTER_MIN_DELAY_MS - 1);
+    expect(enterWrites()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    await flushMicrotasks();
     expect(enterWrites()).toHaveLength(1);
 
     // The late authoritative marker cancels the pending duplicate paste.

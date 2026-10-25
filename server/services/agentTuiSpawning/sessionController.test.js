@@ -466,3 +466,90 @@ describe('Codex terminal model-access rejection (#9319)', () => {
     await controller.handleExit({ exitCode: 0 });
   });
 });
+
+
+describe('Codex paste output settles before submission', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('keeps one late paste intact and waits for its last output before Enter', async () => {
+    const { controller, write } = makeController();
+    controller.attachSession({ sessionId: 'session-paste-settle', pid: 4242 });
+    controller.markCommandInjected();
+    await controller.handleData('› Ask Codex to do anything\n');
+    await vi.advanceTimersByTimeAsync(3000);
+    const pastes = () => write.mock.calls.filter(([, keys]) => keys.startsWith('\x1b[200~'));
+    const enters = () => write.mock.calls.filter(([, keys]) => keys === '\r');
+    expect(pastes()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(8000);
+    // A cold start can render the first chip long after the paste write. More
+    // input still follows it; an Enter here belongs to Codex's paste burst.
+    await controller.handleData('[Pasted Content 30000 chars]');
+    for (let chunk = 0; chunk < 8; chunk += 1) {
+      await vi.advanceTimersByTimeAsync(100);
+      await controller.handleData(' remaining prompt text');
+      expect(enters()).toHaveLength(0);
+    }
+    await vi.advanceTimersByTimeAsync(199);
+    expect(enters()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(enters()).toHaveLength(1);
+    expect(pastes()).toHaveLength(1);
+    expect(pastes()[0][1]).toBe('\x1b[200~do the work\x1b[201~');
+    await controller.handleExit({ exitCode: 1 });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(enters()).toHaveLength(1);
+  });
+
+  it('finalizes a deferred Enter write failure without escaping the timer callback', async () => {
+    const { controller, write, finalizeAgent } = makeController();
+    controller.attachSession({ sessionId: 'session-paste-write-failure', pid: 4242 });
+    controller.markCommandInjected();
+    await controller.handleData('› Ask Codex to do anything\n');
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.advanceTimersByTimeAsync(8050);
+    write.mockImplementation((_sessionId, keys) => {
+      if (keys === '\r') throw new Error('PTY closed');
+    });
+    await controller.handleData('[Pasted Content 30000 chars]');
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+      success: false, completionReason: 'prompt-submit-failed',
+      error: expect.stringContaining('Could not submit the pasted prompt: PTY closed'),
+    })));
+  });
+
+  it('bounds continuous paste output with explicit non-submission and no duplicate paste', async () => {
+    const { controller, write, finalizeAgent } = makeController();
+    controller.attachSession({ sessionId: 'session-paste-never-settles', pid: 4242 });
+    controller.markCommandInjected();
+    await controller.handleData('› Ask Codex to do anything\n');
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.advanceTimersByTimeAsync(8050);
+    await controller.handleData('[Pasted Content 30000 chars]');
+    for (let chunk = 0; chunk < 460; chunk += 1) {
+      await vi.advanceTimersByTimeAsync(100);
+      await controller.handleData(' continuing redraw');
+    }
+    await vi.waitFor(() => expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+      success: false, completionReason: 'prompt-not-submitted',
+      error: expect.stringContaining('no submission Enter was sent'),
+    })));
+    expect(write.mock.calls.filter(([, keys]) => keys === '\r')).toHaveLength(0);
+    expect(write.mock.calls.filter(([, keys]) => keys.startsWith('\x1b[200~'))).toHaveLength(1);
+  });
+
+  it('cancels a pending settled submission when the PTY exits', async () => {
+    const { controller, write } = makeController();
+    controller.attachSession({ sessionId: 'session-paste-exit', pid: 4242 });
+    controller.markCommandInjected();
+    await controller.handleData('› Ask Codex to do anything\n');
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.advanceTimersByTimeAsync(8050);
+    await controller.handleData('[Pasted Content 30000 chars]');
+    await vi.advanceTimersByTimeAsync(50);
+    await controller.handleExit({ exitCode: 1 });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(write.mock.calls.filter(([, keys]) => keys === '\r')).toHaveLength(0);
+  });
+});
