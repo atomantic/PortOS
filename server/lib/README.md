@@ -1,6 +1,8 @@
 # server/lib/ — shared server helpers
 
 Pure / side-effect-free helpers, validators, parsers, prompt builders, and shared constants.
+
+`workspaceTestCacheRoots.js` — canonical workspace/cache roots for test runners and scoped retirement verification, checked against the real configured cache publishers.
 **Before adding a new helper here, grep this catalog first** — if a similar module exists,
 extend it. When you add a new module, add it to `index.js` AND add a row here.
 
