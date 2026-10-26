@@ -270,6 +270,9 @@ export function ownFixtureWork() {
   return {
     run, wrap, tests,
     cleanup(work) {
+      // A timed-out prepare hook can reach teardown again while the original
+      // removal is still pending. One fixture generation owns one cleanup.
+      if (cleanup) return cleanup;
       cleanup = (async () => work())();
       void cleanup.catch(error => cleanupFailures.push(error));
       return cleanup;
@@ -279,6 +282,7 @@ export function ownFixtureWork() {
       // error for finish(), while allowing the next independent case to start.
       await cleanup?.catch(() => {});
       this.reset();
+      cleanup = null;
     },
     async finish(removeDataRoots) {
       try {

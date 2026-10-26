@@ -67,7 +67,9 @@ const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fe
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, execGit: async (args, cwd, options) => {
+  return { ...actual,
+    execGitSafe: (args, cwd, options) => owned.run('git', () => actual.execGitSafe(args, cwd, options)),
+    execGit: async (args, cwd, options) => {
     if (injected.onSnapshot && args[0] === 'ls-files' && args[1] === '-u') await injected.onSnapshot();
     // Pauses an archive mid-write, after its first snapshot and before its re-read.
     if (injected.onBundle && args.includes('bundle') && args.includes('create')) await injected.onBundle();
@@ -2723,6 +2725,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       shippedDefault = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
       expect((await execGit(['cat-file', '-e', `${shippedDefault}^{commit}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
       await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+      // Default-branch discovery must stay local; only the proof fetch below
+      // crosses the mocked forge boundary, never a real credential helper.
+      await execGit(['update-ref', 'refs/remotes/origin/main', c.release.head], repo);
+      await execGit(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], repo);
       injected.fetchRemote = remote;
     }
     await execGit(['reset', '--hard', 'HEAD^'], repo);

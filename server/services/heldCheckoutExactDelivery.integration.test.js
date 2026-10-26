@@ -12,7 +12,9 @@ vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { 
 vi.mock('./cos.js', () => ({}));
 vi.mock('../lib/execGit.js', async original => {
   const actual = await original();
-  return { ...actual, execGit: (args, cwd, options) => owned.run('git', () => actual.execGit(
+  return { ...actual,
+    execGitSafe: (args, cwd, options) => owned.run('git', () => actual.execGitSafe(args, cwd, options)),
+    execGit: (args, cwd, options) => owned.run('git', () => actual.execGit(
     args.includes('fetch') ? args.map(arg => arg === 'https://github.com/example/repo.git' ? fixture.remote : arg) : args, cwd, options)) };
 });
 vi.mock('./apps.js', () => ({ getAppById: async () => fixture.app }));
