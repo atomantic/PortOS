@@ -23,6 +23,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
   const [open, setOpen] = useState(false);
   const [usageError, setUsageError] = useState(false);
   const [usageRetry, setUsageRetry] = useState(0);
+  const handledUsageRetry = useRef(0);
   const [universes, setUniverses] = useState(null);
   const [loadError, setLoadError] = useState(false);
   const [target, setTarget] = useState('');
@@ -47,7 +48,9 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
       getCatalogUniverseContext(ingredient.id, { silent: true }).then((data) => { if (active && sequence === contextSequence.current) { setUsageError(false); onContextChange(data); } })
         .catch(() => { if (active) { setUsageError(true); toast.error('Unable to refresh universe ownership and usage. Retry before changing it.'); } });
     };
-    if (context?.usageComplete === false) refresh();
+    const retryRequested = handledUsageRetry.current !== usageRetry;
+    handledUsageRetry.current = usageRetry;
+    if (context?.usageComplete === false || retryRequested) refresh();
     socket.on('catalog:primitive-changed', refresh);
     socket.on('connect', refresh);
     return () => { active = false; socket.off('catalog:primitive-changed', refresh); socket.off('connect', refresh); };

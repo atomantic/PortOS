@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useState } from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 const navigate = vi.hoisted(() => vi.fn());
 vi.mock('react-router', async (io) => ({ ...await io(), useNavigate: () => navigate }));
@@ -14,6 +14,7 @@ vi.mock('../../services/apiCatalog', () => ({
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 import CatalogUniversePanel from './CatalogUniversePanel';
+import socket from '../../services/socket';
 import { getCatalogUniverseContext, setCatalogUniverseOwner, forkCatalogIngredient } from '../../services/apiCatalog';
 
 const initial = { status: 'needs-review', owner: null, refs: [
@@ -86,4 +87,21 @@ it('keeps incomplete usage distinct from unused and retries secondary failures',
   fireEvent.click(screen.getByRole('button', { name: 'Retry usage' }));
   await screen.findByText('No linked containers');
   expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('retries a failed socket refresh after usage has already loaded', async () => {
+  function LoadedHarness() {
+    const [context, setContext] = useState({ ...initial, refs: [], usageComplete: true });
+    return <CatalogUniversePanel ingredient={{ id: 'cat-chr-1', name: 'Example courier', type: 'character' }} context={context} onContextChange={setContext} />;
+  }
+  getCatalogUniverseContext.mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValueOnce({ ...initial, usageComplete: true });
+  render(<MemoryRouter><LoadedHarness /></MemoryRouter>);
+  expect(getCatalogUniverseContext).not.toHaveBeenCalled();
+  const refresh = socket.on.mock.calls.find(([event]) => event === 'catalog:primitive-changed')[1];
+  await act(async () => { refresh({ ingredientId: 'cat-chr-1' }); });
+  expect(await screen.findByRole('alert')).toHaveTextContent('Detailed usage could not be loaded');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry usage' }));
+  await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  expect(screen.getByText('missing')).toBeInTheDocument();
+  expect(getCatalogUniverseContext).toHaveBeenCalledTimes(2);
 });
