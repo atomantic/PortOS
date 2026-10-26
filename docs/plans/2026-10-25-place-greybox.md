@@ -125,6 +125,12 @@ preview CSP, blocked unknown requests, locked loopback and required OS network
 isolation (Seatbelt on macOS, bubblewrap on Linux). Unsupported hosts fail
 closed. It does not use a user browser profile, instance credentials, live data
 mounts or an HTTP server.
+Its `data/greybox-renders/` workspaces are ephemeral files, protected from generic
+Data Manager purge while rendering and excluded from backups; reference PNGs
+remain in the existing catalog media store.
+The composition maintenance reservation covers rendering, attachment and cleanup;
+new requests honor a graceful-maintenance hold and unconfirmed browser cleanup
+keeps readiness unsettled.
 
 `greyboxCaptureSettings` defines the shared 1,280-pixel long edge, rounded short
 edge, shot aspect and 35mm-equivalent vertical field of view. The registered

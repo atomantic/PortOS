@@ -11,6 +11,7 @@
 
 import { ServerError } from '../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { promptAddition } from '../lib/modelInput.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../lib/creativeLatitude.js';
 import { resolveGreybox } from '../lib/greyboxScene.js';
@@ -125,7 +126,8 @@ export const captureGreyboxShot = (ingredientId, shotId, body) =>
   captureQueue(`${ingredientId}:${shotId}`, () => replaceShotCapture(ingredientId, shotId, body));
 
 /** An explicit render request uses the same queue and replacement transaction as a tab upload. */
-export const renderGreyboxShot = (ingredientId, shotId) => captureGreyboxShot(ingredientId, shotId, { render: true });
+export const renderGreyboxShot = (ingredientId, shotId) => maintenance.run('composition', 'Greybox shot capture',
+  () => captureGreyboxShot(ingredientId, shotId, { render: true }), { continuation: true });
 
 async function replaceShotCapture(ingredientId, shotId, { dataBase64, render = false }) {
   const place = await requirePlace(ingredientId);

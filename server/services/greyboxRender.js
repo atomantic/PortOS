@@ -4,6 +4,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { PREVIEW_PAGE_CSP } from '../lib/generatedPreviewSandbox.js';
 import { greyboxCaptureSettings } from '../lib/greyboxCapture.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { getGreyboxCapturePage } from './greyboxCapturePage.js';
 
 const renderQueue = createKeyCachedQueue();
@@ -36,6 +37,7 @@ async function capture(scene, shot) {
   } finally {
     // A failed owned close preserves its evidence and must not report success.
     try { await page?.close(); }
+    catch (error) { maintenance.markCurrentUnsettled(); throw error; }
     finally { await rm(scratch, { recursive: true, force: true }); }
   }
 }

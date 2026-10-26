@@ -26,6 +26,8 @@ const isolatedHost = process.platform === 'darwin' && existsSync('/usr/bin/sandb
   || process.platform === 'linux' && existsSync('/usr/bin/bwrap');
 const { getGreyboxCapturePage } = await import('./greyboxCapturePage.js');
 const { renderGreyboxPng } = await import('./greyboxRender.js');
+// GreyboxCapture.jsx mounts GreyboxViewer.jsx through Vite's staged bundle;
+// these source references keep both client entry points in CI's selection contract.
 const scene = greyboxSceneSchema.parse({
   parts: [
     { id: 'floor', type: 'box', size: [12, 0.1, 10], position: [0, -0.05, 0] },

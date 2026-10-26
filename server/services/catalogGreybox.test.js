@@ -4,6 +4,8 @@ const db = vi.hoisted(() => ({
   getIngredient: vi.fn(), setIngredientPayloadKey: vi.fn(), listMediaForIngredient: vi.fn(), detachMedia: vi.fn(),
 }));
 const upload = vi.hoisted(() => vi.fn());
+const maintenanceRun = vi.hoisted(() => vi.fn());
+vi.mock('../lib/maintenanceAdmission.js', () => ({ maintenance: { run: maintenanceRun } }));
 vi.mock('./catalogDB.js', () => db);
 vi.mock('./catalogMedia.js', () => ({ uploadIngredientMediaFile: upload }));
 
@@ -19,6 +21,7 @@ const renderCapture = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  maintenanceRun.mockImplementation((_kind, _resource, work) => work());
   db.getIngredient.mockResolvedValue(place);
   __setGreyboxDepsForTests({
     resolveProvider: async () => ({ provider: { id: 'p1', enabled: true }, selectedModel: 'm1' }),
@@ -28,6 +31,12 @@ beforeEach(() => {
 });
 
 describe('renderGreyboxShot', () => {
+  it('refuses new captures during graceful maintenance before rendering or replacing references', async () => {
+    maintenanceRun.mockRejectedValueOnce(Object.assign(new Error('Maintenance held'), { code: 'MAINTENANCE_HELD' }));
+    await expect(renderGreyboxShot('plc-1', 'wide')).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+    expect(renderCapture).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
+  });
   it('renders the saved scene with no tab and serializes it with a concurrent uploaded capture', async () => {
     const live = [{ mediaKey: 'old.png', kind: 'reference', role: 'greybox-shot:wide' }];
     db.listMediaForIngredient.mockImplementation(async () => [...live]);
