@@ -44,6 +44,9 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
   'lib/filmLook.browser.test.js',
   'lib/filmLookGpu.browser.test.js',
   'lib/musicVideoTitleCard.browser.test.js',
+  // Native HiDPI readback and SwiftShader captures share the quiet GPU budget,
+  // rather than competing with parallel FFmpeg/export fixtures (#13748).
+  'routes/catalogGreyboxViewer.browser.test.js',
   'services/htmlComposition/index.test.js',
   'services/musicVideo/documentRender.browser.test.js',
   'services/musicVideo/documentTemplates/layered/engine.overlay.browser.test.js',

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { browserSuiteCanRun, resolveClientBundler, resolveTestChrome } from '../lib/browserSuiteGate.js';
 import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../../scripts/lib/browserFixture.js';
+import { createTestPhaseDiagnostics } from '../test/testPhaseDiagnostics.js';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const client = join(root, 'client');
@@ -23,8 +24,8 @@ const scene = {
   shots: [{ id: 'overhead', label: 'Overhead', position: [0, 12, 0.01], target: [0, 0, 0], focalLengthMm: 28, aspect: '16:9', figures: [{ anchorId: 'figure', pose: 'Standing' }] }],
 };
 
-async function openEnvironment(fixture, { warmup = false } = {}) {
-  const page = await fixture.browser.newPage({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 2, reducedMotion: 'no-preference' });
+async function openEnvironment(fixture, { warmup = false, phase = (_name, work) => work() } = {}) {
+  const page = await phase('page-create', () => fixture.browser.newPage({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 2, reducedMotion: 'no-preference' }));
   page.setDefaultTimeout(10000);
   await page.addInitScript(() => {
     // Only timing/method names from this synthetic fixture, capped per page.
@@ -54,7 +55,7 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     const { metrics } = await session.send('Performance.getMetrics');
     return Object.fromEntries(metrics.filter(({ name }) => ['Timestamp', 'TaskDuration', 'ScriptDuration', 'LayoutDuration', 'RecalcStyleDuration', 'JSHeapUsedSize'].includes(name)).map(({ name, value }) => [name, value]));
   };
-  const initialMetrics = await metrics();
+  const initialMetrics = await phase('performance-before', metrics);
   const state = { captures: [], errors: [], viewerRequests: 0, phase: 'navigation', progress: [] };
   const started = Date.now();
   const mark = phase => { if (state.progress.length < 32) state.progress.push({ phase, elapsedMs: Date.now() - started }); };
@@ -96,9 +97,9 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     return route.continue();
   });
   try {
-    await page.goto(`${fixture.origin}environments/example-place/plates`);
+    await phase('environment-navigation', () => page.goto(`${fixture.origin}environments/example-place/plates`));
     state.phase = 'Greybox tab';
-    await page.getByRole('tab', { name: 'Greybox', exact: true }).waitFor();
+    await phase('greybox-tab-ready', () => page.getByRole('tab', { name: 'Greybox', exact: true }).waitFor());
     if (warmup) {
       state.phase = 'lazy chunk compilation';
       await page.evaluate("import('/src/components/catalog/GreyboxViewer.jsx').then(() => true)");
@@ -126,22 +127,26 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
       };
     });
     state.phase = 'viewer attachment';
-    await page.getByRole('tab', { name: 'Greybox', exact: true }).click();
-    await page.locator('[data-testid="greybox-viewer"] canvas').waitFor({ state: 'attached' });
+    await phase('viewer-attachment', async () => {
+      await page.getByRole('tab', { name: 'Greybox', exact: true }).click();
+      await page.locator('[data-testid="greybox-viewer"] canvas').waitFor({ state: 'attached' });
+    });
     expect(await page.evaluate(() => ({
       reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
       base: getComputedStyle(document.body, '::before').animationPlayState,
       glow: getComputedStyle(document.body, '::after').animationPlayState,
     }))).toEqual({ reducedMotion: false, base: 'running', glow: 'paused' });
     state.phase = 'shot selection';
-    await page.getByRole('button', { name: /Overhead/, pressed: false }).click();
-    await page.waitForFunction(() => document.querySelector('#greybox-lens')?.value === '28');
-    // Demand rendering and Html placement finish after React commits.
-    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await phase('shot-selection', async () => {
+      await page.getByRole('button', { name: /Overhead/, pressed: false }).click();
+      await page.waitForFunction(() => document.querySelector('#greybox-lens')?.value === '28');
+      // Demand rendering and Html placement finish after React commits.
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    });
     expect(await page.locator('[data-testid="greybox-viewer"] canvas').isVisible()).toBe(true);
     const readiness = await page.evaluate(() => ({ ...window.greyboxReadinessEvidence?.(), callCounts: window.greyboxCallCounts, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, ambientAnimations: ['::before', '::after'].map(pseudo => getComputedStyle(document.body, pseudo).animationName) }));
     console.info(`Greybox passive startup samples: ${JSON.stringify(readiness)}`);
-    const finalMetrics = await metrics();
+    const finalMetrics = await phase('performance-after', metrics);
     console.info(`Greybox startup durations: ${JSON.stringify(Object.fromEntries(Object.entries(finalMetrics).map(([name, value]) => [name, value - initialMetrics[name]])))}`);
     await session.detach();
     const slowGpuCalls = await page.evaluate(() => window.greyboxGpuCalls);
@@ -189,10 +194,11 @@ async function capturePixels(page, dataBase64, focalLengthMm = 28) {
   }, { dataBase64, focalLengthMm });
 }
 
-const canvasState = page => page.locator('[data-testid="greybox-viewer"] canvas').evaluate(canvas => ({
+// Dimension-only restoration checks must not flush and PNG-encode a HiDPI frame.
+const canvasState = (page, { pixels = false } = {}) => page.locator('[data-testid="greybox-viewer"] canvas').evaluate((canvas, pixels) => ({
   width: canvas.width, height: canvas.height, cssWidth: canvas.getBoundingClientRect().width,
-  cssHeight: canvas.getBoundingClientRect().height, pixels: canvas.toDataURL(),
-}));
+  cssHeight: canvas.getBoundingClientRect().height, ...(pixels ? { pixels: canvas.toDataURL() } : {}),
+}), pixels);
 
 async function waitForRedraw(page, previous) {
   await page.waitForFunction(pixels => document.querySelector('[data-testid="greybox-viewer"] canvas').toDataURL() !== pixels, previous.pixels);
@@ -260,20 +266,24 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
   }, BROWSER_FIXTURE_STARTUP_MS);
   afterEach(() => fixture?.close());
 
-  it('uploads an oriented L floor at fixed landscape/portrait resolution and restores the HiDPI viewport', async () => {
-    const { page, state, ingredient } = await openEnvironment(fixture);
+  it('uploads an oriented L floor at fixed landscape/portrait resolution and restores the HiDPI viewport', async ({ onTestFailed }) => {
+    const phase = createTestPhaseDiagnostics(onTestFailed);
+    const { page, state, ingredient } = await phase('open-environment', () => openEnvironment(fixture, { phase }));
     try {
       expect(state.viewerRequests).toBeGreaterThan(0);
       expect(new URL(page.url()).searchParams.get('shot')).toBe('overhead');
       for (const [aspect, width, height] of [['16:9', 1280, 720], ['9:16', 720, 1280]]) {
-        await page.getByRole('combobox', { name: /^Frame/ }).selectOption(aspect);
-        await page.waitForFunction(ratio => { const c = document.querySelector('[data-testid="greybox-viewer"] canvas'); return Math.abs(c.width / c.height - ratio) < 0.01; }, width / height);
-        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-        const before = await canvasState(page);
+        const frame = width > height ? 'landscape' : 'portrait';
+        await phase(`${frame}-select`, () => page.getByRole('combobox', { name: /^Frame/ }).selectOption(aspect));
+        await phase(`${frame}-ready`, async () => {
+          await page.waitForFunction(ratio => { const c = document.querySelector('[data-testid="greybox-viewer"] canvas'); return Math.abs(c.width / c.height - ratio) < 0.01; }, width / height);
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        });
+        const before = await phase(`${frame}-viewport-before`, () => canvasState(page));
         // Observe native backing-buffer changes without replacing canvas setters.
         // A capture must not allocate a larger intermediate buffer than either
         // its requested output or the viewport it restores.
-        await page.locator('[data-testid="greybox-viewer"] canvas').evaluate(canvas => {
+        await phase(`${frame}-observe-buffer`, () => page.locator('[data-testid="greybox-viewer"] canvas').evaluate(canvas => {
           const changes = [];
           const collect = records => { for (const record of records) {
             if (changes.length >= 64) throw new Error('Capture buffer observation limit');
@@ -291,47 +301,47 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
             }
             return sizes;
           };
-        });
+        }));
         state.phase = `capture ${aspect}`;
-        await Promise.all([
+        await phase(`${frame}-capture-and-media`, () => Promise.all([
           page.waitForResponse(response => response.url().endsWith('/details?view=media')),
           page.getByRole('button', { name: /(?:Capture|Replace) reference image/ }).click(),
-        ]);
-        const bufferSizes = await page.evaluate(() => window.captureBufferSizes());
+        ]));
+        const bufferSizes = await phase(`${frame}-buffer-sizes`, () => page.evaluate(() => window.captureBufferSizes()));
         expect(Math.max(...bufferSizes.map(([w, h]) => w * h))).toBeLessThanOrEqual(Math.max(before.width * before.height, width * height));
-        const pixels = await capturePixels(page, state.captures.at(-1).dataBase64);
+        const pixels = await phase(`${frame}-uploaded-pixels`, () => capturePixels(page, state.captures.at(-1).dataBase64));
         expect(pixels).toMatchObject({ width, height });
         expect(pixels.variance).toBeGreaterThan(100);
         for (const [r, g, b] of pixels.floor) { expect(g).toBeGreaterThan(r * 1.3); expect(g).toBeGreaterThan(b * 1.2); }
         for (const [r, g, b] of pixels.outside) expect(Math.max(r, g, b)).toBeLessThan(60);
-        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-        const { pixels: _beforePixels, ...beforeSize } = before;
-        const { pixels: _afterPixels, ...afterSize } = await canvasState(page);
-        expect(afterSize).toEqual(beforeSize);
+        await phase(`${frame}-viewport-redraw`, () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+        expect(await phase(`${frame}-viewport-after`, () => canvasState(page))).toEqual(before);
         expect(ingredient.payload.greybox.shots[0].aspect).toBe(aspect);
       }
-      await page.getByRole('tab', { name: 'Plates', exact: true }).click();
-      await page.getByTestId('greybox-viewer').waitFor({ state: 'detached' });
+      await phase('exit-greybox', async () => {
+        await page.getByRole('tab', { name: 'Plates', exact: true }).click();
+        await page.getByTestId('greybox-viewer').waitFor({ state: 'detached' });
+      });
       expect(await page.evaluate(() => getComputedStyle(document.body, '::after').animationPlayState)).toBe('running');
       expect(state.errors).toEqual([]);
     } catch (error) {
       const gpuCalls = await page.evaluate(() => window.greyboxGpuCalls);
       throw new Error(`${state.phase}: ${error.message}; captures: ${state.captures.length}; progress: ${JSON.stringify(state.progress)}; gpu calls: ${JSON.stringify(gpuCalls)}; browser errors: ${state.errors.join('; ')}`, { cause: error });
-    } finally { await page.close(); }
+    } finally { await phase('page-close', () => page.close()); }
   }, 60000);
 
   it('redraws the demand canvas when the lens or frame changes and keeps labels readable in day/night themes', async () => {
     const { page, state } = await openEnvironment(fixture);
     try {
-      const original = await canvasState(page);
+      const original = await canvasState(page, { pixels: true });
       await page.getByLabel(/Lens:/).press('ArrowRight');
       await waitForRedraw(page, original);
-      const longerLens = await canvasState(page);
+      const longerLens = await canvasState(page, { pixels: true });
       expect(longerLens.width).toBe(original.width);
       expect(longerLens.height).toBe(original.height);
       await page.getByRole('combobox', { name: /^Frame/ }).selectOption('1:1');
       await waitForRedraw(page, longerLens);
-      const square = await canvasState(page);
+      const square = await canvasState(page, { pixels: true });
       expect(square.cssWidth / square.cssHeight).toBeCloseTo(1, 2);
       const squarePixels = await capturePixels(page, square.pixels.split(',')[1], 29);
       for (const [r, g, b] of squarePixels.floor) { expect(g).toBeGreaterThan(r * 1.3); expect(g).toBeGreaterThan(b * 1.2); }
