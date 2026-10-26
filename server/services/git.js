@@ -279,8 +279,12 @@ export async function isRepo(dir, { unknownOnError = false } = {}) {
   if (result.exitCode === 0 && (inside === 'true' || inside === 'false')) return inside === 'true';
   // Recognize only ordinary discovery failure. Unrecognized/localized errors
   // remain unknown rather than misclassifying a valid but inaccessible repo.
+  // Git distinguishes reaching its search ceiling from reaching a mount point.
+  const diagnostic = result.stderr.trim();
+  const discoveryFailed = diagnostic === 'fatal: not a git repository (or any of the parent directories): .git'
+    || /^fatal: not a git repository \(or any parent up to mount point [^\r\n]+\)\r?\nStopping at filesystem boundary \(GIT_DISCOVERY_ACROSS_FILESYSTEM not set\)\.$/.test(diagnostic);
   if (result.exitCode === 128 && !inside
-    && result.stderr.trim() === 'fatal: not a git repository (or any of the parent directories): .git') return false;
+    && discoveryFailed) return false;
   return undefined;
 }
 
