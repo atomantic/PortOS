@@ -35,16 +35,40 @@ camera, lens and frame; its selection is included in the page URL.
 After reframing a selected shot, choose **Update “[shot name]” to this view** to
 save the change. The delete button removes the selected camera shot. Named
 landmarks identify important positions; anchors show figure and prop stand-ins.
-Geometry changes use the AI edit controls below; the viewer itself is for camera
-framing, not dragging individual shapes.
+Choose **Free view — show all anchors** to leave the selected shot without changing
+its saved camera.
+
+## Edit the layout by hand
+
+Open the collapsed **Parts**, **Anchors**, **Landmarks** or **Zones** lists below
+the viewer. Add a row or select one to edit its label, position and available
+numeric fields. Parts include rotation and dimensions, plus a zone picker;
+anchors include kind, facing and height. The selected row is highlighted in the
+viewer, and selection is included in the page URL.
+
+Drag an anchor in the viewer to move it on the floor in 0.1 m steps. Its height
+stays unchanged and the camera does not orbit during the drag. Numeric position
+fields also support precise placement.
+
+With a shot selected, open **Figures in “[shot name]”** to choose its anchors and
+write a pose note for each. Anchors excluded from that shot appear faded while
+editing. Removing an anchor removes its figure entries from every shot; removing
+a zone clears its assignments on parts. A layout must keep at least one part.
+
+Changes preview locally. Choose **Save layout edits** to persist them, or
+**Discard layout edits** to restore the saved scene. Invalid fields are listed
+before a save; failed saves keep the draft available for correction or retry.
+Save or discard before capturing, updating camera shots or drafting with AI.
+Manual editing does not call an AI provider.
 
 ## Capture a reference
 
 Select a saved shot and choose **Capture reference image**. PortOS saves the current
 framing onto the shot if it moved, then attaches a PNG to the Environment as a
 reference image tagged for that greybox shot. The capture uses the selected aspect
-ratio and a 1280-pixel long edge. Editor grid and landmark pins are excluded;
-layout geometry and figure stand-ins remain. **Replace reference image** updates
+ratio and a 1280-pixel long edge. Editor grid, landmark pins, selection highlights
+and anchors excluded from the selected shot are hidden; layout geometry and the
+shot’s chosen figure stand-ins remain. **Replace reference image** updates
 the capture for that shot.
 
 When preparing shot image generation, pick the Environment's captured image as a
@@ -72,6 +96,6 @@ AI drafting sends your instruction and the place description to the chosen
 provider. Editing also includes the current greybox unless you select **Start over**.
 The full-prompt view shows the exact composed text and additions; review these
 before using a remote provider with private location details. Calls run only when
-you press the draft button. Opening the tab, choosing a starter, framing shots and
+you press the draft button. Opening the tab, choosing a starter, editing by hand, framing shots and
 capturing reference images do not call an AI provider. Using a capture in later
 image generation follows that generator's selected provider and input controls.
