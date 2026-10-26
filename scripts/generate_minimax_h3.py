@@ -36,9 +36,11 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
+import tempfile
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -990,7 +992,9 @@ class ProgressWriter:
 
 
 def validate_args(args: argparse.Namespace) -> None:
-    validate_h3_history_args(args, supported=False)
+    interval = validate_h3_history_args(args, supported=True)
+    if interval and (args.image or args.anchor or args.draft_decoder_file):
+        raise SystemExit("H3 MLX history cannot be combined with keyframes or a substituted video VAE.")
     # Everything the H3 checkpoint imposes regardless of runtime — fps, the 32px
     # canvas grid, the 17n+5 frame grid, the sigma floor, keyframe anchoring —
     # lives in the shared module so this runner and the CUDA one cannot drift.
@@ -1058,7 +1062,7 @@ def place_keyframes_on_canvas(images: list, width: int, height: int) -> list:
     return [prepare_keyframe_image(image, height, width, stretch=index == 0) for index, image in enumerate(images)]
 
 
-def render_outputs(pipe, args, images, save_mp4, batch_seeds=None):
+def render_outputs(pipe, args, images, save_mp4, batch_seeds=None, history=None):
     """Render one at a time, retaining weights and only this request's conditioning.
 
     The pipeline already keeps its DiT, VAEs and modulation cache. Cache the
@@ -1085,34 +1089,42 @@ def render_outputs(pipe, args, images, save_mp4, batch_seeds=None):
         base_output = Path(args.output)
         for index, seed in enumerate(batch_seeds or [args.seed]):
             output = base_output if index == 0 else base_output.with_name(f"{base_output.stem}-{index + 1}{base_output.suffix}")
+            if getattr(args, "source_video", None) and output.resolve() == Path(args.source_video).resolve():
+                raise RuntimeError("H3 history source and batch outputs must be different files.")
             if batch_seeds is not None:
                 print(f"STATUS:Rendering video {index + 1}/{len(batch_seeds)} (seed {seed})", file=sys.stderr, flush=True)
             print("STAGE:inference", file=sys.stderr, flush=True)
             progress = ProgressWriter(preview)
             with heartbeat("minimax-h3-inference"), redirect_stdout(progress):
-                result = pipe(
-                    args.prompt,
-                    duration_seconds=args.num_frames / FPS,
-                    num_inference_steps=args.steps,
-                    seed=seed,
-                    images=images or None,
-                    keyframe_anchors=tuple(args.anchor),
-                    height=args.height,
-                    width=args.width,
-                    drop_adaln=True,
-                )
+                if history is not None:
+                    from _minimax_h3_mlx_history import render_history
+
+                    result = render_history(pipe, args, history, seed)
+                else:
+                    result = pipe(
+                        args.prompt,
+                        duration_seconds=args.num_frames / FPS,
+                        num_inference_steps=args.steps,
+                        seed=seed,
+                        images=images or None,
+                        keyframe_anchors=tuple(args.anchor),
+                        height=args.height,
+                        width=args.width,
+                        drop_adaln=True,
+                    )
             progress.flush()
 
             output.parent.mkdir(parents=True, exist_ok=True)
-            wav_path = output.with_suffix(".wav")
             print("STAGE:mux", file=sys.stderr, flush=True)
-            try:
-                save_mp4(output, result.video, result.fps, result.audio, result.sample_rate)
-            finally:
-                wav_path.unlink(missing_ok=True)
-
-            if not output.is_file() or output.stat().st_size == 0:
-                raise RuntimeError(f"MiniMax H3 completed but did not write {output}.")
+            # The pinned muxer writes a sibling WAV and can leave a partial MP4.
+            # Both belong in our scratch directory, never beside a source or a
+            # completed output. Commit only a successfully muxed nonempty file.
+            with tempfile.TemporaryDirectory(prefix=".h3-mux-", dir=output.parent) as scratch:
+                temporary_output = Path(scratch) / output.name
+                save_mp4(temporary_output, result.video, result.fps, result.audio, result.sample_rate)
+                if not temporary_output.is_file() or temporary_output.stat().st_size == 0:
+                    raise RuntimeError(f"MiniMax H3 completed but did not write {output}.")
+                os.replace(temporary_output, output)
             print(
                 f"STATUS:MiniMax H3 saved {output.name} ({result.video.shape[0]} frames with stereo audio)",
                 file=sys.stderr,
@@ -1128,7 +1140,16 @@ def render_outputs(pipe, args, images, save_mp4, batch_seeds=None):
             pipe.text_encoder.encode = encode
 
 
+def install_cancellation_handler() -> None:
+    """Unwind owned mux scratch when the render process group is cancelled."""
+    def terminate(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, terminate)
+
+
 def main() -> int:
+    install_cancellation_handler()
     args = parse_args()
     try:
         batch_seeds = json.loads(args.batch_seeds) if args.batch_seeds else None
@@ -1139,6 +1160,7 @@ def main() -> int:
             or any(type(seed) is not int or not 0 <= seed <= 2 ** 32 - 1 for seed in batch_seeds)):
         raise SystemExit("--batch-seeds requires 2 to 20 unsigned 32-bit integers")
     validate_args(args)
+    interval = validate_h3_history_args(args, supported=True)
     # Read the keyframes first: everything below is a git probe, ~35 HF cache
     # lookups and an mlx/transformers import, so an unreadable conditioning
     # image should not cost seconds before it reports.
@@ -1148,7 +1170,17 @@ def main() -> int:
     # the ffmpeg this runner shells out to mux with.
     establish_process_group()
 
-    require_ffmpeg()
+    ffmpeg = require_ffmpeg()
+
+    runtime_dir = Path(args.runtime_dir).resolve()
+    verify_runtime_checkout(runtime_dir, args.runtime_revision)
+    history = None
+    if interval is not None:
+        from _minimax_h3_mlx_history import read_history_media, report_history, verify_history_backend
+
+        verify_history_backend(runtime_dir, args.runtime_revision)
+        history = read_history_media(args, interval, ffmpeg)
+        report_history(interval)
 
     # Capacity before anything is loaded. PortOS gates this at submit time too;
     # this is the runner-side half, which also catches a render that reached the
@@ -1158,9 +1190,6 @@ def main() -> int:
     # placement report can state what is actually resident rather than what the
     # entry could hold in the worst case.
     apply_memory_limit(args, total_memory_gb, vision_loaded=bool(images))
-
-    runtime_dir = Path(args.runtime_dir).resolve()
-    verify_runtime_checkout(runtime_dir, args.runtime_revision)
 
     emit_runtime_fingerprint(
         "minimax_h3",
@@ -1294,7 +1323,7 @@ def main() -> int:
             [{"path": p, "scale": s} for p, s in zip(args.lora, args.lora_scale)],
         )
 
-    render_outputs(pipe, args, images, save_mp4, batch_seeds)
+    render_outputs(pipe, args, images, save_mp4, batch_seeds, history)
     return 0
 
 
