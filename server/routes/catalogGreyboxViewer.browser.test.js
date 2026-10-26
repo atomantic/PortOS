@@ -270,10 +270,11 @@ async function capturePixels(page, dataBase64, focalLengthMm = 28) {
   }, { dataBase64, focalLengthMm });
 }
 
-const canvasState = page => page.locator('[data-testid="greybox-viewer"] canvas').evaluate(canvas => ({
+const canvasState = (page, { pixels = false } = {}) => page.locator('[data-testid="greybox-viewer"] canvas').evaluate((canvas, pixels) => ({
   width: canvas.width, height: canvas.height, cssWidth: canvas.getBoundingClientRect().width,
-  cssHeight: canvas.getBoundingClientRect().height, pixels: canvas.toDataURL(),
-}));
+  cssHeight: canvas.getBoundingClientRect().height,
+  ...(pixels ? { pixels: canvas.toDataURL() } : {}),
+}), pixels);
 
 async function waitForRedraw(page, previous) {
   await page.waitForFunction(pixels => document.querySelector('[data-testid="greybox-viewer"] canvas').toDataURL() !== pixels, previous.pixels);
@@ -392,9 +393,7 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
         for (const [r, g, b] of pixels.floor) { expect(g).toBeGreaterThan(r * 1.3); expect(g).toBeGreaterThan(b * 1.2); }
         for (const [r, g, b] of pixels.outside) expect(Math.max(r, g, b)).toBeLessThan(60);
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-        const { pixels: _beforePixels, ...beforeSize } = before;
-        const { pixels: _afterPixels, ...afterSize } = await canvasState(page);
-        expect(afterSize).toEqual(beforeSize);
+        expect(await canvasState(page)).toEqual(before);
         expect(ingredient.payload.greybox.shots[0].aspect).toBe(aspect);
       }
       await page.getByRole('tab', { name: 'Plates', exact: true }).click();
@@ -415,15 +414,15 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
     const { page, state, phase } = await openEnvironment(fixture);
     try {
       phase('lens and frame redraw');
-      const original = await canvasState(page);
+      const original = await canvasState(page, { pixels: true });
       await page.getByLabel(/Lens:/).press('ArrowRight');
       await waitForRedraw(page, original);
-      const longerLens = await canvasState(page);
+      const longerLens = await canvasState(page, { pixels: true });
       expect(longerLens.width).toBe(original.width);
       expect(longerLens.height).toBe(original.height);
       await page.getByRole('combobox', { name: /^Frame/ }).selectOption('1:1');
       await waitForRedraw(page, longerLens);
-      const square = await canvasState(page);
+      const square = await canvasState(page, { pixels: true });
       expect(square.cssWidth / square.cssHeight).toBeCloseTo(1, 2);
       const squarePixels = await capturePixels(page, square.pixels.split(',')[1], 29);
       for (const [r, g, b] of squarePixels.floor) { expect(g).toBeGreaterThan(r * 1.3); expect(g).toBeGreaterThan(b * 1.2); }

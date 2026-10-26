@@ -621,6 +621,10 @@ async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false } = {}
   const { getTaskById } = await import('./cosTaskStore.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
   if (!skipPrelude) {
+    const { recoverReleaseSynchronizationHandoffs } = await import('./releaseSynchronization.js');
+    await recoverReleaseSynchronizationHandoffs(agents).catch(error => {
+      emitLog('warn', `Release synchronization handoffs retained: ${error.code || 'outbox-unavailable'}`);
+    });
     await reconcileReleasedSelectionHistory(agents);
     // Replay completed handoffs after restart as well as at their event. Only
     // terminal parents with unfinished delivery qualify; ordinary completed

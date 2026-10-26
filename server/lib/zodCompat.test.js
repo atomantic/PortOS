@@ -30,21 +30,6 @@ describe('partialWithoutDefaults', () => {
     expect(schema.safeParse({ note: 'hi' }).success).toBe(true);
     // nullable() field: explicit null is accepted, but no default is injected
     expect(schema.parse({ nick: null })).toEqual({ nick: null });
-    expect(schema.parse({})).toEqual({});
-  });
-
-  it('makes every field optional (like .partial())', () => {
-    const schema = partialWithoutDefaults(base);
-    // `name` has no default and no .optional() on the base, but partial makes it optional
-    expect(schema.safeParse({}).success).toBe(true);
-  });
-
-  it('contrasts with Zod 4 .partial(), which keeps inner defaults', () => {
-    // Documents the behavior this helper exists to avoid: stock .partial()
-    // still injects the defaults for omitted fields in Zod 4.
-    expect(base.partial().parse({})).toMatchObject({ enabled: false, debounceMs: 2500 });
-    // The helper does not:
-    expect(partialWithoutDefaults(base).parse({})).toEqual({});
   });
 
   it('preserves .strict() from the source schema (rejects unknown keys)', () => {

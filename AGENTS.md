@@ -13,6 +13,18 @@ Every agent must leave discovered problems either fixed and verified or captured
 - **Search before filing.** Reuse an existing issue that covers the finding; add new evidence when useful. For a new issue, include redacted evidence or reproduction steps, expected versus actual behavior, affected files, a chosen next step, and acceptance criteria. Distinguish a suspected flake from a reproduced cause. Follow the owning project's issue conventions; for PortOS, read [portos-file-issue](.claude/skills/portos-file-issue/SKILL.md) and the canonical label guidance in `server/lib/dispatchLabels.js`.
 - **Close the loop.** Report fixes and issue links in the handoff. Chat-only notes and TODO comments do not replace a filed issue. If tracker access fails, report the exact blocker and provide a ready-to-file issue body; never claim it was filed.
 
+## Platform support and issue triage
+
+macOS is the primary interactive app/browser target; Windows is secondary.
+Linux interactive browser compatibility is not a support target. Linux server
+support is unchanged. Before claiming Linux-browser-only work, require a
+supported-target reproduction or concrete shared-code, server, security, or data
+impact. Close demonstrated unsupported-only reports as not planned with evidence;
+uncertain scope is not proof of irrelevance. Headless Linux CI failures can expose
+shared regressions: investigate them and keep required checks honest. Record the
+OS, browser/engine, versions, and headed/headless context; see
+[the triage guidance](docs/CONTRIBUTING.md#platform-support-and-issue-triage).
+
 ## Resolve every accepted finding
 
 PortOS is agent-developed: every accepted review, lint, test, or quality finding
@@ -272,6 +284,7 @@ This policy governs code comments, not user-facing guides or product copy.
 - **No per-branch changelog entries.** PRs do not write a changelog file or fragment — commit messages are the record, and `/do:release` synthesizes the release notes from the commit log since the last tag into `.changelog/v{version}.md`. **Write commit subjects/bodies for a human release-note reader** (see "Git commits and PRs" in the global instructions). Rationale: `.changelog/README.md`.
 - **Release quality snapshot**: after publication, run `npm run quality:snapshot` on the install holding PortOS audit evidence. It publishes numeric local assessments only (no provider calls, no private run prose) into the repo-root `.quality.json` through an immediately-merged pull request; with no local evidence it commits nothing and says so. This publication goes to the next release; never move or delay the frozen candidate to include it.
 - **Versioning**: `package.json` reflects the last release. Do not bump during development — `/do:release` handles it.
+- **Reuse applicable reviews.** Before requesting a review, inspect existing decisions and the reviewed revision/scope. Failed CI or default-branch movement alone is not a reason to request another round. For an already reviewed PR, resolve CI first; request a fresh round only for material unreviewed changes or an explicit reviewer/merge requirement. A main integration may retain approval only when its applicability is verified; preserve the historical reviewed head, never claim a new inspection, and obey GitHub requirements.
 - After each feature or bug fix, review the diff for unnecessary complexity and duplication; use `/simplify` when available, otherwise perform the review directly. Follow the active task's delivery workflow for commit/push; a review-only request does not authorize shipping changes.
 - **Deferred work follows “Don't leave trash on the floor” above.** Make routine design decisions rather than parking an issue for input. PortOS issue labels come only from `MANDATORY_DISPATCH_HINT_GUIDANCE` in `server/lib/dispatchLabels.js`; do not duplicate the vocabulary in instructions.
 - **Never link to AI conversation sessions.** No `claude.ai`, `chatgpt.com`, or other AI chat/session share URL (or "view this conversation" link) in a PR description, commit message, issue, or review comment. Reference durable artifacts instead: issue/PR numbers, commit SHAs, file paths.

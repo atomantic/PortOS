@@ -1,6 +1,7 @@
 /** Fresh delivery evidence for one captured checkout, including partial batches.
  * This never changes the producing agent, its result, or its original policy.
  */
+import { reviewedDeliveryHandoffValid } from './branchCompletionPolicy.js';
 import { execGit } from '../lib/execGit.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
@@ -74,6 +75,32 @@ export async function readCheckoutDeliveryContinuations(input, agents, opts = {}
     }
     return null;
   };
+  const reviewTasks = new Map();
+  const reviewHandoff = async agent => {
+    const target = agent.metadata.reviewLoopMergeTarget;
+    if (target?.url !== prUrl || target.branch !== branch) return null;
+    if (!reviewTasks.has(agent.taskId)) reviewTasks.set(agent.taskId,
+      Promise.resolve().then(async () => (opts.getTaskById || (await import('./cosTaskStore.js')).getTaskById)(agent.taskId)).catch(() => null));
+    const task = await reviewTasks.get(agent.taskId);
+    const source = task?.metadata?.sourceAgentId && byId.get(task.metadata.sourceAgentId);
+    const sourceChain = source && resumeChain(source);
+    if (!sourceChain) return null;
+    const reviewChain = [], seen = new Set();
+    let node = agent;
+    while (node && reviewChain.length < 25 && !seen.has(node.id)) {
+      seen.add(node.id); reviewChain.push(node.id);
+      if (!node.metadata.resumedFromAgentId) break;
+      node = byId.get(node.metadata.resumedFromAgentId);
+    }
+    const handoff = { task: task && { id: task.id, status: task.status, metadata: {
+      sourceAgentId: task.metadata?.sourceAgentId, sourceTaskId: task.metadata?.sourceTaskId,
+      reviewLoopFollowUp: task.metadata?.reviewLoopFollowUp, reviewLoopPRUrl: task.metadata?.reviewLoopPRUrl,
+      reviewLoopPRBranch: task.metadata?.reviewLoopPRBranch, reviewLoopLeaveOpen: task.metadata?.reviewLoopLeaveOpen } },
+      reviewChain, sourceChain };
+    if (!reviewedDeliveryHandoffValid(input, agents, handoff, agent.id)) return null;
+    for (const id of [...reviewChain, ...sourceChain]) if (!await ancestor(captured(byId.get(id))?.head, tip)) return null;
+    return handoff;
+  };
   const evidence = [];
   const historical = new Map();
   // Bounded sequential forge reads, only for a matching completed execution
@@ -81,7 +108,8 @@ export async function readCheckoutDeliveryContinuations(input, agents, opts = {}
   for (const agent of candidates) {
     const capturedRow = captured(agent);
     const moved = capturedRow && !samePath(capturedRow.path, checkoutPath) ? resumeChain(agent) : null;
-    if (!capturedRow || (!samePath(capturedRow.path, checkoutPath) && !moved)) continue;
+    const handoff = capturedRow && !samePath(capturedRow.path, checkoutPath) && !moved ? await reviewHandoff(agent) : null;
+    if (!capturedRow || (!samePath(capturedRow.path, checkoutPath) && !moved && !handoff)) continue;
     const policyUrl = agent.metadata.branchCompletionPolicy?.prUrl;
     const target = agent.metadata.reviewLoopMergeTarget;
     if ((policyUrl != null && !parsePullRequestUrl(policyUrl))
@@ -93,7 +121,7 @@ export async function readCheckoutDeliveryContinuations(input, agents, opts = {}
       evidence.push({ kind: 'captured-merged-delivery', agentId: agent.id, originalPrUrl,
         originalPrHead: originalPrUrl ? retirementForge.prHead : null, originalMergeCommit: originalPrUrl ? retirementForge.mergeCommit : null,
         capturedHead: rows[0].head, capturedAt: rows[0].capturedAt, prUrl, tip, checkoutIncarnation,
-        ...(moved && { resumeChain: moved }) });
+        ...(moved && { resumeChain: moved }), ...(handoff && { reviewHandoff: handoff }) });
       continue;
     }
     if (!historical.has(originalPrUrl)) historical.set(originalPrUrl,

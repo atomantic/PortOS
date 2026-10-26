@@ -1357,6 +1357,23 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
       expect(followUp.metadata.reviewLoopReviewerUsernames).toEqual(['ghost-reviewer']);
       expect(followUp.metadata.reviewLoopReviewerIdentityFaults).toBeUndefined();
     });
+
+    it('blocks a required PR author and records an optional author without dropping other reviewers', async () => {
+      execGhMock.mockImplementation((args) => Promise.resolve(args.includes('repos/test/repo/pulls/61') ? 'Author\n' : '{}'));
+      const blocked = await run({ usernames: ['author'] });
+      expect(addTask).not.toHaveBeenCalled();
+      expect(blocked.join(' ')).toMatch(/Required reviewer configuration fault.*author/i);
+
+      await run({ usernames: ['AUTHOR', 'other'], optionalReviewers: ['@author'] });
+      const [followUp] = addTask.mock.calls[0];
+      expect(followUp.metadata.reviewLoopReviewerUsernames).toEqual(['other']);
+      expect(followUp.metadata.reviewLoopReviewerIdentityFaults).toEqual([
+        expect.objectContaining({ token: 'AUTHOR', reason: expect.stringContaining('PR author') })
+      ]);
+      const section = buildReviewLoopFollowUpSection(followUp.metadata);
+      expect(section).toContain('read back pending requested reviewers and completed reviews');
+      expect(section).toContain('treat the request as failed');
+    });
   });
 
   it('spawns a username-only follow-up on a non-GitHub forge (copilot stripped, username drives the loop)', async () => {

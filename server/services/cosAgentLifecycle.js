@@ -103,11 +103,27 @@ export async function registerAgent(agentId, taskId, metadata = {}) {
 }
 
 export async function updateAgent(agentId, updates) {
+  let completionOwner = null;
+  if (updates.status === 'completed') {
+    const existing = await getAgentRecord(agentId);
+    if (existing?.status !== 'completed' && existing?.metadata?.releasePublication?.synchronizationHandoffVersion === 1) {
+      const { ensureReleaseSynchronization } = await import('./releaseSynchronization.js');
+      await ensureReleaseSynchronization(existing);
+      completionOwner = { taskId: existing.taskId, startedAt: existing.startedAt, identity: existing.metadata.releasePublication.identity };
+    }
+  }
   return withStateLock(async () => {
     const state = await loadState();
 
     if (!state.agents[agentId]) {
       return null;
+    }
+
+    const current = state.agents[agentId];
+    if (updates.status === 'completed' && current.status !== 'completed' && current.metadata?.releasePublication?.synchronizationHandoffVersion === 1
+      && (current.taskId !== completionOwner?.taskId || current.startedAt !== completionOwner?.startedAt
+        || current.metadata.releasePublication.identity !== completionOwner?.identity)) {
+      throw new ServerError('Release synchronization handoff ownership changed before completion', { status: 409 });
     }
 
     // Only forge verification may write publication receipts. Generic updates
@@ -175,7 +191,10 @@ export async function recordAgentReleasePublication(owner, receipt) {
     const previous = agent.metadata.releasePublication;
     if (previous) {
       if (previous.identity !== receipt.identity) throw new ServerError('Release coordinator already recorded a different publication', { status: 409 });
-      return previous;
+      if (previous.synchronizationHandoffVersion === 1 || receipt.synchronizationHandoffVersion !== 1) return previous;
+      // An explicit verification request can enroll a legacy receipt. Startup
+      // recovery alone must never manufacture new provider work from history.
+      receipt = { ...previous, synchronizationHandoffVersion: 1 };
     }
     const updated = { ...agent, metadata: { ...agent.metadata, releasePublication: receipt } };
     await saveState({ ...state, agents: { ...state.agents, [owner.id]: updated } }, { changedAgentIds: [owner.id] });
@@ -451,6 +470,15 @@ export async function retryCompletionCheckoutCapture(agentId, { retirement } = {
 
 export async function completeAgent(agentId, result = {}) {
   const existing = await getAgentRecord(agentId);
+  const publicationIdentity = existing?.metadata?.releasePublication?.identity;
+  let publicationHandoffConfirmed = false;
+  if (existing?.status !== 'completed' && existing?.metadata?.releasePublication?.synchronizationHandoffVersion === 1) {
+    const { ensureReleaseSynchronization } = await import('./releaseSynchronization.js');
+    // All completion paths share this fence, including orphan/error recovery.
+    // Task registration takes the ordinary state lock, so do it before ours.
+    await ensureReleaseSynchronization(existing);
+    publicationHandoffConfirmed = true;
+  }
   if (existing?.metadata?.taskAnalysisType === 'security' && existing.metadata.useRunner) {
     const { settleAgentSecurityScan } = await import('./agentSecurityScan.js');
     const scanner = await settleAgentSecurityScan(agentId);
@@ -491,6 +519,10 @@ export async function completeAgent(agentId, result = {}) {
     // Capture while the state lock still protects this run's active bindings.
     // A later audit must never turn an old branch name into checkout authority.
     const agent = state.agents[agentId];
+    if (agent.metadata?.releasePublication?.synchronizationHandoffVersion === 1 && (!publicationHandoffConfirmed || agent.metadata.releasePublication.identity !== publicationIdentity
+      || agent.startedAt !== existing?.startedAt || agent.taskId !== existing?.taskId)) {
+      throw new ServerError('Release synchronization handoff ownership changed before completion', { status: 409 });
+    }
     let completedCheckouts;
     let checkoutCapture;
     if (hasClaimCheckoutBindings(agent.metadata) || agent.metadata?.isWorktree) {
