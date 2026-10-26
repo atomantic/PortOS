@@ -2676,11 +2676,18 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       expect(await registered(c.path)).toBe(true);
     }
     row.head = rewritten;
-    const originalIncarnation = row.incarnation;
-    row.incarnation = { pointer: { ino: 'different' } };
-    expect(await c.prepare()).toMatchObject({ ok: false });
-    expect(await registered(c.path)).toBe(true);
-    row.incarnation = originalIncarnation;
+    // These holds must survive the real rewritten-delivery fallback as well
+    // as ordinary exact-head policy admission.
+    for (const [target, key, value] of [[attempts[0], 'taskId', 'other-task'], [attempts[0], 'status', 'running'],
+      [attempts[0].metadata.reviewLoopMergeTarget, 'url', 'https://github.com/example/repo/pull/43'],
+      [attempts[0].metadata, 'prCompletionPolicy', 'leave-open'],
+      [row, 'incarnation', { pointer: { ino: 'different' } }]]) {
+      const prior = target[key]; target[key] = value;
+      const refused = await c.prepare();
+      expect(refused, `${key}: ${JSON.stringify(refused)}`).toMatchObject({ ok: false });
+      expect(await registered(c.path)).toBe(true);
+      target[key] = prior;
+    }
     // An explicit original-head policy must bind the captured old head, rather
     // than being replaced with the rewritten tip to make the review pass.
     attempts[0].metadata.branchCompletionPolicy = { branch: c.release.branch, completion: 'review-then-merge',
@@ -3285,7 +3292,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       injected.policies = [...ancestors, agent];
       const differentGeneration = structuredClone(agent.metadata.completedCheckouts[0].incarnation);
       differentGeneration.pointer.ino = String(BigInt(differentGeneration.pointer.ino) + 1n);
-      lineageControls = [[ancestors[0].metadata.completedCheckouts[0], 'incarnation', differentGeneration]];
+      lineageControls = [[ancestors[0], 'taskId', 'unrelated-task'],
+        [ancestors[0].metadata.completedCheckouts[0], 'incarnation', differentGeneration],
+        [ancestors[0].metadata, 'prCompletionPolicy', 'leave-open'], [ancestors[0], 'status', 'running']];
     }
     if (scenario === 'separate-malformed-capture') {
       agent.metadata.completedCheckouts[0].version = 1;
