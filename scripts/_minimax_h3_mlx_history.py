@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
+from fractions import Fraction
 from types import SimpleNamespace
 
 PIN = "fcd9e9b79a1d6018d91ac477c0968de1fa067e49"
@@ -44,18 +46,44 @@ def read_history_media(args, interval: dict, ffmpeg: str):
     import numpy as np
 
     source = str(Path(args.source_video).resolve())
-    common = [ffmpeg, "-v", "error", "-nostdin", "-i", source]
+    # Keep the demuxed timestamps: sample zero in the audio stream need not
+    # coincide with frame zero in the video stream (edits and delayed tracks).
+    # Read the first decoded video's exact clock using the same FFmpeg binary;
+    # no second probe executable or model/runtime dependency is required.
+    probe = subprocess.run([ffmpeg, "-v", "info", "-nostdin", "-copyts", "-i", source,
+                            "-map", "0:v:0", "-vf", "showinfo", "-frames:v", "1",
+                            "-f", "null", "-"], capture_output=True, check=True)
+    metadata = probe.stderr.decode("utf-8", errors="replace")
+    clock = re.search(r"config in time_base: (\d+)/(\d+)", metadata)
+    first = re.search(r"n:\s*0\s+pts:\s*(-?\d+)\s+pts_time:", metadata)
+    if not clock or not first:
+        raise RuntimeError("H3 history video needs timestamps for audio alignment.")
+    origin = Fraction(int(first[1]) * int(clock[1]), int(clock[2]))
+    start = round(origin * 32000) + interval["start_sample"]
+    end = round(origin * 32000) + interval["end_sample"]
+    common = [ffmpeg, "-v", "info", "-nostdin", "-copyts", "-i", source]
     video = subprocess.run(common + [
         "-map", "0:v:0", "-vf",
-        f"fps=24,trim=start_frame={interval['start_frame']}:end_frame={interval['end_frame']},"
+        f"setpts=PTS-STARTPTS,fps=24:start_time=0,trim=start_frame={interval['start_frame']}:end_frame={interval['end_frame']},"
         f"setpts=PTS-STARTPTS,scale={args.width}:{args.height}:flags=lanczos,setsar=1",
         "-frames:v", "17", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
     ], capture_output=True, check=True)
     audio = subprocess.run(common + [
         "-map", "0:a:0", "-af",
-        f"aresample=32000,atrim=start_sample={interval['start_sample']}:end_sample={interval['end_sample']}",
+        f"aresample=32000,atrim=start_pts={start}:end_pts={end},ashowinfo",
         "-ac", "2", "-f", "f32le", "pipe:1",
     ], capture_output=True, check=True)
+    # Every selected sample must cover the requested video-clock interval.
+    # Length alone misses shifted tracks, timestamp gaps and overlaps.
+    cursor = start
+    chunks = re.findall(r"\[Parsed_ashowinfo_[^\]]+\].*?pts:(-?\d+)\s+pts_time:.*?nb_samples:(\d+)",
+                        audio.stderr.decode("utf-8", errors="replace"))
+    for pts, count in chunks:
+        if int(pts) != cursor:
+            raise RuntimeError("H3 history source audio does not cover the exact selected interval.")
+        cursor += int(count)
+    if cursor != end:
+        raise RuntimeError("H3 history source audio does not cover the exact selected interval.")
     samples = interval["end_sample"] - interval["start_sample"]
     if len(video.stdout) != 17 * args.width * args.height * 3 or len(audio.stdout) != samples * 2 * 4:
         raise RuntimeError("H3 history source does not cover the requested video/audio interval.")

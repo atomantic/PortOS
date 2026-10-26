@@ -108,6 +108,43 @@ def check_media():
         video, waveform = read_history_media(args, interval, ffmpeg)
         np.testing.assert_array_equal(video, frames[24:41])
         np.testing.assert_array_equal(waveform, audio[32000:54667].T.astype(np.float32) / 32768)
+        # The timeline belongs to the video, not to audio sample zero. Use
+        # nonzero global timestamps and independent audio starts in both
+        # directions; these would return full-length but wrong audio before.
+        shifted = root / 'shifted.mkv'
+        for delay, expected_start in [(0.25, 24000), (-0.25, 40000)]:
+            subprocess.run([ffmpeg, '-v', 'error', '-nostdin', '-y', '-i', str(source),
+                            '-itsoffset', str(delay), '-i', str(wav), '-map', '0:v:0', '-map', '1:a:0',
+                            '-c', 'copy', '-output_ts_offset', '2', str(shifted)],
+                           capture_output=True, check=True)
+            shifted_args = NS(**(vars(args) | {'source_video': str(shifted)}))
+            shifted_video, shifted_audio = read_history_media(shifted_args, interval, ffmpeg)
+            np.testing.assert_array_equal(shifted_video, frames[24:41])
+            np.testing.assert_array_equal(shifted_audio,
+                                          audio[expected_start:expected_start + 22667].T.astype(np.float32) / 32768)
+        # A delayed stream still has enough samples when counted from its own
+        # start, but it cannot cover the selected video's first quarter second.
+        subprocess.run([ffmpeg, '-v', 'error', '-nostdin', '-y', '-i', str(source),
+                        '-itsoffset', '1.25', '-i', str(wav), '-map', '0:v:0', '-map', '1:a:0',
+                        '-c', 'copy', '-output_ts_offset', '2', str(shifted)],
+                       capture_output=True, check=True)
+        try:
+            read_history_media(shifted_args, interval, ffmpeg)
+            raise AssertionError('incomplete timestamp coverage accepted')
+        except RuntimeError as exc:
+            assert 'exact selected interval' in str(exc)
+        # A missing interior span is also incomplete coverage, even when
+        # the file's audio begins early enough and extends past the interval.
+        subprocess.run([ffmpeg, '-v', 'error', '-nostdin', '-y', '-i', str(source),
+                        '-map', '0:v:0', '-map', '0:a:0', '-c:v', 'copy', '-c:a', 'pcm_s16le',
+                        '-af', 'asetpts=PTS+gte(T\\,1.25)*0.25/TB', str(shifted)],
+                       capture_output=True, check=True)
+        try:
+            read_history_media(shifted_args, interval, ffmpeg)
+            raise AssertionError('interior audio timestamp gap accepted')
+        except RuntimeError as exc:
+            assert 'exact selected interval' in str(exc)
+        shifted.unlink()
         args.history_end_frame = 100
         try:
             read_history_media(args, validate_h3_history_args(args, supported=True), ffmpeg)
