@@ -14,6 +14,7 @@ import { execFile, execFileSync } from './childProcess.js';
 import { promisify } from 'util';
 import { accessSync, constants, existsSync, statSync } from 'fs';
 import { delimiter, isAbsolute, join, resolve, win32 } from 'path';
+import { PATHS } from './paths.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = process.platform === 'win32';
@@ -25,7 +26,15 @@ export function stripDebugMallocEnv(env) {
 }
 
 export function safeChildProcessEnv(extra = {}) {
-  return stripDebugMallocEnv({ ...process.env, ...extra });
+  return withTorchCompilerCacheEnv(stripDebugMallocEnv({ ...process.env, ...extra }));
+}
+
+// PyTorch's Windows default cache asks getpass for an account name, which a
+// projected agent environment need not contain. Keep compiled artifacts local
+// without inventing an identity or expanding credential inheritance.
+export function withTorchCompilerCacheEnv(env, cacheRoot = join(PATHS.data, 'cache')) {
+  if (process.platform !== 'win32' || env.TORCHINDUCTOR_CACHE_DIR) return env;
+  return { ...env, TORCHINDUCTOR_CACHE_DIR: join(cacheRoot, 'torchinductor') };
 }
 
 // Canonical options for background server subprocesses. PM2 detaches PortOS
@@ -47,7 +56,7 @@ const SAFE_CLI_BASE_ENV_KEYS = new Set([
   'NVM_DIR', 'NVM_BIN', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'CODEX_HOME',
   'SSL_CERT_FILE', 'SSL_CERT_DIR', 'EDITOR', 'VISUAL', 'PORTOS_REAL_PM2',
   'SystemRoot', 'SystemDrive', 'ComSpec', 'PATHEXT', 'USERPROFILE', 'APPDATA',
-  'LOCALAPPDATA', 'ProgramData', 'ProgramFiles', 'HOMEDRIVE', 'HOMEPATH',
+  'TORCHINDUCTOR_CACHE_DIR', 'LOCALAPPDATA', 'ProgramData', 'ProgramFiles', 'HOMEDRIVE', 'HOMEPATH',
   'AWS_REGION', 'AWS_DEFAULT_REGION', 'SSH_AUTH_SOCK', 'GH_TOKEN', 'GITHUB_TOKEN',
 ]);
 
