@@ -5,6 +5,9 @@ import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepSummary } from './lib/githubOutput.js';
 
+// Run-level errors plus five bounded assertion records and module progress.
+export const RUN_DIAGNOSTIC_MAX_BYTES = 320_000;
+
 const repoRoot = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/');
 
 // Publish repository identities only; never expose a runner's private paths.
@@ -102,7 +105,7 @@ export async function collectTestDiagnostics(root, {
       lines.push('Diagnostic gap: invocation metadata unavailable; launcher completion is unverified.');
     }
     try {
-      const run = readReport(join(dir, 'run.json'), 160_000);
+      const run = readReport(join(dir, 'run.json'), RUN_DIAGNOSTIC_MAX_BYTES);
       if (!Array.isArray(run.activeModules) || !Array.isArray(run.completedModules)
         || !Number.isInteger(run.completedCount) || !Number.isInteger(run.errorCount)) throw Error('invalid progress');
       const reason = ['passed', 'failed', 'interrupted', 'not-finished'].includes(run.reason) ? run.reason : 'unavailable';

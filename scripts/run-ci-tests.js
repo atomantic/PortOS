@@ -13,7 +13,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { formatErrorAnnotation, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
-import { collectionDiagnostic, diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
+import { RUN_DIAGNOSTIC_MAX_BYTES, collectionDiagnostic, diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
 import { browserShardSlice } from './lib/browserSuites.js';
 import { browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
@@ -164,7 +164,7 @@ export function structuredFailureDiagnostics(reportPath, runReportPath) {
   const lines = [];
   if (runReportPath) {
     try {
-      if (statSync(runReportPath).size > 160_000) throw new Error('run report exceeds limit');
+      if (statSync(runReportPath).size > RUN_DIAGNOSTIC_MAX_BYTES) throw new Error('run report exceeds limit');
       const run = JSON.parse(readFileSync(runReportPath, 'utf8'));
       if (!Array.isArray(run.errors) || !run.errors.every(error => typeof error === 'string')) {
         throw new Error('invalid run report schema');
@@ -272,7 +272,7 @@ export async function runNpm(scope, script, extraArgs, { env = process.env, sign
 
 function readCollectionReport(path) {
   try {
-    if (statSync(path).size > 160_000) return null;
+    if (statSync(path).size > RUN_DIAGNOSTIC_MAX_BYTES) return null;
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch { return null; }
 }

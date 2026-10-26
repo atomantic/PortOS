@@ -151,6 +151,8 @@ describe('release-only assertion collection (#13759)', () => {
     expect(ciTestBail({ npm_lifecycle_event: 'test:db:ci' })).toBe(1);
     expect(ciTestBail({ npm_lifecycle_event: 'test' })).toBeUndefined();
     expect(releaseCandidateDiagnostics({})).toBe(false);
+    expect(releaseCandidateDiagnostics({ ...policyEnv, GITHUB_HEAD_REF: 'codex/release-1/fix' })).toBe(true);
+    expect(releaseCandidateDiagnostics({ ...policyEnv, GITHUB_HEAD_REF: 'codex/release-' })).toBe(true);
     for (const patch of [{ GITHUB_BASE_REF: 'main' }, { GITHUB_EVENT_NAME: 'schedule' },
       { GITHUB_HEAD_REF: 'ordinary-feature' }, { PORTOS_CI_HEAD_REPOSITORY: 'other/fork' }]) {
       expect(() => releaseCandidateDiagnostics({ ...policyEnv, ...patch })).toThrow(/frozen candidate/);

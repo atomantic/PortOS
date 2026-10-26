@@ -6,7 +6,7 @@ export function releaseCandidateDiagnostics(env = process.env) {
   if (!env.PORTOS_CI_TEST_POLICY) return false;
   if (env.PORTOS_CI_TEST_POLICY !== 'release-candidate'
     || env.GITHUB_EVENT_NAME !== 'pull_request' || env.GITHUB_BASE_REF !== 'release'
-    || !/^codex\/release-[\w.-]+$/.test(env.GITHUB_HEAD_REF ?? '')
+    || !env.GITHUB_HEAD_REF?.startsWith('codex/release-')
     || !env.GITHUB_REPOSITORY || env.PORTOS_CI_HEAD_REPOSITORY !== env.GITHUB_REPOSITORY) {
     throw new Error('Release-candidate diagnostics require a same-repository frozen candidate PR into release.');
   }
