@@ -89,7 +89,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // mirrored into the embedded entry). A <=v14 peer's `sanitizePlace` would strip
   // it on an unrelated Universe edit and LWW the loss back. The catalog gate stays
   // put: catalog peer-receive stores the payload verbatim.
-  universes: 15,
+  // v16 = optional generation/finishing visual profile. Older sanitizers strip it.
+  universes: 16,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode

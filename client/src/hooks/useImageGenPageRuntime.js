@@ -38,7 +38,8 @@ import { musicVideoFilingFields } from '../lib/musicVideoFiling';
 // The style presets folded into the prompt, recorded beside it on the render (#11317).
 const promptAdditionsField = (presets) => {
   const additions = stylePromptAdditions(presets);
-  return additions.length ? { promptAdditions: additions } : {};
+  const profile = presets.find(preset => preset?.visualProfile)?.visualProfile;
+  return { ...(additions.length ? { promptAdditions: additions } : {}), ...(profile ? { visualProfileOverride: profile } : {}) };
 };
 
 const IMAGE_QUEUE_EVENTS = ['media-jobs:changed'];

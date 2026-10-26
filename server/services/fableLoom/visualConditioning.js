@@ -9,6 +9,7 @@
 
 import { basename, join } from 'node:path';
 import { stat } from 'node:fs/promises';
+import { resolveUniverseVisualProfile } from '../../lib/universeVisualProfile.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, resolveImageInputPath, sha256File } from '../../lib/fileUtils.js';
 import { characterIdentityPackReadiness } from '../../lib/storyBible.js';
@@ -24,7 +25,7 @@ import { resolveCharacterLoras } from '../characterLoraResolver.js';
 import { getSeries } from '../pipeline/series.js';
 import { getLoom } from './records.js';
 
-export const FABLELOOM_VISUAL_COMPILER_VERSION = '1.1.0';
+export const FABLELOOM_VISUAL_COMPILER_VERSION = '1.2.0';
 
 const byId = (list) => new Map((Array.isArray(list) ? list : []).filter((item) => item?.id).map((item) => [item.id, item]));
 const text = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -397,6 +398,7 @@ export async function compileFableLoomVisualRequest({
   const manifest = {
     version: 1,
     compilerVersion: FABLELOOM_VISUAL_COMPILER_VERSION,
+    visualProfile: resolveUniverseVisualProfile(universe, undefined, series),
     status: manifestStatus({ locked, omitted, warnings }),
     universeId: universe.id,
     capability,
@@ -423,6 +425,7 @@ export async function compileFableLoomVisualRequest({
     prompt: positive,
     negativePrompt,
     promptAdditions,
+    visualProfile: resolveUniverseVisualProfile(universe, undefined, series),
     referenceImagePaths: allocation.accepted.map((asset) => asset.path),
     referenceImageStrengths: referenceStrengths(allocation.accepted),
     loraFilenames: adapters.map((adapter) => adapter.filename),

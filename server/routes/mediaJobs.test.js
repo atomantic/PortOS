@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import { naturalUniverseVisualProfile } from '../lib/universeVisualProfile.js';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { validateVideoRetryParams } from '../services/videoGen/prepareParams.js';
@@ -836,4 +837,28 @@ it('projects local holds on the array list and validates explicit resume', async
   expect((await request(app).post(`/api/media-jobs/holds/${holdId}/resume`).send({ retry: true })).status).toBe(400);
   stubs.resumeVideoHold.mockResolvedValue(false);
   expect((await request(app).post(`/api/media-jobs/holds/${holdId}/resume`).send({})).status).toBe(404);
+});
+
+
+describe('image profile retry contracts', () => {
+  beforeEach(() => { jobStore.clear(); vi.clearAllMocks(); });
+  it('changes finishing on the saved source, rejects photography changes and invalidates it for effective generation changes', async () => {
+    const profile = naturalUniverseVisualProfile();
+    const source = { filename: 'example-source.png' };
+    jobStore.set('profile-retry', { id: 'profile-retry', kind: 'image', status: 'failed', params: { mode: 'codex', effort: 'high', prompt: 'Example', visualProfile: profile, visualProfileSource: source } });
+    const original = jobStore.get('profile-retry');
+    const app = makeApp();
+    const finishing = { ...profile, finishing: { ...profile.finishing, mode: 'save' } };
+    const result = await request(app).post('/api/media-jobs/profile-retry/retry').send({ params: { visualProfile: finishing } });
+    expect(result.status).toBe(200);
+    expect(stubs.enqueueJob.mock.calls.at(-1)[0].params).toMatchObject({ visualProfile: finishing, visualProfileSource: source });
+    expect(stubs.enqueueJob.mock.calls.at(-1)[0].params.visualProfileRevision).toMatch(/^[a-f0-9]{64}$/);
+    jobStore.set('profile-retry', original);
+    const changed = { ...profile, generation: { ...profile.generation, lighting: 'Different light' } };
+    expect((await request(app).post('/api/media-jobs/profile-retry/retry').send({ params: { visualProfile: changed } })).status).toBe(409);
+    expect((await request(app).post('/api/media-jobs/profile-retry/retry').send({ params: { visualProfileSource: source } })).status).toBe(400);
+    expect((await request(app).post('/api/media-jobs/profile-retry/retry').send({ params: { effort: 'default' } })).status).toBe(200);
+    expect(stubs.enqueueJob.mock.calls.at(-1)[0].params).not.toHaveProperty('visualProfileSource');
+    expect(stubs.enqueueJob.mock.calls.at(-1)[0].params).not.toHaveProperty('effort');
+  });
 });

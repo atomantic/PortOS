@@ -163,7 +163,7 @@ describe('dataSync — universe category', () => {
     const snap = await dataSync.getSnapshot('universe');
     expect(snap.portosMeta).toBeDefined();
     expect(typeof snap.portosMeta.portosVersion).toBe('string');
-    expect(snap.portosMeta.schemaVersions.universes).toBe(15);
+    expect(snap.portosMeta.schemaVersions.universes).toBe(16);
   });
 
   it('applyRemote rejects when sender schemaVersions are AHEAD of local code', async () => {

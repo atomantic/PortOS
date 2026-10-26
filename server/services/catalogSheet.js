@@ -1,3 +1,4 @@
+import { normalizeUniverseVisualProfile } from '../lib/universeVisualProfile.js';
 import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
 /**
  * Catalog reference sheets: a sheet for a catalog record without needing a
@@ -217,6 +218,11 @@ async function resolveSheetTarget(id, options) {
 // Presence is checked without rewriting authored text. Board pins alone are
 // not a style definition: use the board's explicitly composed style prompt.
 async function lookDirection(universe, options) {
+  const authored = options.visualDirection || {};
+  const profile = normalizeUniverseVisualProfile(options.visualProfileOverride === undefined ? universe?.visualProfile : options.visualProfileOverride);
+  const generation = profile?.generation.enabled ? profile.generation : {};
+  const effectiveProfile = profile ? { ...profile, generation: { ...profile.generation, ...(authored.camera ? { optics: '' } : {}), ...(authored.lighting ? { lighting: '' } : {}) } } : null;
+  const styledUniverse = universe ? { ...universe, visualProfile: effectiveProfile } : null;
   const boardId = options.moodBoardId ?? universe?.moodBoardId;
   const board = boardId ? await getBoard(boardId) : null;
   if (boardId && !board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
@@ -225,21 +231,22 @@ async function lookDirection(universe, options) {
   const add = (id, label, text) => {
     if (hasText(text)) additions.push({ id, label, text });
   };
-  add('universe-style', `Universe style · ${universe?.name || ''}`, universe ? universeAestheticLine(universe) : '');
+  add('universe-style', `Universe style · ${universe?.name || ''}`, styledUniverse ? universeAestheticLine(styledUniverse) : '');
   add('universe-style-notes', 'Universe style notes', universe?.styleNotes);
   for (const [index, ref] of (universe?.styleReferences || []).entries()) {
     add(`universe-style-reference-${index}`, ref.title || 'Universe style reference', ref.prompt);
   }
   add('mood-board-style', `Mood board style · ${board?.name || ''}`, board?.style?.prompt);
-  const authored = options.visualDirection || {};
   const hasSourceStyle = additions.length > 0;
   const fields = { style: 'Overall style / medium', camera: 'Camera', lighting: 'Lighting', environment: 'Environment' };
   for (const [key, label] of Object.entries(fields)) add(`look-${key}`, label, authored[key]);
-  const missing = Object.entries(fields).filter(([key]) => !hasText(authored[key]) && !(key === 'style' && hasSourceStyle)).map(([, label]) => label);
+  const defaults = { camera: generation.optics, lighting: generation.lighting };
+  const missing = Object.entries(fields).filter(([key]) => !hasText(authored[key]) && !hasText(defaults[key]) && !(key === 'style' && hasSourceStyle)).map(([, label]) => label);
   return {
+    profile: effectiveProfile,
     additions,
     styleLine: additions.map((a) => `${a.label}: ${a.text}`).join('\n\n'),
-    negatives: [...universeVisualStyleTokens(universe).avoid, board?.style?.negativePrompt].filter(hasText).join(', '),
+    negatives: [...universeVisualStyleTokens(styledUniverse).avoid, board?.style?.negativePrompt].filter(hasText).join(', '),
     status: {
       ready: missing.length === 0,
       missing,
@@ -250,7 +257,8 @@ async function lookDirection(universe, options) {
 }
 
 async function buildCatalogSheet(target, options) {
-  const { ingredient, payload, variant, universe } = target;
+  const { ingredient, payload, variant } = target;
+  const universe = target.universe ? { ...target.universe, visualProfile: options.visualProfileOverride === undefined ? target.universe.visualProfile : options.visualProfileOverride } : null;
   const entry = { ...payload, name: ingredient.name };
   // Other sheets retain their default style; looks require explicit direction.
   const direction = variant.id === CATALOG_LOOK_VARIANT_ID ? await lookDirection(universe, options) : null;
@@ -260,6 +268,7 @@ async function buildCatalogSheet(target, options) {
   const result = await buildSheetRenderParams({
     built,
     options,
+    visualProfile: direction ? direction.profile : (options.visualProfileOverride === undefined ? universe?.visualProfile : options.visualProfileOverride),
     styleLine: direction ? '' : universeStyle || variant.defaultStyle,
     styleChip: universeStyle
       ? { id: 'universe-style', label: 'Universe style' }

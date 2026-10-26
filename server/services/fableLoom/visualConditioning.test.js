@@ -126,7 +126,7 @@ describe('FableLoom visual conditioning compiler', () => {
     expect(result.visualConditioning.compiledPrompt).toBe(result.prompt);
     expect(result.visualConditioning.compiledNegativePrompt).toBe(result.negativePrompt);
     expect(result.visualConditioning).toMatchObject({
-      status: 'locked', compilerVersion: '1.1.0', universeId: universe.id,
+      status: 'locked', compilerVersion: '1.2.0', universeId: universe.id,
       temporalSourceNodeId: 'opening',
       bindings: { inferred: false, placeId: 'place-1', objectIds: ['object-1'] },
       adapters: [{ filename: 'aria-v2.safetensors', scale: 0.75, sha256: 'a'.repeat(64) }],

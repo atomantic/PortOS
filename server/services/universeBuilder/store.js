@@ -143,6 +143,7 @@ function makeFileBackend(dir) {
           id: r.id,
           name: r.name,
           influences: r.influences,
+          visualProfile: r.visualProfile,
           stylePrompt: r.stylePrompt,
           negativePrompt: r.negativePrompt,
           createdAt: r.createdAt,

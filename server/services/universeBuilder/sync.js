@@ -52,6 +52,7 @@ const ADDITIVE_UNIVERSE_FIELD_VERSIONS = Object.freeze({
   moodBoardId: 9,
   // v12 — factual/fiction axis (#7616). Persisted only when true.
   factual: 12,
+  visualProfile: 16,
 });
 
 /**

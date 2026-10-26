@@ -147,17 +147,20 @@ export function initUniverseBuilderCollectionHook() {
       // Collection filing only when a collection target is present — section-
       // local renders skip it (no gallery membership, just the entry-ref
       // append below).
-      const addItemCall = () => {
-        if (!hasCollection) return Promise.resolve(null);
-        return addItem(tag.collectionId, { kind: 'image', ref: filename })
-          .then(() => 'added')
-          .catch((err) => {
-            // A duplicate (same filename rendered twice in the same run) is
-            // expected when batchPerVariation > 1 and the gen output collides.
-            if (err?.code === ERR_DUPLICATE) return 'duplicate';
-            console.log(`⚠️ universe-builder collection hook failed for ${filename}: ${err?.message || String(err)}`);
+      const addItemCall = async () => {
+        if (!hasCollection) return null;
+        let added = false;
+        for (const ref of [filename, job.result?.finishedVariant?.filename].filter(Boolean)) {
+          try {
+            await addItem(tag.collectionId, { kind: 'image', ref });
+            added = true;
+          } catch (err) {
+            if (err?.code === ERR_DUPLICATE) continue;
+            console.log(`⚠️ universe-builder collection hook failed for ${ref}: ${err?.message || String(err)}`);
             return 'failed';
-          });
+          }
+        }
+        return added ? 'added' : 'duplicate';
       };
 
       // Append the rendered filename to the source entry's `imageRefs[]` so

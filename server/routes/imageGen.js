@@ -14,6 +14,8 @@ import { assertCatalogIdentityWritable } from '../services/catalogDB/identityAcc
 import { createImageGalleryHandlers } from './imageGalleryRead.js';
 import { Router } from 'express';
 import { z } from 'zod';
+import { applyImageVisualProfile } from '../services/imageGen/visualProfile.js';
+import { finishVisualProfileImage } from '../services/imageGen/finishVisualProfile.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
   validateRequest, modelDownloadQuerySchema, modelDownloadParamsSchema, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
@@ -33,7 +35,8 @@ import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded } from '../lib/fileUtils.js';
 import { prepareGenerateParams, resolveLocalImageModel, selectLocalImageModelFromSettings } from '../services/imageGen/prepareParams.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
-import { applyFilmLookBake } from '../services/imageGen/filmLookBake.js';
+import { applyFilmLookBake, readFilmLookSource } from '../services/imageGen/filmLookBake.js';
+import { universeVisualProfileSchema } from '../lib/universeVisualProfileValidation.js';
 import { previewImagePrompt } from '../services/imageGen/promptPreview.js';
 import { filmLookBakeSchema } from '../lib/filmLookValidation.js';
 import { join, basename } from 'node:path';
@@ -128,6 +131,7 @@ const generateSchema = z.object({
   // prompt arrives as `undefined`; default it to '' rather than rejecting.
   prompt: noNulPrompt.optional().default(''),
   negativePrompt: noNulPrompt.optional(),
+  visualProfileOverride: universeVisualProfileSchema.nullable().optional(),
   // Per-request backend override. If omitted, the dispatcher uses
   // `imageGen.mode` from settings.json.
   mode: z.enum(IMAGE_GEN_MODES).optional(),
@@ -399,6 +403,11 @@ router.post('/:filename/film-look', asyncHandler(async (req, res) => {
   res.json(await applyFilmLookBake({ filename, sourceMeta, look }));
 }));
 
+router.get('/:filename/film-look-source', asyncHandler(async (req, res) => {
+  const { filename, path } = await readFilmLookSource(req.params.filename);
+  res.json({ filename, path });
+}));
+
 // Visible-watermark removal — erases the Gemini / Nano-Banana bottom-right ✦.
 // Body is optional: with no fields the corner box is auto-sized to the
 // sparkle's typical footprint. `size` overrides the square side; `region`
@@ -548,6 +557,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       authoredNegativePrompt: params.negativePrompt,
     });
     if (compiled) {
+      Object.assign(params, applyImageVisualProfile({ ...params, prompt: compiled.prompt, negativePrompt: compiled.negativePrompt }, compiled.visualProfile));
       params.prompt = compiled.prompt;
       params.negativePrompt = compiled.negativePrompt;
       // The compiler's canon blocks, listed beside what the scene's own request listed (#11317).
@@ -742,7 +752,8 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
     await assertRevisionOpen(params.musicVideo.projectId, params.musicVideo.revisionId, { sceneId: params.musicVideo.sceneId, kind: 'image' });
   }
-  const result = await imageGen.generateImage(params);
+  let result = await imageGen.generateImage(params);
+  if (params.visualProfile && result?.filename) result = await finishVisualProfileImage({ result, profile: params.visualProfile, signal: new AbortController().signal });
   if (params.musicVideoProjectId && result?.filename) {
     const { fileIntoMusicVideoCollection } = await import('../services/musicVideoCollectionHook.js');
     await fileIntoMusicVideoCollection(params.musicVideoProjectId, [{ kind: 'image', ref: result.filename }]);

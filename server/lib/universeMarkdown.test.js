@@ -216,3 +216,9 @@ describe('parseUniverseMarkdown', () => {
     );
   });
 });
+
+// A machine-readable recipe must survive the human-readable bible export too.
+it('round trips a visual profile without treating its strings as Markdown headings', () => {
+  const profile = { version: 1, generation: { enabled: true, lighting: 'Window light\n## Still a prompt' }, finishing: { mode: 'off' } };
+  expect(parseUniverseMarkdown(universeToMarkdown({ name: 'Example', visualProfile: profile })).visualProfile).toEqual(profile);
+});

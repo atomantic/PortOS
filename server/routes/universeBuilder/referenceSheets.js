@@ -1,3 +1,4 @@
+import { universeVisualProfileSchema } from '../../lib/universeVisualProfileValidation.js';
 /**
  * Character reference sheets: the variant catalog plus render/delete of a
  * single character's sheet.
@@ -36,6 +37,7 @@ router.get('/reference-sheet-variants', asyncHandler(async (_req, res) => {
 // subscribes to SSE for progress, and the server-side completion handler
 // stamps the variant's pointer on success.
 const renderReferenceSheetSchema = z.object({
+  visualProfileOverride: universeVisualProfileSchema.nullable().optional(),
   variant: z.string().trim().min(1).max(48).optional(),
   overridePrompt: z.string().trim().max(8000).optional(),
   overrideNegativePrompt: z.string().trim().max(2000).optional(),

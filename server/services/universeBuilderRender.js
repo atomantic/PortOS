@@ -9,6 +9,8 @@
  * The route handler becomes: validate → renderUniverseJobs → res.json.
  */
 
+import { applyImageVisualProfile } from './imageGen/visualProfile.js';
+import { resolveUniverseVisualProfile } from '../lib/universeVisualProfile.js';
 import { randomUUID } from 'crypto';
 import * as svc from './universeBuilder.js';
 import { assertMediaQueueRoom, enqueueJob, partialBatchAdmissionError } from './mediaJobQueue/index.js';
@@ -34,6 +36,7 @@ import { ServerError } from '../lib/errorHandler.js';
  */
 export async function renderUniverseJobs(universeId, body, mapServiceError) {
   const universe = await svc.getUniverse(universeId).catch((err) => { throw mapServiceError(err); });
+  const visualProfile = resolveUniverseVisualProfile(universe, body.visualProfileOverride);
 
   // Resolve a style preset (server-side authoritative list) so the embrace
   // tokens are deterministic for this render even if the client sent a stale
@@ -43,6 +46,7 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
   // option name (avoids shadowing `negativePrompt` on each compiled item).
   const compiled = svc.compilePrompts(universe, {
     promptMode: body.promptMode,
+    visualProfileOverride: body.visualProfileOverride,
     selection: body.selection,
     sheetSelection: body.sheetSelection,
     canonSelection: body.canonSelection,
@@ -162,7 +166,7 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
     createdAt: new Date().toISOString(),
   });
   for (const item of compiled) {
-    const params = {
+    const params = applyImageVisualProfile({
       ...baseParams,
       prompt: item.prompt,
       negativePrompt: item.negativePrompt || undefined,
@@ -185,7 +189,7 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
         label: item.label,
         entryRef: item.entryRef,
       }),
-    };
+    }, visualProfile);
     // The queue dispatches directly to imageGen/{codex,local}.generateImage,
     // bypassing imageGen/index.js's dispatcher that resolves cleaners for
     // direct callers. Resolve here so the per-mode cleanC2PA + denoise

@@ -78,6 +78,7 @@ export default function QuickImagePrompt() {
     // on its own).
     const styled = composeForSubmit(text);
     const result = await generateImage({
+      ...(stylePreset?.visualProfile ? { visualProfileOverride: stylePreset.visualProfile } : {}),
       prompt: styled.prompt,
       negativePrompt: styled.negativePrompt,
       width,

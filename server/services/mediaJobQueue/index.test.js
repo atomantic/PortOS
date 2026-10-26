@@ -63,6 +63,7 @@ const stubs = {
   generateVideoFal: vi.fn(async () => ({ jobId: 'whatever' })),
   generateChainedVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImage: vi.fn(async () => ({ jobId: 'whatever' })),
+  finishVisualProfile: vi.fn(),
   generateImageCodex: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImageFal: vi.fn(async () => ({ jobId: 'whatever' })),
   generateAudio: vi.fn(async () => ({ jobId: 'whatever' })),
@@ -142,6 +143,7 @@ vi.mock('../videoGen/fal.js', () => ({
   cancel: (...args) => stubs.cancelVideo(...args),
 }));
 
+vi.mock('../imageGen/finishVisualProfile.js', () => ({ finishVisualProfileImage: (...args) => stubs.finishVisualProfile(...args) }));
 vi.mock('../imageGen/local.js', () => ({
   generateImage: (...args) => stubs.generateImage(...args),
   cancel: (...args) => stubs.cancelImage(...args),
@@ -800,6 +802,60 @@ describe('mediaJobQueue', () => {
     videoGenEvents.emit('failed', { generationId: blocker.jobId, error: 'cleanup' });
     if (resolveBlocker) resolveBlocker();
     await flush();
+  });
+
+  it('keeps an image running through its finish and retains the ungraded reference', async () => {
+    let finish;
+    stubs.generateImageCodex.mockImplementation(async () => ({}));
+    stubs.finishVisualProfile.mockImplementation(({ result }) => new Promise(resolve => { finish = () => resolve({ ...result, finishedVariant: { filename: 'example-finished.png' } }); }));
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'Example', visualProfile: { version: 1 } } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'example-source.png' });
+    await waitFor(() => typeof finish === 'function');
+    expect(mediaJobQueue.getJob(jobId).status).toBe('running');
+    expect(mediaJobQueue.getJob(jobId).params.visualProfileSource.filename).toBe('example-source.png');
+    finish();
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'completed');
+    expect(mediaJobQueue.getJob(jobId).result).toMatchObject({ filename: 'example-source.png', finishedVariant: { filename: 'example-finished.png' } });
+  });
+
+  it('cancels the finish browser independently after the provider has settled', async () => {
+    stubs.generateImageCodex.mockImplementation(async () => ({}));
+    stubs.finishVisualProfile.mockImplementation(({ signal }) => new Promise((_resolve, reject) => { signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }));
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'Example', visualProfile: { version: 1 } } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'example-source.png' });
+    await waitFor(() => stubs.finishVisualProfile.mock.calls.length === 1);
+    expect((await mediaJobQueue.cancelJob(jobId)).ok).toBe(true);
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'canceled');
+    expect(stubs.cancelImageCodex).not.toHaveBeenCalled();
+    expect(mediaJobQueue.getJob(jobId).result.filename).toBe('example-source.png');
+  });
+
+  it('retries a failed local finish from its durable source without another image provider call', async () => {
+    stubs.generateImageCodex.mockImplementation(async () => ({}));
+    stubs.finishVisualProfile.mockRejectedValueOnce(new Error('Browser unavailable')).mockImplementation(async ({ result }) => result);
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'Example', visualProfile: { version: 1 } } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'example-source.png' });
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'failed');
+    const failed = mediaJobQueue.getJob(jobId);
+    expect(failed.error).toContain('original image retained');
+    const retry = await mediaJobQueue.enqueueJob({ kind: 'image', params: failed.params });
+    await waitFor(() => mediaJobQueue.getJob(retry.jobId).status === 'completed');
+    expect(stubs.generateImageCodex).toHaveBeenCalledTimes(1);
+    expect(mediaJobQueue.getJob(retry.jobId).result.filename).toBe('example-source.png');
+  });
+
+  it('finishes a settled remote source locally without acquiring or retaining a peer reservation', async () => {
+    stubs.finishVisualProfile.mockImplementation(async ({ result }) => result);
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: {
+      remoteMedia: remoteImageMediaParams(), visualProfile: { version: 1 }, visualProfileSource: { filename: 'settled-source.png' },
+    } });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+    expect(mediaJobQueue.getJob(job.jobId).params.remotePeerReservation).not.toBe(true);
+    expect(stubs.finishVisualProfile).toHaveBeenCalledTimes(1);
+    expect(stubs.generateImageCodex).not.toHaveBeenCalled();
   });
 
   it('worker drains a queued video job and marks it completed on the gen completed event', async () => {
