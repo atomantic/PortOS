@@ -127,11 +127,16 @@ export async function spawnAndWatchVideo({
   const persistTermination = async (exitCode, signal, reason) => {
     // The pre-launch receipt gates execution; later diagnostics must never
     // replace a known render outcome or an admission refusal.
+    clearTimeout(memoryTimer);
+    memoryTimer = null;
     try {
-      await flushMemoryEvidence();
-      await recordVideoExecutionDiagnostics(jobId, { termination: {
-        exitCode, signal, reason, observedAt: new Date().toISOString(),
-      } });
+      // Batch failures were reported by their timer. Retry the latest memory
+      // together with termination so a memory-write fault cannot omit a signal.
+      await memoryWrites.catch(() => {});
+      await recordVideoExecutionDiagnostics(jobId, {
+        ...(Object.keys(memoryEvidence).length ? { memory: { ...memoryEvidence } } : {}),
+        termination: { exitCode, signal, reason, observedAt: new Date().toISOString() },
+      });
     } catch (error) {
       console.error(`❌ Video termination evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`);
     }

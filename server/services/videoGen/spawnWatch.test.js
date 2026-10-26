@@ -193,10 +193,10 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     child.signalCode = 'SIGKILL';
     child.emit('close', null, 'SIGKILL');
     await vi.advanceTimersByTimeAsync(0);
-    expect(mocks.diagnostics).toHaveBeenCalledWith(params.jobId, { memory: {
-      peakAllocatedBytes: 900, peakRssBytes: 600, allocatorApplied: true, allocatorLimitBytes: 1024,
-    } });
-    expect(mocks.diagnostics).toHaveBeenCalledWith(params.jobId, { termination: expect.objectContaining({ exitCode: null, signal: 'SIGKILL', reason: 'failed' }) });
+    expect(mocks.diagnostics).toHaveBeenLastCalledWith(params.jobId, {
+      memory: { peakAllocatedBytes: 900, peakRssBytes: 600, allocatorApplied: true, allocatorLimitBytes: 1024 },
+      termination: expect.objectContaining({ exitCode: null, signal: 'SIGKILL', reason: 'failed' }),
+    });
     expect(failed).toHaveBeenCalledOnce();
   });
 
@@ -209,9 +209,29 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     child.signalCode = 'SIGKILL';
     child.emit('close', null, 'SIGKILL');
     await vi.advanceTimersByTimeAsync(0);
-    expect(mocks.diagnostics).toHaveBeenLastCalledWith(params.jobId, { termination: expect.objectContaining({ signal: 'SIGKILL', reason: 'failed' }) });
+    expect(mocks.diagnostics).toHaveBeenLastCalledWith(params.jobId, {
+      memory: { peakAllocatedBytes: 900 }, termination: expect.objectContaining({ signal: 'SIGKILL', reason: 'failed' }),
+    });
     expect(mocks.diagnostics).toHaveBeenCalledWith(params.jobId, { memory: { peakAllocatedBytes: 900 } });
     expect(failed).toHaveBeenCalledOnce();
+  });
+
+  it('attempts memory and signal together when an immediate close hits a final evidence write failure', async () => {
+    params.model = h3Model();
+    await spawnAndWatchVideo(params);
+    mocks.diagnostics.mockClear();
+    mocks.diagnostics.mockRejectedValueOnce(new Error('final evidence storage unavailable'));
+    child.stderr.emit('data', Buffer.from('H3MEMORY:{"peakAllocatedBytes":900}\n'));
+    child.signalCode = 'SIGKILL';
+    child.emit('close', null, 'SIGKILL');
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.diagnostics).toHaveBeenCalledExactlyOnceWith(params.jobId, {
+      memory: { peakAllocatedBytes: 900 }, termination: expect.objectContaining({ signal: 'SIGKILL', reason: 'failed' }),
+    });
+    expect(failed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ error: expect.stringContaining('Process killed') }));
+    expect(completed).not.toHaveBeenCalled();
   });
 
   it('delivers spawn failure even when its diagnostic receipt cannot be written', async () => {

@@ -1019,6 +1019,37 @@ describe('mediaJobQueue', () => {
     expect(stubs.generateVideo).toHaveBeenCalledTimes(1);
   });
 
+  it('retains one combined memory and signal receipt when terminal settlement recovers a diagnostic write failure', async () => {
+    const { recordVideoExecution, recordVideoExecutionDiagnostics } = await import('../videoGen/executionRecorder.js');
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.some(([params]) => params.jobId === jobId));
+    await recordVideoExecution(jobId, { seed: 37, modelId: 'example-mlx', width: 768, height: 768, numFrames: 141, fps: 24, steps: 9 });
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    let rejectDiagnostic = true;
+    atomicWriteSpy.mockImplementation(async (file, data, ...args) => {
+      if (rejectDiagnostic && data.jobs?.some(job => job.id === jobId && job.videoExecution?.diagnostics?.termination)) {
+        rejectDiagnostic = false;
+        throw new Error('synthetic final evidence disk failure');
+      }
+      return realWrite(file, data, ...args);
+    });
+    try {
+      await expect(recordVideoExecutionDiagnostics(jobId, {
+        memory: { peakAllocatedBytes: 4096 },
+        termination: { exitCode: null, signal: 'SIGKILL', reason: 'failed', observedAt: new Date().toISOString() },
+      })).rejects.toThrow('synthetic final evidence disk failure');
+      videoGenEvents.emit('failed', { generationId: jobId, error: 'Process killed' });
+      await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'failed');
+      await importFresh();
+      await mediaJobQueue.initMediaJobQueue();
+      expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'failed', videoExecution: {
+        diagnostics: { memory: { peakAllocatedBytes: 4096 }, termination: { signal: 'SIGKILL', reason: 'failed' } },
+      } });
+    } finally {
+      atomicWriteSpy.mockImplementation(realWrite);
+    }
+  });
+
   it('rejects a pre-launch receipt storage failure before the provider can launch its child', async () => {
     const realWrite = atomicWriteSpy.getMockImplementation();
     let rejectReceipt = true;
