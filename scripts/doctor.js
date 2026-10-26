@@ -47,6 +47,7 @@ import { createServer } from 'net';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
+import { probeGitMergeTree } from '../lib/gitMergeTree.js';
 import { certPaths } from '../lib/certPaths.js';
 import { commandExists } from '../server/lib/commandExists.js';
 import { isStaleGitLock } from '../server/lib/gitStaleLock.js';
@@ -446,6 +447,10 @@ export function defaultProbes({ root = ROOT } = {}) {
   return [
     { name: 'node', required: true, run: probeNode },
     { name: 'npm', required: false, run: probeNpm },
+    { name: 'git:merge-tree', required: true, run: () => {
+      const result = probeGitMergeTree(root);
+      return { status: result.ok ? 'available' : 'unavailable', detail: result.ok ? '--write-tree and --merge-base supported' : result.detail };
+    } },
     { name: 'submodule:slashdo', required: true, run: () => probeSubmodule(root) },
     ...WORKSPACES.map((workspace) => ({
       name: `deps:${workspace || 'root'}`,

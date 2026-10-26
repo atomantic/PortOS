@@ -173,9 +173,10 @@ describe('defaultProbes', () => {
 
   it('requires the boot-blocking prerequisites and leaves the rest advisory', () => {
     const required = Object.fromEntries(defaultProbes().map((p) => [p.name, p.required]));
-    // Without these the server cannot start.
+    // Required install and delivery prerequisites.
     expect(required).toMatchObject({
       node: true,
+      'git:merge-tree': true,
       'submodule:slashdo': true,
       'deps:server': true,
       'data:seeded': true,

@@ -1,5 +1,14 @@
 # Contributing Guide
 
+Git 2.40 or newer is required for merge validation and detached-checkout retirement.
+The capability check requires both `git merge-tree --write-tree` and `--merge-base`
+([Git 2.40 documentation](https://github.com/git/git/blob/v2.40.0/Documentation/git-merge-tree.txt)).
+Run `node scripts/checkGitVersion.js` before setup or contribution work; setup and
+`npm run doctor` also check it. Upgrade Git (Git for Windows on Windows), ensure
+that the running process resolves the upgraded executable first on PATH, and
+restart that process if its PATH changed. Unsupported Git fails closed before
+merged-tree cloning; structural guards and retirement proofs are never skipped.
+
 Before starting work, read [how to claim an issue and submit a PR](../CONTRIBUTING.md).
 Issues labeled `in-progress` or assigned to someone are not available to claim.
 
