@@ -235,10 +235,20 @@ describe('buildVideoGenSubmission — local IC-LoRA, chunks and misc', () => {
   it('inactive chunking sends empty strings; active chunking slices live beats', () => {
     expect(local({ chunkPrompts: ['x'], chunks: 2, contextFrames: 9 }))
       .toMatchObject({ chunks: '', chunkPrompts: '', contextFrames: '' });
-    const p = local({ chainingActive: true, chunks: 2, chunkPrompts: ['one', 'two', 'stale'], contextFrames: 9 });
-    expect(p).toMatchObject({ chunks: 2, contextFrames: '9' });
+    const p = local({ chainingActive: true, chunks: 2, chunkPrompts: ['one', 'two', 'stale'], contextFrames: 11 });
+    expect(p).toMatchObject({ chunks: 2, contextFrames: '11', continuityStrategy: 'window' });
     expect(JSON.parse(p.chunkPrompts)).toEqual(['one', 'two']);
     expect(local({ chainingActive: true, chunks: 2, chunkPrompts: ['', '  '] }).chunkPrompts).toBe('');
+  });
+
+  it('submits the inspected fixed history count and explicit last-frame opt-out', () => {
+    const verified = { runtime: 'minimax_h3', continuationCapability: { temporalContext: true, historyFrames: 17 } };
+    expect(local({ currentModel: verified, chainingActive: true, chunks: 2, contextFrames: 22 }))
+      .toMatchObject({ continuityStrategy: 'window', contextFrames: '17' });
+    expect(local({ currentModel: verified, chainingActive: true, chunks: 2, contextFrames: 0 }))
+      .toMatchObject({ continuityStrategy: 'frame', contextFrames: '0' });
+    expect(local({ currentModel: { ...verified, continuationCapability: { temporalContext: false, historyFrames: 17 } }, chainingActive: true, chunks: 2, contextFrames: 17 }))
+      .toMatchObject({ continuityStrategy: 'frame', contextFrames: '0' });
   });
 
   it('batch size, loras, display sleep and negative prompt follow model support', () => {

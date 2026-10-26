@@ -13,7 +13,7 @@ import {
 } from '../lib/videoGenResolutions';
 import { normalizeVideoTiling } from '../lib/videoTilingOptions';
 import {
-  MAX_CHUNKS,
+  MAX_CHUNKS, supportsContextWindow,
   videoModelMemoryGb, isModelAllowedForMode,
   normalizeFramesForModel, normalizeFpsForModel, audioDurationToFrames,
   icLoraSpecForMode,
@@ -406,6 +406,7 @@ export function useVideoGenForm({
     setFps((current) => normalizeFpsForModel(current, nextModel));
     setSteps('');
     setGuidanceScale('');
+    if (!supportsContextWindow(nextModel)) setContextFrames(0);
   }, [models]);
 
   // Validate `modelId` once models are loaded. Two failure modes covered:
@@ -469,6 +470,10 @@ export function useVideoGenForm({
   }, [modelId, models, modelContext?.defaultModel, modelContext?.systemMemoryGb, mode, visibleModels, applyModelSelection]);
 
   const currentModel = models.find((m) => m.id === modelId);
+
+  useEffect(() => {
+    if (currentModel && !supportsContextWindow(currentModel) && contextFrames !== 0) setContextFrames(0);
+  }, [currentModel, contextFrames]);
 
   // LTX-2.5's A2V runner needs an explicit frame canvas even though the user
   // thinks in audio duration. Snap the browser-probed duration UP to the
@@ -1319,7 +1324,9 @@ export function useVideoGenForm({
     // raw value rejects that string while `Number(null)`/`Number('')` are both
     // a finite 0 that would wrongly clear the default. Same shape the
     // `guidanceScale` restore above uses, for the same round-tripping reason.
-    if (p.contextFrames != null && p.contextFrames !== '' && Number.isFinite(Number(p.contextFrames))) {
+    if (p.continuityStrategy === 'frame') {
+      setContextFrames(0);
+    } else if (p.contextFrames != null && p.contextFrames !== '' && Number.isFinite(Number(p.contextFrames))) {
       setContextFrames(Number(p.contextFrames));
     }
     // Per-chunk beats (#3695). The server normalizes an absent beat to null;

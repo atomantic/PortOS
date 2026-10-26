@@ -286,6 +286,32 @@ describe('MediaLightbox — i2v reference provenance (#4874)', () => {
     raw,
   });
 
+  it('shows persisted temporal delivery evidence rather than inferring a window from the model', () => {
+    const continuation = { requestedStrategy: 'window', effectiveStrategy: 'window', contextFrames: 17,
+      actualHistoryFrames: 12, runtime: 'minimax_h3', backendPin: '0123456789abcdef0123456789abcdef01234567',
+      capability: true, unavailableReason: null };
+    const { rerender } = render(<MediaLightbox item={videoItem({ continuation })} onClose={() => {}} />);
+    const receipt = screen.getByRole('region', { name: 'Continuation receipt' });
+    expect(receipt).toHaveTextContent('Requested strategyTemporal window');
+    expect(receipt).toHaveTextContent('Effective strategyTemporal window');
+    expect(receipt).toHaveTextContent('Admitted context17 frames');
+    expect(receipt).toHaveTextContent('Actual history12 frames');
+    expect(receipt).toHaveTextContent('Backend runtimeminimax_h3');
+    expect(receipt).toHaveTextContent(continuation.backendPin);
+
+    rerender(<MediaLightbox item={videoItem({ continuation: { ...continuation, contextFrames: undefined } })} onClose={() => {}} />);
+    expect(receipt).toHaveTextContent('Admitted contextNot recorded');
+
+    rerender(<MediaLightbox item={videoItem({ continuation: { ...continuation, requestedStrategy: 'frame',
+      effectiveStrategy: 'frame', contextFrames: 17, actualHistoryFrames: 0 } })} onClose={() => {}} />);
+    expect(receipt).toHaveTextContent('Admitted context0 frames');
+    expect(receipt).toHaveTextContent('Actual history0 frames');
+    expect(receipt).not.toHaveTextContent('Temporal window');
+
+    rerender(<MediaLightbox item={videoItem({})} onClose={() => {}} />);
+    expect(screen.queryByRole('region', { name: 'Continuation receipt' })).toBeNull();
+  });
+
   it('names the promise and the strength that delivered it', () => {
     render(<MediaLightbox item={videoItem({ i2vReferenceMode: 'inspire', imageStrength: 0.35 })} onClose={() => {}} />);
     expect(screen.getByText('Reference')).toBeTruthy();

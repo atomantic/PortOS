@@ -37,10 +37,23 @@ export const CHUNK_OPTIONS = Array.from({ length: MAX_CHUNKS }, (_, i) => i + 1)
 // extend pipeline does anyway.
 export const DEFAULT_CONTEXT_FRAMES = 22;
 export const CONTEXT_FRAME_OPTIONS = [0, 11, 22, 45, 73];
-// Only a runtime with a video-conditioned extend pipeline can use a window;
-// elsewhere the server ignores the value, so the control stays hidden rather
-// than offering a knob that does nothing.
-export const supportsContextWindow = (model) => isLtx2FamilyRuntime(model?.runtime);
+// Older catalogs have no projection; preserve their established LTX contract.
+// An explicit server refusal always wins over the legacy runtime fallback.
+export const supportsContextWindow = (model) => model?.continuationCapability == null
+  ? isLtx2FamilyRuntime(model?.runtime)
+  : model.continuationCapability.temporalContext === true;
+export const contextFrameOptionsForModel = (model) => {
+  if (!supportsContextWindow(model)) return [0];
+  const fixedHistory = model?.continuationCapability?.historyFrames;
+  return Number.isInteger(fixedHistory) && fixedHistory > 0
+    ? [0, fixedHistory] : CONTEXT_FRAME_OPTIONS;
+};
+export const selectedContextFramesForModel = (model, contextFrames) => {
+  const options = contextFrameOptionsForModel(model);
+  const requested = contextFrames == null || contextFrames === '' ? DEFAULT_CONTEXT_FRAMES : Number(contextFrames);
+  return options.includes(requested) ? requested
+    : (options.includes(DEFAULT_CONTEXT_FRAMES) ? DEFAULT_CONTEXT_FRAMES : options.at(-1));
+};
 export const WAN_FRAME_OPTIONS = [...new Set([
   ...FRAME_OPTIONS,
   41, 61, 81, 101, 161, 201, 321,
@@ -198,7 +211,8 @@ export const videoChainChunkModes = ({ model, mode, chaining, contextFrames, has
   // the Fast picker and grey out Steps/CFG for a chain the server then declines
   // wholesale, which is the precise failure this gate exists to prevent.
   const windowHop = resolveContextFramesForDisplay(contextFrames) > 0 && supportsContextWindow(model);
-  return [first, windowHop ? 'extend' : 'image'];
+  const temporalMode = model?.continuationCapability?.outputLayout === 'new-output-only' ? 'text' : 'extend';
+  return [first, windowHop ? temporalMode : 'image'];
 };
 
 // Display-side mirror of resolveContextFrames. Only the absent/invalid→default

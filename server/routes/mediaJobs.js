@@ -24,6 +24,7 @@ import { I2V_REFERENCE_MODES } from '../lib/videoReferenceModes.js';
 import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 import { DRAFT_DECODE_IDS, isFullDecode } from '../lib/videoDraftDecoders.js';
 import { VIDEO_STREAMING_MODES, isDefaultVideoStreamingMode } from '../lib/videoStreamingMode.js';
+import { MAX_CONTEXT_FRAMES, resolveContinuityRequest } from '../lib/videoContinuity.js';
 
 const router = Router();
 
@@ -303,7 +304,8 @@ const RETRY_OVERRIDE_SCHEMA = z.object({
     .transform((v) => (v === undefined ? undefined : (isDefaultVideoStreamingMode(v) ? null : v))),
   chunks: z.number().int().min(1).max(8).optional(),
   chunkPrompts: z.array(z.string().max(8000)).max(8).optional(),
-  contextFrames: z.number().int().min(0).max(64).optional(),
+  contextFrames: z.number().int().min(0).max(MAX_CONTEXT_FRAMES).optional(),
+  continuityStrategy: z.enum(['frame', 'window']).optional(),
   a2vLoraStageStrengths: a2vLoraStageStrengthsSchema.nullable().optional(),
   loras: z.array(z.object({
     filename: z.string().min(1).max(255).regex(/^[^/\\]+\.safetensors$/i, 'filename must be a bare .safetensors basename'),
@@ -396,7 +398,14 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
   if (job.kind === 'video') {
     const validateHostedRetry = hostedVideoRetryValidator(params.mode);
     if (validateHostedRetry) validateHostedRetry(params);
-    else await validateVideoRetryParams(params);
+    else {
+      const model = await validateVideoRetryParams(params);
+      delete params.continuation;
+      if (Number(params.chunks || 1) > 1 || params.continuityStrategy != null) {
+        params.continuation = resolveContinuityRequest({ model,
+          continuityStrategy: params.continuityStrategy, contextFrames: params.contextFrames });
+      }
+    }
   }
   // Reset Codex effort to the shipped default: dropping the key lets codex.js's
   // fallback (CODEX_IMAGEGEN_DEFAULT_EFFORT) take over, which a merged sentinel

@@ -12,7 +12,7 @@ import ModelDownloadBadge from '../media/ModelDownloadBadge.jsx';
 import {
   frameOptionsForModel, fpsOptionsForModel, CHUNK_OPTIONS,
   isModelAllowedForMode, supportsVideoAudioControls, supportsVideoAudioPromptControls,
-  CONTEXT_FRAME_OPTIONS, supportsContextWindow,
+  contextFrameOptionsForModel, selectedContextFramesForModel, supportsContextWindow,
   DEFAULT_SPEED_PROFILE_ID, speedProfilesForMode,
   videoChainChunkModes,
   DEFAULT_DRAFT_DECODE_ID, draftDecodeOptionsForModel,
@@ -97,6 +97,10 @@ export default function AdvancedParamsPanel({
   const displayedImageStrength = hasExplicitStrength
     ? imageStrength
     : (effectiveImageStrength != null ? effectiveImageStrength : 1);
+  const temporalAvailable = supportsContextWindow(currentModel);
+  const continuationCapability = currentModel?.continuationCapability;
+  const contextOptions = contextFrameOptionsForModel(currentModel);
+  const displayedContext = selectedContextFramesForModel(currentModel, contextFrames);
   const frameOptions = frameOptionsForModel(currentModel, numFrames);
   const fpsOptions = fpsOptionsForModel(currentModel);
   const samplerLocked = currentModel?.samplerLocked === true;
@@ -194,30 +198,29 @@ export default function AdvancedParamsPanel({
             </div>
           )}
 
-          {/* Continuation context window. Only meaningful once the request
-              really chains AND the runtime has an extend pipeline to feed the
-              window to — everywhere else the server seeds the next chunk from
-              a single last frame regardless, so showing the control would be
-              offering a knob that does nothing. */}
-          {chainingActive && supportsContextWindow(currentModel) && (
-            <div>
-              <label htmlFor={fieldId('context-frames-select')} className="block text-xs font-medium text-gray-400 mb-1" title="How much of the previous chunk each new chunk sees. A window carries the scene's motion across the seam; a single last frame gives the model a pose with no velocity, so movement stalls and restarts at every join.">
+          {chainingActive && (
+            <div className="min-w-0">
+              <label htmlFor={fieldId('context-frames-select')} className="block text-xs font-medium text-gray-400 mb-1">
                 Continuity
               </label>
               <select
                 id={fieldId('context-frames-select')}
-                value={contextFrames}
+                value={displayedContext}
                 onChange={(e) => onContextFramesChange(Number(e.target.value))}
                 className={inputCls}
               >
-                {CONTEXT_FRAME_OPTIONS.map((n) => (
+                {contextOptions.map((n) => (
                   <option key={n} value={n}>
                     {n === 0 ? 'Last frame only' : `${n} frames (~${(n / fps).toFixed(1)}s)`}
                   </option>
                 ))}
+                {!temporalAvailable && <option disabled value="unavailable">Temporal context unavailable</option>}
               </select>
-              <p className="text-[10px] text-gray-500 leading-snug mt-1">
-                Bigger windows hold motion better across joins but add render time per chunk.
+              <p className="text-[10px] text-gray-500 leading-snug mt-1 break-words">
+                {temporalAvailable
+                  ? 'A temporal window carries motion across joins; last frame only uses a still.'
+                  : `Temporal context unavailable: ${continuationCapability?.unavailableReason || 'This runtime has no verified temporal continuation contract.'}`}
+                {continuationCapability?.backendPin && ` Backend: ${continuationCapability.backendPin}.`}
               </p>
             </div>
           )}

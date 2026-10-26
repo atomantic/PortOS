@@ -144,13 +144,23 @@ describe('ModelDisclosure', () => {
     });
   });
 
+  it('shows the server refusal and exact continuation backend pin', () => {
+    renderDisclosure({ backend: 'local', model: { ...SHIPPED_MODEL,
+      continuationCapability: { temporalContext: false, backendPin: 'example-pin',
+        unavailableReason: 'Hardware motion/audio comparison is missing.' },
+    } });
+    const facts = screen.getByLabelText('Selected model disclosure');
+    expect(within(facts).getByText(/Unavailable: Hardware motion\/audio comparison is missing/)).toBeInTheDocument();
+    expect(within(facts).getByText('example-pin')).toBeInTheDocument();
+  });
+
   it('renders Unknown for every fact a custom model does not carry', () => {
     const custom = { id: 'mine', name: 'My Model', source: 'user' };
     renderDisclosure({ backend: 'local', model: custom });
     const facts = screen.getByLabelText('Selected model disclosure');
     // model card, revision, weights license, runtime license, download,
-    // memory, modes, runtime → all Unknown.
-    expect(within(facts).getAllByText('Unknown')).toHaveLength(8);
+    // memory, modes, runtime, temporal continuation → all Unknown.
+    expect(within(facts).getAllByText('Unknown')).toHaveLength(9);
     expect(within(facts).queryByRole('link')).not.toBeInTheDocument();
   });
 
