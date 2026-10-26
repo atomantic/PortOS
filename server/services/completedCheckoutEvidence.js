@@ -113,7 +113,7 @@ export function completedCheckoutReceiptValid(agent, receipt) {
 /** Read the final head only inside the pre-existing physical binding. No fetch
  * or branch-name discovery is allowed after terminal ingestion.
  */
-export async function captureSeededCompletionCheckouts(agent, { preterminal = false } = {}) {
+export async function captureSeededCompletionCheckouts(agent, { preterminal = false, retirement = null } = {}) {
   if (preterminal && !['running', 'paused'].includes(agent.status)) return null;
   const terminalAt = preterminal ? Date.now() : Date.parse(agent.completedAt);
   const bound = hasClaimCheckoutBindings(agent.metadata) ? agent.metadata.claimBranches : [agent.metadata?.worktreeBranch];
@@ -128,14 +128,18 @@ export async function captureSeededCompletionCheckouts(agent, { preterminal = fa
     const head = (await execGit(['rev-parse', '--verify', 'HEAD^{commit}'], seed.path, {
       env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_REPLACE_OBJECTS: '1' }, timeout: 5000,
     })).stdout.trim();
-    // A physical seed survives later commits in the same checkout. Only a head
-    // observed while this execution still owned it may authorize late capture.
+    // Normal replay requires the head observed during execution. Explicit
+    // retirement review can instead bind a currently merged head to the exact
+    // original seed; this is a current observation, never a backdated capture.
     const terminal = agent.metadata?.checkoutCapture?.targets?.find(row => row.agentId === agent.id
       && row.startedAt === agent.startedAt && row.repoPath === seed.repoPath && row.branch === seed.branch
       && row.path === seed.path && same(row.incarnation, seed.incarnation)
       && Number.isFinite(Date.parse(row.capturedAt)) && Date.parse(row.capturedAt) >= Date.parse(agent.startedAt)
       && Date.parse(row.capturedAt) <= terminalAt);
-    if (!preterminal && (!terminal || terminal.head !== head)) return null;
+    const reviewedCurrentHead = !terminal && retirement?.verifiedMergedHead === head
+      && retirement.head === head && retirement.repoPath === seed.repoPath
+      && retirement.branch === seed.branch && retirement.path === seed.path;
+    if (!preterminal && ((!terminal && !reviewedCurrentHead) || (terminal && terminal.head !== head))) return null;
     const target = { repoPath: seed.repoPath, branch: seed.branch, path: seed.path, head };
     const current = await readCompletedCheckoutIdentity(target);
     if (!current || !same(current.incarnation, seed.incarnation)) return null;

@@ -379,8 +379,9 @@ export async function settleAbsentTaskCompletion(agentId, expected) {
   return saved && matched;
 }
 
-/** Retry capture ONLY against preterminal snapshots. Unknown originals remain
- * explicit holds; a completed record can never discover a replacement by name.
+/** Replay requires preterminal snapshots. An explicit, freshly merged retirement
+ * review may observe the current head inside the original physical seed instead.
+ * Neither path discovers a replacement by name or rewrites execution history.
  */
 export async function retryCompletionCheckoutCapture(agentId, { retirement } = {}) {
   const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
@@ -394,6 +395,12 @@ export async function retryCompletionCheckoutCapture(agentId, { retirement } = {
     }
     const agent = await getAgentRecord(agentId);
     const pending = agent?.metadata?.checkoutCapture;
+    const knownPr = agent?.metadata?.branchCompletionPolicy?.prUrl || agent?.metadata?.reviewLoopMergeTarget?.url;
+    const reviewedRetirement = retirement?.verifiedMergedHead === retirement?.head
+      && typeof retirement?.prUrl === 'string' && retirement.prUrl === knownPr
+      && agent?.result?.executionSuccess === true && agent.result.validationPassed !== false
+      && agent.result?.taskOutcome?.recovery?.mode !== 'approval' && !agent.metadata?.blocker;
+    if (retirement?.verifiedMergedHead && !reviewedRetirement) return false;
     const seededOrphan = retirement && agent?.result?.orphaned === true && agent.result.validationPassed !== false
       && pending?.status === 'captured' && agent.metadata.completedCheckouts?.length === 0
       && agent.metadata.checkoutSeeds?.some(seed => seed.repoPath === retirement.repoPath
@@ -426,7 +433,8 @@ export async function retryCompletionCheckoutCapture(agentId, { retirement } = {
       const expected = { repoPath: target.repoPath, branch: target.branch, path: target.path, head: target.head, incarnation: target.incarnation };
       if (!current || JSON.stringify(current) !== JSON.stringify(expected)) return false;
     }
-    const captured = seeds.length ? await captureSeededCompletionCheckouts(agent).catch(() => null) : targets;
+    const captured = seeds.length ? await captureSeededCompletionCheckouts(agent,
+      reviewedRetirement ? { retirement } : {}).catch(() => null) : targets;
     if (!captured?.length) return false;
     if (retirement && !captured.some(row => row.repoPath === retirement.repoPath && row.branch === retirement.branch
       && row.path === retirement.path && row.head === retirement.head)) return false;

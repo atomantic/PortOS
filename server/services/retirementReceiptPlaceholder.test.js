@@ -42,6 +42,37 @@ afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 afterAll(cleanupTempDataRoots);
 
 describe('stale branch-only retirement placeholders', () => {
+  it('uses verified ref finalization to settle a delayed branch-only row without changing physical removal time', async () => {
+    const observation = { ...row, createdAt: '2026-01-05T00:00:00.000Z' };
+    receipt.branchFinalizedAt = '2026-01-04T00:00:00.000Z';
+    receipt.branchFinalization = { kind: 'observed-absent' };
+    await seed({ receipts: [receipt], observation });
+    const result = await getBranchReconcileInventory(appId);
+    expect(result.remaining).toEqual([]); expect(result.retirementObligations).toEqual([]);
+    expect(result.retired[0]).toMatchObject({ retiredAt: receipt.retiredAt, branchFinalizedAt: receipt.branchFinalizedAt,
+      settledObservations: [{ observation }] });
+  });
+
+  it.each(['settled', 'recreated', 'ambiguous', 'different-path'])(
+    'reconciles a delayed echoed-ref row only against its absent exact receipt: %s', async scenario => {
+      const observation = { ...row, path: receipt.path, head: row.branch,
+        createdAt: '2026-01-03T00:00:00.000Z' }; // After the real removal receipt.
+      const receipts = [receipt];
+      if (scenario === 'recreated') { await mkdir(receipt.path); await writeFile(join(receipt.path, 'unique.txt'), 'unfinished work'); }
+      if (scenario === 'ambiguous') receipts.push({ ...receipt, checkoutIdentity: 'c'.repeat(64) });
+      if (scenario === 'different-path') observation.path = join(root, 'other-checkout');
+      await seed({ receipts, observation });
+      const result = await getBranchReconcileInventory(appId);
+      if (scenario === 'settled') {
+        expect(result.remaining).toEqual([]); expect(result.retirementObligations).toEqual([]);
+        expect(result.retired[0]).toMatchObject({ retiredAt: receipt.retiredAt, settledObservations: [{ observation }] });
+        const saved = await readFile(schedulePath, 'utf8');
+        await getBranchReconcileInventory(appId);
+        expect(await readFile(schedulePath, 'utf8')).toBe(saved);
+      } else expect(result.retirementObligations).toContainEqual(expect.objectContaining(observation));
+      if (scenario === 'recreated') expect(await readFile(join(receipt.path, 'unique.txt'), 'utf8')).toBe('unfinished work');
+    });
+
   it('settles receipt arrival and idempotent replay without changing the deletion timestamp or duplicating its audit', async () => {
     await seed();
     await recordHeldCheckoutRetirement(appId, receipt);
