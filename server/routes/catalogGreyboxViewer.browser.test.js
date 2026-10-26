@@ -20,7 +20,7 @@ const scene = {
   zones: [{ id: 'floor-zone', label: 'Floor', color: '#38b85a' }],
   landmarks: [{ id: 'mark', label: 'Example landmark', position: [-3, 0.5, 2] }],
   anchors: [{ id: 'figure', label: 'Example figure', kind: 'figure', position: [0, 0.5, 0], heightMeters: 1.7, facingDegrees: 0 }],
-  shots: [{ id: 'overhead', label: 'Overhead', position: [0, 12, 0.01], target: [0, 0, 0], focalLengthMm: 28, aspect: '16:9', figures: [] }],
+  shots: [{ id: 'overhead', label: 'Overhead', position: [0, 12, 0.01], target: [0, 0, 0], focalLengthMm: 28, aspect: '16:9', figures: [{ anchorId: 'figure', pose: 'Standing' }] }],
 };
 
 async function openEnvironment(fixture, { warmup = false } = {}) {
