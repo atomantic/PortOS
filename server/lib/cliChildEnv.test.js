@@ -798,6 +798,9 @@ describe('identity-free Windows children', () => {
       vi.stubGlobal('process', { ...originalProcess, platform: 'win32' });
       const baseEnv = { SystemRoot: 'C:\\Windows', PORTOS_API_TOKEN: 'test-secret' };
       const env = buildCliChildEnv({ baseEnv, cwd });
+      // libuv fills required Windows variables from the native parent's env.
+      // Remove identity there too so the spawned fixture stays identity-free.
+      for (const key of ['USER', 'LOGNAME', 'LNAME', 'USERNAME']) vi.stubEnv(key, undefined);
       const received = JSON.parse(execFileSync(originalProcess.execPath,
         ['-e', 'process.stdout.write(JSON.stringify(process.env))'], { cwd, env, windowsHide: true, encoding: 'utf8' }));
       expect(received.TORCHINDUCTOR_CACHE_DIR).toBe(join(cwd, '.cache', 'torchinductor'));
@@ -817,6 +820,7 @@ describe('identity-free Windows children', () => {
       expect(buildCliChildEnv({ baseEnv, cwd }).TORCHINDUCTOR_CACHE_DIR).toBeUndefined();
     } finally {
       vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
       rmSync(cwd, { recursive: true, force: true });
     }
   });
