@@ -108,7 +108,7 @@ it('publishes a source sidecar with exact prompt and profile facts for optional 
   fetchWithTimeout.mockImplementation(async url => response(url.endsWith('/txt2img') ? { images: ['aGVsbG8='] } : { sd_model_checkpoint: 'example-model' }));
   const profile = naturalUniverseVisualProfile();
   const result = await generateImage({ sdapiUrl: 'http://example.test', prompt: 'Exact source prompt', visualProfile: profile, visualProfileRevision: 'example-revision' });
-  const write = atomicWrite.mock.calls.find(([path]) => path.endsWith(result.filename.replace('.png', '.json')));
+  const write = atomicWrite.mock.calls.find(([path]) => path.endsWith(result.filename.replace('.png', '.metadata.json')));
   expect(write).toBeDefined();
   expect(JSON.parse(write[1])).toMatchObject({ prompt: 'Exact source prompt', visualProfile: profile, visualProfileRevision: 'example-revision', mode: 'external' });
 });

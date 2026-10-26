@@ -159,7 +159,7 @@ export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, h
       await ensureDir(PATHS.images);
       const filename = `${randomUUID()}.png`;
       const pngPath = join(PATHS.images, filename);
-      const sidecarPath = visualProfile ? join(PATHS.images, `${filename.slice(0, -4)}.json`) : null;
+      const sidecarPath = visualProfile ? join(PATHS.images, `${filename.slice(0, -4)}.metadata.json`) : null;
       return publishImageFiles([pngPath, ...(sidecarPath ? [sidecarPath] : [])], async () => {
         await atomicWrite(pngPath, Buffer.from(data.images[0], 'base64'));
         const reason = await rejectDegenerateFrame(pngPath);
