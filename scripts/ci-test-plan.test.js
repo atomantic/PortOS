@@ -1992,6 +1992,16 @@ it('projects transitive browser consumers through the planner CLI without replac
 
 describe('cross-workspace browser suites (#10312)', () => {
 
+  it('selects greybox pixel parity when the bundled viewer or capture contract changes', () => {
+    const cwd = fileURLToPath(new URL('../', import.meta.url));
+    const suite = 'server/services/greyboxRender.browser.test.js';
+    for (const source of ['client/src/components/catalog/GreyboxViewer.jsx', 'client/src/components/catalog/GreyboxCapture.jsx', 'server/lib/greyboxCapture.js']) {
+      const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
+      const trackedFiles = inputs.trackedFiles.filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
+      expect(buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles }).browserFiles).toContain(suite);
+    }
+  });
+
   it('selects animatic pixel coverage when only the compositor or Save frame control changes', () => {
     const cwd = fileURLToPath(new URL('../', import.meta.url));
     const suite = 'server/services/musicVideo/animaticCapture.browser.test.js';
@@ -2018,6 +2028,7 @@ describe('cross-workspace browser suites (#10312)', () => {
     // Server-only media suites do not mount the changed client component.
     const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js', 'server/lib/musicVideoTitleCard.browser.test.js',
       'server/services/federatedMedia/sourceAudio.browser.test.js',
+      'server/services/greyboxRender.browser.test.js',
       'server/services/fableLoom/static-player/player.browser.test.js',
       'server/services/codeAnimation/export.realBrowser.test.js',
       'server/services/htmlComposition/index.test.js'];

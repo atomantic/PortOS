@@ -8,19 +8,8 @@
 import { GREYBOX_ASPECTS, GREYBOX_SHOT_ROLE_PREFIX } from '../../../server/lib/greyboxVocabulary.js';
 
 export { GREYBOX_ASPECTS };
-export const DEFAULT_FOCAL_LENGTH_MM = 35;
+export { aspectRatio, fovFromFocalLength, DEFAULT_FOCAL_LENGTH_MM } from '../../../server/lib/greyboxCapture.js';
 const DEFAULT_ZONE_COLOR = '#8a8f98';
-
-/** Width / height for an aspect label like `16:9`. */
-export function aspectRatio(aspect) {
-  const [w, h] = String(aspect).split(':').map(Number);
-  return w > 0 && h > 0 ? w / h : 16 / 9;
-}
-
-// A 35mm-equivalent lens is quoted against the 24mm full-frame sensor height,
-// so the vertical field of view is 2·atan(12 / f). Matches the server's
-// "focalLengthMm" meaning in the scene contract.
-export const fovFromFocalLength = (mm) => (2 * Math.atan(12 / mm) * 180) / Math.PI;
 
 /** The role a shot's captured reference image carries on the place's media. */
 const shotRole = (shotId) => `${GREYBOX_SHOT_ROLE_PREFIX}${shotId}`;

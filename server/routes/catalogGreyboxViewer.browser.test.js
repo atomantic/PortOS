@@ -270,11 +270,35 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
         await page.waitForFunction(ratio => { const c = document.querySelector('[data-testid="greybox-viewer"] canvas'); return Math.abs(c.width / c.height - ratio) < 0.01; }, width / height);
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         const before = await canvasState(page);
+        // Observe native backing-buffer changes without replacing canvas setters.
+        // A capture must not allocate a larger intermediate buffer than either
+        // its requested output or the viewport it restores.
+        await page.locator('[data-testid="greybox-viewer"] canvas').evaluate(canvas => {
+          const changes = [];
+          const collect = records => { for (const record of records) {
+            if (changes.length >= 64) throw new Error('Capture buffer observation limit');
+            changes.push({ name: record.attributeName, previous: Number(record.oldValue) });
+          } };
+          const observer = new MutationObserver(collect);
+          observer.observe(canvas, { attributes: true, attributeOldValue: true, attributeFilter: ['width', 'height'] });
+          window.captureBufferSizes = () => {
+            collect(observer.takeRecords()); observer.disconnect();
+            let width = canvas.width; let height = canvas.height;
+            const sizes = [[width, height]];
+            for (const change of changes.reverse()) {
+              if (change.name === 'width') width = change.previous; else height = change.previous;
+              sizes.push([width, height]);
+            }
+            return sizes;
+          };
+        });
         state.phase = `capture ${aspect}`;
         await Promise.all([
           page.waitForResponse(response => response.url().endsWith('/details?view=media')),
           page.getByRole('button', { name: /(?:Capture|Replace) reference image/ }).click(),
         ]);
+        const bufferSizes = await page.evaluate(() => window.captureBufferSizes());
+        expect(Math.max(...bufferSizes.map(([w, h]) => w * h))).toBeLessThanOrEqual(Math.max(before.width * before.height, width * height));
         const pixels = await capturePixels(page, state.captures.at(-1).dataBase64);
         expect(pixels).toMatchObject({ width, height });
         expect(pixels.variance).toBeGreaterThan(100);

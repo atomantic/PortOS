@@ -40,6 +40,7 @@ describe.skipIf(!chrome)('manual greybox in Chromium', () => {
               export const detachCatalogIngredientMedia = async () => ({});
               export const uploadCatalogIngredientMediaFile = async () => ({});
               export const captureCatalogGreyboxShot = async () => ({});
+              export const renderCatalogGreyboxShot = async () => { throw Error('Unexpected headless render'); };
               export const draftCatalogGreybox = async () => { throw Error('Unexpected provider call'); };
               export const previewCatalogGreyboxPrompt = async () => ({});
             `;
