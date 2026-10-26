@@ -1076,6 +1076,12 @@ async function rawBlobId(source, size, format, work) {
  */
 const VITEST_CACHE_TAG = 'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.';
 const VITEST_MODULE_CACHE_ROOTS = Object.values(WORKSPACE_TEST_CACHE_ROOTS).map(cache => `${cache.workspace}/${cache.cacheDir}/modules`);
+// Running Vitest through the client's declared Vite config uses its cacheDir.
+// Keep that producer root compatible without accepting arbitrary ignored roots.
+const VITEST_STATE_CACHE_ROOTS = [
+  ...Object.values(WORKSPACE_TEST_CACHE_ROOTS).map(cache => `${cache.workspace}/${cache.cacheDir}/vitest`),
+  'client/.cache/vite/vitest',
+];
 const cacheInspectionFailure = error => {
   if (['retirement-archive-cancelled', 'retirement-archive-work-limit-exceeded', 'archive-manifest-budget-exceeded'].includes(error.message)) throw error;
   return false;
@@ -1102,8 +1108,7 @@ function testStateCacheSchema(value, filename) {
 }
 
 async function disposableStateCache(path, rel, ignored, verified, work) {
-  const root = Object.values(WORKSPACE_TEST_CACHE_ROOTS).map(cache => `${cache.workspace}/${cache.cacheDir}/vitest`)
-    .find(cache => rel.startsWith(`${cache}/`) && /^(?:CACHEDIR\.TAG|[a-f0-9]{40}\/(?:(?:results|dependencies)\.json|\.tmp-\d{13}-[a-z0-9]+))$/.test(rel.slice(cache.length + 1)));
+  const root = VITEST_STATE_CACHE_ROOTS.find(cache => rel.startsWith(`${cache}/`) && /^(?:CACHEDIR\.TAG|[a-f0-9]{40}\/(?:(?:results|dependencies)\.json|\.tmp-\d{13}-[a-z0-9]+))$/.test(rel.slice(cache.length + 1)));
   if (!root || !ignored.has(`${root}/CACHEDIR.TAG`)) return false;
   if (!verified.has(root)) verified.set(root, archiveBytes(await archiveFile(path, join(path, root, 'CACHEDIR.TAG')), work, 2048)
     .then(tag => tag.toString('utf8') === `${VITEST_CACHE_TAG}\n# For information about cache directory tags see https://bford.info/cachedir/\n`)

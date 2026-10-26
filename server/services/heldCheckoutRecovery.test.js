@@ -1537,12 +1537,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   // Normal tests generate state caches as well as compiled modules. Only their
   // tagged producer schema may pass the actual destructive retirement boundary.
-  it.each(['results', 'dependencies', 'dependencies-no-setup', 'atomic-empty', 'atomic-nonempty', 'atomic-untagged', 'atomic-untracked', 'bad-setup', 'unknown-field', 'bad-version', 'bad-project', 'bad-index', 'untagged', 'untracked', 'sidecar'])(
-    'recognizes only the actual tagged Vitest state producer: %s', async kind => {
+  const stateCacheCases = [
+    ...['results', 'dependencies', 'dependencies-no-setup', 'atomic-empty', 'atomic-nonempty', 'atomic-untagged', 'atomic-untracked', 'bad-setup', 'unknown-field', 'bad-version', 'bad-project', 'bad-index', 'untagged', 'untracked', 'sidecar']
+      .map(kind => ['server/.cache/vitest/vitest', kind]),
+    ...['server/.cache/vitest-db/vitest', 'client/.cache/vitest/vitest', 'client/.cache/vite/vitest'].map(root => [root, 'results']),
+    ...['unknown-field', 'untagged', 'untracked'].map(kind => ['client/.cache/vite/vitest', kind]),
+    ['client/.cache/unknown/vitest', 'wrong-root'],
+  ];
+  it.each(stateCacheCases)(
+    'recognizes only the actual tagged Vitest state producer: root=%s kind=%s', async (cacheRoot, kind) => {
       const c = await reviewedCheckout(`state-cache-${kind}`);
-      const root = join(c.path, 'server/.cache/vitest/vitest');
+      const root = join(c.path, cacheRoot);
       const project = join(root, 'a'.repeat(40)); await mkdir(project, { recursive: true });
-      if (!['untracked', 'atomic-untracked'].includes(kind)) await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
+      if (!['untracked', 'atomic-untracked'].includes(kind)) await writeFile(join(repo, '.git', 'info', 'exclude'), `${cacheRoot.split('/')[0]}/.cache/\n`);
       if (!['untagged', 'atomic-untagged'].includes(kind)) await writeFile(join(root, 'CACHEDIR.TAG'),
         'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.\n# For information about cache directory tags see https://bford.info/cachedir/\n');
       const dependencies = ['dependencies', 'dependencies-no-setup', 'bad-setup', 'bad-index'].includes(kind);
