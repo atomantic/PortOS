@@ -4,6 +4,26 @@ vi.mock('../../services/appQuality.js', () => ({ getAppQualityHistory: vi.fn(asy
 vi.mock('../../services/appQualitySnapshotFile.js', () => ({ publishAppQualitySnapshot: vi.fn(async () => ({ published: true, hash: 'abc1234', path: '.quality.json' })) }));
 vi.mock('../../services/appLaneHealth.js', () => ({ getAppLaneHealth: vi.fn(async () => ({ available: true, windowDays: 60, lanes: [] })) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+const { gitProbes, gitProbeDirs } = vi.hoisted(() => ({ gitProbes: [], gitProbeDirs: [] }));
+vi.mock('../../lib/execGit.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  const bounded = value => gitProbeDirs.reduce((text, directory) => text.replaceAll(directory, '<fixture>'), String(value ?? '')).slice(0, 1000);
+  return { ...actual, execGit: vi.fn((...args) => {
+    const operation = actual.execGit(...args);
+    if (args[0]?.join(' ') === 'rev-parse --is-inside-work-tree') {
+      // Observe the existing operation without adding a probe, awaiting it, or
+      // changing its promise, arguments, options, or rejection behavior.
+      void operation.then(result => {
+        if (gitProbes.length < 16) gitProbes.push({ stdout: bounded(result.stdout), stderr: bounded(result.stderr), exitCode: result.exitCode, terminated: result.terminated });
+      }, error => {
+        if (gitProbes.length < 16) gitProbes.push({ code: bounded(error.code), message: bounded(error.message), settlement: bounded(error.settlement) });
+      });
+    }
+    return operation;
+  }) };
+});
+import { execGit } from '../../lib/execGit.js';
+import { isRepo } from '../../services/git.js';
 import express from 'express';
 import { execFileSync } from 'child_process';
 import { mkdtempSync, rmSync } from 'fs';
@@ -149,8 +169,10 @@ describe('Apps CRUD Routes', () => {
     });
 
     it('flags non-git directories with isGitRepo and leaves a missing directory unknown', async () => {
+      gitProbes.length = 0; gitProbeDirs.length = 0;
       const plainDir = mkdtempSync(join(tmpdir(), 'portos-plain-'));
       const gitDir = mkdtempSync(join(tmpdir(), 'portos-git-'));
+      gitProbeDirs.push(plainDir, gitDir);
       try {
         execFileSync('git', ['init', '-q'], { cwd: gitDir });
         appsService.getAllApps.mockResolvedValue([
@@ -164,9 +186,73 @@ describe('Apps CRUD Routes', () => {
         const response = await request(app).get('/api/apps');
 
         const flags = Object.fromEntries(response.body.map(a => [a.id, a.isGitRepo]));
-        expect(flags).toEqual({ plain: false, repo: true, gone: undefined });
+        expect(flags, `Git fixture probe diagnostics: ${JSON.stringify(gitProbes)}`).toEqual({ plain: false, repo: true, gone: undefined });
       } finally {
         rmSync(plainDir, { recursive: true, force: true });
+        rmSync(gitDir, { recursive: true, force: true });
+      }
+    });
+
+    it('leaves Git capability unknown when the probe is unavailable without relaxing worktree guards', async () => {
+      const gitDir = mkdtempSync(join(tmpdir(), 'portos-unavailable-git-'));
+      try {
+        execFileSync('git', ['init', '-q'], { cwd: gitDir });
+        appsService.getAllApps.mockResolvedValue([{ id: 'repo', name: 'Repo', repoPath: gitDir, pm2ProcessNames: [], isGitRepo: false }]);
+        pm2Service.listProcessesStrict.mockResolvedValue([]);
+        streamingDetect.parseEcosystemFromPath.mockResolvedValue([]);
+        const unavailable = () => Object.assign(new Error('Windows Git containment unavailable'), { code: 'GIT_CONTAINMENT_UNAVAILABLE' });
+        execGit.mockRejectedValueOnce(unavailable());
+
+        const response = await request(app).get('/api/apps');
+
+        expect(response.status).toBe(200);
+        expect(response.body[0]).toMatchObject({ id: 'repo' });
+        expect(response.body[0]).not.toHaveProperty('isGitRepo');
+        execGit.mockRejectedValueOnce(unavailable());
+        expect(await isRepo(gitDir)).toBe(false);
+      } finally {
+        rmSync(gitDir, { recursive: true, force: true });
+      }
+    });
+
+    it('recognizes ordinary repository discovery stopping at a filesystem boundary', async () => {
+      const plainDir = mkdtempSync(join(tmpdir(), 'portos-git-boundary-'));
+      try {
+        appsService.getAllApps.mockResolvedValue([{ id: 'plain', name: 'Plain', repoPath: plainDir, pm2ProcessNames: [] }]);
+        pm2Service.listProcessesStrict.mockResolvedValue([]);
+        streamingDetect.parseEcosystemFromPath.mockResolvedValue([]);
+        execGit.mockResolvedValueOnce({ exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any parent up to mount point /synthetic-mount)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n' });
+
+        const response = await request(app).get('/api/apps');
+
+        expect(response.status).toBe(200);
+        expect(response.body[0]).toMatchObject({ id: 'plain', isGitRepo: false });
+        expect(execGit).toHaveBeenCalledTimes(1);
+      } finally {
+        rmSync(plainDir, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      ['an ownership refusal', { exitCode: 128, stdout: '', stderr: "fatal: detected dubious ownership in repository at '<fixture>'" }],
+      ['an interrupted probe', { exitCode: null, stdout: '', stderr: '', terminated: true, signal: 'SIGTERM' }],
+    ])('leaves Git capability unknown for %s without relaxing execution guards', async (_reason, probe) => {
+      const gitDir = mkdtempSync(join(tmpdir(), 'portos-refused-git-'));
+      try {
+        execFileSync('git', ['init', '-q'], { cwd: gitDir });
+        appsService.getAllApps.mockResolvedValue([{ id: 'repo', name: 'Repo', repoPath: gitDir, pm2ProcessNames: [], isGitRepo: false }]);
+        pm2Service.listProcessesStrict.mockResolvedValue([]);
+        streamingDetect.parseEcosystemFromPath.mockResolvedValue([]);
+        execGit.mockResolvedValueOnce(probe);
+
+        const response = await request(app).get('/api/apps');
+
+        expect(response.status).toBe(200);
+        expect(response.body[0]).toMatchObject({ id: 'repo' });
+        expect(response.body[0]).not.toHaveProperty('isGitRepo');
+        execGit.mockResolvedValueOnce(probe);
+        expect(await isRepo(gitDir)).toBe(false);
+      } finally {
         rmSync(gitDir, { recursive: true, force: true });
       }
     });

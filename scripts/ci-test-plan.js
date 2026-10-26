@@ -63,7 +63,7 @@ export const sourceReferencePattern = (sourcePath) => (
 // ci.yml because a job-level `if` cannot read the matrix context, so the
 // planner emits the matrix for scoped plans too. Sizing rationale:
 // docs/GITHUB_ACTIONS.md "Full-suite sharding".
-export const FULL_SUITE_SHARDS = { server: 2, client: 3, windows: 3 };
+export const FULL_SUITE_SHARDS = { server: 2, client: 3, windows: 4 };
 
 /** Matrix values for one runner: every shard on a full run, one otherwise. */
 export const shardIndexes = (mode, count) => (

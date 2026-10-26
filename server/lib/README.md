@@ -149,6 +149,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `brainValidation.js` | Brain/memory route schemas (search, ingest, edit). |
 | `catalogExtractionDraft.js` | Extraction-only six-type graph schema, strict grounded-output parsing, and conservative chunk identity/edge reconciliation. |
 | `catalogIdentityValidation.js` | Bilateral canonical catalog identity operator and peer evidence schemas. |
+| `catalogGreyboxValidation.js` | Endpoint-specific greybox request schemas, kept outside general catalog validation to avoid loading scene validation for unrelated catalog operations. |
 | `catalogValidation.js` | Creative ingredients catalog route schemas (scraps, ingredients, links, relations, tags, revisions, sync envelope). |
 | `catalogMediaLibrary.js` | Casting reference library helpers: normalize variant/tags/guide, filter by age/era/look/tag, pick up to 4 render guides. |
 | `characterSheetReferences.js` | Select canonical character-sheet images, resolve viewable assets, and report missing files, model support and provider limits for preview/render parity. |
@@ -1023,3 +1024,5 @@ migration with explicit recognition of the outgoing shipped defaults.
 | `providerExecutionOptions.js` | Read-only runtime capabilities and per-dispatch execution-option preparation. |
 
 | `catalogRedesign.js` | Shared editable redesign fields and per-field limits for catalog creative conversations. |
+
+| `releasePublication.js` | Validated request for forge-verified release publication milestones. |

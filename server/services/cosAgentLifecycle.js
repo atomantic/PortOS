@@ -76,6 +76,7 @@ export async function readProtectedCleanupOwners({ state = null, index = null, t
 }
 
 export async function registerAgent(agentId, taskId, metadata = {}) {
+  metadata = { ...metadata, releasePublication: null };
   return withStateLock(async () => {
     const state = await loadState();
 
@@ -107,6 +108,13 @@ export async function updateAgent(agentId, updates) {
 
     if (!state.agents[agentId]) {
       return null;
+    }
+
+    // Only forge verification may write publication receipts. Generic updates
+    // and stale completion metadata cannot forge or revoke an observed release.
+    if (updates.metadata && Object.hasOwn(updates.metadata, 'releasePublication')) {
+      const { releasePublication: _publication, ...metadata } = updates.metadata;
+      updates = { ...updates, metadata };
     }
 
     // Socket events, reconnect snapshots and finalization may arrive out of
@@ -150,6 +158,29 @@ export async function updateAgent(agentId, updates) {
 
     cosEvents.emit('agent:updated', updatedAgent);
     return updatedAgent;
+  });
+}
+
+/** Persist one forge-verified milestone without changing execution/delivery status. */
+export async function recordAgentReleasePublication(owner, receipt) {
+  return withStateLock(async () => {
+    const state = await loadState();
+    const agent = state.agents[owner.id];
+    if (!agent || agent.status !== 'running' || agent.taskId !== owner.taskId
+      || agent.startedAt !== owner.startedAt || agent.metadata?.taskAnalysisType !== 'do-release'
+      || agent.metadata?.sourceWorkspace !== owner.metadata?.sourceWorkspace
+      || agent.metadata?.workspacePath !== owner.metadata?.workspacePath) {
+      throw new ServerError('Release coordinator ownership changed during verification', { status: 409 });
+    }
+    const previous = agent.metadata.releasePublication;
+    if (previous) {
+      if (previous.identity !== receipt.identity) throw new ServerError('Release coordinator already recorded a different publication', { status: 409 });
+      return previous;
+    }
+    const updated = { ...agent, metadata: { ...agent.metadata, releasePublication: receipt } };
+    await saveState({ ...state, agents: { ...state.agents, [owner.id]: updated } }, { changedAgentIds: [owner.id] });
+    cosEvents.emit('agent:updated', updated);
+    return receipt;
   });
 }
 

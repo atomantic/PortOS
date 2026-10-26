@@ -214,3 +214,31 @@ it('retains a cleanup-only task hold when preservation or another obligation is 
   expect(screen.getByText('Task incomplete')).toBeInTheDocument();
   expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
 });
+
+it('shows verified eventual delivery instead of the earlier pre-merge contention verdict', () => {
+  const agent = { result: { success: false, executionSuccess: true,
+    taskOutcome: { status: 'incomplete', reason: 'Earlier main movement.' } }, metadata: {
+    repoStateVerification: { status: 'completed', deliveryVerified: true },
+    cleanupOutcome: { status: 'verified', reason: 'already-absent-merged', committedIntegrationVerified: true },
+  } };
+  const view = render(<AgentResultLine agent={agent} />);
+  expect(screen.getByText('Completed successfully')).toBeInTheDocument();
+  expect(screen.queryByText('Task incomplete')).not.toBeInTheDocument();
+  view.rerender(<AgentResultLine agent={{ ...agent, metadata: { ...agent.metadata,
+    cleanupOutcome: { status: 'blocked', committedIntegrationVerified: true } } }} />);
+  expect(screen.getByText('Task incomplete')).toBeInTheDocument();
+  expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+});
+
+it('shows verified publication before any terminal result and retains it after synchronization fails', () => {
+  const publication = { status: 'verified', tag: 'v1.2.3', releaseUrl: 'https://github.com/example/repo/releases/tag/v1.2.3', publishedAt: '2026-01-01T12:00:00Z' };
+  const agent = { status: 'running', metadata: { releasePublication: publication } };
+  const view = render(<AgentResultLine agent={agent} />);
+  expect(screen.getByText('Published — synchronization not yet verified')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'v1.2.3' })).toHaveAttribute('href', publication.releaseUrl);
+  expect(view.container.querySelector('time')).toHaveAttribute('datetime', publication.publishedAt);
+  expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+  view.rerender(<AgentResultLine agent={{ ...agent, result: { success: false, error: 'Synchronization failed' } }} />);
+  expect(screen.getByText('Published — synchronization not yet verified')).toBeInTheDocument();
+  expect(screen.getByText('Synchronization failed')).toBeInTheDocument();
+});
