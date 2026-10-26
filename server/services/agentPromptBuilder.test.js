@@ -9,6 +9,7 @@ import { tmpdir } from 'os';
 import { execFileSync, spawnSync } from 'child_process';
 import { PATHS } from '../lib/fileUtils.js';
 import { setHttpsEnabledAtBoot } from '../lib/httpsState.js';
+import { resolveBashBinary } from '../lib/bashResolver.js';
 
 // Isolate personal instructions so contributor config cannot decide assertions.
 // Tests of global-instruction loading override this with a fixture home (#3475).
@@ -1354,7 +1355,7 @@ describe('buildLightContextPrompt', () => {
       const hasZsh = spawnSync('zsh', ['-f', '-c', 'exit 0']).status === 0;
 
       it('expands the emitted refspecs to the branch names under bash', () => {
-        expect(expandUnderShell('bash', buildPublishPrompt())).toEqual([...expected, '']);
+        expect(expandUnderShell(resolveBashBinary(), buildPublishPrompt())).toEqual([...expected, '']);
       });
 
       it.runIf(hasZsh)('expands the emitted refspecs identically under zsh (a bare $BRANCH: is a zsh modifier)', () => {
