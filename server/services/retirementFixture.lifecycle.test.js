@@ -12,7 +12,7 @@ const fixtureUrl = new URL('../../scripts/lib/vitestTempRootFixture.js', import.
 const processUrl = new URL('../lib/childProcess.js', import.meta.url).href;
 
 function observedSuite(root, mode, tracked) {
-  const name = mode === 'git' ? 'heldCheckoutExactDelivery.integration.test.js' : 'heldCheckoutRecovery.test.js';
+  const name = mode.endsWith('git') ? 'heldCheckoutExactDelivery.integration.test.js' : 'heldCheckoutRecovery.test.js';
   const url = new URL(name, import.meta.url);
   const shim = join(root, 'observed-vitest.js');
   writeFileSync(shim, `
@@ -70,7 +70,7 @@ function lifecycleSource(root, mode, tracked) {
     globalThis.__retirementFixture = state;
     vi.mock('node:fs/promises', async original => {
       const fs = await original();
-      const { statSync, writeFileSync } = await import('node:fs');
+      const { existsSync, statSync, writeFileSync } = await import('node:fs');
       return { ...fs,
         mkdtemp: async (...args) => {
           const path = await fs.mkdtemp(...args);
@@ -89,6 +89,17 @@ function lifecycleSource(root, mode, tracked) {
           if (identity && state.rootIdentity && identity.dev === state.rootIdentity.dev && identity.ino === state.rootIdentity.ino) {
             state.earlyRemoval ||= state.active > 0;
             writeFileSync(process.env.RETIRE_REMOVAL, 'scratch removal attempted');
+            if (${JSON.stringify(mode.startsWith('cleanup-'))}) {
+              // Dispose the synthetic fixture before surfacing the injected
+              // failure; this probes reporting, not a historical lock holder.
+              await fs.rm(path, options);
+              // A failing suite afterAll may prevent later observer hooks.
+              writeFileSync(process.env.RETIRE_RESULT, JSON.stringify({
+                earlyRemoval: state.earlyRemoval, active: state.active,
+                scratchExists: existsSync(state.scratch),
+              }));
+              throw Object.assign(new Error('controlled scratch removal failure'), { code: 'EBUSY' });
+            }
           }
           return fs.rm(path, options);
         },
@@ -125,6 +136,46 @@ function lifecycleSource(root, mode, tracked) {
 }
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('retirement fixture cancellation boundary', () => {
+  // Uniquely catches cleanup-only failures losing all fixture diagnostics when
+  // the test itself passed, in both actual suite teardown boundaries.
+  for (const mode of ['cleanup-git', 'cleanup-writes']) {
+    owned.it(`reports scratch removal failure after a passing ${mode} case`, async ({ signal }) => {
+      const host = mkdtempSync(join(tmpdir(), 'retirement-lifecycle-'));
+      let result;
+      try {
+        const fixture = createVitestTempFixture(host, 'server', '');
+        const root = fixture.args[fixture.args.indexOf('--root') + 1];
+        writeFileSync(join(root, 'vitest.setup.js'), `import ${JSON.stringify(new URL('../vitest.setup.js', import.meta.url).href)};`);
+        const resultFile = join(host, 'result.json');
+        Object.assign(fixture.options.env, {
+          RETIRE_RESULT: resultFile, RETIRE_REMOVAL: join(host, 'removal'),
+          RETIRE_CLEANUP: join(host, 'cleanup'), RETIRE_CANCELLED: join(host, 'cancelled'),
+          PORTOS_PROFILE_RETIREMENT_FIXTURE: '0', PORTOS_PROFILE_HELD_RECEIPT: '0',
+          PORTOS_TEST_QUIET: '1',
+        });
+        writeFileSync(join(root, 'lifecycle.test.js'), lifecycleSource(root, mode, true));
+        fixture.args.push('--testNamePattern', mode.endsWith('git')
+          ? 'custom-driver' : 'retains more than 1000 ignored files');
+        result = await runFixtureToCompletion(fixture, undefined, { signal });
+        const output = result.stdout + result.stderr;
+        expect(result.error, output).toBeUndefined();
+        expect(result.status, output).toBe(1);
+        expect(output).toContain('controlled scratch removal failure');
+        const reports = output.split('\n').filter(line => line.includes('fixture:') && line.includes('scratch-removal='));
+        expect(reports, output).toHaveLength(1);
+        expect(reports[0]).toMatch(/scratch-removal=\d+ms\/1 max=\d+ms active=0 oldest=0ms/);
+        expect(reports[0]).not.toContain(host);
+        expect(JSON.parse(readFileSync(resultFile, 'utf8'))).toEqual({ earlyRemoval: false, active: 0, scratchExists: false });
+        // finish() deliberately rethrows the injected teardown failure. Vitest
+        // can then skip its later template hook; this harness removes those
+        // separate templates with host only after the nested process closes.
+        expect(output).not.toMatch(/test temp leak: (?:detached-delivery-|portos-held-checkout-)/);
+      } finally {
+        if (result?.closeConfirmed) rmSync(host, { recursive: true, force: true });
+      }
+    });
+  }
+
   // Each negative control proves the actual suite removes scratch too early
   // without settlement; the matching repair waits for that same owned work.
   for (const mode of ['git', 'writes']) for (const tracked of [false, true]) {
@@ -154,6 +205,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retirement fixture cancellation boundar
         Object.assign(fixture.options.env, {
           RETIRE_READY: ready, RETIRE_RELEASE: release, RETIRE_CLEANUP: cleanup,
           RETIRE_CANCELLED: cancelled, RETIRE_RESULT: resultFile, RETIRE_HOOKS: hooks, RETIRE_REMOVAL: removal,
+          PORTOS_TEST_QUIET: '1',
         });
         writeFileSync(join(root, 'lifecycle.test.js'), lifecycleSource(root, mode, tracked));
         if (mode === 'git') writeFileSync(join(root, 'neighbor.test.js'), fixtureReadyFailureSource(ready));
@@ -179,7 +231,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retirement fixture cancellation boundar
         expect(output).toContain(mode === 'git' ? 'controlled sibling failure' : 'controlled hook deadline');
         expect(JSON.parse(readFileSync(resultFile, 'utf8'))).toEqual({ earlyRemoval: !tracked, active: 0, scratchExists: false });
         expect(readFileSync(join(host, 'keep'), 'utf8')).toBe('neighboring artifact');
-        if (tracked) expect(output).not.toMatch(/test temp leak|could not remove run temp root|EBUSY|ENOENT/);
+        if (tracked) {
+          expect(output).toContain(mode === 'git' ? 'exact-delivery fixture:' : 'retirement fixture:');
+          expect(output).not.toMatch(/test temp leak|could not remove run temp root|EBUSY|ENOENT/);
+        }
       } finally {
         controller.abort();
         if (running) closed = (await running).closeConfirmed;
