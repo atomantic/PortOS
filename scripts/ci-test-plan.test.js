@@ -773,6 +773,7 @@ describe('CI test impact planner', () => {
     for (const path of [
       '.github/workflows/ci.yml',
       'server/vitest.config.js',
+      'client/vitest.config.js',
       'client/src/test/setup.js',
       'server/lib/validation.js',
       // The client lint configuration. Both of these carry real enforced rules —
@@ -1711,8 +1712,8 @@ describe('Windows escalation on a full plan (#7440)', () => {
     ...options,
   });
 
-  it('runs the contract baseline for a full trigger windows-server cannot observe', () => {
-    const downgraded = plan(['client/vite.config.js']);
+  it.each(['client/vite.config.js', 'client/vitest.config.js'])('runs the Windows contract baseline for client-only configuration: %s', (path) => {
+    const downgraded = plan([path]);
 
     // Still a full plan for every Linux suite — only the 2x job narrows.
     expect(downgraded.full).toBe(true);
@@ -1741,10 +1742,10 @@ describe('Windows escalation on a full plan (#7440)', () => {
 
   it('escalates when ANY matching trigger is Windows-relevant, not just the reported one', () => {
     // The reason line reports the first match in sorted-path order, which here
-    // is the client-only one. The Windows decision must still see server/index.js.
-    const mixed = plan(['client/vite.config.js', 'server/index.js']);
+    // is the client-only one. The server runner config still escalates Windows.
+    const mixed = plan(['client/vitest.config.js', 'server/vitest.config.js']);
 
-    expect(mixed.reason).toContain('client/vite.config.js');
+    expect(mixed.reason).toContain('client/vitest.config.js');
     expect(mixed.windowsMode).toBe('full');
     expect(mixed.shards.windows).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.windows));
   });

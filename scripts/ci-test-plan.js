@@ -240,7 +240,10 @@ const FULL_TRIGGER_RULES = [
   // Every workspace's .npmrc pins ignore-scripts and install behavior; npm reads
   // it on the Windows install too.
   { re: /(?:^|\/)\.npmrc$/, reason: 'npm configuration changed', windowsEscalates: true },
-  { re: /^(?:server|client)\/vitest\.config(?:\.db)?\.js$/, reason: 'test runner configuration changed', windowsEscalates: true },
+  { re: /^server\/vitest\.config(?:\.db)?\.js$/, reason: 'test runner configuration changed', windowsEscalates: true },
+  // windows-server uses the server runner; client configuration still gets the
+  // complete Linux plan and the native Windows contract baseline.
+  { re: /^client\/vitest\.config\.js$/, reason: 'client test runner configuration changed', windowsEscalates: false },
   { re: /^scripts\/vitestCiPool(?:\.test)?\.js$/, reason: 'test runner pool configuration changed', windowsEscalates: true },
   { re: /^server\/vitest\.setup\.js$/, reason: 'server test setup changed', windowsEscalates: true },
   // Client-only: windows-server never loads the client setup file.

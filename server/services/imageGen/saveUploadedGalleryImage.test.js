@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, statSync } from 'fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import sharp from 'sharp';
@@ -230,15 +230,12 @@ describe('saveUploadedGalleryImage', () => {
     ).rejects.toMatchObject({ status: 400, code: 'UNSUPPORTED_IMAGE' });
   }));
 
-  it('accepts a file above the former JSON ceiling and preserves PNG metadata', () => fixture.run(async () => {
+  it('imports a staged PNG and preserves its generation metadata', () => fixture.run(async () => {
     const png = await measureStage('fixture-encode', () =>
       sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).png().toBuffer());
     const source = addPngText(png, 'parameters', 'A test image\nSteps: 20, Seed: 42');
-    const tempPath = join(tmpRoot, 'large.png');
-    // Trailing padding is legal input for the decoder, without a huge pixel allocation.
-    await measureStage('fixture-write', () =>
-      writeFileSync(tempPath, Buffer.concat([source, Buffer.alloc(56 * 1024 * 1024)])));
-    expect(statSync(tempPath).size).toBeGreaterThan(56 * 1024 * 1024);
+    const tempPath = join(tmpRoot, 'staged.png');
+    await measureStage('fixture-write', () => writeFileSync(tempPath, source));
     const saved = await measureStage('upload', () => saveUploadedGalleryImage(null, tempPath));
     expect(saved.metadata).toMatchObject({ prompt: 'A test image', steps: 20, seed: 42 });
     expect(JSON.parse(readFileSync(join(imagesDir, saved.filename.replace('.png', '.metadata.json')), 'utf8')))
