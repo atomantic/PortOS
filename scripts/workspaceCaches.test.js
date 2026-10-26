@@ -24,7 +24,18 @@ describe('checkout-owned server Vite caches with shared dependencies', () => {
 
   for (const [configName, cacheName] of [['vitest.config.js', 'vitest'], ['vitest.config.db.js', 'vitest-db']]) {
     it(`server ${configName} keeps concurrent publications separate and reuses its owned cache`, async ({ signal, onTestFailed }) => {
-      await checkWorkspaceCacheIsolation('server', configName, cacheName, expect, signal, { phase: createTestPhaseDiagnostics(onTestFailed) });
+      const children = new Map();
+      onTestFailed(({ task }) => {
+        const evidence = `Cache children: ${JSON.stringify([...children.values()])}`;
+        for (const error of task.result.errors) {
+          error.message += `\n${evidence}`;
+          if (error.stack) error.stack += `\n${evidence}`;
+        }
+      });
+      await checkWorkspaceCacheIsolation('server', configName, cacheName, expect, signal, {
+        phase: createTestPhaseDiagnostics(onTestFailed),
+        onChild: row => children.set(row.name, row),
+      });
     });
   }
 
