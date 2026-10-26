@@ -1,5 +1,6 @@
 vi.mock('../services/catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: vi.fn(async id => id) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { basename } from 'node:path';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -30,7 +31,8 @@ vi.mock('../services/catalogDB.js', () => ({
 }));
 vi.mock('../lib/pathSafety.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  resolveImageInputPath: (path) => mocks.imageFiles.has(path.split('/').pop()) ? path : null,
+  // The real sheet service supplies native filesystem paths on every runner.
+  resolveImageInputPath: (path) => mocks.imageFiles.has(basename(path)) ? path : null,
 }));
 vi.mock('../services/universeBuilder.js', () => ({
   getUniverse: (...args) => mocks.getUniverse(...args),
@@ -113,7 +115,7 @@ describe('catalog sheet routes', () => {
     expect(JSON.stringify(preview)).not.toContain(process.cwd());
     const queued = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
     expect(queued.status).toBe(200);
-    expect(queuedParams().referenceImagePaths.map((path) => path.split('/').pop())).toEqual(['portrait.png', 'canon.png', 'profile.png']);
+    expect(queuedParams().referenceImagePaths.map((path) => basename(path))).toEqual(['portrait.png', 'canon.png', 'profile.png']);
     expect(queuedParams().prompt).toBe(preview.sentPrompt);
     expect(preview.promptAdditions.find((a) => a.id === 'character-identity').text).toContain('facial features');
   });
