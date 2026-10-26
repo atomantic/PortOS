@@ -1537,13 +1537,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   // Normal tests generate state caches as well as compiled modules. Only their
   // tagged producer schema may pass the actual destructive retirement boundary.
-  it.each(['results', 'dependencies', 'dependencies-no-setup', 'bad-setup', 'unknown-field', 'bad-version', 'bad-project', 'bad-index', 'untagged', 'untracked', 'sidecar'])(
+  it.each(['results', 'dependencies', 'dependencies-no-setup', 'atomic-empty', 'atomic-nonempty', 'atomic-untagged', 'atomic-untracked', 'bad-setup', 'unknown-field', 'bad-version', 'bad-project', 'bad-index', 'untagged', 'untracked', 'sidecar'])(
     'recognizes only the actual tagged Vitest state producer: %s', async kind => {
       const c = await reviewedCheckout(`state-cache-${kind}`);
       const root = join(c.path, 'server/.cache/vitest/vitest');
       const project = join(root, 'a'.repeat(40)); await mkdir(project, { recursive: true });
-      if (kind !== 'untracked') await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
-      if (kind !== 'untagged') await writeFile(join(root, 'CACHEDIR.TAG'),
+      if (!['untracked', 'atomic-untracked'].includes(kind)) await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
+      if (!['untagged', 'atomic-untagged'].includes(kind)) await writeFile(join(root, 'CACHEDIR.TAG'),
         'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.\n# For information about cache directory tags see https://bford.info/cachedir/\n');
       const dependencies = ['dependencies', 'dependencies-no-setup', 'bad-setup', 'bad-index'].includes(kind);
       const value = { version: 1, projects: { parallel: dependencies
@@ -1554,19 +1554,20 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       if (kind === 'unknown-field') value.wanted = 'unique user content';
       if (kind === 'bad-version') value.version = 99;
       if (kind === 'bad-project') value.projects.parallel = { wanted: 'unique user content' };
-      const file = join(project, dependencies ? 'dependencies.json' : 'results.json');
-      await writeFile(file, JSON.stringify(value));
+      const file = join(project, kind.startsWith('atomic-') ? '.tmp-1700000000000-abc123' : dependencies ? 'dependencies.json' : 'results.json');
+      const content = kind.startsWith('atomic-') ? kind === 'atomic-nonempty' ? 'unique partial output' : '' : JSON.stringify(value);
+      await writeFile(file, content);
       if (kind === 'sidecar') await writeFile(join(project, 'wanted.txt'), 'unique user data');
       const prepared = await c.prepare();
       expect(prepared.ok).toBe(true);
       const retired = await c.confirm(prepared.review);
-      if (['results', 'dependencies', 'dependencies-no-setup'].includes(kind)) {
+      if (['results', 'dependencies', 'dependencies-no-setup', 'atomic-empty'].includes(kind)) {
         expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
         expect(await registered(c.path)).toBe(false);
       } else {
         expect(retired.ok).toBe(false);
         expect(await registered(c.path)).toBe(true);
-        expect(await readFile(file, 'utf8')).toBe(JSON.stringify(value));
+        expect(await readFile(file, 'utf8')).toBe(content);
       }
       expect(await archives()).toEqual([]);
     });

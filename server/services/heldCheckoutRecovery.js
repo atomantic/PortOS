@@ -1103,13 +1103,17 @@ function testStateCacheSchema(value, filename) {
 
 async function disposableStateCache(path, rel, ignored, verified, work) {
   const root = Object.values(WORKSPACE_TEST_CACHE_ROOTS).map(cache => `${cache.workspace}/${cache.cacheDir}/vitest`)
-    .find(cache => rel.startsWith(`${cache}/`) && /^(?:CACHEDIR\.TAG|[a-f0-9]{40}\/(?:results|dependencies)\.json)$/.test(rel.slice(cache.length + 1)));
+    .find(cache => rel.startsWith(`${cache}/`) && /^(?:CACHEDIR\.TAG|[a-f0-9]{40}\/(?:(?:results|dependencies)\.json|\.tmp-\d{13}-[a-z0-9]+))$/.test(rel.slice(cache.length + 1)));
   if (!root || !ignored.has(`${root}/CACHEDIR.TAG`)) return false;
   if (!verified.has(root)) verified.set(root, archiveBytes(await archiveFile(path, join(path, root, 'CACHEDIR.TAG')), work, 2048)
     .then(tag => tag.toString('utf8') === `${VITEST_CACHE_TAG}\n# For information about cache directory tags see https://bford.info/cachedir/\n`)
     .catch(cacheInspectionFailure));
   if (!await verified.get(root)) return false;
   if (rel === `${root}/CACHEDIR.TAG`) return true;
+  // Vitest's atomicWriteFile creates .tmp-<Date.now>-<base36 random> beside
+  // state files. An interrupted empty file holds no payload; nonempty partial
+  // writes stay protected rather than being discarded by filename alone.
+  if (basename(rel).startsWith('.tmp-')) return (await archiveBytes(await archiveFile(path, join(path, rel)), work, 0)).length === 0;
   const value = JSON.parse((await archiveBytes(await archiveFile(path, join(path, rel)), work, MAX_MANIFEST_BYTES)).toString('utf8'));
   return testStateCacheSchema(value, basename(rel));
 }
