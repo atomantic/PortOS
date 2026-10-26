@@ -1,11 +1,10 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { rmSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { spawn } from './childProcess.js';
 
 const compilerKey = Symbol.for('portos.windowsGitSupervisor');
@@ -21,7 +20,10 @@ function supervisor() {
       const directory = await mkdtemp(join(tmpdir(), 'portos-git-supervisor-'));
       state.directory = directory;
       const executable = join(directory, 'supervisor.exe');
-      const source = fileURLToPath(new URL('./windowsGitSupervisor.cs', import.meta.url));
+      const source = join(directory, 'supervisor.cs');
+      // Snapshot compiler input before asynchronous launch. The explicit read
+      // also keeps native source bytes in the test memo's dependency keys.
+      await writeFile(source, await readFile(new URL('./windowsGitSupervisor.cs', import.meta.url)));
       const { windowsPowerShell51Path, findCommandOnPath } = await import('./processEnv.js');
       const quote = value => `'${value.replaceAll("'", "''")}'`;
       const script = `$ErrorActionPreference='Stop'; Add-Type -Path ${quote(source)} -ReferencedAssemblies System.Web.Extensions -OutputAssembly ${quote(executable)} -OutputType ConsoleApplication`;
