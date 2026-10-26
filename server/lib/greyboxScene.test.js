@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { greyboxSceneSchema, resolveGreybox } from './greyboxScene.js';
+import editingParts from './fixtures/greyboxEditing.json' with { type: 'json' };
 
 const rink = () => ({
   parts: [
@@ -12,6 +13,14 @@ const rink = () => ({
 });
 
 describe('greyboxSceneSchema', () => {
+  it.each(Object.entries(editingParts))('accepts the client editor’s %s wire fixture and rejects an invalid extent', (_type, part) => {
+    expect(greyboxSceneSchema.safeParse({ parts: [part] }).success).toBe(true);
+    const invalid = structuredClone(part);
+    if (invalid.size) invalid.size[0] = 0;
+    else invalid.height = 0;
+    expect(greyboxSceneSchema.safeParse({ parts: [invalid] }).success).toBe(false);
+  });
+
   it('accepts a minimal rink and applies defaults', () => {
     const scene = greyboxSceneSchema.parse(rink());
     expect(scene.source).toBe('spec');
