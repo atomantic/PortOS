@@ -24,7 +24,10 @@ const scene = {
 };
 
 async function openEnvironment(fixture, { warmup = false } = {}) {
-  const page = await fixture.browser.newPage({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 2 });
+  // Exercise the supported reduced-motion path: animated glass backdrops can
+  // stall SwiftShader's first canvas paint without moving the shot button.
+  // The scene, real pointer actions, HiDPI buffer and capture checks stay intact.
+  const page = await fixture.browser.newPage({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 2, reducedMotion: 'reduce' });
   page.setDefaultTimeout(10000);
   await page.addInitScript(() => {
     // Only timing/method names from this synthetic fixture, capped per page.
@@ -133,7 +136,7 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     // Demand rendering and Html placement finish after React commits.
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     expect(await page.locator('[data-testid="greybox-viewer"] canvas').isVisible()).toBe(true);
-    const readiness = await page.evaluate(() => ({ ...window.greyboxReadinessEvidence?.(), callCounts: window.greyboxCallCounts }));
+    const readiness = await page.evaluate(() => ({ ...window.greyboxReadinessEvidence?.(), callCounts: window.greyboxCallCounts, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, ambientAnimations: ['::before', '::after'].map(pseudo => getComputedStyle(document.body, pseudo).animationName) }));
     console.info(`Greybox passive startup samples: ${JSON.stringify(readiness)}`);
     const finalMetrics = await metrics();
     console.info(`Greybox startup durations: ${JSON.stringify(Object.fromEntries(Object.entries(finalMetrics).map(([name, value]) => [name, value - initialMetrics[name]])))}`);
@@ -145,7 +148,7 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     const finalMetrics = await metrics();
     const durations = Object.fromEntries(Object.entries(finalMetrics).map(([name, value]) => [name, value - initialMetrics[name]]));
     await session.detach();
-    const readiness = await page.evaluate(() => ({ ...window.greyboxReadinessEvidence?.(), gpuCalls: window.greyboxGpuCalls, callCounts: window.greyboxCallCounts }));
+    const readiness = await page.evaluate(() => ({ ...window.greyboxReadinessEvidence?.(), gpuCalls: window.greyboxGpuCalls, callCounts: window.greyboxCallCounts, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, ambientAnimations: ['::before', '::after'].map(pseudo => getComputedStyle(document.body, pseudo).animationName) }));
     const viewers = await page.getByTestId('greybox-viewer').evaluateAll(elements => elements.map(el => ({
       rect: el.getBoundingClientRect().toJSON(), canvases: [...el.querySelectorAll('canvas')].map(c => ({
         rect: c.getBoundingClientRect().toJSON(), width: c.width, height: c.height, visibility: getComputedStyle(c).visibility, display: getComputedStyle(c).display,
