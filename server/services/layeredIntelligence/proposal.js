@@ -8,7 +8,7 @@
  * CoS hand-off task. Also the tracker→filer dispatch table.
  */
 
-import { normalizeDispatchEffort, normalizeDispatchModel } from '../../lib/dispatchLabels.js';
+import { normalizeDispatchEffort, normalizeDispatchModel, normalizeIssueHardwareRequirements, HELP_WANTED_NON_REQUIREMENT_REASONS } from '../../lib/dispatchLabels.js';
 import { PROPOSAL_SCOPES, PROPOSAL_COMPLEXITIES, HANDOFF_COMPLEXITY } from './constants.js';
 import { normalizeSlug } from './dedup.js';
 
@@ -43,9 +43,10 @@ export function validateReasonerResponse(parsed) {
 
   const p = parsed.proposal;
   if (p && typeof p === 'object' && !Array.isArray(p)) {
+    const hardwareRequirements = normalizeIssueHardwareRequirements(p.hardwareRequirements, p);
     const slug = normalizeSlug(p.slug);
     const title = typeof p.title === 'string' ? p.title.trim() : '';
-    if (PROPOSAL_SCOPES.includes(p.scope) && slug && title) {
+    if (PROPOSAL_SCOPES.includes(p.scope) && slug && title && hardwareRequirements) {
       out.proposal = {
         scope: p.scope,
         slug,
@@ -66,7 +67,9 @@ export function validateReasonerResponse(parsed) {
         // applies. Independent of model:light (a wide mechanical sweep is not
         // a good first issue).
         goodFirstIssue: p.goodFirstIssue === true,
-        helpWanted: p.helpWanted === true
+        helpWanted: p.helpWanted === true,
+        hardwareRequirements,
+        helpWantedReason: HELP_WANTED_NON_REQUIREMENT_REASONS.includes(p.helpWantedReason) ? p.helpWantedReason : null
       };
     }
   }

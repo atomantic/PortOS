@@ -128,7 +128,7 @@ describe('forge vs Jira label formatting', () => {
   // axis builders above it keep the canonical form their lookup tables are keyed
   // by and nothing between them has to carry a `cli`.
   it('spells every axis with GitLab\'s scoped separator on glab, and Jira stays colon-free', () => {
-    expect(forgeIssueLabels({ model: 'light', planner: 'claude-opus-5', helpWanted: true, cli: 'glab' }))
+    expect(forgeIssueLabels({ model: 'light', planner: 'claude-opus-5', helpWanted: true, helpWantedReason: 'user-perspectives', cli: 'glab' }))
       .toEqual(['model::light', HELP_WANTED_LABEL, 'planner::opus-5']);
     expect(forgeIssueLabels({ model: 'heavy', effort: 'low', cli: 'glab' }))
       .toEqual(['model::heavy', 'effort::low']);
@@ -238,7 +238,7 @@ describe('label specs and CLI formatting', () => {
     expect(forgeIssueLabels({ model: 'light', goodFirstIssue: true }))
       .toEqual(['model:light', GOOD_FIRST_ISSUE_LABEL]);
     expect(forgeIssueLabels({ model: 'light' })).toEqual(['model:light']);
-    expect(jiraIssueLabels({ effort: 'low', helpWanted: true }))
+    expect(jiraIssueLabels({ effort: 'low', helpWanted: true, helpWantedReason: 'user-perspectives' }))
       .toEqual(['effort-low', JIRA_HELP_WANTED_LABEL]);
   });
 

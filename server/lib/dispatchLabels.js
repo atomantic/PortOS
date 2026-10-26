@@ -31,6 +31,36 @@ import { kebabCase } from './textUtils.js';
 export const DISPATCH_MODEL_TIERS = Object.freeze(['light', 'medium', 'heavy', 'ultra']);
 export const DISPATCH_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 
+/** Explicit prerequisites, never inferred from prose or host detection. Unscoped
+ * labels let combined requirements coexist on GitLab as well as GitHub. */
+export const HELP_WANTED_NON_REQUIREMENT_REASONS = Object.freeze(['user-perspectives', 'hardware-alternatives']);
+export const HARDWARE_REQUIREMENTS = Object.freeze(['windows', 'macos', 'linux', 'cuda', 'apple-silicon']);
+const HARDWARE_LABEL_COLORS = Object.freeze(Object.fromEntries(HARDWARE_REQUIREMENTS.map((name) => [name, '0366D6'])));
+const HARDWARE_LABEL_DESCRIPTIONS = Object.freeze({
+  windows: 'Requires Windows development or validation',
+  macos: 'Requires macOS development or validation',
+  linux: 'Requires Linux development or validation',
+  cuda: 'Requires NVIDIA CUDA hardware',
+  'apple-silicon': 'Requires Apple Silicon hardware',
+});
+
+/** Missing metadata remains compatible; malformed metadata must not disappear. */
+export function normalizeIssueHardwareRequirements(value = [], { helpWanted, helpWantedReason } = {}) {
+  if (!Array.isArray(value) || value.some((name) => !HARDWARE_REQUIREMENTS.includes(name))) return null;
+  const requirements = [...new Set(value)];
+  // Independent OS targets and macOS/CUDA validation must be split before filing.
+  if (requirements.filter((name) => ['windows', 'macos', 'linux'].includes(name)).length > 1
+    || (requirements.includes('cuda') && (requirements.includes('macos') || requirements.includes('apple-silicon')))) return null;
+  if (helpWanted === true && !requirements.length && !HELP_WANTED_NON_REQUIREMENT_REASONS.includes(helpWantedReason)) return null;
+  return requirements;
+}
+
+function hardwareRequirementLabels(value, options) {
+  const labels = normalizeIssueHardwareRequirements(value, options);
+  if (!labels) throw new TypeError('Invalid hardwareRequirements: supply canonical combined prerequisites or split independent platform targets');
+  return labels;
+}
+
 /**
  * The `<key><sep><value>` separator each forge CLI wants. GitLab's `::` is what
  * turns `model::heavy` into a native scoped label; GitHub keeps the plain `:`.
@@ -539,25 +569,28 @@ export function formatVolunteerClaimCommands(issueRef, { cli = 'gh' } = {}) {
  * label, so every axis above it stays in the canonical form its lookup tables
  * are keyed by.
  */
-export function forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner, cli = 'gh' } = {}) {
+export function forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, helpWantedReason, hardwareRequirements, planner, cli = 'gh' } = {}) {
   return [
     ...forgeDispatchLabels({ model, effort }),
     ...forgeContributorLabels({ goodFirstIssue, helpWanted }),
+    ...hardwareRequirementLabels(hardwareRequirements, { helpWanted, helpWantedReason }),
     forgePlannerLabel(planner),
   ].filter(Boolean).map((name) => forgeLabelName(name, { cli }));
 }
 
 /** Dispatch hints + contributor labels for one Jira ticket. */
-export function jiraIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner } = {}) {
+export function jiraIssueLabels({ model, effort, goodFirstIssue, helpWanted, helpWantedReason, hardwareRequirements, planner } = {}) {
   return [
     ...jiraDispatchLabels({ model, effort }),
     ...jiraContributorLabels({ goodFirstIssue, helpWanted }),
+    ...hardwareRequirementLabels(hardwareRequirements, { helpWanted, helpWantedReason }),
     jiraPlannerLabel(planner),
   ].filter(Boolean);
 }
 
 /** The fixed label tables, in precedence order, as `[colors, descriptions]` pairs. */
 const LABEL_TABLES = Object.freeze([
+  [HARDWARE_LABEL_COLORS, HARDWARE_LABEL_DESCRIPTIONS],
   [DISPATCH_LABEL_COLORS, DISPATCH_LABEL_DESCRIPTIONS],
   [CONTRIBUTOR_LABEL_COLORS, CONTRIBUTOR_LABEL_DESCRIPTIONS],
   [WORKFLOW_LABEL_COLORS, WORKFLOW_LABEL_DESCRIPTIONS],
@@ -668,6 +701,12 @@ export const DISPATCH_HINT_FANOUT_GUIDANCE = [
 ].join('\n');
 
 const HELP_WANTED_CRITERIA = 'only when testing or validation requires specific hardware, or input from multiple real users would materially enrich development. Name the required hardware or the user perspectives sought and how they improve validation or design in the issue body. A well-scoped task, complexity, or a desire for extra hands alone does not qualify.';
+export const HARDWARE_REQUIREMENT_GUIDANCE = [
+  'Hardware-bound `help wanted` needs actual labels: `windows`, `macos`, `linux`, `cuda`, `apple-silicon` (0366D6); reuse/create tracker labels. Body: hardware/runtime/assets and unblock evidence.',
+  'Labels mean AND, never incidental mentions. CUDA need not mean Windows; MLX needs `macos` + `apple-silicon`. For OR, label only shared requirements.',
+  'Split independent macOS/MLX and CUDA targets. Deduplicate; keep actionable per-target criteria, provenance, blockers and sibling/successor links before closing mixed parents.',
+  '`hardwareRequirements`: canonical prerequisite array ([] if none); extend vocabulary as needed. `helpWanted: true` needs requirements or `helpWantedReason: user-perspectives|hardware-alternatives` (OR with none shared). Refuse invalid/missing evidence. Never infer labels from prose/host or auto-change include/exclude selectors.',
+].join('\n');
 const HELP_WANTED_GUIDANCE = `Apply \`help wanted\` (color 008672) ${HELP_WANTED_CRITERIA}`;
 
 /** Canonical filing contract for every autonomous issue producer. */
@@ -683,6 +722,7 @@ export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
   `Create each label immediately before applying it, passing the name and \`--color\` as separate arguments: ${Object.entries(DISPATCH_LABEL_COLORS).map(([name, color]) => `\`gh label create ${name} --color ${color} 2>/dev/null || true\``).join(', ')}. glab needs \`--name <name>\` and \`--color "#<hex>"\`.`,
   'Contributor labels stay OPTIONAL and independent: `good first issue` (color 7057FF) when the work is self-contained enough for a new contributor with no deep repo context — a `model:light` 40-file sweep is NOT a good first issue. Use the same gh / glab label create form.',
   HELP_WANTED_GUIDANCE,
+  HARDWARE_REQUIREMENT_GUIDANCE,
   'Planner attribution: also apply the `planner:<model>` label naming the model that WROTE the plan. Never guess it from what you believe you are — use the exact label your run\'s "Planner attribution" instruction gives you, and omit the axis when your run was given none. It is a third independent axis: it records the AUTHOR, while `model:`/`effort:` recommend how a future agent should RUN the work.',
   'Use repeated `--label` flags (one per label). Preserve existing category/scope labels (`plan`, `ux`, `bug`, `tests`, `area:*`, …). After creating each issue, read its labels back (`gh issue view <number> --json labels`) and apply any that did not stick and read back again. Do not report filing complete until both axes are present; report a labeling failure explicitly if repair fails. Never relabel a deduplicated existing issue.',
   ISSUE_QUALITY_GUIDANCE,
@@ -703,6 +743,7 @@ export const JIRA_DISPATCH_HINT_GUIDANCE = [
   'Choose each axis only when the work you just inspected justifies it. Omit an axis rather than guessing. Do NOT stamp `medium` on both by reflex, and do NOT put `[model-…]` / `[effort-…]` / `[category]` / `[SEVERITY]` in the summary — those belong in labels.',
   'Also apply contributor labels when the work actually fits them — independently of the dispatch axes: `good-first-issue` (self-contained, a new contributor can ship it) and `help-wanted` under the criteria below. A `model-light` 40-file sweep is NOT a good-first-issue.',
   `Apply \`help-wanted\` ${HELP_WANTED_CRITERIA}`,
+  HARDWARE_REQUIREMENT_GUIDANCE,
   'Planner attribution: also apply the `planner-<model>` label naming the model that WROTE the plan, taken verbatim from your run\'s "Planner attribution" instruction (omit the axis when your run was given none). It records the AUTHOR, independently of the dispatch axes.',
   'Preserve existing category/scope labels. Never relabel a ticket you skipped as a duplicate.',
   ISSUE_QUALITY_GUIDANCE,
