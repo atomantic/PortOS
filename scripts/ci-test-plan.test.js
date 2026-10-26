@@ -1822,6 +1822,11 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'server/lib/nativeTrash.test.js',
       'server/lib/nativeTrash.smoke.test.js',
       'server/lib/bufferedSpawn.js',
+      'server/lib/execGit.js',
+      'server/lib/windowsGitProcess.js',
+      'server/lib/windowsGitProcess.test.js',
+      'server/lib/windowsGitProcess.protocol.test.js',
+      'server/lib/windowsGitSupervisor.cs',
       'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/pathSafety.js',
       'server/lib/mockPathsDataRoot.js',
@@ -1875,6 +1880,13 @@ describe('Windows escalation on a full plan (#7440)', () => {
       // `windows: true` here is a direct consequence of WINDOWS_RISK_RULES.
       expect(plan(['server/services/auth.js']).windows).toBe(false);
       expect(plan(['server/lib/bufferedSpawn.js']).windows).toBe(true);
+    });
+
+    it('selects the Windows Git process regressions for test-only changes (#13703)', () => {
+      const tests = ['server/lib/windowsGitProcess.test.js', 'server/lib/windowsGitProcess.protocol.test.js'];
+      const selected = buildCiTestPlan(tests, { trackedFiles: [...TRACKED, ...WINDOWS_CONTRACT_TESTS, ...tests], clientDependencies: [] });
+      expect(selected).toMatchObject({ full: false, windows: true, windowsMode: 'files' });
+      expect(selected.windowsFiles).toEqual([...new Set([...WINDOWS_CONTRACT_TESTS, ...tests])].sort());
     });
 
     it.each(['js', 'test.js'])('runs checkout retirement %s changes on Windows (#13562)', extension => {

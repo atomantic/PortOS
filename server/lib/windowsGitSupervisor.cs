@@ -46,7 +46,7 @@ public static class WindowsGitSupervisor
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CreateProcess(string application, StringBuilder command, IntPtr processSecurity, IntPtr threadSecurity, bool inherit, uint flags, IntPtr environment, string cwd, ref StartupEx startup, out ProcessInfo process);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool CreatePipe(out IntPtr read, out IntPtr write, ref Security security, uint size);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
-    [DllImport("kernel32.dll")] static extern bool CancelIoEx(IntPtr handle, IntPtr overlapped);
+    [DllImport("kernel32.dll")] static extern bool CancelIoEx(SafeFileHandle handle, IntPtr overlapped);
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateFile(string name, uint access, uint share, ref Security security, uint disposition, uint flags, IntPtr template);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetProcessTimes(IntPtr process, out long created, out long exited, out long kernel, out long user);
@@ -69,9 +69,9 @@ public static class WindowsGitSupervisor
     static void Emit(object value) {
         lock (outputLock) { Console.WriteLine(new JavaScriptSerializer().Serialize(value)); }
     }
-    static bool Pump(string id, string channel, IntPtr handle) {
+    static bool Pump(string id, string channel, SafeFileHandle handle) {
         try {
-            using (var stream = new FileStream(new SafeFileHandle(handle, true), FileAccess.Read, 16384, false)) {
+            using (var stream = new FileStream(handle, FileAccess.Read, 16384, false)) {
                 var buffer = new byte[16384];
                 int count;
                 while ((count = stream.Read(buffer, 0, buffer.Length)) > 0)
@@ -80,13 +80,20 @@ public static class WindowsGitSupervisor
             }
         } catch { return false; }
     }
+    static void ClosePipe(SafeFileHandle handle) {
+        if (handle == null) return;
+        // P/Invoke pins this exact handle during cancellation. A pump can
+        // dispose it concurrently; never address its recycled numeric value.
+        try { CancelIoEx(handle, IntPtr.Zero); } catch (ObjectDisposedException) { }
+        handle.Dispose();
+    }
     static void Run(Dictionary<string, object> request, string id, ManualResetEventSlim cancel) {
         IntPtr job = IntPtr.Zero, attributes = IntPtr.Zero, handles = IntPtr.Zero, jobs = IntPtr.Zero;
         IntPtr input = IntPtr.Zero, output = IntPtr.Zero, error = IntPtr.Zero;
         IntPtr outputRead = IntPtr.Zero, errorRead = IntPtr.Zero, environment = IntPtr.Zero;
         var process = new ProcessInfo();
         bool launched = false, settled = false, initialized = false;
-        bool pumping = false;
+        SafeFileHandle stdoutPipe = null, stderrPipe = null;
         Task<bool> stdout = null, stderr = null;
         string reason = "launch-failed";
         uint exitCode = 1;
@@ -103,6 +110,8 @@ public static class WindowsGitSupervisor
             Require(CreatePipe(out errorRead, out error, ref security, 0));
             Require(SetHandleInformation(outputRead, 1, 0));
             Require(SetHandleInformation(errorRead, 1, 0));
+            stdoutPipe = new SafeFileHandle(outputRead, true); outputRead = IntPtr.Zero;
+            stderrPipe = new SafeFileHandle(errorRead, true); errorRead = IntPtr.Zero;
             IntPtr size = IntPtr.Zero;
             InitializeProcThreadAttributeList(IntPtr.Zero, 2, 0, ref size);
             attributes = Marshal.AllocHGlobal(size);
@@ -128,9 +137,8 @@ public static class WindowsGitSupervisor
             Require(CreateProcess(executable, command, IntPtr.Zero, IntPtr.Zero, true, 0x08080400, environment, (string)request["cwd"], ref startup, out process));
             launched = true;
             CloseHandle(output); output = IntPtr.Zero; CloseHandle(error); error = IntPtr.Zero;
-            stdout = Task.Factory.StartNew(() => Pump(id, "stdout", outputRead), TaskCreationOptions.LongRunning);
-            stderr = Task.Factory.StartNew(() => Pump(id, "stderr", errorRead), TaskCreationOptions.LongRunning);
-            pumping = true;
+            stdout = Task.Factory.StartNew(() => Pump(id, "stdout", stdoutPipe), TaskCreationOptions.LongRunning);
+            stderr = Task.Factory.StartNew(() => Pump(id, "stderr", stderrPipe), TaskCreationOptions.LongRunning);
             long created, exited, kernel, user;
             Require(GetProcessTimes(process.Process, out created, out exited, out kernel, out user));
             // Retaining the native handle binds this evidence to this process,
@@ -164,12 +172,9 @@ public static class WindowsGitSupervisor
             if (input != IntPtr.Zero && input != new IntPtr(-1)) CloseHandle(input);
             if (output != IntPtr.Zero) CloseHandle(output);
             if (error != IntPtr.Zero) CloseHandle(error);
-            if (pumping) {
-                CancelIoEx(outputRead, IntPtr.Zero); CancelIoEx(errorRead, IntPtr.Zero);
-            } else {
-                if (outputRead != IntPtr.Zero) CloseHandle(outputRead);
-                if (errorRead != IntPtr.Zero) CloseHandle(errorRead);
-            }
+            ClosePipe(stdoutPipe); ClosePipe(stderrPipe);
+            if (outputRead != IntPtr.Zero) CloseHandle(outputRead);
+            if (errorRead != IntPtr.Zero) CloseHandle(errorRead);
             if (initialized) DeleteProcThreadAttributeList(attributes);
             foreach (IntPtr memory in new[] { attributes, handles, jobs, environment }) if (memory != IntPtr.Zero) Marshal.FreeHGlobal(memory);
         }

@@ -287,7 +287,7 @@ export const WINDOWS_RISK_RULES = [
   /^scripts\/ps1-bom\.test\.js$/,
   // Shell32 recycling and its opt-in real-bin smoke require an actual Windows runner.
   /^server\/lib\/nativeTrash(?:\.(?:smoke\.)?test)?\.js$/,
-  /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok)\b/,
+  /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok|execGit|windowsGitProcess|windowsGitSupervisor)\b/,
   // The cmd.exe wrap and npm-shim bypass every Windows CLI launch goes through.
   /^server\/lib\/aiToolkit\/internal\/windowsSafeSpawn\.js$/,
   // Path SEMANTICS differ per platform in ways pinPlatform() cannot fake: NTFS
