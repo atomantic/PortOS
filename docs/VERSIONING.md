@@ -218,15 +218,30 @@ retains the original receipt and verification timestamp.
 
 The agent card shows the release link and publication time as soon as the receipt
 is saved, even while execution continues. This receipt verifies **publication
-only**: synchronization remains explicitly unverified. The coordinator still owns
-synchronization, reviews, CI, admission, quality snapshot and preservation under
-the procedure below; this milestone does not authorize early completion or
-transfer that ownership. Automatic durable synchronization handoff is separate
-work tracked from #13758.
+only**: synchronization remains explicitly unverified. After saving the receipt,
+the endpoint persists a publication-keyed outbox and registers exactly one
+`task-release-sync-<publication identity>` continuation on this instance. A
+successful response confirms that durable task ownership; the publishing
+coordinator then stops doing synchronization and may complete without waiting
+for another agent slot. Every terminal agent write repeats the ownership check.
+On a registration failure, retain the original receipt, branch/head/PR and
+checkout evidence and retry the same handoff; do not create another task or
+publish again. Interrupted handoffs resume through ordinary delivery recovery.
+Legacy receipts are not enrolled at startup. Only an explicit publication
+verification request can enroll one, retaining its original verification time;
+an upgrade never silently generates new synchronization work from old releases.
+
+The outbox keeps the original reviewer policy, publication ancestry and retained
+physical checkout seeds. It never transfers checkout authority. The continuation
+uses the procedure below and ordinary delivery, admission and retirement recovery.
+Completed task history still owns its publication identity and cannot be deleted
+through task CRUD. Execution success does **not** mark synchronization verified:
+individual obligations remain pending until independently verified. The remaining
+verification and status-view slices are tracked in #13772 and #13773 under #13760.
 
 #### 6. Synchronize back without changing the published release
 
-After publication, open a normal **`release` → `main`** synchronization PR and
+After publication, the durable continuation opens a normal **`release` → `main`** synchronization PR and
 merge it with a merge commit after its own required checks/reviews/admission.
 This carries version metadata, notes and candidate-only fixes back to development
 and preserves the release merge ancestry for the next candidate. Run the

@@ -93,7 +93,7 @@ export async function verifyAgentReleasePublication(agentId, body) {
   if (tagTree !== tree) refuse('Release tag tree differs from the published candidate');
   const identity = createHash('sha256').update(JSON.stringify([origin.host, repository, tag, tagCommit, tree])).digest('hex');
   const receipt = {
-    status: 'verified', identity, repository, version: input.version, candidateHead,
+    status: 'verified', synchronizationHandoffVersion: 1, identity, repository, version: input.version, candidateHead,
     cutoff: candidate.cutoff, pin: candidate.pin, releaseBase: candidate.releaseBase,
     previousCommit: candidate.previousCommit, previousTag: candidate.previousTag,
     promotionPrNumber: input.promotionPrNumber, promotionMerge, tag, tagCommit, tagTree,
@@ -104,5 +104,9 @@ export async function verifyAgentReleasePublication(agentId, body) {
   // Identity/owner checks and the write share the ordinary agent state lock.
   // Replays retain the original verification time; a competing release cannot
   // replace an earlier milestone or turn it into a terminal delivery verdict.
-  return recordAgentReleasePublication(owner, receipt);
+  const saved = await recordAgentReleasePublication(owner, receipt);
+  const { ensureReleaseSynchronization } = await import('./releaseSynchronization.js');
+  // A failed handoff never rolls back or overwrites verified publication.
+  await ensureReleaseSynchronization(await getAgentRecord(agentId));
+  return saved;
 }

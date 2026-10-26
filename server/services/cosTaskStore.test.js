@@ -3095,6 +3095,31 @@ describe('cosTaskStore completed history older than the working set', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it('joins a durable dispatch in old history and rejects a different dispatch on its row', async () => {
+    await seed('user', [pending(900), ...Array.from({ length: 105 }, (_, index) => done(index + 1, 200 - index,
+      index === 0 ? { metadata: { updatedAt: new Date(CLOCK - 200 * DAY).toISOString(), idempotencyKey: 'publication-example' } } : {}))]);
+    const original = await getTaskById(id(1));
+    expect(await inWorkingSet(id(1))).toBe(false);
+    const replay = { id: id(1), description: 'A replay must not reopen completed work', status: 'pending', metadata: {} };
+    const results = await Promise.all([addTask(replay, 'user', { raw: true, idempotencyKey: 'publication-example' }), addTask(replay, 'user', { raw: true, idempotencyKey: 'publication-example' })]);
+    expect(results.every(task => task.id === id(1) && task.status === 'completed' && task.duplicate)).toBe(true);
+    expect((await getTaskById(id(1))).description).toBe(original.description);
+    await expect(addTask(replay, 'user', { raw: true, idempotencyKey: 'competing-publication' })).rejects.toThrow('different dispatch');
+    expect((await getTaskView({ kind: 'completed', source: 'user', limit: 200 })).total).toBe(105);
+  });
+
+  it('registers one concurrent publication dispatch and preserves it through CRUD and execution updates', async () => {
+    const task = { id: 'task-release-sync-example', description: 'Synchronize an example release', status: 'pending', priority: 'MEDIUM',
+      metadata: { app: 'example', targetInstanceId: 'example-instance', releaseSynchronization: { identity: 'example' } } };
+    const results = await Promise.all([addTask(task, 'internal', { raw: true, idempotencyKey: 'example-publication' }), addTask(task, 'internal', { raw: true, idempotencyKey: 'example-publication' })]);
+    expect(results.map(value => value.id)).toEqual([task.id, task.id]);
+    expect(await updateTask(task.id, { metadata: { releaseSynchronization: null } }, 'internal')).toMatchObject({ error: expect.stringContaining('immutable') });
+    expect(await deleteTask(task.id, 'internal')).toMatchObject({ error: expect.stringContaining('durable publication obligation') });
+    const completed = await updateTask(task.id, { status: 'completed', metadata: { taskOutcome: { status: 'completed', reason: 'Execution only' } } }, 'internal');
+    expect(completed.metadata.releaseSynchronization).toEqual(task.metadata.releaseSynchronization);
+    expect((await addTask(task, 'internal', { raw: true, idempotencyKey: 'example-publication' })).status).toBe('completed');
+  });
+
   it('stores two tasks created in the same millisecond as two tasks', async () => {
     const now = Date.parse('2026-10-20T12:00:00Z');
     const first = await addTask({ description: 'First of a burst' }, 'user', { now });
