@@ -66,6 +66,7 @@ export const PEER_API_SURFACE = Object.freeze([
   { prefix: '/data/videos/', methods: READ },
   { prefix: '/data/music/', methods: READ },
   { prefix: '/data/audio/', methods: READ },
+  { prefix: '/data/models/', methods: READ },
   { prefix: '/data/writers-room/works/', methods: READ },
 ]);
 

@@ -486,7 +486,7 @@ export const catalogMediaDetachSchema = z.object({
 }).strict();
 
 // File-upload attach body: raw base64 bytes + the browser-reported MIME. The
-// server decides the media `kind` (image→reference, audio, video) from the MIME
+// server decides the media `kind` (image→reference, audio, video, model) from the MIME
 // and persists into the matching federating library dir before attaching — the
 // client never picks the storage kind. 32 MB base64 (~24 MB raw) upper-bounds a
 // runaway paste; per-category size is re-checked server-side.

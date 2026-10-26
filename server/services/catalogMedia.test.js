@@ -1,6 +1,7 @@
 vi.mock('./catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: vi.fn(async id => id) }));
 import { describe, it, expect, vi } from 'vitest';
 import { catalogSyncEnvelopeSchema } from '../lib/catalogValidation.js';
+import { PATHS } from '../lib/fileUtils.js';
 import { GENERATION_METADATA_LIMITS } from '../lib/pngMetadata.js';
 import {
   classifyUploadMime,
@@ -38,6 +39,29 @@ const okIngredient = () => ({ id: 'ing-1', name: 'Test' });
 const b64 = (s) => Buffer.from(s).toString('base64');
 
 describe('uploadIngredientMediaFile', () => {
+  it('stores a Blender GLB in the federating model library and attaches its model row', async () => {
+    const bytes = Buffer.alloc(12);
+    bytes.write('glTF'); bytes.writeUInt32LE(2, 4); bytes.writeUInt32LE(bytes.length, 8);
+    const persistFileFn = vi.fn(async () => 'upload-layout.glb');
+    const attachMediaFn = vi.fn(async (ingredientId, mediaKey, kind, options) => ({ ingredientId, mediaKey, kind, ...options }));
+    const media = await uploadIngredientMediaFile({ ingredientId: 'ing-1', dataBase64: bytes.toString('base64'), mimeType: 'application/octet-stream', filename: 'layout.glb', role: 'greybox' }, {
+      getIngredientFn: okIngredient, persistFileFn, attachMediaFn,
+    });
+    expect(persistFileFn).toHaveBeenCalledWith(bytes, PATHS.models, 'glb');
+    expect(media).toMatchObject({ mediaKey: 'upload-layout.glb', kind: 'model', role: 'greybox' });
+    expect(catalogSyncEnvelopeSchema.parse({ media: [{ ...media, createdAt: '2026-01-01T00:00:00Z' }] }).media[0].kind).toBe('model');
+  });
+
+  it('rejects a mislabeled or truncated GLB before publishing bytes or a media row', async () => {
+    const persistFileFn = vi.fn();
+    const attachMediaFn = vi.fn();
+    await expect(uploadIngredientMediaFile({ ingredientId: 'ing-1', dataBase64: b64('not a GLB'), mimeType: 'model/gltf-binary' }, {
+      getIngredientFn: okIngredient, persistFileFn, attachMediaFn,
+    })).rejects.toMatchObject({ status: 422, code: 'UNSUPPORTED_MEDIA' });
+    expect(persistFileFn).not.toHaveBeenCalled();
+    expect(attachMediaFn).not.toHaveBeenCalled();
+  });
+
   it('refuses a fenced target before writing uploaded bytes', async () => {
     const saveImageFn = vi.fn();
     const attachMediaFn = vi.fn();

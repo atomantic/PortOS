@@ -25,6 +25,29 @@ blank room need no AI provider. They appear only while the Environment has no
 layout. To replace a saved layout with a starter, use **Remove greybox** and its
 inline confirmation first. Locked or read-only Environments cannot be changed.
 
+## Attach a Blender layout
+
+Build the layout in Blender, then export **glTF 2.0** with **Format: glTF Binary
+(.glb)**. Use **Metric** units with **Unit Scale: 1.0** so one unit is one metre.
+Apply object rotation and scale before export, keep the floor at height zero,
+and leave the exporter’s **+Y Up** option enabled. Include the layout meshes;
+textures are unnecessary because PortOS displays the model with a flat grey
+material. Keep the export self-contained in one `.glb` file, up to 24 MB.
+
+In the Environment’s **Greybox** tab, choose **Attach Blender export (.glb)**.
+The model replaces the rendered layout while its landmarks, anchors and saved
+camera shots remain editable in PortOS. **Layout source** switches between the
+attached model and the saved spec parts without changing those annotations.
+Attach another export to replace the model, or use **Remove model** to return to
+the spec layout. Existing reference images remain until you explicitly capture
+the shot again; choose **Replace reference image** after changing the mesh.
+
+The model file and its catalog attachment use the existing private peer media
+sync channels. Older peers keep the attachment metadata but ignore the unknown
+model kind in their UI; model bytes transfer once both peers support model
+library sync. Legacy peers continue receiving their existing media kinds. Blender is only an authoring tool; viewing and capturing a layout
+do not require Blender or call an AI provider.
+
 ## Frame and save shots
 
 Drag the viewer to orbit, scroll to zoom, and right-drag to pan. Adjust **Lens**
@@ -53,7 +76,7 @@ fields also support precise placement.
 With a shot selected, open **Figures in “[shot name]”** to choose its anchors and
 write a pose note for each. Anchors excluded from that shot appear faded while
 editing. Removing an anchor removes its figure entries from every shot; removing
-a zone clears its assignments on parts. A layout must keep at least one part.
+a zone clears its assignments on parts. A spec layout must keep at least one part; an attached Blender layout can have none.
 
 Changes preview locally. Choose **Save layout edits** to persist them, or
 **Discard layout edits** to restore the saved scene. Invalid fields are listed

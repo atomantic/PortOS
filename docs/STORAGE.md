@@ -428,10 +428,11 @@ goal data together; interrupted intents remain retryable after restore.
 
 **When to use.** You have generated or imported binary assets that the user needs to search, filter, favorite, or relate to other records, but the bytes themselves are large and have no business in a column.
 
-**Where it lives.** Bytes under `./data/` (`data/images/*`, `data/videos/*`, `data/audio/*`, `data/music/*`, thumbnails). Metadata in DB asset rows keyed by `asset_key` / `media_key`, with integrity metadata (SHA-256 — see `server/lib/assetHash.js`). The DB row references the file; it never embeds the bytes.
+**Where it lives.** Bytes under `./data/` (`data/images/*`, `data/videos/*`, `data/audio/*`, `data/music/*`, `data/models/*`, thumbnails). Metadata in DB asset rows keyed by `asset_key` / `media_key`, with integrity metadata (SHA-256 — see `server/lib/assetHash.js`). The DB row references the file; it never embeds the bytes.
 
 **Examples.**
 - Generated images — `data/images/*` bytes + `.metadata.json` sidecars; indexed into the `media_assets` table (#1000) keyed `image:<filename>`. Sidecars remain authoritative; the DB row is a derived, queryable mirror. Adapter: `server/services/mediaAssetIndex/`.
+- Catalog GLB models — `data/models/*.glb` bytes, referenced by `catalog_ingredient_media` rows with `kind: model`. Uploaded files use the existing backup asset-publication lease and the private media-library sync channel; model-capable receivers opt in with `models=1`.
 - Generated videos — `data/videos/*`, `data/video-thumbnails/*` bytes, tracked in `data/video-history.json`; indexed into `media_assets` keyed `video:<jobId>`. History file remains authoritative.
 - Game asset manifests — immutable `data/games/{id}/manifests/game-assets-v{N}.json` artifacts reference sprite atlas and music-library bytes by stable path + SHA-256; the `games` DB record owns the current pointer and history. Both halves are backed up: PostgreSQL by the required dump, manifests and referenced media by the rsync snapshot.
 - Music Video shot action contracts are optional versioned metadata on the existing db-primary project: authored in `treatment.shotDirections[].actionContract`, applied in `scenes[].direction.actionContract`, and snapshotted in take `shotInstruction.actionContract`. They require no seed/backfill or new store; `musicVideoProjects` schema v13 prevents older treatment writers from discarding intent. Clip-relative event times are revalidated before video queue submission.

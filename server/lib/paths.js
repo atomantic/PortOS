@@ -101,6 +101,7 @@ export const PATHS = {
   // It deliberately stays machine-local and is included in normal data backups.
   voiceProfiles: join(INSTALL_ROOT, 'data/voice-profiles'),
   videos: join(INSTALL_ROOT, 'data/videos'),
+  models: join(INSTALL_ROOT, 'data/models'),
   videoThumbnails: join(INSTALL_ROOT, 'data/video-thumbnails'),
   // Music Video cover lettering (#10345): typefaces the director uploaded (.ttf/.otf/.woff2)
   // plus their index. Machine-local; included in normal data backups.

@@ -24,7 +24,7 @@ const { PORTOS_SCHEMA_VERSIONS } = await import('../../lib/schemaVersions.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
 const { getPeers } = await import('../instances.js');
 const { peerFetch } = await import('../../lib/peerHttpClient.js');
-const { syncMediaLibraryFromPeer } = await import('./peerMediaLibrarySync.js');
+const { syncMediaLibraryFromPeer, buildMediaLibraryManifest } = await import('./peerMediaLibrarySync.js');
 const { diffAssetManifestAgainstLocal } = await import('./peerSyncAssets.js');
 const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
 
@@ -50,7 +50,7 @@ function advertise(peers, filenames = ['repair.png']) {
     assets: filenames.map(filename => ({ kind: 'image', filename, sha256: createHash('sha256').update(bytes).digest('hex') })),
   };
   vi.mocked(peerFetch).mockImplementation(async url => {
-    if (String(url).endsWith('/library-manifest')) return { ok: true, json: async () => manifest };
+    if (String(url).endsWith('/library-manifest?models=1')) return { ok: true, json: async () => manifest };
     if (String(url).endsWith('.png')) return { ok: true, headers: new Headers({ 'content-length': String(bytes.length) }), arrayBuffer: async () => bytes };
     return { ok: false }; // no optional metadata sidecar
   });
@@ -72,6 +72,34 @@ afterEach(async () => {
 afterAll(async () => { await rm(tempRoot, { recursive: true, force: true }); });
 
 describe('peer library index recovery', () => {
+  it('keeps model entries out of legacy manifests and advertises them only to capable receivers', async () => {
+    await mkdir(PATHS.models, { recursive: true });
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(join(PATHS.models, 'export.glb'), 'synthetic-model');
+    const legacy = await buildMediaLibraryManifest();
+    const capable = await buildMediaLibraryManifest({ models: true });
+    expect(legacy.assets.some(asset => asset.kind === 'model')).toBe(false);
+    expect(capable.assets).toContainEqual(expect.objectContaining({ kind: 'model', filename: 'export.glb' }));
+    expect(capable.manifestHash).not.toBe(legacy.manifestHash);
+  });
+
+  it('pulls model bytes into the model library', async () => {
+    const source = peer();
+    vi.mocked(getPeers).mockResolvedValue([source]);
+    const modelBytes = Buffer.from('synthetic-model-bytes');
+    vi.mocked(peerFetch).mockImplementation(async url => {
+      if (String(url).endsWith('/library-manifest?models=1')) return { ok: true, json: async () => ({
+        schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary, manifestHash: 'b'.repeat(64),
+        assets: [{ kind: 'model', filename: 'layout.glb', sha256: createHash('sha256').update(modelBytes).digest('hex') }],
+      }) };
+      if (String(url).endsWith('/data/models/layout.glb')) return { ok: true, headers: new Headers({ 'content-length': String(modelBytes.length) }), arrayBuffer: async () => modelBytes };
+      return { ok: false };
+    });
+    indexAdapter.reconcile.mockResolvedValue({ ok: true, skippedPrune: [] });
+    expect(await syncMediaLibraryFromPeer(source)).toMatchObject({ pulled: 1, missing: 0 });
+    expect(await readFile(join(PATHS.models, 'layout.glb'))).toEqual(modelBytes);
+  });
+
   it.each(['write rejection', 'incomplete authoritative read'])('repairs landed images on the identical next sweep after %s, then resumes unchanged shortcuts', async failure => {
     const source = peer();
     advertise([source]);
