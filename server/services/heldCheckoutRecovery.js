@@ -45,7 +45,7 @@ export async function releaseCheckoutWithoutArchive(context, prepare) {
   const retained = context.retainValidationEvidence === true
     ? await retainCompletedCheckoutValidation(context, prepared) : null;
   const preservedFiles = [...(context.preservedFiles || []), ...(retained?.files || [])];
-  await assertNoUniqueIgnoredCheckoutPayload(context.path, execGit, context.ignoredPaths, preservedFiles, context.repoPath);
+  await assertNoUniqueIgnoredCheckoutPayload(context.path, execGit, context.ignoredPaths, preservedFiles, context.repoPath, context.disposableCacheProofs);
   if (!retained) return prepared;
   const verify = prepared.verify;
   return { ...prepared, preservedFiles, validationEvidence: retained.evidence,
@@ -54,7 +54,7 @@ export async function releaseCheckoutWithoutArchive(context, prepare) {
 }
 
 /** Git cleanliness alone omits ignored files. Links retain their target bytes. */
-export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGit, ignoredPaths = [], preservedFiles = [], primaryRepoPath = null) {
+export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGit, ignoredPaths = [], preservedFiles = [], primaryRepoPath = null, disposableCacheProofs = []) {
   const present = await lstat(path).catch(error => {
     if (error.code === 'ENOENT') return null;
     throw error;
@@ -69,6 +69,11 @@ export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGi
   const verifiedCaches = new Map();
   const npmPayload = createNpmRetirementVerifier(path, primaryRepoPath, work);
   for (const listed of ignored) {
+    // Only current reviewed retirement supplies these server-generated roots.
+    // Its admission already hashed them and the final destructive fence always
+    // recomputes them; repeating per-file pathname checks here adds no proof.
+    if (disposableCacheProofs.some(proof => proof.version === 1 && proof.producer === 'vitest-modules'
+      && VITEST_MODULE_CACHE_ROOTS.includes(proof.root) && listed.startsWith(`${proof.root}/`))) continue;
     const { rel, info } = await listedContentEntry(path, listed, work);
     if (info.isSymbolicLink() || isAgentScratchPath(rel) || matchesScratchRoot(rel, ignoredPaths)) continue;
     if (rel === `node_modules/${WORKTREE_NODE_MODULES_MARKER}` && info.isFile() && info.size === 0) continue;
@@ -1739,6 +1744,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
           validationEvidence = { ...validationEvidence, artifacts: retainedArtifacts.evidence };
         }
         await releaseCheckoutWithoutArchive({ repoPath, path: tree.path, branch,
+          disposableCacheProofs: reviewed?.review.disposableCacheProofs,
           preservedFiles: [...(preservedSupersession ? reviewed.review.preservedSource.files
             : reviewed?.review.validationReceipt ? [reviewed.review.validationReceipt] : []), ...(retainedArtifacts?.files || [])] }, async () => {
           if (opts.signal?.aborted) throw new Error('retirement-archive-cancelled');

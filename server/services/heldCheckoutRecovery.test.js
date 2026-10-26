@@ -1662,18 +1662,22 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   it('detects an ancestor temporarily redirected and restored before the descriptor fence', async () => {
     const c = await reviewedCheckout('compact-cache-restored-ancestor');
-    const root = await moduleCache(c, { bytes: 24 });
-    const module = join(root, 'a'.repeat(40));
+    const root = await moduleCache(c, { count: 2, bytes: 24 });
+    const module = join(root, '1'.padStart(40, '0'));
+    const originalModule = join(root, '0'.repeat(40));
     const originalBytes = await readFile(module);
     const ancestor = dirname(dirname(root));
     const saved = join(scratch, 'original-cache-ancestor');
     const outside = join(scratch, 'outside-cache-ancestor');
     await mkdir(join(outside, 'vitest/modules'), { recursive: true });
-    await writeFile(join(outside, 'vitest/modules', 'a'.repeat(40)), 'outside payload must not be read');
+    await writeFile(join(outside, 'vitest/modules', '1'.padStart(40, '0')), 'outside payload must not be read');
+    let unblockOriginal;
+    const parentRestored = new Promise(resolve => { unblockOriginal = resolve; });
     let swapped = false;
     let restored = false;
     let reads = 0;
     cacheFaults.onLstat = async path => {
+      if (path === originalModule) await parentRestored;
       if (path !== module || swapped) return;
       swapped = true;
       await rename(ancestor, saved);
@@ -1684,8 +1688,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       await rm(ancestor, { recursive: true });
       await rename(saved, ancestor);
       restored = true;
+      unblockOriginal();
     };
-    cacheFaults.onRead = path => { if (path === module) reads++; };
+    cacheFaults.onRead = path => { if (path === module || path === originalModule) reads++; };
     expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-test-cache-changed' });
     expect(swapped && restored).toBe(true);
     expect(reads).toBe(0);
