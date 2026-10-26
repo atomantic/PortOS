@@ -697,7 +697,7 @@ function IngredientEditor() {
   }) || ingredientCoverUrl({ thumbnailKey: media.find((m) => m.kind === 'reference' && !m.role?.startsWith('archive:'))?.mediaKey || (!mediaReady && record.coverMedia?.referenceKey) });
   const renderBlockedReason = (subject) => identityReason || (record.payload?.locked === true
     ? 'Unlock this record above before rendering.'
-    : saving
+    : saving || lookSaving || characterActionBusy || unlocking
     ? `Saving — the ${subject} renders from the saved record.`
     : isDirty ? `Save your profile edits first — the ${subject} renders from the saved record.` : null);
 
@@ -987,7 +987,14 @@ function IngredientEditor() {
         {mediaReady && (activeTab === 'profile' ? !tabs : activeTab === 'references' || activeTab === 'images') && (
           <MediaPanel
             readOnly={identityReadOnly}
-            referenceLibrary={record.type === 'character' ? { ingredientId: record.id, forms: formsOf(record.payload), media: media.map(protectMedia), onChanged: refreshMedia } : null}
+            referenceLibrary={record.type === 'character' ? { ingredientId: record.id, forms: formsOf(record.payload), media: media.map(protectMedia), onChanged: refreshMedia,
+              revision: record.updatedAt, blockedReason: renderBlockedReason('reference'),
+              onMediaUpdated: updated => setMedia(previous => previous.map(row => {
+                if (row.mediaKey !== updated.mediaKey || (row.ingredientId || record.id) !== (updated.ingredientId || record.id)) return row;
+                if (row.kind === updated.kind) return updated;
+                return ['bad', 'rejected'].includes(updated.library?.review?.status)
+                  ? { ...row, library: { ...(row.library || {}), guide: false } } : row;
+              })) } : null}
             media={(tabs ? media.filter(isReferenceTabRow) : media).map(protectMedia)}
             canonImageRefs={[payload.primaryImageRef, ...(Array.isArray(payload.imageRefs) ? payload.imageRefs : [])].filter((ref) =>
               !media.some((m) => (m.kind === 'portrait' || m.kind === 'reference') && m.mediaKey === ref))}

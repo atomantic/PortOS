@@ -7,9 +7,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const attachMedia = vi.fn(async () => ({}));
 const setPortraitMedia = vi.fn(async () => ({}));
 const listMediaForIngredient = vi.fn(async () => []);
+const updateMediaLibrary = vi.fn(async () => ({}));
 // Defaults to "ingredient exists" — the 'gone'-path test overrides per-call.
 const getIngredient = vi.fn(async () => ({ id: 'ing', deleted: false }));
-vi.mock('./catalogDB.js', () => ({ attachMedia, setPortraitMedia, listMediaForIngredient, getIngredient }));
+vi.mock('./catalogDB.js', () => ({ attachMedia, setPortraitMedia, listMediaForIngredient, getIngredient, updateMediaLibrary }));
 
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
 const hook = await import('./catalogImageAttachHook.js');
@@ -34,6 +35,7 @@ describe('catalogImageAttachHook', () => {
     listMediaForIngredient.mockResolvedValue([]);
     getIngredient.mockReset();
     getIngredient.mockResolvedValue({ id: 'ing', deleted: false });
+    updateMediaLibrary.mockClear();
   });
 
   afterEach(async () => {
@@ -60,6 +62,19 @@ describe('catalogImageAttachHook', () => {
     mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-3', kind: 'reference' } }, 'ref.png'));
     await hook.__testing.settled();
     expect(attachMedia).toHaveBeenCalledWith('ing-3', 'ref.png', 'reference');
+    expect(setPortraitMedia).not.toHaveBeenCalled();
+  });
+
+  it('durably attaches an unreviewed refinement with age, feedback and source lineage after the client leaves', async () => {
+    const library = { variant: { age: 27, formId: 'adult' }, guide: false,
+      review: { status: 'unreviewed', feedback: 'Keep the face, correct the hair' },
+      derivedFrom: { mediaKey: 'original.png', kind: 'reference' } };
+    mediaJobEvents.emit('completed', completedImageJob({
+      catalogAttach: { ingredientId: 'ing-refine', kind: 'reference', role: 'refinement', library },
+    }, 'refined.png'));
+    await hook.__testing.settled();
+    expect(attachMedia).toHaveBeenCalledWith('ing-refine', 'refined.png', 'reference', { role: 'refinement', library });
+    expect(updateMediaLibrary).not.toHaveBeenCalled();
     expect(setPortraitMedia).not.toHaveBeenCalled();
   });
 

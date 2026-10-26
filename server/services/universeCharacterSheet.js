@@ -401,10 +401,14 @@ export async function buildSheetRenderParams({
   styleChip = { id: 'universe-style', label: 'Universe style' },
   negativesLabel = 'Character sheet negatives',
   referenceCandidates = [],
+  sharedIdentity = '',
 }) {
   const hasPromptOverride = typeof options.overridePrompt === 'string' && !!options.overridePrompt.trim();
   const hasNegativeOverride = typeof options.overrideNegativePrompt === 'string' && !!options.overrideNegativePrompt.trim();
   let prompt = hasPromptOverride ? options.overridePrompt : built.prompt;
+  const identityAddition = !hasPromptOverride && sharedIdentity && !prompt.includes(sharedIdentity)
+    ? promptAddition('shared-character-identity', 'Shared facial identity', sharedIdentity) : null;
+  if (identityAddition) prompt += `\n\nShared facial identity: ${sharedIdentity}`;
   const negativePrompt = hasNegativeOverride ? options.overrideNegativePrompt : built.negativePrompt;
 
   const settings = await getSettings();
@@ -437,6 +441,7 @@ export async function buildSheetRenderParams({
   // style and the sheet negatives it carries are listed on the render's
   // sent-prompt record (#11317). A typed override is sent as written.
   const promptAdditions = [
+    identityAddition,
     !hasPromptOverride && styleLine && prompt.includes(styleLine.trim()) ? promptAddition(styleChip.id, styleChip.label, styleLine) : null,
     !hasNegativeOverride ? promptAddition('sheet-negatives', negativesLabel, built.negativePrompt) : null,
   ].filter(Boolean);
@@ -530,6 +535,7 @@ async function prepareCharacterSheet(universeId, entryId, options) {
   const sheet = await buildSheetRenderParams({
     built, options, styleLine: universeAestheticLine(universe), renderPin: recordRenderPin(universe),
     referenceCandidates: characterSheetReferenceCandidates(character, media),
+    sharedIdentity: character.visualIdentity,
   });
   return { variant, variantConfig, universe, character, ...sheet };
 }

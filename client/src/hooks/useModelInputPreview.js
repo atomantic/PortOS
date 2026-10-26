@@ -7,9 +7,10 @@ const PREVIEW_DELAY_MS = 500;
  * refreshed a moment after the form stops changing. `body` must be plain JSON
  * (uploads named by count); `fetchPreview(body, { silent })` is the route
  * wrapper. A superseded response is dropped, and a refusal comes back as
- * `error` so the form can show why the render would be refused.
+ * `error` so the form can show why the render would be refused. `revision`
+ * invalidates previews when saved context changes outside the request body.
  */
-export function useModelInputPreview(fetchPreview, body, { enabled = true } = {}) {
+export function useModelInputPreview(fetchPreview, body, { enabled = true, revision } = {}) {
   const [state, setState] = useState({ preview: null, error: null });
   const generation = useRef(0);
   const key = enabled ? JSON.stringify(body) : null;
@@ -19,16 +20,16 @@ export function useModelInputPreview(fetchPreview, body, { enabled = true } = {}
     const current = ++generation.current;
     const timer = setTimeout(() => {
       fetchPreview(JSON.parse(key), { silent: true })
-        .then((preview) => { if (current === generation.current) setState({ key, fetchPreview, preview, error: null }); })
-        .catch((err) => { if (current === generation.current) setState({ key, fetchPreview, preview: null, error: err?.message || 'Preview failed' }); });
+        .then((preview) => { if (current === generation.current) setState({ key, fetchPreview, revision, preview, error: null }); })
+        .catch((err) => { if (current === generation.current) setState({ key, fetchPreview, revision, preview: null, error: err?.message || 'Preview failed' }); });
     }, PREVIEW_DELAY_MS);
     return () => {
       clearTimeout(timer);
       generation.current++;
     };
-  }, [fetchPreview, key]);
+  }, [fetchPreview, key, revision]);
 
-  return enabled && state.key === key && state.fetchPreview === fetchPreview
+  return enabled && state.key === key && state.fetchPreview === fetchPreview && state.revision === revision
     ? { preview: state.preview, error: state.error } : { preview: null, error: null };
 }
 

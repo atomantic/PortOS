@@ -386,7 +386,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
     stagedRefPaths.push(initImagePath);
     uploadedTempPaths.push(initUpload.path);
   } else if (data.initImageFile) {
-    const resolved = resolveGalleryImage(data.initImageFile);
+    const resolved = resolveGalleryImage(data.initImageFile) || resolveImageInputPath(data.initImageFile);
     if (!resolved) {
       cleanupStagedAndTemp();
       throw new ServerError('Init image not found in gallery', { status: 400, code: 'INIT_IMAGE_NOT_FOUND' });

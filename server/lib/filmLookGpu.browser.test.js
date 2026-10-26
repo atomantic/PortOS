@@ -71,6 +71,26 @@ describe.skipIf(!canRun).each([
   }, 30000);
   afterAll(async () => { await fixture?.close(); });
 
+  it('keeps translucent color and highlight gradation in the new image finish', async () => {
+    const w = 256, h = 2;
+    const input = Buffer.alloc(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      input.set([x, x, x, y ? 128 : 255], i);
+    }
+    const src = (await sharp(input, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer()).toString('base64');
+    const alphaPage = await fixture.browser.newPage({ viewport: { width: w, height: h } });
+    try {
+      const built = filmLookFilterMarkup(normalizeFilmLook({ version: 2, shoulder: 0.5, toe: 0.2 }), { width: w, height: h });
+      await alphaPage.setContent(`<style>html,body{margin:0;background:transparent}img{display:block;filter:${built.css}}</style>${built.svg}<img width="${w}" height="${h}" src="data:image/png;base64,${src}">`);
+      const pixels = await sharp(await alphaPage.screenshot({ omitBackground: true })).ensureAlpha().raw().toBuffer();
+      expect(pixels[255 * 4]).toBeGreaterThan(pixels[230 * 4]);
+      expect(pixels[255 * 4]).toBeLessThan(255);
+      expect(pixels[(w + 128) * 4 + 3]).toBe(128);
+      expect(Math.abs(pixels[(w + 128) * 4] - pixels[128 * 4])).toBeLessThanOrEqual(2);
+    } finally { await alphaPage.close(); }
+  });
+
   it.for(looks)('draws %s within 40 dB of the SVG filter', async ([, look], { skip }) => {
     // A Chrome without WebGL2 keeps the SVG filter; there is nothing to compare.
     if (!available) skip();

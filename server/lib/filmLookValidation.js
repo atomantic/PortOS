@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FILM_LOOK_CONTROLS, FILM_LOOK_PRESET_IDS, FILM_LOOK_VERSION } from './filmLook.js';
+import { FILM_LOOK_CONTROLS, FILM_LOOK_PRESET_IDS } from './filmLook.js';
 
 /**
  * The film-look record a project stores and a gallery bake receives, derived
@@ -15,7 +15,7 @@ for (const control of FILM_LOOK_CONTROLS) {
 }
 
 export const filmLookSchema = z.object({
-  version: z.literal(FILM_LOOK_VERSION).optional(),
+  version: z.union([z.literal(1), z.literal(2)]).optional(),
   preset: z.enum([...FILM_LOOK_PRESET_IDS, 'custom']).optional(),
   ...controlShape,
 }).strict();

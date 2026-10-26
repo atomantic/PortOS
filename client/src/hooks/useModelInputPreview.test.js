@@ -35,6 +35,23 @@ describe('useModelInputPreview', () => {
     expect(result.current).toEqual({ preview: null, error: 'Codex Imagegen is disabled' });
   });
 
+  it('invalidates saved previews and drops old context responses when the library revision changes', async () => {
+    vi.useFakeTimers();
+    const resolvers = [];
+    const fetchPreview = vi.fn(() => new Promise(resolve => resolvers.push(resolve)));
+    const { result, rerender } = renderHook(({ revision }) => useModelInputPreview(fetchPreview,
+      { mediaKey: 'source.png', feedback: 'Keep identity' }, { revision }), { initialProps: { revision: 'old' } });
+    await act(async () => { vi.advanceTimersByTime(500); });
+    rerender({ revision: 'new' });
+    expect(result.current.preview).toBeNull();
+    await act(async () => { vi.advanceTimersByTime(500); });
+    await act(async () => { resolvers[1]({ sentPrompt: 'new age and guides' }); });
+    await act(async () => { resolvers[0]({ sentPrompt: 'old age and guides' }); });
+    expect(result.current.preview).toEqual({ sentPrompt: 'new age and guides' });
+    expect(fetchPreview).toHaveBeenCalledTimes(2);
+    expect(fetchPreview).toHaveBeenLastCalledWith({ mediaKey: 'source.png', feedback: 'Keep identity' }, { silent: true });
+  });
+
   it('hides the preview when disabled and drops an in-flight refusal', async () => {
     vi.useFakeTimers();
     let rejectPreview;

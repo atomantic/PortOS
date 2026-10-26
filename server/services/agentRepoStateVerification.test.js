@@ -358,7 +358,7 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it('immediately finalizes a receipt-retired squash delivery when its follow-up completes, including duplicate observations', async () => {
+  it.each(['follow-up', 'capture'])('immediately finalizes receipt-retired delivery after %s, including duplicate observations', async event => {
     const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
       startedAt: CREATED_AT, capturedAt: CREATED_AT, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
     const state = { ...agentState({ instanceId: 'fixture-local', completedCheckouts: [completed],
@@ -374,8 +374,10 @@ describe('verifyAgentRepoState — clean runs', () => {
     queuedTasks([followUp]);
     const events = new EventEmitter();
     const unbind = bindCompletionRetirementEvents(events);
-    events.emit('tasks:changed', { type: 'internal', task: followUp, previousStatus: 'in_progress' });
-    events.emit('tasks:changed', { type: 'internal', task: followUp, previousStatus: 'completed' });
+    const name = event === 'capture' ? 'agent:checkout-captured' : 'tasks:changed';
+    const payload = event === 'capture' ? { agentId: 'agent-1' } : { type: 'internal', task: followUp, previousStatus: 'in_progress' };
+    events.emit(name, payload);
+    events.emit(name, payload);
     await vi.waitFor(() => expect(recordRepoStateVerification).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({ status: 'completed' })));
     unbind();
     expect(updateTask).toHaveBeenCalledOnce();

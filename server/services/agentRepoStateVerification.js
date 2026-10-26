@@ -558,11 +558,18 @@ export function bindCompletionRetirementEvents(events) {
   };
   const onReceipt = receipt => onRetirement(receipt)
     .catch(error => emitLog('warn', `Completion deferred after retirement receipt: ${error.message}`, { appId: receipt?.appId }));
+  const onCapture = data => {
+    if (typeof data?.agentId !== 'string' || !data.agentId) return;
+    return resumeAgentCompletionRetirement(data.agentId)
+      .catch(error => emitLog('warn', `Completion deferred after checkout capture: ${error.message}`, { agentId: data.agentId }));
+  };
   events.on('tasks:changed', onChange);
   events.on('checkout:retired', onReceipt);
+  events.on('agent:checkout-captured', onCapture);
   return () => {
     events.off('tasks:changed', onChange);
     events.off('checkout:retired', onReceipt);
+    events.off('agent:checkout-captured', onCapture);
   };
 }
 
