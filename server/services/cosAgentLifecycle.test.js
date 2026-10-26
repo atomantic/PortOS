@@ -28,6 +28,8 @@ vi.mock('./cosState.js', () => ({
 
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: vi.fn(async () => Object.values(mockCosState.state?.agents || {})) }));
 const recoveryTasks = vi.hoisted(() => new Map());
+const releaseHandoff = vi.hoisted(() => ({ ensure: vi.fn(async () => ({ taskId: 'task-release-sync-example' })) }));
+vi.mock('./releaseSynchronization.js', () => ({ ensureReleaseSynchronization: releaseHandoff.ensure }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./cosTaskStore.js', () => ({
   getTaskById: vi.fn(async id => recoveryTasks.get(id) || null),
@@ -480,6 +482,33 @@ describe('completeAgent budget-ledger ordering (#1683)', () => {
 
     expect(recordDomainUsage).toHaveBeenCalledWith('cos', { actions: 1, ms: 1200 });
     expect(order).toEqual(['usage', 'completed']);
+  });
+
+  it('archives a publisher only after its durable continuation is confirmed', async () => {
+    const publication = { status: 'verified', synchronizationHandoffVersion: 1, identity: 'a'.repeat(64), publishedAt: '2026-01-01T00:00:00Z' };
+    const agent = { id: 'agent-publisher', taskId: 'task-example-release', status: 'running',
+      startedAt: '2026-01-01T00:00:00Z', metadata: { taskAnalysisType: 'do-release', releasePublication: publication } };
+    mockCosState.state.agents[agent.id] = agent;
+    releaseHandoff.ensure.mockRejectedValueOnce(new Error('synthetic handoff unavailable'));
+    await expect(completeAgent(agent.id, { success: true })).rejects.toThrow('handoff unavailable');
+    expect(mockCosState.state.agents[agent.id].status).toBe('running');
+    const completed = await completeAgent(agent.id, { success: true });
+    expect(completed.status).toBe('completed');
+    expect(completed.metadata.releasePublication).toEqual(publication);
+    expect(releaseHandoff.ensure).toHaveBeenCalledWith(expect.objectContaining({ id: agent.id, taskId: agent.taskId }));
+  });
+
+  it('refuses enrollment racing a completion that only observed the legacy receipt', async () => {
+    const id = 'agent-publication-race';
+    mockCosState.state.agents[id] = { id, taskId: 'task-example-release', status: 'running', startedAt: '2026-01-01T00:00:00Z',
+      metadata: { taskAnalysisType: 'do-release', releasePublication: { status: 'verified', identity: 'b'.repeat(64) } } };
+    loadState.mockImplementationOnce(async () => {
+      const legacy = structuredClone(mockCosState.state);
+      mockCosState.state.agents[id].metadata.releasePublication.synchronizationHandoffVersion = 1;
+      return legacy;
+    });
+    await expect(completeAgent(id, { success: true })).rejects.toThrow('handoff ownership changed');
+    expect(mockCosState.state.agents[id].status).toBe('running');
   });
 
   it('retains delivery outcome through archive storage and list projection without changing feedback', async () => {

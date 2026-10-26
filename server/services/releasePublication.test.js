@@ -1,5 +1,5 @@
 import { beforeAll, afterAll, beforeEach, expect, it, vi } from 'vitest';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -8,8 +8,29 @@ import { ownTestBodies, makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots }
 
 const bodies = ownTestBodies(it);
 const test = bodies.it;
-const fixture = vi.hoisted(() => ({ state: null, disk: null, queue: null, replies: {}, saveError: false, readHook: null }));
-vi.mock('../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: lazyTempDataRoot('release-publication-') }));
+const fixture = vi.hoisted(() => ({ state: null, disk: null, queue: null, replies: {}, saveError: false, readHook: null,
+  tasks: new Map(), taskFailure: null, outboxWrite: 0, failedOutboxWrite: null }));
+vi.mock('../lib/fileUtils.js', async original => {
+  const actual = await original();
+  return makePathsProxy(actual, { dataRoot: lazyTempDataRoot('release-publication-'), overrides: {
+    atomicWrite: async (path, value) => {
+      if (path.endsWith('release-synchronization.json') && ++fixture.outboxWrite === fixture.failedOutboxWrite) throw new Error('synthetic outbox failure');
+      return actual.atomicWrite(path, value);
+    },
+  } });
+});
+vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
+vi.mock('./codeReview.js', () => ({ getCodeReviewDefaults: async () => ({}), resolveReviewLoopOptions: async metadata => ({ reviewers: metadata.reviewers, reviewerEfforts: metadata.reviewerEfforts }) }));
+vi.mock('./cosTaskStore.js', () => ({
+  getTaskById: async id => id === 'release-task' ? { id, priority: 'MEDIUM', metadata: { app: 'example-app', reviewers: ['codex'], reviewerEfforts: { codex: 'high' } } } : fixture.tasks.get(id) || null,
+  addTask: async (task, type, options) => {
+    if (fixture.taskFailure === 'before') throw new Error('synthetic queue failure');
+    const saved = { ...structuredClone(task), taskType: type, metadata: { ...task.metadata, idempotencyKey: options.idempotencyKey } };
+    fixture.tasks.set(saved.id, saved);
+    if (fixture.taskFailure === 'after') throw new Error('synthetic lost queue acknowledgement');
+    return saved;
+  },
+}));
 vi.mock('./cosState.js', () => ({
   AGENTS_DIR: '/unused-synthetic-agents',
   loadState: async () => fixture.state,
@@ -29,7 +50,9 @@ vi.mock('./github.js', () => ({ execGh: async args => {
   return JSON.stringify(fixture.replies[path]);
 } }));
 import { verifyAgentReleasePublication } from './releasePublication.js';
-import { registerAgent, updateAgent } from './cosAgentLifecycle.js';
+import { registerAgent, updateAgent, completeAgent } from './cosAgentLifecycle.js';
+import { ensureReleaseSynchronization, recoverReleaseSynchronizationHandoffs } from './releaseSynchronization.js';
+import { PATHS } from '../lib/fileUtils.js';
 import { cosEvents } from './cosEvents.js';
 
 let repo, root, cutoff, pin, head, tree;
@@ -61,12 +84,17 @@ afterAll(async () => {
   await rm(repo, { recursive: true, force: true });
   cleanupTempDataRoots();
 });
-beforeEach(() => {
+beforeEach(async () => {
+  await rm(join(PATHS.cos, 'release-synchronization.json'), { force: true });
+  fixture.tasks.clear();
+  fixture.taskFailure = null;
+  fixture.outboxWrite = 0;
+  fixture.failedOutboxWrite = null;
   fixture.queue = createFileWriteQueue();
   fixture.saveError = false;
   fixture.readHook = null;
   fixture.state = { stats: { agentsSpawned: 0 }, agents: { publisher: { id: 'publisher', taskId: 'release-task', status: 'running', startedAt: '2026-01-01T00:00:00Z',
-    metadata: { taskAnalysisType: 'do-release', sourceWorkspace: repo } } } };
+    metadata: { taskAnalysisType: 'do-release', sourceWorkspace: repo, checkoutSeeds: [{ branch: 'release/example-candidate', head: 'f'.repeat(40), incarnation: { example: true } }] } } } };
   fixture.disk = structuredClone(fixture.state);
   fixture.replies = {
     'pulls/12': { number: 12, merged: true, merged_at: '2026-01-01T01:00:00Z', merge_commit_sha: merge,
@@ -92,11 +120,107 @@ test('publishes a durable live milestone once, emits it, and retains it across r
     expect(results[0]).toMatchObject({ status: 'verified', repository: 'example/repo', cutoff, pin, candidateHead: head, promotionMerge: merge, tagCommit: merge, tagTree: tree, workflowRunId: 34 });
     expect(events[0]).toMatchObject({ status: 'running' });
     expect(events[0].result).toBeUndefined();
+    const continuation = [...fixture.tasks.values()];
+    expect(continuation).toHaveLength(1);
+    expect(continuation[0]).toMatchObject({ status: 'pending', metadata: { app: 'example-app', targetInstanceId: 'example-instance', reviewers: ['codex'], reviewerEfforts: { codex: 'high' }, useWorktree: 'true', openPR: 'true' } });
     fixture.state = structuredClone(fixture.disk);
     await updateAgent('publisher', { status: 'completed', result: { success: false, error: 'Synchronization failed' }, metadata: { releasePublication: null } });
     expect(fixture.disk.agents.publisher.metadata.releasePublication).toEqual(results[0]);
     expect(fixture.disk.agents.publisher.result.success).toBe(false);
   } finally { cosEvents.off('agent:updated', listener); }
+});
+
+// Each failure is a distinct cross-store crash window: receipt without intent,
+// intent without queue commit, queue commit without acknowledgement, and task
+// ownership without its final outbox acknowledgement.
+for (const [name, fail] of [
+  ['receipt persisted before outbox intent', () => { fixture.failedOutboxWrite = 1; }],
+  ['intent persisted before queue commit', () => { fixture.taskFailure = 'before'; }],
+  ['queue commit without acknowledgement', () => { fixture.taskFailure = 'after'; }],
+  ['queue commit before final outbox acknowledgement', () => { fixture.failedOutboxWrite = 3; }],
+]) test(`recovers ${name} through the same publication and task after restart`, async () => {
+  fail();
+  await expect(verifyAgentReleasePublication('publisher', input)).rejects.toThrow();
+  const original = structuredClone(fixture.disk.agents.publisher.metadata.releasePublication);
+  expect(original.status).toBe('verified');
+  fixture.state = structuredClone(fixture.disk);
+  fixture.failedOutboxWrite = null;
+  fixture.taskFailure = null;
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60 * 60_000);
+  try { await recoverReleaseSynchronizationHandoffs(Object.values(fixture.state.agents)); }
+  finally { clock.mockRestore(); }
+  expect(fixture.tasks.size).toBe(1);
+  await verifyAgentReleasePublication('publisher', input);
+  expect(fixture.tasks.size).toBe(1);
+  expect(fixture.disk.agents.publisher.metadata.releasePublication).toEqual(original);
+  const outbox = JSON.parse(await readFile(join(PATHS.cos, 'release-synchronization.json'), 'utf8'));
+  const entry = outbox.publications[original.identity];
+  expect(entry.registeredAt).toEqual(expect.any(String));
+  expect(entry.checkouts).toEqual(fixture.state.agents.publisher.metadata.checkoutSeeds);
+  expect(Object.values(entry.obligations).every(value => value.status === 'pending')).toBe(true);
+});
+
+test('withholds all parent completion paths while durable registration is unavailable', async () => {
+  fixture.taskFailure = 'before';
+  await expect(verifyAgentReleasePublication('publisher', input)).rejects.toThrow('queue failure');
+  await expect(completeAgent('publisher', { success: true })).rejects.toThrow('queue failure');
+  await expect(completeAgent('publisher', { success: false, orphaned: true })).rejects.toThrow('queue failure');
+  await expect(updateAgent('publisher', { status: 'completed' })).rejects.toThrow('queue failure');
+  expect(fixture.disk.agents.publisher.status).toBe('running');
+  expect(fixture.disk.agents.publisher.metadata.releasePublication.status).toBe('verified');
+  fixture.taskFailure = null;
+  expect(await ensureReleaseSynchronization(fixture.state.agents.publisher)).toMatchObject({ synchronizationVerified: false });
+});
+
+test('joins completed task history without requeuing it or inferring synchronization completion', async () => {
+  await verifyAgentReleasePublication('publisher', input);
+  const task = [...fixture.tasks.values()][0];
+  task.status = 'completed';
+  task.metadata.taskOutcome = { status: 'completed', reason: 'Agent prose claiming everything merged' };
+  fixture.state = structuredClone(fixture.disk);
+  const joined = await ensureReleaseSynchronization(fixture.state.agents.publisher);
+  expect(joined).toMatchObject({ taskId: task.id, synchronizationVerified: false });
+  expect(fixture.tasks.size).toBe(1);
+  expect(fixture.tasks.get(task.id).status).toBe('completed');
+  // Even if archive enumeration no longer contains the publisher, a durable
+  // intent and deterministic historical lookup survive independently.
+  await recoverReleaseSynchronizationHandoffs([]);
+  expect(fixture.tasks.size).toBe(1);
+});
+
+test('refuses a competing publisher and a replaced or missing registered task without taking either owner', async () => {
+  await verifyAgentReleasePublication('publisher', input);
+  const publisher = fixture.state.agents.publisher;
+  const task = [...fixture.tasks.values()][0];
+  await expect(ensureReleaseSynchronization({ ...publisher, id: 'another-publisher' })).rejects.toThrow('another coordinator');
+  task.metadata.releaseSynchronization.publisherAgentId = 'another-owner';
+  await expect(ensureReleaseSynchronization(publisher)).rejects.toThrow('conflicting owner');
+  expect(task.metadata.releaseSynchronization.publisherAgentId).toBe('another-owner');
+  fixture.tasks.clear();
+  await expect(ensureReleaseSynchronization(publisher)).rejects.toThrow('task is missing');
+  expect(fixture.tasks.size).toBe(0);
+});
+
+test('retains malformed outbox bytes instead of replacing its ownership with defaults', async () => {
+  await verifyAgentReleasePublication('publisher', input);
+  const path = join(PATHS.cos, 'release-synchronization.json');
+  await writeFile(path, '{"version":99,"publications":{}}');
+  await expect(ensureReleaseSynchronization(fixture.state.agents.publisher)).rejects.toThrow('unreadable');
+  expect(await readFile(path, 'utf8')).toBe('{"version":99,"publications":{}}');
+});
+
+test('never enrolls legacy publication history at startup, but an explicit request preserves its original receipt time', async () => {
+  const verified = await verifyAgentReleasePublication('publisher', input);
+  const { synchronizationHandoffVersion: _enrollment, ...legacy } = verified;
+  fixture.state.agents.publisher.metadata.releasePublication = legacy;
+  fixture.disk = structuredClone(fixture.state);
+  fixture.tasks.clear();
+  await rm(join(PATHS.cos, 'release-synchronization.json'), { force: true });
+  await recoverReleaseSynchronizationHandoffs(Object.values(fixture.state.agents));
+  expect(fixture.tasks.size).toBe(0);
+  const enrolled = await verifyAgentReleasePublication('publisher', input);
+  expect(enrolled).toEqual({ ...legacy, synchronizationHandoffVersion: 1 });
+  expect(fixture.tasks.size).toBe(1);
 });
 
 for (const [name, change] of [
