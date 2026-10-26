@@ -711,7 +711,9 @@ export default function CanonCard({
               <div key={ref} className="relative w-16 h-16">
                 {onRemoveImageRef && <button type="button" onClick={() => setRemovingImage(ref)} disabled={imageBusy}
                   aria-label={`Remove reference ${ref}`} title="Remove reference; keep the image file"
-                  className="absolute bottom-0.5 right-0.5 z-10 min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded port-media-overlay text-gray-400 hover:text-port-error"><X size={12} /></button>}
+                  className="absolute bottom-0.5 right-0.5 z-10 h-11 w-11 inline-flex items-end justify-end p-0 bg-transparent border-0 shadow-none text-gray-400 hover:text-port-error">
+                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full port-media-overlay"><X size={12} /></span>
+                </button>}
                 <button
                   type="button"
                   onClick={() => onPreview?.(ref)}
