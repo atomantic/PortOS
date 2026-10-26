@@ -6,7 +6,7 @@
  * remain readable.
  */
 import { describe, it as vitestIt, expect, beforeEach as vitestBeforeEach, afterEach, afterAll, vi } from 'vitest';
-import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat } from 'fs/promises';
+import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat, lstat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { createHash } from 'node:crypto';
@@ -465,8 +465,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   });
 
   describe('bounded historical evidence', () => {
-    beforeEach(cleanupTempDataRoots);
-    afterEach(async () => { await owned.drain(); await cleanupTempDataRoots(); });
+    // Imported stores capture this private PATHS pathname once. Reset all
+    // fixture data between history cases without rotating the tracked root.
+    const resetHistoryData = async () => {
+      const root = PATHS.data;
+      await rm(root, { recursive: true, force: true });
+      await mkdir(root, { recursive: true });
+    };
+    beforeEach(resetHistoryData);
+    afterEach(async () => { await owned.drain(); await resetHistoryData(); });
 
     it('bounds persisted recovery diagnostics across obligations and unrelated archives while verifying the exact matching archive', async () => {
       const { release, saved } = await historicalArchive();
@@ -1554,6 +1561,42 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       }
       expect(await archives()).toEqual([]);
     });
+
+  // Real destructive boundary: retain captured-run diagnostics, and refuse
+  // any source that changed after its review rather than deleting new output.
+  it.each([false, true])('retains completed-run diagnostics before exact merged retirement, source changed=%s', async changed => {
+    const c = await reviewedCheckout(`run-validation-${changed}`);
+    await writeFile(join(repo, '.git', 'info', 'exclude'), '.cache/\n');
+    await mkdir(join(c.path, '.cache'), { recursive: true });
+    const file = join(c.path, '.cache', 'validation.log');
+    await writeFile(file, 'meaningful synthetic validation output');
+    c.release.checkoutIdentity = await readRetirementCheckoutIdentity(c.path);
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
+    const pointer = await lstat(join(c.path, '.git'), { bigint: true });
+    const agent = injected.policies[0];
+    Object.assign(agent, { startedAt: '2026-01-01T10:00:00.000Z', completedAt: '2026-01-01T11:00:00.000Z' });
+    agent.metadata.completedCheckouts = [{ version: 1, agentId: agent.id, startedAt: agent.startedAt,
+      capturedAt: '2026-01-01T10:59:00.000Z', repoPath: repo, path: c.path, branch: c.release.branch, head: c.release.head,
+      incarnation: { pointer: Object.fromEntries(['dev', 'ino', 'birthtimeNs'].map(key => [key, String(pointer[key])])) } }];
+    const prepared = await c.prepare();
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { validationArtifacts: { owner: { id: agent.id, startedAt: agent.startedAt } } } });
+    if (changed) await writeFile(file, 'new unique output after review');
+    const retired = await c.confirm(prepared.review);
+    if (changed) {
+      expect(retired).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+      expect(await readFile(file, 'utf8')).toBe('new unique output after review');
+      expect(await registered(c.path)).toBe(true);
+    } else {
+      expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+      expect(await registered(c.path)).toBe(false);
+      const { readCompletionData } = await import('./agentCompletionData.js');
+      const proof = retired.validationEvidence.artifacts;
+      const retained = await readCompletionData(proof.owner, proof.reference);
+      expect(retained.release.head).toBe(c.release.head);
+      expect(Buffer.from(retained.files[0].data, 'base64').toString()).toBe('meaningful synthetic validation output');
+    }
+    expect(await archives()).toEqual([]);
+  });
 
   it('retains an ignored validation receipt beside a verified disposable module cache', async () => {
     const c = await reviewedCheckout('cache-with-receipt');
