@@ -61,6 +61,7 @@ export const MAX_CONTEXT_FRAMES = 121;
 // can condition on images; a future adapter must bring its own output layout.
 const LTX_CONTINUATION = Object.freeze({
   temporalContext: true,
+  adapter: 'ltx-extend',
   latentFrameStride: 8,
   outputLayout: 'echoed-history-prefix',
   unavailableReason: null,
@@ -70,10 +71,22 @@ const CONTINUATION_CONTRACTS = Object.freeze({
   ltx25: LTX_CONTINUATION,
   minimax_h3: Object.freeze({
     temporalContext: false,
-    unavailableReason: 'The pinned H3 MLX helper has no verified video/audio history-conditioning adapter.',
+    adapter: 'h3-history',
+    backendPin: 'fcd9e9b79a1d6018d91ac477c0968de1fa067e49',
+    historyFrames: 17,
+    fps: 24,
+    audioSampleRate: 32000,
+    outputLayout: 'new-output-only',
+    unavailableReason: 'The H3 MLX history adapter has no verified paired hardware motion/audio fidelity render.',
   }),
   minimax_h3_cuda: Object.freeze({
     temporalContext: false,
+    adapter: 'h3-history',
+    backendPin: 'diffusers==0.42.0',
+    historyFrames: 17,
+    fps: 24,
+    audioSampleRate: 32000,
+    outputLayout: 'new-output-only',
     unavailableReason: 'The H3 CUDA history adapter has no verified Windows/NVIDIA moving-subject and still-baseline motion/audio comparison.',
   }),
 });
@@ -208,5 +221,54 @@ export const planExtendSplice = ({ runtime, sourceFrames, outputFrames, extendLa
     newStartFrame: keepFrames,
     newFrames: total - keepFrames,
     droppedSourceFrames: source - keepFrames,
+  };
+};
+
+/** Explicit requests never borrow another runtime's timing or silently downgrade. */
+export const continuityRequestViolation = ({ model, continuityStrategy, contextFrames }) => {
+  if (continuityStrategy != null && !['frame', 'window'].includes(continuityStrategy)) {
+    return { code: 'VIDEO_CONTINUITY_STRATEGY_INVALID', message: 'continuityStrategy must be frame or window.' };
+  }
+  if (continuityStrategy !== 'window') return null;
+  const contract = continuationContract(model?.runtime);
+  if (!contract.temporalContext) {
+    return { code: 'VIDEO_TEMPORAL_UNAVAILABLE', message: `Temporal continuation unavailable for ${model?.runtime ?? 'unknown runtime'}: ${contract.unavailableReason}` };
+  }
+  if (resolveContextFrames(contextFrames) === 0) {
+    return { code: 'VIDEO_CONTINUITY_CONTEXT_REQUIRED', message: 'Window continuation needs a positive contextFrames count; choose frame for last-frame continuation.' };
+  }
+  return null;
+};
+
+/** Callers admit through continuityRequestViolation before resolving. */
+export const resolveContinuityRequest = ({ model, continuityStrategy, contextFrames }) => {
+  const contract = continuationContract(model?.runtime);
+  const resolvedFrames = resolveContextFrames(contextFrames);
+  const frames = resolvedFrames === 0 ? 0 : (contract.historyFrames ?? resolvedFrames);
+  const effectiveStrategy = continuityStrategy === 'frame' ? 'frame'
+    : resolveContinuityStrategy({ model, contextFrames: frames });
+  return {
+    requestedStrategy: continuityStrategy ?? 'auto',
+    effectiveStrategy,
+    contextFrames: effectiveStrategy === 'window' ? frames : 0,
+    actualHistoryFrames: effectiveStrategy === 'window' ? null : 0,
+    runtime: model?.runtime ?? null,
+    capability: contract.temporalContext,
+    backendPin: contract.backendPin ?? null,
+    unavailableReason: contract.unavailableReason,
+  };
+};
+
+/** Description of the installed adapter contract; never asserts hardware fidelity. */
+export const publicContinuationCapability = (model) => {
+  const contract = continuationContract(model?.runtime);
+  return {
+    temporalContext: contract.temporalContext,
+    adapter: contract.adapter ?? null,
+    backendPin: contract.backendPin ?? null,
+    historyFrames: contract.historyFrames ?? null,
+    outputLayout: contract.outputLayout ?? null,
+    unavailableReason: contract.unavailableReason,
+    strategies: contract.temporalContext ? ['frame', 'window'] : ['frame'],
   };
 };

@@ -34,6 +34,7 @@
  * them, and the copies had already drifted into different rules.
  */
 
+import { continuityRequestViolation } from '../../lib/videoContinuity.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { VIDEO_RUNTIME_MODES, resolveVideoSupportedModes } from '../../lib/videoModeProfiles.js';
 import { i2vReferenceModeViolation } from '../../lib/videoReferenceModes.js';
@@ -306,4 +307,10 @@ export const videoReferenceModeError = (opts) => {
   const violation = i2vReferenceModeViolation(opts);
   if (!violation) return null;
   return new ServerError(violation.message, { status: 400, code: violation.code });
+};
+
+/** Same explicit-continuation admission at staging, replay and argv boundaries. */
+export const videoContinuityContractError = (opts) => {
+  const violation = continuityRequestViolation(opts);
+  return violation ? new ServerError(violation.message, { status: 400, code: violation.code }) : null;
 };

@@ -3,7 +3,7 @@ import {
 } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' } } })),
@@ -12,6 +12,7 @@ vi.mock('../services/videoGen/continuousVideo.js', () => ({
   generateContinuousVideoEpisode: vi.fn(async () => ({ ok: true })),
   composeEpisodeClips: vi.fn(),
   attachEpisodeSseClient: vi.fn(() => false),
+  resolveEpisodeContinuity: vi.fn(async () => null),
   CONTINUOUS_VIDEO_BACKENDS: ['local', 'reactor', 'fal'],
 }));
 vi.mock('../lib/videoPromptLinter.js', () => ({ lintClips: vi.fn() }));
@@ -32,6 +33,7 @@ describe('continuousVideoEpisode routes', () => {
     app.use(errorMiddleware);
     vi.clearAllMocks();
     continuousVideo.composeEpisodeClips.mockReturnValue([{ prompt: 'A quiet street.', cutType: 'fresh' }]);
+    continuousVideo.resolveEpisodeContinuity.mockResolvedValue(null);
     lintClips.mockReturnValue({ pass: true, results: [] });
   });
 
@@ -73,6 +75,19 @@ describe('continuousVideoEpisode routes', () => {
       expect(call.renderOptions.pythonPath).toBe('/usr/bin/python3');
       expect(call.renderOptions.settings).not.toEqual({ hacked: true });
       expect(call.renderOptions.modelId).toBe('ltx2');
+    });
+
+    it('refuses unavailable temporal admission before returning a running descriptor', async () => {
+      continuousVideo.resolveEpisodeContinuity.mockRejectedValueOnce(new ServerError('Hardware evidence unavailable', { status: 400, code: 'VIDEO_TEMPORAL_UNAVAILABLE' }));
+      const r = await request(app).post('/api/continuous-video').send({
+        scenes, bible, renderOptions: { continuityStrategy: 'window', contextFrames: 17 },
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('VIDEO_TEMPORAL_UNAVAILABLE');
+      expect(continuousVideo.resolveEpisodeContinuity).toHaveBeenCalledWith({
+        backend: undefined, renderOptions: { continuityStrategy: 'window', contextFrames: 17 },
+      });
+      expect(continuousVideo.generateContinuousVideoEpisode).not.toHaveBeenCalled();
     });
   });
 

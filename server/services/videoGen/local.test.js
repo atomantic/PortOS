@@ -1201,8 +1201,6 @@ describe('generateChainedVideo — continuation strategy (context window vs last
   const WINDOW_START_HOP = 27;
   // 25 + (49−25) + (49−25) once the echoes come out of the timeline…
   const STITCHED_FRAMES_3_CHUNKS = 73;
-  // …versus the 123 frames actually on the timeline if the cuts don't land.
-  const UNTRIMMED_FRAMES_3_CHUNKS = 123;
 
   const flagValue = (args, flag) => (Array.isArray(args) && args.includes(flag)
     ? args[args.indexOf(flag) + 1] : null);
@@ -1213,7 +1211,7 @@ describe('generateChainedVideo — continuation strategy (context window vs last
    * and the raw child_process spawns (which is where both extractLastFrame's
    * `-sseof` seek and the final concat show up).
    */
-  async function runChain(chainParams, totalChunks, probeFrames = null) {
+  async function runChain(chainParams, totalChunks, probeFrames = null, expectFailure = false) {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const { trimVideoFromFrame, probeFrameCount } = await import('../../lib/ffmpeg.js');
     const { spawn } = await import('../../lib/childProcess.js');
@@ -1244,9 +1242,18 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     );
     videoGenEvents.on('started', (e) => innerJobIds.push(e.generationId));
 
+    const outerJobId = randomUUID();
+    const failed = expectFailure ? new Promise((resolve) => {
+      const listener = (event) => {
+        if (event.generationId !== outerJobId) return;
+        videoGenEvents.off('failed', listener);
+        resolve(event);
+      };
+      videoGenEvents.on('failed', listener);
+    }) : null;
     generateChainedVideo({
       chunks: totalChunks,
-      jobId: randomUUID(),
+      jobId: outerJobId,
       pythonPath: '/usr/bin/python3',
       modelId: 'ltx2_unified',
       prompt: 'test prompt',
@@ -1273,7 +1280,8 @@ describe('generateChainedVideo — continuation strategy (context window vs last
       const id = innerJobIds[i];
       videoGenEvents.emit('completed', { generationId: id, filename: `${id}.mp4`, path: `/data/videos/${id}.mp4` });
     }
-    await waitForStitch();
+    if (failed) await failed;
+    else await waitForStitch();
     videoGenEvents.removeAllListeners('started');
 
     const spawns = vi.mocked(spawn).mock.calls;
@@ -1371,12 +1379,9 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     expect(concat).not.toContain('-f');
   });
 
-  it('falls back to a stream copy when the trimmed filter graph fails, rather than losing the chain', async () => {
-    // The pre-trim implementation degraded to a repeated seam when a chunk
-    // trim failed, because failing there would have discarded every chunk
-    // already rendered. Moving the cut into the concat has to keep that: the
-    // untrimmed chunks were never re-encoded, so they're still in codec
-    // lockstep and the demuxer can still assemble them.
+  it('refuses a repeated-context salvage when the required exact trim fails', async () => {
+    // Completed chunks remain available, but a failed seam trim cannot publish
+    // a stitched clip that repeats history while claiming exact delivery.
     const { spawn } = await import('../../lib/childProcess.js');
     const failingProc = () => {
       const listeners = {};
@@ -1395,17 +1400,11 @@ describe('generateChainedVideo — continuation strategy (context window vs last
       Array.isArray(args) && args.includes('-filter_complex') ? failingProc() : makeProc()
     ));
     try {
-      const { spawns, stitched } = await runChain({}, 3);
+      const { spawns, stitched } = await runChain({}, 3, null, true);
       const concats = spawns.map(([, args]) => args).filter(Array.isArray);
       expect(concats.some((args) => args.includes('-filter_complex'))).toBe(true);
-      // …and the salvage run, which is the plain demuxer stream copy.
-      const copy = concats.find((args) => args.includes('-f') && args.includes('copy'));
-      expect(copy).toBeTruthy();
-      // The echoes are still in the output, so the record must say so — and
-      // "so" is the chunks' MEASURED lengths (25 + 49 + 49), not the numFrames
-      // they were rendered at, which understates an extend render's file by
-      // the whole context window.
-      expect(stitched?.numFrames).toBe(UNTRIMMED_FRAMES_3_CHUNKS);
+      expect(concats.some((args) => args.includes('-f') && args.includes('copy'))).toBe(false);
+      expect(stitched).toBeNull();
     } finally {
       vi.mocked(spawn).mockImplementation(() => makeProc());
     }
@@ -3230,6 +3229,40 @@ describe('generateVideo — Wan MLX-Gen contract', () => {
 });
 
 describe('generateVideo — MiniMax H3 MLX contract', () => {
+  it('refuses explicit temporal replay and direct history before resolving assets or spawning', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockClear();
+    for (const conditioning of [
+      { continuityStrategy: 'window', contextFrames: 17 },
+      { historyContext: { sourceVideoPath: '/mock/prior.mp4', endFrame: 124, frames: 17 } },
+    ]) {
+      await expect(generateVideo({ modelId: 'minimax_h3_8bit', prompt: 'A paper boat on a pond',
+        ...conditioning })).rejects.toMatchObject({ code: 'VIDEO_TEMPORAL_UNAVAILABLE' });
+    }
+    expect(spawnDetached).not.toHaveBeenCalled();
+  });
+
+  it('records current frame behavior instead of replaying stale window provenance', async () => {
+    const { atomicWrite } = await import('../../lib/fileUtils.js');
+    const jobId = 'h3-stale-window-provenance';
+    await renderToTerminal({
+      jobId, modelId: 'minimax_h3_8bit', prompt: 'A paper boat on a pond',
+      mode: 'text', numFrames: 124, fps: 24,
+      continuation: {
+        requestedStrategy: 'auto', effectiveStrategy: 'window',
+        contextFrames: 22, actualHistoryFrames: 22, runtime: 'ltx2',
+        capability: true, backendPin: null, unavailableReason: null,
+      },
+    });
+    const record = vi.mocked(atomicWrite).mock.calls
+      .flatMap(([, value]) => Array.isArray(value) ? value : [])
+      .find(value => value.id === jobId);
+    expect(record.continuation).toMatchObject({
+      requestedStrategy: 'auto', effectiveStrategy: 'frame', actualHistoryFrames: 0,
+      contextFrames: 0, runtime: 'minimax_h3', capability: false,
+    });
+  });
+
   // H3 anchors keyframes at the first/last latent frame only, so the ltx2
   // arbitrary-index array and every non-keyframe conditioning channel stay out.
   it.each([

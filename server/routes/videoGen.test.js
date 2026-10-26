@@ -1336,6 +1336,7 @@ describe('videoGen routes', () => {
         // full-decode default — the generic round-trip can't cover it. Its
         // own case is below.
         'streamingMode',
+        'continuityStrategy',
       ]);
       const { getSettings } = await import('../services/settings.js');
       getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
@@ -2022,6 +2023,21 @@ describe('videoGen routes', () => {
       });
       expect(r.status).toBe(400);
       expect(r.body.error).toMatch(/chunks/i);
+    });
+
+    it('persists explicit temporal intent and rejects invalid strategies before queueing', async () => {
+      const accepted = await request(app).post('/api/video-gen/').send({
+        prompt: 'a long shot', chunks: 3, continuityStrategy: 'window', contextFrames: 17,
+      });
+      expect(accepted.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({
+        continuityStrategy: 'window', contextFrames: 17,
+        continuation: expect.objectContaining({ requestedStrategy: 'window', effectiveStrategy: 'window', actualHistoryFrames: null }),
+      }) }));
+      mediaJobQueue.enqueueJob.mockClear();
+      const invalid = await request(app).post('/api/video-gen/').send({ prompt: 'a shot', continuityStrategy: 'experimental' });
+      expect(invalid.status).toBe(400);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
     it('defaults the continuation context window on a chained request', async () => {
@@ -2957,6 +2973,8 @@ describe('videoGen routes', () => {
     // (sourceImagePath, audioFilePath, uploadedTempPath(s), extendFromVideoPath)
     // or the resolved pythonPath to the browser.
     it('whitelists params and never leaks server-internal file paths', async () => {
+      const continuation = { requestedStrategy: 'window', effectiveStrategy: 'window', contextFrames: 17,
+        actualHistoryFrames: null, runtime: 'ltx2', capability: true, backendPin: null, unavailableReason: null };
       mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([
         { id: 'running-1', kind: 'video', status: 'running', position: 1, params: {
           prompt: 'safe prompt',
@@ -2965,6 +2983,8 @@ describe('videoGen routes', () => {
           numFrames: 121, fps: 24,
           steps: 25, guidanceScale: 3, seed: 42,
           tiling: 'auto', disableAudio: false, mode: 'text', chunks: 1,
+          continuityStrategy: 'window',
+          continuation: { ...continuation, sourceVideoPath: '/private/original.mp4' },
           // sensitive fields that must NOT round-trip:
           pythonPath: '/Users/secret/venv/bin/python',
           sourceImagePath: '/Users/secret/data/uploads/source.png',
@@ -2980,6 +3000,8 @@ describe('videoGen routes', () => {
       expect(p.prompt).toBe('safe prompt');
       expect(p.modelId).toBe('ltx2_unified');
       expect(p.width).toBe(768);
+      expect(p.continuityStrategy).toBe('window');
+      expect(p.continuation).toEqual(continuation);
       expect(p.pythonPath).toBeUndefined();
       expect(p.sourceImagePath).toBeUndefined();
       expect(p.audioFilePath).toBeUndefined();

@@ -1,3 +1,4 @@
+import { sanitizeContinuation } from '../../lib/videoContinuationProvenance.js';
 import { effectiveJobPrompt } from '../../lib/federatedMediaWire.js';
 import { videoHoldSchema } from './videoHolds.js';
 import { isRemoteMediaJob } from './remoteMediaJob.js';
@@ -83,6 +84,9 @@ export function sanitizeJob(job) {
           : value,
       ]))
     : undefined;
+  if (safeParams && ['frame', 'window'].includes(job.params?.continuityStrategy)) safeParams.continuityStrategy = job.params.continuityStrategy;
+  const continuation = sanitizeContinuation(job.params?.continuation);
+  if (safeParams && continuation) safeParams.continuation = continuation;
   // A remote job's conditioning text lives inside its versioned marker, never
   // in top-level params — that is what makes an older build (which cannot route
   // the marker) fail closed instead of quietly re-rendering the job locally.

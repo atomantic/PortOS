@@ -1,7 +1,30 @@
+import { resolveContinuityRequest } from '../../lib/videoContinuity.js';
 import { describe, expect, it } from 'vitest';
 import { sanitizeJob } from './sanitizeJob.js';
 
 describe('sanitizeJob', () => {
+  it('projects bounded continuation evidence without worker paths or unsupported nested values', () => {
+    const continuation = resolveContinuityRequest({ model: { runtime: 'minimax_h3' }, continuityStrategy: 'frame' });
+    const projected = sanitizeJob({ kind: 'video', params: { continuityStrategy: 'frame', continuation: {
+      ...continuation, sourceVideoPath: '/private/original.mp4', scratch: '/private/scratch.mp4',
+    } } });
+    expect(projected.params).toMatchObject({ continuityStrategy: 'frame', continuation });
+    expect(JSON.stringify(projected)).not.toContain('/private');
+    const malformed = sanitizeJob({ kind: 'video', params: { continuityStrategy: { sourcePath: '/private/input.mp4' }, continuation: {
+      ...continuation, actualHistoryFrames: 999999,
+    } } });
+    expect(malformed.params).not.toHaveProperty('continuation');
+    expect(malformed.params).not.toHaveProperty('continuityStrategy');
+    const historical = sanitizeJob({ kind: 'video', params: { continuation: {
+      ...continuation, backendPin: 'diffusers==0.41.0', unavailableReason: 'The prior adapter lacked a verified history contract.',
+    } } });
+    expect(historical.params.continuation).toMatchObject({ backendPin: 'diffusers==0.41.0', unavailableReason: 'The prior adapter lacked a verified history contract.' });
+    const unsafe = sanitizeJob({ kind: 'video', params: { continuation: {
+      ...continuation, backendPin: '/private/runtime', unavailableReason: 'Source missing: /tmp/private-input.mp4',
+    } } });
+    expect(unsafe.params.continuation).toMatchObject({ backendPin: null, unavailableReason: null });
+  });
+
   it('exposes requested reference filenames without leaking local paths or inferring missing history', () => {
     const params = { initImagePath: '/private/gallery/source.png', referenceImagePaths: [
       'C:\\private\\refs\\character.png', '/private/refs/character.png', null, '/private/secret.txt',
