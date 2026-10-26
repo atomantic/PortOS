@@ -15,7 +15,7 @@ const compilerKey = Symbol.for('portos.windowsGitSupervisor');
 function supervisor() {
   let state = process[compilerKey];
   if (!state) {
-    state = { active: new Set(), operations: new Set(), held: false, closing: false };
+    state = { active: new Set(), operations: new Set(), held: false, holdReasons: new Set(), closing: false };
     process[compilerKey] = state;
     state.ready = (async () => {
       const directory = await mkdtemp(join(tmpdir(), 'portos-git-supervisor-'));
@@ -67,10 +67,10 @@ async function cleanupSupervisor(state) {
     while (state.operations.size || state.active.size) {
       const pending = [...state.operations, ...[...state.active].map(child => child.gitSettlement)];
       const drained = await Promise.race([Promise.allSettled(pending).then(() => true), deadline]);
-      if (!drained) throw held();
+      if (!drained) throw held(new Set(['work-unconfirmed']));
     }
     await stopBroker(state);
-    if (state.held) throw held();
+    if (state.held) throw held(state.holdReasons);
     if (state.directory) await rm(state.directory, { recursive: true, force: true });
     if (process[compilerKey] === state) delete process[compilerKey];
     delete globalThis.__portosGitSupervisorCleanup;
@@ -78,7 +78,9 @@ async function cleanupSupervisor(state) {
 }
 
 const unavailable = () => Object.assign(new Error('Windows Git containment unavailable'), { code: 'GIT_CONTAINMENT_UNAVAILABLE' });
-const held = () => Object.assign(new Error('Git work settlement is held'), { code: 'GIT_SETTLEMENT_HELD' });
+const held = reasons => Object.assign(new Error('Git work settlement is held'), {
+  code: 'GIT_SETTLEMENT_HELD', settlement: 'held', settlementReasons: [...reasons].sort(),
+});
 
 async function stopBroker(state) {
   if (state.stopping) return state.stopping;
@@ -90,15 +92,17 @@ async function stopBroker(state) {
       try { broker.process.stdin.end(); }
       catch {
         state.held = true;
+        state.holdReasons.add('supervisor-unconfirmed');
         try { broker.process.kill(); } catch { /* retain the resource obligation */ }
-        throw held();
+        throw held(state.holdReasons);
       }
       const closed = await Promise.race([broker.closed.then(() => true),
         new Promise(resolve => { timer = setTimeout(() => resolve(false), 5000); })]);
       if (!closed) {
         state.held = true;
+        state.holdReasons.add('supervisor-unconfirmed');
         try { broker.process.kill(); } catch { /* retain the resource obligation */ }
-        throw held();
+        throw held(state.holdReasons);
       }
     } finally { clearTimeout(timer); state.stopping = null; }
   })();
@@ -220,6 +224,7 @@ export function startGit(args, options, wire) {
       if (!broker.jobs.delete(id)) return;
       state.active.delete(child);
       state.held ||= !result.settled;
+      if (!result.settled) state.holdReasons.add(result.reason);
       child.exitCode = result.exitCode;
       child.stdout.end(); child.stderr.end();
       resolveSettlement(result);

@@ -55,6 +55,8 @@ describe.skipIf(process.platform !== 'win32')('Windows Git broker failure contai
     expect(failure.message).not.toMatch(/synthetic|argument|transport/);
     expect(retain).toHaveBeenCalledOnce();
     expect(() => assertGitWorkSettled(cwd)).toThrow(/held/);
-    await expect(globalThis.__portosGitSupervisorCleanup()).rejects.toMatchObject({ code: 'GIT_SETTLEMENT_HELD' });
+    await expect(globalThis.__portosGitSupervisorCleanup()).rejects.toMatchObject({
+      code: 'GIT_SETTLEMENT_HELD', settlementReasons: ['supervisor-unconfirmed'],
+    });
   });
 });
