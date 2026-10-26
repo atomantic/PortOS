@@ -559,7 +559,10 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
       let paints = 0;
       const settle = () => {
         const clips = [...(figureRef.current?.querySelectorAll('video[data-preview-video]') || [])]
-          .filter((video) => Number(getComputedStyle(video.parentElement).opacity) > 0);
+          // A decoded current clip can still be transparent until loadeddata
+          // reveals it. Its paused surface must settle before serialization.
+          .filter((video) => Number(getComputedStyle(video.parentElement).opacity) > 0
+            || (video.matches('[data-ready]:not([aria-hidden="true"])') && video.readyState >= 2));
         const failedClip = clips.find((video) => video.dataset.previewError);
         if (failedClip) { clearTimeout(timer); reject(new Error(failedClip.dataset.previewError)); return; }
         if (++paints >= 2 && clips.every((video) => !video.seeking && video.dataset.pausedFrame === String(video.currentTime))) {

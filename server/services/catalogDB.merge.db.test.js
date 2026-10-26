@@ -204,7 +204,8 @@ describe.skipIf(!ready)('recoverable local catalog merge', () => {
       'source-primary.png', 'survivor-primary.png', 'source-standard.png', 'survivor-standard.png',
       'source-blueprint.png', 'survivor-blueprint.png',
     ]));
-    expect((await listIngredients({ ids: [input.survivorId] })).items[0].thumbnailKey).toBeNull();
+    const cover = (await listIngredients({ ids: [input.survivorId] })).items[0].thumbnailKey;
+    expect(media.filter(row => row.role?.startsWith('sheet:')).map(row => row.mediaKey)).toContain(cover);
     expect(media.filter(row => row.role === 'sheet:blueprint').map(row => row.mediaKey)).toEqual(expect.arrayContaining(['source-blueprint.png', 'survivor-blueprint.png']));
     expect((await getIngredient(input.survivorId)).payload.referenceSheets.blueprint).toBe('survivor-blueprint.png');
   });

@@ -38,7 +38,7 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // issues (`fileIssues: true`); the user can flip it to implement. Deliberately
   // narrower than its siblings: raw console errors belong to `ui-bugs`, viewport
   // breakage to `mobile-responsive`, ARIA/contrast/keyboard to `accessibility`.
-  'ux',
+  'ux', 'design',
   // Quota-burn `data-safety-audit` counterpart. Migrations, schema parity, and
   // cross-version compatibility. Defaults to file-issues (safer for unattended).
   'data-safety',

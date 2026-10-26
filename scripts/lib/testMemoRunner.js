@@ -19,7 +19,7 @@
  * the same after the run as before it.
  *
  * Sharding: a matrix shard takes its slice of the FULL selected list with
- * Vitest's own algorithm (`vitestShardSlice`) before the memo subtracts
+ * the runner's selected algorithm (Vitest by default) before the memo subtracts
  * anything, so every file lands in exactly one shard whatever each shard's
  * store holds. Vitest itself is never given `--shard`.
  */
@@ -51,7 +51,7 @@ const VIRTUAL_MODULE = /(?:^|\/)@vite\/|^\0|^virtual:/;
  * @returns {{ selected: string[], run: string[], skipped: Array<{test: string, via: 'recorded'|'floor'}>,
  *   reasons: Map<string, string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
  */
-export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry }) {
+export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, shardSlice = vitestShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry }) {
   const workspaceTests = listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel));
   const candidates = mode === 'files' ? uniqueSorted(repoFiles) : uniqueSorted([...workspaceTests, ...repoFiles]);
   const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion };
@@ -81,7 +81,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const selected = mode === 'related'
     ? uniqueSorted([...relatedTests(verdicts, repoSources), ...repoFiles])
     : candidates;
-  const slice = shard ? vitestShardSlice(selected, { repoRoot, scope, ...shard }) : selected;
+  const slice = shard ? shardSlice(selected, { repoRoot, scope, ...shard }) : selected;
 
   const skipped = [];
   const reasons = new Map();

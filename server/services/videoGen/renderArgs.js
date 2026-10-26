@@ -1,5 +1,4 @@
-import { assertA2vLoraStageRequest } from './loraStages.js';
-import { isDefaultA2vLoraStages } from '../../lib/videoLoraStageValidation.js';
+import { assertA2vLoraStageRequest, isDefaultA2vLoraStages } from '../../lib/videoLoraStageValidation.js';
 /**
  * Local-video render argument assembly and runtime validation.
  *

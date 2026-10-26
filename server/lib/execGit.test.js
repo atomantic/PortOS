@@ -1,12 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 vi.mock('./childProcess.js', () => ({
   spawn: vi.fn()
 }));
 
 import { spawn } from './childProcess.js';
-import { execGit, execGitSafe } from './execGit.js';
+vi.mock('./windowsGitProcess.js', () => ({ startGit: vi.fn((args, options, wire) => wire(spawn('git', args, options))) }));
+import { startGit } from './windowsGitProcess.js';
+import { assertGitWorkSettled, execGit, execGitSafe, withGitMutationLifetime } from './execGit.js';
 
 const makeChild = () => {
   const child = new EventEmitter();
@@ -36,6 +41,11 @@ describe('execGit', () => {
       cwd: '/repo',
       shell: false
     });
+  });
+
+  it('rejects embedded NUL before a native command line could truncate an argument', async () => {
+    await expect(execGit(['status', 'prefix\0suffix'], '/repo')).rejects.toThrow(/without NUL/);
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it('forwards an explicit credential environment without merging ambient variables', async () => {
@@ -168,7 +178,8 @@ describe('execGit', () => {
     await expect(promise).resolves.toEqual({
       exitCode: 1,
       stdout: '',
-      stderr: 'git command timed out after 0.5s: git fetch'
+      stderr: 'git command timed out after 0.5s',
+      settlement: 'held', settlementReason: 'tree-unconfirmed'
     });
   });
 
@@ -188,6 +199,117 @@ describe('execGit', () => {
     const promise = execGit(['status'], '/repo');
     child.emit('error', new Error('spawn ENOENT'));
     await expect(promise).rejects.toThrow(/ENOENT/);
+  });
+
+  it('holds mutation admission and teardown when cancellation cannot confirm pipe settlement', async () => {
+    const child = makeChild();
+    child.pid = 12345;
+    child.cancelOwnedGit = vi.fn();
+    child.gitSettlement = new Promise(() => {});
+    spawn.mockReturnValue(child);
+    const retain = vi.fn();
+    const result = withGitMutationLifetime(() => execGit(['fetch', 'private-argument'], '/held-fixture/repo', { timeout: 100 }), retain).catch(error => error);
+    vi.advanceTimersByTime(100);
+    expect(child.cancelOwnedGit).toHaveBeenCalledOnce();
+    expect(retain).not.toHaveBeenCalled();
+    child.emit('exit', 1);
+    expect(() => assertGitWorkSettled('/held-fixture')).toThrow(/settlement is held/);
+    vi.advanceTimersByTime(5000);
+    const failure = await result;
+    expect(failure).toMatchObject({ code: 'GIT_TIMEOUT', settlement: 'held', settlementReason: 'pipes-unconfirmed' });
+    expect(failure.message).not.toContain('private-argument');
+    expect(retain).toHaveBeenCalledOnce();
+    expect(() => assertGitWorkSettled('/held-fixture')).toThrow(/settlement is held/);
+    expect(() => assertGitWorkSettled('/held-fixture-neighbor')).not.toThrow();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('waits for owned-tree evidence after close before releasing mutation admission', async () => {
+    const child = makeChild();
+    child.cancelOwnedGit = vi.fn();
+    let confirm;
+    child.gitSettlement = new Promise(resolve => { confirm = resolve; });
+    spawn.mockReturnValue(child);
+    const retain = vi.fn();
+    const result = withGitMutationLifetime(() => execGit(['status'], '/settled-fixture/repo', { timeout: 100 }), retain).catch(error => error);
+    vi.advanceTimersByTime(100);
+    child.emit('close', 1);
+    expect(() => assertGitWorkSettled('/settled-fixture')).toThrow(/settlement is held/);
+    confirm({ settled: true, launched: true, exitCode: 1, reason: 'settled' });
+    expect(await result).toMatchObject({ code: 'GIT_TIMEOUT', settlement: 'settled' });
+    expect(retain).not.toHaveBeenCalled();
+    expect(() => assertGitWorkSettled('/settled-fixture')).not.toThrow();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('retains an unconfirmed tree despite closed pipes and a zero supervisor exit', async () => {
+    const child = makeChild();
+    child.gitSettlement = Promise.resolve({ settled: false, reason: 'termination-unconfirmed' });
+    spawn.mockReturnValue(child);
+    const retain = vi.fn();
+    const result = withGitMutationLifetime(() => execGit(['status'], '/unconfirmed-fixture'), retain);
+    child.emit('close', 0);
+    await expect(result).rejects.toMatchObject({ code: 'GIT_SETTLEMENT_HELD', settlement: 'held', settlementReason: 'termination-unconfirmed' });
+    expect(retain).toHaveBeenCalledOnce();
+    expect(() => assertGitWorkSettled('/unconfirmed-fixture')).toThrow(/settlement is held/);
+  });
+
+  it('drains a live sibling before a failed mutation workflow can release its permit', async () => {
+    const first = makeChild(), second = makeChild();
+    spawn.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    let ended = false;
+    const work = withGitMutationLifetime(() => Promise.all([
+      execGit(['first'], '/fanout-fixture'), execGit(['second'], '/fanout-fixture'),
+    ]), vi.fn()).finally(() => { ended = true; });
+    const failure = work.catch(error => error);
+    first.emit('close', 1);
+    await Promise.resolve(); await Promise.resolve();
+    expect(ended).toBe(false);
+    expect(() => assertGitWorkSettled('/fanout-fixture')).toThrow(/held/);
+    second.emit('close', 0);
+    expect((await failure).message).toBe('git exited with code 1');
+    expect(() => assertGitWorkSettled('/fanout-fixture')).not.toThrow();
+  });
+
+  it('holds fixture teardown while containment startup is pending and clears an unlaunched failure', async () => {
+    let failStartup;
+    startGit.mockImplementationOnce(() => new Promise((resolve, reject) => { failStartup = reject; }));
+    const result = execGit(['status'], '/starting-fixture');
+    expect(() => assertGitWorkSettled('/starting-fixture')).toThrow(/held/);
+    failStartup(new Error('containment startup failed'));
+    await expect(result).rejects.toThrow('containment startup failed');
+    expect(() => assertGitWorkSettled('/starting-fixture')).not.toThrow();
+  });
+
+  it('holds teardown across junction or symlink spellings of the owned directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'portos-owned-git-path-'));
+    const physical = join(root, 'physical'), alias = join(root, 'alias');
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    let pending;
+    try {
+      await mkdir(physical);
+      await symlink(physical, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      pending = execGit(['status'], alias);
+      expect(() => assertGitWorkSettled(physical)).toThrow(/held/);
+      expect(() => assertGitWorkSettled(alias)).toThrow(/held/);
+    } finally {
+      child.emit('close', 0);
+      if (pending) await pending;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses detached Git work after its mutation permit lifetime has ended', async () => {
+    let resume, late;
+    const later = new Promise(resolve => { resume = resolve; });
+    await withGitMutationLifetime(() => {
+      late = later.then(() => execGit(['status'], '/expired-fixture'));
+    }, vi.fn());
+    const outcome = late.catch(error => error);
+    resume();
+    expect(await outcome).toMatchObject({ code: 'GIT_MUTATION_LIFETIME_CLOSED' });
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it('falls back to a generic error message when stderr is empty on non-zero exit', async () => {

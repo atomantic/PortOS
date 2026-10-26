@@ -32,7 +32,7 @@ const analysisFor = task => ({
   snippet: task.metadata.blockedReason || task.metadata.taskOutcome?.reason,
   blockedSystemRecovery: true,
   preserveOriginalBudget: true,
-  escalation: 'Re-read the original task, current owners and delivery evidence first. Reuse active fixes. Resolve the affected work within its original authority and budgets. Diagnose the underlying machine/product cause; repair a demonstrated code defect in an isolated checkout with a regression test, required review, CI, merge admission and own-checkout cleanup. Reuse and link an existing active fix instead of duplicating it. Do not invent code defects for external permission failures or transient causes; record those accurately. Preserve unfinished work and original failure/spawn budgets. Do not requeue, reset, or mark the original task completed by hand; its existing verifier and budget rules own continuation. Do not retry denied operations, change credentials, spend limits or permissions, or bypass a genuine human approval. Report actual human-required boundaries on the original record; machine-recoverable failures must not create personal Brain/todo actions.',
+  escalation: 'Re-read the original task, current owners and delivery evidence first. Reuse active fixes. Resolve the affected work within its original authority and budgets. Diagnose the underlying machine/product cause; repair a demonstrated code defect in an isolated checkout with a regression test, required review, CI, merge admission and own-checkout cleanup. Reuse and link an existing active fix instead of duplicating it. Verify that owner is still running on this instance before joining it. To wait for that owner, report an incomplete taskOutcome with recovery {mode: "dependency-wait", ownerTaskId, ownerAgentId, prUrl}; the server verifies the same repository, dispatch and remaining budget before recording the wait. An active internal dependency is not a human approval and is not investigation success. A linked task or status edit is not a correction: after verified delivery, continue this same investigation within its remaining budget, verify the original failure against the actual root-code fix/regression/review/CI/merge, or report a demonstrated environmental cause or actual external permission boundary. Do not claim an environment cause without causal evidence. Do not invent code defects for external permission failures or transient causes; record those accurately. Preserve unfinished work and original failure/spawn budgets. Do not requeue, reset, or mark the original task completed by hand; its existing verifier and budget rules own continuation. Do not retry denied operations, change credentials, spend limits or permissions, or bypass a genuine human approval. Report actual human-required boundaries on the original record; machine-recoverable failures must not create personal Brain/todo actions.',
 });
 const phaseFor = task => task.status === 'in_progress' ? 'investigating'
   : task.status === 'completed' ? 'diagnosed'
@@ -144,4 +144,9 @@ export function _createBlockedSystemInvestigationRecovery(deps = {}) {
 
 const recovery = _createBlockedSystemInvestigationRecovery();
 export const recoverBlockedSystemTask = taskId => recovery.recover(taskId);
-export const recoverBlockedSystemTasks = () => recovery.sweep();
+export const recoverBlockedSystemTasks = async () => {
+  const result = await recovery.sweep();
+  const { reconcileInvestigationDependencies } = await import('./investigationDependencyWait.js');
+  await reconcileInvestigationDependencies();
+  return result;
+};

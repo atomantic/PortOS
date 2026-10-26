@@ -218,7 +218,10 @@ the person using it, not as the person who wrote it. Hunt specifically for:
 - **Reachability.** A view that cannot be linked to, bookmarked, or reached from
   the command palette / navigation because its selection lives in local state.
 
-Prefer one high-traffic screen audited deeply over ten skimmed.`,
+Design owns rendered composition, media framing, icon treatment and theme character.
+Mobile-responsive owns phone/tablet layout and touch defects; accessibility owns
+ARIA, contrast and keyboard failures. Deduplicate across sibling audits by root
+cause: one finding, one owner. Prefer one high-traffic screen audited deeply over ten skimmed.`,
   }),
 
   auditPreset({

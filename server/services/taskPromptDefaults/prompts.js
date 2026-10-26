@@ -893,7 +893,85 @@ one-off values.
 
 Cite \`file:LINE\` for the rule or component responsible.`,
 
-  'ux': `[Improvement: {appName}] UX / Design Audit
+  'design': `[Improvement: {appName}] Rendered Design Audit
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+Review {appName}'s actual rendered UI for composition, balance and authored
+visual character. This audit defaults to actionable tracker findings. Discover
+the app's UI URL and design standards from its own config, README and docs;
+managed apps need neither PortOS runtime conventions nor theme support.
+
+## Ownership and deduplication
+
+Design owns rendered composition, visual balance, purposeful media framing,
+controls obscuring thumbnails, coherent icon treatment, polished loading/error/
+empty states, responsive composition and intentional theme character. UX owns
+findability, task flows, interactions, accessibility-aware usability, hierarchy,
+clarity, spacing and consistency. Accessibility owns ARIA, contrast and keyboard
+failures; ui-bugs owns broken elements/requests; mobile-responsive owns overflow,
+clipping, breakpoint, viewport-height and touch defects at viewport width ≤1024.
+Responsive composition here means balance and framing, not those layout failures.
+Search sibling audits and existing tracker items by root cause, not category or
+title. One finding, one owner: reuse the owning issue and add only new evidence;
+never split one shared-component cause across routes, themes or audit categories.
+
+## Bounded rendered evidence
+
+1. Inventory routes/components and consult the preloaded Recent audit slices.
+   Rotate into unreviewed areas. Choose at most three representative routes:
+   a list/media view, a detail/editor mid-workflow, and an overlay or error/empty
+   state where relevant. Use synthetic fixtures, never real personal records.
+2. Open the running app with available browser automation and actually capture
+   AND inspect screenshots. Source, DOM and token checks support attribution,
+   but source-only review cannot establish visual quality. If rendering or
+   screenshot inspection is unavailable, report coverage unavailable, sliceScore
+   null and visual coverage blocked/untested with the exact blocker. Never
+   claim visual passing or broad coverage from an unrendered screen.
+3. Inspect desktop and one narrow viewport on the representative sample. Bound
+   the total to six route/state/viewport/theme captures per run; allocate them
+   to the strongest candidates rather than a Cartesian product. Record every
+   inspected screenshot's route, state, viewport dimensions, theme (or none),
+   responsible component and private/local evidence reference. Unvisited states,
+   routes, viewports and themes remain explicitly untested. Reuse the existing
+   audit evidence/assessment and AUDIT_SLICE mechanisms; do not build a second
+   evidence store. Keep screenshots private/local; public tracker items carry
+   redacted observations and synthetic reproductions, not large screenshot dumps.
+4. Where themes exist, compare matching representative screens in a small
+   sample (at most two themes within the same capture budget). Evaluate intended
+   differences in typography, palette, surfaces/material, shape, depth and motion
+   where appropriate. For PortOS only, consult docs/themes/README.md and
+   client/src/themes/portosThemes.js: Kestrel Neon and Kestrel Dawn are favored
+   references, not templates every theme must resemble. Preserve authored
+   identity; similar palettes alone are not defects. Apps without themes skip
+   the comparison and record themes as not applicable.
+
+## Findings and completion
+
+{trackerInstructions}
+
+Each accepted objective defect needs severity, observed user impact, route/state/
+viewport/theme, screenshot inspection evidence plus component file:line, a chosen
+bounded fix and precise before/after acceptance criteria. Check framing/cropping,
+thumbnail overlays, visual balance, icon coherence and polished states against the
+app's authored standards. Aesthetic suggestions belong only in the final report as separate proposals,
+not accepted defects or automatically actionable tracker items: do not score
+them as defects or file them as defects. Explain
+concrete rationale, tradeoffs and a bounded before/after proposal, and mark the
+user-owned decision explicitly. They do not authorize automatic cosmetic edits,
+theme homogenization or redesigning every theme, even in implement mode. Do not
+change production settings/themes or restart services to obtain evidence; use a
+safe local preview. Do not invoke heavy models or purchase new assets.
+
+Finish with inspected evidence references, findings and owning issue links,
+objective defects versus aesthetic proposals, remaining coverage and why the
+sample stopped. Emit the existing quality report and recent-slice markers with
+truthful partial/unavailable coverage; a bounded sample is not app-wide visual
+certification.`,
+
+  'ux': `[Improvement: {appName}] UX Audit
 
 You are reviewing {appName}'s running UI as a UX reviewer, not as an engineer
 fixing bugs. The question you are answering for every screen is **"can a user
@@ -903,7 +981,7 @@ Repository: {repoPath}
 
 {modeInstructions}
 
-Design judgment is normally proposed rather than merged: this audit defaults to
+UX judgment is normally proposed rather than merged: this audit defaults to
 filing one tracker item per finding so a human — or a later claim-style task
 runner — decides what actually gets built. The mode banner above is what
 decides; when it puts you in implement mode, the sections below that describe
@@ -918,6 +996,7 @@ interface the same way and hold to the same checklist.
 
 Duplicate findings are noise. Do NOT file:
 
+- **Rendered composition, balance, media framing, thumbnail overlays, icon treatment, polished states and theme character** — \`design\` owns these. UX retains hierarchy, clarity, spacing and consistency when they affect usability.
 - **Raw console errors / broken elements / failed requests** — \`ui-bugs\` owns these.
 - **Phone and tablet viewports (1024 wide or narrower) and touch mechanics** — \`mobile-responsive\` owns overflow, clipping, breakpoint gaps, viewport-height assumptions, hover-only controls, and tap targets at those viewport widths. This audit's reflow check (item 8) is a narrow CONTAINER on a desktop viewport — a dashboard widget, an embedded panel, a side panel — never a narrow viewport.
 - **ARIA labels, contrast ratios, keyboard traps** — \`accessibility\` owns these.
@@ -933,7 +1012,7 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
 
 1. **Inventory existing findings so you don't duplicate.** Follow the
    "Inventory" step under "Where to record findings" above for this app's
-   tracker. De-duplicate by the route/screen and problem described in existing
+   tracker. De-duplicate across sibling audits by root cause (one finding, one owner), then by the route/screen and problem described in existing
    items; the tracker block defines their IDs. Older forge issues may have a
    legacy title tag, but new issue titles do not need one.
 
@@ -955,10 +1034,10 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
    if none is reachable, exit cleanly as step 2 says. For every route:
    - Navigate to it and read the rendered structure (an accessibility snapshot
      or the DOM), not only a screenshot.
-   - View it in three viewport classes — desktop (1280 wide or more), tablet
-     (roughly 768–1024), and phone (390 or narrower) — and read the structure
-     at each. The fold differs per class, and a buried primary action is the
-     single most common finding.
+   - Start with a desktop viewport (1280 wide or more). Sample one narrow
+     viewport only when it answers a distinct task-flow or findability question;
+     do not repeat mobile-responsive's phone/tablet layout sweep. Record the
+     sampled viewport and leave unsampled widths explicitly untested.
 
    - Test with the navigation sidebar expanded and collapsed, and at 200% zoom.
    - Resize dashboard widgets and embedded panels to 240px, 320px, and 480px wide on a desktop viewport. Viewport breakpoints do not prove a narrow container fits.
@@ -971,7 +1050,8 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
 4. **Evaluate each route against this named checklist.** Cite the checklist
    number in the finding so results are reproducible rather than vibes:
 
-   1. **Primary action visible above the fold** at both 1440x900 AND 375x812.
+   1. **Primary action visible above the fold** at the sampled desktop viewport
+      and any narrow task-flow sample.
       What is the one thing a user comes to this screen to do, and can they see
       it without scrolling?
    2. **Empty / loading / error states name a next action.** A blank panel, a

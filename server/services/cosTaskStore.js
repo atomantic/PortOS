@@ -867,12 +867,23 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   const previousStatus = tasks[taskIndex].status;
   const transition = resolveTaskStatusTransition(previousStatus, updates.status);
 
+  const dependencyWait = current.metadata?.investigationDependencyWait;
+  const dependencyReady = updates.metadata?.investigationDependencyWait;
+  const dependencyRelease = preserveRetryBudget && expectedStatus === 'blocked' && expectedTask && recoveryOwner
+    && current.metadata?.blockedCategory === 'internal-dependency' && updates.status === 'pending'
+    && dependencyWait?.version === 1 && dependencyWait.phase === 'waiting' && dependencyReady?.phase === 'ready'
+    && dependencyWait.sourceAgentId === recoveryOwner.id && dependencyWait.sourceStartedAt === recoveryOwner.startedAt
+    && ['sourceAgentId', 'sourceStartedAt', 'ownerAgentId', 'ownerStartedAt', 'ownerTaskId', 'instanceId', 'repoPath', 'prUrl']
+      .every(key => dependencyWait[key] === dependencyReady[key])
+    && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(dependencyReady.proof?.head || '')
+    && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(dependencyReady.proof?.mergeCommit || '');
+
   // Retire the metadata this transition releases. Ordered — see the table's note on
   // the `blockedCategory` clear feeding the resume-pointer check below.
   for (const [field, keys] of TRANSITION_METADATA_CLEARS) {
     if (!transition[field]) continue;
     for (const key of keys) {
-      if (runtimeRelease && ['failureCount', 'lastErrorCategory', 'lastFailureAt'].includes(key)) continue;
+      if ((runtimeRelease || dependencyRelease) && ['failureCount', 'lastErrorCategory', 'lastFailureAt'].includes(key)) continue;
       delete updatedMetadata[key];
     }
   }

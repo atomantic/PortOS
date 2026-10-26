@@ -13,14 +13,14 @@ vi.mock('./github.js', () => ({ execGh: vi.fn() }));
 vi.mock('./gitlab.js', () => ({ execGlab: vi.fn() }));
 // Replace only the synthetic HTTPS transport; Git still applies the real
 // exact-ref lease to a private bare repository. No command reaches GitHub.
-vi.mock('../lib/childProcess.js', async importOriginal => {
+vi.mock('../lib/windowsGitProcess.js', async importOriginal => {
   const original = await importOriginal();
-  return { ...original, spawn: (command, args, options) => {
-    if (command === 'git' && args.includes('push') && args.includes('https://github.com/fixture/app.git')) {
+  return { ...original, startGit: (args, options, wire) => {
+    if (args.includes('push') && args.includes('https://github.com/fixture/app.git')) {
       fixture.pushes.push({ args: [...args], env: options.env });
-      return original.spawn(command, args.map(arg => arg === 'https://github.com/fixture/app.git' ? fixture.remote : arg), options);
+      return original.startGit(args.map(arg => arg === 'https://github.com/fixture/app.git' ? fixture.remote : arg), options, wire);
     }
-    return original.spawn(command, args, options);
+    return original.startGit(args, options, wire);
   } };
 });
 

@@ -135,17 +135,33 @@ describe('recovery output-hook dispatch (#3182)', () => {
 
   it('awaits the scheduled outcome ledger and finishes even when that write fails', async () => {
     const { recordTaskTypeSuccess, recordTaskTypeFailure } = await import('./taskSchedule.js');
+    const ledgerEntered = Promise.withResolvers();
     let rejectLedger;
-    recordTaskTypeSuccess.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectLedger = reject; }));
+    recordTaskTypeSuccess.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectLedger = reject;
+      ledgerEntered.resolve();
+    }));
     const completion = finalizeAgent({
       agentId: persistedAgent.id, task: TASK, success: true, exitCode: 0,
       duration: 1000, outputBuffer: '',
     });
 
-    await vi.waitFor(() => expect(recordTaskTypeSuccess).toHaveBeenCalledWith('example-output-hook', 'app-example'));
-    expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ taskOutcome: { status: 'completed', reason: 'The task delivery criteria passed.' } }) }), 'internal');
-    expect(processAgentCompletion).not.toHaveBeenCalled();
-    rejectLedger(new Error('ledger write failed'));
+    try {
+      // Cold finalization can load async dependencies before entering this
+      // ledger. Synchronize on that boundary under the test's own deadline.
+      expect(await Promise.race([
+        ledgerEntered.promise.then(() => 'ledger'),
+        completion.then(() => 'completed'),
+      ])).toBe('ledger');
+      expect(recordTaskTypeSuccess).toHaveBeenCalledWith('example-output-hook', 'app-example');
+      expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ taskOutcome: { status: 'completed', reason: 'The task delivery criteria passed.' } }) }), 'internal');
+      expect(processAgentCompletion).not.toHaveBeenCalled();
+    } finally {
+      // Drain finalization even when an ordering assertion fails, so its
+      // pending write cannot escape into another test's mocks or fixtures.
+      rejectLedger?.(new Error('ledger write failed'));
+      await completion.catch(() => {});
+    }
 
     await expect(completion).resolves.toMatchObject({ success: true });
     expect(recordTaskTypeFailure).not.toHaveBeenCalled();
@@ -485,6 +501,42 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({
       liExecution: expect.objectContaining({ appId: 'app-example', slug: 'example-proposal', success: true }),
     }) }), 'internal');
+  });
+
+  it.each(['normal', 'recovered'])('durably parks a typed investigation dependency before %s terminal publication without claiming success', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const service = await import('./investigationDependencyWait.js');
+    const task = { ...TASK, status: 'in_progress', metadata: { isInvestigation: true,
+      blockedSystemRecovery: true, preserveOriginalBudget: true, failureCount: 2, totalSpawnCount: 2 } };
+    const taskOutcome = { status: 'incomplete', reason: 'An existing local owner is fixing the root code.',
+      recovery: { mode: 'dependency-wait', ownerTaskId: 'sys-owner', ownerAgentId: 'agent-owner',
+        prUrl: 'https://github.com/example/repo/pull/7' } };
+    const context = { expectedStatus: 'in_progress', expectedTask: {
+      description: task.description, priority: task.priority, metadata: task.metadata } };
+    const resolve = vi.spyOn(service, 'resolveInvestigationDependencyUpdate').mockResolvedValue({ status: 'blocked',
+      dependencyWaitContext: context, metadata: { ...task.metadata, taskOutcome, blockedCategory: 'internal-dependency',
+        blockedReason: 'Waiting for independently verified delivery.' } });
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.taskOutcome = taskOutcome;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    const order = [];
+    updateTask.mockImplementationOnce(async () => { order.push('durable-wait'); return { status: 'blocked' }; });
+    completeAgent.mockImplementationOnce(async () => { order.push('terminal'); return null; });
+    try {
+      const result = mode === 'normal'
+        ? await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+          finalSummary: JSON.stringify({ summary: taskOutcome.reason, taskOutcome }) })
+        : await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0 });
+      expect(result).toMatchObject({ success: false, taskOutcome });
+      expect(order).toEqual(['durable-wait', 'terminal']);
+      expect(resolve).toHaveBeenCalledWith(task, taskOutcome, persistedAgent.id);
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked', metadata: expect.objectContaining({
+        blockedCategory: 'internal-dependency', failureCount: 2, totalSpawnCount: 2,
+      }) }), 'internal', expect.objectContaining(context));
+      expect(completeAgent).toHaveBeenCalledWith(persistedAgent.id, expect.objectContaining({ success: false }));
+      expect(addTask).not.toHaveBeenCalled();
+      expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
+    } finally { resolve.mockRestore(); }
   });
 
   it.each(['normal', 'recovered'])('parks a runtime prerequisite through %s public completion without a provider retry', async mode => {

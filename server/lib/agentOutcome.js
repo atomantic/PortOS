@@ -103,6 +103,12 @@ export function normalizeTaskOutcome(value) {
       prUrl: typeof value.recovery.prUrl === 'string' ? value.recovery.prUrl : '',
       requiredCommit: typeof value.recovery.requiredCommit === 'string' ? value.recovery.requiredCommit : '' };
     if (value.recovery?.mode === 'cleanup') outcome.recovery = { mode: 'cleanup' };
+    if (value.recovery?.mode === 'dependency-wait'
+      && ['ownerTaskId', 'ownerAgentId', 'prUrl'].every(key => typeof value.recovery[key] === 'string'
+        && value.recovery[key].length > 0 && value.recovery[key].length <= (key === 'prUrl' ? 2048 : 160))) {
+      outcome.recovery = { mode: 'dependency-wait', ownerTaskId: value.recovery.ownerTaskId,
+        ownerAgentId: value.recovery.ownerAgentId, prUrl: value.recovery.prUrl };
+    }
     if (value.recovery?.mode === 'approval') {
       const options = Array.isArray(value.recovery.options)
         ? value.recovery.options.filter(option => typeof option === 'string' && option.trim()).map(option => option.trim()) : [];

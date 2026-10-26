@@ -1659,6 +1659,9 @@ export async function init() {
   // its exact cleanup owner and receipt, and coalesces concurrent wake-ups.
   const { bindCompletionRetirementEvents } = await import('./agentRepoStateVerification.js');
   bindCompletionRetirementEvents(cosEvents);
+  const { bindInvestigationDependencyEvents, reconcileInvestigationDependencies } = await import('./investigationDependencyWait.js');
+  bindInvestigationDependencyEvents(cosEvents);
+  await reconcileInvestigationDependencies().catch(error => console.warn(`⚠️ Investigation dependency recovery deferred: ${error.message}`));
 
   // Contributor remediation retains its forge hand-back when blocked. Ordinary
   // merge follow-ups stay in automated recovery rather than the human inbox.

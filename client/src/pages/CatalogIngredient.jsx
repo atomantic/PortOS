@@ -58,6 +58,7 @@ import CanonReferenceRemoval from '../components/catalog/CanonReferenceRemoval';
 import CatalogLockButton from '../components/catalog/CatalogLockButton';
 import CharacterCanonActions from '../components/catalog/CharacterCanonActions';
 import ObjectAttachmentsEditor from '../components/universe/ObjectAttachmentsEditor';
+import CatalogRedesign from '../components/catalog/CatalogRedesign';
 import CatalogUniversePanel from '../components/catalog/CatalogUniversePanel';
 import CatalogFormsEditor from '../components/catalog/CatalogFormsEditor';
 import CatalogMergePanel from '../components/catalog/CatalogMergePanel';
@@ -388,7 +389,7 @@ function IngredientEditor() {
       .catch((err) => { toast.error(err?.message || 'Failed to set portrait'); return false; });
     if (!ok) return;
     refreshMedia();
-    toast.success('Portrait set');
+    toast.success('Canonical image set');
   };
 
   const handleDetachMedia = async (mediaKey, kind) => {
@@ -794,6 +795,9 @@ function IngredientEditor() {
         </div>}
         <CatalogUniversePanel key={`universe-${record.id}`} ingredient={record} context={record.universeContext}
           onContextChange={applyUniverseContext} readOnly={identityReadOnly} forkBlocked={record.sharedIdentity?.reason === 'CATALOG_IDENTITY_FENCED'} unsaved={isDirty || saving || lookSaving} />
+
+        <CatalogRedesign ingredient={record} payload={payload} disabled={identityReadOnly || payload.locked === true || saving || lookSaving || !!externalDetails}
+          onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} />
 
         {profileVisited && (
           <div hidden={activeTab !== 'profile'} className="space-y-4">
@@ -1543,6 +1547,7 @@ function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = 
                   className="w-full aspect-square object-contain" />
                 <figcaption className="text-xs text-gray-400 p-2 break-words">
                   {filename === primaryImageRef ? 'Primary canon reference' : 'Canon reference'}
+                  {!readOnly && onSetPortrait && <button type="button" onClick={() => onSetPortrait(filename)} className="block min-h-11 text-port-accent">Set as canonical image</button>}
                   {canonRemoval && <CanonReferenceRemoval key={filename} {...canonRemoval} filename={filename} />}
                 </figcaption>
               </figure>

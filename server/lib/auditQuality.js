@@ -19,6 +19,7 @@ export const AUDIT_DISCOVERY = Object.freeze({
   'error-handling': 'Inventory external I/O and failure boundaries; search swallowed rejections and missing recovery, ranking data loss and stranded user operations first.',
   typing: 'Inventory unsafe casts, any, nullable values and external schemas; rank mismatches at public and persistence boundaries by reachable failure.',
   'console-errors': 'Inventory startup and critical routes, inspect available browser/server diagnostics, then reproduce recurring errors with the widest user impact.',
+  design: 'Inventory rendered screens, shared media and controls, polished states and authored theme standards; rank observed composition defects, then rotate a bounded screenshot sample using recent audit slices.',
   ux: 'Inventory primary user goals and route flows; rank blocked task completion, onboarding friction, navigation dead ends and missing recovery, then walk the worst journeys.',
   'data-safety': 'Inventory destructive writes, migrations, backup/restore and cross-version payloads; rank irreversible data loss and incompatible upgrades first.',
   simplify: 'Scan source exports, callers and repeated blocks across the repository; rank proven dead subsystems and duplicated behavior by maintenance cost and drift.',
