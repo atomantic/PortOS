@@ -270,10 +270,18 @@ async function commitAdmitted(dir, message, { paths = [] } = {}) {
  */
 export async function isRepo(dir, { unknownOnError = false } = {}) {
   const result = await execGit(['rev-parse', '--is-inside-work-tree'], dir, { ignoreExitCode: true }).catch(() => null);
-  // Capability displays must distinguish an unavailable probe from a confirmed
-  // non-repository. Execution guards retain the default fail-closed boolean.
-  if (!result && unknownOnError) return undefined;
-  return result?.stdout.trim() === 'true';
+  // Execution guards retain their default fail-closed boolean contract.
+  if (!unknownOnError) return result?.stdout.trim() === 'true';
+  // A display may only disable Git features after a conclusive probe. Git can
+  // resolve nonzero (ownership/configuration errors), or report interruption.
+  if (!result || result.terminated || result.signal) return undefined;
+  const inside = result.stdout.trim();
+  if (result.exitCode === 0 && (inside === 'true' || inside === 'false')) return inside === 'true';
+  // Recognize only ordinary discovery failure. Unrecognized/localized errors
+  // remain unknown rather than misclassifying a valid but inaccessible repo.
+  if (result.exitCode === 128 && !inside
+    && result.stderr.trim() === 'fatal: not a git repository (or any of the parent directories): .git') return false;
+  return undefined;
 }
 
 /** Actionable refusal text shared by task creation and spawn-time worktree prep. */

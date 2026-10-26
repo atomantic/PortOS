@@ -216,6 +216,30 @@ describe('Apps CRUD Routes', () => {
       }
     });
 
+    it.each([
+      ['an ownership refusal', { exitCode: 128, stdout: '', stderr: "fatal: detected dubious ownership in repository at '<fixture>'" }],
+      ['an interrupted probe', { exitCode: null, stdout: '', stderr: '', terminated: true, signal: 'SIGTERM' }],
+    ])('leaves Git capability unknown for %s without relaxing execution guards', async (_reason, probe) => {
+      const gitDir = mkdtempSync(join(tmpdir(), 'portos-refused-git-'));
+      try {
+        execFileSync('git', ['init', '-q'], { cwd: gitDir });
+        appsService.getAllApps.mockResolvedValue([{ id: 'repo', name: 'Repo', repoPath: gitDir, pm2ProcessNames: [], isGitRepo: false }]);
+        pm2Service.listProcessesStrict.mockResolvedValue([]);
+        streamingDetect.parseEcosystemFromPath.mockResolvedValue([]);
+        execGit.mockResolvedValueOnce(probe);
+
+        const response = await request(app).get('/api/apps');
+
+        expect(response.status).toBe(200);
+        expect(response.body[0]).toMatchObject({ id: 'repo' });
+        expect(response.body[0]).not.toHaveProperty('isGitRepo');
+        execGit.mockResolvedValueOnce(probe);
+        expect(await isRepo(gitDir)).toBe(false);
+      } finally {
+        rmSync(gitDir, { recursive: true, force: true });
+      }
+    });
+
     it('returns the nav projection without invoking PM2 enrichment', async () => {
       const mockApps = [{
         id: 'app-001', name: 'Test App', icon: 'package', archived: false, type: 'express',
