@@ -204,6 +204,26 @@ checks its tree before and after publication; never create the version tag by
 hand. Verify the tag tree, version, named notes and published, non-draft,
 non-prerelease GitHub Release. A merged PR alone is not completion.
 
+A running scheduled release coordinator can persist the verified publication before
+starting synchronization. POST `/api/cos/agents/:id/release-publication`
+using the authenticated PortOS API transport, with JSON fields `version` (without
+`v`), `promotionPrNumber`, and `workflowRunId`. The server resolves the repository
+from the registered workspace, reads the candidate's metadata-only pin and ancestry
+from its local Git objects, and independently verifies the merged promotion,
+published stable release, successful release workflow and peeled tag tree against
+GitHub. Keep the candidate objects available in that repository; missing objects
+or inconclusive forge responses cannot establish publication. No supplied URL or
+terminal prose is accepted as proof. Repeating the same verified publication
+retains the original receipt and verification timestamp.
+
+The agent card shows the release link and publication time as soon as the receipt
+is saved, even while execution continues. This receipt verifies **publication
+only**: synchronization remains explicitly unverified. The coordinator still owns
+synchronization, reviews, CI, admission, quality snapshot and preservation under
+the procedure below; this milestone does not authorize early completion or
+transfer that ownership. Automatic durable synchronization handoff is separate
+work tracked from #13758.
+
 #### 6. Synchronize back without changing the published release
 
 After publication, open a normal **`release` → `main`** synchronization PR and
