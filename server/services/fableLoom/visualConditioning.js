@@ -351,7 +351,7 @@ const blockedError = (messages, manifest) => new ServerError(
  * the real public compiler contract without touching the live universe store.
  */
 export async function compileFableLoomVisualRequest({
-  tag, kind, capability, authoredPrompt = '', authoredNegativePrompt = '', sourceImagePath = null,
+  tag, kind, capability, visualProfileOverride, authoredPrompt = '', authoredNegativePrompt = '', sourceImagePath = null,
   loadLoom = getLoom, loadUniverse = getUniverse, loadSeries = getSeries,
   resolveLoras = resolveCharacterLoras,
   hashFile = sha256File, resolveAsset = resolveImageInputPath,
@@ -364,7 +364,8 @@ export async function compileFableLoomVisualRequest({
   if (!loom || !episode || !node) throw new ServerError('FableLoom scene not found', { status: 404, code: 'NOT_FOUND' });
   const series = loom.seriesId ? await loadSeries(loom.seriesId).catch(() => null) : null;
   const universeId = loom.universeId || series?.universeId || null;
-  const universe = universeId ? await loadUniverse(universeId) : null;
+  const loadedUniverse = universeId ? await loadUniverse(universeId) : null;
+  const universe = loadedUniverse ? { ...loadedUniverse, visualProfile: resolveUniverseVisualProfile(loadedUniverse, visualProfileOverride, series) } : null;
   // Legacy/unlinked scenes keep their pre-compiler prompt-only behavior. A
   // scene carrying explicit canon bindings must resolve the canon it names.
   if (!universe && !node.visualCanon) return null;

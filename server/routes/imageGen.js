@@ -545,6 +545,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     const providerMode = params.mediaProviderPeerId ? 'federated' : mode;
     const compiled = await compileFableLoomVisualRequest({
       tag: params.fableLoom,
+      visualProfileOverride: data.visualProfileOverride,
       kind: 'image',
       capability: fableLoomImageCapabilities({
         mode: providerMode,
