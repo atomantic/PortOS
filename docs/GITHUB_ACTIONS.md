@@ -324,6 +324,21 @@ pushed head, and the impact planner skips what it attests to:
   `node scripts/pregate-attest.js --dry-run` shows what would be posted for
   the current receipt and HEAD without posting it.
 
+### Browser workload partition
+
+The browser job uses two runners. Each receives the complete planner selection
+and `CI_SHARD`; the runner assigns files by alternating the canonical
+`BROWSER_SUITES` registry before subtracting any memo entries. Scoped selections
+keep those same owners. This separates the long document-rendering and HTML
+composition suites, which the generic Vitest hash partition clustered together.
+Unknown browser selectors fail rather than being dropped.
+
+Each shard retains the full selected browser profile, the quiet capture project,
+normal motion, fidelity assertions, process containment and the existing
+720-second supervisor deadline. `CI Gate` consumes the matrix's aggregate result,
+so every selected shard must pass. Transform artifacts, test memos and failure
+artifacts have distinct shard keys; a passing shard cannot replace its sibling.
+
 ### Vitest runner tuning
 
 On GitHub Actions, `CI=true` caps the server Vitest runner at `maxWorkers: 4`
@@ -767,9 +782,9 @@ and exceed the bounded test-step budget on one Windows runner. Full Windows
 shards reached 19,911 passing tests in 877.6 seconds before post-test timeout,
 and another reached 1,091/1,100 modules at the 15-minute deadline (2026-10-24,
 #13402). The test step now has 25 minutes within its unchanged 40-minute job (#13301);
-the two-worker cap, matrix size and all tests remain unchanged. Matrices are
+the two-worker cap and all tests remain unchanged. Matrices are
 sized by `FULL_SUITE_SHARDS` in
-`scripts/ci-test-plan.js` (client 3, Windows 3, server 2) — and each job builds
+`scripts/ci-test-plan.js` (client 3, Windows 4, server 2) — and each job builds
 its matrix from that output. The decision has to be made in the planner: a
 job-level `if` cannot read the `matrix` context, so a job cannot skip its own
 extra shards. `scripts/run-ci-tests.js` turns `CI_SHARD=<index>/<count>` into
@@ -852,6 +867,11 @@ Windows runs the baseline. Likewise only the pipeline scripts the Windows job ex
 (`ci-base-sha`, `run-ci-tests`, and `lib/githubOutput` which the runner imports) escalate it;
 `ci-test-plan`, `run-ci-lint`, `scan-diff-hidden-content` and `verify-ci-status` run on Linux jobs
 only. The nightly run and the candidate → `release` PR keep the complete matrix as the net.
+
+The client Vitest configuration also keeps Windows at that contract baseline:
+the Windows job executes the server runner. Server Vitest configuration and
+shared pool changes still escalate Windows; a mixed client/server change keeps
+the stronger requirement. All Linux suites remain full for either config change.
 
 **Dependency manifests decide per package.** The planner's 32-PR sample in
 October 2026 traced every full plan to a lockfile/manifest change (4),
@@ -939,14 +959,45 @@ measured fixed overhead plus the contract suite); every other figure is measured
 There is **no wall-clock regression**: a downgraded run's Windows job goes from 4.15 min to
 ~1.5 min, so the full path gets *shorter*, and no full-Windows run changes at all.
 
-**Why the matrix is still 3 shards.** Dropping Windows to 2 was measured and
+**Historical three-shard sizing.** Dropping Windows from 3 to 2 was measured and
 rejected. Per-shard step timings put fixed overhead (checkout, setup-node, cache
 restore) at only ~0.83 min of the 4.15-min shard; the rest is the test step. Going
 3 → 2 therefore removes one setup (~1.7 equivalent-minutes, 7%) while adding
 ~1.65 min to the full path's critical chain. Tightening the selection above beat
-that at zero wall-clock cost, so `FULL_SUITE_SHARDS.windows` stays at 3.
+that at zero wall-clock cost, so the matrix stayed at 3 at that point.
+The later full-suite capacity measurements below justify its current four shards.
 `max-parallel` is not an alternative — it lowers peak concurrency, not total
 occupancy.
+
+### Windows full-suite capacity
+
+Full and related Windows plans use four shards; the 43-test contract baseline
+and other focused exact-file plans still use one job. Worker concurrency remains
+two, with the same 25-minute test-step and 40-minute job deadlines. The generic
+Vitest path-hash partition still owns every full-suite file exactly once.
+
+On release CI run `40339302684`, three-shard Windows runner 1 reached its step
+deadline after 1,119 completed modules with only the quiet planner suite left.
+There were no assertion failures. Its largest file,
+`heldCheckoutRecovery.test.js`, took 1,005.5 seconds versus 772.3 seconds in the
+preceding completed run; the planner suite took only 32.6 seconds previously.
+Adding capacity addresses the aggregate backlog rather than suppressing that
+planner contract or extending any deadline.
+
+Measured file durations from the current and preceding runs, including import
+and setup overhead calibrated from their completed jobs, give this sizing model:
+
+| Full Windows shards | Files per shard | Largest estimated shard | Headroom below 1,500 seconds |
+| --- | --- | --- | --- |
+| 3 | 1,128 / 1,128 / 1,127 | 1,592 seconds | None |
+| 4 | 846 / 846 / 846 / 845 | 1,343 seconds | 157 seconds |
+| 5 | 677 / 677 / 677 / 676 / 676 | 1,216 seconds | 284 seconds |
+
+These are planning estimates, not hosted validation results. They use the larger
+observed duration per file, the unchanged two-worker cap, quiet-group sequencing,
+and approximately 0.255 seconds of measured per-file import/setup overhead. The
+five-shard estimate also respects the indivisible 1,005.5-second file. Four is
+the smallest measured partition with room below the unchanged step deadline.
 
 ### Python sidecar scripts
 
@@ -1391,16 +1442,21 @@ required CI gate.
 Use the workflow-dispatch button for an immediate full run. A PR also chooses
 full CI automatically when its impact cannot be classified safely.
 
-### Rebase Before Push
+### Before Push
 
-Since CI may auto-commit changelog archives, always rebase before pushing:
+Fetch the intended base and inspect the branch and working tree before pushing:
 
 ```bash
 git fetch origin main
-git rebase origin/main
 npm run pregate
-git push
 ```
+
+Commit intended changes and push to the branch's verified remote destination.
+Integrate the fetched base when there is an actual conflict, an enforced
+up-to-date policy, or evidenced semantic overlap; rerun pregate after a rebase.
+A moving main alone does not require a new head or another hosted CI run.
+Managed merges still require fresh combined-tree structural guards and live
+head/base checks under the merge policy in the root AGENTS.md.
 
 ## Adapting for Sub-Projects
 
@@ -1502,3 +1558,41 @@ all stop recovery. The existing Actions write grant is reused without adding
 permissions. Private repositories that cannot read the PR with that grant remain
 held rather than expanding authority. No PR checkout or code executes in this
 privileged observer; both scripts run from the default branch's sparse checkout.
+
+## Bounded frozen release-candidate failure collection
+
+CI explicitly sets `PORTOS_CI_TEST_POLICY=release-candidate` only for same-repository
+`codex/release-*` pull requests targeting `release`. Ordinary PRs, nightly runs,
+release pushes and local `test:ci` keep bail=1. The shared CI command entry point supplies one
+bail flag, raises it to five for that policy, and disables both Vitest retries
+and the launcher's native-crash retry. Nested bare Vitest runs retain their own bail policy rather than inheriting the
+outer npm lifecycle setting. Existing worker caps, shard selection,
+quiet groups, database isolation and deadlines do not change.
+
+The lifecycle reporter records up to five assertion failures, preserving the
+first. Failed hooks (including assertion failures in hooks), collection errors,
+non-assertion errors, unhandled errors and process teardown timeouts stop safe
+collection. Vitest receives graceful cancellation; the launcher independently
+monitors atomic reporter evidence and cancels its owned process tree on unsafe
+or malformed evidence, using existing escalation and settlement guards. Already
+running work can finish during cancellation; its later output is **unverified**,
+not additional independent regressions. Failed assertions are candidates for
+investigation, not proof that failures are independent or predate an amendment.
+Capped, interrupted, unsafe or missing-evidence runs remain red and cannot write
+green memo entries or support CI-skipping attestation. First-cause run evidence
+and process-settlement refusals remain in each attempt's diagnostics directory.
+
+`invocation.json` binds policy, candidate head, tested checkout, actual checkout
+base, shard, selection digest, workflow run ID/attempt and start/finish times.
+`run.json` contains the bounded assertion list, stop reason and coverage status;
+the ordinary JSON report and process evidence remain available. Report coverage
+as unverified after any stop, including tests that never ran. A successful shard
+alone is not evidence that the whole candidate passed.
+
+For hosted before/after comparisons, group workflow rounds by exact candidate
+head/base and selection digest. Use Actions job queued/start/completion times to
+separate queue time from execution time; sum job execution minutes for
+runner-minutes and report failures collected per invocation. Keep non-reproducing
+failures and classify amendment-introduced regressions separately from failures
+shown to exist at the original cutoff. No hosted duration improvement is claimed
+by this implementation; a local synthetic collection test cannot measure it.

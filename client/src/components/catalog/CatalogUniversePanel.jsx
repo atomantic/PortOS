@@ -23,6 +23,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
   const [open, setOpen] = useState(false);
   const [usageError, setUsageError] = useState(false);
   const [usageRetry, setUsageRetry] = useState(0);
+  const handledUsageRetry = useRef(0);
   const [universes, setUniverses] = useState(null);
   const [loadError, setLoadError] = useState(false);
   const [target, setTarget] = useState('');
@@ -47,7 +48,9 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
       getCatalogUniverseContext(ingredient.id, { silent: true }).then((data) => { if (active && sequence === contextSequence.current) { setUsageError(false); onContextChange(data); } })
         .catch(() => { if (active) { setUsageError(true); toast.error('Unable to refresh universe ownership and usage. Retry before changing it.'); } });
     };
-    if (context?.usageComplete === false) refresh();
+    const retryRequested = handledUsageRetry.current !== usageRetry;
+    handledUsageRetry.current = usageRetry;
+    if (context?.usageComplete === false || retryRequested) refresh();
     socket.on('catalog:primitive-changed', refresh);
     socket.on('connect', refresh);
     return () => { active = false; socket.off('catalog:primitive-changed', refresh); socket.off('connect', refresh); };
@@ -106,11 +109,11 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
           {owner ? <Link to={threadRefUrl('universe', owner.refId)} className="ml-2 text-port-accent hover:underline break-words">{owner.refName || owner.refId}</Link>
             : <span className="ml-2 text-port-warning">{context?.status === 'conflict' ? 'Conflicting owners — review required' : 'Ownership needs review'}</span>}
         </div>
-        <button type="button" onClick={() => setOpen((value) => !value)} className="text-xs text-port-accent hover:underline">{open ? 'Close' : owner || readOnly ? 'Fork into another universe…' : 'Resolve ownership / fork…'}</button>
+        <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} className="min-h-11 rounded border border-port-border px-3 py-2 text-xs text-port-accent hover:bg-port-accent/10">{open ? 'Close' : owner || readOnly ? 'Fork / experiment with redesign…' : 'Resolve ownership / fork…'}</button>
       </div>
       {!owner && <p className="text-xs text-gray-400">Existing references are preserved. Select an owning universe explicitly to establish story and style context.</p>}
       {owner && !refs.some((ref) => ref.refKind === 'universe' && ref.refId === owner.refId) && !readOnly && <button type="button"
-        onClick={addToCanon} disabled={busy || unsaved} className="text-xs text-port-accent hover:underline disabled:opacity-40">Add to owning universe</button>}
+        onClick={addToCanon} disabled={busy || unsaved} className="min-h-11 rounded border border-port-border px-3 py-2 text-xs text-port-accent hover:bg-port-accent/10 disabled:opacity-40">Add to owning universe</button>}
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-gray-400">Used in</span>
         {refs.length === 0 && <span className="text-gray-500">{context?.usageComplete === false ? 'Detailed usage pending' : 'No linked containers'}</span>}
@@ -130,7 +133,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
               <select id={`${fieldId}-universe`} value={target} onChange={(event) => setTarget(event.target.value)} disabled={busy}
                 className="w-full rounded border border-port-border bg-port-bg px-2 py-2 text-sm text-white">
                 <option value="">Choose a universe…</option>
-                {universes.filter((universe) => universe.id !== owner?.refId).map((universe) => <option key={universe.id} value={universe.id}>{universe.name}</option>)}
+                {universes.map((universe) => <option key={universe.id} value={universe.id}>{universe.name}{universe.id === owner?.refId ? ' (same universe · redesign)' : ''}</option>)}
               </select></div>
             <div><label htmlFor={`${fieldId}-name`} className="block text-xs text-gray-400 mb-1">Fork name</label>
               <input id={`${fieldId}-name`} value={forkName} maxLength={200} onChange={(event) => setForkName(event.target.value)} disabled={busy}

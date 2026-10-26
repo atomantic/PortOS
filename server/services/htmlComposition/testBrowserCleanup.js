@@ -436,7 +436,8 @@ async function terminateOwnedChrome(proc, observeProcess) {
 // _cleanupTestBrowser. The owner row names this test file if the root leaks.
 export function _createTestArtifactsRoot({ parent = tmpdir() } = {}) {
   const path = mkdtempSync(join(parent, 'portos-cdp-artifacts-'));
-  const { dev, ino } = lstatSync(path);
+  // Windows file IDs can exceed Number's exact integer range.
+  const { dev, ino } = lstatSync(path, { bigint: true });
   recordTempRootOwner(path);
   return Object.freeze({ path, dev, ino });
 }
@@ -459,7 +460,7 @@ export function _testBrowserCleanupSettled(proc) {
 function removeTestArtifactsRoot({ path, dev, ino }, childSettled, detachedGroupSettled) {
   if (!childSettled) return 'skipped; owned child exit unconfirmed, root preserved';
   if (!detachedGroupSettled) return 'skipped; detached process group unsettled, root preserved';
-  const current = lstatSync(path, { throwIfNoEntry: false });
+  const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
   if (current) {
     if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== dev || current.ino !== ino) {
       return 'refused; root identity changed';

@@ -213,6 +213,8 @@ async function worktreeCleanupContext(agentId, options) {
     worktreePath: metadata.workspacePath || join(PATHS.worktrees, agentId),
     publicationValidation: publicationHolds.get(agentId) || metadata.publicationValidation,
     runtimeVerificationRequested: agentState?.result?.taskOutcome?.recovery?.mode === 'runtime',
+    dependencyWaitRequested: agentState?.result?.taskOutcome?.recovery?.mode === 'dependency-wait',
+    startedAt: agentState?.startedAt, instanceId: metadata.instanceId,
     taskId: agentState?.taskId || normalized.originalTask?.id,
     securityScan: metadata.securityScan,
     securityScanControl: metadata.securityScanControl,
@@ -250,6 +252,19 @@ async function probeWorktreePr(context, success) {
 
 async function runCleanupAgentWorktree(agentId, success, options = {}) {
   const context = await worktreeCleanupContext(agentId, options);
+  if (context.dependencyWaitRequested) {
+    const { getTaskById } = await import('./cosTaskStore.js');
+    // Completion callers still hold the pre-finalize task snapshot. Only the
+    // fresh accepted wait can retain this exact investigator generation,
+    // including the interval between ready dispatch and successor claiming.
+    const held = context.taskId ? await getTaskById(context.taskId) : null;
+    const wait = held?.metadata?.investigationDependencyWait;
+    if (held?.taskType === 'internal' && isTruthyMeta(held.metadata?.blockedSystemRecovery)
+      && isTruthyMeta(held.metadata?.preserveOriginalBudget) && wait?.version === 1
+      && ['waiting', 'ready'].includes(wait.phase) && ['blocked', 'pending', 'in_progress'].includes(held.status)
+      && wait.sourceAgentId === agentId && wait.sourceStartedAt === context.startedAt
+      && wait.instanceId === context.instanceId) return [];
+  }
   if (context.runtimeVerificationRequested) {
     const { getTaskById } = await import('./cosTaskStore.js');
     const held = context.taskId ? await getTaskById(context.taskId) : null;
@@ -1243,7 +1258,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // The saved roster is never rewritten.
   let reviewerIdentityFaults = [];
   if (effectiveUsernames.length || effectiveOptionalReviewers.length) {
-    const { preflightReviewerIdentities } = await import('./reviewerIdentity.js');
+    const { preflightReviewerIdentities, preflightReviewerPrAuthor } = await import('./reviewerIdentity.js');
     const preflight = await preflightReviewerIdentities({
       usernames: effectiveUsernames,
       optionalReviewers: effectiveOptionalReviewers,
@@ -1256,12 +1271,20 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
         status: 409, code: 'REVIEWER_IDENTITY_NOT_FOUND', context: { reviewers: preflight.requiredMissing.map((e) => e.token) },
       });
     }
-    if (preflight.optionalMissing.length) {
-      const dropped = new Set(preflight.optionalMissing.map((e) => e.token.toLowerCase()));
-      reviewerIdentityFaults = preflight.optionalMissing.map(({ token, reason }) => ({ token, reason }));
+    const eligibility = isNonGithubForge ? { required: [], optional: [] } : await preflightReviewerPrAuthor({ usernames: effectiveUsernames, optionalReviewers: effectiveOptionalReviewers, pr: parsedPr });
+    if (eligibility.required.length) {
+      const detail = eligibility.required.map((e) => `@${e.token}: ${e.reason}`).join('; ');
+      throw new ServerError(`Required reviewer configuration fault — ${detail}. Fix it in Settings → Code Reviewers.`, {
+        status: 409, code: 'REVIEWER_IS_PR_AUTHOR', context: { reviewers: eligibility.required.map((e) => e.token) },
+      });
+    }
+    const optionalFaults = [...preflight.optionalMissing, ...eligibility.optional];
+    if (optionalFaults.length) {
+      const dropped = new Set(optionalFaults.map((e) => e.token.toLowerCase()));
+      reviewerIdentityFaults = optionalFaults.map(({ token, reason }) => ({ token, reason }));
       effectiveUsernames = effectiveUsernames.filter((u) => !dropped.has(u.toLowerCase()));
       effectiveOptionalReviewers = effectiveOptionalReviewers.filter((r) => !dropped.has(r.replace(/^@/, '').toLowerCase()));
-      console.log(`🚫 Optional reviewer(s) not found on the target forge, skipped for this run: ${reviewerIdentityFaults.map((f) => `@${f.token}`).join(', ')}`);
+      console.log(`🚫 Optional reviewer(s) unavailable for this run: ${reviewerIdentityFaults.map((f) => `@${f.token}`).join(', ')}`);
     }
   }
   // Per-reviewer iteration caps (`~max=<n>`) — forge-agnostic, threaded verbatim

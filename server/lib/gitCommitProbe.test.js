@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-vi.mock('./execGit.js', () => ({ execGit: vi.fn() }));
+vi.mock('./execGit.js', async importOriginal => ({ ...await importOriginal(), execGit: vi.fn() }));
 vi.mock('./primaryCheckoutGuard.js', async (importOriginal) => ({
   ...await importOriginal(),
   resolveRemoteDefaultRef: vi.fn(),

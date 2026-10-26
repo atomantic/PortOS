@@ -49,7 +49,7 @@ outcome rather than treating the absence of a generated task as successful clean
 
 ## Retiring a held checkout
 
-A row with a checkout path and HEAD offers **Archive and retire checkout**. The
+A row with a checkout path and HEAD offers **Retire checkout**. The
 inline confirmation is a scoped release of that exact row: its path, HEAD,
 branch and lock text. The server refuses unless the row is in the app's last
 persisted inventory and a fresh Git read still matches it — a changed lock,

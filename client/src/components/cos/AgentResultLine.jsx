@@ -1,12 +1,12 @@
 import { Fragment } from 'react';
 import { Link } from 'react-router';
 import { CheckCircle, AlertCircle, RotateCcw } from 'lucide-react';
-import { formatCount, formatUsd } from '../../utils/formatters';
+import { formatCount, formatUsd, formatDateTime } from '../../utils/formatters';
 import { isAgentHandoff, agentHandoffReason, normalizeTaskOutcome, isTaskDeliveryComplete } from '../../lib/agentOutcome';
 
 /** Shared delivery and execution verdict for cards and the Resume dialog. */
 export default function AgentResultLine({ agent, className = '' }) {
-  if (!agent?.result) return null;
+  if (!agent?.result) return <ReleasePublicationLine publication={agent?.metadata?.releasePublication} className={className} />;
   const handoff = isAgentHandoff(agent);
   const outcome = normalizeTaskOutcome(agent.result.taskOutcome);
   const executionSuccess = agent.result.executionSuccess ?? agent.result.success;
@@ -37,6 +37,7 @@ export default function AgentResultLine({ agent, className = '' }) {
 
   return (
     <div className={`text-sm ${tone} ${className}`.trim()}>
+      <ReleasePublicationLine publication={agent.metadata?.releasePublication} />
       <span className="flex items-center gap-2">
       {handoff ? (
         <><RotateCcw size={14} aria-hidden="true" /> {agentHandoffReason(agent)}</>
@@ -121,5 +122,17 @@ export function SecurityScanEvidence({ scanner, control }) {
         <div>Artifacts — findings: {scanner.artifacts?.findings == null ? 'unknown' : scanner.artifacts.findings ? 'saved' : 'absent'}; coverage: {scanner.artifacts?.coverage == null ? 'unknown' : scanner.artifacts.coverage ? 'saved' : 'absent'}</div>
         {(control?.cleanup || scanner.cleanup) && <div>Process cleanup: {control?.cleanup || scanner.cleanup}</div>}
       </div>
+  );
+}
+
+/** Publication is independent of the agent's eventual execution result. */
+export function ReleasePublicationLine({ publication, className = '' }) {
+  if (publication?.status !== 'verified') return null;
+  return (
+    <div className={`text-sm text-port-success break-words ${className}`.trim()}>
+      <div>Published — synchronization not yet verified</div>
+      <a href={publication.releaseUrl} target="_blank" rel="noopener noreferrer" className="underline">{publication.tag}</a>
+      {' · '}<time dateTime={publication.publishedAt}>{formatDateTime(publication.publishedAt)}</time>
+    </div>
   );
 }

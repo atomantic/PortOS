@@ -296,6 +296,27 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     expect(git.push).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['waiting', 'blocked', true], ['ready', 'pending', true], ['ready', 'in_progress', true],
+    ['waiting', 'blocked', false], ['ready', 'completed', true],
+  ])('preserves only the exact accepted investigator checkout at %s/%s (bound=%s)', async (phase, status, bound) => {
+    const startedAt = '2026-01-01T00:00:00.000Z';
+    getAgent.mockResolvedValue({ ...mockWorktreeAgent({ instanceId: 'fixture-local' }), id: 'waiting-agent',
+      taskId: 'waiting-task', startedAt, result: { success: false,
+        taskOutcome: { status: 'blocked', recovery: { mode: 'dependency-wait' } } } });
+    getTaskById.mockResolvedValue({ id: 'waiting-task', taskType: 'internal', status, metadata: {
+      blockedSystemRecovery: true, preserveOriginalBudget: true, investigationDependencyWait: {
+        version: 1, phase, sourceAgentId: bound ? 'waiting-agent' : 'another-generation', sourceStartedAt: startedAt,
+        instanceId: 'fixture-local',
+      },
+    } });
+    // Deliberately stale caller data must not discard a server-accepted wait.
+    await cleanupAgentWorktree('waiting-agent', false, { originalTask: { id: 'waiting-task', metadata: { discardWorktree: true } } });
+    if (bound && status !== 'completed') expect(removeWorktree).not.toHaveBeenCalled();
+    else expect(removeWorktree).toHaveBeenCalled();
+    expect(git.push).not.toHaveBeenCalled();
+  });
+
   it('publishes only after PortOS validation succeeds and persists that distinct outcome', async () => {
     validatePublication.mockResolvedValue({ status: 'passed', head: 'verified-head' });
     git.push.mockImplementation(async () => {
@@ -1336,6 +1357,23 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
       const [followUp] = addTask.mock.calls[0];
       expect(followUp.metadata.reviewLoopReviewerUsernames).toEqual(['ghost-reviewer']);
       expect(followUp.metadata.reviewLoopReviewerIdentityFaults).toBeUndefined();
+    });
+
+    it('blocks a required PR author and records an optional author without dropping other reviewers', async () => {
+      execGhMock.mockImplementation((args) => Promise.resolve(args.includes('repos/test/repo/pulls/61') ? 'Author\n' : '{}'));
+      const blocked = await run({ usernames: ['author'] });
+      expect(addTask).not.toHaveBeenCalled();
+      expect(blocked.join(' ')).toMatch(/Required reviewer configuration fault.*author/i);
+
+      await run({ usernames: ['AUTHOR', 'other'], optionalReviewers: ['@author'] });
+      const [followUp] = addTask.mock.calls[0];
+      expect(followUp.metadata.reviewLoopReviewerUsernames).toEqual(['other']);
+      expect(followUp.metadata.reviewLoopReviewerIdentityFaults).toEqual([
+        expect.objectContaining({ token: 'AUTHOR', reason: expect.stringContaining('PR author') })
+      ]);
+      const section = buildReviewLoopFollowUpSection(followUp.metadata);
+      expect(section).toContain('read back pending requested reviewers and completed reviews');
+      expect(section).toContain('treat the request as failed');
     });
   });
 

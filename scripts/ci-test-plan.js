@@ -63,7 +63,7 @@ export const sourceReferencePattern = (sourcePath) => (
 // ci.yml because a job-level `if` cannot read the matrix context, so the
 // planner emits the matrix for scoped plans too. Sizing rationale:
 // docs/GITHUB_ACTIONS.md "Full-suite sharding".
-export const FULL_SUITE_SHARDS = { server: 2, client: 3, windows: 3 };
+export const FULL_SUITE_SHARDS = { server: 2, client: 3, windows: 4 };
 
 /** Matrix values for one runner: every shard on a full run, one otherwise. */
 export const shardIndexes = (mode, count) => (
@@ -240,7 +240,10 @@ const FULL_TRIGGER_RULES = [
   // Every workspace's .npmrc pins ignore-scripts and install behavior; npm reads
   // it on the Windows install too.
   { re: /(?:^|\/)\.npmrc$/, reason: 'npm configuration changed', windowsEscalates: true },
-  { re: /^(?:server|client)\/vitest\.config(?:\.db)?\.js$/, reason: 'test runner configuration changed', windowsEscalates: true },
+  { re: /^server\/vitest\.config(?:\.db)?\.js$/, reason: 'test runner configuration changed', windowsEscalates: true },
+  // windows-server uses the server runner; client configuration still gets the
+  // complete Linux plan and the native Windows contract baseline.
+  { re: /^client\/vitest\.config\.js$/, reason: 'client test runner configuration changed', windowsEscalates: false },
   { re: /^scripts\/vitestCiPool(?:\.test)?\.js$/, reason: 'test runner pool configuration changed', windowsEscalates: true },
   { re: /^server\/vitest\.setup\.js$/, reason: 'server test setup changed', windowsEscalates: true },
   // Client-only: windows-server never loads the client setup file.
@@ -287,7 +290,7 @@ export const WINDOWS_RISK_RULES = [
   /^scripts\/ps1-bom\.test\.js$/,
   // Shell32 recycling and its opt-in real-bin smoke require an actual Windows runner.
   /^server\/lib\/nativeTrash(?:\.(?:smoke\.)?test)?\.js$/,
-  /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok)\b/,
+  /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok|execGit|windowsGitProcess|windowsGitSupervisor)\b/,
   // The cmd.exe wrap and npm-shim bypass every Windows CLI launch goes through.
   /^server\/lib\/aiToolkit\/internal\/windowsSafeSpawn\.js$/,
   // Path SEMANTICS differ per platform in ways pinPlatform() cannot fake: NTFS
@@ -353,7 +356,7 @@ export const WINDOWS_CONTRACT_TESTS = [
   'server/cos-runner/index.test.js',
   'server/cos-runner/processStats.test.js',
   'server/cos-runner/runnerState.test.js',
-  'server/cos-runner/streamJsonParser.test.js',
+  'server/lib/streamJsonParser.test.js',
   'server/lib/agentGuard/index.test.js',
   'server/lib/bashResolver.test.js',
   'server/lib/bufferedSpawn.test.js',

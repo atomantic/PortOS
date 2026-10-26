@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as childProcess from '../lib/childProcess.js';
+import * as gitProcess from '../lib/windowsGitProcess.js';
 import { execGit } from '../lib/execGit.js';
 import { preparePendingMergeGuard, pendingMergeGuardCurrent } from './pendingMergeGuard.js';
 
@@ -105,22 +106,23 @@ describe('pending merged-tree validation', () => {
   it('drains sibling checkout probes before refusing a detached checkout', async () => {
     const { input, git, repoPath, worktreePath, headSha } = await fixture();
     await git(['checkout', '--detach', headSha], worktreePath);
-    const spawn = childProcess.spawn;
+    const startGit = gitProcess.startGit;
     const closes = [];
     let heldChild;
     let detachedProbeClosed;
     const detachedClosed = new Promise(resolve => { detachedProbeClosed = resolve; });
-    const spy = vi.spyOn(childProcess, 'spawn').mockImplementation((command, args, options) => {
+    const spy = vi.spyOn(gitProcess, 'startGit').mockImplementation((args, options, wire) => {
       // A live sibling owns the primary repo as its cwd, just as a slow Git
       // probe does on Windows. Release it explicitly rather than sleeping.
-      const held = command === 'git' && options.cwd === repoPath && args.includes('--git-common-dir');
-      const child = held
-        ? spawn(process.execPath, ['-e', 'process.stdin.resume()'], options)
-        : spawn(command, args, options);
-      closes.push(new Promise(resolve => child.once('close', resolve)));
-      if (held) heldChild = child;
-      if (command === 'git' && args[0] === 'symbolic-ref') child.once('close', detachedProbeClosed);
-      return child;
+      const held = options.cwd === repoPath && args.includes('--git-common-dir');
+      const attach = child => {
+        closes.push(new Promise(resolve => child.once('close', resolve)));
+        if (held) heldChild = child;
+        if (args[0] === 'symbolic-ref') child.once('close', detachedProbeClosed);
+        wire(child);
+      };
+      if (held) { attach(childProcess.spawn(process.execPath, ['-e', 'process.stdin.resume()'], options)); return; }
+      return startGit(args, options, attach);
     });
     let settled = false;
     const checking = preparePendingMergeGuard(input).then(result => {

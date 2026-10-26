@@ -16,6 +16,8 @@
 // brain and digital-twin) can be disambiguated as `brainValidation.X` /
 // `digitalTwinValidation.X`. The catch-all `validation.js` stays flat — its
 // names are the canonical PortOS-wide schemas.
+export * from './releasePublication.js';
+export * from './releaseSynchronization.js';
 export * from './appOperationErrorContext.js';
 export * from './workspaceTestCacheRoots.js';
 export * from './appPromptPlaceholders.js';
@@ -45,6 +47,7 @@ export * from './brainThreads.js';
 export * from './humanActions.js';
 export * as catalogIdentityValidation from './catalogIdentityValidation.js';
 export * as catalogValidation from './catalogValidation.js';
+export * as catalogGreyboxValidation from './catalogGreyboxValidation.js';
 export * as catalogMediaLibrary from './catalogMediaLibrary.js';
 export * from './characterSheetReferences.js';
 export * as characterAugmentValidation from './characterAugmentValidation.js';
@@ -230,6 +233,7 @@ export * from './codexCliOutput.js';
 export * from './contextBudget.js';
 export * from './cursor.js';
 export * from './greyboxPrompt.js';
+export * from './greyboxCapture.js';
 export * from './greyboxScene.js';
 export * from './greyboxStarters.js';
 export * from './greyboxVocabulary.js';
@@ -448,6 +452,7 @@ export * from './hostShutdown.js';
 export * from './httpDrain.js';
 export * from './upgradeFallback.js';
 export * from './execGit.js';
+export * from './windowsGitProcess.js';
 export * from './ffmpeg.js';
 export * from './ffmpegFilterGraph.js';
 export * from './forgeAccessErrors.js';
@@ -998,3 +1003,4 @@ export * from './npmRetirementPayload.js';
 export * from './videoLoraStageValidation.js';
 
 export * from './musicVideoGreybox.js';
+export * from './catalogRedesign.js';

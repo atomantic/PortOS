@@ -383,9 +383,12 @@ export async function verifyAgentRepoState(input) {
       return settled ? result : { ...result, verified: false, skipReason: 'cleanup-receipt-settlement-unverified' };
     }
     const outcomes = result.branches || [result];
+    // A retirement policy refusal is a preservation hold, not failed delivery.
+    // Keep its persisted obligation pending for service replay; requeueing the
+    // original task would launch another review agent against an already merged PR.
     const unsupported = prStaysOpen(input.task) ? { skipReason: 'leave-open-cleanup-unsupported' } : outcomes.find(item => [REPO_STATE_SKIPS.DISABLED, REPO_STATE_SKIPS.NOT_WORKTREE,
       REPO_STATE_SKIPS.PERSISTENT_WORKTREE, REPO_STATE_SKIPS.DISCARDED_WORKTREE,
-      'retirement-app-unavailable', 'retirement-app-ambiguous', 'retirement-policy-not-legacy-completed'].includes(item.skipReason)
+      'retirement-app-unavailable', 'retirement-app-ambiguous'].includes(item.skipReason)
       || (item.skipReason === 'cleanup-delivery-unverified' && (['OPEN', 'CLOSED'].includes(item.observed?.prState)
         || (item.observed?.prState === null && item.observed?.prUrl === null && item.observed?.unreadable?.length === 0))));
     if (cleanupPending && unsupported) {
@@ -448,6 +451,13 @@ export function resumeAgentCompletionRetirement(agentId) {
   return releasedCompletionRuns.run(agentId, () => resumeReleasedCompletion(agentId));
 }
 
+async function verifyReleasedSynchronization(agent) {
+  if (agent?.status === 'completed' && agent.metadata?.taskAnalysisType === 'release-sync') {
+    const { verifyReleaseSynchronizationTask } = await import('./releaseSynchronization.js');
+    await verifyReleaseSynchronizationTask(agent.taskId);
+  }
+}
+
 async function resumeReleasedCompletion(agentId) {
   // A pre-release audit may still be settling an owner-active observation.
   // Wait for it, then start a fresh verification instead of joining its stale result.
@@ -457,7 +467,10 @@ async function resumeReleasedCompletion(agentId) {
   if (agent?.status !== 'completed') return;
   const deliveryPending = agent.result?.cleanupPending === true
     && agent.metadata?.repoStateVerification?.status === 'pending';
-  if (!deliveryPending && agent.metadata?.completionCleanup?.status !== 'pending') return;
+  if (!deliveryPending && agent.metadata?.completionCleanup?.status !== 'pending') {
+    await verifyReleasedSynchronization(agent);
+    return;
+  }
   const { getTaskById } = await import('./cosTaskStore.js');
   const task = await getTaskById(agent.taskId);
   const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
@@ -465,12 +478,16 @@ async function resumeReleasedCompletion(agentId) {
   // Failed/no-change runs can still owe physical cleanup. The owner-release
   // event replays that obligation without changing their original verdict or
   // granting a new task/provider retry budget.
-  if (!deliveryPending) return { verified: false, cleanupReplayed: Boolean(task), skipReason: 'original-result-preserved' };
+  if (!deliveryPending) {
+    await verifyReleasedSynchronization(agent);
+    return { verified: false, cleanupReplayed: Boolean(task), skipReason: 'original-result-preserved' };
+  }
   const current = await getAgentRecord(agentId);
   const result = await verifyAgentRepoState({ agentId, agentState: current, task: task || { id: agent.taskId },
     success: current.result?.success === true, prExpected: isTruthyMeta(task?.metadata?.openPR) });
   const settled = await getAgentRecord(agentId);
   if (task) await replayAgentCompletionCleanup(settled);
+  await verifyReleasedSynchronization(settled);
   return result;
 }
 
@@ -525,8 +542,17 @@ export function bindCompletionRetirementEvents(events) {
     return resumeCompletedDeliveryParent(data.task)
       .catch(error => emitLog('warn', `Parent completion deferred after delivery follow-up: ${error.message}`, { taskId: data.task.id }));
   };
+  const onCapture = data => {
+    if (typeof data?.agentId !== 'string' || !data.agentId) return;
+    return resumeAgentCompletionRetirement(data.agentId)
+      .catch(error => emitLog('warn', `Completion deferred after checkout capture: ${error.message}`, { agentId: data.agentId }));
+  };
   events.on('tasks:changed', onChange);
-  return () => events.off('tasks:changed', onChange);
+  events.on('agent:checkout-captured', onCapture);
+  return () => {
+    events.off('tasks:changed', onChange);
+    events.off('agent:checkout-captured', onCapture);
+  };
 }
 
 let completionSweep = null;
@@ -618,6 +644,10 @@ async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false } = {}
   const { getTaskById } = await import('./cosTaskStore.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
   if (!skipPrelude) {
+    const { recoverReleaseSynchronizationHandoffs } = await import('./releaseSynchronization.js');
+    await recoverReleaseSynchronizationHandoffs(agents).catch(error => {
+      emitLog('warn', `Release synchronization handoffs retained: ${error.code || 'outbox-unavailable'}`);
+    });
     await reconcileReleasedSelectionHistory(agents);
     // Replay completed handoffs after restart as well as at their event. Only
     // terminal parents with unfinished delivery qualify; ordinary completed

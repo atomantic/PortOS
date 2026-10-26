@@ -204,9 +204,67 @@ checks its tree before and after publication; never create the version tag by
 hand. Verify the tag tree, version, named notes and published, non-draft,
 non-prerelease GitHub Release. A merged PR alone is not completion.
 
+A running scheduled release coordinator can persist the verified publication before
+starting synchronization. POST `/api/cos/agents/:id/release-publication`
+using the authenticated PortOS API transport, with JSON fields `version` (without
+`v`), `promotionPrNumber`, and `workflowRunId`. The server resolves the repository
+from the registered workspace, reads the candidate's metadata-only pin and ancestry
+from its local Git objects, and independently verifies the merged promotion,
+published stable release, successful release workflow and peeled tag tree against
+GitHub. Keep the candidate objects available in that repository; missing objects
+or inconclusive forge responses cannot establish publication. No supplied URL or
+terminal prose is accepted as proof. Repeating the same verified publication
+retains the original receipt and verification timestamp.
+
+The agent card shows the release link and publication time as soon as the receipt
+is saved, even while execution continues. This receipt verifies **publication
+only**: synchronization remains explicitly unverified. After saving the receipt,
+the endpoint persists a publication-keyed outbox and registers exactly one
+`task-release-sync-<publication identity>` continuation on this instance. A
+successful response confirms that durable task ownership; the publishing
+coordinator then stops doing synchronization and may complete without waiting
+for another agent slot. Every terminal agent write repeats the ownership check.
+On a registration failure, retain the original receipt, branch/head/PR and
+checkout evidence and retry the same handoff; do not create another task or
+publish again. Interrupted handoffs resume through ordinary delivery recovery.
+Legacy receipts are not enrolled at startup. Only an explicit publication
+verification request can enroll one, retaining its original verification time;
+an upgrade never silently generates new synchronization work from old releases.
+
+The outbox keeps the original reviewer policy, publication ancestry and retained
+physical checkout seeds. It never transfers checkout authority. The continuation
+uses the procedure below and ordinary delivery, admission and retirement recovery.
+Completed task history still owns its publication identity and cannot be deleted
+through task CRUD. Execution success does **not** mark synchronization verified:
+individual obligations remain pending until independently verified. A bounded recovery
+sweep checks the same outbox after restart, including completed task/agent history.
+It records pending, running, blocked or verified synchronization separately from the
+original publication timestamp and link. Transport failures retain successful
+revision-bound proof and durable retry times; conflicting owners remain blocked.
+
+Verification inspects the exact same-repository synchronization PR/head, its merged
+development ancestry (including the candidate head and published promotion),
+completed pre-PR local-review lifecycle, exact-head hosted approvals and checks
+green at merge, and server admission history or a coordinator merge receipt. The
+retirement service retains the continuation's private local-review receipt before
+removing its checkout; retirement refuses an uncollected receipt. Legacy or missing
+review evidence is a blocker, never a synthesized clean review. The historical
+reviewed head stays historical when later hosted feedback changes the PR.
+
+The development quality snapshot must include the available local numeric
+measurements; an independently observed lack of local measurements is recorded
+explicitly as a no-evidence result. Publication does not run providers to create
+quality evidence. Runtime, runner, PID and checkout process checks establish
+process settlement separately from task execution success. Every retained physical
+checkout generation requires its exact service retirement receipt plus checkout
+and local/remote ref absence; generic delivery/retirement recovery remains the
+only writer of those receipts. No verifier merges a PR, changes a published tag,
+steals a checkout, or resets a task retry budget. Status-view integration is
+tracked in #13773 under #13760.
+
 #### 6. Synchronize back without changing the published release
 
-After publication, open a normal **`release` → `main`** synchronization PR and
+After publication, the durable continuation opens a normal **`release` → `main`** synchronization PR and
 merge it with a merge commit after its own required checks/reviews/admission.
 This carries version metadata, notes and candidate-only fixes back to development
 and preserves the release merge ancestry for the next candidate. Run the

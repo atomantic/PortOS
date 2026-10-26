@@ -18,7 +18,6 @@ import { CODEX_EFFORT_LEVELS } from '../lib/providerModels.js';
 import { videoSegmentReplayReceiptSchema } from '../services/mediaJobQueue/videoExecution.js';
 import { sanitizeJob } from '../services/mediaJobQueue/sanitizeJob.js';
 import { isRemoteMediaJob } from '../services/mediaJobQueue/remoteMediaJob.js';
-import { validateVideoRetryParams } from '../services/videoGen/prepareParams.js';
 import { hostedVideoRetryValidator } from '../services/videoGen/hostedSubmission.js';
 import { I2V_REFERENCE_MODES } from '../lib/videoReferenceModes.js';
 import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
@@ -399,6 +398,7 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     const validateHostedRetry = hostedVideoRetryValidator(params.mode);
     if (validateHostedRetry) validateHostedRetry(params);
     else {
+      const { validateVideoRetryParams } = await import('../services/videoGen/prepareParams.js');
       const model = await validateVideoRetryParams(params);
       delete params.continuation;
       if (Number(params.chunks || 1) > 1 || params.continuityStrategy != null) {

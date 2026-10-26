@@ -50,15 +50,17 @@ export default function CatalogMediaTile({
           missing
         </span>
       )}
+      {isImage && (isPortrait || (!m.readOnly && onSetPortrait)) && (
+        <div className="p-2 border-t border-port-border">
+          {isPortrait ? <span className="inline-flex items-center gap-1 text-xs text-port-warning"><Star size={12} aria-hidden="true" /> Canonical image</span>
+            : <button type="button" onClick={() => onSetPortrait(m.mediaKey)} className="min-h-11 rounded border border-port-border px-2 py-1 text-xs text-port-accent inline-flex items-center gap-1 hover:bg-port-accent/10">
+              <Star size={12} aria-hidden="true" /> Set as canonical image
+            </button>}
+        </div>
+      )}
       {m.readOnly && <p className="text-xs text-gray-500 p-2 break-words">Read-only provenance · {m.ingredientId || 'retained media'}</p>}
       {!m.readOnly && <div className="port-media-overlay absolute top-1 right-1 flex gap-1 rounded opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
         {extraActions}
-        {!isPortrait && isImage && onSetPortrait && (
-          <button type="button" onClick={() => onSetPortrait(m.mediaKey)} title="Set as portrait" aria-label="Set as portrait"
-            className="port-media-overlay-item p-2 sm:p-1 rounded hover:text-port-warning">
-            <Star size={12} aria-hidden="true" />
-          </button>
-        )}
         {onDetach && (armedDetach === tileKey ? (
           <ConfirmButtonPair prompt="Detach?" confirmText="Detach" cancelText="Cancel"
             ariaLabel="Confirm media detach" onConfirm={() => {

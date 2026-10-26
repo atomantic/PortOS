@@ -9,6 +9,7 @@ import { tmpdir } from 'os';
 import { execFileSync, spawnSync } from 'child_process';
 import { PATHS } from '../lib/fileUtils.js';
 import { setHttpsEnabledAtBoot } from '../lib/httpsState.js';
+import { resolveBashBinary } from '../lib/bashResolver.js';
 
 // Isolate personal instructions so contributor config cannot decide assertions.
 // Tests of global-instruction loading override this with a fixture home (#3475).
@@ -1354,7 +1355,7 @@ describe('buildLightContextPrompt', () => {
       const hasZsh = spawnSync('zsh', ['-f', '-c', 'exit 0']).status === 0;
 
       it('expands the emitted refspecs to the branch names under bash', () => {
-        expect(expandUnderShell('bash', buildPublishPrompt())).toEqual([...expected, '']);
+        expect(expandUnderShell(resolveBashBinary(), buildPublishPrompt())).toEqual([...expected, '']);
       });
 
       it.runIf(hasZsh)('expands the emitted refspecs identically under zsh (a bare $BRANCH: is a zsh modifier)', () => {
@@ -2817,6 +2818,30 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/"reviewedPrs":\[\{"number":12,"safe":true,"headRefOid":"a{40}","findingCount":0\}\]/);
       expect(prompt).not.toMatch(/output\.txt/);
     });
+  });
+});
+
+describe('unnecessary dispatch contract', () => {
+  it.each([
+    ['merged resolve target', { reviewLoopFollowUp: true, resumedFromAgentId: 'prior' }],
+    ['non-reproducing incident', { isInvestigation: true, resumedFromAgentId: 'prior' }],
+  ])('includes source tracing in both prompt paths for %s', async (_name, metadata) => {
+    const task = makeTask({ metadata });
+    const worktree = { branchName: 'claim/example', worktreePath: '/tmp/wt', baseBranch: 'origin/main', existingBranch: true };
+    const prompts = [buildLightContextPrompt(task, '/r', worktree, { providerId: 'codex', providerCommand: 'codex' }),
+      await buildAgentPrompt(task, {}, '/r', worktree, { providerType: 'api' })];
+    for (const prompt of prompts) {
+      expect(prompt).toContain('## Unnecessary dispatch investigation');
+      expect(prompt).toContain('source task, producer, trigger and recovery evidence');
+      expect(prompt).toContain('no longer reproduces is not a diagnosis');
+      expect(prompt).toContain('evidence of a legitimate race');
+      expect(prompt).toContain('First follow the unnecessary dispatch investigation contract in this prompt');
+    }
+  });
+
+  it('does not grant the contract based on task prose', () => {
+    const prompt = buildLightContextPrompt(makeTask({ description: '[Auto] Investigate agent failure' }), '/r', null, {});
+    expect(prompt).not.toContain('## Unnecessary dispatch investigation');
   });
 });
 

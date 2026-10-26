@@ -9,7 +9,7 @@ import { SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 const owned = ownTestBodies(vitestIt);
 afterEach(() => owned.drain());
 const fixtureUrl = new URL('../../scripts/lib/vitestTempRootFixture.js', import.meta.url).href;
-const processUrl = new URL('../lib/childProcess.js', import.meta.url).href;
+const gitProcessUrl = new URL('../lib/windowsGitProcess.js', import.meta.url).href;
 
 function observedSuite(root, mode, tracked) {
   const name = mode.endsWith('git') ? 'heldCheckoutExactDelivery.integration.test.js' : 'heldCheckoutRecovery.test.js';
@@ -121,17 +121,25 @@ function lifecycleSource(root, mode, tracked) {
         },
       };
     });
-    vi.mock(${JSON.stringify(processUrl)}, async original => {
+    vi.mock(${JSON.stringify(gitProcessUrl)}, async original => {
       const actual = await original();
-      return { ...actual, spawn: (command, args, options) => {
-        const hold = ${JSON.stringify(mode)} === 'git' && command === 'git' && args[0] === 'commit' && !state.held && String(options?.cwd).startsWith(state.scratch);
-        if (!hold) return actual.spawn(command, args, options);
+      const { realpathSync } = await import('node:fs');
+      const { relative, isAbsolute, sep } = await import('node:path');
+      const ownsDirectory = cwd => {
+        if (!state.scratch) return false;
+        const path = relative(state.scratch, realpathSync.native(cwd));
+        return path === '' || (!isAbsolute(path) && path !== '..' && !path.startsWith('..' + sep));
+      };
+      return { ...actual, startGit: (args, options, wire) => {
+        const hold = ${JSON.stringify(mode)} === 'git' && args[0] === 'commit' && !state.held && ownsDirectory(options.cwd);
+        if (!hold) return actual.startGit(args, options, wire);
         state.held = true;
         state.active++;
-        const child = actual.spawn(command, ['-c', 'core.hooksPath=' + process.env.RETIRE_HOOKS, ...args], options);
-        const work = new Promise(resolve => child.once('close', () => { state.active--; state.work.delete(work); resolve(); }));
-        state.work.add(work);
-        return child;
+        return actual.startGit(['-c', 'core.hooksPath=' + process.env.RETIRE_HOOKS, ...args], options, child => {
+          const work = new Promise(resolve => child.once('close', () => { state.active--; state.work.delete(work); resolve(); }));
+          state.work.add(work);
+          wire(child);
+        });
       } };
     });
     ${observedSuite(root, mode, tracked)}

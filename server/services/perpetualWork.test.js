@@ -16,6 +16,7 @@ vi.mock('./forgeAuth.js', () => ({
 }));
 
 import { spawn } from '../lib/childProcess.js';
+vi.mock('../lib/windowsGitProcess.js', () => ({ startGit: (args, options, wire) => wire(spawn('git', args, options)) }));
 import { resolveForgeTokenEnv } from './forgeAuth.js';
 import {
   isActionableIssue,

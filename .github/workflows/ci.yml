@@ -22,6 +22,12 @@ on:
         type: boolean
         default: true
 
+# Explicit opt-in: no ordinary PR, nightly, or release push changes policy.
+env:
+  PORTOS_CI_TEST_POLICY: ${{ github.event_name == 'pull_request' && github.base_ref == 'release' && startsWith(github.head_ref, 'codex/release-') && github.event.pull_request.head.repo.full_name == github.repository && 'release-candidate' || '' }}
+  PORTOS_CI_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+  PORTOS_CI_CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha }}
+
 permissions:
   contents: read
 
@@ -431,6 +437,7 @@ jobs:
         if: needs.impact.outputs.server_mode != 'skip'
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
+          PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
           PORTOS_CI_BROWSER_OWNER: unit
           CI_TEST_MODE: ${{ needs.impact.outputs.server_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.server_files }}
@@ -461,6 +468,19 @@ jobs:
       - name: Smoke-boot server
         if: needs.impact.outputs.smoke == 'true' && matrix.shard == 1
         run: npm run smoke
+
+      - name: Retain frozen candidate invocation evidence
+        if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-diagnostics-server-${{ strategy.job-index || 0 }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/invocation.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/run.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/failures.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/processes.json
 
   client:
     # Sharded like the server job; the build and the bundle budget run on shard 1.
@@ -556,6 +576,7 @@ jobs:
         if: needs.impact.outputs.client_mode != 'skip'
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
+          PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
           CI_TEST_MODE: ${{ needs.impact.outputs.client_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.client_files }}
           CI_TEST_SOURCES: ${{ needs.impact.outputs.client_sources }}
@@ -579,6 +600,19 @@ jobs:
       - name: Check API Explorer bundle has no Scalar chunks
         if: needs.impact.outputs.build == 'true' && matrix.shard == 1
         run: npm run test --prefix client -- ApiExplorer.bundle
+
+      - name: Retain frozen candidate invocation evidence
+        if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-diagnostics-client-${{ strategy.job-index || 0 }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/invocation.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/run.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/failures.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/processes.json
 
   lint:
     # Its own job rather than a step on client shard 1, for cost and latency —
@@ -811,6 +845,7 @@ jobs:
         env:
           PGDATABASE: portos_test
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
+          PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
           CI_TEST_MODE: full
         run: node scripts/run-ci-tests.js db
 
@@ -821,16 +856,36 @@ jobs:
           path: ${{ runner.temp }}/portos-test-memo
           key: test-memo-${{ runner.os }}-${{ runner.arch }}-db-${{ github.run_id }}
 
+      - name: Retain frozen candidate invocation evidence
+        if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-diagnostics-database-${{ strategy.job-index || 0 }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/invocation.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/run.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/failures.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/processes.json
+
   browser:
     # Owns the registered browser suites; the Linux unit job excludes that
     # exact registry. PRs run the smoke profile; scheduled, release and
     # dispatched runs run the complete profile. No Postgres: the suites run on
-    # the file backend under NODE_ENV=test.
-    name: Browser suites
+    # the file backend under NODE_ENV=test. Two deterministic shards split the
+    # aggregate capture workload without changing quiet-project sequencing or
+    # the independent 720-second watchdog on either runner.
+    name: Browser suites (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
     if: needs.impact.outputs.browser_files != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      # Keep every shard's evidence if another fails; CI Gate requires all.
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     permissions:
       contents: read
     steps:
@@ -921,7 +976,7 @@ jobs:
           path: |
             server/.cache/vitest
             server/.cache/vitest-db
-          key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}-browser
+          key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}-browser-${{ matrix.shard }}of${{ strategy.job-total }}
           restore-keys: |
             vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
             vitest-server-${{ runner.os }}-
@@ -972,8 +1027,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
-          key: test-memo-${{ runner.os }}-${{ runner.arch }}-browser-${{ github.run_id }}
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-browser-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
           restore-keys: |
+            test-memo-${{ runner.os }}-${{ runner.arch }}-browser-${{ matrix.shard }}of${{ strategy.job-total }}-
             test-memo-${{ runner.os }}-${{ runner.arch }}-browser-
 
       # Fail-closed: PORTOS_REQUIRE_BROWSER_SUITES makes the suites' canRun guard
@@ -986,9 +1042,11 @@ jobs:
         timeout-minutes: 15
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
-          PORTOS_BROWSER_TEST_PROFILE: ${{ github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full' }}
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
+          PORTOS_BROWSER_TEST_PROFILE: ${{ github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full' }}
           CI_TEST_MODE: files
+          CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+          PORTOS_CI_BROWSER_OWNER: browser
           CI_TEST_FILES: ${{ needs.impact.outputs.browser_files }}
           PORTOS_REQUIRE_BROWSER_SUITES: '1'
           PORTOS_TEST_QUIET: 1
@@ -999,7 +1057,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
-          key: test-memo-${{ runner.os }}-${{ runner.arch }}-browser-${{ github.run_id }}
+          key: test-memo-${{ runner.os }}-${{ runner.arch }}-browser-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
 
       - name: Preserve browser test failure diagnostics
         if: failure()
@@ -1013,13 +1071,26 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: animatic-capture-diagnostics
+          name: animatic-capture-diagnostics-${{ matrix.shard }}of${{ strategy.job-total }}
           retention-days: 7
           if-no-files-found: ignore
           path: |
             ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/animatic-capture/case-*/saved.png
             ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/animatic-capture/case-*/displayed.png
             ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/animatic-capture/case-*/frame.json
+
+      - name: Retain frozen candidate invocation evidence
+        if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-diagnostics-browser-${{ strategy.job-index || 0 }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/invocation.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/run.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/failures.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/processes.json
 
   windows-server:
     # Sharded like the server job.
@@ -1159,8 +1230,8 @@ jobs:
         timeout-minutes: 25
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
-          # Outside the launcher's disposable temp root; recoverable after exit.
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
+          # Outside the launcher's disposable temp root; recoverable after exit.
           CI_TEST_MODE: ${{ needs.impact.outputs.windows_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.windows_files }}
           CI_TEST_SOURCES: ${{ needs.impact.outputs.windows_sources }}
@@ -1188,6 +1259,19 @@ jobs:
         env:
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
         run: node scripts/ci-test-diagnostics.js
+
+      - name: Retain frozen candidate invocation evidence
+        if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-diagnostics-windows-server-${{ strategy.job-index || 0 }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/invocation.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/run.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/failures.json
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/processes.json
 
   node-minimum:
     name: Node minimum compatibility

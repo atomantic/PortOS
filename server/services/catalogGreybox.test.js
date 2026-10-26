@@ -4,10 +4,12 @@ const db = vi.hoisted(() => ({
   getIngredient: vi.fn(), setIngredientPayloadKey: vi.fn(), listMediaForIngredient: vi.fn(), detachMedia: vi.fn(),
 }));
 const upload = vi.hoisted(() => vi.fn());
+const maintenanceRun = vi.hoisted(() => vi.fn());
+vi.mock('../lib/maintenanceAdmission.js', () => ({ maintenance: { run: maintenanceRun } }));
 vi.mock('./catalogDB.js', () => db);
 vi.mock('./catalogMedia.js', () => ({ uploadIngredientMediaFile: upload }));
 
-const { draftGreybox, previewGreyboxPrompt, saveGreybox, captureGreyboxShot, __setGreyboxDepsForTests } = await import('./catalogGreybox.js');
+const { draftGreybox, previewGreyboxPrompt, saveGreybox, captureGreyboxShot, renderGreyboxShot, __setGreyboxDepsForTests } = await import('./catalogGreybox.js');
 
 const scene = {
   parts: [{ id: 'floor', type: 'box', size: [30, 0.1, 14] }],
@@ -15,13 +17,66 @@ const scene = {
 };
 const place = { id: 'plc-1', type: 'place', name: 'Rink', payload: { description: 'Roller rink', greybox: scene } };
 const runPrompt = vi.fn();
+const renderCapture = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  maintenanceRun.mockImplementation((_kind, _resource, work) => work());
   db.getIngredient.mockResolvedValue(place);
   __setGreyboxDepsForTests({
     resolveProvider: async () => ({ provider: { id: 'p1', enabled: true }, selectedModel: 'm1' }),
     runPrompt,
+    renderCapture,
+  });
+});
+
+describe('renderGreyboxShot', () => {
+  it('refuses new captures during graceful maintenance before rendering or replacing references', async () => {
+    maintenanceRun.mockRejectedValueOnce(Object.assign(new Error('Maintenance held'), { code: 'MAINTENANCE_HELD' }));
+    await expect(renderGreyboxShot('plc-1', 'wide')).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+    expect(renderCapture).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
+  });
+  it('renders the saved scene with no tab and serializes it with a concurrent uploaded capture', async () => {
+    const live = [{ mediaKey: 'old.png', kind: 'reference', role: 'greybox-shot:wide' }];
+    db.listMediaForIngredient.mockImplementation(async () => [...live]);
+    db.detachMedia.mockImplementation(async (_id, key) => { live.splice(live.findIndex((m) => m.mediaKey === key), 1); });
+    upload.mockImplementation(async ({ dataBase64 }) => {
+      const row = { mediaKey: `${dataBase64}.png`, kind: 'reference', role: 'greybox-shot:wide' };
+      live.push(row);
+      return row;
+    });
+    let finishRender;
+    renderCapture.mockImplementation(() => new Promise((resolve) => { finishRender = resolve; }));
+    const rendered = renderGreyboxShot('plc-1', 'wide');
+    await vi.waitFor(() => expect(renderCapture).toHaveBeenCalledTimes(1));
+    const uploaded = captureGreyboxShot('plc-1', 'wide', { dataBase64: 'TAB' });
+    expect(upload).not.toHaveBeenCalled();
+    expect(renderCapture).toHaveBeenCalledWith(expect.objectContaining({ source: 'spec', parts: scene.parts.map((p) => ({ ...p, position: [0, 0, 0], rotationDegrees: [0, 0, 0] })) }), expect.objectContaining({ id: 'wide', focalLengthMm: 35, aspect: '16:9' }));
+    finishRender('HEADLESS');
+    await expect(rendered).resolves.toMatchObject({ mediaKey: 'HEADLESS.png' });
+    await uploaded;
+    expect(live.map((m) => m.mediaKey)).toEqual(['TAB.png']);
+    expect(upload).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves previous references on render failure and rejects a layout changed during rendering', async () => {
+    renderCapture.mockRejectedValueOnce(new Error('Isolated browser unavailable'));
+    await expect(renderGreyboxShot('plc-1', 'wide')).rejects.toThrow('Isolated browser unavailable');
+    renderCapture.mockImplementationOnce(async () => {
+      db.getIngredient.mockResolvedValue({ ...place, payload: { greybox: { ...scene, parts: [{ ...scene.parts[0], size: [20, 1, 10] }] } } });
+      return 'PNG';
+    });
+    await expect(renderGreyboxShot('plc-1', 'wide')).rejects.toMatchObject({ code: 'GREYBOX_CHANGED', status: 409 });
+    expect(upload).not.toHaveBeenCalled();
+    expect(db.detachMedia).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown shot or unsupported GLB scene before launching a browser', async () => {
+    await expect(renderGreyboxShot('plc-1', 'ghost')).rejects.toMatchObject({ code: 'GREYBOX_SHOT_UNKNOWN' });
+    db.getIngredient.mockResolvedValue({ ...place, payload: { greybox: { ...scene, source: 'glb' } } });
+    await expect(renderGreyboxShot('plc-1', 'wide')).rejects.toMatchObject({ code: 'GREYBOX_NOT_RENDERABLE' });
+    expect(renderCapture).not.toHaveBeenCalled();
   });
 });
 

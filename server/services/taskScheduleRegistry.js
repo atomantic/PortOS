@@ -368,6 +368,7 @@ const TASK_INTERVAL_DEFAULTS = {
   // On-demand by default (AI Provider Usage Policy — a manual Run is the user's
   // consent to a browser-driving LLM run; choosing a cadence opts into scheduling).
   'ux':                  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false, readOnly: false } },
+  'design':                  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false, readOnly: false } },
   // data-safety / simplify are the scheduled counterparts of the quota-burn
   // `data-safety-audit` and `simplify-audit` presets. New types default to
   // file-issues so an unattended scheduled run doesn't land code. On-demand
@@ -645,7 +646,8 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'jira-sprint-manager': 'Triage and implement JIRA sprint tickets',
   'jira-status-report': 'Generate JIRA weekly status report',
   'reference-watch': 'Watch reference repos and append PLAN.md items for new upstream work',
-  'ux': 'UX/design audit — file issues (default) or implement fixes',
+  'design': 'Rendered design audit — file issues (default) or implement fixes',
+  'ux': 'UX audit — file issues (default) or implement fixes',
   'data-safety': 'Data/upgrade-safety audit — file issues (default) or implement fixes',
   'simplify': 'Dead-code/duplication audit — file issues (default) or implement removals',
   'module-hygiene': 'Module hygiene — complexity, reuse, ownership, and discoverability; file issues (default) or implement one refactor',

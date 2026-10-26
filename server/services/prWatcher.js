@@ -693,6 +693,14 @@ async function readPendingDefault({ origin, repoSpec, forgeExec }) {
 async function attemptAdmittedMerge(entry, binding, prView, ctx) {
   const ownerPolicy = await currentHandoffOwnerPolicy(binding);
   if (ownerPolicy) return { step: await holdForOwner(ctx.app, entry, binding, ownerPolicy.ownerBlocked) };
+  const { preparePendingMergeAdmission } = await import('./cosMergeAdmission.js');
+  const preparationKey = JSON.stringify([entry.prUrl, binding?.receiptId ?? null, prView.headRefOid]);
+  if (entry.mergePreparationKey && entry.mergePreparationKey !== preparationKey) {
+    await preparePendingMergeAdmission(ctx.origin, entry.mergePreparationKey, { yieldTurn: true });
+  }
+  entry = { ...entry, mergePreparationKey: preparationKey };
+  const turn = await preparePendingMergeAdmission(ctx.origin, preparationKey);
+  if (!turn.prepared) return { step: { outcome: entry, tally: { waiting: 1 } } };
   const { preparePendingMergeGuard, summarizeMergeGuardOutput } = await import('./pendingMergeGuard.js');
   const guard = await preparePendingMergeGuard({ app: ctx.app, entry, binding, prView,
     readDefault: () => readPendingDefault(ctx), env: ctx.forgeExec.env,
@@ -702,6 +710,9 @@ async function attemptAdmittedMerge(entry, binding, prView, ctx) {
     return { ok: false, reason: 'merged-tree-validation-unavailable', evidence: { detail } };
   });
   if (!guard.ok) {
+    if (guard.reason !== 'merged-tree-base-moved') {
+      await preparePendingMergeAdmission(ctx.origin, preparationKey, { yieldTurn: true });
+    }
     const retained = { ...entry, mergedTreeGuard: { ...guard.evidence, reason: guard.reason } };
     if (guard.reason === 'merged-tree-recovery-required') {
       return { step: await recoverUnboundMerge(retained, prView, ctx) };
@@ -719,7 +730,7 @@ async function attemptAdmittedMerge(entry, binding, prView, ctx) {
   }
   const retained = guard.evidence ? { ...entry, mergedTreeGuard: guard.evidence } : entry;
   const { withPendingMergeAdmission, markMergeHandoffMerged } = await import('./cosMergeAdmission.js');
-  const admitted = await withPendingMergeAdmission(ctx.origin, () => mergeAssessedHead(entry, binding, ctx, guard.evidence));
+  const admitted = await withPendingMergeAdmission(ctx.origin, () => mergeAssessedHead(entry, binding, ctx, guard.evidence), preparationKey);
   if (!admitted.admitted) {
     console.log(`⏳ Pending merge deferred for PR #${entry.prNumber}: ${admitted.reason}`);
     return { step: { outcome: retained, tally: { waiting: 1 } } };
@@ -812,11 +823,20 @@ async function processPendingMergeEntry(entry, ctx) {
   if (Date.now() < (entry.cleanup?.retryAt || 0)) return { outcome: entry, tally: {} };
   const binding = await validateHandoffBinding(entry, ctx.origin);
   if (binding === INVALID_HANDOFF) {
+    if (entry.mergePreparationKey) {
+      const { preparePendingMergeAdmission } = await import('./cosMergeAdmission.js');
+      await preparePendingMergeAdmission(ctx.origin, entry.mergePreparationKey, { yieldTurn: true });
+    }
     if (!entry.recoveryBlocked) await notifyPendingMergeTimeout(ctx.app, entry, null,
       'PortOS will not merge this handed-off PR: its recorded head/policy binding is unreadable or names another repository. Verify the PR and merge or re-dispatch it.');
     return { outcome: { ...entry, recoveryBlocked: 'handoff-binding-unreadable' }, tally: { invalidated: 1 } };
   }
   const prView = await readPendingPullRequest(ctx.repoSpec, entry.prNumber, ctx.forgeExec);
+  if (entry.mergePreparationKey && (!prView || !isPendingMergeReady(prView) || entry.recoveryBlocked
+    || (binding && prView.headRefOid !== binding.headSha))) {
+    const { preparePendingMergeAdmission } = await import('./cosMergeAdmission.js');
+    await preparePendingMergeAdmission(ctx.origin, entry.mergePreparationKey, { yieldTurn: true });
+  }
   if (!prView) return settleUnreadablePr(entry, binding, ctx);
   const step = await processReadablePr(entry, binding, prView, ctx);
   return { outcome: step.outcome, tally: { checked: 1, ...step.tally } };

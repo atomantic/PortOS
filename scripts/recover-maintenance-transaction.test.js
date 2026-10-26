@@ -224,7 +224,7 @@ describe('offline maintenance transaction recovery', () => {
     }
   });
 
-  it('preserves a foreign transition that replaces its marker before descriptor inspection', async () => {
+  it.each(['foreign transition evidence', ''])('preserves a replacement transition despite aliased file identity, bytes=%j', async foreign => {
     const { data, directory } = fixture();
     const dead = spawnSync(process.execPath, ['-e', ''], { timeout: 5000 });
     expect(dead.status).toBe(0);
@@ -238,16 +238,21 @@ describe('offline maintenance transaction recovery', () => {
       const fd = fs.openSync(path, ...args);
       if (path === transition) {
         fs.renameSync(transition, displaced);
-        fs.writeFileSync(transition, 'foreign transition evidence');
+        fs.writeFileSync(transition, foreign);
         fs.writeFileSync(join(fence, 'owner.json'), replacement);
       }
       return fd;
+    }, fstatSync(fd) {
+      // Pin the Windows failure: descriptor/path numeric identities can alias
+      // even though the descriptor still owns the renamed original marker.
+      fs.fstatSync(fd);
+      return fs.lstatSync(transition);
     } };
     await expect(recoverMaintenanceTransaction(reason, { data, io, processes: stopped }))
       .rejects.toThrow('Maintenance recovery ownership changed during inspection.');
-    expect(fs.readFileSync(transition, 'utf8')).toBe('foreign transition evidence');
+    expect(fs.readFileSync(transition, 'utf8')).toBe(foreign);
     expect(fs.readFileSync(join(fence, 'owner.json'), 'utf8')).toBe(replacement);
-    expect(fs.readFileSync(displaced)).toHaveLength(0);
+    expect(JSON.parse(fs.readFileSync(displaced, 'utf8'))).toMatchObject({ version: 1, pid: process.pid, token: expect.any(String) });
     expect(fs.existsSync(join(directory, 'state.json'))).toBe(false);
   });
 

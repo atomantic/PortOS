@@ -9,7 +9,8 @@ import SentPromptPanel from '../media/SentPromptPanel';
 import FilePickerButton from '../ui/FilePickerButton';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import GreyboxEditor from './GreyboxEditor';
-import { captureCatalogGreyboxShot, detachCatalogIngredientMedia, uploadCatalogIngredientMediaFile, draftCatalogGreybox, previewCatalogGreyboxPrompt, saveCatalogGreybox } from '../../services/apiCatalog';
+import { captureCatalogGreyboxShot, renderCatalogGreyboxShot, detachCatalogIngredientMedia, uploadCatalogIngredientMediaFile, draftCatalogGreybox, previewCatalogGreyboxPrompt, saveCatalogGreybox } from '../../services/apiCatalog';
+import { formatCount } from '../../utils/formatters';
 import {
   GREYBOX_ASPECTS,
   DEFAULT_FOCAL_LENGTH_MM,
@@ -29,6 +30,13 @@ const actionButton = 'min-h-[40px] inline-flex items-center justify-center gap-1
 const EMPTY_LLM = { providerId: '', model: '', effort: '' };
 const AUTO = 'Default — the active provider';
 
+// Identity reads group media by its owning ingredient before recency. A
+// retained source's older export can therefore precede the replacement on the
+// surviving identity. Use the newest attachment consistently after refreshes
+// and remounts, even when detaching the previous export failed.
+const latestModel = (media = []) => media.filter((row) => row.kind === 'model' && !row.deleted)
+  .reduce((latest, row) => !latest || (row.createdAt || '') > (latest.createdAt || '') ? row : latest, null);
+
 /**
  * The Greybox tab of an Environment: orbit a coarse 3D layout of the place,
  * save camera angles as shots, capture a shot as a reference image on the
@@ -40,7 +48,8 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
   const [params, setParams] = useSearchParams();
   const viewerRef = useRef(null);
   const [modelOverride, setModelOverride] = useState(null);
-  const model = modelOverride?.recordId === record.id ? modelOverride.row : (media || []).find((row) => row.kind === 'model' && !row.deleted);
+  const syncedModel = latestModel(media || []);
+  const model = modelOverride?.recordId === record.id ? modelOverride.row : syncedModel;
   const saved = record.payload?.greybox ?? null;
   const [draft, setDraft] = useState(null);
   const [manual, setManual] = useState(null);
@@ -53,12 +62,13 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
   const [newShotName, setNewShotName] = useState('');
   const [preview, setPreview] = useState(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [confirmRecapture, setConfirmRecapture] = useState(false);
+  const actionInFlight = useRef(false);
 
   useEffect(() => {
     if (modelOverride?.recordId !== record.id) return;
-    const synced = (media || []).filter((row) => row.kind === 'model' && !row.deleted);
-    if (modelOverride.row ? synced.some((row) => row.mediaKey === modelOverride.row.mediaKey) : synced.length === 0) setModelOverride(null);
-  }, [record.id, media, modelOverride]);
+    if (modelOverride.row ? syncedModel?.mediaKey === modelOverride.row.mediaKey : !syncedModel) setModelOverride(null);
+  }, [record.id, syncedModel, modelOverride]);
 
   const scene = draft?.greybox || manual || saved;
   const editErrors = manual ? greyboxEditErrors(manual) : [];
@@ -114,10 +124,13 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
   // The parent holds its Save while a write is in flight. It is told directly (not
   // via an effect) so the release still fires if the tab was left mid-write.
   const run = (name, fn) => {
+    if (actionInFlight.current || disabled) return Promise.resolve();
+    actionInFlight.current = true;
     setBusy(name);
     onBusyChange?.(true);
     return fn().finally(() => {
       setBusy('');
+      actionInFlight.current = false;
       onBusyChange?.(false);
     });
   };
@@ -176,6 +189,25 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
       toast.success(`Saved "${shot.label}" as a reference image`);
       onCaptured?.();
     }
+  });
+
+  const recaptureAll = () => run('recapture', async () => {
+    if (locked || draft || manual || saved?.source !== 'spec' || !saved?.shots.length) return;
+    let captured = 0;
+    // Use saved cameras, not the currently orbited/unsaved view. Stop at the
+    // first failure and report the prefix that was replaced; never retry a shot.
+    for (const savedShot of saved.shots) {
+      const row = await renderCatalogGreyboxShot(record.id, savedShot.id, { silent: true })
+        .catch((err) => {
+          toast.error(`Captured ${formatCount(captured)} of ${formatCount(saved.shots.length)} shots. “${savedShot.label}” failed: ${err?.message || 'Could not render'}; remaining shots were not changed.`);
+          return null;
+        });
+      if (!row) break;
+      captured++;
+      onCaptured?.();
+    }
+    setConfirmRecapture(false);
+    if (captured === saved.shots.length) toast.success(`Re-captured ${formatCount(captured)} shot${captured === 1 ? '' : 's'}`);
   });
 
   const removeShot = () => run('shot', async () => {
@@ -369,6 +401,15 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
             {shot && <button type="button" className={actionButton} onClick={() => selectShot('')}>Free view — show all anchors</button>}
             {!draft && !manual && !locked && (
               <div className="space-y-2">
+                {saved?.source === 'spec' && saved.shots.length > 0 && (confirmRecapture
+                  ? <div className="space-y-2">
+                    <p className="text-xs text-gray-400">Saved shots: {formatCount(saved.shots.length)}. Existing reference images to replace: {formatCount(saved.shots.filter((s) => captureForShot(media, s.id)).length)}. Saved camera angles will be used.</p>
+                    <ConfirmButtonPair confirmText="Re-capture all shots" onConfirm={recaptureAll} onCancel={() => setConfirmRecapture(false)}
+                      busy={blocked} busyText="Capturing…" tone="warning" className="flex-wrap" />
+                  </div>
+                  : <button type="button" className={actionButton} disabled={blocked} onClick={() => setConfirmRecapture(true)}>
+                    <Camera size={14} aria-hidden="true" />Re-capture all shots ({formatCount(saved.shots.length)})
+                  </button>)}
                 <label htmlFor="greybox-new-shot" className="block text-xs text-gray-400">New shot name</label>
                 <div className="flex gap-2">
                   <input id="greybox-new-shot" value={newShotName} onChange={(e) => setNewShotName(e.target.value)} maxLength={120} placeholder="e.g. DJ booth, low angle"

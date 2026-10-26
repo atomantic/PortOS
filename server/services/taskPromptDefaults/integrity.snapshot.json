@@ -24,7 +24,8 @@
     "data-integrity": "5fcc4f5044101e89da5bbf4890c11a1c",
     "data-safety": "25e79bc34cfadeab3cc3969a6c3421c2",
     "dependency-updates": "8ce4e7e33c5c7554b89af7d35a471c31",
-    "do-release": "22c7fa45352bd013b4208cbe8188b5cd",
+    "design": "118ab916feb90ff079f6e6449f60e7fe",
+    "do-release": "0770a37985af6fd232ff275b983e36b0",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
     "documentation": "c94797b4bd3a0d554e225888ed48b76b",
     "error-handling": "416b4e9aa2c1fcc3bfea7a2d38814ae5",
@@ -62,7 +63,7 @@
     "ui-lifecycle": "d156882c73593a54c0fd5754eb4c6fa0",
     "upgrade-rehearsal": "e53a4cb57cdc7b5876d709bcd8a68132",
     "user-action-review": "28c1b49e5ca806568077f56fe982ce08",
-    "ux": "14d790bd65e540d00786ecb4e787a61e",
+    "ux": "7a717ced5a1c8df4d76c1f6987747792",
     "workflow-recovery": "628d2ec51c3cd3d8bbd76eacb212dada"
   },
   "PROMPT_VERSIONS": {
@@ -90,7 +91,8 @@
     "data-integrity": 1,
     "data-safety": 3,
     "dependency-updates": 9,
-    "do-release": 21,
+    "design": 1,
+    "do-release": 23,
     "do-replan": 2,
     "documentation": 9,
     "error-handling": 4,
@@ -125,7 +127,7 @@
     "ui-lifecycle": 3,
     "upgrade-rehearsal": 2,
     "user-action-review": 3,
-    "ux": 8,
+    "ux": 9,
     "workflow-recovery": 1
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 5,
@@ -361,7 +363,9 @@
       "0ee9c504bad68f4a73be15f0b955a796",
       "dcb1b0c84712f7824afd9c44cb4208da",
       "97ce61508d7dd6616a8c02e2c365b872",
-      "3061f2041d25fd80d60189f68ac5c3e0"
+      "3061f2041d25fd80d60189f68ac5c3e0",
+      "22c7fa45352bd013b4208cbe8188b5cd",
+      "8118a437451c1cc7d707a30f13e6767e"
     ],
     "do-replan": [
       "59a57f1bb445138c30ab4fa23630c6f8"
@@ -544,7 +548,8 @@
       "f90b5f38a7c6264e0d40919a2933ba4c",
       "9f346b8be4408c5a8207d9a8b6080ff0",
       "bb8670c1e6eb28434ad2d45b6dc62177",
-      "41b02e644f3dc5dcb713700c56a56454"
+      "41b02e644f3dc5dcb713700c56a56454",
+      "14d790bd65e540d00786ecb4e787a61e"
     ]
   }
 }

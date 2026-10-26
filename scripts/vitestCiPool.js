@@ -40,9 +40,15 @@ export function vitestCiPool({ maxWorkers = 4 } = {}) {
 // Keep these public Chrome/ffmpeg contracts in the full/CI runner, but give
 // their captures a quiet group after parallel unit work (#9394).
 export const EXCLUSIVE_CAPTURE_TESTS = [
+  // Real HiDPI WebGL capture shares the same constrained Chromium/GPU budget.
+  // Parallel hosted runs timed out in both capture and startup (#13748).
+  'routes/catalogGreyboxViewer.browser.test.js',
   // Exact SVG-filter screenshots hit the 30s CI budget alongside parallel tests.
   'lib/filmLook.browser.test.js',
   'lib/filmLookGpu.browser.test.js',
+  // Save-frame pixel parity uses the same exact SVG film look and two-second
+  // paused-video settle contract; keep unrelated browser work out of its budget.
+  'services/musicVideo/animaticCapture.browser.test.js',
   'lib/musicVideoTitleCard.browser.test.js',
   'services/htmlComposition/index.test.js',
   'services/musicVideo/documentRender.browser.test.js',
@@ -66,6 +72,9 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
 const EXCLUSIVE_TESTS = [
   ...EXCLUSIVE_CAPTURE_TESTS,
   'services/databaseMaintenanceCutover.test.js',
+  // The generated shell/curl ownership proof retains its native process
+  // deadlines; run it after parallel fixture work instead of sharing that load.
+  'routes/cosAgentRoutes.ownershipResponse.test.js',
   'services/creativeDirector/videoAssembly.test.js',
   'services/musicVideo/publishKit.test.js',
   'services/musicVideo/sharingCopy.test.js',
@@ -74,6 +83,10 @@ const EXCLUSIVE_TESTS = [
   '../scripts/ci-test-plan.test.js',
   // Three real nested runners need quiet startup, with owned cancellation.
   '../scripts/workspaceCaches.test.js',
+  // Real nested launchers and Git subprocess workflows exceeded their existing
+  // Windows deadlines in the parallel group; retain deadlines on a quiet worker.
+  '../scripts/ciTestPolicy.test.js',
+  'services/git.sharedRecovery.test.js',
   '../scripts/persistentMindProcessAuditCleanup.test.js',
   '../scripts/writersRoomPromotionCleanup.test.js',
 ];
