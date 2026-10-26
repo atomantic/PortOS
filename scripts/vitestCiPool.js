@@ -43,6 +43,9 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
   // Exact SVG-filter screenshots hit the 30s CI budget alongside parallel tests.
   'lib/filmLook.browser.test.js',
   'lib/filmLookGpu.browser.test.js',
+  // Save-frame pixel parity uses the same exact SVG film look and two-second
+  // paused-video settle contract; keep unrelated browser work out of its budget.
+  'services/musicVideo/animaticCapture.browser.test.js',
   'lib/musicVideoTitleCard.browser.test.js',
   // Native HiDPI readback and SwiftShader captures share the quiet GPU budget,
   // rather than competing with parallel FFmpeg/export fixtures (#13748).
