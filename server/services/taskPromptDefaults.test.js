@@ -10,6 +10,7 @@ import {
   hashPromptBody,
   readPromptIntegritySnapshot,
 } from './taskPromptDefaults/integrityHash.js';
+import { reconcileStoredPrompt } from './taskPromptDefaults/storedPrompt.js';
 import { RETIRED_CONSOLE_ERRORS_PROMPT } from './taskPromptDefaults/retiredPromptFixtures.js';
 import { EPIC_DECOMPOSED_LABEL } from './perpetualWork.js';
 // The claim prompts build their contributor-label release from this helper, so the
@@ -113,10 +114,22 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).not.toContain('gh issue create');
   });
 
+  it('installs Design defaults without replacing customized Design or UX prompts', () => {
+    expect(reconcileStoredPrompt({}, 'design')).toMatchObject({
+      prompt: DEFAULT_TASK_PROMPTS.design, promptVersion: PROMPT_VERSIONS.design,
+    });
+    for (const type of ['design', 'ux']) {
+      expect(reconcileStoredPrompt({ prompt: 'My audit instructions', promptVersion: 1,
+        promptCustomized: true, promptSource: 'user' }, type)).toMatchObject({
+        prompt: 'My audit instructions', promptCustomized: true, changed: false,
+      });
+    }
+  });
+
   it('ux filings use tracker IDs instead of title slugs', () => {
     const current = DEFAULT_TASK_PROMPTS.ux;
 
-    expect(PROMPT_VERSIONS.ux).toBe(8);
+    expect(PROMPT_VERSIONS.ux).toBe(9);
     // v8 (#12090): route rotation reads the preloaded slice block, not only the tracker.
     expect(current).toMatch(/preloaded Recent audit slices block does not list/);
     expect(current).toContain('{trackerInstructions}');
@@ -155,7 +168,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
     const ux = DEFAULT_TASK_PROMPTS.ux;
     expect(ux).not.toMatch(/Playwright MCP|browser_[a-z]+/);
     expect(ux).toContain('a CDP tab, Playwright, or the host');
-    expect(ux).toContain('three viewport classes');
+    expect(ux).toContain('do not repeat mobile-responsive');
+    expect(ux).not.toContain('three viewport classes');
+    expect(ux).toContain('`design` owns these');
     expect(ux).toContain('(desktop viewport, narrow container)');
     expect(ux).toContain('Phone and tablet viewports (1024 wide or narrower) and touch mechanics');
     expect(ux).not.toContain('Responsive layout failures ARE part of this UX audit');
