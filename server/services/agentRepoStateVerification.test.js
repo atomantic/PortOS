@@ -1139,8 +1139,11 @@ describe('claim-swarm completion', () => {
       checkoutSeeds: scenario === 'seeded' ? [{ branch: selected }] : [] }),
       id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT };
     if (scenario === 'ref-present') readLocalBranchPresence.mockResolvedValue(true);
-    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/11', detail: 'MERGED' });
-    await run({ agentState: state });
+    findPullRequestForBranch.mockImplementation(async branch => branch === delivered
+      ? { status: 'found', url: 'https://github.com/example/repo/pull/11', detail: 'MERGED' }
+      : { status: 'none', url: null, detail: null });
+    const result = await run({ agentState: state });
+    expect(result.verified).toBe(scenario === 'released');
     const released = recordCleanupOutcome.mock.calls.some(([, row]) => row.branch === selected
       && row.reason === 'released-selection-no-local-artifacts');
     expect(released).toBe(scenario === 'released');
