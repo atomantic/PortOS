@@ -3,7 +3,8 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
 const f = vi.hoisted(() => ({ agents: [], pr: null, review: null, reviews: [], checks: [], receipts: [],
-  present: true, busy: false, unavailable: false, ancestor: true, quality: null, qualityFile: null, failSave: false }));
+  present: true, busy: false, unavailable: false, ancestor: true, quality: null, qualityFile: null, failSave: false,
+  missingSyncAncestry: false, retirementUnavailable: false }));
 vi.mock('../lib/fileUtils.js', async original => {
   const actual = await original();
   return makePathsProxy(actual, { dataRoot: lazyTempDataRoot('release-sync-verifier-'), overrides: {
@@ -27,7 +28,10 @@ vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original
 vi.mock('../lib/localReviewLifecycle.js', () => ({ localReviewLifecycle: async () => f.review || { reusable: false, receipt: null } }));
 vi.mock('../lib/processCwdProbe.js', () => ({ hasProcessCwdInside: async () => f.busy }));
 vi.mock('./repoCleanupObservation.js', () => ({ readCheckoutPathPresence: async () => f.present, readLocalBranchPresence: async () => f.present }));
-vi.mock('./taskSchedule.js', () => ({ getBranchReconcileOutcome: async () => ({ retired: f.receipts }) }));
+vi.mock('./taskSchedule.js', () => ({ getBranchReconcileOutcome: async () => {
+  if (f.retirementUnavailable) throw new Error('synthetic retirement transport failure');
+  return { retired: f.receipts };
+} }));
 vi.mock('./shell.js', () => ({ listAllSessions: () => [] }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: async () => [{ path: '/example/repo', branch: 'refs/heads/main' }] }));
 vi.mock('./branchReconcile.js', () => ({ listRemoteHeads: async () => new Map() }));
@@ -42,7 +46,8 @@ vi.mock('./github.js', () => ({ execGh: async args => {
   else if (path.startsWith('pulls?')) result = [[f.pr]];
   else if (path === 'pulls/42') result = f.pr;
   else if (path === 'pulls/42/reviews?per_page=100') result = [f.reviews];
-  else if (path.startsWith('compare/')) result = { status: f.ancestor ? 'ahead' : 'diverged', merge_base_commit: { sha: path.slice(8, 48) } };
+  else if (path.startsWith('compare/')) result = { status: f.ancestor
+    && !(f.missingSyncAncestry && path === `compare/${f.pr.head.sha}...${'e'.repeat(40)}`) ? 'ahead' : 'diverged', merge_base_commit: { sha: path.slice(8, 48) } };
   else if (path.startsWith('contents/.quality.json?')) result = f.qualityFile;
   else throw new Error(`Unexpected synthetic forge endpoint: ${path}`);
   return JSON.stringify(result);
@@ -85,6 +90,8 @@ beforeEach(async () => {
   f.busy = false;
   f.unavailable = false;
   f.ancestor = true;
+  f.missingSyncAncestry = false;
+  f.retirementUnavailable = false;
   f.quality = { schemaVersion: 1, repository: 'f'.repeat(64), measurements: [] };
 });
 
@@ -254,5 +261,30 @@ it('does not publish verification or lose original evidence when its durable wri
   await expect(verifyReleaseSynchronizationTask(taskId)).rejects.toThrow('synthetic outbox write failure');
   expect(await getReleaseSynchronization(identity)).toEqual(prior);
   f.failSave = false;
+  expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
+});
+
+it('refuses a squash-shaped result that contains the promotion but loses the synchronization head ancestry', async () => {
+  f.missingSyncAncestry = true;
+  await verifyReleaseSynchronizationTask(taskId);
+  const saved = await getReleaseSynchronization(identity);
+  expect(saved.obligations.synchronizationPr.blocker).toBe('synchronization-head-not-on-development');
+  expect(saved.obligations.releaseAncestry.status).toBe('verified');
+  expect(saved.synchronization.status).toBe('blocked');
+});
+
+it('retains complete retirement receipts on an unreadable follow-up while another obligation is blocked', async () => {
+  await verifyReleaseSynchronizationTask(taskId);
+  finishExecution();
+  const approval = f.reviews;
+  f.reviews = [];
+  await verifyReleaseSynchronizationTask(taskId);
+  const prior = (await getReleaseSynchronization(identity)).obligations.retirement;
+  expect(prior.status).toBe('verified');
+  expect(prior.evidence.receipts).toHaveLength(1);
+  f.retirementUnavailable = true;
+  await verifyReleaseSynchronizationTask(taskId);
+  expect((await getReleaseSynchronization(identity)).obligations.retirement).toEqual(prior);
+  f.reviews = approval;
   expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
 });

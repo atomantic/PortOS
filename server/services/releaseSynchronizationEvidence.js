@@ -164,10 +164,13 @@ export async function inspectReleaseSynchronization(entry, agents) {
     if (pr.merged !== true) wait('synchronization-pr-not-merged');
     if (!time(pr.merged_at) || !sha(pr.merge_commit_sha)) hold('synchronization-merge-unreadable');
     if (!await ctx.ancestor(pr.merge_commit_sha, target.developmentHead)) hold('synchronization-merge-not-on-development');
+    if (!await ctx.ancestor(target.headSha, target.developmentHead)) hold('synchronization-head-not-on-development');
     return target;
   });
   await check('candidateFixes', async () => {
     if (!await ctx.ancestor(entry.publication.candidateHead, target.headSha)) hold('candidate-fixes-not-preserved');
+    if (!pr.merged) wait('candidate-fixes-awaits-sync');
+    if (!await ctx.ancestor(entry.publication.candidateHead, target.developmentHead)) hold('candidate-fixes-not-on-development');
     return { candidateHead: entry.publication.candidateHead };
   });
   await check('releaseAncestry', async () => {
@@ -232,7 +235,7 @@ export async function inspectReleaseSynchronization(entry, agents) {
   await check('qualitySnapshot', async () => {
     if (obligations.synchronizationPr.status !== 'verified') wait('quality-awaits-development-sync');
     const snapshot = await buildQualitySnapshot(ctx.app);
-    if (!snapshot || !Array.isArray(snapshot.measurements)) hold('quality-evidence-unavailable');
+    if (!snapshot || !Array.isArray(snapshot.measurements)) throw new Error('quality-evidence-unavailable');
     if (!snapshot.measurements.length) return { kind: 'no-local-evidence', developmentHead: target.developmentHead };
     const file = await ctx.api(`contents/.quality.json?ref=${target.developmentHead}`);
     if (file.encoding !== 'base64' || !sha(file.sha) || typeof file.content !== 'string') hold('development-quality-unreadable');
@@ -245,7 +248,11 @@ export async function inspectReleaseSynchronization(entry, agents) {
   });
   // Retain exact final heads even while retirement remains blocked. A receipt
   // for the same pathname from an older physical generation cannot settle it.
-  obligations.retirement.evidence = { ...binding, checkouts };
+  if (!isDeepStrictEqual(entry.obligations.retirement.evidence?.checkouts, checkouts)) {
+    obligations.retirement = { status: 'pending' };
+    obligations.processSettlement = { status: 'pending' };
+  }
+  obligations.retirement.evidence = { ...obligations.retirement.evidence, ...binding, checkouts };
   await check('processSettlement', async () => {
     const owners = [...ownersOf(entry, agents), ...agents.filter(agent => agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt)];
     if (!owners.length || owners.some(agent => agent.status !== 'completed')) wait('release-owner-still-active');
@@ -276,11 +283,13 @@ export async function inspectReleaseSynchronization(entry, agents) {
       && Date.parse(receipt.retiredAt) <= Date.now()));
     if (!receipts.length || receipts.some(receipt => !receipt)) hold('exact-retirement-receipt-unverified');
     for (const row of checkouts) {
-      if (await readCheckoutPathPresence(row.path) !== false || await readLocalBranchPresence(row.repoPath, row.branch) !== false) hold('retired-checkout-or-ref-present');
+      const [pathPresent, branchPresent] = await Promise.all([readCheckoutPathPresence(row.path), readLocalBranchPresence(row.repoPath, row.branch)]);
+      if (pathPresent === null || branchPresent === null) throw new Error('retirement-inventory-unreadable');
+      if (pathPresent !== false || branchPresent !== false) hold('retired-checkout-or-ref-present');
     }
     const [{ listWorktrees }, { listRemoteHeads }] = await Promise.all([import('./worktreeManager.js'), import('./branchReconcile.js')]);
     const [trees, remote] = await Promise.all([listWorktrees(ctx.cwd), listRemoteHeads(ctx.cwd)]);
-    if (!Array.isArray(trees) || !trees.length || !(remote instanceof Map)) hold('retirement-inventory-unreadable');
+    if (!Array.isArray(trees) || !trees.length || !(remote instanceof Map)) throw new Error('retirement-inventory-unreadable');
     if (checkouts.some(row => remote.has(row.branch) || trees.some(tree => tree.path === row.path
       || tree.branch?.replace(/^refs\/heads\//, '') === row.branch))) hold('retired-checkout-or-ref-present');
     return { checkouts, receipts };
