@@ -1,0 +1,35 @@
+{
+  "id": "minimax-h3-cuda-history-v1",
+  "source": "https://github.com/huggingface/diffusers/tree/v0.42.0/src/diffusers/modular_pipelines/minimax_h3",
+  "model": {
+    "repo": "MiniMaxAI/MiniMax-H3",
+    "revision": "42ed227ee7df40d41602854ae760620d6eb651fe"
+  },
+  "runtimePackages": {
+    "diffusers": "0.42.0",
+    "transformers": "5.15.0",
+    "torchao": "0.18.0",
+    "accelerate": "1.14.0",
+    "av": "18.1.0"
+  },
+  "historyFrames": 17,
+  "audioSampleRate": 32000,
+  "cleanTimestep": 1,
+  "outputLayout": "new-output-only",
+  "lightx2vCompatible": false,
+  "fidelityValidation": {
+    "reason": "Windows/NVIDIA H3 moving-subject render and still-baseline comparison unavailable: the dedicated pinned H3 CUDA runtime and checkpoint are not installed on the validation host.",
+    "available": false
+  },
+  "sourceSha256": {
+    "diffusers/modular_pipelines/minimax_h3/before_denoise.py": "c0c3484b238b7cf529fb494bcfd02c286db8b34ce3e23fd78a17eeda257764d1",
+    "diffusers/modular_pipelines/minimax_h3/encoders.py": "594345d3619198c15fadf42b0fc8c13cec324e546ba10ee4c60c3d06c4b8e2fb",
+    "diffusers/modular_pipelines/minimax_h3/decoders.py": "17580a0335d870cf98870050186ac9ef8551a5da9f7c09b8fe8e21aed3853784",
+    "diffusers/modular_pipelines/minimax_h3/denoise.py": "4c2bc8b9856c38ba1692b02e35aa68ec92beda4db273e2e71f0ebbf997e19c79",
+    "diffusers/modular_pipelines/minimax_h3/modular_pipeline.py": "9d5284ac8390f97d3e5eb3e0a50eddf25e04e7a12ff7fe063409b3cbd333b0ff",
+    "diffusers/modular_pipelines/modular_pipeline.py": "d086e07a0095f09917593536d63aa8b263408004d6fd5ee26037502cd5b3d380",
+    "diffusers/models/autoencoders/autoencoder_kl_minimax_h3.py": "58e0ed47fdee8227d738eec5bb1e7a47acc21c65ee3de01aa3795c97d679d015",
+    "diffusers/models/autoencoders/autoencoder_kl_minimax_h3_audio.py": "b56c5bb95a7dc99ace03df192544615c89ec01ac3b134a7f1dd7348b03731d57",
+    "diffusers/schedulers/scheduling_minimax_h3.py": "307d5bf755337ef00c47237f9ac8be116e627d26e1df3b5f0bd504a80f9de8dd"
+  }
+}

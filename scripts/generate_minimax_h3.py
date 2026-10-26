@@ -50,7 +50,7 @@ from _runner_common import (  # noqa: E402
 )
 from _minimax_h3_common import (  # noqa: E402
     FPS, add_h3_common_args, emit_result, enforce_system_memory, load_keyframes,
-    resolve_cached_snapshot, validate_h3_output_args,
+    resolve_cached_snapshot, validate_h3_output_args, validate_h3_history_args,
 )
 from _minimax_h3_mlx_pins import (  # noqa: E402
     pinned_encoder_hook, verify_pinned_encode_source,
@@ -990,6 +990,7 @@ class ProgressWriter:
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    validate_h3_history_args(args, supported=False)
     # Everything the H3 checkpoint imposes regardless of runtime — fps, the 32px
     # canvas grid, the 17n+5 frame grid, the sigma floor, keyframe anchoring —
     # lives in the shared module so this runner and the CUDA one cannot drift.

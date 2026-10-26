@@ -29,6 +29,7 @@ cannot hold this model says so in seconds rather than being killed an hour in.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -37,7 +38,7 @@ from _checkpoint_index_guard import validate_checkpoint_indexes  # noqa: E402
 from _runner_common import emit_runtime_fingerprint, establish_process_group, heartbeat  # noqa: E402
 from _minimax_h3_common import (  # noqa: E402
     FPS, add_h3_common_args, emit_result, enforce_system_memory, load_keyframes,
-    resolve_cached_snapshot, validate_h3_output_args,
+    resolve_cached_snapshot, validate_h3_output_args, validate_h3_history_args,
 )
 
 
@@ -105,6 +106,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    history = validate_h3_history_args(args, supported=True)
+    if history and (args.image or getattr(args, "speed_profile", None) or getattr(args, "lora", [])):
+        raise SystemExit("H3 CUDA history supports the baseline sampler without keyframes, LightX2V or LoRAs.")
     # Everything the H3 checkpoint imposes regardless of runtime — fps, the 32px
     # canvas grid, the 17n+5 frame grid, the sigma floor, keyframe anchoring —
     # lives in the shared module so this runner and the MLX one cannot drift.
@@ -267,6 +271,17 @@ def keyframe_kwargs(images: list, anchors: list[str]) -> dict:
 def main() -> int:
     args = parse_args()
     validate_args(args)
+    history = validate_h3_history_args(args, supported=True)
+    if history:
+        from minimax_h3_cuda_history import assert_runtime_contract, decode_history
+        assert_runtime_contract(args)
+        log("STAGE:decode-history")
+        history_frames, history_audio = decode_history(args.source_video, history, args.width, args.height)
+    # Refuse a completed output before any expensive work. Publication repeats
+    # this check atomically, covering another producer completing meanwhile.
+    import os
+    if os.path.lexists(args.output):
+        raise SystemExit("H3 output already exists; choose a new output file.")
     # Read the keyframes first: everything below is ~60 HF cache lookups and a
     # torch/diffusers import, so an unreadable conditioning image should not
     # cost seconds before it reports.
@@ -331,19 +346,21 @@ def main() -> int:
     import time
     inference_start = time.perf_counter()
     with heartbeat("minimax-h3-cuda-inference"):
-        results = pipe(
-            prompt=args.prompt,
-            num_frames=args.num_frames,
-            height=args.height,
-            width=args.width,
-            num_inference_steps=args.steps,
-            # A CPU generator keeps the three documented draws (conditioning,
-            # video, audio) reproducible regardless of which device each
-            # component happens to be resident on under an offload profile.
-            generator=torch.Generator().manual_seed(args.seed),
-            output=["videos", "audio", "sampling_rate"],
-            **keyframe_kwargs(images, args.anchor),
-        )
+        if history:
+            from minimax_h3_cuda_history import run_history
+            results = run_history(pipe, args, history_frames, history_audio)
+        else:
+            results = pipe(
+                prompt=args.prompt,
+                num_frames=args.num_frames,
+                height=args.height,
+                width=args.width,
+                num_inference_steps=args.steps,
+                # Keep the draws reproducible across offload placements.
+                generator=torch.Generator().manual_seed(args.seed),
+                output=["videos", "audio", "sampling_rate"],
+                **keyframe_kwargs(images, args.anchor),
+            )
     if args.speed_profile:
         torch.cuda.synchronize()
         report = {
@@ -364,13 +381,8 @@ def main() -> int:
     from diffusers.utils.export_utils import encode_video
 
     frames = results["videos"][0]
-    encode_video(
-        frames,
-        fps=FPS,
-        output_path=str(output),
-        audio=results["audio"][0],
-        audio_sample_rate=results["sampling_rate"],
-    )
+    from minimax_h3_cuda_history import mux_owned_output
+    mux_owned_output(output, encode_video, frames, results["audio"][0], results["sampling_rate"])
 
     if not output.is_file() or output.stat().st_size == 0:
         raise RuntimeError(f"MiniMax H3 completed but did not write {output}.")
