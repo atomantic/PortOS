@@ -548,12 +548,13 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
       keyframes, lastImagePath, extendFromVideoPath, audioFilePath,
     }, await getSettings());
   }
-  if (model.runtime === 'minimax_h3_cuda' && resolvedLoras.length) {
-    const { validateMiniMaxH3CudaLoras } = await import('./ensureWeights.js');
-    await validateMiniMaxH3CudaLoras(resolvedLoras, speedProfile);
+  if (['minimax_h3', 'minimax_h3_cuda'].includes(model.runtime) && resolvedLoras.length) {
+    const { validateMiniMaxH3CudaLoras, validateMiniMaxH3MlxLoras } = await import('./ensureWeights.js');
+    const validate = model.runtime === 'minimax_h3' ? validateMiniMaxH3MlxLoras : validateMiniMaxH3CudaLoras;
+    await validate(resolvedLoras, speedProfile);
   }
   const speedProfileDeclined = speedProfile ? null : speedProfileDeclineReason({ model, profileId: speedProfileId, mode: speedProfileMode });
-  if (speedProfileDeclined && model.runtime === 'minimax_h3_cuda') {
+  if (speedProfileDeclined && ['minimax_h3', 'minimax_h3_cuda'].includes(model.runtime)) {
     throw new ServerError(speedProfileDeclined.message, { status: 400, code: speedProfileDeclined.code });
   }
   if (speedProfileDeclined) {
@@ -861,7 +862,7 @@ async function startPreparedLocalVideo({
     if (batch) args.push('--batch-seeds', JSON.stringify(batch.map((item) => item.seed)));
     if (buildParams.model.runtime === 'minimax_h3') {
       const { ensureMiniMaxH3Weights } = await import('./ensureWeights.js');
-      await ensureMiniMaxH3Weights(buildParams.model);
+      await ensureMiniMaxH3Weights(buildParams.model, { cacheOnly: !!buildParams.speedProfile });
     }
     // Weights can take a long first-run download; honor a cancel that landed during it.
     preparation.throwIfCanceled();

@@ -24,7 +24,7 @@ import {
   byovRuntimeLoraCapable, invalidateByovLoraCapabilityCache, invalidateByovReadyCache,
   isByovRuntimeCurrent, isByovRuntimeReady, isPinnedSourceStatusClean, modelAnchorsLastFrame,
   resolveA2vLoraStageCapable, a2vLoraStageCapable,
-  resolveByovRuntimeLoraCapable, runtimeIsCacheOnly, runtimeNeedsProcessGroupKill, runtimeUsesMlx,
+  resolveByovRuntimeLoraCapable, resolveMiniMaxH3MlxSpeedCapable, runtimeIsCacheOnly, runtimeNeedsProcessGroupKill, runtimeUsesMlx,
   routesToWindowsHelper, warmByovLoraCapabilities, LTX25_EXPECTED_REVISION,
 } from './runtimes.js';
 
@@ -135,6 +135,24 @@ describe('isByovRuntimeReady', () => {
 
     expect(runtimeMocks.spawn).toHaveBeenCalledTimes(1);
     expect(runtimeMocks.spawn.mock.calls[0][0]).toBe('git');
+  });
+});
+
+describe('MLX LightX2V runtime admission', () => {
+  it('requires the actual clean Git pin before the sampler seam probe can admit the profile', async () => {
+    runtimeMocks.spawn.mockImplementationOnce(() => statusChild(`# branch.oid ${'0'.repeat(40)}\n`));
+    await expect(resolveMiniMaxH3MlxSpeedCapable()).resolves.toBe(false);
+    expect(runtimeMocks.spawn).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.spawn.mock.calls[0][0]).toBe('git');
+
+    runtimeMocks.spawn.mockClear();
+    runtimeMocks.spawn.mockImplementationOnce(() => statusChild(`# branch.oid ${REVISION}\n`))
+      .mockImplementationOnce(() => exitChild(0));
+    await expect(resolveMiniMaxH3MlxSpeedCapable()).resolves.toBe(true);
+    expect(runtimeMocks.spawn.mock.calls[1][1]).toEqual([
+      expect.stringContaining('_minimax_h3_mlx_lightx2v.py'), '--probe',
+      BYOV_RUNTIME_INFO.minimax_h3.repoDir, REVISION,
+    ]);
   });
 });
 

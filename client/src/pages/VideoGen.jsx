@@ -123,7 +123,7 @@ import MusicVideoFilingSelect from '../components/media/MusicVideoFilingSelect';
 import { MUSIC_VIDEO_FILING_PARAM, musicVideoFilingFields, musicVideoOf } from '../lib/musicVideoFiling';
 import { formatCount, formatUsd, timeAgo } from '../utils/formatters';
 import ResolutionField from '../components/media/ResolutionField';
-import { VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
+import { isMiniMaxH3SpeedProfile, VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
 import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
 const MODES = [
@@ -831,7 +831,7 @@ export default function VideoGen() {
   // pull before hitting Render.
   const modelDownload = useModelDownloadStatus({ kind: 'video' });
   const modelStatus = modelId ? modelDownload.getStatus(modelId) : null;
-  const selectedH3SpeedProfile = currentModel?.speedProfiles?.find((p) => p.id === speedProfileId && p.type === 'minimax-h3-lightx2v');
+  const selectedH3SpeedProfile = currentModel?.speedProfiles?.find((p) => p.id === speedProfileId && isMiniMaxH3SpeedProfile(p));
   const speedProfileAssetId = selectedH3SpeedProfile ? speedProfileDownloadId(modelId, speedProfileId) : null;
   const speedProfileStatus = speedProfileAssetId ? modelDownload.getStatus(speedProfileAssetId) : null;
   const usesSharedTextEncoder = currentModel?.runtime === 'mlx_video' || currentModel?.runtime === 'ltx2';

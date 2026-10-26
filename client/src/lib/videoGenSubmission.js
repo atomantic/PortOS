@@ -5,7 +5,7 @@ import { isLtx2FamilyRuntime } from './runnerFamilies';
 import { isDefaultI2vReferenceMode } from './videoReferenceModes';
 import { clampImageEdge } from './imageGenResolutions';
 import {
-  VIDEO_EDGE_BOUNDS,
+  isMiniMaxH3SpeedProfile, VIDEO_EDGE_BOUNDS,
   videoEdgeBoundsForModel,
   supportsVideoAudioControls,
   supportsVideoAudioPromptControls,
@@ -273,7 +273,7 @@ function localOptionalFields({
     textEncoderId: normalizeTextEncoderForModel(textEncoderId, currentModel) === STOCK_TEXT_ENCODER_ID
       ? undefined
       : textEncoderId,
-    speedProfileId: currentModel?.speedProfiles?.some((p) => p.id === speedProfileId && p.type === 'minimax-h3-lightx2v')
+    speedProfileId: currentModel?.speedProfiles?.some((p) => p.id === speedProfileId && isMiniMaxH3SpeedProfile(p))
       ? speedProfileId : selectedSpeedProfile(speedProfileId, currentModel, videoChainChunkModes({
       model: currentModel, mode, chaining: chainingActive, contextFrames,
     }))?.id,
@@ -321,7 +321,7 @@ function localVideoSubmission(args, { composed, withEnvelope, effectiveDisableAu
     chainingActive, chunks, contextFrames,
   } = args;
   const legacyFflf = mode === 'fflf' && !keyframesActive;
-  const h3SpeedProfile = currentModel?.speedProfiles?.some((p) => p.id === args.speedProfileId && p.type === 'minimax-h3-lightx2v');
+  const h3SpeedProfile = currentModel?.speedProfiles?.some((p) => p.id === args.speedProfileId && isMiniMaxH3SpeedProfile(p));
   return {
     backend: 'local',
     prompt: withEnvelope(prompt),

@@ -1,4 +1,4 @@
-# MiniMax H3 LightX2V on CUDA
+# MiniMax H3 LightX2V
 
 Video Gen offers an experimental, explicit **LightX2V v1.3** speed profile on
 the shipped MiniMax H3 CUDA model. Quality remains the default and keeps its
@@ -65,5 +65,40 @@ character/style fidelity; retain the actual inspection evidence. Repeat for a
 first-image request. Stock uses its prior sampler; do not change its step count
 to manufacture a comparison. A Mac benchmark cannot establish CUDA performance.
 
-MLX integration and paired full-model hardware/quality results are separate
-remaining work; this CUDA slice does not imply support or performance there.
+## MLX INT8 profile
+
+The separate `lightx2v-mlx-v1.3-4step` profile targets the shipped
+`minimax_h3_8bit` row, its exact transformer revision, and the pinned
+`PipeNetwork/minimax-h3-mlx` runtime revision
+`fcd9e9b79a1d6018d91ac477c0968de1fa067e49`. Its complete contract lives in
+`server/lib/minimaxH3Lightx2vMlx.json`. The CUDA profile does not admit MLX;
+the two profiles retain separate runtime and model identities. The MLX contract
+also pins the upstream checkpoint and complete component manifest, refusing
+custom conditioner/VAE manifests before queue admission.
+
+MLX keeps its stock sampler and existing settings when Quality is selected.
+The optional profile uses the same original, digest-pinned adapter and the
+existing explicit, terms-gated adapter download. Rendering uses cached weights.
+Only single text or first-image clips at 1344×768 are supported. Other
+quantizations, runtime pins, canvases, continuation, chains and conflicting
+sampler overrides are refused.
+
+The pinned MLX scheduler accepts five sigma points for four updates. Its
+model timestep is `t = 1 - sigma`, and its predicted velocity points toward
+the data. PortOS sets the pipeline's independent video/audio shifts to 6/3
+before the existing scheduler builds its grids; it does not substitute CUDA's
+velocity sign or step implementation. The runtime source seams are verified
+before loading weights. The original split adapter is applied through PortOS's
+activation residual adapter, preserving packed base weights and the adapter's
+alpha/rank scaling. Speed and user adapters each enter the stack once.
+
+Applied reports distinguish denoiser time from whole-pipeline time and cold
+model loading. Peak memory covers the pipeline call, including conditioning
+and decode; it is not a denoiser-only allocation measurement.
+
+MLX evidence must be collected independently using the paired-render protocol
+above, with the stock MLX sampler unchanged. Retain actual private outputs and
+inspection notes for both text and first-image pairs, exact fingerprints,
+cold-load and inference timings, peak memory, and any fidelity regressions.
+Deterministic fixtures alone establish neither a performance gain nor visual
+or soundtrack quality. No measured MLX speed or quality claim is made here.

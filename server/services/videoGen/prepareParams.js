@@ -86,11 +86,11 @@ import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles
 
 async function validateMiniMaxH3SpeedParams(model, params, settings) {
   const hasProfile = isMiniMaxH3SpeedProfileRequest(params.speedProfileId);
-  if (!hasProfile && model?.runtime === 'minimax_h3_cuda' && params.speedProfileId && params.speedProfileId !== 'quality') {
-    throw new ServerError('This H3 CUDA model does not offer the requested speed profile. Select Quality or its listed LightX2V profile.', { status: 400, code: 'VIDEO_SPEED_PROFILE_UNSUPPORTED' });
+  if (!hasProfile && ['minimax_h3', 'minimax_h3_cuda'].includes(model?.runtime) && params.speedProfileId && params.speedProfileId !== 'quality') {
+    throw new ServerError('This H3 model does not offer the requested speed profile. Select Quality or its listed LightX2V profile.', { status: 400, code: 'VIDEO_SPEED_PROFILE_UNSUPPORTED' });
   }
-  if (!hasProfile && (model?.runtime !== 'minimax_h3_cuda' || !params.loras?.length)) return;
-  const { prepareMiniMaxH3SpeedProfile, validateMiniMaxH3CudaLoras } = await import('./ensureWeights.js');
+  if (!hasProfile && (!['minimax_h3', 'minimax_h3_cuda'].includes(model?.runtime) || !params.loras?.length)) return;
+  const { prepareMiniMaxH3SpeedProfile, validateMiniMaxH3CudaLoras, validateMiniMaxH3MlxLoras } = await import('./ensureWeights.js');
   const profile = hasProfile ? await prepareMiniMaxH3SpeedProfile({
     ...params, model, profileId: params.speedProfileId,
     mode: params.mode || (params.sourceImagePath ? 'image' : 'text'),
@@ -99,7 +99,8 @@ async function validateMiniMaxH3SpeedParams(model, params, settings) {
   }, settings || await getSettings()) : null;
   if (params.loras?.length) {
     const { resolveVideoLoras } = await import('./renderArgs.js');
-    await validateMiniMaxH3CudaLoras(await resolveVideoLoras(params.loras, { runtime: model.runtime }), profile);
+    const validate = model.runtime === 'minimax_h3' ? validateMiniMaxH3MlxLoras : validateMiniMaxH3CudaLoras;
+    await validate(await resolveVideoLoras(params.loras, { runtime: model.runtime }), profile);
   }
 }
 

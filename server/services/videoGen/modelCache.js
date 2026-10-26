@@ -16,7 +16,7 @@ import { repoForModel, getTextEncoderRepo, isHfRepoId } from '../../lib/mediaMod
 import { IC_LORA_WEIGHT_KEYS, icLoraSpecByKey, icLoraRepos } from '../../lib/icLoraWeights.js';
 import { downloadableVideoTextEncoders, downloadableVideoTextEncoder } from '../../lib/videoTextEncoders.js';
 import { downloadableVideoDraftDecoders } from '../../lib/videoDraftDecoders.js';
-import { MINIMAX_H3_LIGHTX2V_PROFILE, isPinnedMiniMaxH3SpeedProfile } from '../../lib/minimaxH3SpeedProfiles.js';
+import { isPinnedMiniMaxH3SpeedProfile } from '../../lib/minimaxH3SpeedProfiles.js';
 import {
   inspectModelCache, verifyModelCache, repairModelCache,
   verifyCachedRepoFiles, repairCachedRepoFiles, summarizeVerify, aggregateVerifies,
@@ -48,7 +48,7 @@ export const speedProfileDownloadTarget = (model, profileId) => {
   if (!isPinnedMiniMaxH3SpeedProfile(model, profile)) {
     throw new ServerError('This model does not offer that downloadable speed profile.', { status: 400, code: 'VIDEO_SPEED_PROFILE_UNSUPPORTED' });
   }
-  const adapter = MINIMAX_H3_LIGHTX2V_PROFILE.adapter;
+  const adapter = profile.adapter;
   return { repo: adapter.repo, revision: adapter.revision, only: [adapter.file] };
 };
 

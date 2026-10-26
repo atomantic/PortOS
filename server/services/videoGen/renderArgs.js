@@ -800,7 +800,7 @@ const miniMaxH3HostMemoryArgs = (model) => {
 // Build args for PipeNetwork's pinned MiniMax H3 MLX port. The helper resolves
 // only exact, already-cached HF revisions; every network download remains an
 // explicit Video Gen UI action guarded by the model's terms acknowledgement.
-const buildMiniMaxH3Args = ({ historyContext, model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder, draftDecoder }) => {
+const buildMiniMaxH3Args = ({ historyContext, speedProfile, model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder, draftDecoder }) => {
   assertMiniMaxH3Preflight({
     runtimeId: 'minimax_h3',
     repoLabel: 'transformer repo or revision',
@@ -859,6 +859,15 @@ const buildMiniMaxH3Args = ({ historyContext, model, prompt, negativePrompt, wid
   // has already rejected LoRAs unless the probe proved this checkout plus the
   // PortOS adapter can apply them to the quantized DiT (see runtimes.js
   // `loraProbeArgs`).
+  if (speedProfile) {
+    const reason = miniMaxH3SpeedProfileDeclineReason({ model, profileId: speedProfile.id, mode,
+      width, height, steps, keyframes, lastImagePath, extendFromVideoPath, audioFilePath });
+    if (reason) throw new ServerError(reason.message, { status: 400, code: reason.code });
+    if (!speedProfile.adapterPath) {
+      throw new ServerError('LightX2V adapter was not resolved from the pinned cache.', { status: 400, code: 'MINIMAX_H3_SPEED_WEIGHTS_NOT_CACHED' });
+    }
+    args.push('--speed-profile', speedProfile.id, '--speed-adapter', speedProfile.adapterPath);
+  }
   for (const l of loras ?? []) args.push('--lora', l.path, '--lora-scale', String(l.strength));
   // Substituted prompt conditioner (lib/videoTextEncoders.js). Absent for the
   // stock choice, so the argv of an unswapped render is byte-identical to what
@@ -1256,7 +1265,7 @@ export const buildArgs = ({ continuityStrategy, contextFrames, historyContext, u
     return buildWan22CudaArgs({ model, wanModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath });
   }
   if (model.runtime === 'minimax_h3') {
-    return buildMiniMaxH3Args({ historyContext, model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder, draftDecoder });
+    return buildMiniMaxH3Args({ historyContext, speedProfile, model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder, draftDecoder });
   }
   if (model.runtime === 'minimax_h3_cuda') {
     return buildMiniMaxH3CudaArgs({ historyContext, model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, loras, speedProfile });

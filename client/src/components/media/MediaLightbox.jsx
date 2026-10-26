@@ -1,3 +1,4 @@
+import { isMiniMaxH3SpeedProfile } from '../../lib/videoGenParams.js';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -256,7 +257,7 @@ export default function MediaLightbox({
     // as a clean full run — the whole point is that an unverified speed-up is
     // never presented as a verified one.
     if (!applied) return `${id} — outcome not reported`;
-    if (applied.type === 'minimax-h3-lightx2v') {
+    if (isMiniMaxH3SpeedProfile(applied)) {
       return `${id} · ${applied.denoisingSteps} updates · shifts ${applied.videoShift}/${applied.audioShift} · ${applied.adapter?.file || 'adapter unknown'} · ${applied.applied === true && applied.fallback === false ? 'applied, no fallback' : 'outcome unverified'}`;
     }
     const degraded = applied.degraded;

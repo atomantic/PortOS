@@ -108,12 +108,12 @@ async function expandReel(user) {
   await user.click(toggle);
 }
 
-it('clears inherited sampler overrides when retrying a stock H3 job with LightX2V', async () => {
+it.each(['minimax-h3-lightx2v', 'minimax-h3-mlx-lightx2v'])('clears inherited sampler overrides when retrying a stock H3 job with %s', async (type) => {
   const user = userEvent.setup();
-  const profile = { id: 'example-speed', type: 'minimax-h3-lightx2v', name: 'Example speed',
+  const profile = { id: 'example-speed', type, name: 'Example speed',
     steps: 5, guidance: 0, modes: ['text', 'image'], canvases: [[1344, 768]],
     adapter: { file: 'example.safetensors', alpha: 8, rank: 128 }, videoShift: 6, audioShift: 3 };
-  const model = { id: 'example-h3-cuda', runtime: 'minimax_h3_cuda', name: 'Example H3 CUDA',
+  const model = { id: 'example-h3', runtime: type === 'minimax-h3-mlx-lightx2v' ? 'minimax_h3' : 'minimax_h3_cuda', name: 'Example H3',
     samplerLocked: true, steps: 8, guidance: 0, frameOptions: [124], fpsOptions: [24],
     supportedModes: ['text', 'image'], speedProfiles: [profile] };
   getVideoGenStatus.mockResolvedValue({ models: [model] });

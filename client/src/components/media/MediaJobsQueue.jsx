@@ -27,7 +27,7 @@ import AdvancedParamsPanel from '../videoGen/AdvancedParamsPanel';
 import ContinuationDetails from '../videoGen/ContinuationDetails';
 import { resolutionOptionsForModel } from '../../lib/videoGenResolutions';
 import {
-  videoEdgeBoundsForModel, textEncoderOptionsForModel, STOCK_TEXT_ENCODER_ID,
+  isMiniMaxH3SpeedProfile, videoEdgeBoundsForModel, textEncoderOptionsForModel, STOCK_TEXT_ENCODER_ID,
   normalizeTextEncoderForModel,
   DEFAULT_SPEED_PROFILE_ID, normalizeSpeedProfileForModel, speedProfileIdFromRecord,
   isFullDecodeId, resolveDraftDecodeForModel, draftDecodeFromRecord,
@@ -989,7 +989,7 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     if (modelId !== p.modelId || speedProfileId !== originalSpeedProfileForModel) {
       overrides.speedProfileId = speedProfileId === DEFAULT_SPEED_PROFILE_ID ? null : speedProfileId;
     }
-    if (currentModel?.speedProfiles?.some((profile) => profile.id === speedProfileId && profile.type === 'minimax-h3-lightx2v')) {
+    if (currentModel?.speedProfiles?.some((profile) => profile.id === speedProfileId && isMiniMaxH3SpeedProfile(profile))) {
       if (p.steps != null || overrides.steps !== undefined) overrides.steps = null;
       if (p.guidanceScale != null || overrides.guidanceScale !== undefined) overrides.guidanceScale = null;
     }

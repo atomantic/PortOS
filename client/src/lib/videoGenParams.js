@@ -154,6 +154,10 @@ export const textEncoderIdFromRecord = (value) => (
 // when it holds this value, and the server treats absence and this id
 // identically.
 export const DEFAULT_SPEED_PROFILE_ID = 'quality';
+export const isMiniMaxH3SpeedProfile = (profile) => (
+  profile?.type === 'minimax-h3-lightx2v' || profile?.type === 'minimax-h3-mlx-lightx2v'
+);
+
 // Absence, the empty string and the default id are one request — mirrors
 // `isDefaultSpeedProfile` on the server.
 export const isDefaultSpeedProfileId = (id) => (
