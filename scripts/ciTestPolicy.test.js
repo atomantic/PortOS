@@ -103,8 +103,11 @@ describe('release-only assertion collection (#13759)', () => {
   }, 25000);
 
   it.each(['{}', '{"errors":[],"errorCount":0}'])('rejects zero exit with malformed final evidence %s', (evidence) => {
-    const result = launch(`test('control', () => {});`, { extraReporter: `import { writeFileSync } from 'node:fs';
-      export default function () { return { onInit(v) { v.onClose(() => { process.once('exit', () => writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, ${JSON.stringify(evidence)})); }); } }; }` });
+    // The launcher watches final-report publication and can terminate the
+    // child on malformed evidence. Match the real reporter's atomic rename;
+    // a direct overwrite can be killed after truncation but before its write.
+    const result = launch(`test('control', () => {});`, { extraReporter: `import { persistTestDiagnostic } from ${JSON.stringify(new URL('./ci-test-diagnostics.js', import.meta.url).href)};
+      export default function () { return { onInit(v) { v.onClose(() => { process.once('exit', () => persistTestDiagnostic(process.env.PORTOS_CI_DIAGNOSTICS_PATH, ${evidence})); }); } }; }` });
     expect(result.status, result.stderr).not.toBe(0);
     expect([0, 143]).toContain(result.invocation.status);
     expect(result.run).toEqual(JSON.parse(evidence));
