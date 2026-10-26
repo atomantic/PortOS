@@ -49,7 +49,7 @@ describe('completed-run evidence retention before checkout retirement', () => {
     await expect(readCompletionData({ ...captured.owner, startedAt: '2026-10-02T10:00:00.000Z' }, retained.evidence.reference)).rejects.toThrow();
   });
   it('retains originals when run ownership, repository or captured physical generation is absent, active or ambiguous', async () => {
-    expect(await capture([])).toBeNull();
+    expect(await capture([])).toMatchObject({ scope: 'checkout', files: expect.any(Array) });
     expect(await capture([{ ...agent, status: 'running' }])).toBeNull();
     const changed = structuredClone(agent); changed.metadata.completedCheckouts[0].incarnation.pointer.ino = '1';
     expect(await capture([changed])).toBeNull();

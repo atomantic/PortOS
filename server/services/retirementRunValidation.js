@@ -40,7 +40,17 @@ export async function captureRunValidationArtifacts(repoPath, release, content, 
     }
   }
   const owners = [...new Map(matches.map(owner => [JSON.stringify(owner), owner])).values()];
-  if (!owners.length) return null;
+  // Terminal agents outside CoS have no captured run identity. Preserve their
+  // bounded validation bytes against the reviewed checkout instead of inventing
+  // a run owner. Each existing private proof remains below its own byte limit.
+  if (!owners.length) {
+    const claimedGeneration = policies.some(agent => agent.metadata?.completedCheckouts?.some(row =>
+      row.head === release.head && row.branch === release.branch));
+    const encodedBytes = files.reduce((sum, file) => sum + 4 * Math.ceil(file.bytes / 3), 0);
+    return !claimedGeneration && files.every(file => Number.isSafeInteger(file.bytes) && file.bytes >= 0 && file.bytes <= 64 * 1024)
+      && encodedBytes + Buffer.byteLength(JSON.stringify(files)) + 4096 <= MAX_COMPLETION_DATA_BYTES
+      ? { scope: 'checkout', files } : null;
+  }
   let lineage;
   let selected = owners[0];
   if (owners.length > 1) {
@@ -73,7 +83,7 @@ export async function captureRunValidationArtifacts(repoPath, release, content, 
 
 /** The caller supplies its no-follow, stable-identity bounded source reader.
  * Durable byte verification completes before any checkout removal is allowed. */
-export async function retainRunValidationArtifacts(review, readSource, { store = storeCompletionData, read = readCompletionData } = {}) {
+export async function retainRunValidationArtifacts(review, readSource, { store = storeCompletionData, read = readCompletionData, retainCheckoutProof } = {}) {
   const captured = review.validationArtifacts;
   if (!captured) return null;
   if (review.kind || review.comparison.disposition !== 'integrated' || review.release.head !== review.forge.prHead) fail();
@@ -85,6 +95,18 @@ export async function retainRunValidationArtifacts(review, readSource, { store =
   }
   const value = { version: 1, release: review.release, prUrl: review.forge.prUrl,
     prHead: review.forge.prHead, mergeCommit: review.forge.mergeCommit, files, ...(captured.lineage && { lineage: captured.lineage }) };
+  if (captured.scope === 'checkout') {
+    if (!retainCheckoutProof || captured.owner || files.some(file => Buffer.from(file.data, 'base64').length > 64 * 1024)) fail();
+    const proofs = files.map(file => ({ version: 1, release: value.release, prUrl: value.prUrl,
+      prHead: value.prHead, mergeCommit: value.mergeCommit, file }));
+    const references = [];
+    for (const proof of proofs) references.push(await retainCheckoutProof(proof));
+    const verify = async () => {
+      for (const proof of proofs) await retainCheckoutProof(proof, true);
+    };
+    await verify();
+    return { files, evidence: { scope: 'checkout', references }, verify };
+  }
   const reference = await store(captured.owner, 'retirement-evidence', value);
   const verify = async () => {
     if (JSON.stringify(await read(captured.owner, reference)) !== JSON.stringify(value)) fail();
