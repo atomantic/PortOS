@@ -6467,7 +6467,7 @@ describe('generateVideo — MiniMax H3 draft decode (#5423)', () => {
     let startedMeta = null;
     const capture = (e) => { if (e.generationId === jobId) startedMeta = e; };
     videoGenEvents.on('started', capture);
-    await generateVideo({
+    await renderToTerminal({
       jobId,
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',
