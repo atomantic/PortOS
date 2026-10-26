@@ -1073,3 +1073,22 @@ it('waits for held image embedding and the persisted sheet before assembly settl
   expect(artifact).toMatchObject({ kind: 'cast-sets', status: 'pending', version: 1 });
   expect(readFileSync(join(ROOT(), artifact.file), 'utf8')).toContain(`data:image/png;base64,${PNG.toString('base64')}`);
 });
+
+// A picker must not spend a provider call, and the old sheet must not approve the newly selected conditioning.
+it('saves a greybox plate choice without rendering and holds approval until regeneration', async () => {
+  const project = await seed();
+  await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, castAndSets: {
+    status: 'review', revision: 1, direction: DIRECTION, plan: {}, images: {},
+  } } }));
+  const beforeJobs = jobs.length;
+  const result = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'lab', setReference: { subjectId: 'place-example', greyboxShotId: 'wide' } }] });
+  await service.__settleCastAndSetsForTests();
+  expect(result.stage.greyboxPending).toBe(true);
+  expect(jobs.length).toBe(beforeJobs);
+  await expect(service.approveCastAndSets(project.id)).rejects.toMatchObject({ code: 'CAST_SETS_GREYBOX_PENDING' });
+  await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'lab', setReference: null }] });
+  await service.regenerateCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  expect((await current(project.id)).castAndSets.greyboxPending).toBe(false);
+  await expect(service.approveCastAndSets(project.id)).resolves.toMatchObject({ stage: { status: 'approved' } });
+});

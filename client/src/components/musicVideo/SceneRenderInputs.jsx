@@ -31,7 +31,7 @@ const clock = (sec) => {
  * input is `{ state: 'on' | 'off' | 'required' | 'unavailable', note }` (`wholeLine` is null off a performance shot).
  */
 export function shotCardRenderRequest({
-  project = null, scene, settings = {}, performance = false, endFramePlan = null, models = [], defaultModel = '', inputs = {}, plan = null,
+  project = null, greybox = null, scene, settings = {}, performance = false, endFramePlan = null, models = [], defaultModel = '', inputs = {}, plan = null,
 }) {
   const falModel = settings.backend === 'fal' ? getFalVideoModel(falSceneTake({ scene, videoSettings: settings }).modelId) : null;
   const runwayModel = settings.backend === 'runway' ? getRunwayVideoModel(runwaySceneTake({ scene, videoSettings: settings }).modelId) : null;
@@ -56,7 +56,7 @@ export function shotCardRenderRequest({
   const contractProblem = contract != null ? shotActionContractProblem(contract, scene) : null;
   const authored = authoredShotPrompt(scene);
   const { prompt, promptAdditions } = musicVideoShotModelInput(contractProblem ? null : project, scene, {
-    authored, asTyped: true, hears, backend: settings.backend, audioReactive,
+    greybox, authored, asTyped: true, hears, backend: settings.backend, audioReactive,
     audioReferenceModelId: performance && falHearsAudioReference(falModel) ? falModel.id : null,
   });
 

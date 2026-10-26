@@ -53,11 +53,13 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const unmet = repairing ? (scene.takes || []).flatMap((take) => currentPlateEvidence(scene, take)?.checks.filter((check) => check.status === 'fail').map((check) => `${check.requirement}: ${check.note}`) || []) : [];
   // The autonomous run's stills review names what the last still got wrong (autonomousService.js).
   const fixes = typeof scene.stillFixes?.text === 'string' ? scene.stillFixes.text : '';
-  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes });
+  const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
+  const greybox = await loadMusicVideoGreybox(project, scene);
+  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes, greybox });
   if (!prompt) throw unprompted(scene, 'frame');
   // A Casting guide may live in any image-input root (catalog.js validates it with resolveImageInputPath).
-  const referenceImagePaths = conditioningReferences(project, scene, await loadSceneCastMedia(scene))
-    .map((ref) => (ref.castGuide ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId, { mustExist: false }))).filter(Boolean);
+  const referenceImagePaths = conditioningReferences(project, scene, await loadSceneCastMedia(scene), greybox)
+    .map((ref) => (ref.greybox ? greybox.path : ref.castGuide ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId, { mustExist: false }))).filter(Boolean);
   const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { enqueueJob }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),
     import('../../lib/imageCleanDefaults.js'),

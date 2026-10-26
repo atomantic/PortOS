@@ -94,7 +94,7 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
  * automatic set fills the remaining slots. `castMedia` is optional: without it
  * (or without a variant) the result is the automatic set alone.
  */
-export function musicVideoConditioningReferences(project, scene, castMedia = null) {
+function baseConditioningReferences(project, scene, castMedia = null) {
   const guides = musicVideoCastGuideReferences(project, scene, castMedia);
   const panel = musicVideoPanelArtReferences(scene);
   // The director's own pick for this shot (the shot card's References row) wins over the automatic set.
@@ -176,4 +176,18 @@ export function musicVideoStyleImages(project, identityImages, capacity) {
     seen.add(ref.imageId);
     return true;
   }).slice(0, available).map((r) => r.imageId);
+}
+
+/** An explicitly selected greybox keeps a slot ahead of all other set plates. */
+export function musicVideoConditioningReferences(project, scene, castMedia = null, greybox = null) {
+  const references = baseConditioningReferences(project, scene, castMedia);
+  if (!greybox?.reference) return references;
+  return [greybox.reference, ...references.filter((r) => r.imageId !== greybox.reference.imageId)]
+    .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+}
+
+/** A frame being edited leads; the chosen shot references fill the remaining slots. */
+export function musicVideoFrameReferenceFiles(leadImageId, references) {
+  return [...(leadImageId ? [leadImageId] : []), ...references.map((ref) => ref.imageId).filter((id) => id !== leadImageId)]
+    .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
 }

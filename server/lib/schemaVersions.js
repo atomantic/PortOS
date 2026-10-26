@@ -764,8 +764,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // which a v23 re-plan or split rebuilds without. Optional, no backfill.
   // v25 = per-project automatic lyric-overlay visibility; older renderers ignore it.
   // Optional, no migration or backfill; absent retains legacy rendering.
-  // A field added to these normalizers later needs v26.
-  musicVideoProjects: 25,
+  // v26 = explicit per-shot greybox set references. Older generators ignore the layout
+  // and its missing-capture refusal. Optional on existing records; no backfill.
+  musicVideoProjects: 26,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

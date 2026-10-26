@@ -1,5 +1,6 @@
+import { musicVideoGreyboxReference } from '../../../server/lib/musicVideoGreybox.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
-import { isOutsideMusicVideoReference, musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
+import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
 import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
 import { useEffect, useRef, useState } from 'react';
@@ -9,6 +10,7 @@ import { addMusicVideoSceneTake, getMusicVideoSceneJobs } from '../services/apiM
 import { listCatalogIngredientMedia } from '../services/apiCatalog.js';
 import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
+import useMusicVideoGreyboxPlaces from './useMusicVideoGreyboxPlaces.js';
 import useSceneBatch from './useSceneBatch.js';
 import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
@@ -43,10 +45,7 @@ export const conditioningReferences = musicVideoConditioningReferences;
  * A render's reference files: the frame it reworks leads, then the shot's references, kept
  * within the backends' reference cap (a leading frame leaves room for the first 3).
  */
-const frameReferenceFiles = (leadImageId, references) => [
-  ...(leadImageId ? [leadImageId] : []),
-  ...references.map((ref) => ref.imageId).filter((id) => id !== leadImageId),
-].slice(0, MAX_CONDITIONING_REFERENCES);
+const frameReferenceFiles = musicVideoFrameReferenceFiles;
 /** A mood board / Pinterest reference: look text only, never a conditioning image. */
 export const isOutsideReference = isOutsideMusicVideoReference;
 
@@ -166,6 +165,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   // so the board reloads them when its tab comes back into view.
   const castIds = [...new Set((project?.scenes || []).map((scene) => scene?.characterVariant?.ingredientId).filter(Boolean))].sort().join(',');
   const [castMedia, setCastMedia] = useState({});
+  const greyboxPlaces = useMusicVideoGreyboxPlaces(project);
   const [castRefresh, setCastRefresh] = useState(0);
   useVisibilityEvent((state) => { if (state === 'visible') setCastRefresh((n) => n + 1); });
   useEffect(() => {
@@ -221,7 +221,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const refining = Boolean(refine?.trim() && referenceImageId);
     if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
     // The shot's references (the card's References row) ride along on every frame render, a refine included.
-    const conditioning = conditioningReferences(project, scene, castMedia);
+    const greybox = musicVideoGreyboxReference(project, scene, greyboxPlaces);
+    if (greybox?.error) { toast.error(greybox.error); return Promise.resolve({ ok: false }); }
+    const conditioning = conditioningReferences(project, scene, castMedia, greybox);
     const problem = refining ? null : shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
     // The director's text (or a refine's instruction); the server composes the still's
@@ -291,7 +293,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
     const projectId = project.id;
     // The frame it renders from leads, then the shot's references (the card's References row).
-    const references = frameReferenceFiles(referenceImageId, conditioningReferences(project, scene, castMedia));
+    const references = frameReferenceFiles(referenceImageId, conditioningReferences(project, scene, castMedia, musicVideoGreyboxReference(project, scene, greyboxPlaces)));
     endFrameLane.startScene(scene.sceneId);
     return generateImage({
       // From a frame the server keeps its shot and changes what the prompt asks; with no frame it renders like a start frame.
@@ -534,6 +536,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     videoBatch,
     conditioning,
     castMedia,
+    greyboxPlaces,
     generateFrame,
     generateEndFrame,
     generateSceneVideo,

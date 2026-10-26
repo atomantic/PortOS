@@ -29,7 +29,7 @@ async function silentMusicVideoMotionPrompt(prompt, project, scene) {
 }
 
 /** Rewrites `params.prompt` for the shot and returns the labeled additions the composer put around it. */
-async function composeShotPrompt({ body, params, project, scene, prepared, performance, backend }) {
+async function composeShotPrompt({ body, params, project, scene, prepared, performance, backend, greybox }) {
   const { musicVideo } = body;
   // A take that hears nothing (no lip-sync or supplied song audio) gets plain physical
   // motion: the model would act out song cues and look words instead of reading them.
@@ -39,7 +39,7 @@ async function composeShotPrompt({ body, params, project, scene, prepared, perfo
     // The director's text plus each labeled block PortOS adds (#11317), from the same
     // composer the shot card shows; a take that hears nothing gets no look or song timing.
     const composed = musicVideoShotModelInput(project, scene, {
-      authored: params.prompt, asTyped: musicVideo.promptAsTyped === true, hears: hearsAudio, backend,
+      greybox, authored: params.prompt, asTyped: musicVideo.promptAsTyped === true, hears: hearsAudio, backend,
       audioReactive: musicVideo.audioReactive === true, offsetSec, fixes: body._clipFixes || '',
       // A music-driven take on a reference model hears the song slice as "Audio 1" / @Audio1.
       audioReferenceModelId: backend === VIDEO_GEN_MODE.FAL ? performance?.modelId || null : null,
@@ -54,6 +54,10 @@ async function composeShotPrompt({ body, params, project, scene, prepared, perfo
     params.prompt = withShotActionPrompt(params.prompt, project, scene, { offsetSec });
   }
   if (!hearsAudio && !musicVideo.promptAsTyped) params.prompt = await silentMusicVideoMotionPrompt(params.prompt, project, scene);
+  if (greybox) {
+    params.prompt = [params.prompt, ...greybox.promptAdditions.map((a) => a.text)].filter(Boolean).join('\n');
+    return greybox.promptAdditions;
+  }
   return [];
 }
 
@@ -153,7 +157,12 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
   }
   const scene = project?.scenes?.find((entry) => entry.sceneId === musicVideo.sceneId);
   assertShotActionContract(scene);
-  const composedAdditions = await composeShotPrompt({ body, params, project, scene, prepared, performance, backend });
+  const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
+  const greybox = await loadMusicVideoGreybox(project, scene);
+  if (greybox && !params.referenceImagePaths?.some((p) => basename(p) === greybox.reference.imageId)) {
+    refuse(409, 'MUSIC_VIDEO_GREYBOX_CHANGED', 'The greybox capture changed while the shot was prepared. Submit again.');
+  }
+  const composedAdditions = await composeShotPrompt({ body, params, project, scene, prepared, performance, backend, greybox });
   assertShotTiming({ params, scene, performance, prepared });
   applyActionContract({ params, scene, performance });
   await assertSourceAudioCurrent({ project, prepared });

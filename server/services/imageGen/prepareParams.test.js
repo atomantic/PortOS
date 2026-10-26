@@ -10,9 +10,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+const greyboxCatalog = vi.hoisted(() => ({ getIngredient: vi.fn(), listMediaForIngredient: vi.fn() }));
+vi.mock('../catalogDB.js', () => greyboxCatalog);
 
 const getSettings = vi.fn(async () => ({}));
 vi.mock('../settings.js', () => ({ getSettings: (...a) => getSettings(...a) }));
@@ -310,4 +313,25 @@ describe('prepared image cleaner policy', () => {
       expect((await run({ prompt: 'p' })).data).toMatchObject({ cleanC2PA: mode !== 'grok', denoise: false });
     }
   });
+});
+
+// Catches a board render whose preview includes the layout but whose actual image inputs omit it.
+it('sends the live greybox capture before set plates, retains the edited frame first, and refuses a removed capture', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  for (const file of ['layout.png', 'plate.png', 'edit.png']) writeFileSync(join(PATHS.images, file), 'fixture');
+  const setReference = { subjectId: 'rink', greyboxShotId: 'wide' };
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  getProject.mockResolvedValue({ concept: { subjects: [{ id: 'rink', kind: 'place', ingredientId: 'cat-rink', name: 'Example Rink' }] }, scenes: [{ sceneId: 's1', setReference }] });
+  greyboxCatalog.getIngredient.mockResolvedValue({ type: 'place', payload: { greybox: { anchors: [{ id: 'rail', label: 'Singer' }], shots: [{ id: 'wide', figures: [{ anchorId: 'rail', pose: 'waving' }] }] } } });
+  greyboxCatalog.listMediaForIngredient.mockResolvedValue([{ kind: 'reference', role: 'greybox-shot:wide', mediaKey: 'layout.png' }]);
+  const tag = { projectId: 'mv-1', sceneId: 's1', compose: true };
+  const rendered = await run({ prompt: 'A wide shot', referenceImageFiles: ['plate.png'], musicVideo: tag });
+  expect(rendered.data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['layout.png', 'plate.png']);
+  expect(rendered.data.promptAdditions).toContainEqual(expect.objectContaining({ id: 'greybox-figure-0' }));
+  const refined = await run({ prompt: 'Raise the hand', referenceImageFiles: ['edit.png', 'plate.png'], musicVideo: { ...tag, refine: true } });
+  expect(refined.data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['edit.png', 'layout.png', 'plate.png']);
+  expect(refined.data.prompt).toContain('Singer stands at the "rail" mark, waving');
+  greyboxCatalog.listMediaForIngredient.mockResolvedValue([]);
+  await expect(run({ prompt: 'A wide shot', musicVideo: tag })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_GREYBOX_UNAVAILABLE' });
 });

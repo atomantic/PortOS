@@ -17,16 +17,16 @@ const nameOf = (ref) => ref.label || ref.role || 'Reference';
  * puts the automatic set back. A shot naming a Casting cast member
  * (`characterVariant`, #12763) leads with that member's guides, from `castMedia`.
  */
-export default function SceneFrameReferences({ project, scene, castMedia = null, onEditLocal, onSave, disabled = false }) {
+export default function SceneFrameReferences({ project, scene, castMedia = null, greybox = null, onEditLocal, onSave, disabled = false }) {
   const [adding, setAdding] = useState(false);
   // The reference shown large: hovering a chip with a mouse, or long-pressing it on a phone.
   const [preview, setPreview] = useState(null);
   const pressTimer = useRef(null);
   const longPressed = useRef(false);
   useEffect(() => () => clearTimeout(pressTimer.current), []);
-  const choices = [...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoPanelArtReferences(scene), ...musicVideoReferenceChoices(project)];
+  const choices = [...(greybox?.reference ? [greybox.reference] : []), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoPanelArtReferences(scene), ...musicVideoReferenceChoices(project)];
   if (!choices.length) return null;
-  const chosen = musicVideoConditioningReferences(project, scene, castMedia);
+  const chosen = musicVideoConditioningReferences(project, scene, castMedia, greybox);
   const ids = chosen.map((ref) => ref.id);
   const others = choices.filter((ref) => !ids.includes(ref.id));
   const auto = !Array.isArray(scene.frameReferenceIds);
@@ -77,10 +77,10 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
           <li key={ref.id} className={CHIP} {...previewProps(ref)}>
             {thumb(ref)}
             <span className="min-w-0 max-w-[10rem] truncate">{nameOf(ref)}</span>
-            <button type="button" onClick={unlessLongPress(() => { set(ids.filter((id) => id !== ref.id)); setPreview((shown) => (shown?.id === ref.id ? null : shown)); })} disabled={locked} aria-label={`Don't send ${nameOf(ref)}`}
+            {!ref.greybox && <button type="button" onClick={unlessLongPress(() => { set(ids.filter((id) => id !== ref.id)); setPreview((shown) => (shown?.id === ref.id ? null : shown)); })} disabled={locked} aria-label={`Don't send ${nameOf(ref)}`}
               className="inline-flex min-h-[40px] min-w-[32px] items-center justify-center rounded hover:bg-port-border disabled:opacity-50 sm:min-h-[28px] sm:min-w-[24px]">
               <X size={12} aria-hidden="true" />
-            </button>
+            </button>}
           </li>
         ))}
         {others.length > 0 && (

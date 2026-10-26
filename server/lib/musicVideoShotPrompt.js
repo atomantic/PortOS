@@ -60,7 +60,7 @@ function audioReferencePrompt(modelId) {
  * `audioReferenceModelId` is the fal model of a music-driven take that hears
  * the song slice as a reference, which its prompt then names.
  */
-export function musicVideoShotModelInput(project, scene, {
+function composeShotModelInput(project, scene, {
   authored = authoredShotPrompt(scene), asTyped = false, hears = false, backend = null,
   audioReactive = false, offsetSec = 0, fixes = '', audioReferenceModelId = null,
 } = {}) {
@@ -113,7 +113,7 @@ export const authoredFramePromptText = (scene, slot = 'start') => (slot === 'end
  * autonomous run's repair notes. The frame text keeps the project look the
  * mood board's own style block joins later (imageGen/prepareParams.js).
  */
-export function musicVideoFrameModelInput(project, scene, {
+function composeFrameModelInput(project, scene, {
   slot = 'start', authored = authoredFramePromptText(scene, slot), fromFrame = false, refine = false,
   repairs = [], fixes = '', otherReferences = 0,
 } = {}) {
@@ -146,4 +146,18 @@ export function musicVideoFrameModelInput(project, scene, {
     addition('repair-notes', 'Repair notes', fixes ? `Fix these visible problems from the previous still while preserving the shot intent:\n${fixes}` : ''),
   ].filter(Boolean);
   return { prompt: [firstLine, ...tail.map((item) => item.text)].filter(Boolean).join('\n'), promptAdditions: [...look, ...tail] };
+}
+
+const withGreybox = (input, greybox) => {
+  const additions = greybox?.promptAdditions || [];
+  return additions.length ? { prompt: [input.prompt, ...additions.map((a) => a.text)].filter(Boolean).join('\n'),
+    promptAdditions: [...input.promptAdditions, ...additions] } : input;
+};
+
+export function musicVideoShotModelInput(project, scene, options = {}) {
+  return withGreybox(composeShotModelInput(project, scene, options), options.greybox);
+}
+
+export function musicVideoFrameModelInput(project, scene, options = {}) {
+  return withGreybox(composeFrameModelInput(project, scene, options), options.greybox);
 }
