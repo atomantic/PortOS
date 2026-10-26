@@ -462,7 +462,7 @@ describe('verifyAgentRepoState — clean runs', () => {
     const state = { ...agentState({ completedCheckouts: [captured], repoStateVerification: { status: 'pending' } }),
       id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT, result: { success: false, cleanupPending: true } };
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/7', detail: 'MERGED' });
-    expect(await run({ task: task({ openPR: false }), prExpected: false, success: false, agentState: state }))
+    expect(await run({ task: task({ openPR: 'false' }), prExpected: false, success: false, agentState: state }))
       .toMatchObject({ verified: true });
     expect(readRetirementForgeEvidence).toHaveBeenCalledWith('/repo', BRANCH, 'https://github.com/example/repo/pull/7',
       expect.objectContaining({ exactDeliveredHead: HEAD }));

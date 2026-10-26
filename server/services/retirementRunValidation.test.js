@@ -12,12 +12,16 @@ import { readCompletionData } from './agentCompletionData.js';
 import { captureRunValidationArtifacts, retainRunValidationArtifacts } from './retirementRunValidation.js';
 let root, release, agent, content;
 const bytes = Buffer.from('Synthetic retained validation output.');
+const compiled = Buffer.from([0, 1, 2, 255]);
+const compiledPath = 'scripts/__pycache__/validation.cpython-311.pyc';
 const digest = value => createHash('sha256').update(value).digest('hex');
 beforeAll(async () => {
   root = lazyTempDataRoot('portos-run-retirement-');
   await mkdir(join(root, 'checkout', '.cache'), { recursive: true });
   await writeFile(join(root, 'checkout', '.git'), 'gitdir: synthetic');
   await writeFile(join(root, 'checkout', '.cache', 'verification.log'), bytes);
+  await mkdir(join(root, 'checkout', 'scripts', '__pycache__'), { recursive: true });
+  await writeFile(join(root, 'checkout', compiledPath), compiled);
   release = { path: join(root, 'checkout'), branch: 'claim/issue-example', head: 'a'.repeat(40), checkoutIdentity: await readRetirementCheckoutIdentity(join(root, 'checkout')) };
   const pointer = await lstat(join(release.path, '.git'), { bigint: true });
   agent = { id: 'agent-run-validation', startedAt: '2026-10-01T10:00:00.000Z', completedAt: '2026-10-01T11:00:00.000Z', status: 'completed', metadata: { completedCheckouts: [{
@@ -25,7 +29,7 @@ beforeAll(async () => {
     repoPath: root, path: release.path, branch: release.branch, head: release.head,
     incarnation: { pointer: Object.fromEntries(['dev', 'ino', 'birthtimeNs'].map(key => [key, String(pointer[key])])) },
   }] } };
-  content = { files: [{ path: '.cache/verification.log', bytes: bytes.length, sha256: digest(bytes) }, { path: 'private-user-file.bin', bytes: 8, sha256: 'b'.repeat(64) }] };
+  content = { files: [{ path: '.cache/verification.log', bytes: bytes.length, sha256: digest(bytes) }, { path: compiledPath, bytes: compiled.length, sha256: digest(compiled) }, { path: 'scripts/__pycache__/private-user-file.bin', bytes: 8, sha256: 'b'.repeat(64) }] };
 });
 afterAll(cleanupTempDataRoots);
 const capture = policies => captureRunValidationArtifacts(root, release, content, { readPolicies: async () => policies });
@@ -33,12 +37,13 @@ const review = captured => ({ release, comparison: { disposition: 'integrated' }
 describe('completed-run evidence retention before checkout retirement', () => {
   it('durably retains exact reviewed diagnostic bytes in the captured run and reuses the same proof on replay', async () => {
     const captured = await capture([agent]);
-    expect(captured.files.map(file => file.path)).toEqual(['.cache/verification.log']);
+    expect(captured.files.map(file => file.path)).toEqual(['.cache/verification.log', compiledPath]);
     const retained = await retainRunValidationArtifacts(review(captured), file => readFile(join(release.path, file.path)));
     await expect(retained.verify()).resolves.toBeUndefined();
     const stored = await readCompletionData(captured.owner, retained.evidence.reference);
     expect(Buffer.from(stored.files[0].data, 'base64')).toEqual(bytes);
     expect(stored.release).toEqual(release);
+    expect(Buffer.from(stored.files[1].data, 'base64')).toEqual(compiled);
     const replay = await retainRunValidationArtifacts(review(captured), file => readFile(join(release.path, file.path)));
     expect(replay.evidence).toEqual(retained.evidence);
     await expect(readCompletionData({ ...captured.owner, startedAt: '2026-10-02T10:00:00.000Z' }, retained.evidence.reference)).rejects.toThrow();
@@ -58,7 +63,7 @@ describe('completed-run evidence retention before checkout retirement', () => {
     const captured = await capture([agent]);
     await expect(retainRunValidationArtifacts(review(captured), async () => Buffer.from('changed'))).rejects.toThrow('retirement-validation-preservation-unavailable');
     await expect(retainRunValidationArtifacts({ ...review(captured), comparison: { disposition: 'review-supersession' } }, async () => bytes)).rejects.toThrow();
-    await expect(retainRunValidationArtifacts(review(captured), async () => bytes, { store: async () => ({}), read: async () => ({}) })).rejects.toThrow('retirement-validation-preservation-unavailable');
+    await expect(retainRunValidationArtifacts(review(captured), async file => file.path === compiledPath ? compiled : bytes, { store: async () => ({}), read: async () => ({}) })).rejects.toThrow('retirement-validation-preservation-unavailable');
     await expect(captureRunValidationArtifacts(root, release, { files: [{ ...content.files[0], bytes: 64 * 1024 * 1024 }] }, { readPolicies: async () => [agent] })).rejects.toThrow('retirement-validation-preservation-unavailable');
   });
 });

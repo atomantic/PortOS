@@ -10,6 +10,9 @@ const fail = () => { throw new Error('retirement-validation-preservation-unavail
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const artifact = path => /^\.cache\/[^/]+\.(?:log|md|json)$/.test(path)
   || /^\.cache\/test-process-diagnostics\/[0-9a-f-]{36}\.json$/.test(path)
+  // Compiled validation output is preserved as opaque bytes, never executed
+  // or accepted as disposable merely because its filename resembles a cache.
+  || /^scripts\/__pycache__\/[A-Za-z0-9_]+\.cpython-\d+(?:\.opt-\d+)?\.pyc$/.test(path)
   || /^\.cache\/animatic-artifact-check\/animatic-capture\/case-\d+\/(?:frame\.json|displayed\.png|saved\.png)$/.test(path);
 
 /** Source hashes already belong to the complete reviewed content fingerprint.
