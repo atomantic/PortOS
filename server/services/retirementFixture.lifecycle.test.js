@@ -33,6 +33,7 @@ function observedSuite(root, mode, tracked) {
     export const afterEach = body => rawAfterEach(context => {
       const work = body(context);
       writeFileSync(process.env.RETIRE_CLEANUP, 'cleanup entered');
+      if (${JSON.stringify(mode.startsWith('reentry-'))}) return Promise.all([work, body(context), body(context)]);
       return work;
     });
     afterAll(async () => {
@@ -41,6 +42,7 @@ function observedSuite(root, mode, tracked) {
       writeFileSync(process.env.RETIRE_RESULT, JSON.stringify({
         earlyRemoval: state.earlyRemoval, active: state.active,
         scratchExists: existsSync(state.scratch),
+        ...(${JSON.stringify(mode.startsWith('reentry-'))} ? { removals: state.removals } : {}),
       }));
     });
   `);
@@ -66,7 +68,7 @@ function lifecycleSource(root, mode, tracked) {
   return `
     import { vi } from 'vitest';
     import { waitForFixtureReady } from ${JSON.stringify(fixtureUrl)};
-    const state = vi.hoisted(() => ({ scratch: '', active: 0, held: false, earlyRemoval: false, rootIdentity: null, work: new Set() }));
+    const state = vi.hoisted(() => ({ scratch: '', active: 0, held: false, earlyRemoval: false, rootIdentity: null, removals: 0, work: new Set() }));
     globalThis.__retirementFixture = state;
     vi.mock('node:fs/promises', async original => {
       const fs = await original();
@@ -87,6 +89,7 @@ function lifecycleSource(root, mode, tracked) {
           try { identity = statSync(path, { bigint: true }); }
           catch (error) { if (error.code !== 'ENOENT') throw error; }
           if (identity && state.rootIdentity && identity.dev === state.rootIdentity.dev && identity.ino === state.rootIdentity.ino) {
+            state.removals++;
             state.earlyRemoval ||= state.active > 0;
             writeFileSync(process.env.RETIRE_REMOVAL, 'scratch removal attempted');
             if (${JSON.stringify(mode.startsWith('cleanup-'))}) {
@@ -136,6 +139,37 @@ function lifecycleSource(root, mode, tracked) {
 }
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('retirement fixture cancellation boundary', () => {
+  // A failed prepare after an earlier teardown deadline can invoke the same
+  // suite's afterEach again. All callers must share the original root removal.
+  for (const mode of ['reentry-git', 'reentry-writes']) {
+    owned.it(`removes scratch once across repeated ${mode} teardown`, async ({ signal }) => {
+      const host = mkdtempSync(join(tmpdir(), 'retirement-lifecycle-'));
+      let result;
+      try {
+        const fixture = createVitestTempFixture(host, 'server', '');
+        const root = fixture.args[fixture.args.indexOf('--root') + 1];
+        writeFileSync(join(root, 'vitest.setup.js'), `import ${JSON.stringify(new URL('../vitest.setup.js', import.meta.url).href)};`);
+        const resultFile = join(host, 'result.json');
+        Object.assign(fixture.options.env, {
+          RETIRE_RESULT: resultFile, RETIRE_REMOVAL: join(host, 'removal'),
+          RETIRE_CLEANUP: join(host, 'cleanup'), RETIRE_CANCELLED: join(host, 'cancelled'),
+        });
+        writeFileSync(join(root, 'lifecycle.test.js'), lifecycleSource(root, mode, true));
+        fixture.args.push('--testNamePattern', mode.endsWith('git')
+          ? 'custom-driver' : 'retains more than 1000 ignored files');
+        result = await runFixtureToCompletion(fixture, undefined, { signal });
+        const output = result.stdout + result.stderr;
+        expect(result.error, output).toBeUndefined();
+        expect(result.status, output).toBe(0);
+        expect(JSON.parse(readFileSync(resultFile, 'utf8'))).toEqual({
+          earlyRemoval: false, active: 0, scratchExists: false, removals: 1,
+        });
+      } finally {
+        if (result?.closeConfirmed) rmSync(host, { recursive: true, force: true });
+      }
+    });
+  }
+
   // Uniquely catches cleanup-only failures losing all fixture diagnostics when
   // the test itself passed, in both actual suite teardown boundaries.
   for (const mode of ['cleanup-git', 'cleanup-writes']) {

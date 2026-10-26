@@ -105,6 +105,42 @@ describe('ownTestBodies cancellation ordering (#11641)', () => {
 describe('owned fixture cleanup failures (#13651)', () => {
   const controls = ownTestBodies(it);
   afterAll(() => controls.drain());
+  controls.it('shares removal across repeated teardown until the next fixture is prepared', async () => {
+    const fixture = ownFixtureWork();
+    const root = createTempDataRoot('portos-owned-fixture-');
+    const neighbor = createTempDataRoot('portos-next-fixture-');
+    const entered = Promise.withResolvers(), release = Promise.withResolvers();
+    let removals = 0;
+    let preparing;
+    const remove = async () => {
+      removals++;
+      entered.resolve();
+      await release.promise;
+      await rm(root, { recursive: true, force: true });
+    };
+    const cleanup = fixture.cleanup(remove);
+    try {
+      await entered.promise;
+      // A runner deadline does not settle the original teardown. A later
+      // failed prepare can still invoke afterEach for that same generation.
+      preparing = fixture.prepare();
+      expect(fixture.cleanup(remove)).toBe(cleanup);
+      expect(fixture.cleanup(remove)).toBe(cleanup);
+      expect(removals).toBe(1);
+      expect(existsSync(root)).toBe(true);
+      expect(existsSync(neighbor)).toBe(true);
+      release.resolve();
+      await preparing;
+      expect(existsSync(root)).toBe(false);
+      await fixture.cleanup(() => rm(neighbor, { recursive: true, force: true }));
+      expect(existsSync(neighbor)).toBe(false);
+      await fixture.finish(() => {});
+    } finally {
+      release.resolve();
+      await Promise.allSettled([cleanup, preparing]);
+      await Promise.all([root, neighbor].map(path => rm(path, { recursive: true, force: true })));
+    }
+  });
   controls.it('retains cancellation failures while the next fixture and final cleanup still run', async () => {
     const fixture = ownFixtureWork();
     const root = createTempDataRoot('portos-owned-fixture-');
