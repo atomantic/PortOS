@@ -47,7 +47,7 @@ describe('stale branch-only retirement placeholders', () => {
     await recordHeldCheckoutRetirement(appId, receipt);
     const first = outcomeFrom(await persisted());
     expect(first.retirementObligations).toEqual([]); expect(first.remaining).toEqual([]);
-    expect(first.retired[0].settledPlaceholders).toEqual([{ observation: row, settledAt: expect.any(String) }]);
+    expect(first.retired[0].settledObservations).toEqual([{ observation: row, settledAt: expect.any(String) }]);
     const originalRetiredAt = first.retired[0].retiredAt;
     const schedule = await persisted(); outcomeFrom(schedule).remaining = [row]; outcomeFrom(schedule).retirementObligations = [row];
     await writeFile(schedulePath, JSON.stringify(schedule));
@@ -55,20 +55,56 @@ describe('stale branch-only retirement placeholders', () => {
     const replay = outcomeFrom(await persisted());
     expect(replay.remaining).toEqual([]); expect(replay.retirementObligations).toEqual([]);
     expect(replay.retired[0].retiredAt).toBe(originalRetiredAt);
-    expect(replay.retired[0].settledPlaceholders).toHaveLength(1);
+    expect(replay.retired[0].settledObservations).toHaveLength(1);
     expect(replay.legacyRetirementTransition).toEqual({ version: 1, observations: [], resolutions: [] });
   });
   it('recovers persisted receipt evidence on inventory read after restart without replaying deletion or rewriting its timestamp', async () => {
     await seed({ receipts: [receipt] });
     const repaired = await getBranchReconcileInventory(appId);
     expect(repaired.remaining).toEqual([]); expect(repaired.retirementObligations).toEqual([]);
-    expect(repaired.retired[0]).toMatchObject({ retiredAt: receipt.retiredAt, settledPlaceholders: [{ observation: row }] });
+    expect(repaired.retired[0]).toMatchObject({ retiredAt: receipt.retiredAt, settledObservations: [{ observation: row }] });
     const before = await readFile(schedulePath, 'utf8');
     await getBranchReconcileInventory(appId);
     expect(await readFile(schedulePath, 'utf8')).toBe(before);
     expect(await git('status', '--porcelain')).toBe('');
   });
-  it.each(['ambiguous', 'recreated-branch', 'recreated-path', 'active-owner', 'human-handoff', 'new-generation', 'newer-placeholder', 'missing-receipt', 'unreadable-owners', 'locked-placeholder', 'nonreceipt'])(
+  it('keeps the unprocessed observation when one receipt reaches its audit budget in a batch', async () => {
+    receipt.settledObservations = Array.from({ length: 999 }, (_, i) => ({ observation: { ...row, branch: `feature/prior-${i}` }, settledAt: receipt.retiredAt }));
+    await seed({ receipts: [receipt] });
+    const second = { ...row, createdAt: '2026-01-01T00:00:01.000Z' };
+    const schedule = await persisted();
+    outcomeFrom(schedule).remaining.push(second); outcomeFrom(schedule).retirementObligations.push(second);
+    await writeFile(schedulePath, JSON.stringify(schedule));
+    const result = await getBranchReconcileInventory(appId);
+    expect(result.retired[0].settledObservations).toHaveLength(1000);
+    expect(result.retirementObligations).toEqual([second]);
+  });
+
+  it.each(['moved', 'progressed', 'old-path-recreated', 'unrelated-head'])(
+    'binds only the same absent physical generation to its actual receipt: %s', async scenario => {
+      const observation = { ...row, path: join(root, 'previous-location'), head: receipt.head, checkoutIdentity: receipt.checkoutIdentity };
+      if (scenario === 'progressed') {
+        await writeFile(join(fixture.repo, 'later.txt'), 'delivered continuation\n'); await git('add', '.'); await git('commit', '-m', 'later');
+        receipt.head = await git('rev-parse', 'HEAD');
+      }
+      if (scenario === 'unrelated-head') {
+        await git('checkout', '--orphan', 'independent'); await git('rm', '-rf', '.');
+        await writeFile(join(fixture.repo, 'independent.txt'), 'different history\n'); await git('add', '.'); await git('commit', '-m', 'independent');
+        receipt.head = await git('rev-parse', 'HEAD'); await git('checkout', 'main'); await git('branch', '-D', 'independent');
+      }
+      if (scenario === 'old-path-recreated') { await mkdir(observation.path); await writeFile(join(observation.path, 'new.txt'), 'unique work\n'); }
+      await seed({ receipts: [receipt], observation });
+      const result = await getBranchReconcileInventory(appId);
+      if (['moved', 'progressed'].includes(scenario)) {
+        expect(result.remaining).toEqual([]); expect(result.retirementObligations).toEqual([]);
+        expect(result.retired[0]).toMatchObject({ retiredAt: receipt.retiredAt, settledObservations: [{ observation }] });
+      } else {
+        expect(result.retirementObligations).toContainEqual(expect.objectContaining(observation));
+        if (scenario === 'old-path-recreated') expect(await readFile(join(observation.path, 'new.txt'), 'utf8')).toBe('unique work\n');
+      }
+    });
+
+  it.each(['ambiguous', 'recreated-branch', 'recreated-path', 'active-owner', 'human-handoff', 'new-generation', 'newer-placeholder', 'missing-receipt', 'unreadable-owners', 'locked-placeholder', 'nonreceipt', 'invalid-archive'])(
     'retains real or ambiguous unfinished evidence: %s', async scenario => {
       const receipts = [receipt]; const observation = { ...row };
       if (scenario === 'ambiguous') receipts.push({ ...receipt, checkoutIdentity: 'c'.repeat(64) });
@@ -82,10 +118,11 @@ describe('stale branch-only retirement placeholders', () => {
       if (scenario === 'unreadable-owners') fixture.agents = null;
       if (scenario === 'locked-placeholder') observation.locked = true;
       if (scenario === 'nonreceipt') receipt.branchDeleted = false;
+      if (scenario === 'invalid-archive') receipt.archiveDir = '';
       await seed({ receipts, observation });
       const result = await getBranchReconcileInventory(appId);
       expect(result.retirementObligations).toContainEqual(expect.objectContaining(observation));
-      expect(result.retired?.some(value => value.settledPlaceholders?.length)).toBe(false);
+      expect(result.retired?.some(value => value.settledObservations?.length)).toBe(false);
       if (scenario === 'recreated-path') expect(await readFile(join(receipt.path, 'new-work.txt'), 'utf8')).toBe('unique work\n');
     });
 });
