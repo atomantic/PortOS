@@ -74,7 +74,7 @@ const CONTINUATION_CONTRACTS = Object.freeze({
   }),
   minimax_h3_cuda: Object.freeze({
     temporalContext: false,
-    unavailableReason: 'The pinned H3 CUDA helper has no verified video/audio history-conditioning adapter.',
+    unavailableReason: 'The H3 CUDA history adapter has no verified Windows/NVIDIA moving-subject and still-baseline motion/audio comparison.',
   }),
 });
 const UNAVAILABLE_CONTINUATION = Object.freeze({

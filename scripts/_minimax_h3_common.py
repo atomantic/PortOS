@@ -69,6 +69,11 @@ def add_h3_common_args(
     parser.add_argument("--anchor", action="append", default=[], choices=["first", "last"],
                         help="latent anchor for each --image, in the same order")
     parser.add_argument("--output", required=True)
+    parser.add_argument("--source-video", help="local video containing the prior history interval")
+    parser.add_argument("--history-end-frame", type=int,
+                        help="exclusive end of history on the source's normalized 24 fps timeline")
+    parser.add_argument("--history-frames", type=int, default=17,
+                        help="prior pixel frames to condition on (currently exactly 17)")
     parser.add_argument("--memory-profile", default=None,
                         help="id of the weight-placement profile PortOS selected (reported back, not re-derived)")
     parser.add_argument("--min-system-memory-gb", type=float, default=None,
@@ -77,6 +82,30 @@ def add_h3_common_args(
                         help="host RAM held back from the model's ALLOCATOR for the OS and PortOS itself; "
                              "never netted off before the --min-system-memory-gb comparison")
     return parser
+
+
+def validate_h3_history_args(args, *, supported: bool) -> dict | None:
+    """The shared source interval contract; each backend must explicitly admit it."""
+    source = getattr(args, "source_video", None)
+    end = getattr(args, "history_end_frame", None)
+    count = getattr(args, "history_frames", 17)
+    if source is None and end is None and count == 17:
+        return None
+    if not supported:
+        raise SystemExit("MiniMax H3 history conditioning is unavailable on this backend; no verified adapter.")
+    if not source or type(end) is not int or count != 17 or end < count:
+        raise SystemExit("H3 history requires --source-video, --history-end-frame >= 17 and --history-frames 17.")
+    path = Path(source)
+    if not path.is_file():
+        raise SystemExit("H3 history source video is missing or is not a local file.")
+    if path.resolve() == Path(args.output).resolve():
+        raise SystemExit("H3 history source and output must be different files.")
+    # Round absolute endpoints independently so adjacent intervals share a sample boundary.
+    start = end - count
+    return {
+        "start_frame": start, "end_frame": end, "frames": count,
+        "start_sample": round(start * 32000 / FPS), "end_sample": round(end * 32000 / FPS),
+    }
 
 
 def total_system_memory_gb() -> float | None:
@@ -271,4 +300,5 @@ __all__ = [
     "load_keyframes",
     "resolve_cached_snapshot",
     "validate_h3_output_args",
+    "validate_h3_history_args",
 ]

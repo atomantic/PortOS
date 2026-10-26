@@ -87,6 +87,9 @@ describe.skipIf(!pyBin)('_minimax_h3_common.py — checkpoint facts shared by bo
       'image:False:[]',
       'anchor:False:[]',
       'output:True:None',
+      'source_video:False:None',
+      'history_end_frame:False:None',
+      'history_frames:False:17',
       // The capacity contract PortOS passes down (#5420). Shared rather than
       // per-runner because both lanes enforce the same host floor before they
       // load anything; only the VRAM half is the CUDA runner's own.
