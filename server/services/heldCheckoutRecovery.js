@@ -1719,7 +1719,8 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
         if (reviewed?.review.validationArtifacts) {
           const { retainRunValidationArtifacts } = await import('./retirementRunValidation.js');
           retainedArtifacts = await retainRunValidationArtifacts(reviewed.review, file =>
-            archiveFile(tree.path, join(tree.path, file.path)).then(path => archiveBytes(path, archiveWork(opts.signal), MAX_FILE_BYTES)));
+            archiveFile(tree.path, join(tree.path, file.path)).then(path => archiveBytes(path, archiveWork(opts.signal), MAX_FILE_BYTES)),
+          { retainCheckoutProof: (proof, verifyOnly) => retainValidationProof(repoPath, proof, verifyOnly) });
           validationEvidence = { ...validationEvidence, artifacts: retainedArtifacts.evidence };
         }
         await releaseCheckoutWithoutArchive({ repoPath, path: tree.path, branch,

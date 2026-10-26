@@ -1608,6 +1608,45 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
+  // External terminal jobs have checkout evidence, not a fabricated CoS run.
+  // Aggregate bytes exceed one private proof's cap; each file remains bounded.
+  it.each(['retained', 'changed', 'oversized', 'unknown', 'lost-proof'])(
+    'preserves external checkout validation bytes before merged retirement: %s', async kind => {
+      const c = await reviewedCheckout(`external-validation-${kind}`);
+      await writeFile(join(repo, '.git', 'info', 'exclude'), 'scripts/__pycache__/\n');
+      const directory = join(c.path, 'scripts/__pycache__');
+      await mkdir(directory, { recursive: true });
+      const files = ['one', 'two', 'three'].map(name => `${name}.cpython-311.pyc`);
+      const bytes = Buffer.alloc(kind === 'oversized' ? 65537 : 32768, 17);
+      for (const file of files) await writeFile(join(directory, file), bytes);
+      if (kind === 'unknown') await writeFile(join(directory, 'wanted.bin'), 'unique user work');
+      const prepared = await c.prepare();
+      expect(prepared.ok, JSON.stringify(prepared)).toBe(true);
+      if (kind !== 'oversized') expect(prepared.review.validationArtifacts).toMatchObject({ scope: 'checkout' });
+      if (kind === 'changed') await writeFile(join(directory, files[0]), 'new unique output');
+      const retired = await c.confirm(prepared.review, kind === 'lost-proof' ? { beforeMutation: async () => {
+        await rm(join(repo, '.git', 'portos-retirement-validation'), { recursive: true, force: true });
+      } } : {});
+      if (kind === 'retained') {
+        expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+        expect(await registered(c.path)).toBe(false);
+        const evidence = retired.validationEvidence.artifacts;
+        expect(evidence.scope).toBe('checkout');
+        expect(evidence.owner).toBeUndefined();
+        expect(evidence.references).toHaveLength(3);
+        for (const { digest } of evidence.references) {
+          const proof = JSON.parse(await readFile(join(repo, '.git', 'portos-retirement-validation', `${digest}.json`), 'utf8'));
+          expect(proof.release.head).toBe(c.release.head);
+          expect(Buffer.from(proof.file.data, 'base64')).toEqual(bytes);
+        }
+      } else {
+        expect(retired.ok, JSON.stringify(retired)).toBe(false);
+        expect(await registered(c.path)).toBe(true);
+        expect(await readFile(join(directory, files[2]))).toEqual(bytes);
+      }
+      expect(await archives()).toEqual([]);
+    });
+
   it('retains an ignored validation receipt beside a verified disposable module cache', async () => {
     const c = await reviewedCheckout('cache-with-receipt');
     await moduleCache(c, { bytes: 32 });
