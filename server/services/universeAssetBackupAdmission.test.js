@@ -15,6 +15,9 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/m
 vi.mock('../lib/fileUtils.js', async importOriginal => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-universe-assets-'),
 }));
+vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), {
+  dataRoot: () => lazyTempDataRoot('portos-universe-assets-'),
+}));
 
 // In-memory universe rows standing in for the PostgreSQL store. Every write
 // awaits `beforeRowWrite`, so a test can hold the commit after the files changed.
@@ -65,7 +68,7 @@ vi.mock('./settings.js', () => ({ getSettings: async () => ({ imageGen: { mode: 
 vi.mock('./universeRunTag.js', () => ({ buildUniverseRunTag: async () => null }));
 vi.mock('../lib/mediaModels.js', async importOriginal => ({
   ...(await importOriginal()),
-  getImageModels: () => [{ id: 'dev', hardwareCompatibility: { state: 'available' } }],
+  getImageModels: () => [{ id: 'dev', runner: 'flux2', hardwareCompatibility: { state: 'available' } }],
 }));
 
 const { PATHS } = await import('../lib/fileUtils.js');
@@ -130,6 +133,7 @@ describe('render completion listeners', () => {
       name: 'character reference sheet',
       job: async () => {
         const { jobId, destFilename } = await renderCharacterReferenceSheet('universe-1', 'character-1');
+        expect(queuedJobs.get(jobId).params.referenceImagePaths).toEqual([renderPath()]);
         sheet = destFilename;
         const completed = { ...queuedJobs.get(jobId), status: 'completed', result: { filename: RENDER } };
         queuedJobs.set(jobId, completed);
