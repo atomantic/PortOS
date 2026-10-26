@@ -51,6 +51,7 @@ import {
   buildCharacterLookPrompt,
 } from './catalogSheetPrompts.js';
 import { CATALOG_LOOK_VARIANT_ID } from '../lib/catalogValidation.js';
+import { catalogAppearance } from '../lib/catalogAppearance.js';
 
 const CATALOG_SHEET_VARIANTS = Object.freeze({
   place: Object.freeze([Object.freeze({
@@ -112,12 +113,6 @@ function lookVariantFor(ingredient, payload, wardrobeId) {
   };
 }
 
-// Which payload fields a form's age and description replace, per type.
-const FORM_FIELDS = Object.freeze({
-  character: { age: 'age', description: 'physicalDescription' },
-  place: { age: 'era', description: 'description' },
-  object: { age: null, description: 'description' },
-});
 const MEDIA_ROLE_MAX = 64;
 
 function formFor(ingredient, payload, formId) {
@@ -135,19 +130,6 @@ function formFor(ingredient, payload, formId) {
       { status: 400, code: 'VALIDATION_ERROR' });
   }
   return { ...form, age, description };
-}
-
-// The payload a form's sheet builds from: the record with its age/look swapped in.
-function payloadForForm(type, payload, form) {
-  if (!form) return payload;
-  const fields = FORM_FIELDS[type] || FORM_FIELDS.object;
-  const out = { ...payload };
-  if (form.description) out[fields.description] = form.description;
-  if (form.age) {
-    if (fields.age) out[fields.age] = form.age;
-    else out[fields.description] = [out[fields.description], form.age].filter(Boolean).join(' — ');
-  }
-  return out;
 }
 
 // Load + guard the record, resolve its variant and any universe it links to.
@@ -211,7 +193,7 @@ async function resolveSheetTarget(id, options) {
       if (entry) return { ingredient, payload, variant, delegate: { universeId: universe.id, entryId: entry.id } };
     }
   }
-  return { ingredient, payload: payloadForForm(ingredient.type, payload, form), variant, universe: universes[0] ?? null };
+  return { ingredient, payload: catalogAppearance(ingredient.type, payload, form), variant, universe: universes[0] ?? null };
 }
 
 // Presence is checked without rewriting authored text. Board pins alone are
@@ -269,6 +251,7 @@ async function buildCatalogSheet(target, options) {
     referenceCandidates: ingredient.type === 'character'
       ? characterSheetReferenceCandidates(payload, await listMediaForIngredient(ingredient.id), options)
       : [],
+    sharedIdentity: ingredient.type === 'character' ? payload.visualIdentity : '',
   });
   if (direction) result.params.promptAdditions = [...direction.additions, ...(result.params.promptAdditions || [])];
   return { ...result, visualDirection: direction?.status };

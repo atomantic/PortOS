@@ -1078,6 +1078,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // provider (possibly a tool-capable harness). Save and capture are data-only.
   'POST /api/catalog/ingredients/:id/greybox/draft',
   'POST /api/catalog/ingredients/:id/refine',
+  'POST /api/catalog/ingredients/:id/media/refine',
 
   // Importer, Brain and analytics AI (#11036): caller text, stored reference
   // data and a caller-chosen provider reach a non-tool-free runner. Authorize

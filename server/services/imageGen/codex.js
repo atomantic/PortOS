@@ -231,13 +231,13 @@ export function codexSentPrompt({ prompt = '', negativePrompt, width, height, in
   const ratioPhrase = (width && height) ? aspectRatioPhrase(Number(width), Number(height)) : '';
   const sizeHint = (width && height) ? ` (${ratioPhrase ? `${ratioPhrase} frame, ` : ''}${width}x${height})` : '';
   const qualityHint = (width >= 1536 || height >= 1536) ? ' (high quality)' : '';
-  const avoidHint = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
+  const avoidHint = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt}` : '';
   const editPrefix = buildCodexAttachmentPrefix({
     initPath: inputImages.initPath,
     referenceCount: inputImages.referencePaths.length,
     initImageStrength,
   });
-  const buildWith = (text) => `$imagegen ${editPrefix}${text.trim()}${sizeHint}${qualityHint}${avoidHint}`;
+  const buildWith = (text) => `$imagegen ${editPrefix}${text}${sizeHint}${qualityHint}${avoidHint}`;
   const fullPrompt = buildWith(prompt) + '\n' + noFabricationClause('image_gen');
   return {
     fullPrompt,
@@ -335,7 +335,7 @@ async function generateImagePrepared({
   ];
 
   const meta = {
-    id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
+    id: jobId, prompt, negativePrompt: negativePrompt || '',
     width: width ? Number(width) : null, height: height ? Number(height) : null,
     filename, mode: IMAGE_GEN_MODE.CODEX, model: effectiveModel,
     inputProvenance: 'provider-inputs',

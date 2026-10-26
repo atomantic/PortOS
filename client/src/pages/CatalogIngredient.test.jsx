@@ -79,6 +79,7 @@ vi.mock('../services/apiCatalog', () => ({
   listCatalogSheetVariants: vi.fn(async () => ({ variants: [] })),
   previewCatalogSheet: vi.fn(async () => ({ preview: null })),
   renderCatalogSheet: vi.fn(),
+  refineCatalogMedia: vi.fn(async () => ({ sentPrompt: 'Example reference refinement' })),
 }));
 // Universe-delegated sheet renders announce completion on this broadcast.
 const { socketHandlers } = vi.hoisted(() => ({ socketHandlers: new Map() }));
@@ -433,7 +434,7 @@ describe('CatalogIngredient — character sheet', () => {
       fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
       fireEvent.click(await screen.findByRole('button', { name: /Add age or look/ }));
       fireEvent.change(screen.getAllByLabelText('Name')[1], { target: { value: 'Age 7' } });
-      fireEvent.change(screen.getByLabelText('How it looks'), { target: { value: 'yellow raincoat' } });
+      fireEvent.change(screen.getByLabelText('Hair, clothing & appearance'), { target: { value: 'yellow raincoat' } });
       fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
       await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalled());
       expect(updateCatalogIngredient.mock.calls[0][1].payload.forms).toEqual([
@@ -1332,6 +1333,27 @@ describe('CatalogIngredient — tabbed library record pages', () => {
   });
 
   describe('Looks tab', () => {
+    it('blocks reference refinement while an outfit save is pending after switching tabs', async () => {
+      let finishSave;
+      updateCatalogIngredient.mockImplementation((_id, patch) => new Promise(resolve => {
+        finishSave = () => resolve({ ...HERO, payload: patch.payload });
+      }));
+      getCatalogIngredientDetails.mockResolvedValue({ ...detailsOf(HERO), media: MEDIA.map(m => m.mediaKey === 'mood.png'
+        ? { ...m, library: { review: { status: 'good', feedback: 'Preserve the face' } } } : m) });
+      const { router } = await renderPage('/casting/cat-chr-hero/looks');
+      fireEvent.click(await screen.findByRole('button', { name: /Add look/ }));
+      fireEvent.change(screen.getByLabelText('Look name'), { target: { value: 'Travel coat' } });
+      fireEvent.change(screen.getByLabelText('Outfit description'), { target: { value: 'Grey wool coat.' } });
+      fireEvent.click(screen.getByRole('button', { name: /Save look/ }));
+      await waitFor(() => expect(finishSave).toBeTypeOf('function'));
+      await act(async () => { await router.navigate('/casting/cat-chr-hero/references'); });
+      const row = await screen.findByRole('group', { name: 'reference details for mood.png' });
+      fireEvent.click(within(row).getByText(/Review & refine/));
+      expect(within(row).getByRole('button', { name: 'Refine as new version' })).toBeDisabled();
+      expect(within(row).getByRole('status')).toHaveTextContent('Saving — the reference renders from the saved record.');
+      expect(within(row).getByLabelText('Editing guidance')).not.toBeDisabled();
+      await act(async () => { finishSave(); });
+    });
     // Catches the look render losing its wardrobe id or attaching under a role
     // the Looks tab does not read back.
     it('lists looks with their images, previews a look and renders it under its look role', async () => {

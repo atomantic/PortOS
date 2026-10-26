@@ -1,6 +1,8 @@
 import { useId, useMemo, useState } from 'react';
 import { Compass, Star } from 'lucide-react';
 import CatalogMediaTile from './CatalogMediaTile';
+import CatalogReferenceReview from './CatalogReferenceReview';
+import { rejectedReferenceKeys } from '../../../../server/lib/catalogMediaLibrary.js';
 import { formatCount } from '../../utils/formatters';
 import { updateCatalogIngredientMediaLibrary, attachCatalogIngredientMediaFromMoodBoard } from '../../services/apiCatalog';
 
@@ -10,18 +12,21 @@ const LIBRARY_KINDS = new Set(['portrait', 'reference', 'video']);
 const eraFor = (m) => m.library?.variant?.era
   || (Number.isInteger(m.library?.variant?.age) ? (m.library.variant.age < 13 ? 'child' : m.library.variant.age < 20 ? 'teen' : m.library.variant.age < 65 ? 'adult' : 'elder') : '');
 
-export default function CatalogReferenceLibrary({ ingredientId, media = [], forms = [], readOnly = false, onChanged, referenceMedia = media, missingMedia = new Set(), onSetPortrait, onDetach }) {
+export default function CatalogReferenceLibrary({ ingredientId, media = [], forms = [], readOnly = false, onChanged, onMediaUpdated, referenceMedia = media, missingMedia = new Set(), onSetPortrait, onDetach, revision, blockedReason }) {
   const id = useId();
   const [armedDetach, setArmedDetach] = useState(null);
-  const [filter, setFilter] = useState({ form: '', age: '', era: '', tag: '', guides: false, allMedia: false });
+  const [filter, setFilter] = useState({ form: '', age: '', era: '', tag: '', review: '', guides: false, allMedia: false });
   const [error, setError] = useState('');
   const [busyKey, setBusyKey] = useState('');
   const [boardId, setBoardId] = useState('');
   const [itemIds, setItemIds] = useState('');
+  const previewRevision = useMemo(() => JSON.stringify({ revision, forms,
+    media: media.map(m => [m.ingredientId, m.kind, m.mediaKey, m.deleted, m.updatedAt, m.library]) }), [revision, forms, media]);
 
   const rows = useMemo(() => media.filter((m) => !m.deleted && LIBRARY_KINDS.has(m.kind)), [media]);
   // Sheets and looks in other tabs still consume the character-wide guide limit.
-  const guideCount = media.filter((m) => !m.deleted && LIBRARY_KINDS.has(m.kind) && m.library?.guide === true).length;
+  const rejected = rejectedReferenceKeys(media);
+  const guideCount = media.filter((m) => !m.deleted && !rejected.has(m.mediaKey) && LIBRARY_KINDS.has(m.kind) && m.library?.guide === true).length;
   const ages = [...new Set(rows.map((m) => m.library?.variant?.age).filter(Number.isInteger))].sort((a, b) => a - b);
   const tags = [...new Set(rows.flatMap((m) => m.library?.tags || []))].sort();
   const formKey = (m) => m.library?.variant?.formId || 'canonical';
@@ -31,7 +36,8 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
     && (filter.age === '' || m.library?.variant?.age === Number(filter.age))
     && (!filter.era || eraFor(m) === filter.era)
     && (!filter.tag || (m.library?.tags || []).includes(filter.tag))
-    && (!filter.guides || m.library?.guide === true));
+    && (!filter.review || (m.library?.review?.status || 'unreviewed') === filter.review)
+    && (!filter.guides || (m.library?.guide === true && !rejected.has(m.mediaKey))));
 
   // One visual can have both portrait and reference attachments with independent metadata.
   const groups = new Map();
@@ -45,8 +51,10 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
     setError('');
     setBusyKey(`${m.kind}:${m.mediaKey}`);
     try {
-      await updateCatalogIngredientMediaLibrary(ingredientId, { mediaKey: m.mediaKey, kind: m.kind, ...patch }, { silent: true });
-      onChanged?.();
+      const updated = await updateCatalogIngredientMediaLibrary(ingredientId, { mediaKey: m.mediaKey, kind: m.kind, ...patch }, { silent: true });
+      if (onMediaUpdated) onMediaUpdated(updated);
+      else onChanged?.();
+      return updated;
     } catch (err) {
       setError(err?.message || 'Could not update reference');
     } finally {
@@ -116,6 +124,12 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
         <label htmlFor={`${id}-guides`} className="flex min-h-11 items-center gap-2">
           <input id={`${id}-guides`} type="checkbox" checked={filter.guides} onChange={(e) => setFilter({ ...filter, guides: e.target.checked })} /> Guides only
         </label>
+        <label htmlFor={`${id}-review`} className="min-w-0 space-y-1"><span>Rating</span>
+          <select id={`${id}-review`} value={filter.review} onChange={event => setFilter({ ...filter, review: event.target.value })} className={fieldClass}>
+            <option value="">All ratings</option>
+            {['unreviewed', 'good', 'bad', 'rejected'].map(value => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </label>
       </div>
       {error && <p role="alert" className="text-sm text-port-error">{error}</p>}
       {visible.length === 0 ? <p className="text-sm text-gray-400">{rows.length ? 'No references match. Change the filters to see more.' : 'No references yet. Add an image or video to start your library.'}</p> : (
@@ -129,9 +143,9 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
                   isPortrait={tile.kind === 'portrait'} onSetPortrait={tileEditable ? onSetPortrait : undefined}
                   onDetach={tileEditable ? onDetach : undefined} armedDetach={armedDetach} onArmDetach={setArmedDetach} />
                 {attachments.map((m) => {
-                  const key = `${m.kind}:${m.mediaKey}`;
+                  const key = `${m.ingredientId || ingredientId}:${m.kind}:${m.mediaKey}`;
                   const lib = m.library || {};
-                  const isGuide = lib.guide === true;
+                  const isGuide = lib.guide === true && !rejected.has(m.mediaKey);
                   const editable = !readOnly && !m.readOnly;
                   const title = lib.variant?.label || m.caption || m.mediaKey;
                   const summary = [forms.find((f) => f.id === lib.variant?.formId)?.label || 'Canonical',
@@ -145,13 +159,16 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
                       </div>
                       <p className="text-xs text-gray-400 [overflow-wrap:anywhere]">{summary}</p>
                       {m.kind !== 'video' && (editable ? (
-                        <button type="button" disabled={!!busyKey || (!isGuide && guideCount >= MAX_CAST_GUIDES)} aria-pressed={isGuide}
+                        <button type="button" disabled={!!busyKey || rejected.has(m.mediaKey) || (!isGuide && guideCount >= MAX_CAST_GUIDES)} aria-pressed={isGuide}
                           title={!isGuide && guideCount >= MAX_CAST_GUIDES ? `At most ${MAX_CAST_GUIDES} render guides` : 'Use as a render guide'}
                           onClick={() => save(m, { guide: !isGuide })}
                           className={`flex min-h-11 w-full items-center justify-center gap-2 rounded border px-3 text-sm disabled:opacity-40 ${isGuide ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-gray-300 hover:border-port-accent'}`}>
-                          <Compass size={16} aria-hidden="true" /> {busyKey === key ? 'Saving…' : isGuide ? 'Guide' : 'Make guide'}
+                          <Compass size={16} aria-hidden="true" /> {busyKey === `${m.kind}:${m.mediaKey}` ? 'Saving…' : isGuide ? 'Guide' : 'Make guide'}
                         </button>
                       ) : isGuide && <p className="text-xs text-port-accent">Render guide</p>)}
+                      {m.kind !== 'video' && <CatalogReferenceReview
+                        ingredientId={ingredientId} media={m} readOnly={!editable} saving={!!busyKey}
+                        onSave={patch => save(m, patch)} onChanged={onChanged} revision={previewRevision} blockedReason={blockedReason} />}
                       {editable && (
                         <details>
                           <summary className="flex min-h-11 cursor-pointer items-center text-xs text-port-accent">Edit reference details</summary>
@@ -159,14 +176,19 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
                             {forms.length > 0 && (
                               <label htmlFor={`${id}-${key}-form`} className="min-w-0 space-y-1"><span>Age or look</span>
                                 <select id={`${id}-${key}-form`} aria-label={`Age or look for ${m.mediaKey}`} value={lib.variant?.formId || ''} className={fieldClass}
-                                  onChange={(e) => save(m, { variant: { ...(lib.variant || {}), formId: e.target.value || undefined } })}>
+                                  onChange={(e) => {
+                                    const form = forms.find(f => f.id === e.target.value);
+                                    const age = /^\d+$/.test(String(form?.age).trim()) ? Number(form.age) : undefined;
+                                    save(m, { variant: { ...(lib.variant || {}), formId: e.target.value || undefined,
+                                      ...(age !== undefined ? { age, era: undefined } : {}) } });
+                                  }}>
                                   <option value="">Canonical</option>
                                   {forms.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
                                 </select>
                               </label>
                             )}
                             <label htmlFor={`${id}-${key}-age`} className="min-w-0 space-y-1"><span>Age</span>
-                              <input id={`${id}-${key}-age`} aria-label={`Age for ${m.mediaKey}`} type="number" min="0" max="150" defaultValue={lib.variant?.age ?? ''} className={fieldClass}
+                              <input key={lib.variant?.age ?? ''} id={`${id}-${key}-age`} aria-label={`Age for ${m.mediaKey}`} type="number" min="0" max="150" defaultValue={lib.variant?.age ?? ''} className={fieldClass}
                                 onBlur={(e) => {
                                   if (!e.target.validity.valid) return;
                                   const age = e.target.value === '' ? undefined : Number(e.target.value);
@@ -181,7 +203,7 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
                               </select>
                             </label>
                             <label htmlFor={`${id}-${key}-tags`} className="col-span-full min-w-0 space-y-1"><span>Tags (comma separated)</span>
-                              <input id={`${id}-${key}-tags`} aria-label={`Tags for ${m.mediaKey}`} defaultValue={(lib.tags || []).join(', ')} placeholder="e.g. studio, winter" className={fieldClass}
+                              <input key={(lib.tags || []).join(',')} id={`${id}-${key}-tags`} aria-label={`Tags for ${m.mediaKey}`} defaultValue={(lib.tags || []).join(', ')} placeholder="e.g. studio, winter" className={fieldClass}
                                 onBlur={(e) => {
                                   const next = e.target.value.split(',').map((tag) => tag.trim()).filter(Boolean);
                                   if (next.join(',') !== (lib.tags || []).join(',')) save(m, { tags: next });
