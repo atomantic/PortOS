@@ -1229,6 +1229,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/universe-builder/:id/canon/backfill-descriptions', RECORDS],
   ['POST /api/universe-builder/:id/characters/:entryId/augment/apply', RECORDS],
   ['DELETE /api/universe-builder/:id/characters/:entryId/reference-sheet', REMOVES_RECORD],
+  ['POST /api/universe-builder/:id/characters/:entryId/reference-sheet/preview', READ_OVER_POST],
   ['POST /api/universe-builder/:id/import/markdown', RECORDS],
   ['POST /api/universe-builder/:id/restore-starter', 'Replaces record text with bundled defaults only; no agent, process or filesystem operation.'],
   ['POST /api/universe-builder/:id/style-references', RECORDS],

@@ -363,6 +363,11 @@ export const renderCharacterReferenceSheet = (universeId, entryId, {
     ...options,
   });
 
+export const previewCharacterReferenceSheet = (universeId, entryId, body = {}, options = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/reference-sheet/preview`, {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+
 // Delete the character's reference sheet of the given variant. Variant
 // defaults server-side to 'standard'. Returns `{ filename, fileDeleted, cleared }`.
 export const deleteCharacterReferenceSheet = (universeId, entryId, { variant, ...requestOpts } = {}) => {

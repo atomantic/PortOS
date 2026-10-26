@@ -5,6 +5,7 @@ import CharacterReferenceSheetPanel from './CharacterReferenceSheetPanel';
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map(), read: vi.fn(), render: vi.fn(), error: vi.fn(),
+  preview: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({ default: {
   on: (event, callback) => { if (!mocks.handlers.has(event)) mocks.handlers.set(event, new Set()); mocks.handlers.get(event).add(callback); },
@@ -14,6 +15,7 @@ vi.mock('../../services/apiUniverseBuilder', () => ({
   fetchReferenceSheetVariants: async () => ({ variants: [{ id: 'standard', label: 'Reference sheet' }] }),
   getCharacterReferenceSheet: (...args) => mocks.read(...args),
   renderCharacterReferenceSheet: (...args) => mocks.render(...args),
+  previewCharacterReferenceSheet: (...args) => mocks.preview(...args),
   deleteCharacterReferenceSheet: vi.fn(),
 }));
 vi.mock('../../hooks/useMediaJobProgress', () => ({ default: () => ({ status: 'completed', progress: 1 }) }));
@@ -30,10 +32,24 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.read.mockResolvedValue({ filename: null, pendingJobId: null });
   mocks.render.mockResolvedValue({ jobId: 'job-1', destFilename: 'sheet.png' });
+  mocks.preview.mockResolvedValue({ preview: { sentPrompt: 'Example sheet', referenceImages: [] } });
 });
 afterEach(() => vi.useRealTimers());
 
 describe('persisted reference-sheet publication', () => {
+  it('shows canonical images and the exact prompt before starting a universe sheet', async () => {
+    mocks.preview.mockResolvedValue({ preview: { sentPrompt: 'Use the canonical identity', referenceImages: [
+      { filename: 'canon.png', source: 'Primary canon image', status: 'included', url: '/data/image-refs/canon.png' },
+    ] } });
+    render(<Panel />);
+    const reference = await screen.findByRole('link', { name: /Open canonical reference 1/ });
+    expect(reference).toHaveAttribute('href', '/data/image-refs/canon.png');
+    expect(screen.getByText('Will be sent to the model')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
+    expect(screen.getByText('Use the canonical identity')).toBeInTheDocument();
+    expect(mocks.render).not.toHaveBeenCalled();
+  });
+
   it('waits for publication, filters unrelated events, and performs no timer-driven HEAD requests', async () => {
     render(<Panel />);
     await waitFor(() => expect(mocks.read).toHaveBeenCalledTimes(1));
