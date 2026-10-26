@@ -298,6 +298,33 @@ export const miniMaxH3MemoryDeclineReason = ({ model, modelId, totalMemoryGb } =
 };
 
 /**
+ * Admit the existing MLX placement envelope against live, reclaimable RAM.
+ * The requirement is the declared total-capacity floor minus its existing
+ * host reserve, not a newly measured peak or a lower-memory profile claim.
+ */
+export function miniMaxH3LiveMemoryAdmission({ model, totalMemoryGb, availableMemoryGb } = {}) {
+  if (model?.runtime !== 'minimax_h3') return null;
+  const total = positiveNumber(totalMemoryGb);
+  const available = typeof availableMemoryGb === 'number' && Number.isFinite(availableMemoryGb) && availableMemoryGb >= 0 ? availableMemoryGb : null;
+  const capacityError = miniMaxH3MemoryDeclineReason({ model, totalMemoryGb });
+  if (capacityError) return { decline: capacityError };
+  const { profile } = selectMiniMaxH3MemoryProfile({ model, totalMemoryGb });
+  const floor = positiveNumber(profile?.minMemoryGb);
+  if (total === null || available === null || available > total || floor === null || floor <= MINIMAX_H3_HOST_RESERVE_GB) {
+    return { decline: { code: 'MINIMAX_H3_MEMORY_UNKNOWN', message: 'MiniMax H3 live memory admission requires measured total and available RAM and a declared placement profile. No model was loaded.' } };
+  }
+  const gib = 1024 ** 3;
+  const reserveBytes = MINIMAX_H3_HOST_RESERVE_GB * gib;
+  const requiredBytes = Math.max(0, floor * gib - reserveBytes);
+  const budgetBytes = Math.floor(Math.min(available * gib, total * gib - reserveBytes));
+  const memory = { profileId: profile.id, requirementBasis: 'declared-profile-minus-reserve', totalBytes: Math.floor(total * gib), availableBytes: Math.floor(available * gib), reserveBytes, requiredBytes: Math.ceil(requiredBytes), budgetBytes };
+  if (budgetBytes < requiredBytes) {
+    return { memory, decline: { code: 'MINIMAX_H3_HEADROOM_INSUFFICIENT', message: `MiniMax H3 profile ${profile.id} requires its declared ${Math.round(requiredBytes / gib)} GiB working envelope after the existing ${MINIMAX_H3_HOST_RESERVE_GB} GiB host reserve; only ${(budgetBytes / gib).toFixed(1)} GiB is available. Free memory or choose a measured lower-memory profile. No model was loaded.` } };
+  }
+  return { memory, profileId: profile.id };
+}
+
+/**
  * Validate one platform's video list for memory-profile problems. Pure —
  * returns `{ id, profileId, reason }` rows (empty when sound). Same division of
  * labour as `validateSpeedProfileTable`: callers decide whether to

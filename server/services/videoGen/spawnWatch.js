@@ -11,6 +11,8 @@ import { createVideoDiagnosticTail, normalizeVideoFailure } from '../../lib/vide
 import { createLineReader } from '../../lib/streamLines.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { prepareLocalMemory, gpuBlockersMessage } from '../localMemory.js';
+import { miniMaxH3LiveMemoryAdmission } from '../../lib/minimaxH3Memory.js';
+import { recordVideoExecution, recordVideoExecutionDiagnostics } from './executionRecorder.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { videoGenEvents } from './events.js';
 import {
@@ -91,6 +93,43 @@ export async function spawnAndWatchVideo({
     maintenance.markCurrentUnsettled();
     maintenance.markResourceUnsettled('media', jobId);
   };
+  const cancelEpochAtStart = videoJobState.cancelEpoch;
+  let memoryEvidence = {};
+  let memoryTimer = null;
+  let memoryWrites = Promise.resolve();
+  const flushMemoryEvidence = () => {
+    clearTimeout(memoryTimer);
+    memoryTimer = null;
+    if (Object.keys(memoryEvidence).length) {
+      const memory = { ...memoryEvidence };
+      memoryWrites = memoryWrites.catch(() => {}).then(() => recordVideoExecutionDiagnostics(jobId, { memory }));
+    }
+    return memoryWrites;
+  };
+  const collectMemoryEvidence = (raw) => {
+    if (model.runtime !== 'minimax_h3' || !raw.startsWith('H3MEMORY:') || raw.length > 1024) return false;
+    let sample;
+    try { sample = JSON.parse(raw.slice('H3MEMORY:'.length)); } catch { return true; }
+    for (const key of ['allocatorLimitBytes', 'peakAllocatedBytes', 'peakRssBytes']) {
+      const value = sample?.[key];
+      if (Number.isSafeInteger(value) && value >= 0) {
+        memoryEvidence[key] = key.startsWith('peak') ? Math.max(memoryEvidence[key] || 0, value) : value;
+      }
+    }
+    if (typeof sample?.allocatorApplied === 'boolean') memoryEvidence.allocatorApplied = sample.allocatorApplied;
+    if (!memoryTimer) memoryTimer = setTimeout(() => {
+      void flushMemoryEvidence().catch(err => {
+        console.error(`❌ Video memory evidence persistence failed [${jobId.slice(0, 8)}]: ${err.message}`);
+      });
+    }, 250);
+    return true;
+  };
+  const persistTermination = async (exitCode, signal, reason) => {
+    await flushMemoryEvidence();
+    await recordVideoExecutionDiagnostics(jobId, { termination: {
+      exitCode, signal, reason, observedAt: new Date().toISOString(),
+    } });
+  };
   // No child and no claim exist yet, so this startup owner releases what the
   // caller handed over. A refusal (busy holder) and a claim I/O rejection both
   // end here, and neither touches another owner's claim.
@@ -104,14 +143,18 @@ export async function spawnAndWatchVideo({
   };
   let heavyClaim;
   try {
+    await recordVideoExecution(jobId, { ...meta, modelId, seed: actualSeed, width: w, height: h,
+      numFrames: parsedNumFrames, steps: actualSteps, ...(batch ? { batchSeeds: batch.map(item => item.seed) } : {}) });
     heavyClaim = await claimHeavyLocalJob({ kind: 'local video generation', id: jobId });
   } catch (err) {
     console.error(`❌ Video generation claim acquisition [${jobId.slice(0, 8)}]: ${err.message}`);
     await releaseUnclaimedStartup();
+    await persistTermination(null, null, 'refused').catch(error => console.error(`❌ Video startup evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`));
     throw err;
   }
   if (!heavyClaim.ok) {
     await releaseUnclaimedStartup();
+    await persistTermination(null, null, 'refused');
     throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
   }
   const releaseHeavyClaim = () => heavyClaim.release().catch((err) => {
@@ -326,7 +369,11 @@ export async function spawnAndWatchVideo({
       // ENOENT/permission errors leak files in os.tmpdir().
       // Defensive cleanup includes audio passed directly without the route's
       // uploadedTempPaths tracking. Duplicate unlinks remain harmless.
-      return cleanupFailedRender().then(() => {
+      return cleanupFailedRender().then(async () => {
+        await persistTermination(null, null, 'failed').catch(error => {
+          retainOwnership();
+          console.error(`❌ Video spawn evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`);
+        });
         broadcastSse(job, { type: 'error', error: reason });
         videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }) });
         closeJobAfterDelay(videoJobState.jobs, jobId);
@@ -425,6 +472,7 @@ export async function spawnAndWatchVideo({
       console.log(`🐍-out [${jobId.slice(0, 8)}] ${line}`);
     });
     const stderrReader = createLineReader((raw) => {
+      if (collectMemoryEvidence(raw)) return;
       recordStderrTail(raw);
       // Record the root-cause module only — downstream imports in the same
       // traceback raise the same error against later names.
@@ -558,6 +606,7 @@ export async function spawnAndWatchVideo({
           }
           if (batch) reason += ` (${batchResults.length}/${batch.length} videos saved to history)`;
           console.error(`❌ Video generation failed [${jobId.slice(0, 8)}]: ${reason}`);
+          await persistTermination(code, signal, preparation?.wasCanceled() || videoJobState.cancelEpoch !== cancelEpochAtStart ? 'canceled' : 'failed');
           broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}` });
           videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: missingPyModule ? normalizeVideoFailure(reason) : failure, ...(batch ? { results: batchResults } : {}) });
         } else {
@@ -599,6 +648,7 @@ export async function spawnAndWatchVideo({
           // Complete only after learning settles, so a completion listener's
           // next matching render can observe the successful policy.
           job.status = 'complete';
+          await persistTermination(code, signal, 'completed');
           const result = batch ? { ...batchResults[0], results: batchResults }
             : { filename, seed: actualSeed, thumbnail, path: `/data/videos/${filename}` };
           broadcastSse(job, { type: 'complete', result });
@@ -612,6 +662,10 @@ export async function spawnAndWatchVideo({
         // process. The job may already be partway through finalize, so force the
         // error state and emit the terminal event the client is waiting on.
         job.status = 'error';
+        await persistTermination(code, signal, preparation?.wasCanceled() || videoJobState.cancelEpoch !== cancelEpochAtStart ? 'canceled' : 'failed').catch(error => {
+          retainOwnership();
+          console.error(`❌ Video termination evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`);
+        });
         console.error(`❌ Video close handler failed [${jobId.slice(0, 8)}]: ${err.message}`);
         broadcastSse(job, { type: 'error', error: `Generation failed: ${err.message}` });
         videoGenEvents.emit('failed', { generationId: jobId, error: err.message, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }), ...(batch ? { results: batchResults } : {}) });
@@ -809,9 +863,15 @@ export async function spawnAndWatchVideo({
     stopAbandonedChild(firstProc);
     if (videoJobState.activeProcess === firstProc) videoJobState.activeProcess = null;
     await cleanupFailedRender();
+    await persistTermination(null, null, 'refused').catch(error => {
+      retainOwnership();
+      console.error(`❌ Video startup evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`);
+    });
     job.status = 'error';
     const reason = err.message || 'Video generation failed before the render child was wired';
-    console.error(`❌ Video generation setup error [${jobId.slice(0, 8)}]: ${reason}`);
+    const refused = err.status >= 400 && err.status < 500;
+    const log = refused ? console.log : console.error;
+    log(`${refused ? '🚫' : '❌'} Video generation setup error [${jobId.slice(0, 8)}]: ${reason}`);
     broadcastSse(job, { type: 'error', error: reason });
     videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }) });
     closeJobAfterDelay(videoJobState.jobs, jobId);
@@ -824,6 +884,12 @@ export async function spawnAndWatchVideo({
     // names neither the tenant nor the fix — the throw converges on
     // abandonBeforeWiring like every other pre-wiring failure.
     if (memoryReport.blockers.length) throw new Error(gpuBlockersMessage(memoryReport.blockers));
+    const admission = miniMaxH3LiveMemoryAdmission({ model, totalMemoryGb: memoryReport.totalGb, availableMemoryGb: memoryReport.availableGb });
+    if (admission?.memory) {
+      await recordVideoExecutionDiagnostics(jobId, { memory: admission.memory });
+    }
+    if (admission?.decline) throw new ServerError(admission.decline.message, { status: 409, code: admission.decline.code });
+    if (admission) args.push('--memory-budget-bytes', String(admission.memory.budgetBytes));
     if (memoryReport.unloaded.length) console.log(`🧹 Video generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
 
     // History-calibrated wall-clock estimate (#3801). `null` when this install

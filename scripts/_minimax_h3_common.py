@@ -81,6 +81,8 @@ def add_h3_common_args(
     parser.add_argument("--memory-headroom-gb", type=float, default=0.0,
                         help="host RAM held back from the model's ALLOCATOR for the OS and PortOS itself; "
                              "never netted off before the --min-system-memory-gb comparison")
+    parser.add_argument("--memory-budget-bytes", type=int, default=None,
+                        help="measured live allocator envelope admitted by PortOS before launch")
     return parser
 
 

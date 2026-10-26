@@ -209,7 +209,7 @@ export async function getAvailableMemoryGb() {
 export async function prepareLocalMemory() {
   const blockers = await detectGpuBlockers().catch(() => []);
   const unloaded = blockers.length ? [] : await unloadResidentModels().catch(() => []);
-  const availableGb = await getAvailableMemoryGb().catch(() => 0);
+  const availableGb = await getAvailableMemoryGb().catch(() => null);
   const totalGb = totalmem() / GB;
-  return { unloaded, availableGb, totalGb, budgetGb: Math.min(totalGb, availableGb), blockers };
+  return { unloaded, availableGb, totalGb, budgetGb: Number.isFinite(availableGb) ? Math.min(totalGb, availableGb) : null, blockers };
 }
