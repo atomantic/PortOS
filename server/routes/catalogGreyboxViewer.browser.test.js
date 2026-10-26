@@ -32,13 +32,36 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     window.greyboxDrawCalls = 0;
     window.greyboxCallCounts = {};
     window.greyboxPngTimings = [];
+    // Capture input dispatch separately from native framebuffer allocation,
+    // rendering and PNG readback. All evidence is bounded and synthetic-only.
+    window.greyboxInteractionPhases = [];
+    for (const event of ['pointerdown', 'pointerup', 'click']) document.addEventListener(event, e => {
+      if (window.greyboxInteractionPhases.length < 16 && /(?:Capture|Replace) reference image/.test(e.target.closest('button')?.textContent || '')) {
+        window.greyboxInteractionPhases.push({ phase: event, atMs: Math.round(performance.now()) });
+      }
+    }, true);
+    window.greyboxRendererPhases = [];
+    window.__THREE_DEVTOOLS__ = new EventTarget();
+    window.__THREE_DEVTOOLS__.addEventListener('observe', ({ detail: renderer }) => {
+      if (!renderer.isWebGLRenderer) return;
+      for (const method of ['setDrawingBufferSize', 'setPixelRatio', 'render']) {
+        const original = renderer[method];
+        renderer[method] = function (...args) {
+          const start = performance.now();
+          try { return original.apply(this, args); }
+          finally {
+            if (window.greyboxRendererPhases.length < 48) window.greyboxRendererPhases.push({ phase: method, atMs: Math.round(start), elapsedMs: Math.round(performance.now() - start) });
+          }
+        };
+      }
+    });
     const toDataURL = HTMLCanvasElement.prototype.toDataURL;
     HTMLCanvasElement.prototype.toDataURL = function (...args) {
       const start = performance.now();
       try { return toDataURL.apply(this, args); }
       finally {
         if (window.greyboxPngTimings.length < 8) window.greyboxPngTimings.push({
-          elapsedMs: Math.round(performance.now() - start), width: this.width, height: this.height,
+          startMs: Math.round(start), elapsedMs: Math.round(performance.now() - start), width: this.width, height: this.height,
         });
       }
     };
@@ -77,6 +100,7 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     const url = new URL(response.url());
     const path = url.pathname;
     if (path === '/api/catalog/ingredients/example-place/details') mark(`${url.searchParams.get('view') === 'media' ? 'media' : 'details'}:${response.status()}`);
+    if (path === '/api/catalog/ingredients/example-place/greybox') mark(`save-response:${response.status()}`);
     if (path.endsWith('/shots/overhead/capture')) mark(`capture-response:${response.status()}`);
   });
   const ingredient = { id: 'example-place', type: 'place', name: 'Example environment', tags: [], payload: { description: 'Synthetic browser fixture', greybox: structuredClone(scene) } };
@@ -336,7 +360,9 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
     } catch (error) {
       const gpuCalls = await page.evaluate(() => window.greyboxGpuCalls);
       const pngTimings = await page.evaluate(() => window.greyboxPngTimings);
-      throw new Error(`${state.phase}: ${error.message}; captures: ${state.captures.length}; progress: ${JSON.stringify(state.progress)}; png timings: ${JSON.stringify(pngTimings)}; gpu calls: ${JSON.stringify(gpuCalls)}; browser errors: ${state.errors.join('; ')}`, { cause: error });
+      const interactions = await page.evaluate(() => window.greyboxInteractionPhases);
+      const rendererPhases = await page.evaluate(() => window.greyboxRendererPhases);
+      throw new Error(`${state.phase}: ${error.message}; captures: ${state.captures.length}; progress: ${JSON.stringify(state.progress)}; interactions: ${JSON.stringify(interactions)}; renderer phases: ${JSON.stringify(rendererPhases)}; png timings: ${JSON.stringify(pngTimings)}; gpu calls: ${JSON.stringify(gpuCalls)}; browser errors: ${state.errors.join('; ')}`, { cause: error });
     } finally { await page.close(); }
   }, 60000);
 
