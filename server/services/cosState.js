@@ -645,6 +645,7 @@ export async function readMergeAdmissionStateForSafetyCheck({ onStage } = {}) {
     trusted: trusted && stored.trusted,
     agents: stored.agents,
     mergeAdmissions: state && Object.hasOwn(state, 'mergeAdmissions') ? state.mergeAdmissions : {},
+    mergePreparations: state && Object.hasOwn(state, 'mergePreparations') ? state.mergePreparations : {},
   };
 }
 

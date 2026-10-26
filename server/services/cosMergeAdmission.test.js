@@ -13,7 +13,7 @@ vi.mock('../lib/gitRemote.js', () => ({
     fullName: path === '/repos/other' ? 'example/other' : 'Example/Repo' }),
 }));
 vi.mock('./cosAgentLifecycle.js', () => ({ readAgentRecordOrUnreadable: async () => fixture.archived }));
-import { AGENT_LEASE_MAX_HOLD_MS, claimMergeAdmission, withPendingMergeAdmission } from './cosMergeAdmission.js';
+import { AGENT_LEASE_MAX_HOLD_MS, MERGE_PREPARATION_MAX_HOLD_MS, claimMergeAdmission, preparePendingMergeAdmission, withPendingMergeAdmission } from './cosMergeAdmission.js';
 const origin = { host: 'github.com', fullName: 'example/repo' };
 const parent = (id, sourceWorkspace = '/repos/example') => ({ id, taskId: `task-${id}`, status: 'running',
   startedAt: '2026-01-01T00:00:00Z', metadata: { sourceWorkspace, claimPicksOwnBranch: true } });
@@ -181,5 +181,76 @@ describe('repository final merge workflow', () => {
   it('releases a failed sweep without swallowing its error', async () => {
     await expect(withPendingMergeAdmission(origin, async () => { throw new Error('forge unavailable'); })).rejects.toThrow('forge unavailable');
     expect((await acquire('a')).admitted).toBe(true);
+  });
+});
+
+
+describe('ready merge preparation ordering', () => {
+  const prepare = agentId => claimMergeAdmission({ agentId, action: 'prepare' });
+  const yieldTurn = agentId => claimMergeAdmission({ agentId, action: 'yield' });
+
+  it('orders guard preparation before admission across parents, pending receipts and legacy acquires', async () => {
+    const a = await prepare('a');
+    expect(a.prepared).toBe(true);
+    expect(fixture.state.mergeAdmissions).toEqual({});
+    expect(await preparePendingMergeAdmission(origin, 'receipt:1')).toMatchObject({ prepared: false });
+    expect(await acquire('b')).toMatchObject({ admitted: false, reason: 'preparation-waiting' });
+    expect((await prepare('a')).preparationToken).toBe(a.preparationToken);
+    expect((await acquire('c')).admitted).toBe(true); // Another repository progresses.
+    expect(await yieldTurn('a')).toEqual({ yielded: true });
+    expect((await acquire('b')).admitted).toBe(false); // Cannot overtake the receipt.
+    expect((await preparePendingMergeAdmission(origin, 'receipt:1')).prepared).toBe(true);
+    const merge = vi.fn(async () => 'merged');
+    expect(await withPendingMergeAdmission(origin, merge, 'receipt:1')).toMatchObject({ admitted: true });
+    expect(merge).toHaveBeenCalledOnce();
+    expect((await acquire('b')).admitted).toBe(true);
+  });
+
+  it('retains a nonrenewable position through repeated base refreshes and yields for substantive work', async () => {
+    const a = await prepare('a');
+    await prepare('b');
+    for (let base = 0; base < 4; base++) {
+      const lease = await acquire('a');
+      expect(lease.admitted).toBe(true);
+      await release('a', lease.token, 'resync');
+      expect(await prepare('a')).toEqual(a);
+      expect(fixture.state.mergeAdmissions).toEqual({});
+      expect((await prepare('b')).prepared).toBe(false);
+    }
+    await yieldTurn('a');
+    expect((await prepare('b')).prepared).toBe(true);
+    expect((await prepare('a')).prepared).toBe(false);
+  });
+
+  it('moves an expired holder behind live waiters without renewing its turn', async () => {
+    vi.useFakeTimers();
+    try {
+      const a = await prepare('a');
+      await prepare('b');
+      for (let elapsed = 60_000; elapsed < MERGE_PREPARATION_MAX_HOLD_MS; elapsed += 60_000) {
+        vi.advanceTimersByTime(60_000);
+        expect((await prepare('b')).prepared).toBe(false);
+      }
+      vi.advanceTimersByTime(59_999);
+      expect(await prepare('a')).toEqual(a);
+      vi.advanceTimersByTime(1);
+      expect((await prepare('a')).prepared).toBe(false);
+      expect((await prepare('b')).prepared).toBe(true);
+      await yieldTurn('b');
+      expect((await prepare('a')).preparationToken).not.toBe(a.preparationToken);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('prunes a completed preparation owner and refuses malformed or unpersisted scheduling', async () => {
+    await prepare('a');
+    fixture.state.agents.a.status = 'completed';
+    fixture.state.agents.a.completedAt = new Date().toISOString(); persist();
+    expect((await prepare('b')).prepared).toBe(true);
+    fixture.state.mergePreparations = null; persist();
+    expect(await prepare('b')).toMatchObject({ admitted: false, reason: 'ownership-unreadable' });
+    fixture.state.mergePreparations = {}; persist();
+    fixture.failSave = true;
+    await expect(prepare('b')).rejects.toThrow('write failed');
+    expect(fixture.state.mergePreparations).toEqual({});
   });
 });
