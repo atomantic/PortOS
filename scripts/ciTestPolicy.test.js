@@ -104,10 +104,10 @@ describe('release-only assertion collection (#13759)', () => {
 
   it.each(['{}', '{"errors":[],"errorCount":0}'])('rejects zero exit with malformed final evidence %s', (evidence) => {
     const result = launch(`test('control', () => {});`, { extraReporter: `import { persistTestDiagnostic } from ${JSON.stringify(new URL('./ci-test-diagnostics.js', import.meta.url).href)};
-      export default function () { return { onInit(v) { v.onClose(() => { process.once('exit', () => persistTestDiagnostic(process.env.PORTOS_CI_DIAGNOSTICS_PATH, ${JSON.stringify(JSON.parse(evidence))})); }); } }; }` });
+      export default function () { const path = process.env.PORTOS_CI_DIAGNOSTICS_PATH; return { onInit(v) { v.onClose(() => { process.once('exit', () => persistTestDiagnostic(path, ${JSON.stringify(JSON.parse(evidence))})); }); } }; }` });
     expect(result.status, result.stderr).not.toBe(0);
     expect([0, 143]).toContain(result.invocation.status);
-    expect(result.run).toEqual(JSON.parse(evidence));
+    expect(result.run, `${result.stdout}\n${result.stderr}`).toEqual(JSON.parse(evidence));
   }, 25000);
 
   it('preserves external cancellation without coverage or memo evidence', () => {
