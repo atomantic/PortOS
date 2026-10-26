@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { browserSuiteCanRun, resolveClientBundler, resolveTestChrome } from '../lib/browserSuiteGate.js';
-import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../../client/src/test/browserFixture.js';
+import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../../scripts/lib/browserFixture.js';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const client = join(root, 'client');
