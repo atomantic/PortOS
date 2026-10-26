@@ -6,11 +6,11 @@ import { aspectRatio, fovFromFocalLength, partColor } from '../../lib/greybox';
 import useClonedGltf, { GltfPrimitive } from '../../hooks/useClonedGltf';
 import ErrorBoundary from '../ErrorBoundary';
 import useGreyboxAnchorDrag from './useGreyboxAnchorDrag';
+import { greyboxCaptureSettings } from '../../../../server/lib/greyboxCapture.js';
 
 const BACKGROUND = '#1b1e24';
 const FIGURE_COLOR = '#e0884a';
 const PROP_COLOR = '#4aa8a0';
-const CAPTURE_LONG_EDGE = 1280;
 const DEFAULT_VIEW = Object.freeze({ position: [0, 8, 18], target: [0, 0, 0] });
 const rad = (deg) => (deg * Math.PI) / 180;
 
@@ -89,7 +89,7 @@ const AnchorProxy = memo(function AnchorProxy({ anchor, selected, onSelect, onMo
 // panel. Capture re-renders at a set resolution (independent of the viewport) and
 // hides the editor helpers (grid, landmark pins) so the reference holds only the
 // layout and figure proxies.
-function ViewApi({ apiRef, layout, shotView, focalLengthMm, aspect, helpersRef, modelReady }) {
+function ViewApi({ apiRef, layout, shotView, focalLengthMm, aspect, helpersRef, modelReady, onReady }) {
   const { camera, gl, scene, controls, invalidate } = useThree();
   const appliedViewId = useRef(null);
 
@@ -119,38 +119,39 @@ function ViewApi({ apiRef, layout, shotView, focalLengthMm, aspect, helpersRef, 
   // The canvas renders on demand; redraw when anything it shows changes.
   useEffect(() => { invalidate(); }, [layout, focalLengthMm, aspect, invalidate]);
 
+  useEffect(() => { if (controls && modelReady) onReady?.(); }, [controls, modelReady, onReady]);
+
   useImperativeHandle(apiRef, () => ({
     getView: () => ({ position: camera.position.toArray(), target: controls ? controls.target.toArray() : [0, 0, 0] }),
     capture: () => {
       if (!modelReady) return null;
-      const ratio = aspectRatio(aspect);
-      const [width, height] = ratio >= 1
-        ? [CAPTURE_LONG_EDGE, Math.round(CAPTURE_LONG_EDGE / ratio)]
-        : [Math.round(CAPTURE_LONG_EDGE * ratio), CAPTURE_LONG_EDGE];
+      const { width, height, aspect: ratio, fov } = greyboxCaptureSettings({ aspect, focalLengthMm });
       const size = gl.getSize(new THREE.Vector2());
       const pixelRatio = gl.getPixelRatio();
       const previousAspect = camera.aspect;
       const hidden = [];
       scene.traverse((object) => { if (object.userData.greyboxHelper) { hidden.push([object, object.visible]); object.visible = false; } });
+      const previousFov = camera.fov;
+      const helpersVisible = helpersRef.current?.visible;
       if (helpersRef.current) helpersRef.current.visible = false;
       try {
-        gl.setPixelRatio(1);
-        gl.setSize(width, height, false);
+        gl.setDrawingBufferSize(width, height, 1);
         camera.aspect = ratio;
+        camera.fov = fov;
         camera.updateProjectionMatrix();
         gl.render(scene, camera);
         return gl.domElement.toDataURL('image/png');
       } finally {
-        gl.setPixelRatio(pixelRatio);
-        gl.setSize(size.x, size.y, false);
+        gl.setDrawingBufferSize(size.x, size.y, pixelRatio);
         camera.aspect = previousAspect;
+        camera.fov = previousFov;
         camera.updateProjectionMatrix();
-        if (helpersRef.current) helpersRef.current.visible = true;
-        invalidate();
+        if (helpersRef.current) helpersRef.current.visible = helpersVisible;
         hidden.forEach(([object, visible]) => { object.visible = visible; });
+        invalidate();
       }
     },
-  }), [camera, gl, scene, controls, aspect, helpersRef, invalidate, modelReady]);
+  }), [camera, gl, scene, controls, aspect, focalLengthMm, helpersRef, invalidate, modelReady]);
   return null;
 }
 
@@ -160,7 +161,7 @@ function ViewApi({ apiRef, layout, shotView, focalLengthMm, aspect, helpersRef, 
  * moves the camera when its id or framing changes. `ref` exposes `getView()` and
  * `capture()` (PNG data URL).
  */
-const GreyboxViewer = forwardRef(function GreyboxViewer({ scene, aspect = '16:9', focalLengthMm = 35, shotView = null, selected = '', onSelect, onMoveAnchor, activeShot = null, modelSrc = null }, ref) {
+const GreyboxViewer = forwardRef(function GreyboxViewer({ scene, aspect = '16:9', focalLengthMm = 35, shotView = null, selected = '', onSelect, onMoveAnchor, activeShot = null, modelSrc = null, onReady }, ref) {
   const helpersRef = useRef(null);
   const [readyModel, setReadyModel] = useState(null);
   const [modelFailure, setModelFailure] = useState(null);
@@ -213,7 +214,7 @@ const GreyboxViewer = forwardRef(function GreyboxViewer({ scene, aspect = '16:9'
         {scene.source !== 'glb' && scene.parts.map((part) => <PartMesh key={part.id} part={part} color={partColor(scene, part)} selected={selected === `parts:${part.id}`} onSelect={onSelect} />)}
         {scene.anchors.filter((anchor) => !visibleAnchors || visibleAnchors.has(anchor.id)).map((anchor) => <AnchorProxy key={anchor.id} anchor={anchor} selected={selected === `anchors:${anchor.id}`} onSelect={onSelect} onMove={onMoveAnchor} labelPortal={labelPortal} />)}
         <OrbitControls makeDefault target={start.target} maxPolarAngle={Math.PI * 0.98} />
-        <ViewApi apiRef={ref} layout={scene} shotView={shotView} focalLengthMm={focalLengthMm} aspect={aspect} helpersRef={helpersRef} modelReady={modelReady} />
+        <ViewApi apiRef={ref} layout={scene} shotView={shotView} focalLengthMm={focalLengthMm} aspect={aspect} helpersRef={helpersRef} modelReady={modelReady} onReady={onReady} />
       </Canvas>
       </ErrorBoundary>}
     </div>

@@ -934,3 +934,6 @@ export const catalogGreyboxSaveSchema = z.object({
 export const catalogGreyboxCaptureSchema = z.object({
   dataBase64: z.string().min(1).max(32 * 1024 * 1024),
 }).strict();
+
+// Scene, camera and output size always come from the saved record/contract.
+export const catalogGreyboxRenderSchema = z.object({}).strict();

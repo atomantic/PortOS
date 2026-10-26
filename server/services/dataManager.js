@@ -92,6 +92,7 @@ export const CATEGORIES = {
   'certs': { label: 'TLS Certificates', description: 'HTTPS certificate and private key — purging drops the install back to HTTP', archivable: false, deletable: false },
   'launch-videos': { label: 'Launch Videos', description: 'App launch-video compositions, plans, captions and rendered deliverables', archivable: true, deletable: false },
   'composition-proofs': { label: 'Composition Proofs', description: 'Contact-sheet review stills from HTML-composition proof renders — re-rendered from source, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
+  'greybox-renders': { label: 'Greybox Render Scratch', description: 'Temporary viewer pages for in-flight greybox shot captures — removed when each render ends', archivable: false, deletable: false },
   // Development artifacts ("ingredients") of Music Video projects — every
   // version of a Cast & Sets sheet, animatic, treatment or storyboard, one
   // immutable file each, referenced by the project record. Not deletable from

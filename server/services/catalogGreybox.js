@@ -11,6 +11,7 @@
 
 import { ServerError } from '../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { promptAddition } from '../lib/modelInput.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../lib/creativeLatitude.js';
 import { resolveGreybox } from '../lib/greyboxScene.js';
@@ -30,6 +31,7 @@ import { uploadIngredientMediaFile } from './catalogMedia.js';
 const deps = {
   resolveProvider: async (args) => (await import('./promptRunner.js')).resolveProviderAndModel(args),
   runPrompt: async (args) => (await import('./promptRunner.js')).runPromptThroughProvider(args),
+  renderCapture: async (scene, shot) => (await import('./greyboxRender.js')).renderGreyboxPng(scene, shot),
 };
 export const __setGreyboxDepsForTests = (overrides) => Object.assign(deps, overrides);
 
@@ -123,11 +125,25 @@ const captureQueue = createKeyCachedQueue();
 export const captureGreyboxShot = (ingredientId, shotId, body) =>
   captureQueue(`${ingredientId}:${shotId}`, () => replaceShotCapture(ingredientId, shotId, body));
 
-async function replaceShotCapture(ingredientId, shotId, { dataBase64 }) {
+/** An explicit render request uses the same queue and replacement transaction as a tab upload. */
+export const renderGreyboxShot = (ingredientId, shotId) => maintenance.run('composition', 'Greybox shot capture',
+  () => captureGreyboxShot(ingredientId, shotId, { render: true }), { continuation: true });
+
+async function replaceShotCapture(ingredientId, shotId, { dataBase64, render = false }) {
   const place = await requirePlace(ingredientId);
   // Stored scenes were validated on save; no need to re-parse the whole thing.
   const shot = place.payload?.greybox?.shots?.find((s) => s.id === shotId);
   if (!shot) throw refuse(`Shot "${shotId}" is not saved on this place's greybox; save the shot first.`, 'GREYBOX_SHOT_UNKNOWN', 404);
+
+  if (render) {
+    const scene = resolveGreybox(place.payload);
+    if (!scene || scene.source !== 'spec') throw refuse('Only saved primitive greyboxes can be rendered.', 'GREYBOX_NOT_RENDERABLE', 422);
+    dataBase64 = await deps.renderCapture(scene, scene.shots.find((s) => s.id === shotId));
+    const current = await requirePlace(ingredientId);
+    if (JSON.stringify(resolveGreybox(current.payload)) !== JSON.stringify(scene)) {
+      throw refuse('The greybox changed while rendering; re-capture the saved layout.', 'GREYBOX_CHANGED', 409);
+    }
+  }
 
   const role = greyboxShotRole(shotId);
   const previous = (await catalogDB.listMediaForIngredient(ingredientId) || [])
