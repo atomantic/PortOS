@@ -4,7 +4,6 @@ import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import GreyboxPanel from './GreyboxPanel';
 import { captureCatalogGreyboxShot, draftCatalogGreybox, previewCatalogGreyboxPrompt, saveCatalogGreybox } from '../../services/apiCatalog';
-import { greyboxSceneSchema } from '../../../../server/lib/greyboxScene';
 import toast from '../ui/Toast';
 import { blankGreybox } from '../../lib/greybox';
 import { GREYBOX_STARTERS } from '../../lib/greyboxStarters';
@@ -133,7 +132,11 @@ describe('GreyboxPanel', () => {
     },
   );
   it('adds, edits, saves and removes layout rows and shot figures without AI, using returned server state', async () => {
-    saveCatalogGreybox.mockImplementation(async (id, greybox) => ({ id, payload: { greybox: greyboxSceneSchema.parse(greybox) } }));
+    saveCatalogGreybox.mockImplementation(async (id, greybox) => ({
+      id, payload: { greybox: { ...greybox, parts: greybox.parts.map((part) => ({
+        ...part, ...(part.label === undefined ? {} : { label: part.label.trim() }),
+      })) } },
+    }));
     show();
     await screen.findByTestId('viewer');
     for (const title of ['Parts (1)', 'Anchors (0)', 'Landmarks (0)']) expect(screen.getByText(title).closest('details')).not.toHaveAttribute('open');

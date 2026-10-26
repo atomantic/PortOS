@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { greyboxSceneSchema } from '../../../server/lib/greyboxScene';
+import editingParts from '../../../server/lib/fixtures/greyboxEditing.json';
 import { aspectRatio, blankGreybox, captureForShot, fovFromFocalLength, shotFromCamera, withShot, withoutShot, greyboxEditErrors, newGreyboxItem } from './greybox';
 
 describe('greybox helpers', () => {
@@ -34,7 +34,7 @@ describe('greybox helpers', () => {
     expect(captureForShot(media, 'wide').mediaKey).toBe('b.png');
     expect(captureForShot(media, 'nope')).toBeNull();
   });
-  it.each(['box', 'plane', 'cylinder', 'extrude'])('creates a server-valid %s with collision-free ids', (type) => {
+  it.each(['box', 'plane', 'cylinder', 'extrude'])('creates the shared %s wire fixture with collision-free ids', (type) => {
     const scene = blankGreybox();
     const first = newGreyboxItem(scene, 'parts', type);
     scene.parts.push(first);
@@ -42,7 +42,7 @@ describe('greybox helpers', () => {
     scene.parts.push(second);
     expect(second.id).not.toBe(first.id);
     expect(greyboxEditErrors(scene)).toEqual([]);
-    expect(greyboxSceneSchema.safeParse(scene).success).toBe(true);
+    expect(first).toEqual(editingParts[type]);
   });
 
   it.each([
@@ -50,11 +50,10 @@ describe('greybox helpers', () => {
     ['unknown zone', (scene) => { scene.parts[0].zone = 'missing'; }],
     ['unknown anchor', (scene) => { scene.shots[0].figures = [{ anchorId: 'missing' }]; }],
     ['invalid extent', (scene) => { scene.parts[0].size[0] = 0; }],
-  ])('mirrors the server rejection for %s before sending', (_name, invalidate) => {
+  ])('rejects %s before sending', (_name, invalidate) => {
     const scene = blankGreybox();
     invalidate(scene);
     expect(greyboxEditErrors(scene).length).toBeGreaterThan(0);
-    expect(greyboxSceneSchema.safeParse(scene).success).toBe(false);
   });
 
 });

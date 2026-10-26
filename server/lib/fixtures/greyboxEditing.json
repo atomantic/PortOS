@@ -1,0 +1,92 @@
+{
+  "box": {
+    "id": "part",
+    "label": "New part",
+    "type": "box",
+    "size": [
+      1,
+      1,
+      1
+    ],
+    "position": [
+      0,
+      0.5,
+      0
+    ],
+    "rotationDegrees": [
+      0,
+      0,
+      0
+    ]
+  },
+  "plane": {
+    "id": "part",
+    "label": "New part",
+    "type": "plane",
+    "size": [
+      1,
+      1
+    ],
+    "position": [
+      0,
+      0.5,
+      0
+    ],
+    "rotationDegrees": [
+      0,
+      0,
+      0
+    ]
+  },
+  "cylinder": {
+    "id": "part",
+    "label": "New part",
+    "type": "cylinder",
+    "radius": 0.5,
+    "height": 1,
+    "position": [
+      0,
+      0.5,
+      0
+    ],
+    "rotationDegrees": [
+      0,
+      0,
+      0
+    ]
+  },
+  "extrude": {
+    "id": "part",
+    "label": "New part",
+    "type": "extrude",
+    "outline": [
+      [
+        -1,
+        -1
+      ],
+      [
+        1,
+        -1
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        -1,
+        1
+      ]
+    ],
+    "height": 1,
+    "position": [
+      0,
+      0.5,
+      0
+    ],
+    "rotationDegrees": [
+      0,
+      0,
+      0
+    ]
+  }
+}
