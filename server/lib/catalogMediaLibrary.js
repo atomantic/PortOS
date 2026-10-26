@@ -14,6 +14,11 @@
 export const MAX_CAST_GUIDES = 4;
 export const CAST_ERAS = Object.freeze(['child', 'teen', 'adult', 'elder']);
 export const MAX_LIBRARY_TAGS = 20;
+export const REFERENCE_REVIEW_STATUSES = Object.freeze(['unreviewed', 'good', 'bad', 'rejected']);
+export const REFERENCE_FEEDBACK_MAX = 2000;
+export const isUsableReference = (m) => !['bad', 'rejected'].includes(m?.library?.review?.status);
+export const rejectedReferenceKeys = (media) => new Set((Array.isArray(media) ? media : [])
+  .filter(m => m && !m.deleted && ['portrait', 'reference'].includes(m.kind) && !isUsableReference(m)).map(m => m.mediaKey));
 
 const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
 const cleanStr = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
@@ -49,6 +54,15 @@ export function normalizeLibrary(value) {
     if (tags.length) out.tags = tags;
   }
   if (typeof value.guide === 'boolean') out.guide = value.guide;
+  if (isObj(value.review) && REFERENCE_REVIEW_STATUSES.includes(value.review.status)) {
+    out.review = { status: value.review.status };
+    if (typeof value.review.feedback === 'string') out.review.feedback = value.review.feedback.slice(0, REFERENCE_FEEDBACK_MAX);
+    if (!isUsableReference({ library: out })) out.guide = false;
+  }
+  if (isObj(value.derivedFrom) && ['portrait', 'reference'].includes(value.derivedFrom.kind)) {
+    const mediaKey = cleanStr(value.derivedFrom.mediaKey, 512);
+    if (mediaKey) out.derivedFrom = { mediaKey, kind: value.derivedFrom.kind };
+  }
   return out;
 }
 
@@ -67,6 +81,7 @@ export function filterLibraryMedia(media, filters = {}) {
     if (filters.formId && lib.variant?.formId !== filters.formId) return false;
     if (filters.tag && !(lib.tags || []).includes(String(filters.tag).toLowerCase())) return false;
     if (filters.guide === true && lib.guide !== true) return false;
+    if (filters.review && (lib.review?.status || 'unreviewed') !== filters.review) return false;
     return true;
   });
 }
@@ -83,6 +98,7 @@ function score(m, want) {
   if (want.formId && v.formId === want.formId) s += 40;
   if (m.library?.guide) s += 10;
   if (m.kind === 'portrait') s += 5;
+  if (m.library?.review?.status === 'good') s += 100;
   return s;
 }
 
@@ -93,13 +109,28 @@ function score(m, want) {
  * wardrobe) wins, then the portrait, then newest. Videos never condition.
  */
 export function pickGuideMedia(media, want = {}, cap = MAX_CAST_GUIDES) {
-  const images = (Array.isArray(media) ? media : []).filter((m) => m && !m.deleted && IMAGE_KINDS.has(m.kind));
+  const rejected = rejectedReferenceKeys(media);
+  const images = (Array.isArray(media) ? media : []).filter((m) => m && !m.deleted && IMAGE_KINDS.has(m.kind)
+    && !rejected.has(m.mediaKey) && matchesReferenceVariant(m, want));
   const guides = images.filter((m) => m.library?.guide === true);
   const pool = guides.length ? guides : images;
   const time = (m) => Date.parse(m.createdAt || 0) || 0;
+  const seen = new Set();
   return [...pool]
     .sort((a, b) => score(b, want) - score(a, want) || time(b) - time(a))
+    .filter((m) => !seen.has(m.mediaKey) && seen.add(m.mediaKey))
     .slice(0, Math.max(0, Math.min(cap, MAX_CAST_GUIDES)));
+}
+
+// Known incompatible looks never fill spare conditioning slots. Untagged
+// legacy references remain usable until the operator assigns their variant.
+export function matchesReferenceVariant(m, want = {}) {
+  const v = m.library?.variant || {};
+  if (want.formId && v.formId && want.formId !== v.formId) return false;
+  if (Number.isInteger(want.age) && Number.isInteger(v.age) && want.age !== v.age) return false;
+  const era = want.era || eraForAge(want.age);
+  if (era && mediaEra(m) && era !== mediaEra(m)) return false;
+  return !want.wardrobeId || !v.wardrobeId || want.wardrobeId === v.wardrobeId;
 }
 
 /** Strip a mood-board/media-history `image:`/`video:` key to library kind + filename. */

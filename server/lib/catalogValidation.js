@@ -12,6 +12,7 @@
 
 import { z } from 'zod';
 import { BIBLE_LIMITS, FORM_ID_PATTERN } from './storyBible.js';
+import { REFERENCE_REVIEW_STATUSES, REFERENCE_FEEDBACK_MAX } from './catalogMediaLibrary.js';
 import {
   INGREDIENT_TYPE_IDS,
   RELATION_KIND_IDS,
@@ -406,6 +407,17 @@ export const catalogMediaLibraryPatchSchema = z.object({
   variant: catalogMediaLibraryVariantSchema.optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   guide: z.boolean().optional(),
+  review: z.object({
+    status: z.enum(REFERENCE_REVIEW_STATUSES),
+    feedback: z.string().max(REFERENCE_FEEDBACK_MAX).optional(),
+  }).strict().optional(),
+}).strict();
+
+export const catalogMediaRefineSchema = z.object({
+  mediaKey: z.string().min(1).max(512),
+  kind: z.enum(['portrait', 'reference']),
+  feedback: z.string().min(1).max(REFERENCE_FEEDBACK_MAX)
+    .refine(value => value.trim().length > 0 && !value.includes('\0'), 'Describe what should change without NUL characters'),
 }).strict();
 // Attach mood-board items to a cast member as references, optionally tagging
 // them all with one variant (e.g. every age-7 sheet) and tags.
@@ -424,6 +436,7 @@ export const catalogMediaLibraryQuerySchema = z.object({
   tag: z.string().trim().min(1).max(40).optional(),
   kind: z.enum(MEDIA_KINDS).optional(),
   guide: z.enum(['true', 'false']).optional(),
+  review: z.enum(REFERENCE_REVIEW_STATUSES).optional(),
 }).strip();
 
 // Set-portrait body — same as attach minus `kind` (the route forces 'portrait').

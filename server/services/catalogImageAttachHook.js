@@ -25,7 +25,8 @@ import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
  */
 
 import { createMediaJobImageHook } from './mediaJobImageHook.js';
-import { attachMedia, setPortraitMedia, listMediaForIngredient, getIngredient } from './catalogDB.js';
+import { attachMedia, setPortraitMedia, listMediaForIngredient, getIngredient, updateMediaLibrary } from './catalogDB.js';
+import { catalogEvents } from './catalogEvents.js';
 import { readImageGenerationMetadata } from './catalogMedia.js';
 import { createNewestWinsGuard } from '../lib/createNewestWinsGuard.js';
 
@@ -43,7 +44,7 @@ const portraitGuard = createNewestWinsGuard();
 // ('portrait' | 'reference'), 'duplicate' when the client already filed it,
 // 'gone' when the target ingredient no longer exists, or throws on a real DB
 // error (caught by the factory).
-async function attachGeneratedImage({ ingredientId, kind, role, filename, queuedAt }) {
+async function attachGeneratedImage({ ingredientId, kind, role, library, filename, queuedAt }) {
   await assertCatalogIdentityWritable(ingredientId);
   // The ingredient can be deleted between enqueue and completion (a render
   // outlives its editor by minutes). `getIngredient` filters `deleted = false`,
@@ -56,6 +57,7 @@ async function attachGeneratedImage({ ingredientId, kind, role, filename, queued
   // exact render (under any kind) — don't double-file it as a second kind.
   const existingRow = existing.find((m) => m.mediaKey === filename);
   if (existingRow) {
+    if (library && !existingRow.library?.derivedFrom) await updateMediaLibrary(ingredientId, filename, existingRow.kind, library);
     // The mounted client won the optimistic attach for this render. If it
     // landed as the PORTRAIT, still record its queuedAt in the guard — otherwise
     // a later OLDER portrait render isn't seen as stale and would clobber this
@@ -81,12 +83,13 @@ async function attachGeneratedImage({ ingredientId, kind, role, filename, queued
   }
   const metadata = await readImageGenerationMetadata(filename);
   const metadataOptions = Object.keys(metadata).length > 0 ? { metadata } : null;
+  const libraryOptions = library ? { library } : {};
   if (target === 'portrait') {
-    if (metadataOptions) await setPortraitMedia(ingredientId, filename, metadataOptions);
+    if (metadataOptions || library) await setPortraitMedia(ingredientId, filename, { ...metadataOptions, ...libraryOptions });
     else await setPortraitMedia(ingredientId, filename);
     portraitGuard.mark(ingredientId, queuedAt);
   } else {
-    const referenceOptions = { ...(mediaRole ? { role: mediaRole } : {}), ...(metadataOptions || {}) };
+    const referenceOptions = { ...(mediaRole ? { role: mediaRole } : {}), ...(metadataOptions || {}), ...libraryOptions };
     if (Object.keys(referenceOptions).length > 0) await attachMedia(ingredientId, filename, 'reference', referenceOptions);
     else await attachMedia(ingredientId, filename, 'reference');
   }
@@ -106,11 +109,12 @@ const hook = createMediaJobImageHook({
   serializeKey: ({ ingredientId }) => ingredientId,
   describe: ({ ingredientId }) => ingredientId,
   attach: ({ ingredientId, tag, filename, queuedAt }) => attachGeneratedImage({
-    ingredientId, kind: tag.kind, role: tag.role, filename, queuedAt,
+    ingredientId, kind: tag.kind, role: tag.role, library: tag.library, filename, queuedAt,
   }),
   onAttached: ({ ingredientId, filename }, status) => {
     if (status === 'portrait' || status === 'reference') {
       console.log(`🏷️ catalog ingredient ${ingredientId.slice(0, 8)} ← ${status} ${filename}`);
+      catalogEvents.emit('primitive-changed', { ingredientId });
     }
   },
 });

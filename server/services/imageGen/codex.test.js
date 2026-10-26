@@ -186,6 +186,16 @@ describe('codex provider — checkConnection', () => {
 });
 
 describe('codex provider — generateImage', () => {
+  it('sends authored prompt and negative whitespace exactly as supplied', async () => {
+    const prompt = '  Keep identity.\nChange only the hair.  ';
+    const negativePrompt = '  long hair, changed face  ';
+    await codex.generateImage({ prompt, negativePrompt });
+    expect(spawnCalls[0].args.at(-1)).toContain(prompt);
+    expect(spawnCalls[0].args.at(-1)).toContain(`Avoid: ${negativePrompt}`);
+    spawnCalls[0].child.exitCode = 1;
+    spawnCalls[0].child.emit('close', 1, null);
+    await flush();
+  });
   it('spawns codex exec with $imagegen prompt prefix and the configured model', async () => {
     const p = codex.generateImage({ prompt: 'a small fox', model: 'gpt-5.4' });
     // generateImage resolves immediately (fire-and-forget run); resolved

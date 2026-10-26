@@ -460,7 +460,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v13 = bible payloads gained optional `forms[]` (alternate ages/looks) and
   // media `library.variant.formId`. A <=v12 peer's sanitizer and library
   // normalizer would strip both and whole-row LWW the loss back.
-  catalog: 13,
+  // v14 = per-reference review/feedback and refinement lineage. Older peers
+  // strip these fields and could restore rejected conditioning references.
+  catalog: 14,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions
   // ride the `storyBuilder` snapshot category. This is a brand-NEW synced

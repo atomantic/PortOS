@@ -58,6 +58,24 @@ afterAll(async () => {
 });
 
 describe.skipIf(!runDb)('atomic local portrait replacement', () => {
+  it('attaches refinement metadata atomically and retains exact feedback when rejecting a guide', async () => {
+    const id = await ingredient();
+    const feedback = '  Keep identity; shorten hair.\nPreserve the coat.  ';
+    const library = { variant: { age: 27, formId: 'adult' }, guide: true,
+      review: { status: 'good', feedback }, derivedFrom: { mediaKey: 'source.png', kind: 'reference' } };
+    const attached = await catalogDB.attachMedia(id, 'refined.png', 'reference', { library });
+    expect(attached.library).toEqual(library);
+    await catalogDB.setPortraitMedia(id, 'refined.png', { library });
+    await catalogDB.updateMediaLibrary(id, 'refined.png', 'reference', { review: { status: 'rejected' } });
+    await catalogDB.updateMediaLibrary(id, 'refined.png', 'reference', { tags: ['retained'] });
+    const portrait = await catalogDB.updateMediaLibrary(id, 'refined.png', 'portrait', { guide: true });
+    expect(portrait.library.guide).toBe(false);
+    const media = await catalogDB.listMediaForIngredient(id);
+    expect(media.find(m => m.kind === 'reference').library).toEqual({
+      ...library, guide: false, tags: ['retained'], review: { status: 'rejected', feedback },
+    });
+    expect(media.find(m => m.kind === 'portrait').library.guide).toBe(false);
+  });
   it.each([false, true])('serializes generic and dedicated writes (existing portrait: %s)', async (existing) => {
     const id = await ingredient();
     if (existing) await catalogDB.setPortraitMedia(id, 'old.png');

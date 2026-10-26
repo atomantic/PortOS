@@ -1,11 +1,22 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { catalogPrimitiveOwnerSchema, catalogPrimitiveForkSchema, catalogRefinementSchema } from '../lib/catalogValidation.js';
+import { catalogPrimitiveOwnerSchema, catalogPrimitiveForkSchema, catalogRefinementSchema, catalogMediaRefineSchema } from '../lib/catalogValidation.js';
 import { getIngredient } from '../services/catalogDB/ingredients.js';
 import { getPrimitiveContext, setPrimitiveOwner, forkPrimitive } from '../services/catalogPrimitives.js';
 
 const router = Router({ mergeParams: true });
+
+router.post('/media/refine/compose', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogMediaRefineSchema, req.body);
+  const { refineCatalogMedia } = await import('../services/catalogMediaRefinement.js');
+  res.json(await refineCatalogMedia(req.params.id, body, { preview: true }));
+}));
+router.post('/media/refine', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogMediaRefineSchema, req.body);
+  const { refineCatalogMedia } = await import('../services/catalogMediaRefinement.js');
+  res.json(await refineCatalogMedia(req.params.id, body));
+}));
 
 router.get('/universe-context', asyncHandler(async (req, res) => {
   if (!await getIngredient(req.params.id)) throw new ServerError('Ingredient not found', { status: 404 });
