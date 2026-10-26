@@ -99,7 +99,7 @@ describe('GreyboxPanel', () => {
     const starter = GREYBOX_STARTERS[0].scene;
     expect(saveCatalogGreybox).toHaveBeenCalledWith('plc-1', starter, { source: undefined, silent: true });
     finishSave({ ...record, payload: { greybox: starter } });
-    expect(await screen.findByRole('button', { name: /Rink wide/ })).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Rink wide/ })).toHaveAttribute('aria-pressed', 'true'));
     expect(screen.getByRole('button', { name: /Rail level/ })).toBeInTheDocument();
     expect(screen.getByTestId('viewer')).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Start from a starter' })).not.toBeInTheDocument();
@@ -125,5 +125,4 @@ describe('GreyboxPanel', () => {
       expect(saveCatalogGreybox).not.toHaveBeenCalled();
     },
   );
-
 });
