@@ -8,7 +8,8 @@
  */
 
 import { existsSync } from 'node:fs';
-import { STATE_FILE, loadState } from '../../services/cosState.js';
+import { readFile } from 'node:fs/promises';
+import { STATE_FILE } from '../../services/cosState.js';
 import { feedbackArchiveDate, isAgentFeedbackEligible } from '../../lib/cosAgentFeedback.js';
 
 export function derivePendingFeedbackRefs(state) {
@@ -24,7 +25,12 @@ export async function up(client) {
     return;
   }
 
-  const refs = derivePendingFeedbackRefs(await loadState());
+  // Read the raw file, not loadState(): while state.json still carries the
+  // legacy agents map, loadState() waits for the boot's migrations to settle,
+  // and this migration is one of them — a boot deadlock until the 120s wait
+  // gives up and the server refuses to start.
+  const state = JSON.parse(await readFile(STATE_FILE, 'utf8'));
+  const refs = derivePendingFeedbackRefs(state);
   for (const ref of refs) {
     await client.query(
       `INSERT INTO cos_pending_agent_feedback (agent_id, archive_date)
