@@ -5,9 +5,10 @@ import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
 const dir = dirname(fileURLToPath(import.meta.url));
+const script = join(dir, 'minimax_h3_cuda_history.py');
 const python = resolveTestPython();
-const run = (source) => execFileSync(python, ['-c', source, dir], { encoding: 'utf8', timeout: 30_000 }).trim();
-const imports = 'import sys\nfrom pathlib import Path\nsys.path.insert(0, sys.argv[1])\nimport minimax_h3_cuda_history as history\n';
+const run = (source) => execFileSync(python, ['-c', source, script], { encoding: 'utf8', timeout: 30_000 }).trim();
+const imports = 'import sys\nfrom pathlib import Path\nsys.path.insert(0, str(Path(sys.argv[1]).parent))\nimport minimax_h3_cuda_history as history\n';
 let native = false;
 if (python) {
   try {
