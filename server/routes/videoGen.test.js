@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import { createHash } from 'node:crypto';
 import { join, resolve } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -86,6 +87,13 @@ vi.mock('../services/videoGen/runtimes.js', async (importOriginal) => ({
 
 vi.mock('../services/videoGen/displayPower.js', () => ({
   isDisplaySleepEnabled: vi.fn(() => false),
+}));
+
+// The HTTP fixture owns synthetic LoRA identities; layout parsing has its
+// own service tests and must not read sidecars for these nonexistent files.
+vi.mock('../services/loras.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getLoraKeyLayout: vi.fn(async () => 'bare'),
 }));
 
 vi.mock('../services/settings.js', () => ({
@@ -270,6 +278,7 @@ const fsMock = vi.hoisted(() => ({
 
 vi.mock('../lib/fileUtils.js', () => ({
   tryReadFile: vi.fn().mockResolvedValue(null),
+  sha256File: vi.fn(async (path) => createHash('sha256').update(path).digest('hex')),
   PATHS: {
     root: '/mock',
     data: '/mock/data',
@@ -1650,7 +1659,7 @@ describe('videoGen routes', () => {
         modelId: 'minimax_h3_8bit',
         loraFilenames: ['a.safetensors'],
       });
-      expect(r.status).toBe(200);
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
     });
 
     it('accepts LoRAs on an H3 model once the runtime probe proved it capable', async () => {
@@ -1663,7 +1672,7 @@ describe('videoGen routes', () => {
         modelId: 'minimax_h3_8bit',
         loraFilenames: ['a.safetensors'],
       });
-      expect(r.status).toBe(200);
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
       expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
         params: expect.objectContaining({ loras: [{ filename: 'a.safetensors', scale: 1.0 }] }),
       }));
