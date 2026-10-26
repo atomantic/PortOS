@@ -155,7 +155,7 @@ function scanTree() {
   }
   treeScan = { sites, violations };
   if (process.env.CI || process.env.PORTOS_SOURCE_SCAN_PROFILE) {
-    console.log(`🔎 timer scan: files=${files.length} candidates=${candidates} read=${readMs.toFixed(1)}ms lex=${lexMs.toFixed(1)}ms analysis=${analysisMs.toFixed(1)}ms total=${(performance.now() - start).toFixed(1)}ms slowestLexer=${slowest.file}:${slowest.bytes}B:${slowest.ms.toFixed(1)}ms`);
+    process.stdout.write(`🔎 timer scan: files=${files.length} candidates=${candidates} read=${readMs.toFixed(1)}ms lex=${lexMs.toFixed(1)}ms analysis=${analysisMs.toFixed(1)}ms total=${(performance.now() - start).toFixed(1)}ms slowestLexer=${slowest.file}:${slowest.bytes}B:${slowest.ms.toFixed(1)}ms\n`);
   }
   return treeScan;
 }
