@@ -180,6 +180,21 @@ loader writes unique temporary config files into the nearest dependency tree
 before config options can redirect caches, so explicitly selecting that loader
 opts back into shared scratch. Existing shared caches are left in place.
 
+On Windows, trusted task CLI environments set `TORCHINDUCTOR_CACHE_DIR` to
+`<task-cwd>/.cache/torchinductor` unless explicitly configured. Their restricted
+projection intentionally need not carry an account name; PyTorch's default
+compiler-cache resolver otherwise calls `getpass.getuser()` and can fail before
+loading any model. Native Python validation launched from a task inherits this
+cache too. Public-content review projections omit it.
+
+Production image/video Python runners use `hfChildEnv`/`safeChildProcessEnv`,
+which inherit the server environment rather than the restricted CLI projection.
+A normally launched Windows server therefore retains `USERNAME`; the task-only
+reproduction does not establish a production failure. These media environments
+also default to `<install-root>/data/cache/torchinductor` for servers launched
+without account identity. Explicit compiler-cache settings take precedence;
+no username is synthesized and no credential allowlist is expanded.
+
 ### Changelog
 
 Nothing to write here — there is no per-branch changelog file or fragment.

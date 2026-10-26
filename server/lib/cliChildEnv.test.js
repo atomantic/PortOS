@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { posixPath } from './testHelper.js';
 
 import { buildCliChildEnv, buildPublicReviewCliEnv, composeProviderEnv } from './cliChildEnv.js';
@@ -7,7 +7,11 @@ import { cliProviderAuthDescriptor } from './processEnv.js';
 import { supportsPublicReviewProvider } from './providerVendors.js';
 import { AGENT_GUARD_BIN } from './agentGuard/index.js';
 import { collectServerSources, readServerSource } from './testHelper.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { safeChildProcessEnv } from './processEnv.js';
 // Read, not `import … with { type: 'json' }` — the repo avoids JSON import
 // attributes (see promptSystemStages.js).
 const SHIPPED_PROVIDERS = JSON.parse(readFileSync(new URL('../../data.reference/providers.json', import.meta.url), 'utf8'));
@@ -25,6 +29,9 @@ const OLLAMA_OPENCODE = {
 
 const declaredModels = (env) => Object.keys(JSON.parse(env.OPENCODE_CONFIG_CONTENT).provider.ollama.models);
 const declaredMtplxModels = (env) => Object.keys(JSON.parse(env.OPENCODE_CONFIG_CONTENT).provider.mtplx.models);
+
+const expectedCompilerCache = (cwd = process.cwd()) => process.platform === 'win32'
+  ? { TORCHINDUCTOR_CACHE_DIR: join(resolve(cwd), '.cache', 'torchinductor') } : {};
 
 describe('buildCliChildEnv — layering', () => {
   it('layers baseEnv < before < provider.envVars < extra', () => {
@@ -87,7 +94,7 @@ describe('buildCliChildEnv — layering', () => {
   });
 
   it('tolerates an absent provider / before / extra', () => {
-    expect(buildCliChildEnv({ baseEnv: { PATH: '/usr/bin' }, provider: null, before: null, extra: null })).toEqual({ PATH: '/usr/bin' });
+    expect(buildCliChildEnv({ baseEnv: { PATH: '/usr/bin' }, provider: null, before: null, extra: null })).toEqual({ PATH: '/usr/bin', ...expectedCompilerCache() });
   });
 
   it('filters unrelated inherited app variables before applying explicit overlays', () => {
@@ -546,7 +553,7 @@ describe('composeProviderEnv — delta for sites that do not spawn directly', ()
 
   it('is what buildCliChildEnv layers over its base env', () => {
     const layers = { before: { A: '1' }, provider: { envVars: { B: '2' } }, extra: { C: '3' } };
-    expect(buildCliChildEnv({ baseEnv: {}, ...layers })).toEqual(composeProviderEnv(layers));
+    expect(buildCliChildEnv({ baseEnv: {}, ...layers })).toEqual({ ...composeProviderEnv(layers), ...expectedCompilerCache() });
   });
 });
 
@@ -566,7 +573,7 @@ describe('buildCliChildEnv — per-call-site composition', () => {
     // The autofixer passes an allowlist so host credentials never reach the CLI —
     // so the builder must not smuggle process.env back in under it.
     const env = buildCliChildEnv({ baseEnv: { PATH: '/usr/bin' }, provider: { envVars: {} }, cwd: '/w' });
-    expect(Object.keys(env).sort()).toEqual(['PATH', 'PWD']);
+    expect(Object.keys(env).sort()).toEqual(['PATH', 'PWD', ...Object.keys(expectedCompilerCache('/w'))].sort());
   });
 
   it('agentCliSpawning.js: forgeToken/claudeSettings sit UNDER provider.envVars', () => {
@@ -613,6 +620,7 @@ describe('buildCliChildEnv — per-call-site composition', () => {
       OPENCODE_CONFIG_CONTENT: '{"baked":"upstream"}',
       PATH: '/usr/bin',
       PWD: '/workspace',
+      ...expectedCompilerCache('/workspace'),
     });
   });
 
@@ -634,7 +642,7 @@ describe('buildCliChildEnv — per-call-site composition', () => {
     });
 
     expect(declaredModels(env)).toContain('qwen3-coder:30b');
-    expect(env).toEqual({ ...envVars, PATH: '/usr/bin', PWD: '/workspace' });
+    expect(env).toEqual({ ...envVars, PATH: '/usr/bin', PWD: '/workspace', ...expectedCompilerCache('/workspace') });
   });
 
   it('retains ambient auth for the selected provider when the runner supplies its descriptor', () => {
@@ -779,4 +787,41 @@ it('admits only opted-in bootstrap auth in ordinary and no-tool runs and strips 
   expect(actions).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
   expect(actions).not.toHaveProperty('ANTHROPIC_BASE_URL');
   expect(buildCliChildEnv({ ...options, provider: { command: 'claude' }, safetyProfile: PUBLIC_REVIEW_EXECUTION_PROFILE })).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
+});
+
+
+describe('identity-free Windows children', () => {
+  it('spawns a trusted task with a local compiler cache while public reviews stay isolated', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'portos-torch-test-'));
+    const originalProcess = process;
+    try {
+      vi.stubGlobal('process', { ...originalProcess, platform: 'win32' });
+      const baseEnv = { SystemRoot: 'C:\\Windows', PORTOS_API_TOKEN: 'test-secret' };
+      const env = buildCliChildEnv({ baseEnv, cwd });
+      // libuv fills required Windows variables from the native parent's env.
+      // Remove identity there too so the spawned fixture stays identity-free.
+      for (const key of ['USER', 'LOGNAME', 'LNAME', 'USERNAME']) vi.stubEnv(key, undefined);
+      const received = JSON.parse(execFileSync(originalProcess.execPath,
+        ['-e', 'process.stdout.write(JSON.stringify(process.env))'], { cwd, env, windowsHide: true, encoding: 'utf8' }));
+      expect(received.TORCHINDUCTOR_CACHE_DIR).toBe(join(cwd, '.cache', 'torchinductor'));
+      for (const key of ['USER', 'LOGNAME', 'LNAME', 'USERNAME', 'PORTOS_API_TOKEN']) expect(received[key]).toBeUndefined();
+      expect(buildCliChildEnv({ baseEnv: { TORCHINDUCTOR_CACHE_DIR: join(cwd, 'custom') }, cwd }).TORCHINDUCTOR_CACHE_DIR)
+        .toBe(join(cwd, 'custom'));
+      for (const safetyProfile of [PUBLIC_REVIEW_EXECUTION_PROFILE, PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE]) {
+        expect(buildCliChildEnv({ baseEnv, cwd, safetyProfile }).TORCHINDUCTOR_CACHE_DIR).toBeUndefined();
+      }
+      // Media children use the inherited server environment, not the CLI projection.
+      // They also need the fallback if the server itself has no account identity.
+      vi.stubGlobal('process', { ...originalProcess, platform: 'win32', env: baseEnv });
+      expect(safeChildProcessEnv().TORCHINDUCTOR_CACHE_DIR).toMatch(/[\\/]cache[\\/]torchinductor$/);
+      expect(safeChildProcessEnv({ TORCHINDUCTOR_CACHE_DIR: join(cwd, 'media') }).TORCHINDUCTOR_CACHE_DIR)
+        .toBe(join(cwd, 'media'));
+      vi.stubGlobal('process', { ...originalProcess, platform: 'linux' });
+      expect(buildCliChildEnv({ baseEnv, cwd }).TORCHINDUCTOR_CACHE_DIR).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
 });
