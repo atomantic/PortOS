@@ -65,7 +65,7 @@ describe('AppTaskCard', () => {
     expect(screen.getByText('Outside managed worktree roots')).toBeVisible();
     expect(screen.getByText(/Retiring a checkout is a scoped release/)).toBeVisible();
     expect(screen.getByText('Resolve the listed holds and run again.')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Archive and retire checkout…' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Retire checkout…' })).toBeVisible();
   });
 
   it('distinguishes an unreadable inventory from a completed empty scan', () => {
