@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { ciTestBail, releaseCandidateDiagnostics } from './ciTestPolicy.js';
+import { releaseCandidateDiagnostics } from './ciTestPolicy.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 import { spawnNpm } from './run-ci-tests.js';
 
@@ -147,9 +147,6 @@ describe('release-only assertion collection (#13759)', () => {
   });
 
   it('retains ordinary local defaults and rejects out-of-scope opt-ins', () => {
-    expect(ciTestBail({ npm_lifecycle_event: 'test:ci' })).toBe(1);
-    expect(ciTestBail({ npm_lifecycle_event: 'test:db:ci' })).toBe(1);
-    expect(ciTestBail({ npm_lifecycle_event: 'test' })).toBeUndefined();
     expect(releaseCandidateDiagnostics({})).toBe(false);
     expect(releaseCandidateDiagnostics({ ...policyEnv, GITHUB_HEAD_REF: 'codex/release-1/fix' })).toBe(true);
     expect(releaseCandidateDiagnostics({ ...policyEnv, GITHUB_HEAD_REF: 'codex/release-' })).toBe(true);

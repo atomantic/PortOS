@@ -1553,9 +1553,10 @@ privileged observer; both scripts run from the default branch's sparse checkout.
 
 CI explicitly sets `PORTOS_CI_TEST_POLICY=release-candidate` only for same-repository
 `codex/release-*` pull requests targeting `release`. Ordinary PRs, nightly runs,
-release pushes and local `test:ci` keep bail=1. The shared launcher supplies one
+release pushes and local `test:ci` keep bail=1. The shared CI command entry point supplies one
 bail flag, raises it to five for that policy, and disables both Vitest retries
-and the launcher's native-crash retry. Existing worker caps, shard selection,
+and the launcher's native-crash retry. Nested bare Vitest runs retain their own bail policy rather than inheriting the
+outer npm lifecycle setting. Existing worker caps, shard selection,
 quiet groups, database isolation and deadlines do not change.
 
 The lifecycle reporter records up to five assertion failures, preserving the

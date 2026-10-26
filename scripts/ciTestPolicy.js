@@ -13,13 +13,7 @@ export function releaseCandidateDiagnostics(env = process.env) {
   return true;
 }
 
-// npm scripts keep their ordinary bail default without a second CLI --bail.
-export function ciTestBail(env = process.env) {
-  return ['test:ci', 'test:db:ci'].includes(env.npm_lifecycle_event) ? 1 : undefined;
-}
-
 export function ciTestConfig(env = process.env) {
-  return { bail: ciTestBail(env),
-    ...(env.PORTOS_CI_COLLECTION === '1' ? { runner: fileURLToPath(new URL('./vitestCandidateRunner.js', import.meta.url)) } : {}),
-  };
+  return env.PORTOS_CI_COLLECTION === '1'
+    ? { runner: fileURLToPath(new URL('./vitestCandidateRunner.js', import.meta.url)) } : {};
 }

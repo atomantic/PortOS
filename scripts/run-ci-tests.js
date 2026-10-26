@@ -305,8 +305,8 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
       .map(arg => diagnosticTestFile(arg.startsWith('../') ? arg.slice(3) : `${scope}/${arg.replace(/^\.\//, '')}`)),
   };
   const args = ['run', script, '--prefix', scope];
-  if (extraArgs.some(arg => /^--(?:bail|retry)(?:=|$)/.test(arg))) throw Error('CI launcher owns bail and retry policy.');
-  args.push('--', ...extraArgs, `--bail=${diagnostic ? 5 : 1}`, ...(diagnostic ? ['--retry=0'] : []), '--reporter=json', `--outputFile.json=${reportPath}`,
+  if (diagnostic && extraArgs.some(arg => /^--(?:bail|retry)(?:=|$)/.test(arg))) throw Error('CI launcher owns bail and retry policy.');
+  args.push('--', ...extraArgs, '--reporter=json', `--outputFile.json=${reportPath}`,
     `--reporter=${join(repoRoot, 'scripts', 'vitestRunDiagnostics.js')}`);
   // Wrapped, not a bare `npm.cmd`: Node refuses to spawn a `.cmd` under
   // `shell:false` and throws EINVAL, so this script could never run on a
