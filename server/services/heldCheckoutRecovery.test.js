@@ -461,8 +461,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   });
 
   describe('bounded historical evidence', () => {
-    beforeEach(cleanupTempDataRoots);
-    afterEach(async () => { await owned.drain(); await cleanupTempDataRoots(); });
+    // Imported stores capture their private data root once. Clear only this
+    // history fixture's archives between cases, never rotate PATHS underneath
+    // the completion store and recreate an untracked root later in the file.
+    beforeEach(() => rm(heldCheckoutArchiveRoot(PATHS.cos), { recursive: true, force: true }));
+    afterEach(async () => { await owned.drain(); await rm(heldCheckoutArchiveRoot(PATHS.cos), { recursive: true, force: true }); });
 
     it('bounds persisted recovery diagnostics across obligations and unrelated archives while verifying the exact matching archive', async () => {
       const { release, saved } = await historicalArchive();

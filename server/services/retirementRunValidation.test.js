@@ -6,7 +6,7 @@ vi.mock('../lib/fileUtils.js', async importOriginal => {
   const { makePathsProxy, lazyTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
   return makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-retirement-run-evidence-') });
 });
-import { cleanupTempDataRoots, createTempDataRoot } from '../lib/mockPathsDataRoot.js';
+import { cleanupTempDataRoots, lazyTempDataRoot } from '../lib/mockPathsDataRoot.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { readCompletionData } from './agentCompletionData.js';
 import { captureRunValidationArtifacts, retainRunValidationArtifacts } from './retirementRunValidation.js';
@@ -14,7 +14,7 @@ let root, release, agent, content;
 const bytes = Buffer.from('Synthetic retained validation output.');
 const digest = value => createHash('sha256').update(value).digest('hex');
 beforeAll(async () => {
-  root = createTempDataRoot('portos-run-retirement-');
+  root = lazyTempDataRoot('portos-run-retirement-');
   await mkdir(join(root, 'checkout', '.cache'), { recursive: true });
   await writeFile(join(root, 'checkout', '.git'), 'gitdir: synthetic');
   await writeFile(join(root, 'checkout', '.cache', 'verification.log'), bytes);
