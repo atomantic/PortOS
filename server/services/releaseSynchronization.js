@@ -228,8 +228,10 @@ export function retainReleaseSynchronizationReview(release) {
       if (!owns) continue;
       await verifyEntry(entry, agents);
       const review = entry.obligations.localReview;
-      if (review.status !== 'verified' || review.evidence?.headSha !== release.head
-        || review.evidence.checkoutIdentity !== release.checkoutIdentity) return false;
+      const retained = entry.obligations.retirement.evidence;
+      if (review.status !== 'verified' || review.evidence?.prUrl !== retained?.prUrl
+        || !retained?.checkouts?.some(row => row.branch === release.branch && row.path === release.path
+          && row.head === release.head && row.checkoutIdentity === release.checkoutIdentity)) return false;
     }
     return true;
   });

@@ -140,9 +140,13 @@ export async function inspectReleaseSynchronization(entry, agents) {
     return { status: blocker === 'synchronization-pr-pending' && ownersOf(entry, agents).some(agent => agent.status === 'running') ? 'running' : 'blocked', blocker, obligations };
   }
   const { pr, target, checkouts } = ctx;
+  const sameDelivery = entry.obligations.localReview.evidence?.prUrl === target.prUrl
+    && entry.obligations.localReview.evidence.base === target.base;
   const sameTarget = entry.obligations.synchronizationPr.evidence?.headSha === target.headSha
     && entry.obligations.synchronizationPr.evidence?.prUrl === target.prUrl;
-  if (!sameTarget) for (const key of RELEASE_SYNC_OBLIGATIONS) obligations[key] = { status: 'pending' };
+  if (!sameTarget) for (const key of RELEASE_SYNC_OBLIGATIONS) {
+    if (key !== 'localReview' || !sameDelivery) obligations[key] = { status: 'pending' };
+  }
   const binding = { prUrl: target.prUrl, headSha: target.headSha };
   const check = async (name, inspect) => {
     try {
@@ -175,13 +179,15 @@ export async function inspectReleaseSynchronization(entry, agents) {
     return { promotionMerge: entry.publication.promotionMerge, developmentHead: target.developmentHead };
   });
   await check('localReview', async () => {
-    if (obligations.localReview.status === 'verified' && sameTarget) return obligations.localReview.evidence;
+    // The completed pre-PR phase belongs to this delivery. Hosted feedback can
+    // move its head; retain the actual historical reviewed head and generation.
+    if (obligations.localReview.status === 'verified' && sameDelivery) return obligations.localReview.evidence;
     for (const row of checkouts.filter(value => value.branch === target.branch && value.head === target.headSha)) {
       const current = await readCompletedCheckoutIdentity(row).catch(() => null);
       if (!current || retirementCheckoutIdentityFromPointer(current.incarnation?.pointer) !== row.checkoutIdentity) continue;
       const delivery = await localReviewLifecycle(row.path, { base: target.base, prUrl: target.prUrl });
       if (delivery.reusable && ['clean', 'partial'].includes(delivery.receipt?.status)) {
-        return { receipt: delivery.receipt, checkoutIdentity: row.checkoutIdentity };
+        return { receipt: delivery.receipt, checkoutIdentity: row.checkoutIdentity, base: target.base };
       }
     }
     if (ownersOf(entry, agents).some(agent => agent.status !== 'completed')) wait('local-review-lifecycle-pending');
@@ -193,7 +199,7 @@ export async function inspectReleaseSynchronization(entry, agents) {
     const latest = new Map();
     for (const review of reviews.sort((left, right) => (left.submitted_at || '').localeCompare(right.submitted_at || '') || left.id - right.id)) {
       if (review.commit_id !== target.headSha || !time(review.submitted_at) || !time(pr.merged_at)
-        || Date.parse(review.submitted_at) > Date.parse(pr.merged_at) || review.state === 'PENDING') continue;
+        || Date.parse(review.submitted_at) > Date.parse(pr.merged_at) || ['PENDING', 'COMMENTED'].includes(review.state)) continue;
       const login = review.user?.login?.toLowerCase();
       if (!login) hold('hosted-review-unreadable');
       latest.set(login, review);
@@ -208,6 +214,7 @@ export async function inspectReleaseSynchronization(entry, agents) {
     if (!pr.merged) wait('head-ci-awaits-merge');
     const checks = await readHeadCheckRuns({ origin: ctx.origin, repoSpec: ctx.origin.fullName,
       forgeExec: ctx.forgeExec, headSha: target.headSha, mergedAt: pr.merged_at });
+    if (!Array.isArray(checks)) throw new Error('head-ci-evidence-unavailable');
     const classified = classifyHeadChecks(checks, pr.merged_at);
     if (!classified.readable || !checks.length || classified.notGreenAtMerge.length) hold('head-ci-not-green-at-merge');
     return { checks, mergedAt: pr.merged_at };

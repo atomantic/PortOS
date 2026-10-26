@@ -3,8 +3,16 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
 const f = vi.hoisted(() => ({ agents: [], pr: null, review: null, reviews: [], checks: [], receipts: [],
-  present: true, busy: false, unavailable: false, ancestor: true, quality: null, qualityFile: null }));
-vi.mock('../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: lazyTempDataRoot('release-sync-verifier-') }));
+  present: true, busy: false, unavailable: false, ancestor: true, quality: null, qualityFile: null, failSave: false }));
+vi.mock('../lib/fileUtils.js', async original => {
+  const actual = await original();
+  return makePathsProxy(actual, { dataRoot: lazyTempDataRoot('release-sync-verifier-'), overrides: {
+    atomicWrite: async (path, value) => {
+      if (f.failSave && path.endsWith('release-synchronization.json')) throw new Error('synthetic outbox write failure');
+      return actual.atomicWrite(path, value);
+    },
+  } });
+});
 vi.mock('./cosState.js', () => ({ loadState: async () => ({ agents: {} }), withStateLock: createFileWriteQueue() }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./codeReview.js', () => ({ getCodeReviewDefaults: async () => ({}), resolveReviewLoopOptions: async () => ({
@@ -51,6 +59,7 @@ afterAll(cleanupTempDataRoots);
 let identity, taskId, publication;
 const getReleaseSynchronization = async key => (await readReleaseSynchronizationOutbox()).publications[key];
 beforeEach(async () => {
+  f.failSave = false;
   identity = (await import('node:crypto')).randomBytes(32).toString('hex');
   const source = await addTask({ description: `Release example ${identity}`, app: 'example-app' });
   publication = { identity, status: 'verified', synchronizationHandoffVersion: 1, repository: 'example/repo', tag: `v1.2.3-${identity}`,
@@ -138,6 +147,15 @@ it('retains successful proof and backoff on transport failure, then completes on
   expect(Date.parse(saved.synchronization.retryAt)).toBeGreaterThan(Date.parse(saved.synchronization.checkedAt));
   expect(saved.obligations.localReview.verifiedAt).toBe(reviewedAt);
   f.unavailable = false;
+  const green = f.checks;
+  const ciVerifiedAt = saved.obligations.requiredCi.verifiedAt;
+  f.checks = null;
+  await verifyReleaseSynchronizationTask(taskId);
+  expect((await getReleaseSynchronization(identity)).obligations.requiredCi).toMatchObject({ status: 'verified', verifiedAt: ciVerifiedAt });
+  f.checks = [{ ...green[0], conclusion: 'failure' }];
+  await verifyReleaseSynchronizationTask(taskId);
+  expect((await getReleaseSynchronization(identity)).obligations.requiredCi.status).toBe('blocked');
+  f.checks = green;
   finishExecution();
   f.receipts[0].checkoutIdentity = '0'.repeat(64);
   await verifyReleaseSynchronizationTask(taskId);
@@ -148,6 +166,15 @@ it('retains successful proof and backoff on transport failure, then completes on
   expect((await getReleaseSynchronization(identity)).obligations.processSettlement.blocker).toBe('checkout-processes-unsettled');
   f.busy = false;
   expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
+});
+
+it('keeps an approval through a comment-only review, but honors a subsequent change request on that head', async () => {
+  f.reviews.push({ ...f.reviews[0], id: 2, state: 'COMMENTED', submitted_at: '2026-01-01T01:08:30Z' });
+  await verifyReleaseSynchronizationTask(taskId);
+  expect((await getReleaseSynchronization(identity)).obligations.hostedReview.status).toBe('verified');
+  f.reviews.push({ ...f.reviews[0], id: 3, state: 'CHANGES_REQUESTED', submitted_at: '2026-01-01T01:09:00Z' });
+  await verifyReleaseSynchronizationTask(taskId);
+  expect((await getReleaseSynchronization(identity)).obligations.hostedReview.status).toBe('blocked');
 });
 
 it('rejects a conflicting live checkout owner without modifying the dispatch, and never waives missing candidate ancestry', async () => {
@@ -188,7 +215,8 @@ it('leaves an unstarted continuation pending and respects durable retry times du
   expect((await getReleaseSynchronization(identity)).synchronization.attempts).toBe(saved.synchronization.attempts);
 });
 
-it('withholds retirement when a merged continuation has no retained local proof and invalidates it when the PR head changes', async () => {
+it('withholds retirement without local proof, then retains the completed PR delivery phase across later hosted-review heads', async () => {
+  f.pr.merged = false;
   const seed = f.agents[1].metadata.checkoutSeeds[0];
   const release = { branch: seed.branch, path: seed.path, head: f.pr.head.sha,
     checkoutIdentity: retirementCheckoutIdentityFromPointer(seed.incarnation.pointer) };
@@ -197,9 +225,34 @@ it('withholds retirement when a merged continuation has no retained local proof 
   f.review = { reusable: true, receipt: { status: 'clean', reviewedHead: f.pr.head.sha } };
   expect(await retainReleaseSynchronizationReview(release)).toBe(true);
   f.pr.head.sha = '8'.repeat(40);
+  f.pr.merged = true;
   f.review = null;
-  expect(await retainReleaseSynchronizationReview({ ...release, head: f.pr.head.sha })).toBe(false);
+  expect(await retainReleaseSynchronizationReview({ ...release, head: f.pr.head.sha })).toBe(true);
   const saved = await getReleaseSynchronization(identity);
-  expect(saved.obligations.localReview.status).toBe('pending');
+  expect(saved.obligations.localReview).toMatchObject({ status: 'verified', evidence: { headSha: release.head,
+    receipt: { reviewedHead: release.head } } });
   expect(saved.obligations.hostedReview.status).toBe('blocked');
+  const owner = f.agents[1];
+  owner.status = 'completed';
+  owner.completedAt = '2026-01-01T01:12:00Z';
+  owner.metadata.completedCheckouts = [{ ...seed, version: 2, head: f.pr.head.sha, capturedAt: '2026-01-01T01:11:00Z' }];
+  const nextSeed = structuredClone(seed);
+  Object.assign(nextSeed, { agentId: `resumed-${identity}`, startedAt: '2026-01-01T01:14:00Z', seededAt: '2026-01-01T01:14:01Z' });
+  nextSeed.incarnation.pointer.ino = '4';
+  f.agents.push({ id: nextSeed.agentId, taskId, startedAt: nextSeed.startedAt, status: 'running',
+    metadata: { ...owner.metadata, checkoutSeeds: [nextSeed], completedCheckouts: [] } });
+  expect(await retainReleaseSynchronizationReview({ ...release, head: f.pr.head.sha,
+    checkoutIdentity: retirementCheckoutIdentityFromPointer(nextSeed.incarnation.pointer) })).toBe(true);
+  expect((await getReleaseSynchronization(identity)).obligations.retirement.evidence.checkouts).toHaveLength(2);
+});
+
+it('does not publish verification or lose original evidence when its durable write fails', async () => {
+  await verifyReleaseSynchronizationTask(taskId);
+  const prior = await getReleaseSynchronization(identity);
+  finishExecution();
+  f.failSave = true;
+  await expect(verifyReleaseSynchronizationTask(taskId)).rejects.toThrow('synthetic outbox write failure');
+  expect(await getReleaseSynchronization(identity)).toEqual(prior);
+  f.failSave = false;
+  expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
 });
