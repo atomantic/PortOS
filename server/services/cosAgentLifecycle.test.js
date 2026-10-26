@@ -756,13 +756,17 @@ describe('completeAgent idempotence (#3384)', () => {
         expect(await retryCompletionCheckoutCapture(agentId)).toBe(false);
         delete mockCosState.state.agents['later-owner'];
       }
+      const captureEvents = vi.spyOn(cosEvents, 'emit');
       expect(await retryCompletionCheckoutCapture(agentId, inline ? {} : { retirement })).toBe(true);
+      expect(captureEvents.mock.calls.filter(([event]) => event === 'agent:checkout-captured')).toEqual([['agent:checkout-captured', { agentId }]]);
       const saved = await getAgent(agentId);
       expect(saved.result).toEqual(originalResult);
       expect(saved.completedAt).toBe(completed.completedAt);
       expect(saved.metadata.completedCheckouts).toEqual([expect.objectContaining({ version: 2, head })]);
       expect(completedCheckoutReceiptValid(saved, saved.metadata.completedCheckouts[0])).toBe(true);
       expect(await retryCompletionCheckoutCapture(agentId, { retirement })).toBe(false);
+      expect(captureEvents.mock.calls.filter(([event]) => event === 'agent:checkout-captured')).toHaveLength(1);
+      captureEvents.mockRestore();
       merged.mockRestore();
     } finally { await rm(scratch, { recursive: true, force: true }); }
   });

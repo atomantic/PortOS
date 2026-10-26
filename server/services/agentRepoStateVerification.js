@@ -542,8 +542,17 @@ export function bindCompletionRetirementEvents(events) {
     return resumeCompletedDeliveryParent(data.task)
       .catch(error => emitLog('warn', `Parent completion deferred after delivery follow-up: ${error.message}`, { taskId: data.task.id }));
   };
+  const onCapture = data => {
+    if (typeof data?.agentId !== 'string' || !data.agentId) return;
+    return resumeAgentCompletionRetirement(data.agentId)
+      .catch(error => emitLog('warn', `Completion deferred after checkout capture: ${error.message}`, { agentId: data.agentId }));
+  };
   events.on('tasks:changed', onChange);
-  return () => events.off('tasks:changed', onChange);
+  events.on('agent:checkout-captured', onCapture);
+  return () => {
+    events.off('tasks:changed', onChange);
+    events.off('agent:checkout-captured', onCapture);
+  };
 }
 
 let completionSweep = null;

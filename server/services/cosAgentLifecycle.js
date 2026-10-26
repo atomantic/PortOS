@@ -429,7 +429,7 @@ export async function retryCompletionCheckoutCapture(agentId, { retirement } = {
         prUrl: proof.prUrl, verifiedPrUrl: proof.prUrl, verifiedMergedHead: head, observedStartedAt: original.startedAt };
     }
   }
-  return withClaimOwnershipLock(async () => {
+  const recovered = await withClaimOwnershipLock(async () => {
     if (retirement) {
       const [repoPath, path] = await Promise.all([realpath(retirement.repoPath).catch(() => null), realpath(retirement.path).catch(() => null)]);
       if (!repoPath || !path || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(retirement.head || '')) return false;
@@ -494,6 +494,10 @@ export async function retryCompletionCheckoutCapture(agentId, { retirement } = {
     });
     return saved && recorded;
   });
+  // Publish after releasing the ownership lock: the existing completion replay
+  // acquires that same lock and must not wait on its own capture operation.
+  if (recovered) cosEvents.emit('agent:checkout-captured', { agentId });
+  return recovered;
 }
 
 export async function completeAgent(agentId, result = {}) {
