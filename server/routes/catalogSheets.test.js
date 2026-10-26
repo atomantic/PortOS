@@ -117,19 +117,22 @@ describe('catalog sheet routes', () => {
     expect(preview.promptAdditions.find((a) => a.id === 'character-identity').text).toContain('facial features');
   });
 
-  it('honors explicit guides and previews the provider cap without rewriting an override', async () => {
+  it('honors guides and provider caps without rewriting an override equal to the template', async () => {
     mocks.getIngredient.mockResolvedValue({ ...character, payload: { primaryImageRef: 'unused.png' } });
     mocks.getSettings.mockResolvedValue({ imageGen: { mode: 'agy', agy: { enabled: true } } });
     mocks.listMediaForIngredient.mockResolvedValue(['one', 'two', 'three', 'four'].map((name) => ({
       kind: 'reference', mediaKey: `${name}.png`, library: { guide: true },
     })));
     ['one', 'two', 'three', 'four'].forEach((name) => mocks.imageFiles.add(`${name}.png`));
-    const body = { overridePrompt: 'My exact sheet prompt' };
+    const { buildCharacterReferenceSheetPrompt } = await import('../services/universeCharacterSheet.js');
+    const built = buildCharacterReferenceSheetPrompt({}, { name: character.name });
+    const body = { overridePrompt: built.prompt, overrideNegativePrompt: built.negativePrompt };
     const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
     expect(res.status).toBe(200);
     expect(res.body.preview.referenceImages.map((ref) => ref.status)).toEqual(['included', 'included', 'included', 'limit']);
     expect(res.body.preview.referenceImages.every((ref) => ref.source === 'Render guide')).toBe(true);
     expect(res.body.preview.sentPrompt).toBe(body.overridePrompt);
+    expect(res.body.preview.promptAdditions).toEqual([]);
     await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
     expect(queuedParams().referenceImagePaths).toHaveLength(3);
     expect(queuedParams().prompt).toBe(body.overridePrompt);

@@ -402,12 +402,10 @@ export async function buildSheetRenderParams({
   negativesLabel = 'Character sheet negatives',
   referenceCandidates = [],
 }) {
-  let prompt = typeof options.overridePrompt === 'string' && options.overridePrompt.trim()
-    ? options.overridePrompt
-    : built.prompt;
-  const negativePrompt = typeof options.overrideNegativePrompt === 'string' && options.overrideNegativePrompt.trim()
-    ? options.overrideNegativePrompt
-    : built.negativePrompt;
+  const hasPromptOverride = typeof options.overridePrompt === 'string' && !!options.overridePrompt.trim();
+  const hasNegativeOverride = typeof options.overrideNegativePrompt === 'string' && !!options.overrideNegativePrompt.trim();
+  let prompt = hasPromptOverride ? options.overridePrompt : built.prompt;
+  const negativePrompt = hasNegativeOverride ? options.overrideNegativePrompt : built.negativePrompt;
 
   const settings = await getSettings();
   // Text-template rendering works with any image-gen backend. Route through
@@ -439,8 +437,8 @@ export async function buildSheetRenderParams({
   // style and the sheet negatives it carries are listed on the render's
   // sent-prompt record (#11317). A typed override is sent as written.
   const promptAdditions = [
-    prompt === built.prompt && styleLine && prompt.includes(styleLine.trim()) ? promptAddition(styleChip.id, styleChip.label, styleLine) : null,
-    negativePrompt === built.negativePrompt ? promptAddition('sheet-negatives', negativesLabel, built.negativePrompt) : null,
+    !hasPromptOverride && styleLine && prompt.includes(styleLine.trim()) ? promptAddition(styleChip.id, styleChip.label, styleLine) : null,
+    !hasNegativeOverride ? promptAddition('sheet-negatives', negativesLabel, built.negativePrompt) : null,
   ].filter(Boolean);
   const baseParams = {
     mode: activeMode,
@@ -480,7 +478,7 @@ export async function buildSheetRenderParams({
   const references = resolveCharacterSheetReferences(referenceCandidates, activeMode, modelId, localModel);
   if (references.paths.length) {
     params.referenceImagePaths = references.paths;
-    if (prompt === built.prompt) {
+    if (!hasPromptOverride) {
       const text = 'Use the attached canonical character images as the identity reference. Preserve the character’s facial features, proportions, skin, hair, markings and distinctive likeness across every view. Apply the requested age, wardrobe and visual direction while keeping the same character identity.';
       prompt += `\n\n${text}`;
       params.prompt = prompt;
