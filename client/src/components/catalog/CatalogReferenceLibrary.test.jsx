@@ -18,6 +18,17 @@ const media = [
 describe('CatalogReferenceLibrary', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('selects a canonical image from the image set and marks the current choice', () => {
+    const onSetPortrait = vi.fn();
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[
+      { mediaKey: 'current.png', kind: 'portrait' },
+      { mediaKey: 'next.png', kind: 'reference' },
+    ]} onSetPortrait={onSetPortrait} />);
+    expect(screen.getByText('Canonical image')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Set as canonical image' }));
+    expect(onSetPortrait).toHaveBeenCalledWith('next.png');
+  });
+
   it('lists image/video references, counts guides and filters by age and era', () => {
     render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={media} />);
     expect(screen.getAllByTestId('library-row')).toHaveLength(3);
