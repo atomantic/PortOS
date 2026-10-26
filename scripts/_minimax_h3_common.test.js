@@ -96,6 +96,7 @@ describe.skipIf(!pyBin)('_minimax_h3_common.py — checkpoint facts shared by bo
       'memory_profile:False:None',
       'min_system_memory_gb:False:None',
       'memory_headroom_gb:False:0.0',
+      'memory_budget_bytes:False:None',
     ]);
   });
 

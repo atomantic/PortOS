@@ -19,8 +19,9 @@ const { heavyClaimRelease, heavyClaimHandoff, mockPrepareLocalMemory } = vi.hois
   // omitted so a test can make it fail, which is how the relaunch path's
   // spawned-but-never-wired child becomes observable.
   heavyClaimHandoff: vi.fn(async () => {}),
-  mockPrepareLocalMemory: vi.fn(async () => ({ unloaded: [], availableGb: 64, totalGb: 64, budgetGb: 64, blockers: [] })),
+  mockPrepareLocalMemory: vi.fn(async () => ({ unloaded: [], availableGb: 120, totalGb: 128, budgetGb: 120, blockers: [] })),
 }));
+vi.mock('os', async importOriginal => ({ ...await importOriginal(), totalmem: () => 128 * 1024 ** 3 }));
 vi.mock('../../lib/heavyJobClaim.js', () => ({
   claimHeavyLocalJob: vi.fn(async () => ({
     ok: true, holder: {}, release: heavyClaimRelease, handoffTo: heavyClaimHandoff,
@@ -142,11 +143,8 @@ vi.mock('../../lib/mediaModels.js', async () => {
         revision: '6818f6c32d12b210915e44ad56a4228c2608f160',
         files: ['LICENSE', 'FL2VA/vae/video/config.json'],
       }],
-      // Deliberately a 1 GB floor rather than the shipped 128 GB: these suites
-      // must assert the same thing on every machine and in CI, and a real floor
-      // would make the capacity gate pass or fail with the runner's own RAM.
-      // The shipped table's numbers are pinned in lib/minimaxH3Memory.test.js.
-      memoryProfiles: [{ id: 'unified-8bit', name: 'Unified 8-bit', minMemoryGb: 1, minVramGb: null, unified: true }],
+      // A fixed host and the real declared floor keep admission independent of CI hardware.
+      memoryProfiles: [{ id: 'unified-8bit', name: 'Unified 8-bit', minMemoryGb: 128, minVramGb: null, unified: true }],
     },
     {
       id: 'minimax_h3_cuda', name: 'MiniMax H3 CUDA int8', runtime: 'minimax_h3_cuda',
@@ -2881,6 +2879,27 @@ describe('generateVideo — LoRA trigger-word weaving (#4665)', () => {
 });
 
 describe('generateVideo — heavy claim setup cleanup (#4364)', () => {
+  it('retains resolved settings before a pre-watch argument failure and performs startup cleanup', async () => {
+    const recorder = await import('./executionRecorder.js');
+    const renderArgs = await import('./renderArgs.js');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockClear();
+    const recordExecution = vi.fn(async () => true);
+    const recordDiagnostics = vi.fn(async () => true);
+    recorder.setVideoExecutionRecorder({ recordExecution, recordDiagnostics });
+    const build = vi.spyOn(renderArgs, 'buildArgs').mockImplementationOnce(() => { throw new Error('synthetic argument refusal'); });
+    try {
+      await expect(generateVideo({ jobId: 'pre-watch-receipt', modelId: 'ltx2_unified', prompt: 'Synthetic action', seed: 37,
+        width: 512, height: 512, numFrames: 25, fps: 24, mode: 'text' })).rejects.toThrow('synthetic argument refusal');
+      expect(recordExecution).toHaveBeenCalledWith('pre-watch-receipt', expect.objectContaining({ seed: 37, width: 512, height: 512, numFrames: 25, steps: 30 }));
+      expect(recordDiagnostics).toHaveBeenCalledWith('pre-watch-receipt', { termination: expect.objectContaining({ reason: 'refused' }) });
+      expect(spawnDetached).not.toHaveBeenCalled();
+    } finally {
+      build.mockRestore();
+      recorder.setVideoExecutionRecorder(null);
+    }
+  });
+
   it('releases the claim when local setup fails before spawn', async () => {
     mockPrepareLocalMemory.mockRejectedValueOnce(new Error('memory setup failed'));
 
@@ -3691,7 +3710,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const [, args] = spawnMock.mock.calls.find(([, childArgs]) => (
       Array.isArray(childArgs) && childArgs.some((arg) => basename(String(arg)) === helper)
     ));
-    expect(args[args.indexOf('--min-system-memory-gb') + 1]).toBe('1');
+    expect(args[args.indexOf('--min-system-memory-gb') + 1]).toBe(modelId === 'minimax_h3_8bit' ? '128' : '1');
     expect(args[args.indexOf('--memory-headroom-gb') + 1]).toBe(String(MINIMAX_H3_HOST_RESERVE_GB));
     // Only the MLX lane takes a server-selected profile: on CUDA the tier is
     // VRAM-driven, so it stays the runner's call on --offload-profile.

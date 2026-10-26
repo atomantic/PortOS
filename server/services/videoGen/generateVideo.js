@@ -22,6 +22,7 @@ import { randomUUID } from 'crypto';
 import { ensureDir, PATHS, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { recordVideoExecution, recordVideoExecutionDiagnostics } from './executionRecorder.js';
 import { federatedSourceAudioSchema } from '../../lib/federatedMediaWire.js';
 import { wan22FrameCountError } from './wan22Controls.js';
 import {
@@ -845,6 +846,7 @@ async function startPreparedLocalVideo({
   let stepwiseDir = null;
   let handedOff = false;
   try {
+    await recordVideoExecution(jobId, { ...meta, ...(batch ? { batchSeeds: batch.map(item => item.seed) } : {}) });
     // Each render gets one private preview directory. Runners overwrite the
     // fixed `preview.png` path atomically, so a long render cannot accumulate
     // one PNG per step and a stale preview can never cross job boundaries.
@@ -876,6 +878,9 @@ async function startPreparedLocalVideo({
     });
   } catch (err) {
     if (handedOff) throw err;
+    await recordVideoExecutionDiagnostics(jobId, { termination: {
+      exitCode: null, signal: null, reason: preparation.wasCanceled() ? 'canceled' : 'refused', observedAt: new Date().toISOString(),
+    } }).catch(error => console.error(`❌ Video preparation evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`));
     job.status = 'error';
     const reason = err.message || 'Failed to prepare video generation';
     console.error(`❌ Video generation preparation error [${jobId.slice(0, 8)}]: ${reason}`);

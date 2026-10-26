@@ -961,6 +961,118 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'completed');
   });
 
+  it('retains resolved execution seeds and bounded termination evidence across failure, cancellation and restart', async () => {
+    const ids = [];
+    const meta = { seed: 123456, modelId: 'example-mlx', width: 768, height: 768, numFrames: 141, fps: 24, steps: 9, mode: 'fflf' };
+    const { recordVideoExecution, recordVideoExecutionDiagnostics } = await import('../videoGen/executionRecorder.js');
+    for (const reason of ['failed', 'canceled']) {
+      const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx', prompt: 'Synthetic action' } });
+      ids.push(jobId);
+      await waitFor(() => stubs.generateVideo.mock.calls.some(([params]) => params.jobId === jobId));
+      await recordVideoExecution(jobId, meta);
+      const savedBeforeExit = JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs.find(j => j.id === jobId);
+      expect(savedBeforeExit).toMatchObject({ params: { seed: meta.seed }, videoExecution: { seed: meta.seed, parameters: { numFrames: 141 } } });
+      await recordVideoExecutionDiagnostics(jobId, { memory: { peakAllocatedBytes: 4096, allocatorApplied: true } });
+      if (reason === 'canceled') {
+        stubs.cancelVideo.mockReturnValue(true);
+        await mediaJobQueue.cancelJob(jobId);
+      }
+      await recordVideoExecutionDiagnostics(jobId, { memory: { peakAllocatedBytes: 2048 }, termination: {
+        exitCode: null, signal: reason === 'failed' ? 'SIGKILL' : 'SIGTERM', reason, observedAt: new Date().toISOString(),
+      } });
+      videoGenEvents.emit('failed', { generationId: jobId, error: reason === 'failed' ? 'Process killed' : 'Canceled while running' });
+      await waitFor(() => mediaJobQueue.getJob(jobId)?.status === reason);
+    }
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    for (const id of ids) {
+      expect(mediaJobQueue.getJob(id)).toMatchObject({ params: { seed: meta.seed }, videoExecution: {
+        seed: meta.seed, diagnostics: { memory: { peakAllocatedBytes: 4096 }, termination: { exitCode: null } },
+      } });
+    }
+    expect(mediaJobQueue.getJob(ids[0]).videoExecution.diagnostics.termination).toMatchObject({ signal: 'SIGKILL', reason: 'failed' });
+  });
+
+  it('durably retains a first seed resolved after cancellation without reviving the canceled job', async () => {
+    let resolveMetadata;
+    const metadataReady = new Promise(resolve => { resolveMetadata = resolve; });
+    const { recordVideoExecution } = await import('../videoGen/executionRecorder.js');
+    const meta = { seed: 765432, modelId: 'example-mlx', width: 768, height: 768, numFrames: 141, fps: 24, steps: 9 };
+    stubs.generateVideo.mockImplementation(async ({ jobId }) => {
+      await metadataReady;
+      await recordVideoExecution(jobId, meta);
+    });
+    stubs.cancelVideo.mockReturnValue(true);
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    await mediaJobQueue.cancelJob(jobId);
+    videoGenEvents.emit('failed', { generationId: jobId, error: 'Canceled while resolving metadata' });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'canceled');
+    expect(mediaJobQueue.getJob(jobId)).not.toHaveProperty('videoExecution');
+    resolveMetadata();
+    await waitFor(() => JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs
+      .some(job => job.id === jobId && job.status === 'canceled' && job.videoExecution?.seed === meta.seed));
+    await expect(recordVideoExecution(jobId, { ...meta, seed: meta.seed + 1 })).rejects.toThrow('different seed');
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'canceled', params: { seed: meta.seed }, videoExecution: { seed: meta.seed } });
+    expect(stubs.generateVideo).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains one combined memory and signal receipt when terminal settlement recovers a diagnostic write failure', async () => {
+    const { recordVideoExecution, recordVideoExecutionDiagnostics } = await import('../videoGen/executionRecorder.js');
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.some(([params]) => params.jobId === jobId));
+    await recordVideoExecution(jobId, { seed: 37, modelId: 'example-mlx', width: 768, height: 768, numFrames: 141, fps: 24, steps: 9 });
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    let rejectDiagnostic = true;
+    atomicWriteSpy.mockImplementation(async (file, data, ...args) => {
+      if (rejectDiagnostic && data.jobs?.some(job => job.id === jobId && job.videoExecution?.diagnostics?.termination)) {
+        rejectDiagnostic = false;
+        throw new Error('synthetic final evidence disk failure');
+      }
+      return realWrite(file, data, ...args);
+    });
+    try {
+      await expect(recordVideoExecutionDiagnostics(jobId, {
+        memory: { peakAllocatedBytes: 4096 },
+        termination: { exitCode: null, signal: 'SIGKILL', reason: 'failed', observedAt: new Date().toISOString() },
+      })).rejects.toThrow('synthetic final evidence disk failure');
+      videoGenEvents.emit('failed', { generationId: jobId, error: 'Process killed' });
+      await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'failed');
+      await importFresh();
+      await mediaJobQueue.initMediaJobQueue();
+      expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'failed', videoExecution: {
+        diagnostics: { memory: { peakAllocatedBytes: 4096 }, termination: { signal: 'SIGKILL', reason: 'failed' } },
+      } });
+    } finally {
+      atomicWriteSpy.mockImplementation(realWrite);
+    }
+  });
+
+  it('rejects a pre-launch receipt storage failure before the provider can launch its child', async () => {
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    let rejectReceipt = true;
+    atomicWriteSpy.mockImplementation(async (file, data, ...args) => {
+      if (rejectReceipt && data.jobs?.some(j => j.status === 'running' && j.videoExecution)) {
+        rejectReceipt = false;
+        throw Object.assign(new Error('synthetic receipt disk failure'), { code: 'EACCES' });
+      }
+      return realWrite(file, data, ...args);
+    });
+    const launched = vi.fn();
+    stubs.generateVideo.mockImplementation(async ({ jobId }) => {
+      const { recordVideoExecution } = await import('../videoGen/executionRecorder.js');
+      await recordVideoExecution(jobId, { seed: 7, modelId: 'example-mlx', width: 768, height: 768, numFrames: 141, fps: 24, steps: 9 });
+      launched();
+    });
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx' } });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'failed');
+    expect(launched).not.toHaveBeenCalled();
+    expect(mediaJobQueue.getJob(jobId).error).toContain('synthetic receipt disk failure');
+    atomicWriteSpy.mockImplementation(realWrite);
+  });
+
   it('debounce-persists live progress before a terminal transition', async () => {
     const file = join(tempDataDir, 'media-jobs.json');
     const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'restart snapshot' } });

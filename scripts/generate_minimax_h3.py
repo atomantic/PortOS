@@ -23,8 +23,9 @@ pool. PortOS passes the host floor its declared placement profile needs
 (`--min-system-memory-gb`) and the reserve it holds back for the operating
 system (`--memory-headroom-gb`); `enforce_system_memory` refuses a box below the
 floor before any weight is read (against TOTAL RAM — the reserve is not netted
-off first), and `apply_memory_limit` caps MLX's allocator at the rest so a
-render that overruns fails as a job instead of wedging the machine.
+off first). A required live `--memory-budget-bytes` bounds the allocator before
+weights load; typed samples retain measured allocation/process peaks. This is
+not a whole-host memory guarantee or evidence of why a signal was delivered.
 """
 
 from __future__ import annotations
@@ -105,57 +106,52 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def report_memory(stage: str, **values) -> None:
+    """Bounded numeric evidence; missing counters remain absent, never zero."""
+    sample = {"stage": stage, **values}
+    try:
+        import mlx.core as mx
+
+        peak = mx.get_peak_memory()
+        if isinstance(peak, (int, float)) and 0 <= peak < 2**53:
+            sample["peakAllocatedBytes"] = int(peak)
+    except (AttributeError, RuntimeError, ImportError):
+        pass
+    try:
+        import resource
+
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        sample["peakRssBytes"] = int(rss if sys.platform == "darwin" else rss * 1024)
+    except (AttributeError, OSError, ImportError):
+        pass
+    print("H3MEMORY:" + json.dumps(sample), file=sys.stderr, flush=True)
+
+
 def apply_memory_limit(args: argparse.Namespace, total_gb: float | None, vision_loaded: bool) -> None:
-    """Cap MLX's allocator at the machine's RAM minus PortOS's reserve.
+    """Require the live allocator envelope before reading any model weights.
 
-    Unified memory means an H3 render and the rest of the machine draw on the
-    same pool, and MLX's default limit is the whole of it. A render that grows
-    into the last gigabyte does not fail on its own — it takes PortOS, Postgres
-    and the desktop down with it, and what the user sees is a hung machine
-    rather than a failed job. An explicit limit converts that into an
-    out-of-memory error the runner reports normally.
-
-    Only the ALLOCATOR limit is set. The wired limit is a different lever with a
-    much lower safe ceiling — MLX raises when it is set above the recommended
-    max working set, which on a 128 GB Mac is well under RAM-minus-reserve — so
-    driving it from this number would kill the runner outright. It stays at the
-    pin's own default until someone measures a value for it.
-
-    Best-effort by design: the setter has moved between `mx` and `mx.metal`
-    across MLX releases and can reject a limit this build dislikes, so both the
-    lookup and the call are guarded. An MLX without it still renders — it just
-    keeps the unbounded behaviour it had before this existed, which is why a
-    failure here is reported rather than raised.
+    MLX's allocator bound is not a whole-process limit. Keep the wired-limit
+    policy unchanged and retain measured peaks rather than claiming OOM from a
+    termination signal alone.
     """
-    profile = args.memory_profile or 'unified'
-    tower = 'loaded' if vision_loaded else 'skipped'
-    headroom_gb = max(0.0, args.memory_headroom_gb or 0.0)
-    if total_gb is None:
-        print(
-            f"STATUS:MiniMax H3 placement: {profile} "
-            f"· host memory unknown, allocator left unbounded · vision tower {tower}",
-            file=sys.stderr, flush=True,
-        )
-        return
-    limit_gb = max(1.0, total_gb - headroom_gb)
-
+    budget = getattr(args, "memory_budget_bytes", None)
+    if total_gb is None or type(budget) is not int or budget <= 0:
+        raise RuntimeError("MiniMax H3 requires measured host memory and a positive admitted --memory-budget-bytes before loading weights.")
+    limit = min(budget, int(max(0, total_gb - max(0, args.memory_headroom_gb or 0)) * 1e9))
+    if limit <= 0:
+        raise RuntimeError("MiniMax H3 has no allocator budget after the host reserve.")
     import mlx.core as mx
 
     setter = getattr(mx, "set_memory_limit", None) or getattr(getattr(mx, "metal", None), "set_memory_limit", None)
     if setter is None:
-        applied = "no allocator limit on this MLX build"
-    else:
-        try:
-            setter(int(limit_gb * 1e9))
-            applied = f"allocator capped at {limit_gb:.0f} GB"
-        except Exception as exc:  # a pin that rejects the limit must not lose the render
-            applied = f"allocator cap rejected by MLX ({type(exc).__name__}: {exc})"
-    print(
-        f"STATUS:MiniMax H3 placement: {profile} "
-        f"· {total_gb:.0f} GB RAM, reserve {headroom_gb:.0f} GB [{applied}] "
-        f"· vision tower {tower}",
-        file=sys.stderr, flush=True,
-    )
+        raise RuntimeError("MiniMax H3 cannot enforce the admitted allocator bound on this MLX build; no model was loaded.")
+    try:
+        setter(limit)
+    except Exception as exc:
+        raise RuntimeError(f"MiniMax H3 allocator bound was rejected ({type(exc).__name__}); no model was loaded.") from None
+    report_memory("allocator", allocatorLimitBytes=limit, allocatorApplied=True)
+    tower = "loaded" if vision_loaded else "skipped"
+    print(f"STATUS:MiniMax H3 placement: {args.memory_profile or 'unified'} · allocator capped at {limit / 1e9:.1f} GB · vision tower {tower}", file=sys.stderr, flush=True)
 
 
 def require_ffmpeg() -> str:
@@ -987,6 +983,7 @@ class ProgressWriter:
             )
             if self._preview is not None:
                 self._preview.publish(int(step), int(total))
+            report_memory("denoise")
             return
         print(clean, file=sys.stderr, flush=True)
 
@@ -1323,7 +1320,9 @@ def main() -> int:
             [{"path": p, "scale": s} for p, s in zip(args.lora, args.lora_scale)],
         )
 
+    report_memory("loaded")
     render_outputs(pipe, args, images, save_mp4, batch_seeds, history)
+    report_memory("completed")
     return 0
 
 

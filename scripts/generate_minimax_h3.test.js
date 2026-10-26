@@ -157,6 +157,40 @@ const filePin = (encodeBody) => [
 ].join('\n');
 
 describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
+  it('enforces the live allocator envelope and publishes measured peaks without model loading', () => {
+    const output = runPython(`${importRunner}\n${captureWarnings}\n${[
+      'import types, json',
+      'core = types.ModuleType("mlx.core")',
+      'core.set_memory_limit = lambda n: print("CAP:" + str(n))',
+      'core.get_peak_memory = lambda: 12345',
+      'mlx = types.ModuleType("mlx"); mlx.core = core',
+      'sys.modules["mlx"] = mlx; sys.modules["mlx.core"] = core',
+      'args = types.SimpleNamespace(memory_profile="unified-8bit", memory_headroom_gb=16, memory_budget_bytes=1000000000)',
+      'runner.apply_memory_limit(args, 137.4, True)',
+    ].join('\n')}`);
+    expect(output).toContain('CAP:1000000000');
+    const sample = JSON.parse(output.split('\n').find(line => line.startsWith('H3MEMORY:')).slice('H3MEMORY:'.length));
+    expect(sample).toMatchObject({ stage: 'allocator', allocatorLimitBytes: 1000000000, allocatorApplied: true, peakAllocatedBytes: 12345 });
+  });
+
+  it.each(['missing-budget', 'missing-setter', 'rejected-setter'])('refuses %s before a model can load', scenario => {
+    const output = runPython(`${importRunner}\n${captureWarnings}\n${[
+      'import types',
+      'core = types.ModuleType("mlx.core")',
+      ...(scenario === 'rejected-setter' ? ['def reject(n): raise RuntimeError("unsupported cap")', 'core.set_memory_limit = reject'] : []),
+      'mlx = types.ModuleType("mlx"); mlx.core = core',
+      'sys.modules["mlx"] = mlx; sys.modules["mlx.core"] = core',
+      `args = types.SimpleNamespace(memory_profile="unified-8bit", memory_headroom_gb=16, memory_budget_bytes=${scenario === 'missing-budget' ? 'None' : '1000000000'})`,
+      'try:',
+      '    runner.apply_memory_limit(args, 137.4, True)',
+      '    print("UNBOUNDED")',
+      'except RuntimeError as exc:',
+      '    print("REFUSED:" + str(exc))',
+    ].join('\n')}`);
+    expect(output).toContain('REFUSED:');
+    expect(output).not.toContain('UNBOUNDED');
+  });
+
   it('defaults the MLX runner to nine sigma points for eight forwards', () => {
     const output = runPython(`${importRunner}\n${[
       'import sys',

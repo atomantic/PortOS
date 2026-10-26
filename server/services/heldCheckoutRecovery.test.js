@@ -67,7 +67,9 @@ const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fe
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, execGit: async (args, cwd, options) => {
+  return { ...actual,
+    execGitSafe: (args, cwd, options) => owned.run('git', () => actual.execGitSafe(args, cwd, options)),
+    execGit: async (args, cwd, options) => {
     if (injected.onSnapshot && args[0] === 'ls-files' && args[1] === '-u') await injected.onSnapshot();
     // Pauses an archive mid-write, after its first snapshot and before its re-read.
     if (injected.onBundle && args.includes('bundle') && args.includes('create')) await injected.onBundle();
@@ -218,6 +220,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners, ...opts });
   }
   const archives = async () => (existsSync(heldCheckoutArchiveRoot(cosDir)) ? readdir(heldCheckoutArchiveRoot(cosDir)) : []);
+  async function addProofOrigin() {
+    // Keep forge identity synthetic while default-branch discovery stays local.
+    // Only the explicitly intercepted proof fetch may read the private remote.
+    await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+    await execGit(['update-ref', 'refs/remotes/origin/main', 'main'], repo);
+    await execGit(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], repo);
+  }
   const makeClean = async (path) => {
     await execGit(['checkout', '--', '.'], path);
     await execGit(['clean', '-fdx'], path);
@@ -2210,7 +2219,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await execGit(['config', 'user.name', 'Test'], remote);
     await execGit(['commit', '--allow-empty', '-m', 'unrelated remote main advance'], remote);
     c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
-    await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+    await addProofOrigin();
     injected.fetchRemote = remote;
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
@@ -2238,7 +2247,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       await execGit(['commit', '--allow-empty', '-m', message], remote);
       heads.push((await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim());
     }
-    await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+    await addProofOrigin();
     injected.fetchRemote = remote;
     let reads = 0;
     c.opts.readForge = async () => ({ ...c.forge, defaultHead: heads[Math.min(reads++, heads.length - 1)] });
@@ -2277,7 +2286,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const merged = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
     expect((await execGit(['cat-file', '-e', `${merged}^{commit}`], repo, { ignoreExitCode: true })).exitCode)
       .not.toBe(0);
-    await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+    await addProofOrigin();
     injected.fetchRemote = remote;
     const prUrl = 'https://github.com/example/repo/pull/42';
     const forge = { repository: 'github.com/example/repo', prUrl, prHead: release.head,
@@ -2722,7 +2731,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       await execGit(['commit', '--allow-empty', '-m', 'new remote default'], remote);
       shippedDefault = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
       expect((await execGit(['cat-file', '-e', `${shippedDefault}^{commit}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
-      await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+      await addProofOrigin();
       injected.fetchRemote = remote;
     }
     await execGit(['reset', '--hard', 'HEAD^'], repo);
@@ -3171,7 +3180,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         await execGit(['config', 'user.name', 'Test'], remote);
         await execGit(['commit', '--allow-empty', '-m', 'remote-only default advance'], remote);
         c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
-        await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+        await addProofOrigin();
         injected.fetchRemote = remote;
       }
     }
