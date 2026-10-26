@@ -395,7 +395,7 @@ export const refreshBranchReconcileInventory = (appId, options = {}) => request(
   method: 'POST', body: JSON.stringify({ appId }), ...options
 });
 
-// Archive and retire one held checkout named exactly as the last branch-reconcile inventory reported it.
+// Retire one merged, clean held checkout in place named exactly as the last branch-reconcile inventory reported it.
 export const retireBranchReconcileCheckout = ({ appId, path, head, branch = null, locked, lockReason = null, review }, options = {}) => request('/cos/schedule/branch-reconcile/checkouts/retire', {
   method: 'POST',
   body: JSON.stringify({ appId, path, head, branch, locked, lockReason, review }),
