@@ -32,6 +32,7 @@ export const DB_TEST_INCLUDE = [
   'services/catalogDB.test.js',
   'services/catalogDB.facets.db.test.js',
   'services/catalogDB/listIngredients.db.test.js',
+  'services/catalogDB/payloadKey.db.test.js',
   'services/catalogDB.media.db.test.js',
   'services/catalogPrimitiveUsage.db.test.js',
   'services/catalogSync.tombstoneRevival.db.test.js',

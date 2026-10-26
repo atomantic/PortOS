@@ -6,6 +6,7 @@
  * Also the FTS / vector / hybrid (RRF) search paths over the ingredient corpus.
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import { query, withTransaction, arrayToPgvector } from '../../lib/db.js';
 import { reciprocalRankFusion } from '../../lib/rrfRanking.js';
 import {
@@ -35,24 +36,34 @@ import { assertCatalogIdentityWritable, getCatalogIdentityAccessForIds } from '.
 import { toPgJson } from '../../lib/pgJson.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
-// Lock only the stored flag under the row lock: a card must never write a
-// stale payload, sanitize legacy fields away, or spend an embedding call.
-export async function setIngredientLock(id, locked) {
+// Write ONE payload key under the row lock: a card or a side panel must never
+// write a stale whole payload, sanitize legacy fields away, or spend an
+// embedding call. `guard(current)` may throw to refuse by type; `null` clears
+// the key. Returns null for a missing row.
+export async function setIngredientPayloadKey(id, key, value, { source = 'user', guard } = {}) {
   return withTransaction(async client => {
     await assertCatalogIdentityWritable(id, { client });
     const { rows: [current] } = await client.query(`SELECT * FROM catalog_ingredients
       WHERE id = catalog_canonical_ingredient_id($1) AND deleted = false FOR UPDATE`, [id]);
     if (!current) return null;
-    if (!BIBLE_SANITIZERS[current.type]) throw new ServerError('This ingredient type has no canon lock', { status: 400 });
-    if (current.payload?.locked === locked) return rowToIngredient(current);
-    const { rows: [row] } = await client.query(`UPDATE catalog_ingredients
-      SET payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{locked}', $2::jsonb, true)
-      WHERE id = $1 RETURNING *`, [current.id, toPgJson(locked)]);
+    guard?.(current);
+    if (isDeepStrictEqual(current.payload?.[key], value ?? undefined)) return rowToIngredient(current);
+    const { rows: [row] } = value === null
+      ? await client.query('UPDATE catalog_ingredients SET payload = payload - $2::text WHERE id = $1 RETURNING *', [current.id, key])
+      : await client.query(`UPDATE catalog_ingredients
+          SET payload = jsonb_set(COALESCE(payload, '{}'::jsonb), ARRAY[$2::text], $3::jsonb, true)
+          WHERE id = $1 RETURNING *`, [current.id, key, toPgJson(value)]);
     const updated = rowToIngredient(row);
-    await recordIngredientRevision(updated, { client });
+    await recordIngredientRevision(updated, { source, client });
     return updated;
   });
 }
+
+export const setIngredientLock = (id, locked) => setIngredientPayloadKey(id, 'locked', locked, {
+  guard: (current) => {
+    if (!BIBLE_SANITIZERS[current.type]) throw new ServerError('This ingredient type has no canon lock', { status: 400 });
+  },
+});
 
 // `{ client }` is optional — when supplied, SQL runs on the caller's transaction
 // client (so the write rolls back if a later step in the same `withTransaction`

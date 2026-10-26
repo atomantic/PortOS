@@ -10,7 +10,7 @@
 import CatalogReferenceLibrary from '../components/catalog/CatalogReferenceLibrary.jsx';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useLocation, Link } from 'react-router';
-import { Sparkles, Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt } from 'lucide-react';
+import { Sparkles, Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import Modal from '../components/ui/Modal.jsx';
@@ -56,6 +56,7 @@ import CatalogRelatedImages from '../components/catalog/CatalogRelatedImages';
 import CatalogSheetsPanel, { ReferenceSheetPanel } from '../components/catalog/CatalogSheetsPanel';
 import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
 import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
+import GreyboxPanel from '../components/catalog/GreyboxPanel';
 import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
 import CharacterDetailEditor from '../components/universe/CharacterDetailEditor';
 import { RevealTimingField } from '../components/pipeline/CanonCard';
@@ -134,6 +135,7 @@ const DETAIL_TAB_ICONS = {
   sheets: LayoutGrid,
   looks: Shirt,
   plates: Clapperboard,
+  greybox: Box,
   references: Images,
   images: ImageIcon,
 };
@@ -539,6 +541,18 @@ function IngredientEditor() {
     refreshRevisions();
     return true;
   }, [record, refreshRevisions, identityReadOnly]);
+
+  // The Greybox tab saves straight onto the SAVED payload; copy just `greybox`
+  // into the draft so the next profile Save does not write the old layout back.
+  const handleGreyboxSaved = useCallback((updated) => {
+    const persisted = ingredientPayload(updated.payload);
+    setRecord((prev) => (prev?.id === updated.id ? { ...prev, ...updated, payload: persisted } : prev));
+    setPayload((cur) => {
+      const { greybox: _previous, ...rest } = cur;
+      return persisted.greybox ? { ...rest, greybox: persisted.greybox } : rest;
+    });
+    refreshRevisions();
+  }, [refreshRevisions]);
 
   // A universe-delegated sheet landed as a canon pointer, which the canon→catalog
   // projection already copied onto this row. Pull just the pointer fields into
@@ -991,6 +1005,17 @@ function IngredientEditor() {
             missingMedia={missingMedia}
             onSetRole={identityReadOnly ? undefined : handleSetMediaRole}
             onDetach={identityReadOnly ? undefined : handleDetachMedia}
+          />
+        )}
+
+        {activeTab === 'greybox' && mediaReady && (
+          <GreyboxPanel
+            key={record.id}
+            record={record}
+            media={media}
+            readOnly={identityReadOnly}
+            onSaved={handleGreyboxSaved}
+            onCaptured={refreshMedia}
           />
         )}
 

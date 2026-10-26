@@ -256,6 +256,8 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['PATCH /api/catalog/ingredients/:id/media/library', RECORDS],
   ['POST /api/catalog/ingredients/:id/media/portrait', RECORDS],
   ['POST /api/catalog/ingredients/:id/media/upload', RECORDS],
+  ['PUT /api/catalog/ingredients/:id/greybox', RECORDS],
+  ['POST /api/catalog/ingredients/:id/greybox/shots/:shotId/capture', RECORDS],
   ['POST /api/catalog/ingredients/:id/media/voice', TOOL_FREE_INFERENCE],
   ['DELETE /api/catalog/ingredients/:id/relations', REMOVES_RECORD],
   ['POST /api/catalog/ingredients/:id/relations', RECORDS],

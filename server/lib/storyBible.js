@@ -1106,6 +1106,10 @@ export function sanitizePlace(raw, { idPrefix = DEFAULT_ID_PREFIX.place, preserv
     firstAppearance: ensureFirstAppearance(raw.firstAppearance),
     evidence: cleanStringArray(raw.evidence, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
     missingFromProse: cleanStringArray(raw.missingFromProse, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
+    // Greybox layout (docs/plans/2026-10-25-place-greybox.md): validated by
+    // `greyboxSceneSchema` where it is written, passed through here so a later
+    // profile save does not drop it.
+    ...(raw.greybox && typeof raw.greybox === 'object' && !Array.isArray(raw.greybox) ? { greybox: raw.greybox } : {}),
     ...applyCanonExtras(raw),
     createdAt: created,
     updatedAt: preserveTimestamps && isStr(raw.updatedAt) ? raw.updatedAt : nowIso(),

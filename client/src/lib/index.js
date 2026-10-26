@@ -40,6 +40,7 @@ export * from './catalogForms.js';
 export * from './catalogTypes.js';
 export * from './creativeDirectorPlan.js';
 export * from './creativeLibraries.js';
+export * from './greybox.js';
 export * from './creativeDirectorPreview.js';
 export * from './creativeDirectorStatus.js';
 export * from './editorialRoadmap.js';

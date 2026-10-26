@@ -35,3 +35,8 @@ and the topic docs elsewhere under `docs/`.
 - [2026-10-25 — shared character workspace](./2026-10-25-character-workspace.md):
   rich shared cards and one compact canonical editor with explicit drafts,
   bounded context reads and atomic locks.
+
+- [2026-10-25 — place greybox](./2026-10-25-place-greybox.md):
+  a 3D layout reference (Three.js spec or Blender GLB) as a facet of the Place
+  primitive, with landmarks, figure anchors and camera shots whose captures feed
+  music-video shot references.
