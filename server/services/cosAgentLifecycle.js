@@ -410,16 +410,18 @@ export async function retryCompletionCheckoutCapture(agentId, { retirement } = {
     const original = await getAgentRecord(agentId);
     const meta = original?.metadata;
     const seed = meta?.checkoutSeeds?.length === 1 ? meta.checkoutSeeds[0] : null;
-    // Inline agents can merge successfully before their terminal capture fails.
+    // Inline and branch-selecting claim agents can merge before terminal capture fails.
     // Resolve fresh forge proof outside the ownership lock; the locked replay
     // below still rechecks the original generation, head and every later owner.
     if (original?.status === 'completed' && original.result?.executionSuccess === true
       && original.result.validationPassed !== false && meta.checkoutCapture?.status === 'pending'
       && meta.checkoutCapture.unknown === true && meta.checkoutCapture.targets?.length === 0
-      && meta.prOpenedBy === 'agent-inline' && meta.configOpenPR === true
       && seed?.agentId === agentId && seed.startedAt === original.startedAt
-      && meta.prDeliveryTarget?.branch === seed.branch
-      && await realpath(meta.prDeliveryTarget.workspacePath || '').catch(() => null) === seed.path) {
+      && ((meta.prOpenedBy === 'agent-inline' && meta.configOpenPR === true
+        && meta.prDeliveryTarget?.branch === seed.branch
+        && await realpath(meta.prDeliveryTarget.workspacePath || '').catch(() => null) === seed.path)
+        || (meta.configClaimFlow === true && hasClaimCheckoutBindings(meta) && meta.claimBranches?.includes(seed.branch)
+          && await realpath(meta.sourceWorkspace || meta.workspacePath || '').catch(() => null) === seed.repoPath))) {
       const { execGit } = await import('../lib/execGit.js');
       const head = await execGit(['rev-parse', '--verify', 'HEAD^{commit}'], seed.path, {
         env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_REPLACE_OBJECTS: '1' }, timeout: 5000,
@@ -439,10 +441,14 @@ export async function retryCompletionCheckoutCapture(agentId, { retirement } = {
     const pending = agent?.metadata?.checkoutCapture;
     const knownPr = agent?.metadata?.branchCompletionPolicy?.prUrl || agent?.metadata?.reviewLoopMergeTarget?.url;
     const inlineTarget = agent?.metadata?.prDeliveryTarget;
-    const verifiedInline = !knownPr && agent?.metadata?.prOpenedBy === 'agent-inline' && agent.metadata.configOpenPR === true
+    const verifiedInline = !knownPr
       && retirement?.verifiedPrUrl === retirement?.prUrl && retirement?.observedStartedAt === agent?.startedAt
-      && inlineTarget?.branch === retirement?.branch
-      && await realpath(inlineTarget?.workspacePath || '').catch(() => null) === retirement?.path;
+      && ((agent?.metadata?.prOpenedBy === 'agent-inline' && agent.metadata.configOpenPR === true
+        && inlineTarget?.branch === retirement?.branch
+        && await realpath(inlineTarget?.workspacePath || '').catch(() => null) === retirement?.path)
+        || (agent?.metadata?.configClaimFlow === true && hasClaimCheckoutBindings(agent.metadata)
+          && agent.metadata.claimBranches?.includes(retirement?.branch)
+          && await realpath(agent.metadata.sourceWorkspace || agent.metadata.workspacePath || '').catch(() => null) === retirement?.repoPath));
     const reviewedRetirement = retirement?.verifiedMergedHead === retirement?.head
       && typeof retirement?.prUrl === 'string' && (retirement.prUrl === knownPr || verifiedInline)
       && agent?.result?.executionSuccess === true && agent.result.validationPassed !== false
