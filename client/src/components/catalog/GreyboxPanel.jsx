@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Camera, Check, Loader2, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import toast from '../ui/Toast';
+import { GREYBOX_STARTERS } from '../../lib/greyboxStarters';
 import MusicVideoLlmPicker from '../musicVideo/MusicVideoLlmPicker';
 import SentPromptPanel from '../media/SentPromptPanel';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
@@ -163,6 +164,10 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
 
   const startBlank = () => run('blank', () => persist(blankGreybox()));
 
+  const startStarter = (starter) => run(starter.id, async () => {
+    if (await persist(structuredClone(starter.scene))) selectShot(starter.scene.shots[0].id);
+  });
+
   const generate = () => run('draft', async () => {
     const res = await draftCatalogGreybox(record.id, {
       instruction, ...llm, useCurrent: Boolean(saved) && !fromScratch,
@@ -199,10 +204,26 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
 
       {!scene && (
         <div className="rounded-lg border border-dashed border-port-border p-4 text-sm text-gray-300 space-y-3">
-          <p>No greybox yet. Build one by hand from a blank room, or describe it below and let a model draft it.</p>
+          <p>No greybox yet. Choose a starter, start from a blank room, or describe it below and let a model draft it.</p>
           <button type="button" className={actionButton} onClick={startBlank} disabled={locked || blocked}>
             {busy === 'blank' ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Plus size={14} aria-hidden="true" />} Start from a blank room
           </button>
+          <div className="space-y-2" role="group" aria-label="Start from a starter">
+            <h3 className="text-sm font-medium text-white">Start from a starter</h3>
+            <p className="text-xs text-gray-400">Ready-made layouts and camera shots. No AI call needed.</p>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {GREYBOX_STARTERS.map((starter) => (
+                <button key={starter.id} type="button" onClick={() => startStarter(starter)} disabled={locked || blocked}
+                  className="min-h-[44px] min-w-0 rounded-lg border border-port-border p-3 text-left hover:border-port-accent/60 disabled:opacity-40">
+                  <span className="flex items-center gap-2 text-sm font-medium text-white">
+                    {busy === starter.id && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+                    {starter.label}
+                  </span>
+                  <span className="mt-1 block text-xs text-gray-400">{starter.description}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 

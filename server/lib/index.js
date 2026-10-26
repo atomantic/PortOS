@@ -230,6 +230,7 @@ export * from './contextBudget.js';
 export * from './cursor.js';
 export * from './greyboxPrompt.js';
 export * from './greyboxScene.js';
+export * from './greyboxStarters.js';
 export * from './greyboxVocabulary.js';
 export * from './grok.js';
 export * from './falVideoModels.js';

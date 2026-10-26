@@ -7,6 +7,7 @@ export * from './publicGuestRoutes.js';
 // === Prompt & rendering (some re-export server/lib/, others are byte-for-byte mirrors; see client/src/lib/README.md) ===
 export * from './canonPrompt.js';
 export * from './cleanPlatePrompt.js';
+export * from './greyboxStarters.js';
 export * from './composeStyledPrompt.js';
 export * from './decks.js';
 export * from './personaTraitBlend.js';
