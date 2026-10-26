@@ -1,7 +1,7 @@
 /** Upgrade bookkeeping only: this module never removes a checkout/ref or asserts
  * an unrecorded deletion succeeded. Fresh local work always stays actionable. */
 import { devNull } from 'node:os';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { spawn } from '../lib/childProcess.js';
 import { execGit } from '../lib/execGit.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
@@ -91,6 +91,63 @@ function targetFor(outcome, row, repoPath, agents) {
       && (!row.path || samePath(row.path, capture.path)) && (!oid(row.head) || row.head === capture.head)
       && !row.checkoutIdentity && completedCheckoutReceiptValid(agent, capture)));
   return captures.length === 1 ? { target: { ...row, ...captures[0] } } : null;
+}
+
+// A branch-only scan placeholder has no physical generation to compare with a
+// later complete receipt. Bind only one already-written service receipt; never
+// infer a deletion from missing files or promote a new incident into migration 443.
+const receiptIdentity = row => JSON.stringify([row.branch, row.path, row.head, row.checkoutIdentity, row.retiredAt, row.archiveDir ?? null]);
+const placeholder = row => ['retirement-receipt-unverified', 'retirement-provenance-unverified'].includes(row?.reason)
+  && typeof row.branch === 'string' && row.branch && row.path == null && row.head == null
+  && row.checkoutIdentity == null && row.locked !== true && Number.isFinite(Date.parse(row.createdAt));
+
+/** Metadata repair only. Complete receipts and their original timestamps remain
+ * immutable; optional receipt-local observations retain what was reconciled. */
+export async function reconcileRecordedReceiptPlaceholders(appId, outcome) {
+  const rows = [...new Map([...(outcome?.retirementObligations || []), ...(outcome?.remaining || [])]
+    .filter(placeholder).map(row => [legacyRetirementKey(row), row])).values()];
+  if (!rows.length) return outcome;
+  const receipts = [...(outcome.retired || []), ...Object.values(outcome.retirementReceiptEvidence || {})];
+  const bindings = rows.flatMap(observation => {
+    const observed = Math.max(Date.parse(observation.createdAt), Date.parse(observation.observedAt || observation.createdAt));
+    const candidates = [...new Map(receipts.filter(row => row.branch === observation.branch && row.branchDeleted === true
+      && typeof row.path === 'string' && isAbsolute(row.path) && oid(row.head) && /^[a-f0-9]{64}$/.test(row.checkoutIdentity || '')
+      && Number.isFinite(Date.parse(row.retiredAt)) && Date.parse(row.retiredAt) >= observed && Date.parse(row.retiredAt) <= Date.now())
+      .map(row => [receiptIdentity(row), row])).values()];
+    if (candidates.length !== 1) return [];
+    const receipt = candidates[0];
+    if ((receipt.settledPlaceholders || []).length >= 1000
+      && !receipt.settledPlaceholders.some(row => legacyRetirementKey(row.observation) === legacyRetirementKey(observation))) return [];
+    return [{ observation, receipt }];
+  });
+  if (!bindings.length) return outcome;
+  const [{ getAppById }, { readClaimOwnershipAgents }, { listWorktrees }] = await Promise.all([
+    import('./apps.js'), import('./cosClaimOwnership.js'), import('./worktreeManager.js'),
+  ]);
+  const app = await getAppById(appId);
+  if (!app?.repoPath) return outcome;
+  const [agents, trees] = await Promise.all([readClaimOwnershipAgents(), listWorktrees(app.repoPath)]);
+  if (!Array.isArray(agents) || !Array.isArray(trees)) return outcome;
+  const accepted = [];
+  const identities = new Map();
+  for (const binding of bindings) if (await absent(app.repoPath, binding.receipt, trees, agents, identities)) accepted.push(binding);
+  if (!accepted.length) return outcome;
+  const settledAt = new Date().toISOString();
+  const keys = new Set(accepted.map(row => legacyRetirementKey(row.observation)));
+  const annotate = receipt => {
+    const matches = accepted.filter(row => receiptIdentity(row.receipt) === receiptIdentity(receipt));
+    if (!matches.length) return receipt;
+    const settledPlaceholders = [...(receipt.settledPlaceholders || [])];
+    for (const { observation } of matches) if (!settledPlaceholders.some(row => legacyRetirementKey(row.observation) === legacyRetirementKey(observation))) {
+      settledPlaceholders.push({ observation, settledAt });
+    }
+    return { ...receipt, settledPlaceholders };
+  };
+  return { ...outcome, updatedAt: settledAt,
+    remaining: outcome.remaining?.filter(row => !keys.has(legacyRetirementKey(row))),
+    retirementObligations: outcome.retirementObligations?.filter(row => !keys.has(legacyRetirementKey(row))),
+    retired: outcome.retired?.map(annotate),
+    retirementReceiptEvidence: Object.fromEntries(Object.entries(outcome.retirementReceiptEvidence || {}).map(([key, receipt]) => [key, annotate(receipt)])) };
 }
 
 export async function _planLegacyRetirementReconciliation({ repoPath, outcome, agents, trees, defaultHead }, options = {}) {
