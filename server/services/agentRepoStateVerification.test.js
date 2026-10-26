@@ -292,6 +292,44 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(releaseRetryHold).toHaveBeenCalledOnce();
   });
 
+  it('keeps a merged delivery policy hold in service recovery without retrying the review task', async () => {
+    const pending = { ...task({ prCompletion: 'review-then-merge', reviewLoopFollowUp: 'true' }), status: 'in_progress' };
+    pending.metadata = { ...pending.metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1', totalSpawnCount: '2' };
+    getTaskById.mockResolvedValue(pending);
+    const state = { ...agentState({ repoStateVerification: { status: 'pending' } }),
+      result: { success: false, executionSuccess: true, cleanupPending: true } };
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    listWorktrees.mockResolvedValue([RELEASE]);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/7', detail: 'MERGED' });
+    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'retirement-policy-not-legacy-completed' });
+    // Repeated completion sweeps must retain ownership and the original budget.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(await run({ task: pending, success: false, agentState: state })).toMatchObject({
+        verified: false, skipReason: 'retirement-policy-not-legacy-completed', recoveryTaskId: null,
+      });
+    }
+    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('demo-app', expect.objectContaining({
+      retirementObligations: [{ ...RELEASE, reason: 'retirement-review-pending' }],
+    }));
+    expect(recordRepoStateVerification).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({
+      status: 'pending', reasons: ['retirement-policy-not-legacy-completed'],
+    }));
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(releaseRetryHold).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    // Once the hold clears, the same service owner retries retirement, not delivery.
+    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: {
+      ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' },
+    } });
+    retireInventoriedCheckout.mockResolvedValue({ ok: true, branchDeleted: true, archiveDir: null });
+    expect(await run({ task: pending, success: false, agentState: state })).toMatchObject({ verified: true });
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
+    expect(releaseRetryHold).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it('transfers unsupported cleanup verification back to bounded recovery', async () => {
     updateTask.mockResolvedValueOnce({ status: 'in_progress' });
     const state = { ...agentState({ isPersistentWorktree: true, repoStateVerification: { status: 'pending' } }),
@@ -345,6 +383,34 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     expect(findMissingCheckoutPreservation).not.toHaveBeenCalled();
     expect(state.result).toEqual({ success: false, executionSuccess: true, cleanupPending: true });
+  });
+
+  it.each([{ integrated: true }, { integrated: false }, { integrated: true, restart: true }])('reconciles an eventual merge after a terminal pre-merge report with exact proof (%j)', async ({ integrated, restart }) => {
+    const capture = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
+      startedAt: CREATED_AT, capturedAt: CREATED_AT, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const originalResult = { success: false, executionSuccess: true, deliveryRecoveryOwned: true,
+      taskOutcome: { status: 'incomplete', reason: 'Main moved during three guard rounds.' } };
+    const state = { ...agentState({ instanceId: 'fixture-local', completedCheckouts: [capture],
+      completionCleanup: { status: 'completed', stages: { worktree: { status: 'done', value: [] } } } }),
+      id: 'agent-1', taskId: 'task-1', status: 'completed', result: originalResult };
+    getAgentRecord.mockResolvedValue(state);
+    getTaskById.mockResolvedValue({ ...task(), status: 'completed' });
+    execGit.mockImplementation(async args => ({ exitCode: integrated && args[0] === 'merge-base' ? 0 : 1, stdout: '' }));
+    const followUp = { id: 'follow-up', status: 'completed', metadata: { reviewLoopFollowUp: 'true',
+      sourceAgentId: 'agent-1', sourceTaskId: 'task-1', reviewLoopPRBranch: BRANCH,
+      reviewLoopPRUrl: 'https://github.com/example/repo/pull/7',
+      mergedReviewFollowUp: { status: 'verified', prUrl: 'https://github.com/example/repo/pull/7' } } };
+    queuedTasks([followUp]);
+    if (restart) {
+      readBranchCompletionPolicies.mockResolvedValueOnce([state]);
+      await sweepRepoStateVerifications();
+    } else await observeCompletedTask(followUp);
+    if (integrated) expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ deliveryVerified: true }));
+    else expect(recordRepoStateVerification).not.toHaveBeenCalled();
+    expect(state.result).toEqual(originalResult);
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
   });
 
   it('replays a failed no-PR run cleanup at owner release without promoting its original result', async () => {

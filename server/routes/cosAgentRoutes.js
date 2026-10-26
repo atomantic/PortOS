@@ -27,6 +27,13 @@ router.post('/agents/:id/security-scan', asyncHandler(async (req, res) => {
   res.json(await runAgentSecurityScan(req.params.id, input));
 }));
 
+router.post('/agents/:id/release-publication', asyncHandler(async (req, res) => {
+  const { releasePublicationRequestSchema } = await import('../lib/releasePublication.js');
+  const input = validateRequest(releasePublicationRequestSchema, req.body ?? {});
+  const { verifyAgentReleasePublication } = await import('../services/releasePublication.js');
+  res.json(await verifyAgentReleasePublication(req.params.id, input));
+}));
+
 const mergeAdmissionSchema = z.object({
   agentId: z.string().min(1).max(200),
   action: z.enum(['prepare', 'yield', 'acquire', 'check', 'release']),

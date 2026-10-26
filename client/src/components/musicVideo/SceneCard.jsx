@@ -1,3 +1,4 @@
+import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
 import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
 import SceneCameraControls from './SceneCameraControls.jsx';
@@ -121,7 +122,7 @@ export default function SceneCard({
   scene, index, shotNumber = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
-  project = null, castMedia = null, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
+  project = null, castMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
@@ -156,6 +157,8 @@ export default function SceneCard({
   const renderSettings = renderOverrides ? { ...falVideoSettings, ...renderOverrides } : falVideoSettings;
   // The card's input toggles (SceneRenderInputs); Whole sung line also re-plans the take below.
   const [renderInputs, setRenderInputs] = useState({});
+  const [greyboxSaving, setGreyboxSaving] = useState(false);
+  const greybox = musicVideoGreyboxReference(project, scene, greyboxPlaces);
   const renderLane = renderOverrides
     ? (renderSettings.backend === 'local' && renderSettings.generationMode === 'audioReactive' ? 'local' : renderSettings.backend)
     : lipSyncBackend;
@@ -186,9 +189,9 @@ export default function SceneCard({
     ? scene.lastFailure : null;
   const endFramePlan = sceneEndFramePlanFor(scene, renderSettings || {}, { models: videoModels, defaultModel: defaultVideoModel });
   // Exactly what Render sends: the prompt as typed and the inputs the card toggles.
-  const cardRequest = shotCardRenderRequest({ project, scene, settings: renderSettings || {}, performance, endFramePlan,
+  const cardRequest = shotCardRenderRequest({ project, scene, greybox, settings: renderSettings || {}, performance, endFramePlan,
     models: videoModels, defaultModel: defaultVideoModel, inputs: renderInputs, plan: timing.plan });
-  const videoRefusal = videoGenerationRefusal({
+  const videoRefusal = (greyboxSaving ? 'Saving greybox reference…' : greybox?.error) || videoGenerationRefusal({
     settingsSaving, speakerUnsaved: performance && (speakerDirty || speakerSaving),
     referenceImageId: scene.referenceImageId, generatingVideo, performanceBlocked, lockBlocked,
     videoBlockedReason: renderOverrides && videoBlockedReasonFor ? videoBlockedReasonFor(renderSettings) : videoBlockedReason,
@@ -453,7 +456,7 @@ export default function SceneCard({
         <div className="grid gap-3 @3xl:grid-cols-2">
         {/* Frames: the still this shot starts from and, optionally, the one it ends on (#11173),
             each with its prompt and Render under it, then the tapped frame's takes. */}
-        <SceneFrames project={project} castMedia={castMedia} scene={scene} index={index} endFrames={endFrames} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
+        <SceneFrames project={project} castMedia={castMedia} greyboxPlaces={greyboxPlaces} greyboxSaving={greyboxSaving} onGreyboxSaving={setGreyboxSaving} scene={scene} index={index} endFrames={endFrames} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
           onGenerateFrame={onGenerateFrame} onGenerateEndFrame={onGenerateEndFrame} onEditLocal={onEditLocal} onSave={onSave}
           onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}

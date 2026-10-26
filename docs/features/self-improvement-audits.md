@@ -78,6 +78,18 @@ proof of billing or subscription consumption.
 in a managed worktree — a mechanical restructuring of hot code must never land in
 the operator's live checkout.
 
+Design uses actual inspected screenshots, with at most six captures across representative
+list/media, detail/editor and overlay/error/empty states, desktop and narrow views,
+and at most two optional themes. Source-only review reports unavailable visual coverage;
+unsampled states stay untested. Private/local synthetic evidence supports component
+attribution, severity, impact and precise before/after acceptance criteria. UX owns
+usability, hierarchy, clarity, spacing and consistency; Design owns composition and
+visual character. Mobile layout/touch and accessibility failures retain their existing
+owners. Deduplicate sibling findings by root cause. Aesthetic suggestions are report-only
+proposals, never automatically scored or implemented defects. Preserve authored theme
+identity; PortOS's Kestrel references apply only to PortOS. Manual Run or an explicitly
+chosen cadence remains the trigger; adding this lane starts no provider work.
+
 | Task type | Owns | Files under | Mode | Isolated |
 |---|---|---|---|---|
 | `security` | Exposure real under the app's own threat model | `security` | implement | |
@@ -92,6 +104,7 @@ the operator's live checkout.
 | `typing` | Type contracts at boundaries | `code-quality`, `typing` | implement | |
 | `console-errors` | What the app actually emits while running | `bug`, `console` | implement | |
 | `ux` | Whether a user can get the job done | `ux` | file | |
+| `design` | Rendered composition, media framing, polished states and intentional theme character; bounded screenshot evidence | `ux`, `design` | file | |
 | `data-safety` | Migrations, schema parity, cross-version safety | `data-safety` | file | |
 | `simplify` | Dead code, duplication, YAGNI | `code-quality`, `simplify` | file | |
 | `module-hygiene` | Responsibility boundaries, reuse, discoverability | `code-quality`, `module-hygiene` | file | yes |

@@ -174,7 +174,7 @@ describe.skipIf(!runDb)('catalogDB facets + album filters (#1762)', () => {
 
   // Uniquely catches a newer reference sheet / look / plate becoming the card
   // cover over an older plain reference image.
-  it('never picks a sheet, look or plate image as the card thumbnail', async () => {
+  it('prefers plain references, falls back to sheets and excludes looks and plates', async () => {
     const ing = await catalogDB.createIngredient({ type: 'place', name: `Thumb ${nonce}` });
     createdIngredientIds.add(ing.id);
     await catalogDB.attachMedia(ing.id, `plain-${nonce}.png`, 'reference');
@@ -186,7 +186,9 @@ describe.skipIf(!runDb)('catalogDB facets + album filters (#1762)', () => {
 
     await catalogDB.detachMedia(ing.id, `plain-${nonce}.png`, 'reference');
     const after = await catalogDB.listIngredients({ ids: [ing.id], limit: 5 });
-    expect(after.items[0].thumbnailKey).toBeNull();
+    expect(after.items[0].thumbnailKey).toBe(`sheet-${nonce}.png`);
+    await catalogDB.detachMedia(ing.id, `sheet-${nonce}.png`, 'reference');
+    expect((await catalogDB.listIngredients({ ids: [ing.id], limit: 5 })).items[0].thumbnailKey).toBeNull();
   });
 
   it('getCatalogFacets aggregates type/universe/series/tag facets + bucket counts', async () => {

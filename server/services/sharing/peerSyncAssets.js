@@ -292,6 +292,7 @@ const ASSET_KIND_EXTENSIONS = {
   'image-ref': new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif']),
   video: new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogv']),
   music: new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus']),
+  model: new Set(['.glb']),
   audio: new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.webm']),
 };
 
@@ -303,6 +304,7 @@ function hasAllowedAssetExtension(kind, filename) {
 }
 
 export function directoryForAssetKind(kind) {
+  if (kind === 'model') return PATHS.models;
   if (kind === 'image') return PATHS.images;
   if (kind === 'image-ref') return PATHS.imageRefs;
   if (kind === 'video') return PATHS.videos;
@@ -882,6 +884,7 @@ const ASSET_KIND_TO_URL_PREFIX = Object.freeze({
   // the standalone media-library sweep. (video-thumbnails are NOT pulled: a video
   // pull regenerates its thumbnail locally — see doPullOneAsset's video branch.)
   audio: '/data/audio',
+  model: '/data/models',
 });
 
 export const ASSET_PULL_TIMEOUT_MS = 60000;

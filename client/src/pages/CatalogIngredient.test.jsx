@@ -100,7 +100,7 @@ vi.mock('../services/apiCatalogTypes', () => ({
 // style preset onto the composed prompt; default to "no universe" so the seed
 // renders bare unless a test overrides it.
 vi.mock('../services/apiUniverseBuilder', () => ({
-  getUniverse: vi.fn(async () => null),
+  getUniverse: vi.fn(async () => ({ id: 'u-1' })),
   listUniverseNames: vi.fn(async () => [{ id: 'u-1', name: 'Example World' }]),
   listUniverseStyles: vi.fn(async () => [{ id: 'u-1', influences: { embrace: ['Analog photography'] } }]),
 }));
@@ -147,7 +147,8 @@ vi.mock('../components/TagPicker', () => ({
 }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
-import CatalogIngredient, { buildGenerationPromptSeed } from './CatalogIngredient';
+import CatalogIngredient from './CatalogIngredient';
+import { buildGenerationPromptSeed } from '../lib/catalogImagePrompt';
 import CatalogRelatedImages from '../components/catalog/CatalogRelatedImages';
 import { getCatalogIngredientDetails, getCatalogUniverseContext, listCatalogIngredientRevisions, listCatalogRelatedImages, unlinkCatalogIngredientRelation, updateCatalogIngredient, detachCatalogIngredientMedia, restoreCatalogIngredientRevision, uploadCatalogIngredientMediaFile } from '../services/apiCatalog';
 import toast from '../components/ui/Toast';
@@ -899,7 +900,7 @@ describe('CatalogIngredient — character sheet', () => {
     expect(payload.prompt).toMatch(/^neon noir, rain-slick streets\. Ada Lovelace: Sharp eyes/);
     expect(payload.negativePrompt).toMatch(/cartoon/);
     expect(payload.promptAdditions.map((addition) => addition.label)).toEqual(['Universe style', 'Style negatives']);
-    getUniverse.mockResolvedValue(null); // restore default for any later test
+    getUniverse.mockResolvedValue({ id: 'u-1' });
   });
 
   // Regression: the textarea is editable during the awaited universe fetch, so a
@@ -922,7 +923,7 @@ describe('CatalogIngredient — character sheet', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /^Render$/i })).toHaveProperty('disabled', false));
     expect(promptBox.value).toBe('my hand-written prompt');
     expect(promptBox.value).not.toMatch(/neon noir/);
-    getUniverse.mockResolvedValue(null); // restore default
+    getUniverse.mockResolvedValue({ id: 'u-1' });
   });
 
   it('attributes relation evidence only to the matching outbound kind and target', async () => {
@@ -1040,6 +1041,26 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     // Sheets don't carry the profile form or the general media panel.
     expect(screen.queryByLabelText('Name')).toBeNull();
     expect(screen.queryByAltText('mood.png')).toBeNull();
+  });
+
+  it('shows the server-selected canonical references beside Generate with full-size links and omissions', async () => {
+    const api = await import('../services/apiCatalog');
+    api.previewCatalogSheet.mockResolvedValue({ preview: {
+      sentPrompt: 'Example sheet with canonical identity', promptAdditions: [],
+      referenceImages: [
+        { filename: 'canon.png', source: 'Render guide', status: 'included', url: '/data/image-refs/canon.png' },
+        { filename: 'extra.png', source: 'Render guide', status: 'limit', url: '/data/images/extra.png' },
+        { filename: 'missing.png', source: 'Canon image', status: 'missing' },
+      ],
+    } });
+    await renderPage('/casting/cat-chr-hero/sheets');
+    const references = await screen.findByRole('region', { name: 'Canonical reference images' });
+    expect(within(references).getByAltText('Canonical reference 1')).toHaveAttribute('src', '/data/image-refs/canon.png');
+    expect(within(references).getByRole('link', { name: /Open canonical reference 1/ })).toHaveAttribute('href', '/data/image-refs/canon.png');
+    expect(within(references).getByText('Will be sent to the model')).toBeInTheDocument();
+    expect(within(references).getByText(/Not sent.*limit/)).toBeInTheDocument();
+    expect(within(references).getByText(/Missing file/)).toBeInTheDocument();
+    expect(api.renderCatalogSheet).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1504,10 +1525,9 @@ describe('buildGenerationPromptSeed', () => {
     expect(buildGenerationPromptSeed(null, null, [])).toBe('');
   });
 
-  it('caps an overly long seed with an ellipsis (≤ 700 chars)', () => {
+  it('preserves a long visual description without silently truncating it)', () => {
     const seed = buildGenerationPromptSeed({ physicalDescription: 'x'.repeat(900) }, charType);
-    expect(seed.length).toBeLessThanOrEqual(700);
-    expect(seed.endsWith('…')).toBe(true);
+    expect(seed).toBe('x'.repeat(900));
   });
 });
 

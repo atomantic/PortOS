@@ -14,7 +14,7 @@ import { mkdtemp, rm, writeFile, cp, mkdir, readdir } from 'fs/promises';
 import { rmSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, basename } from 'path';
-import { execGit } from './execGit.js';
+import { assertGitWorkSettled, execGit } from './execGit.js';
 import { assertTempPath } from './tempPathGuard.js';
 
 export const SKIP_HEAVY_INTEGRATION = ['1', 'true', 'yes'].includes(
@@ -60,25 +60,59 @@ async function stripOrigin(repo) {
   await execGit(['branch', '--unset-upstream'], repo, { ignoreExitCode: true });
 }
 
-function wipeSync(scratch) {
-  if (!scratch) return;
-  try { rmSync(scratch, { recursive: true, force: true }); } catch { /* already gone */ }
+// Shared across isolated module graphs in a worker. Teardown must own promises
+// before mkdtemp resolves, rather than only owning directories after allocation.
+const lifecycle = (globalThis.__portosGitTemplateLifecycle ??= {
+  operations: new Set(), closing: false, owners: new Map(),
+});
+const dirs = (globalThis.__portosGitTemplateDirs ??= []);
+
+function ownOperation(body) {
+  if (lifecycle.closing) return Promise.reject(new Error('Git fixture teardown has started'));
+  const operation = body();
+  lifecycle.operations.add(operation);
+  void operation.then(() => lifecycle.operations.delete(operation), () => lifecycle.operations.delete(operation));
+  return operation;
 }
 
-// Vitest isolates the module cache per test file, so `buildTemplate` can
-// run more than once in a worker. Track every template dir on globalThis
-// and register a single process-exit hook — otherwise watch-mode reruns
-// stack `process.on('exit')` listeners until MaxListenersExceededWarning.
-const TEMPLATE_DIRS_KEY = '__portosGitTemplateDirs';
-const TEMPLATE_HOOK_KEY = '__portosGitTemplateExitHooked';
+async function cleanupTemplates() {
+  lifecycle.closing = true;
+  try {
+    while (lifecycle.operations.size) await Promise.allSettled([...lifecycle.operations]);
+    // Fixture operations may still launch Git while they drain. Fence the
+    // supervisor only after those operations finish, before removing templates.
+    await globalThis.__portosGitSupervisorCleanup?.();
+    const failures = [];
+    for (const dir of [...dirs]) {
+      try {
+        assertGitWorkSettled(dir);
+        await rm(dir, { recursive: true, force: true });
+        dirs.splice(dirs.indexOf(dir), 1);
+        lifecycle.owners.delete(dir);
+      } catch (cause) {
+        failures.push(new Error(`Git template cleanup failed: ${dir} (suite: ${lifecycle.owners.get(dir)})`, { cause }));
+      }
+    }
+    if (failures.length) throw new AggregateError(failures, 'Git template teardown failed');
+  } finally {
+    lifecycle.closing = false;
+  }
+}
+globalThis.__portosCleanupGitTemplates = cleanupTemplates;
 
 function rememberTemplate(scratch) {
-  const dirs = (globalThis[TEMPLATE_DIRS_KEY] ??= []);
   dirs.push(scratch);
-  if (globalThis[TEMPLATE_HOOK_KEY]) return;
-  globalThis[TEMPLATE_HOOK_KEY] = true;
+  lifecycle.owners.set(scratch, basename(globalThis.__vitest_worker__?.filepath || 'unknown suite'));
+  if (globalThis.__portosGitTemplateExitHooked) return;
+  globalThis.__portosGitTemplateExitHooked = true;
   process.on('exit', () => {
-    for (const dir of dirs) wipeSync(dir);
+    for (const dir of dirs) {
+      try { assertGitWorkSettled(dir); rmSync(dir, { recursive: true, force: true }); }
+      catch (error) {
+        console.error(`❌ Git template exit cleanup failed: ${dir}: ${error.message}`);
+        process.exitCode = 1;
+      }
+    }
   });
 }
 
@@ -115,7 +149,7 @@ function getTemplate() {
  * private bare origin at `scratch/origin.git`. The origin URL is rewritten
  * to the copy so two sandboxes never share a remote.
  */
-export async function makeGitSandbox({
+async function makeGitSandboxOwned({
   origin = false,
   prefix = 'portos-git-',
   identity,
@@ -150,7 +184,7 @@ export async function makeGitSandbox({
  * tests that already call `addOrigin()` after extra local commits still
  * publish those commits.
  */
-export async function attachBareOrigin(scratch, repo) {
+async function attachBareOriginOwned(scratch, repo) {
   assertTempPath(scratch, 'bare-origin attach');
   assertTempPath(repo, 'bare-origin attach');
   const template = await getTemplate();
@@ -166,7 +200,7 @@ export async function attachBareOrigin(scratch, repo) {
  * the `mkdtemp` result). Used when the suite wants the repo root to BE the
  * temp dir — `git worktree list` spelling / realpath checks.
  */
-export async function materializeGitRepo(dest, { identity } = {}) {
+async function materializeGitRepoOwned(dest, { identity } = {}) {
   assertTempPath(dest, 'git repo materialization');
   const template = await getTemplate();
   await copyTree(template.repo, dest);
@@ -198,8 +232,9 @@ export async function materializeGitRepo(dest, { identity } = {}) {
  * does not bridge that gap (nothing does but asking git; see the identical
  * problem worked around in `worktreeManager.js`'s `listWorktrees()`).
  */
-export async function resetGitSandbox({ scratch, repo, initialHead, assertPath = repo }) {
+async function resetGitSandboxOwned({ scratch, repo, initialHead, assertPath = repo }) {
   assertTempPath(assertPath, 'git sandbox reset');
+  assertGitWorkSettled(scratch || repo);
   // A test can delete `repo` itself (simulating a checkout that vanished
   // mid-run) — rebuild it from the template rather than handing every git
   // call below a cwd that no longer exists. The template's own working copy
@@ -251,8 +286,9 @@ export async function resetGitSandbox({ scratch, repo, initialHead, assertPath =
  * the last reset (including a locked one), for suites whose tests exercise
  * worktree creation/removal directly rather than just branches and commits.
  */
-export async function resetGitWorktreeSandbox(repo, initialHead, assertPath = repo) {
+async function resetGitWorktreeSandboxOwned(repo, initialHead, assertPath = repo) {
   assertTempPath(assertPath, 'git worktree sandbox reset');
+  assertGitWorkSettled(repo);
   // A missing `repo` has no worktrees to list — let resetGitSandbox()'s own
   // rebuild-from-template handle it below instead of handing `worktree list`
   // a cwd that doesn't exist.
@@ -273,17 +309,39 @@ export async function resetGitWorktreeSandbox(repo, initialHead, assertPath = re
     }
     // The first entry is always `repo` itself, never a grown worktree.
     for (const { path, locked } of entries.slice(1)) {
+      assertGitWorkSettled(path);
       if (locked) await execGit(['worktree', 'unlock', path], repo, { ignoreExitCode: true });
       await execGit(['worktree', 'remove', '--force', path], repo, { ignoreExitCode: true });
       await rm(path, { recursive: true, force: true }).catch(() => {});
     }
     if (entries.length > 1) await execGit(['worktree', 'prune'], repo, { ignoreExitCode: true });
   }
-  await resetGitSandbox({ repo, initialHead, assertPath });
+  await resetGitSandboxOwned({ repo, initialHead, assertPath });
 }
 
 export async function destroyGitSandbox(scratch) {
   if (!scratch) return;
   assertTempPath(scratch, 'recursive sandbox delete');
+  assertGitWorkSettled(scratch);
   await rm(scratch, { recursive: true, force: true });
+}
+
+export function makeGitSandbox(...args) {
+  return ownOperation(() => makeGitSandboxOwned(...args));
+}
+
+export function attachBareOrigin(...args) {
+  return ownOperation(() => attachBareOriginOwned(...args));
+}
+
+export function materializeGitRepo(...args) {
+  return ownOperation(() => materializeGitRepoOwned(...args));
+}
+
+export function resetGitSandbox(...args) {
+  return ownOperation(() => resetGitSandboxOwned(...args));
+}
+
+export function resetGitWorktreeSandbox(...args) {
+  return ownOperation(() => resetGitWorktreeSandboxOwned(...args));
 }

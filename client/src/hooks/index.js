@@ -301,3 +301,5 @@ export * from './useRunwayCatalog.js';
 
 export { default as useCatalogCards } from './useCatalogCards.js';
 export * from './useDraftCommitMode.js';
+
+export { default as useMusicVideoGreyboxPlaces } from './useMusicVideoGreyboxPlaces.js';

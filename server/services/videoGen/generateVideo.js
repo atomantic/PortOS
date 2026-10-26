@@ -1,4 +1,3 @@
-import { validateA2vLoraStages } from './loraStages.js';
 import { a2vLoraStageCapable } from './runtimes.js';
 import { prepareVideoConditioningMedia } from './conditioningMedia.js';
 import { planVideoBatch, supportsWarmVideoBatch, validateVideoBatch } from './batch.js';
@@ -423,6 +422,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
     referenceVideoPaths,
     referenceAudioPaths,
   });
+  const { validateA2vLoraStages } = await import('./loraStages.js');
   await validateA2vLoraStages({ strengths: a2vLoraStageStrengths, model, mode, hasLoras: loras?.length > 0 });
   // Registry defaults are user-editable. Validate them at this internal-call
   // boundary so an empty or malformed value cannot turn into a 0/NaN runner

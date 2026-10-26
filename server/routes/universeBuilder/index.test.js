@@ -169,7 +169,9 @@ const renderCharacterReferenceSheetMock = vi.fn();
 const deleteCharacterReferenceSheetMock = vi.fn();
 const listSheetVariantsMock = vi.fn();
 const getCharacterReferenceSheetMock = vi.fn();
+const previewCharacterReferenceSheetMock = vi.fn(async () => ({ sentPrompt: 'Example sheet', referenceImages: [] }));
 vi.mock('../../services/universeCharacterSheet.js', () => ({
+  previewCharacterReferenceSheet: (...args) => previewCharacterReferenceSheetMock(...args),
   renderCharacterReferenceSheet: (...args) => renderCharacterReferenceSheetMock(...args),
   deleteCharacterReferenceSheet: (...args) => deleteCharacterReferenceSheetMock(...args),
   listSheetVariants: (...args) => listSheetVariantsMock(...args),
@@ -1124,6 +1126,17 @@ describe('universe-builder routes', () => {
     expect(res.body).toEqual({ filename: 'sheet.png', pendingJobId: null });
     expect(getCharacterReferenceSheetMock).toHaveBeenCalledWith('u-1', 'c-1', { variant: 'standard' });
     const invalid = await request(buildApp()).get('/api/universe-builder/u-1/characters/c-1/reference-sheet?variant=');
+    expect(invalid.status).toBe(400);
+  });
+
+  it('previews sheet inputs without generating and validates the same options', async () => {
+    const app = buildApp();
+    const res = await request(app).post('/api/universe-builder/u-1/characters/c-1/reference-sheet/preview').send({ variant: 'blueprint' });
+    expect(res.status).toBe(200);
+    expect(res.body.preview).toEqual({ sentPrompt: 'Example sheet', referenceImages: [] });
+    expect(previewCharacterReferenceSheetMock).toHaveBeenCalledWith('u-1', 'c-1', { variant: 'blueprint' });
+    expect(renderCharacterReferenceSheetMock).not.toHaveBeenCalled();
+    const invalid = await request(app).post('/api/universe-builder/u-1/characters/c-1/reference-sheet/preview').send({ variant: 42 });
     expect(invalid.status).toBe(400);
   });
 

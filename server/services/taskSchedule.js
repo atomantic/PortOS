@@ -932,7 +932,18 @@ export async function getBranchReconcileInventory(appId) {
   const outcome = await getBranchReconcileOutcome(appId);
   const { reconcileLegacyRetirementRecords } = await import('./legacyRetirementReconciliation.js');
   const current = await reconcileLegacyRetirementRecords(appId, outcome).catch(() => outcome);
-  return reconcileMissingInventory(appId, current);
+  if (![...(current?.remaining || []), ...(current?.retirementObligations || [])].some(row => isObligationRow(row))) return reconcileMissingInventory(appId, current);
+  // Recover persisted receipt bindings after restart too; compare/write inside the
+  // normal serialized store, without replaying an old retirement transaction.
+  const repaired = await updateSchedule(async schedule => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    const before = record.branchReconcileOutcome;
+    const after = await repairReceiptObservations(appId, before);
+    const changed = after !== before;
+    if (changed) record.branchReconcileOutcome = after;
+    return { result: after, changed };
+  });
+  return reconcileMissingInventory(appId, repaired);
 }
 
 const missingPreservationObligation = row => ({ ...row, reason: 'retirement-provenance-unverified' });
@@ -1030,6 +1041,14 @@ export async function recordSupersededCheckoutPreservation(appId, release, revie
   });
 }
 
+// This is receipt bookkeeping, never checkout mutation. It can run under the
+// schedule writer even when its caller already owns the claim lock: do not
+// acquire that lock recursively. Fresh absence/owner checks only narrow repair.
+async function repairReceiptObservations(appId, outcome) {
+  const { reconcileRecordedReceiptObservations } = await import('./legacyRetirementReconciliation.js');
+  return reconcileRecordedReceiptObservations(appId, outcome).catch(() => outcome);
+}
+
 /**
  * Drop a retired checkout from the last inventory and keep a short record of
  * where its archive went. Status is untouched: only the next sweep can say the
@@ -1077,9 +1096,9 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
       if (evidence[receiptId] && validationEvidence && !evidence[receiptId].validationEvidence) {
         evidence[receiptId] = { ...evidence[receiptId], validationEvidence };
       }
-      const changed = JSON.stringify(receipts) !== JSON.stringify(outcome.retirementReceiptIdentities || {})
-        || JSON.stringify(evidence) !== JSON.stringify(outcome.retirementReceiptEvidence || {});
-      if (changed) record.branchReconcileOutcome = { ...outcome, retirementReceiptIdentities: receipts, retirementReceiptEvidence: evidence };
+      const repaired = await repairReceiptObservations(appId, { ...outcome, retirementReceiptIdentities: receipts, retirementReceiptEvidence: evidence });
+      const changed = JSON.stringify(repaired) !== JSON.stringify(outcome);
+      if (changed) record.branchReconcileOutcome = repaired;
       return { result: record.branchReconcileOutcome, changed };
     }
     const retiredAt = new Date().toISOString();
@@ -1092,7 +1111,7 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     const retired = [receipt, ...(outcome.retired || [])].slice(0, RETIRED_CHECKOUTS_KEPT);
     if (receiptId) evidence[receiptId] = receipt;
     const retirementObligations = unresolvedRetirements({ ...outcome, retired, retirementReceiptEvidence: evidence });
-    record.branchReconcileOutcome = {
+    record.branchReconcileOutcome = await repairReceiptObservations(appId, {
       ...outcome, retirementObligations,
       retirementReceiptIdentities: receipts, retirementReceiptEvidence: evidence,
       updatedAt: retiredAt,
@@ -1102,7 +1121,7 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
             || (!entry.checkoutIdentity && sameRetirementCheckout(entry, receipt))))
         : outcome.remaining ?? null,
       retired,
-    };
+    });
     return { result: record.branchReconcileOutcome, changed: true };
   });
 }

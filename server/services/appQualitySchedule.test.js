@@ -52,10 +52,19 @@ beforeEach(() => {
 describe('audit applicability gate', () => {
   it('bails out of a UI audit for a pure API repository, keeps the service lenses', async () => {
     const app = appWith(NODE_SERVICE);
+    expect(await resolveAuditApplicability(app, 'design')).toEqual({ applicable: false, reason: expect.stringMatching(/no user interface/) });
     expect(await resolveAuditApplicability(app, 'mobile-responsive')).toEqual({ applicable: false, reason: expect.stringMatching(/no user interface/) });
     expect(await resolveAuditApplicability(app, 'reliability')).toEqual({ applicable: true, reason: null });
     // Infrastructure needs deployment config, which this service lacks.
     expect((await resolveAuditApplicability(app, 'infrastructure')).applicable).toBe(false);
+  });
+
+  it('offers Design for a theme-free UI app and keeps the issue-filing default when scheduled', async () => {
+    const app = appWith(['package.json', 'client/src/App.jsx']);
+    const resolved = await resolveQualityChecks(app);
+    expect(resolved.checks.find(check => check.taskType === 'design')).toMatchObject({ applicable: true });
+    await applyQualitySchedulePlan(app, { taskTypes: ['design'] });
+    expect(updateAppTaskTypeOverrides.mock.calls[0][1].design.taskMetadata.fileIssues).toBe(true);
   });
 
   it('offers and schedules typing for native Swift in a JavaScript app without pretending it has TypeScript', async () => {

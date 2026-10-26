@@ -1,5 +1,14 @@
 # PortOS Setup Guide
 
+Git 2.40 or newer is required for merge validation and detached-checkout retirement.
+The capability check requires both `git merge-tree --write-tree` and `--merge-base`
+([Git 2.40 documentation](https://github.com/git/git/blob/v2.40.0/Documentation/git-merge-tree.txt)).
+Run `node scripts/checkGitVersion.js` before setup or contribution work; setup and
+`npm run doctor` also check it. Upgrade Git (Git for Windows on Windows), ensure
+that the running process resolves the upgraded executable first on PATH, and
+restart that process if its PATH changed. Unsupported Git fails closed before
+merged-tree cloning; structural guards and retirement proofs are never skipped.
+
 PortOS can automate local installation, certificate provisioning, and launch URLs, but two account-level decisions stay with you: joining a Tailscale tailnet and choosing which AI provider may run work. The CLI and **Settings → Setup** show the same ordered readiness checks so a missing prerequisite is visible instead of becoming a broken URL later.
 
 ## First install

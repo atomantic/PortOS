@@ -499,6 +499,7 @@ const MEDIA_KIND_REGISTRY = [
   { id: 'reference', label: 'Reference', accept: 'image/*' },
   { id: 'audio', label: 'Audio', accept: 'audio/*' },
   { id: 'video', label: 'Video', accept: 'video/*' },
+  { id: 'model', label: 'Model', accept: '.glb,model/gltf-binary' },
   { id: 'document', label: 'Document', accept: '.pdf,.txt,.md' },
 ];
 

@@ -520,6 +520,7 @@ function buildScene(input, { order }) {
     lyricText: input.lyricText ?? null,
     visualIntent: input.visualIntent ?? null,
     ...(input.frameReferenceIds ? { frameReferenceIds: input.frameReferenceIds } : {}),
+    ...(input.setReference ? { setReference: input.setReference } : {}),
     ...(input.characterVariant ? { characterVariant: input.characterVariant } : {}),
     // #8985: what a composed render shows for this span (render.js#sceneLayer).
     visualLayer: input.visualLayer ?? 'footage',
@@ -623,6 +624,7 @@ export function replaceScenes(project, sceneInputs) {
       sceneId: prior.sceneId,
       referenceImageId: prior.referenceImageId ?? null,
       videoHistoryId: prior.videoHistoryId ?? null,
+      ...(prior.setReference ? { setReference: prior.setReference } : {}),
       ...(prior.endImageId ? { endImageId: prior.endImageId } : {}),
       ...(prior.endFramePrompt ? { endFramePrompt: prior.endFramePrompt } : {}),
       ...(prior.frameFit ? { frameFit: prior.frameFit } : {}),
@@ -651,7 +653,7 @@ export function replaceScenes(project, sceneInputs) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'frameReferenceIds', 'characterVariant', 'panelId', 'panelRev', 'panelArt'];
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'frameReferenceIds', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
@@ -838,6 +840,7 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
         shotMode: scene.shotMode ?? 'cutaway',
         performanceSpeaker: scene.performanceSpeaker ?? null,
         performanceStyle: scene.performanceStyle ?? null,
+        ...(scene.setReference ? { setReference: scene.setReference } : {}),
         ...(scene.camera ? { camera: scene.camera } : {}),
         ...(scene.panelId ? { panelId: scene.panelId, panelRev: scene.panelRev ?? null, panelArt: scene.panelArt ?? null } : {}),
         ...timing,

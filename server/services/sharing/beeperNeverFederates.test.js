@@ -101,8 +101,8 @@ describe('beeper conversation mirror never federates (#27)', () => {
   // which federates nothing) is what makes this guard real.
   it('carries no beeper directory into the media-library federation walk', () => {
     const dirs = mediaLibraryDirs();
-    // Non-vacuity pin: image, video, audio, music.
-    expect(dirs).toHaveLength(4);
+    // Pin every intended public library kind as well as excluding private stores.
+    expect(dirs.map(({ kind }) => kind)).toEqual(['image', 'video', 'audio', 'music', 'model']);
     expect(dirs.filter(namesBeeperMedia)).toEqual([]);
   });
 

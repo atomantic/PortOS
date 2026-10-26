@@ -1,15 +1,16 @@
 import { forwardRef, useImperativeHandle, useState } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import GreyboxPanel from './GreyboxPanel';
-import { captureCatalogGreyboxShot, draftCatalogGreybox, previewCatalogGreyboxPrompt, saveCatalogGreybox } from '../../services/apiCatalog';
+import { captureCatalogGreyboxShot, renderCatalogGreyboxShot, detachCatalogIngredientMedia, uploadCatalogIngredientMediaFile, draftCatalogGreybox, previewCatalogGreyboxPrompt, saveCatalogGreybox } from '../../services/apiCatalog';
+import toast from '../ui/Toast';
 import { blankGreybox } from '../../lib/greybox';
 import { GREYBOX_STARTERS } from '../../lib/greyboxStarters';
-import toast from '../ui/Toast';
 
 vi.mock('../../services/apiCatalog', () => ({
-  captureCatalogGreyboxShot: vi.fn(), draftCatalogGreybox: vi.fn(), previewCatalogGreyboxPrompt: vi.fn(), saveCatalogGreybox: vi.fn(),
+  detachCatalogIngredientMedia: vi.fn(), uploadCatalogIngredientMediaFile: vi.fn(), captureCatalogGreyboxShot: vi.fn(), draftCatalogGreybox: vi.fn(), previewCatalogGreyboxPrompt: vi.fn(), saveCatalogGreybox: vi.fn(),
+  renderCatalogGreyboxShot: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('../musicVideo/MusicVideoLlmPicker', () => ({
@@ -17,9 +18,11 @@ vi.mock('../musicVideo/MusicVideoLlmPicker', () => ({
 }));
 const view = vi.hoisted(() => ({ position: [1, 2, 3], target: [0, 1, 0] }));
 vi.mock('./GreyboxViewer', () => ({
-  default: forwardRef(function Viewer(_props, ref) {
+  default: forwardRef(function Viewer(props, ref) {
     useImperativeHandle(ref, () => ({ getView: () => view, setView: vi.fn(), capture: () => 'data:image/png;base64,QUJD' }));
-    return <div data-testid="viewer" />;
+    return <div data-testid="viewer" data-selected={props.selected} data-model-src={props.modelSrc}>
+      <button type="button" disabled={!props.onMoveAnchor} onClick={() => props.onMoveAnchor(props.scene.anchors[0]?.id, [1.2, 0, -2.3])}>Move anchor</button>
+    </div>;
   }),
 }));
 
@@ -27,20 +30,75 @@ const scene = blankGreybox();
 const record = { id: 'plc-1', type: 'place', name: 'Rink', payload: { description: 'Roller rink', greybox: scene } };
 const onSaved = vi.fn();
 const onCaptured = vi.fn();
+function SavedPanel(props) {
+  const [current, setCurrent] = useState(props.record || record);
+  return <GreyboxPanel record={current} media={[]} onCaptured={onCaptured} {...props} onSaved={(next) => { setCurrent(next); onSaved(next); }} />;
+}
 const show = (props = {}) => render(
   <MemoryRouter initialEntries={['/environments/plc-1/greybox?shot=wide']}>
-    <GreyboxPanel record={record} media={[]} onSaved={onSaved} onCaptured={onCaptured} {...props} />
+    <SavedPanel {...props} />
   </MemoryRouter>,
 );
 
 beforeEach(() => {
   vi.resetAllMocks();
+  detachCatalogIngredientMedia.mockResolvedValue({});
   captureCatalogGreyboxShot.mockResolvedValue({ mediaKey: 'cap.png' });
   previewCatalogGreyboxPrompt.mockResolvedValue({ sentPrompt: 'PREVIEW PROMPT', promptAdditions: [{ id: 'greybox-place', label: 'Place', text: 'Rink' }] });
   saveCatalogGreybox.mockImplementation(async (id, greybox) => ({ id, payload: { greybox } }));
 });
 
 describe('GreyboxPanel', () => {
+  it('attaches a Blender export, preserves shots, switches sources and detaches the model', async () => {
+    uploadCatalogIngredientMediaFile.mockResolvedValue({ mediaKey: 'example.glb', kind: 'model', role: 'greybox-model' });
+    detachCatalogIngredientMedia.mockResolvedValue({});
+    show();
+    await screen.findByTestId('viewer');
+    fireEvent.change(screen.getByLabelText(/(?:Attach|Replace) Blender export \(.glb\)/), { target: { files: [new File(['fake model'], 'layout.glb', { type: 'model/gltf-binary' })] } });
+    await waitFor(() => expect(uploadCatalogIngredientMediaFile).toHaveBeenCalledWith('plc-1', expect.objectContaining({ filename: 'layout.glb', mimeType: 'model/gltf-binary', role: 'greybox-model' }), { silent: true }));
+    await waitFor(() => expect(screen.getByTestId('viewer')).toHaveAttribute('data-model-src', '/data/models/example.glb'));
+    expect(saveCatalogGreybox).toHaveBeenLastCalledWith('plc-1', { ...scene, source: 'glb' }, expect.anything());
+    expect(screen.queryByRole('button', { name: /Re-capture all shots/ })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Layout source'), { target: { value: 'spec' } });
+    await waitFor(() => expect(saveCatalogGreybox).toHaveBeenLastCalledWith('plc-1', scene, expect.anything()));
+    fireEvent.change(screen.getByLabelText('Layout source'), { target: { value: 'glb' } });
+    await waitFor(() => expect(saveCatalogGreybox).toHaveBeenLastCalledWith('plc-1', { ...scene, source: 'glb' }, expect.anything()));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove model' }));
+    await waitFor(() => expect(detachCatalogIngredientMedia).toHaveBeenCalledWith('plc-1', { kind: 'model', mediaKey: 'example.glb' }, { silent: true }));
+    await waitFor(() => expect(screen.getByTestId('viewer')).not.toHaveAttribute('data-model-src'));
+    expect(saveCatalogGreybox).toHaveBeenLastCalledWith('plc-1', scene, expect.anything());
+  });
+
+  it('replaces the attached model only after its new source is saved', async () => {
+    const old = { mediaKey: 'old.glb', kind: 'model', role: 'greybox-model' };
+    uploadCatalogIngredientMediaFile.mockResolvedValue({ ...old, mediaKey: 'new.glb' });
+    show({ media: [old], record: { ...record, payload: { greybox: { ...scene, source: 'glb' } } } });
+    await screen.findByTestId('viewer');
+    fireEvent.change(screen.getByLabelText(/(?:Attach|Replace) Blender export \(.glb\)/), { target: { files: [new File(['replacement'], 'new.glb')] } });
+    await waitFor(() => expect(detachCatalogIngredientMedia).toHaveBeenCalledWith('plc-1', { kind: 'model', mediaKey: 'old.glb' }, { silent: true }));
+    expect(saveCatalogGreybox.mock.invocationCallOrder[0]).toBeLessThan(detachCatalogIngredientMedia.mock.invocationCallOrder[0]);
+  });
+
+  it('keeps the replacement after a failed detach, identity-grouped media refresh and remount', async () => {
+    const old = { ingredientId: 'original', retained: true, mediaKey: 'old.glb', kind: 'model', createdAt: '2026-10-25T00:00:00.000Z' };
+    const replacement = { ingredientId: record.id, mediaKey: 'new.glb', kind: 'model', role: 'greybox-model', createdAt: '2026-10-26T00:00:00.000Z' };
+    const place = { ...record, payload: { greybox: { ...scene, source: 'glb' } } };
+    uploadCatalogIngredientMediaFile.mockResolvedValue(replacement);
+    detachCatalogIngredientMedia.mockRejectedValue(new Error('Retained attachment cannot be detached'));
+    const panel = (media, key = 'mounted') => <MemoryRouter initialEntries={['/?shot=wide']}>
+      <SavedPanel key={key} record={place} media={media} />
+    </MemoryRouter>;
+    const { rerender } = render(panel([old]));
+    await screen.findByTestId('viewer');
+    fireEvent.change(screen.getByLabelText(/Replace Blender export \(.glb\)/), { target: { files: [new File(['replacement'], 'new.glb')] } });
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Retained attachment cannot be detached'));
+    // Real identity reads group by ingredient id before creation time.
+    rerender(panel([old, replacement]));
+    await waitFor(() => expect(screen.getByTestId('viewer')).toHaveAttribute('data-model-src', '/data/models/new.glb'));
+    rerender(panel([old, replacement], 'remounted'));
+    await waitFor(() => expect(screen.getByTestId('viewer')).toHaveAttribute('data-model-src', '/data/models/new.glb'));
+  });
+
   it('previews an AI draft with the exact prompt and stores it only when applied', async () => {
     const drafted = { ...scene, parts: [...scene.parts, { id: 'booth', type: 'box', size: [3, 2, 2], position: [0, 1, -6], rotationDegrees: [0, 0, 0] }] };
     draftCatalogGreybox.mockResolvedValue({ greybox: drafted, edited: true, sentPrompt: 'FULL PROMPT', promptAdditions: [{ id: 'greybox-contract', label: 'Greybox scene contract', text: 'rules' }], providerId: 'p1', model: 'm1' });
@@ -65,6 +123,38 @@ describe('GreyboxPanel', () => {
     expect(saved.shots[0]).toMatchObject({ id: 'wide', position: [1, 2, 3], target: [0, 1, 0] });
     expect(saveCatalogGreybox.mock.invocationCallOrder[0]).toBeLessThan(captureCatalogGreyboxShot.mock.invocationCallOrder[0]);
     expect(onCaptured).toHaveBeenCalled();
+  });
+
+  it('confirms the replacement count, then renders each saved shot once in order', async () => {
+    const shots = [scene.shots[0], { ...scene.shots[0], id: 'close', label: 'Close' }];
+    let finishFirst;
+    renderCatalogGreyboxShot.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+      .mockResolvedValueOnce({ mediaKey: 'close.png' });
+    show({ record: { ...record, payload: { greybox: { ...scene, shots } } }, media: [{ role: 'greybox-shot:wide', mediaKey: 'old.png' }] });
+    fireEvent.click(await screen.findByRole('button', { name: 'Re-capture all shots (2)' }));
+    expect(screen.getByText(/Saved shots: 2. Existing reference images to replace: 1/)).toBeInTheDocument();
+    expect(renderCatalogGreyboxShot).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Re-capture all shots' }));
+    expect(renderCatalogGreyboxShot.mock.calls).toEqual([['plc-1', 'wide', { silent: true }]]);
+    expect(screen.getByRole('button', { name: 'Capturing…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Replace reference image/ })).toBeDisabled();
+    finishFirst({ mediaKey: 'wide.png' });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Re-captured 2 shots'));
+    expect(renderCatalogGreyboxShot.mock.calls).toEqual([['plc-1', 'wide', { silent: true }], ['plc-1', 'close', { silent: true }]]);
+    expect(saveCatalogGreybox).not.toHaveBeenCalled();
+    expect(onCaptured).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports partial progress and stops without retrying or replacing later shots after failure', async () => {
+    renderCatalogGreyboxShot.mockResolvedValueOnce({ mediaKey: 'wide.png' }).mockRejectedValueOnce(new Error('Browser refused'));
+    const shots = ['wide', 'close', 'reverse'].map((id) => ({ ...scene.shots[0], id, label: id }));
+    show({ record: { ...record, payload: { greybox: { ...scene, shots } } } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Re-capture all shots (3)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Re-capture all shots' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Captured 1 of 3 shots. “close” failed: Browser refused')));
+    expect(renderCatalogGreyboxShot).toHaveBeenCalledTimes(2);
+    expect(onCaptured).toHaveBeenCalledTimes(1);
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it('shows the server-composed prompt before any provider call, and removes the greybox after confirming', async () => {
@@ -125,4 +215,104 @@ describe('GreyboxPanel', () => {
       expect(saveCatalogGreybox).not.toHaveBeenCalled();
     },
   );
+  it('adds, edits, saves and removes layout rows and shot figures without AI, using returned server state', async () => {
+    saveCatalogGreybox.mockImplementation(async (id, greybox) => ({
+      id, payload: { greybox: { ...greybox, parts: greybox.parts.map((part) => ({
+        ...part, ...(part.label === undefined ? {} : { label: part.label.trim() }),
+      })) } },
+    }));
+    show();
+    await screen.findByTestId('viewer');
+    for (const title of ['Parts (1)', 'Anchors (0)', 'Landmarks (0)']) expect(screen.getByText(title).closest('details')).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByText('Zones (0)'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add zone' }));
+    fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'Stage' } });
+    fireEvent.click(screen.getByText('Parts (1)'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add part' }));
+    fireEvent.change(screen.getByLabelText('Label'), { target: { value: '  Block  ' } });
+    fireEvent.change(screen.getByLabelText('Position (m) X'), { target: { value: '3.5' } });
+    fireEvent.change(screen.getByLabelText('Rotation (degrees) Y'), { target: { value: '45' } });
+    fireEvent.change(screen.getByLabelText('Size (m) Z'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Zone'), { target: { value: 'zone' } });
+    expect(screen.getByTestId('viewer')).toHaveAttribute('data-selected', 'parts:part');
+    fireEvent.click(screen.getByText('Anchors (0)'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add anchor' }));
+    fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'Dancer' } });
+    fireEvent.change(screen.getByLabelText('Facing (degrees)'), { target: { value: '90' } });
+    fireEvent.change(screen.getByLabelText('Height (m)'), { target: { value: '1.8' } });
+    fireEvent.click(screen.getByText('Landmarks (0)'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add landmark' }));
+    fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'Entrance' } });
+    fireEvent.change(screen.getByLabelText('Position (m) Z'), { target: { value: '-5' } });
+    fireEvent.click(screen.getByText('Figures in “Wide”'));
+    fireEvent.click(screen.getByLabelText('Dancer'));
+    fireEvent.change(screen.getByLabelText('Pose for Dancer'), { target: { value: 'Waving' } });
+    expect(screen.queryByRole('button', { name: 'Capture reference image' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Re-capture all shots/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save layout edits' }));
+    await screen.findByRole('button', { name: 'Block' });
+    expect(saveCatalogGreybox).toHaveBeenCalledWith('plc-1', expect.objectContaining({
+      parts: expect.arrayContaining([expect.objectContaining({ id: 'part', label: '  Block  ', position: [3.5, 0.5, 0], rotationDegrees: [0, 45, 0], size: [1, 1, 2], zone: 'zone' })]),
+      anchors: [expect.objectContaining({ facingDegrees: 90, heightMeters: 1.8 })],
+      landmarks: [expect.objectContaining({ position: [0, 0, -5] })],
+      shots: [expect.objectContaining({ figures: [{ anchorId: 'anchor', pose: 'Waving' }] })],
+    }), { source: undefined, silent: true });
+    expect(draftCatalogGreybox).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove anchor Dancer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove zone Stage' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove landmark Entrance' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove part Block' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save layout edits' }));
+    await waitFor(() => expect(saveCatalogGreybox).toHaveBeenCalledTimes(2));
+    expect(saveCatalogGreybox.mock.calls[1][1]).toMatchObject({ anchors: [], landmarks: [], zones: [], shots: [{ figures: [] }] });
+    expect(saveCatalogGreybox.mock.calls[1][1].parts).toEqual(scene.parts);
+  });
+
+  it('keeps invalid numeric input local, preserves a failed save for retry, and discards edits', async () => {
+    show();
+    fireEvent.click(await screen.findByText('Parts (1)'));
+    fireEvent.click(screen.getByRole('button', { name: 'Floor' }));
+    fireEvent.change(screen.getByLabelText('Size (m) X'), { target: { value: '' } });
+    expect(screen.getByRole('button', { name: 'Save layout edits' })).toBeDisabled();
+    expect(within(screen.getByLabelText('Layout errors')).getByText(/Part size/)).toBeInTheDocument();
+    expect(saveCatalogGreybox).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Size (m) X'), { target: { value: '25' } });
+    saveCatalogGreybox.mockRejectedValueOnce(new Error('Save failed'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save layout edits' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Save failed'));
+    expect(screen.getByLabelText('Size (m) X')).toHaveValue(25);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard layout edits' }));
+    expect(screen.getByLabelText('Size (m) X')).toHaveValue(20);
+  });
+
+  it('edits figure inclusion and saves a dragged anchor while gating every manual control during the write', async () => {
+    const anchor = { id: 'performer', label: 'Performer', kind: 'figure', position: [0, 0, 0], facingDegrees: 0, heightMeters: 1.7 };
+    let resolveSave;
+    saveCatalogGreybox.mockImplementationOnce(() => new Promise((resolve) => { resolveSave = resolve; }));
+    show({ record: { ...record, payload: { greybox: { ...scene, anchors: [anchor] } } } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Move anchor' }));
+    fireEvent.click(screen.getByText('Figures in “Wide”'));
+    fireEvent.click(screen.getByLabelText('Performer'));
+    fireEvent.change(screen.getByLabelText('Pose for Performer'), { target: { value: 'Seated' } });
+    fireEvent.click(screen.getByLabelText('Performer'));
+    expect(screen.queryByLabelText('Pose for Performer')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save layout edits' }));
+    expect(screen.getByRole('button', { name: 'Add anchor' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Move anchor' })).toBeDisabled();
+    const savedScene = saveCatalogGreybox.mock.calls[0][1];
+    expect(savedScene.anchors[0].position).toEqual([1.2, 0, -2.3]);
+    expect(savedScene.shots[0].figures).toEqual([]);
+    await act(async () => { resolveSave({ ...record, payload: { greybox: savedScene } }); });
+    expect(screen.queryByRole('button', { name: 'Save layout edits' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Capture reference image' })).toBeEnabled();
+  });
+
+  it.each([{ readOnly: true }, { disabled: true }, { record: { ...record, payload: { ...record.payload, locked: true } } }])('preserves manual editing gates: %j', async (props) => {
+    show(props);
+    expect(await screen.findByRole('button', { name: 'Move anchor' })).toBeDisabled();
+    const add = screen.queryByRole('button', { name: 'Add anchor' });
+    if (add) expect(add).toBeDisabled();
+    expect(saveCatalogGreybox).not.toHaveBeenCalled();
+  });
+
 });

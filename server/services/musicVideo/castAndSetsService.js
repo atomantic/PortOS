@@ -236,7 +236,9 @@ async function writePlan(projectId, { direction = null, forceKeys = [], changes 
   // A procedural project whose brief names no image tool is code-only: nothing
   // is rendered, so no image backend is needed (or consulted).
   const codeOnly = !musicVideoAllowsMedia(project, 'image') || nextDirection.medium === 'procedural' && !castAndSetsAllowsImages(project);
-  const plan = codeOnly ? {} : buildCastAndSetsImagePlan(project, nextDirection, { revisionNotes: keyNotesText(stage.keyNotes) });
+  const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
+  const greyboxes = Object.fromEntries(await Promise.all((codeOnly ? [] : nextDirection.sets || []).filter((s) => s.setReference?.greyboxShotId).map(async (set) => [set.id, await loadMusicVideoGreybox(project, { sceneId: `set:${set.id}`, setReference: set.setReference })])));
+  const plan = codeOnly ? {} : buildCastAndSetsImagePlan(project, nextDirection, { revisionNotes: keyNotesText(stage.keyNotes), greyboxes });
   const renderKeys = affectedImageKeys(stage.plan || {}, plan, forceKeys);
   const settings = await deps.getSettings();
   const run = stage.productionRunId ? (project.productionRuns || []).find((r) => r.id === stage.productionRunId) : null;
@@ -245,10 +247,9 @@ async function writePlan(projectId, { direction = null, forceKeys = [], changes 
   if (!route && !codeOnly) return fail(projectId, 'No enabled image backend is allowed for the Cast & Sets images — enable Codex (or another image tool in the brief) and resume');
   const out = await mutateProjectRecord(projectId, (current) => {
     const next = setCastAndSetsDirection(current, { direction: nextDirection, plan, route, renderKeys });
-    if (!changes) return next;
-    // What this revision changed, for the director to read beside the new sheet.
-    const changeSummary = { revision: next.stage.revision, changes, rerendered: renderKeys.length, at: next.stage.updatedAt };
-    const stage = { ...next.stage, changeSummary };
+    const stage = { ...next.stage, greyboxPending: false,
+      ...(changes ? { changeSummary: { revision: next.stage.revision, changes, rerendered: renderKeys.length, at: next.stage.updatedAt } } : {}),
+    };
     return { project: { ...next.project, castAndSets: stage }, stage };
   });
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} r${out.stage.revision}: ${renderKeys.length} image(s) to render${route ? ` on ${route.mode}` : ' (code-only, no image backend)'}`);
@@ -294,6 +295,12 @@ export async function imageJobParams(settings, route, common) {
 async function enqueueImage(project, stage, key) {
   const item = stage.plan[key];
   const referenceImagePaths = referencePaths(stage, item);
+  if (item.setReference?.greyboxShotId) {
+    const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
+    const greybox = await loadMusicVideoGreybox(project, { sceneId: key, setReference: item.setReference });
+    if (greybox.reference.imageId !== item.refImages?.[0]) throw new ServerError('The greybox capture changed. Regenerate the set plan.', { status: 409, code: 'CAST_SETS_GREYBOX_CHANGED' });
+    referenceImagePaths[0] = greybox.path;
+  }
   const common = {
     prompt: item.prompt,
     width: CAST_SETS_IMAGE_SIZE.width,
@@ -589,6 +596,7 @@ export async function approveCastAndSets(projectId) {
   const now = new Date().toISOString();
   const out = await mutateProjectRecord(projectId, (current) => {
     assertCastAndSetsApprovable(current);
+    if (current.castAndSets.greyboxPending) throw new ServerError('Regenerate the set plates with the selected greybox references before approving.', { status: 409, code: 'CAST_SETS_GREYBOX_PENDING' });
     return settleAndRebase(applyApproval(current, now), now);
   });
   console.log(`✅ Music Video Cast & Sets ${short(projectId)} approved (r${out.stage.revision})`);
@@ -734,6 +742,17 @@ export async function removeCastAndSetsFeedbackEntry(projectId, feedbackId) {
 export async function editCastAndSetsDirection(projectId, edits) {
   const project = await requireProject(projectId);
   const sections = songSections(project);
+  const referencesOnly = edits?.sets?.length && !edits.protagonist && !edits.world && edits.sets.every((s) => Object.hasOwn(s, 'setReference') && !Object.hasOwn(s, 'imageRole'));
+  if (referencesOnly) {
+    const out = await mutateProjectRecord(projectId, (current) => {
+      if (!current.castAndSets?.direction || !['review', 'approved'].includes(current.castAndSets.status)) throw new ServerError('The Cast & Sets direction is not ready to edit.', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
+      const edited = applyCastAndSetsDirectionEdits(current.castAndSets.direction, edits, { sections });
+      const stage = { ...current.castAndSets, direction: edited.direction, greyboxPending: true, status: 'review', updatedAt: new Date().toISOString() };
+      return { project: { ...current, castAndSets: stage }, stage };
+    });
+    publish(projectId, out.project);
+    return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
+  }
   let changed = [];
   const out = await mutateProjectRecord(projectId, (current) => {
     const stage = current.castAndSets;

@@ -11,6 +11,12 @@ vi.mock('node:fs', async () => ({
   existsSync: migrationFs.existsSync,
 }));
 
+const migrationFsp = vi.hoisted(() => ({ readFile: vi.fn() }));
+vi.mock('node:fs/promises', async () => ({
+  ...(await vi.importActual('node:fs/promises')),
+  readFile: migrationFsp.readFile,
+}));
+
 vi.mock('../../services/cosState.js', () => migrationState);
 
 import { derivePendingFeedbackRefs, up } from './008-cos-agent-feedback-refs.js';
@@ -46,10 +52,15 @@ describe('db-migration 008 — CoS feedback references', () => {
 
   it('writes derived references without reading the archive or calling a provider', async () => {
     migrationFs.existsSync.mockReturnValue(true);
-    migrationState.loadState.mockResolvedValue({ agents: { [manualAgent.id]: manualAgent } });
+    migrationState.loadState.mockClear();
+    migrationFsp.readFile.mockResolvedValue(JSON.stringify({ agents: { [manualAgent.id]: manualAgent } }));
     const query = vi.fn(async () => ({ rows: [] }));
 
     await up({ query });
+
+    // Regression: loadState() waits for boot migrations to settle, so calling it
+    // from a migration deadlocks the boot while state.json has a legacy agents map.
+    expect(migrationState.loadState).not.toHaveBeenCalled();
 
     expect(query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO cos_pending_agent_feedback'), [
       'agent-example',

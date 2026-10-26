@@ -2,11 +2,15 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Camera, Check, Loader2, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import toast from '../ui/Toast';
+import { readFileAsBase64 } from '../../utils/fileUpload';
 import { GREYBOX_STARTERS } from '../../lib/greyboxStarters';
 import MusicVideoLlmPicker from '../musicVideo/MusicVideoLlmPicker';
 import SentPromptPanel from '../media/SentPromptPanel';
+import FilePickerButton from '../ui/FilePickerButton';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
-import { captureCatalogGreyboxShot, draftCatalogGreybox, previewCatalogGreyboxPrompt, saveCatalogGreybox } from '../../services/apiCatalog';
+import GreyboxEditor from './GreyboxEditor';
+import { captureCatalogGreyboxShot, renderCatalogGreyboxShot, detachCatalogIngredientMedia, uploadCatalogIngredientMediaFile, draftCatalogGreybox, previewCatalogGreyboxPrompt, saveCatalogGreybox } from '../../services/apiCatalog';
+import { formatCount } from '../../utils/formatters';
 import {
   GREYBOX_ASPECTS,
   DEFAULT_FOCAL_LENGTH_MM,
@@ -16,6 +20,7 @@ import {
   withShot,
   withoutShot,
   roundVec,
+  greyboxEditErrors,
 } from '../../lib/greybox';
 
 // three.js stays out of the main chunk: the viewer loads when the tab opens.
@@ -24,6 +29,13 @@ const GreyboxViewer = lazy(() => import('./GreyboxViewer'));
 const actionButton = 'min-h-[40px] inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 const EMPTY_LLM = { providerId: '', model: '', effort: '' };
 const AUTO = 'Default — the active provider';
+
+// Identity reads group media by its owning ingredient before recency. A
+// retained source's older export can therefore precede the replacement on the
+// surviving identity. Use the newest attachment consistently after refreshes
+// and remounts, even when detaching the previous export failed.
+const latestModel = (media = []) => media.filter((row) => row.kind === 'model' && !row.deleted)
+  .reduce((latest, row) => !latest || (row.createdAt || '') > (latest.createdAt || '') ? row : latest, null);
 
 /**
  * The Greybox tab of an Environment: orbit a coarse 3D layout of the place,
@@ -35,8 +47,12 @@ const AUTO = 'Default — the active provider';
 export default function GreyboxPanel({ record, media, readOnly = false, disabled = false, onBusyChange, onSaved, onCaptured }) {
   const [params, setParams] = useSearchParams();
   const viewerRef = useRef(null);
+  const [modelOverride, setModelOverride] = useState(null);
+  const syncedModel = latestModel(media || []);
+  const model = modelOverride?.recordId === record.id ? modelOverride.row : syncedModel;
   const saved = record.payload?.greybox ?? null;
   const [draft, setDraft] = useState(null);
+  const [manual, setManual] = useState(null);
   const [instruction, setInstruction] = useState('');
   const [llm, setLlm] = useState(EMPTY_LLM);
   const [fromScratch, setFromScratch] = useState(false);
@@ -46,8 +62,17 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
   const [newShotName, setNewShotName] = useState('');
   const [preview, setPreview] = useState(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [confirmRecapture, setConfirmRecapture] = useState(false);
+  const actionInFlight = useRef(false);
 
-  const scene = draft?.greybox || saved;
+  useEffect(() => {
+    if (modelOverride?.recordId !== record.id) return;
+    if (modelOverride.row ? syncedModel?.mediaKey === modelOverride.row.mediaKey : !syncedModel) setModelOverride(null);
+  }, [record.id, syncedModel, modelOverride]);
+
+  const scene = draft?.greybox || manual || saved;
+  const editErrors = manual ? greyboxEditErrors(manual) : [];
+  const selected = params.get('greyboxItem') || '';
   const shotId = params.get('shot') || '';
   const shot = scene?.shots?.find((s) => s.id === shotId) || null;
   const locked = readOnly || record.payload?.locked === true;
@@ -85,6 +110,8 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
   // The viewer applies it once per framing, so a new object after a save is harmless.
   const shotView = useMemo(() => (shot ? { id: shot.id, position: shot.position, target: shot.target } : null), [shot]);
 
+  const selectItem = (id) => setParams((prev) => { const next = new URLSearchParams(prev); if (id) next.set('greyboxItem', id); else next.delete('greyboxItem'); return next; }, { replace: true });
+
   const selectShot = (id) => setParams((prev) => { const next = new URLSearchParams(prev); if (id) next.set('shot', id); else next.delete('shot'); return next; }, { replace: true });
 
   const persist = async (nextScene, { source } = {}) => {
@@ -97,11 +124,27 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
   // The parent holds its Save while a write is in flight. It is told directly (not
   // via an effect) so the release still fires if the tab was left mid-write.
   const run = (name, fn) => {
+    if (actionInFlight.current || disabled) return Promise.resolve();
+    actionInFlight.current = true;
     setBusy(name);
     onBusyChange?.(true);
     return fn().finally(() => {
       setBusy('');
+      actionInFlight.current = false;
       onBusyChange?.(false);
+    });
+  };
+
+  const saveManual = () => run('manual', async () => {
+    if (!manual || greyboxEditErrors(manual).length) return;
+    if (await persist(manual)) setManual(null);
+  });
+
+  const moveAnchor = (id, position) => {
+    if (locked || blocked || draft || confirmRemove) return;
+    setManual((prev) => {
+      const current = prev || saved;
+      return { ...current, anchors: current.anchors.map((anchor) => anchor.id === id ? { ...anchor, position } : anchor) };
     });
   };
 
@@ -137,7 +180,7 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
     // move or shot change while saving cannot change what is uploaded.
     const next = framedShot();
     const dataUrl = viewerRef.current?.capture();
-    if (!dataUrl) return;
+    if (!dataUrl) { toast.error('Wait for the Blender model to finish loading before capturing.'); return; }
     // Save the camera first when it moved, so the capture matches the saved shot.
     if (next && JSON.stringify(next) !== JSON.stringify(shot) && !(await persist(withShot(saved, next)))) return;
     const row = await captureCatalogGreyboxShot(record.id, shot.id, dataUrl.split(',')[1], { silent: true })
@@ -146,6 +189,25 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
       toast.success(`Saved "${shot.label}" as a reference image`);
       onCaptured?.();
     }
+  });
+
+  const recaptureAll = () => run('recapture', async () => {
+    if (locked || draft || manual || saved?.source !== 'spec' || !saved?.shots.length) return;
+    let captured = 0;
+    // Use saved cameras, not the currently orbited/unsaved view. Stop at the
+    // first failure and report the prefix that was replaced; never retry a shot.
+    for (const savedShot of saved.shots) {
+      const row = await renderCatalogGreyboxShot(record.id, savedShot.id, { silent: true })
+        .catch((err) => {
+          toast.error(`Captured ${formatCount(captured)} of ${formatCount(saved.shots.length)} shots. “${savedShot.label}” failed: ${err?.message || 'Could not render'}; remaining shots were not changed.`);
+          return null;
+        });
+      if (!row) break;
+      captured++;
+      onCaptured?.();
+    }
+    setConfirmRecapture(false);
+    if (captured === saved.shots.length) toast.success(`Re-captured ${formatCount(captured)} shot${captured === 1 ? '' : 's'}`);
   });
 
   const removeShot = () => run('shot', async () => {
@@ -183,6 +245,38 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
     }
   });
 
+  const attachModel = (file) => run('model', async () => {
+    if (!file) return;
+    if (!/\.glb$/i.test(file.name) || file.size > 24 * 1024 * 1024) {
+      toast.error('Choose a .glb file up to 24 MB.');
+      return;
+    }
+    const row = await readFileAsBase64(file)
+      .then((dataBase64) => uploadCatalogIngredientMediaFile(record.id, { dataBase64, mimeType: 'model/gltf-binary', filename: file.name, role: 'greybox-model' }, { silent: true }))
+      .catch((err) => { toast.error(err?.message || 'Failed to attach the model'); return null; });
+    if (!row) return;
+    setModelOverride({ recordId: record.id, row });
+    onCaptured?.();
+    if (!(await persist({ ...(saved || blankGreybox()), source: 'glb' }))) return;
+    if (model && model.mediaKey !== row.mediaKey) {
+      await detachCatalogIngredientMedia(record.id, { mediaKey: model.mediaKey, kind: 'model' }, { silent: true })
+        .catch((err) => toast.error(err?.message || 'The previous model could not be detached'));
+      onCaptured?.();
+    }
+  });
+
+  const removeModel = () => run('model', async () => {
+    if (!model) return;
+    // Switch first so a failed detach leaves a recoverable, attached model.
+    if (saved?.source === 'glb' && !(await persist({ ...saved, source: 'spec', parts: saved.parts.length ? saved.parts : blankGreybox().parts }))) return;
+    const removed = await detachCatalogIngredientMedia(record.id, { mediaKey: model.mediaKey, kind: 'model' }, { silent: true })
+      .then(() => true).catch((err) => { toast.error(err?.message || 'Failed to detach the model'); return false; });
+    if (removed) {
+      setModelOverride({ recordId: record.id, row: null });
+      onCaptured?.();
+    }
+  });
+
   const selectedCapture = shot ? captureForShot(media, shot.id) : null;
   const counts = scene ? [[scene.parts, 'part'], [scene.anchors, 'anchor'], [scene.shots, 'shot']]
     .map(([list, word]) => `${list.length} ${word}${list.length === 1 ? '' : 's'}`).join(' · ') : '';
@@ -198,7 +292,7 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
           {counts && <span className="text-xs text-gray-400">{counts}</span>}
           {saved && !locked && (confirmRemove
             ? <ConfirmButtonPair prompt="Remove the greybox?" confirmText="Remove" onConfirm={removeGreybox} onCancel={() => setConfirmRemove(false)} busy={busy === 'remove'} busyText="Removing…" />
-            : <button type="button" className="text-xs text-gray-400 hover:text-white underline min-h-[32px]" onClick={() => setConfirmRemove(true)} disabled={blocked}>Remove greybox</button>)}
+            : <button type="button" className="text-xs text-gray-400 hover:text-white underline min-h-[32px]" onClick={() => setConfirmRemove(true)} disabled={blocked || !!manual}>Remove greybox</button>)}
         </div>
       </div>
 
@@ -244,15 +338,29 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
         </div>
       )}
 
-      {scene && scene.source === 'glb' && (
-        <p className="text-sm text-port-warning">This greybox uses an attached Blender model, which the viewer does not display yet. Its shots and anchors are kept.</p>
-      )}
+      {!locked && <div className="flex flex-wrap items-center gap-2">
+        <FilePickerButton accept=".glb,model/gltf-binary" className={actionButton} disabled={blocked || !!manual || !!draft}
+          onChange={(event) => attachModel(event.target.files?.[0])}>
+          {model ? 'Replace Blender export (.glb)' : 'Attach Blender export (.glb)'}
+        </FilePickerButton>
+        {model && <>
+          <button type="button" className={actionButton} disabled={blocked || !!manual || !!draft} onClick={removeModel}>Remove model</button>
+          {saved && <label htmlFor="greybox-source" className="text-xs text-gray-400">Layout source
+            <select id="greybox-source" value={saved.source} disabled={blocked || !!manual || !!draft} className="ml-2 min-h-[40px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white"
+              onChange={(event) => { const source = event.target.value; void run('source', () => persist({ ...saved, source, parts: source === 'spec' && !saved.parts.length ? blankGreybox().parts : saved.parts })); }}>
+              <option value="spec">Layout parts</option><option value="glb">Blender model</option>
+            </select>
+          </label>}
+        </>}
+      </div>}
+      {scene?.source === 'glb' && !model && <p role="status" className="text-sm text-port-warning">The Blender model is missing or has not synced yet. Attach the export to render this layout.</p>}
 
-      {scene && scene.source !== 'glb' && (
+      {scene && (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
           <div className="space-y-3 min-w-0">
             <Suspense fallback={<div className="h-64 flex items-center justify-center text-sm text-gray-400"><Loader2 size={16} className="animate-spin mr-2" aria-hidden="true" />Loading viewer…</div>}>
-              <GreyboxViewer key={record.id} ref={viewerRef} scene={scene} aspect={aspect} focalLengthMm={lens} shotView={shotView} />
+              <GreyboxViewer key={record.id} ref={viewerRef} scene={editErrors.length ? saved : scene} modelSrc={model ? `/data/models/${encodeURIComponent(model.mediaKey)}` : null} aspect={aspect} focalLengthMm={lens} shotView={shotView}
+                activeShot={shot} selected={selected} onSelect={selectItem} onMoveAnchor={!locked && !blocked && !draft && !confirmRemove ? moveAnchor : undefined} />
             </Suspense>
             <div className="grid gap-3 sm:grid-cols-2">
               <label htmlFor="greybox-lens" className="text-xs text-gray-400">
@@ -266,7 +374,7 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
                 </select>
               </label>
             </div>
-            <p className="text-xs text-gray-500">Drag to orbit, scroll to zoom, right-drag to pan. The frame above is exactly what a capture saves.</p>
+            <p className="text-xs text-gray-500">Drag to orbit, scroll to zoom, right-drag to pan. Drag an anchor to move it on the floor in 0.1 m steps; numeric fields also support precise placement. Faded anchors are excluded from the selected shot’s capture. Grid, pins and selection highlights are editor guides only.</p>
           </div>
 
           <div className="space-y-3 min-w-0">
@@ -290,8 +398,18 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
               })}
             </ul>
 
-            {!draft && !locked && (
+            {shot && <button type="button" className={actionButton} onClick={() => selectShot('')}>Free view — show all anchors</button>}
+            {!draft && !manual && !locked && (
               <div className="space-y-2">
+                {saved?.source === 'spec' && saved.shots.length > 0 && (confirmRecapture
+                  ? <div className="space-y-2">
+                    <p className="text-xs text-gray-400">Saved shots: {formatCount(saved.shots.length)}. Existing reference images to replace: {formatCount(saved.shots.filter((s) => captureForShot(media, s.id)).length)}. Saved camera angles will be used.</p>
+                    <ConfirmButtonPair confirmText="Re-capture all shots" onConfirm={recaptureAll} onCancel={() => setConfirmRecapture(false)}
+                      busy={blocked} busyText="Capturing…" tone="warning" className="flex-wrap" />
+                  </div>
+                  : <button type="button" className={actionButton} disabled={blocked} onClick={() => setConfirmRecapture(true)}>
+                    <Camera size={14} aria-hidden="true" />Re-capture all shots ({formatCount(saved.shots.length)})
+                  </button>)}
                 <label htmlFor="greybox-new-shot" className="block text-xs text-gray-400">New shot name</label>
                 <div className="flex gap-2">
                   <input id="greybox-new-shot" value={newShotName} onChange={(e) => setNewShotName(e.target.value)} maxLength={120} placeholder="e.g. DJ booth, low angle"
@@ -316,19 +434,21 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
               </div>
             )}
 
-            {scene.landmarks.length > 0 && (
-              <div>
-                <h3 className="text-sm font-medium text-white">Landmarks</h3>
-                <p className="text-xs text-gray-400">{scene.landmarks.map((l) => l.label).join(' · ')}</p>
-              </div>
-            )}
-            {scene.anchors.length > 0 && (
-              <div>
-                <h3 className="text-sm font-medium text-white">Anchors</h3>
-                <p className="text-xs text-gray-400">{scene.anchors.map((a) => a.label).join(' · ')}</p>
-              </div>
-            )}
           </div>
+        </div>
+      )}
+
+      {saved && !draft && !locked && (
+        <div className="space-y-3">
+          {manual && <div className="rounded-lg border border-port-accent p-3 space-y-2" role="status">
+            <p className="text-sm text-gray-200">Unsaved layout edits. Save before capturing a shot or using AI.</p>
+            {editErrors.length > 0 && <ul className="text-sm text-port-warning" aria-label="Layout errors">{editErrors.map((error) => <li key={error}>{error}</li>)}</ul>}
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className={actionButton} onClick={saveManual} disabled={blocked || editErrors.length > 0}>Save layout edits</button>
+              <button type="button" className={actionButton} onClick={() => setManual(null)} disabled={blocked}>Discard layout edits</button>
+            </div>
+          </div>}
+          <GreyboxEditor scene={manual || saved} shotId={shotId} selected={selected} onSelect={selectItem} onChange={setManual} disabled={blocked || confirmRemove} />
         </div>
       )}
 
@@ -352,7 +472,7 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
             </label>
           )}
           {preview && <SentPromptPanel prompt={instruction} sentPrompt={preview.sentPrompt} additions={preview.promptAdditions} />}
-          <button type="button" className={actionButton} onClick={generate} disabled={blocked || !instruction.trim()}>
+          <button type="button" className={actionButton} onClick={generate} disabled={blocked || !!manual || !instruction.trim()}>
             {busy === 'draft' ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Sparkles size={14} aria-hidden="true" />}
             {busy === 'draft' ? 'Drafting…' : saved && !fromScratch ? 'Draft the edit' : 'Draft a greybox'}
           </button>

@@ -14,6 +14,7 @@ import PageHeader from '../components/PageHeader';
 import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import MediaImage from '../components/MediaImage';
 import CharacterCard from '../components/catalog/CharacterCard';
+import CatalogImageAction from '../components/catalog/CatalogImageAction';
 import useCatalogCards from '../hooks/useCatalogCards';
 import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 import toast from '../components/ui/Toast';
@@ -31,14 +32,18 @@ const LIBRARY_ICONS = { casting: Drama, environments: Mountain, objects: Package
 const UNLINKED = '__unlinked';
 
 function LibraryTile({ ingredient }) {
+  const [generatedCover, setGeneratedCover] = useState(null);
   const name = ingredient.name || '(untitled)';
-  const cover = ingredientCoverUrl(ingredient);
+  const persistedCover = ingredientCoverUrl(ingredient);
+  // Bridge the stale list row only until an authoritative cover/revision arrives.
+  const cover = generatedCover?.baseline === persistedCover && generatedCover?.revision === ingredient.updatedAt
+    ? generatedCover.src : persistedCover;
   const usage = usageSummary(ingredient.usage);
   return (
-    <li className="min-w-0">
+    <li className="min-w-0 flex flex-col bg-port-card border border-port-border rounded-lg overflow-hidden hover:border-port-accent/60">
       <Link
         to={ingredientPath(ingredient)}
-        className="group flex flex-col h-full bg-port-card border border-port-border rounded-lg overflow-hidden hover:border-port-accent/60"
+        className="group flex flex-col flex-1 min-w-0"
       >
         <div className="aspect-[3/4] w-full bg-port-bg flex items-center justify-center overflow-hidden">
           {cover ? (
@@ -53,6 +58,9 @@ function LibraryTile({ ingredient }) {
           <span className="text-[11px] text-gray-500 truncate">{usage || 'Not used yet'}</span>
         </span>
       </Link>
+      <div className="p-2 border-t border-port-border">
+        <CatalogImageAction ingredient={ingredient} onCover={src => setGeneratedCover({ src, baseline: persistedCover, revision: ingredient.updatedAt })} />
+      </div>
     </li>
   );
 }

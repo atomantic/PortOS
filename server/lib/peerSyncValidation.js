@@ -44,7 +44,7 @@ const peerAssetManifestEntrySchema = z.discriminatedUnion('kind', [
     // sidecar, so it rides the non-image branch (`.strict()` rejects a stray
     // sidecarSha256). The per-record push pipeline never emits `audio`; accepting
     // it here is harmless and keeps one shared entry schema across both manifests.
-    kind: z.enum(['image-ref', 'video', 'music', 'audio']),
+    kind: z.enum(['image-ref', 'video', 'music', 'audio', 'model']),
     sha256: hex64.optional(),
   }).strict(),
 ]);
@@ -338,6 +338,8 @@ export const peerSyncNowSchema = z.object({
 // rather than shipping an unbounded list. `manifestHash` lets the receiver
 // short-circuit an unchanged library without diffing every entry. `.strict()`
 // so a malformed envelope is rejected at the boundary.
+export const peerLibraryManifestQuerySchema = z.object({ models: z.literal('1').optional() }).strict();
+
 export const peerLibraryManifestSchema = z.object({
   schemaVersion: z.number().int().min(0).max(1_000_000),
   manifestHash: hex64,

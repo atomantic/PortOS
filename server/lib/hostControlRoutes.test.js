@@ -81,6 +81,7 @@ describe('Universe Builder mutation inventory (#10669)', () => {
     'POST /api/universe-builder/:id/adopt-style',
     'DELETE /api/universe-builder/:id/style-references/:referenceId',
     'DELETE /api/universe-builder/:id/characters/:entryId/reference-sheet',
+    'POST /api/universe-builder/:id/characters/:entryId/reference-sheet/preview',
     'POST /api/universe-builder/merge/preview',
     'POST /api/universe-builder/merge',
     'POST /api/universe-builder/:id/canon/:kind/:entryId/apply-image-correction',

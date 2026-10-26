@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -269,41 +269,49 @@ it('builds the same plan from an explicit working-tree override as from the equi
   }
 });
 
-it('schedules the real client precision-copy import chain for a shared scoring change', () => {
+describe('real shared-source import chains', () => {
   const cwd = fileURLToPath(new URL('../', import.meta.url));
-  const source = 'server/lib/postScoring.js';
-  const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
-  const plan = buildCiTestPlan(inputs.changedFiles, inputs);
+  let inputs;
+  // These read-only plans share one real-tree snapshot. Synthetic mutation and
+  // recollection regressions below keep their separate per-call snapshots.
+  beforeAll(() => {
+    inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [
+      'server/lib/postScoring.js', 'server/lib/editorial/checkInfra/taxonomy.js',
+    ], cwd });
+  });
 
-  expect(plan.full).toBe(false);
-  expect(plan.server.mode).toBe('related');
-  expect(plan.server.sources).toContain(source);
-  expect(plan.client.mode).toBe('related');
-  expect(plan.client.sources).toContain(source);
-  expect(plan.build).toBe(true);
-  // The test names its client helper, not postScoring: only import-graph
-  // selection can reach this regression through the intermediate module.
-  expect(inputs.pathContractTests[source]).not.toContain('client/src/lib/estimationTolerance.test.js');
-  expect(staticImportClosure(join(cwd, 'client/src/lib/estimationTolerance.test.js')).files)
-    .toContain(join(cwd, source));
-});
+  it('schedules the real client precision-copy import chain for a shared scoring change', () => {
+    const source = 'server/lib/postScoring.js';
+    const plan = buildCiTestPlan([source], inputs);
 
-it('schedules the real taxonomy-to-validation consumer chain for a nested editorial leaf', () => {
-  const cwd = fileURLToPath(new URL('../', import.meta.url));
-  const source = 'server/lib/editorial/checkInfra/taxonomy.js';
-  const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
-  const plan = buildCiTestPlan(inputs.changedFiles, inputs);
+    expect(plan.full).toBe(false);
+    expect(plan.server.mode).toBe('related');
+    expect(plan.server.sources).toContain(source);
+    expect(plan.client.mode).toBe('related');
+    expect(plan.client.sources).toContain(source);
+    expect(plan.build).toBe(true);
+    // The test names its client helper, not postScoring: only import-graph
+    // selection can reach this regression through the intermediate module.
+    expect(inputs.pathContractTests[source]).not.toContain('client/src/lib/estimationTolerance.test.js');
+    expect(staticImportClosure(join(cwd, 'client/src/lib/estimationTolerance.test.js')).files)
+      .toContain(join(cwd, source));
+  });
 
-  expect(plan.full).toBe(false);
-  expect(plan.server.mode).toBe('related');
-  expect(plan.server.sources).toEqual([source]);
-  // Explicit guards stay additive to the traversal.
-  expect(plan.server.files).toEqual(expect.arrayContaining(ALWAYS_RUN_TESTS.filter((path) => path.startsWith('server/'))));
-  // validation.test.js reaches the leaf only through pipelineValidation; it names
-  // neither the leaf nor the editorial feature, so only traversal selects it.
-  expect(plan.server.files).not.toContain('server/lib/validation.test.js');
-  expect(staticImportClosure(join(cwd, 'server/lib/validation.test.js')).files)
-    .toContain(join(cwd, source));
+  it('schedules the real taxonomy-to-validation consumer chain for a nested editorial leaf', () => {
+    const source = 'server/lib/editorial/checkInfra/taxonomy.js';
+    const plan = buildCiTestPlan([source], inputs);
+
+    expect(plan.full).toBe(false);
+    expect(plan.server.mode).toBe('related');
+    expect(plan.server.sources).toEqual([source]);
+    // Explicit guards stay additive to the traversal.
+    expect(plan.server.files).toEqual(expect.arrayContaining(ALWAYS_RUN_TESTS.filter((path) => path.startsWith('server/'))));
+    // validation.test.js reaches the leaf only through pipelineValidation; it names
+    // neither the leaf nor the editorial feature, so only traversal selects it.
+    expect(plan.server.files).not.toContain('server/lib/validation.test.js');
+    expect(staticImportClosure(join(cwd, 'server/lib/validation.test.js')).files)
+      .toContain(join(cwd, source));
+  });
 });
 
 it('keeps exact-file selection for a test-only diff and traverses a nested feature leaf for a differently named consumer', () => {
@@ -1271,7 +1279,8 @@ describe('CI test impact planner', () => {
     expect(re.test("'generate_ltx2xpy'")).toBe(false);
   });
 
-  it('shards full plans and related graphs while keeping small exact-file plans on one runner', () => {
+  it('uses four full Windows shards while keeping small exact-file plans on one runner', () => {
+    expect(FULL_SUITE_SHARDS.windows).toBe(4);
     expect(shardIndexes('full', 3)).toEqual([1, 2, 3]);
     expect(shardIndexes('related', 3)).toEqual([1]);
     expect(shardIndexes('files', 3)).toEqual([1]);
@@ -1291,7 +1300,7 @@ describe('CI test impact planner', () => {
     const relatedWindows = buildCiTestPlan(['server/lib/bufferedSpawn.js'], { trackedFiles: TRACKED });
     expect(relatedWindows).toMatchObject({ full: false, windowsMode: 'related',
       windowsSources: ['server/lib/bufferedSpawn.js'],
-      shards: { server: [1, 2], client: [1], windows: [1, 2, 3] } });
+      shards: { server: [1, 2], client: [1], windows: [1, 2, 3, 4] } });
     expect(relatedWindows.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS.filter(path => TRACKED.includes(path)).sort());
     const exactWindows = buildCiTestPlan(['server/lib/bufferedSpawn.test.js'], { trackedFiles: TRACKED });
     expect(exactWindows).toMatchObject({ windowsMode: 'files', shards: { windows: [1] } });
@@ -1711,7 +1720,8 @@ describe('Windows escalation on a full plan (#7440)', () => {
     ...options,
   });
 
-  it('runs the contract baseline for a full trigger windows-server cannot observe', () => {
+  it('keeps the 43-contract Windows baseline on one job despite the larger full matrix', () => {
+    expect(WINDOWS_CONTRACT_TESTS).toHaveLength(43);
     const downgraded = plan(['client/vite.config.js']);
 
     // Still a full plan for every Linux suite — only the 2x job narrows.
@@ -1822,6 +1832,11 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'server/lib/nativeTrash.test.js',
       'server/lib/nativeTrash.smoke.test.js',
       'server/lib/bufferedSpawn.js',
+      'server/lib/execGit.js',
+      'server/lib/windowsGitProcess.js',
+      'server/lib/windowsGitProcess.test.js',
+      'server/lib/windowsGitProcess.protocol.test.js',
+      'server/lib/windowsGitSupervisor.cs',
       'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/pathSafety.js',
       'server/lib/mockPathsDataRoot.js',
@@ -1875,6 +1890,13 @@ describe('Windows escalation on a full plan (#7440)', () => {
       // `windows: true` here is a direct consequence of WINDOWS_RISK_RULES.
       expect(plan(['server/services/auth.js']).windows).toBe(false);
       expect(plan(['server/lib/bufferedSpawn.js']).windows).toBe(true);
+    });
+
+    it('selects the Windows Git process regressions for test-only changes (#13703)', () => {
+      const tests = ['server/lib/windowsGitProcess.test.js', 'server/lib/windowsGitProcess.protocol.test.js'];
+      const selected = buildCiTestPlan(tests, { trackedFiles: [...TRACKED, ...WINDOWS_CONTRACT_TESTS, ...tests], clientDependencies: [] });
+      expect(selected).toMatchObject({ full: false, windows: true, windowsMode: 'files' });
+      expect(selected.windowsFiles).toEqual([...new Set([...WINDOWS_CONTRACT_TESTS, ...tests])].sort());
     });
 
     it.each(['js', 'test.js'])('runs checkout retirement %s changes on Windows (#13562)', extension => {
@@ -1991,6 +2013,16 @@ it('projects transitive browser consumers through the planner CLI without replac
 
 describe('cross-workspace browser suites (#10312)', () => {
 
+  it('selects greybox pixel parity when the bundled viewer or capture contract changes', () => {
+    const cwd = fileURLToPath(new URL('../', import.meta.url));
+    const suite = 'server/services/greyboxRender.browser.test.js';
+    for (const source of ['client/src/components/catalog/GreyboxViewer.jsx', 'client/src/components/catalog/GreyboxCapture.jsx', 'server/lib/greyboxCapture.js']) {
+      const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
+      const trackedFiles = inputs.trackedFiles.filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
+      expect(buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles }).browserFiles).toContain(suite);
+    }
+  });
+
   it('selects animatic pixel coverage when only the compositor or Save frame control changes', () => {
     const cwd = fileURLToPath(new URL('../', import.meta.url));
     const suite = 'server/services/musicVideo/animaticCapture.browser.test.js';
@@ -2017,13 +2049,26 @@ describe('cross-workspace browser suites (#10312)', () => {
     // Server-only media suites do not mount the changed client component.
     const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js', 'server/lib/musicVideoTitleCard.browser.test.js',
       'server/services/federatedMedia/sourceAudio.browser.test.js',
+      'server/services/greyboxRender.browser.test.js',
       'server/services/fableLoom/static-player/player.browser.test.js',
       'server/services/codeAnimation/export.realBrowser.test.js',
       'server/services/htmlComposition/index.test.js'];
     expect(plan.full).toBe(false);
-    expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => !runtimeOnly.includes(suite))));
+    expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => suite.includes('/musicVideo') && !runtimeOnly.includes(suite))));
+    expect(plan.browserFiles).not.toContain('server/routes/catalogGreyboxViewer.browser.test.js');
     for (const suite of runtimeOnly) expect(plan.browserFiles).not.toContain(suite);
     expect(plan.suiteReasons.browser).toMatch(/browser suite/);
+  });
+
+  it('selects greybox pixel coverage for its lazy viewer, editor and Environment route', () => {
+    const cwd = fileURLToPath(new URL('../', import.meta.url));
+    for (const source of ['client/src/components/catalog/GreyboxViewer.jsx', 'client/src/components/catalog/GreyboxPanel.jsx', 'client/src/pages/CatalogIngredient.jsx']) {
+      const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
+      const trackedFiles = inputs.trackedFiles.filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
+      const plan = buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles });
+      expect(plan.full).toBe(false);
+      expect(plan.browserFiles).toContain('server/routes/catalogGreyboxViewer.browser.test.js');
+    }
   });
 
   it('runs every registered browser suite on a full plan, and no unregistered browser test', () => {

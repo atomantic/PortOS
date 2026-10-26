@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { aspectRatio, blankGreybox, captureForShot, fovFromFocalLength, shotFromCamera, withShot, withoutShot } from './greybox';
+import editingParts from '../../../server/lib/fixtures/greyboxEditing.json';
+import { aspectRatio, blankGreybox, captureForShot, fovFromFocalLength, shotFromCamera, withShot, withoutShot, greyboxEditErrors, newGreyboxItem } from './greybox';
 
 describe('greybox helpers', () => {
   it('maps lens to vertical fov and back, and aspect labels to ratios', () => {
@@ -33,4 +34,26 @@ describe('greybox helpers', () => {
     expect(captureForShot(media, 'wide').mediaKey).toBe('b.png');
     expect(captureForShot(media, 'nope')).toBeNull();
   });
+  it.each(['box', 'plane', 'cylinder', 'extrude'])('creates the shared %s wire fixture with collision-free ids', (type) => {
+    const scene = blankGreybox();
+    const first = newGreyboxItem(scene, 'parts', type);
+    scene.parts.push(first);
+    const second = newGreyboxItem(scene, 'parts', type);
+    scene.parts.push(second);
+    expect(second.id).not.toBe(first.id);
+    expect(greyboxEditErrors(scene)).toEqual([]);
+    expect(first).toEqual(editingParts[type]);
+  });
+
+  it.each([
+    ['duplicate ids', (scene) => { scene.parts.push({ ...scene.parts[0] }); }],
+    ['unknown zone', (scene) => { scene.parts[0].zone = 'missing'; }],
+    ['unknown anchor', (scene) => { scene.shots[0].figures = [{ anchorId: 'missing' }]; }],
+    ['invalid extent', (scene) => { scene.parts[0].size[0] = 0; }],
+  ])('rejects %s before sending', (_name, invalidate) => {
+    const scene = blankGreybox();
+    invalidate(scene);
+    expect(greyboxEditErrors(scene).length).toBeGreaterThan(0);
+  });
+
 });

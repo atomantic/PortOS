@@ -42,7 +42,6 @@ import {
   pickDeathFingerprint,
   currentMetalProfileFingerprint,
 } from './runtimes.js';
-import { getMetalBufferProfiles, metalBufferExecutionSignature } from './metalBufferProfiles.js';
 import { isDisplaySleepEnabled, sleepDisplayForVideo, wakeDisplayForVideo } from './displayPower.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
 import { estimateRenderMs } from './eta.js';
@@ -95,6 +94,7 @@ export async function spawnAndWatchVideo({
     maintenance.markResourceUnsettled('media', jobId);
   };
   const cancelEpochAtStart = videoJobState.cancelEpoch;
+  const { getMetalBufferProfiles, metalBufferExecutionSignature } = await import('./metalBufferProfiles.js');
   let memoryEvidence = {};
   let memoryTimer = null;
   let memoryWrites = Promise.resolve();

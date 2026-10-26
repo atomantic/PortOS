@@ -47,7 +47,7 @@
  */
 import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -171,7 +171,10 @@ function awaitOperandEnd(blanked, awaitIndex) {
 
 /** Every spawned-child binding in one file's source that awaits before wiring a terminal listener. */
 export function findLateChildListeners(src) {
-  const { code, blanked } = blankLiterals(src, { includeCommentOnly: true });
+  return lateChildListeners(blankLiterals(src, { includeCommentOnly: true }));
+}
+
+function lateChildListeners({ code, blanked }) {
   // `code` keeps literal text, so `'error'` is still readable; `blanked` is what
   // await/bracket walks use.
   const spans = asyncBodySpans(blanked);
@@ -197,7 +200,46 @@ export function findLateChildListeners(src) {
   return offenders;
 }
 
-const trackedServerSources = () => trackedFiles(SERVER_ROOT, ['*.js', '*.mjs', '*.cjs']).filter((f) => f && !f.includes('.test.'));
+let files;
+const trackedServerSources = () => files ??= trackedFiles(SERVER_ROOT, ['*.js', '*.mjs', '*.cjs']).filter((f) => f && !f.includes('.test.'));
+
+let treeScan;
+function scanTree() {
+  if (treeScan) return treeScan;
+  const start = performance.now();
+  let readMs = 0;
+  let lexMs = 0;
+  let analysisMs = 0;
+  let candidates = 0;
+  let slowest = { file: 'none', ms: 0, bytes: 0 };
+  const sites = [];
+  const violations = [];
+  for (const file of trackedServerSources()) {
+    const readStart = performance.now();
+    const src = readFileSync(join(SERVER_ROOT, file), 'utf8');
+    readMs += performance.now() - readStart;
+    // Any binding the lexer can recognize necessarily contains this token.
+    if (!src.includes('spawn')) continue;
+    candidates += 1;
+    const lexStart = performance.now();
+    const views = blankLiterals(src, { includeCommentOnly: true });
+    const elapsed = performance.now() - lexStart;
+    lexMs += elapsed;
+    if (elapsed > slowest.ms) slowest = { file, ms: elapsed, bytes: Buffer.byteLength(src) };
+    const analysisStart = performance.now();
+    // Retain the recognition case's raw-source condition as well as its lexer match.
+    if (/\b(?:spawn|spawnDetached)\s*\(/.test(src) && [...views.blanked.matchAll(SPAWN_BINDING)].length > 0) sites.push(file);
+    for (const hit of lateChildListeners(views)) violations.push(`server/${file} ${hit}`);
+    analysisMs += performance.now() - analysisStart;
+  }
+  treeScan = { sites, violations };
+  if (process.env.CI || process.env.PORTOS_SOURCE_SCAN_PROFILE) {
+    process.stdout.write(`🔎 child-listener scan: files=${files.length} candidates=${candidates} read=${readMs.toFixed(1)}ms lex=${lexMs.toFixed(1)}ms analysis=${analysisMs.toFixed(1)}ms total=${(performance.now() - start).toFixed(1)}ms slowestLexer=${slowest.file}:${slowest.bytes}B:${slowest.ms.toFixed(1)}ms\n`);
+  }
+  return treeScan;
+}
+
+afterAll(() => { treeScan = undefined; files = undefined; });
 
 describe('spawned children get a terminal listener before the next await (#11761)', () => {
   it('scans the server tree, every module extension included', () => {
@@ -209,10 +251,7 @@ describe('spawned children get a terminal listener before the next await (#11761
   it('still recognizes the spawn sites it is meant to guard', () => {
     // Without this the scan below could go vacuously green after a refactor
     // renames the spawn helpers.
-    const sites = trackedServerSources().filter((file) => {
-      const src = readFileSync(join(SERVER_ROOT, file), 'utf8');
-      return /\b(?:spawn|spawnDetached)\s*\(/.test(src) && [...blankLiterals(src).matchAll(SPAWN_BINDING)].length > 0;
-    });
+    const { sites } = scanTree();
     expect(sites).toEqual(expect.arrayContaining([
       'cos-runner/index.js',
       'services/imageGen/local.js',
@@ -221,12 +260,7 @@ describe('spawned children get a terminal listener before the next await (#11761
   });
 
   it('has no spawn whose listener waits behind an await', () => {
-    const violations = [];
-    for (const file of trackedServerSources()) {
-      const src = readFileSync(join(SERVER_ROOT, file), 'utf8');
-      if (!src.includes('spawn')) continue;
-      for (const hit of findLateChildListeners(src)) violations.push(`server/${file} ${hit}`);
-    }
+    const { violations } = scanTree();
     expect(
       violations,
       'These children are spawned and then the function awaits before any error/exit listener is '

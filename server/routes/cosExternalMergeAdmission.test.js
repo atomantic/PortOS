@@ -90,7 +90,10 @@ beforeAll(async () => {
   app.use('/api/cos', routes);
   app.use(errorMiddleware);
 });
-afterAll(cleanup);
+afterAll(async () => {
+  await globalThis.__portosGitSupervisorCleanup?.();
+  cleanup();
+});
 beforeEach(async () => {
   fixture.trusted = true; fixture.failSave = false; fixture.peers = []; fixture.beforeForge = null;
   fixture.state = { agents: {}, mergeAdmissions: {} }; persist();

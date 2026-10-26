@@ -1,7 +1,7 @@
 import { pinPlatform } from './testHelper.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { execFileSync, spawn as realSpawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -30,9 +30,11 @@ vi.mock('node:fs/promises', async importOriginal => {
     if (delayed.failAfterRename) { delayed.failAfterRename = false; throw new Error('release-result-lost'); }
   } };
 });
-vi.mock('./childProcess.js', () => ({
-  spawn: (command, args, options) => args[0] === 'fixture-delayed-mutation' ? delayed.child : realSpawn(command, args, options),
-}));
+vi.mock('./windowsGitProcess.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, startGit: (args, options, wire) => args[0] === 'fixture-delayed-mutation'
+    ? wire(delayed.child) : actual.startGit(args, options, wire) };
+});
 import { execGit } from './execGit.js';
 import { _checkoutAdmission, withCheckoutPublication, reserveCheckoutRetirement,
   withCheckoutReservation, releaseCheckoutReservation, readCheckoutReservation } from './checkoutRetirementAdmission.js';

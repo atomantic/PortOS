@@ -58,6 +58,7 @@ const BARE_CHECKOUT_SCRIPTS = [
   'scripts/ci-retry-cancelled-run.js',
   'scripts/ci-recover-superseded-gate.js',
   'scripts/doctor.js',
+  'scripts/checkGitVersion.js',
 ];
 
 const BUILTINS = new Set(builtinModules);

@@ -23,6 +23,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { buildPregateReport, guardInputSnapshot, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
+import { assertGitMergeTree } from '../lib/gitMergeTree.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -395,6 +396,7 @@ async function withMergedPregateTree(repoRoot, mergedWith, run) {
   }
   const head = readGit(['rev-parse', '--verify', 'HEAD^{commit}']);
   const base = readGit(['rev-parse', '--verify', `${mergedWith}^{commit}`]);
+  assertGitMergeTree(repoRoot);
   const scratch = mkdtempSync(join(tmpdir(), 'portos-merged-guards-'));
   try {
     // All new merge objects, refs, index entries and generated files live in this disposable clone.
@@ -405,7 +407,8 @@ async function withMergedPregateTree(repoRoot, mergedWith, run) {
     try {
       tree = readGit(['merge-tree', '--write-tree', base, head], scratch).split('\n')[0];
     } catch (error) {
-      throw new Error(`Cannot construct merged guard tree (resolve conflicts before merging): ${error.stdout || error.stderr || error.message}`);
+      const reason = error.status === 1 ? 'resolve conflicts before merging' : 'Git merge-tree failed';
+      throw new Error(`Cannot construct merged guard tree (${reason}): ${error.stdout || error.stderr || error.message}`);
     }
     // A shared clone borrows objects, but not its source's promisor remote.
     // Fetch only blobs missing from this selected tree through the source,

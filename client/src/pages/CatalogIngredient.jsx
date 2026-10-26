@@ -10,13 +10,12 @@
 import CatalogReferenceLibrary from '../components/catalog/CatalogReferenceLibrary.jsx';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useLocation, Link } from 'react-router';
-import { Sparkles, Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box } from 'lucide-react';
+import { Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import Modal from '../components/ui/Modal.jsx';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair.jsx';
 import UnsavedChangesConfirm from '../components/ui/UnsavedChangesConfirm.jsx';
-import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import TabPills from '../components/ui/TabPills';
 import {
@@ -36,20 +35,15 @@ import {
 import { arrayBufferToBase64 } from '../lib/audioRecorder';
 import useMemoRecorder from '../hooks/useMemoRecorder';
 import { useGalleryPage } from '../hooks/useGalleryPage';
-import { generateImage } from '../services/apiSystem';
 import socket from '../services/socket';
-import { previewImagePrompt } from '../services/apiImageVideo';
-import { composeStyledPrompt, stylePromptAdditions } from '../lib/composeStyledPrompt';
-import { universeStylePreset, withUniverseLabel } from '../lib/universeStylePreset';
-import { useModelInputPreview } from '../hooks/useModelInputPreview';
-import ModelInputPreview from '../components/media/ModelInputPreview';
 import AddToThreadButton from '../components/threads/AddToThreadButton';
 import { getCanonCatalogContext } from '../services/canonCatalogContext';
 import { getUniverse } from '../services/apiUniverseBuilder';
 import useMounted from '../hooks/useMounted';
-import MediaJobThumb from '../components/pipeline/MediaJobThumb';
 import IngredientPicker from '../components/IngredientPicker';
 import MediaImage from '../components/MediaImage';
+import GenerateImageControl from '../components/catalog/GenerateImageControl';
+import { buildGenerationPromptSeed } from '../lib/catalogImagePrompt';
 import CatalogMediaTile from '../components/catalog/CatalogMediaTile';
 import CatalogImagePreview, { CatalogImagePreviewProvider } from '../components/catalog/CatalogImagePreview';
 import CatalogRelatedImages from '../components/catalog/CatalogRelatedImages';
@@ -64,6 +58,7 @@ import CanonReferenceRemoval from '../components/catalog/CanonReferenceRemoval';
 import CatalogLockButton from '../components/catalog/CatalogLockButton';
 import CharacterCanonActions from '../components/catalog/CharacterCanonActions';
 import ObjectAttachmentsEditor from '../components/universe/ObjectAttachmentsEditor';
+import CatalogRedesign from '../components/catalog/CatalogRedesign';
 import CatalogUniversePanel from '../components/catalog/CatalogUniversePanel';
 import CatalogFormsEditor from '../components/catalog/CatalogFormsEditor';
 import CatalogMergePanel from '../components/catalog/CatalogMergePanel';
@@ -87,45 +82,6 @@ import { formsOf } from '../lib/catalogForms';
 // Per-type editor field list + badge color now come from the shared registry
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
 // where `kind` is 'text' (single line) or 'textarea' (multi-line).
-
-// Build the image-generation prompt source from the (live, editable) payload:
-// the type's primary content field first, then a curated set of *visual*
-// description fields, so a character renders from its full appearance and a
-// place/object/idea from description/summary. The keys are the ones that DEPICT a
-// subject — `role`/`notes`/`significance` describe the entity but don't depict it
-// and would seed weak prompts, so they're excluded. Unlike the old single-field
-// derive, this folds EVERY populated visual field together (#1809) so a character
-// renders from physicalDescription PLUS visualNotes/visualIdentity/etc., and
-// appends the ingredient's tags as extra prompt tokens. Capped so a verbose canon
-// entry can't blow up the prompt. Returns '' when nothing usable is present (the
-// editor prefill falls back to the name alone). Exported for unit tests.
-export const GENERATION_VISUAL_KEYS = [
-  'physicalDescription', 'visualNotes', 'visualIdentity',
-  'silhouetteNotes', 'postureNotes', 'specialTraits',
-  'description', 'summary',
-];
-const GENERATION_SEED_MAX = 700;
-export function buildGenerationPromptSeed(payload, typeDef, tags = []) {
-  const parts = [];
-  if (payload && typeof payload === 'object') {
-    const keys = [typeDef?.primaryContentKey, ...GENERATION_VISUAL_KEYS].filter(Boolean);
-    const seen = new Set();
-    for (const k of keys) {
-      if (seen.has(k)) continue;
-      seen.add(k);
-      const v = payload[k];
-      if (typeof v === 'string' && v.trim()) parts.push(v.trim());
-    }
-  }
-  const tagList = Array.isArray(tags)
-    ? tags.filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim())
-    : [];
-  let seed = parts.join('. ');
-  if (tagList.length) seed = seed ? `${seed}. ${tagList.join(', ')}` : tagList.join(', ');
-  return seed.length > GENERATION_SEED_MAX
-    ? `${seed.slice(0, GENERATION_SEED_MAX - 1).trimEnd()}…`
-    : seed;
-}
 
 // Compare JSON-shaped editor values by value while ignoring object-key order.
 // A catalog payload can arrive from a peer with the same fields in a different
@@ -433,7 +389,7 @@ function IngredientEditor() {
       .catch((err) => { toast.error(err?.message || 'Failed to set portrait'); return false; });
     if (!ok) return;
     refreshMedia();
-    toast.success('Portrait set');
+    toast.success('Canonical image set');
   };
 
   const handleDetachMedia = async (mediaKey, kind) => {
@@ -839,6 +795,9 @@ function IngredientEditor() {
         </div>}
         <CatalogUniversePanel key={`universe-${record.id}`} ingredient={record} context={record.universeContext}
           onContextChange={applyUniverseContext} readOnly={identityReadOnly} forkBlocked={record.sharedIdentity?.reason === 'CATALOG_IDENTITY_FENCED'} unsaved={isDirty || saving || lookSaving} />
+
+        <CatalogRedesign ingredient={record} payload={payload} disabled={identityReadOnly || payload.locked === true || saving || lookSaving || !!externalDetails}
+          onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} />
 
         {profileVisited && (
           <div hidden={activeTab !== 'profile'} className="space-y-4">
@@ -1447,198 +1406,6 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove, readOnly
 // memo" (MediaRecorder → WAV → Whisper transcript) persist through the catalog
 // media-upload/voice routes into the federating library dirs, then attach via
 // the same media-refs seam gallery picks use.
-// "Generate" affordance for the Media panel — turns the ingredient's
-// description into an image via the same image-gen queue the Universe canon
-// renders use. The generated file lands in the media library as `<jobId>.png`;
-// `MediaJobThumb` surfaces the live diffusion preview and fires `onFilename`
-// once complete, which routes to `onComplete` to attach it onto the ingredient.
-// Disabled when the description is blank — there's nothing to render from.
-function GenerateImageControl({ ingredientId, name, description, universeId, onComplete }) {
-  const mountedRef = useMounted();
-  const [jobId, setJobId] = useState(null);
-  const [starting, setStarting] = useState(false);
-  // Editable-prompt panel state (#1809): the user opens an inline editor,
-  // tweaks the auto-composed prompt, then renders — instead of firing a fixed
-  // prompt on the first click.
-  const [editing, setEditing] = useState(false);
-  const [prefilling, setPrefilling] = useState(false);
-  const [prompt, setPrompt] = useState('');
-  const [negativePrompt, setNegativePrompt] = useState('');
-
-  // The linked universe's style preset travels BESIDE the prompt box, never in
-  // it (#11317): the box holds only the record's own words, the preset becomes
-  // a labeled "Universe style" addition, and the preview below shows the exact
-  // composed text the server will send. Fetched lazily on first open — the
-  // page deliberately doesn't load the universe up front; a failed/missing
-  // universe just omits the preset.
-  const [universe, setUniverse] = useState(null);
-  const universeRequestedRef = useRef(false);
-
-  // Open the editor and prefill the prompt with the record's own seed:
-  // "<name>: <visual description + tags>", with a dangling "Name:" trimmed when
-  // there is no description yet. Don't clobber a prompt the user already
-  // edited (re-open keeps it).
-  const openEditor = async () => {
-    setEditing(true);
-    if (!prompt.trim()) {
-      const seed = `${name || 'Subject'}: ${description || ''}`.replace(/:\s*$/, '');
-      setPrompt(seed);
-    }
-    if (!universeId || universeRequestedRef.current) return;
-    universeRequestedRef.current = true;
-    setPrefilling(true);
-    const loaded = await getUniverse(universeId, { silent: true }).catch(() => null);
-    if (!mountedRef.current) return;
-    setUniverse(loaded || null);
-    setPrefilling(false);
-  };
-
-  // One request body for both the preview and Generate, so what the preview
-  // shows is what the render sends: the user's words composed with the
-  // universe preset (the same shared composer the Image Gen page uses), with
-  // the preset declared as `promptAdditions` so the server records/labels it.
-  const stylePreset = universe ? withUniverseLabel(universeStylePreset(universe)) : null;
-  const buildRequest = (userPrompt, userNegative) => {
-    const composed = composeStyledPrompt(userPrompt, userNegative, stylePreset);
-    const additions = stylePromptAdditions(stylePreset);
-    return {
-      prompt: composed.prompt,
-      negativePrompt: composed.negativePrompt || undefined,
-      ...(additions.length ? { promptAdditions: additions } : {}),
-    };
-  };
-  const previewBody = buildRequest(prompt.trim(), negativePrompt.trim());
-  const modelInputPreview = useModelInputPreview(previewImagePrompt, previewBody, {
-    enabled: editing && !prefilling && prompt.trim().length > 0,
-  });
-
-  const handleRender = async () => {
-    const finalPrompt = prompt.trim();
-    if (!finalPrompt) {
-      toast.error('Enter a prompt before generating an image');
-      return;
-    }
-    setStarting(true);
-    const queued = await generateImage(
-      {
-        ...buildRequest(finalPrompt, negativePrompt.trim()),
-        // Durable attach (#1359): tag the queued job with the target ingredient
-        // so the server-side completion hook files the render even if this page
-        // unmounts before a long local/Codex render finishes. The onComplete
-        // callback below stays as the optimistic/immediate-refresh path; the
-        // hook is idempotent so the two never double-attach.
-        ...(ingredientId ? { catalogIngredientId: ingredientId } : {}),
-      },
-      { silent: true },
-    ).catch((err) => { toast.error(err?.message || 'Image generation failed'); return null; });
-    if (!mountedRef.current) return;
-    setStarting(false);
-    if (!queued) return;
-    setEditing(false);
-    if (queued.jobId) {
-      // Local/Codex modes enqueue a job — track it live via MediaJobThumb,
-      // which fires onFilename on completion to attach the result optimistically.
-      // If this page unmounts before the render finishes the server-side
-      // catalogImageAttachHook still attaches it durably (#1359).
-      setJobId(queued.jobId);
-      toast.success('Generating image…');
-    } else if (queued.filename) {
-      // External SD-API mode renders synchronously and returns the finished
-      // filename with no jobId — attach it directly.
-      onComplete?.(queued.filename);
-    } else {
-      toast.error('Image generation returned no result');
-    }
-  };
-
-  // Fires once when the in-flight job completes (MediaJobThumb forwards the
-  // rendered filename). Clear the job so the thumb unmounts, then hand the
-  // filename up to be attached as portrait/reference.
-  const handleFilename = useCallback((filename) => {
-    if (!filename) return;
-    setJobId(null);
-    onComplete?.(filename);
-  }, [onComplete]);
-
-  // A failed/canceled render never fires onFilename, so without this the button
-  // would stay disabled+"Generating…" with no retry path. Clear the job on a
-  // terminal non-success status to re-enable Generate.
-  const handleStatus = useCallback((status) => {
-    if (status === 'failed' || status === 'canceled') {
-      setJobId(null);
-      if (status === 'failed') toast.error('Image generation failed');
-    }
-  }, []);
-
-  return (
-    <span className="relative inline-flex items-center gap-2">
-      {jobId && (
-        <MediaJobThumb jobId={jobId} label="Generated image" size="xs"
-          onFilename={handleFilename} onStatus={handleStatus} />
-      )}
-      {!editing && (
-        <button
-          type="button"
-          onClick={openEditor}
-          disabled={starting || !!jobId}
-          title="Compose a prompt and generate an image for this item"
-          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {jobId
-            ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
-            : <Sparkles size={12} aria-hidden="true" />}
-          {jobId ? 'Generating…' : 'Generate'}
-        </button>
-      )}
-
-      {editing && (
-        <div className="absolute right-0 z-20 mt-2 w-80 max-w-[calc(100vw-1rem)] max-h-[80vh] overflow-y-auto rounded-lg border border-port-border bg-port-card p-3 shadow-xl space-y-2"
-          style={{ top: '100%' }}>
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-white">Generate image</span>
-            {prefilling && <Loader2 size={12} className="animate-spin text-gray-400" aria-hidden="true" />}
-          </div>
-          <label htmlFor="ci-image-prompt" className="block">
-            <span className="text-[11px] text-gray-400">Prompt</span>
-            <AutoSizeTextarea
-              id="ci-image-prompt"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              rows={3}
-              placeholder="Describe the image to render…"
-              className="mt-1 w-full text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 min-h-[60px]"
-            />
-          </label>
-          <label htmlFor="ci-image-negative-prompt" className="block">
-            <span className="text-[11px] text-gray-400">Negative prompt (optional)</span>
-            <AutoSizeTextarea
-              id="ci-image-negative-prompt"
-              value={negativePrompt}
-              onChange={(e) => setNegativePrompt(e.target.value)}
-              rows={2}
-              className="mt-1 w-full text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 min-h-[44px]"
-            />
-          </label>
-          <ModelInputPreview preview={modelInputPreview} prompt={prompt} />
-          <div className="flex items-center justify-end gap-2 pt-1">
-            <button type="button" onClick={() => setEditing(false)}
-              className="text-xs px-2 py-1 rounded border border-port-border text-gray-400 hover:text-white">
-              Cancel
-            </button>
-            <button type="button" onClick={handleRender} disabled={starting || prefilling || !prompt.trim()}
-              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed">
-              {starting
-                ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
-                : <Sparkles size={12} aria-hidden="true" />}
-              Render
-            </button>
-          </div>
-        </div>
-      )}
-    </span>
-  );
-}
-
 function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = null, media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -1712,7 +1479,7 @@ function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = 
           <ImageIcon size={14} aria-hidden="true" /> Media
         </h2>
         {!readOnly && <div className="flex items-center gap-2 flex-wrap">
-          <GenerateImageControl ingredientId={genIngredientId} name={genName} description={genDescription} universeId={genUniverseId} onComplete={onGenerated} />
+          <GenerateImageControl key={genIngredientId} ingredientId={genIngredientId} name={genName} description={genDescription} universeId={genUniverseId} onComplete={onGenerated} />
           <button type="button" onClick={() => setPickerOpen(true)}
             className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
             <Plus size={12} aria-hidden="true" /> Pick from gallery
@@ -1780,6 +1547,7 @@ function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = 
                   className="w-full aspect-square object-contain" />
                 <figcaption className="text-xs text-gray-400 p-2 break-words">
                   {filename === primaryImageRef ? 'Primary canon reference' : 'Canon reference'}
+                  {!readOnly && onSetPortrait && <button type="button" onClick={() => onSetPortrait(filename)} className="block min-h-11 text-port-accent">Set as canonical image</button>}
                   {canonRemoval && <CanonReferenceRemoval key={filename} {...canonRemoval} filename={filename} />}
                 </figcaption>
               </figure>

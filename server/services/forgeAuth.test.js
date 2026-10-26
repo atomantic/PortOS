@@ -13,6 +13,7 @@ vi.mock('./githubAccounts.js', () => ({ getAccount: vi.fn(), resolveGitHubAccoun
 vi.mock('./github.js', () => ({ execGh: vi.fn() }));
 
 import { spawn } from '../lib/childProcess.js';
+vi.mock('../lib/windowsGitProcess.js', () => ({ startGit: (args, options, wire) => wire(spawn('git', args, options)) }));
 import { listForgePinnedApps } from './agentAppWorkspace.js';
 import { resolveForgeForRepo, resolveForgeTokenEnv } from './forgeAuth.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';

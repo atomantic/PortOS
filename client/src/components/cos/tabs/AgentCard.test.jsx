@@ -1412,3 +1412,13 @@ it('keeps the current cleanup verdict primary and labels stale report and warnin
   expect(await screen.findByText('Earlier agent report — current delivery and cleanup status shown above')).toBeInTheDocument();
   expect(screen.getByText('Cleanup is queued with the checkout preserved.')).toBeInTheDocument();
 });
+
+
+it('shows a publication milestone on the running card without a terminal result', () => {
+  render(<MemoryRouter><AgentCard agent={{ ...agent, status: 'running', result: null, completedAt: null,
+    metadata: { ...agent.metadata, releasePublication: { status: 'verified', tag: 'v1.2.3',
+      releaseUrl: 'https://github.com/example/repo/releases/tag/v1.2.3', publishedAt: '2026-01-01T12:00:00Z' } },
+  }} /></MemoryRouter>);
+  expect(screen.getByRole('link', { name: 'v1.2.3' })).toBeInTheDocument();
+  expect(screen.getByText('Published — synchronization not yet verified')).toBeInTheDocument();
+});

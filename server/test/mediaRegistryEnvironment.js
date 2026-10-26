@@ -23,12 +23,17 @@ export default {
       return {
         async teardown() {
           try {
-            disposeObservations();
-            disposeProcesses();
-            if (root) {
-              if (prior === undefined) delete process.env.PORTOS_MEDIA_MODELS_FILE;
-              else process.env.PORTOS_MEDIA_MODELS_FILE = prior;
-              rmSync(root, { recursive: true, force: true });
+            try {
+              await global.__portosCleanupGitTemplates?.();
+              await global.__portosGitSupervisorCleanup?.();
+            } finally {
+              disposeObservations();
+              disposeProcesses();
+              if (root) {
+                if (prior === undefined) delete process.env.PORTOS_MEDIA_MODELS_FILE;
+                else process.env.PORTOS_MEDIA_MODELS_FILE = prior;
+                rmSync(root, { recursive: true, force: true });
+              }
             }
           } finally {
             await node.teardown(global);
