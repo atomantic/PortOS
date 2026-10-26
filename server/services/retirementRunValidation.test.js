@@ -59,6 +59,40 @@ describe('completed-run evidence retention before checkout retirement', () => {
     const second = structuredClone(agent); second.id = 'agent-other'; second.metadata.completedCheckouts[0].agentId = second.id;
     expect(await capture([agent, second])).toBeNull();
   });
+  const continuation = () => {
+    const parent = structuredClone(agent);
+    parent.metadata.instanceId = 'fixture-local';
+    const child = structuredClone(parent);
+    Object.assign(child, { id: 'agent-run-validation-resumed', startedAt: '2026-10-01T11:30:00.000Z', completedAt: '2026-10-01T12:30:00.000Z' });
+    child.metadata.resumedFromAgentId = parent.id;
+    Object.assign(child.metadata.completedCheckouts[0], { agentId: child.id, startedAt: child.startedAt, capturedAt: '2026-10-01T12:29:00.000Z' });
+    return { parent, child };
+  };
+  it('binds shared-generation evidence to the exact terminal continuation instead of treating a resumed run as an unrelated owner', async () => {
+    const { parent, child } = continuation();
+    const captured = await capture([parent, child]);
+    expect(captured.owner).toEqual({ id: child.id, startedAt: child.startedAt });
+    const retained = await retainRunValidationArtifacts(review(captured), file => readFile(join(release.path, file.path)));
+    const stored = await readCompletionData(captured.owner, retained.evidence.reference);
+    expect(stored.lineage.map(row => row.id)).toEqual([parent.id, child.id]);
+    expect(Buffer.from(stored.files[0].data, 'base64')).toEqual(bytes);
+  });
+  it.each(['overlap', 'cycle', 'foreign-instance', 'invalid-instance', 'fork'])('keeps an ambiguous shared generation when its continuation has %s', async failure => {
+    const { parent, child } = continuation();
+    const policies = [parent, child];
+    if (failure === 'overlap') {
+      child.startedAt = '2026-10-01T10:30:00.000Z';
+      child.metadata.completedCheckouts[0].startedAt = child.startedAt;
+    }
+    if (failure === 'cycle') parent.metadata.resumedFromAgentId = child.id;
+    if (failure === 'foreign-instance') child.metadata.instanceId = 'other-install';
+    if (failure === 'invalid-instance') { parent.metadata.instanceId = 1; child.metadata.instanceId = 1; }
+    if (failure === 'fork') {
+      const sibling = structuredClone(child); sibling.id = 'agent-fork'; sibling.metadata.completedCheckouts[0].agentId = sibling.id; policies.push(sibling);
+    }
+    expect(await capture(policies)).toBeNull();
+  });
+
   it('refuses changed source bytes, unintegrated delivery, failed durability and an oversized existing-store envelope', async () => {
     const captured = await capture([agent]);
     await expect(retainRunValidationArtifacts(review(captured), async () => Buffer.from('changed'))).rejects.toThrow('retirement-validation-preservation-unavailable');
