@@ -15,6 +15,7 @@ import { execFile } from '../lib/childProcess.js';
 import { dirname, join } from 'path';
 import { readRetirementCheckoutIdentity, isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { execGit } from '../lib/execGit.js';
+import { assertTempPath } from '../lib/tempPathGuard.js';
 import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownFixtureWork } from '../lib/mockPathsDataRoot.js';
 import { PATHS } from '../lib/paths.js';
@@ -239,7 +240,41 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await execGit(['clean', '-fdx'], path);
   };
 
-  async function historicalArchive(prepare = async () => {}) {
+  const unchangedHistory = async () => {};
+  let historicalFixture;
+  async function historicalArchive(prepare = unchangedHistory) {
+    const reusable = prepare === unchangedHistory;
+    if (reusable && historicalFixture) {
+      const fixture = historicalFixture;
+      // beforeEach/owned.prepare settled the prior case. Restore immutable
+      // historical inputs at their original paths, never a verification result.
+      await owned.run('archive-copy', async () => {
+        assertTempPath(fixture.source, 'historical fixture restore');
+        assertTempPath(PATHS.data, 'historical evidence reset');
+        await rm(fixture.source, { recursive: true, force: true });
+        await cp(fixture.snapshot, fixture.source, { recursive: true });
+        await rm(PATHS.data, { recursive: true, force: true });
+        await cp(fixture.archive, fixture.archiveDir, { recursive: true });
+      });
+      repo = fixture.repo;
+      external = fixture.external;
+      injected.app.repoPath = repo;
+      injected.schedule = structuredClone(fixture.schedule);
+      return { release: { ...fixture.release }, saved: { archiveDir: fixture.archiveDir } };
+    }
+    let fixture;
+    if (reusable) {
+      const root = await mkdtemp(join(lazyTempDataRoot('portos-held-historical-inputs-'), 'fixture-'));
+      const source = join(root, 'source');
+      await mkdir(source);
+      const safeRepo = join(source, 'repo');
+      await cp(repo, safeRepo, { recursive: true });
+      repo = (await execGit(['rev-parse', '--show-toplevel'], safeRepo)).stdout.trim();
+      external = join(source, 'elsewhere');
+      await mkdir(external);
+      injected.app.repoPath = repo;
+      fixture = { source, repo, external, snapshot: join(root, 'snapshot'), archive: join(root, 'archive') };
+    }
     const path = join(external, 'historical');
     const branch = 'feature/historical';
     await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
@@ -251,6 +286,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'retirement-review-pending' }] });
     const saved = await preserveMergedCheckout(repo, { ...release, branch: `refs/heads/${branch}` }, 'main', { cosDir: PATHS.cos });
     await execGit(['worktree', 'remove', '--force', path], repo);
+    if (fixture) {
+      await cp(fixture.source, fixture.snapshot, { recursive: true });
+      await cp(saved.archiveDir, fixture.archive, { recursive: true });
+      historicalFixture = { ...fixture, release: { ...release }, archiveDir: saved.archiveDir, schedule: structuredClone(injected.schedule) };
+    }
     return { release, saved };
   }
 
