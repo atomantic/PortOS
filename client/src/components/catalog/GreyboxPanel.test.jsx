@@ -58,6 +58,7 @@ describe('GreyboxPanel', () => {
     await waitFor(() => expect(uploadCatalogIngredientMediaFile).toHaveBeenCalledWith('plc-1', expect.objectContaining({ filename: 'layout.glb', mimeType: 'model/gltf-binary', role: 'greybox-model' }), { silent: true }));
     await waitFor(() => expect(screen.getByTestId('viewer')).toHaveAttribute('data-model-src', '/data/models/example.glb'));
     expect(saveCatalogGreybox).toHaveBeenLastCalledWith('plc-1', { ...scene, source: 'glb' }, expect.anything());
+    expect(screen.queryByRole('button', { name: /Re-capture all shots/ })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Layout source'), { target: { value: 'spec' } });
     await waitFor(() => expect(saveCatalogGreybox).toHaveBeenLastCalledWith('plc-1', scene, expect.anything()));
     fireEvent.change(screen.getByLabelText('Layout source'), { target: { value: 'glb' } });

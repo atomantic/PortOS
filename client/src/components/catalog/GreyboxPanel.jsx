@@ -185,7 +185,7 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
   });
 
   const recaptureAll = () => run('recapture', async () => {
-    if (locked || draft || manual || !saved?.shots.length) return;
+    if (locked || draft || manual || saved?.source !== 'spec' || !saved?.shots.length) return;
     let captured = 0;
     // Use saved cameras, not the currently orbited/unsaved view. Stop at the
     // first failure and report the prefix that was replaced; never retry a shot.
@@ -394,7 +394,7 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
             {shot && <button type="button" className={actionButton} onClick={() => selectShot('')}>Free view — show all anchors</button>}
             {!draft && !manual && !locked && (
               <div className="space-y-2">
-                {saved?.shots.length > 0 && (confirmRecapture
+                {saved?.source === 'spec' && saved.shots.length > 0 && (confirmRecapture
                   ? <div className="space-y-2">
                     <p className="text-xs text-gray-400">Saved shots: {formatCount(saved.shots.length)}. Existing reference images to replace: {formatCount(saved.shots.filter((s) => captureForShot(media, s.id)).length)}. Saved camera angles will be used.</p>
                     <ConfirmButtonPair confirmText="Re-capture all shots" onConfirm={recaptureAll} onCancel={() => setConfirmRecapture(false)}
