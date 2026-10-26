@@ -24,12 +24,14 @@ import { listLorasFull } from '../../services/api';
 import ModelSelect from '../ModelSelect';
 import ResolutionField from './ResolutionField';
 import AdvancedParamsPanel from '../videoGen/AdvancedParamsPanel';
+import ContinuationDetails from '../videoGen/ContinuationDetails';
 import { resolutionOptionsForModel } from '../../lib/videoGenResolutions';
 import {
   videoEdgeBoundsForModel, textEncoderOptionsForModel, STOCK_TEXT_ENCODER_ID,
   normalizeTextEncoderForModel,
   DEFAULT_SPEED_PROFILE_ID, normalizeSpeedProfileForModel, speedProfileIdFromRecord,
   isFullDecodeId, resolveDraftDecodeForModel, draftDecodeFromRecord,
+  selectedContextFramesForModel,
 } from '../../lib/videoGenParams';
 import { isDefaultVideoStreamingMode, videoStreamingModeFromRecord } from '../../lib/videoStreamingMode';
 import { isDeliveryVideoModel } from '../../lib/videoFinish';
@@ -593,6 +595,12 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
       {job.kind === 'training' && job.params?.runId && (
         <TrainingJobDetail runId={job.params.runId} status={job.status} />
       )}
+      {job.kind === 'video' && job.params?.continuation && (
+        <details className="mt-2 text-xs text-port-text-muted">
+          <summary className="cursor-pointer">Continuation details</summary>
+          <div className="mt-2"><ContinuationDetails continuation={job.params.continuation} /></div>
+        </details>
+      )}
       <div className="text-xs text-port-text-muted mt-1">
         {job.queuedAt && `queued ${formatTimeOfDaySeconds(job.queuedAt)}`}
         {job.startedAt && ` · started ${formatTimeOfDaySeconds(job.startedAt)}`}
@@ -804,7 +812,7 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
   const [fps, setFps] = useState(p.fps ?? '');
   const [chunks, setChunks] = useState(p.chunks ?? 1);
   const [chunkPrompts, setChunkPrompts] = useState(p.chunkPrompts || []);
-  const [contextFrames, setContextFrames] = useState(p.contextFrames ?? 0);
+  const [contextFrames, setContextFrames] = useState(p.continuityStrategy === 'frame' ? 0 : (p.contextFrames ?? 0));
   const [seed, setSeed] = useState(p.seed ?? '');
   const [steps, setSteps] = useState(p.steps ?? '');
   const [guidanceScale, setGuidanceScale] = useState(p.guidanceScale ?? '');
@@ -843,6 +851,9 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
   }, []);
 
   const currentModel = models.find((model) => model.id === modelId) || null;
+  useEffect(() => {
+    if (currentModel) setContextFrames((current) => selectedContextFramesForModel(currentModel, current));
+  }, [currentModel]);
   // Switching the retry to a model that pins frame one has to clear the promise
   // with it (#4874) — the picker offers only Anchor there, so leaving `inspire`
   // in state would strand the form on a value the user cannot see or change and
@@ -901,6 +912,9 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
   // a single render, so keep the shared chaining controls consistent with the
   // normal VideoGen form for those retry records.
   const chainingLocked = p.mode === 'fflf' || p.mode === 'a2v' || p.mode?.startsWith('ic-');
+  const chainingActive = chunks > 1 && !chainingLocked;
+  const displayedContextFrames = selectedContextFramesForModel(currentModel, contextFrames);
+  const continuationPending = !isHosted && chainingActive && !currentModel;
   const handleModelChange = (event) => {
     const nextModelId = event.target.value;
     const nextModel = models.find((model) => model.id === nextModelId) || null;
@@ -924,6 +938,7 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     const textChanged = (value, original) => (value || '').trim() !== (original || '').trim();
     const numberChanged = (value, original) => (value === '' ? null : Number(value)) !== (original ?? null);
     if (!prompt.trim()) return;
+    if (continuationPending) return;
     if (textChanged(prompt, p.prompt)) overrides.prompt = prompt.trim();
     if (textChanged(negativePrompt, p.negativePrompt)) overrides.negativePrompt = negativePrompt.trim();
     // A hosted retry edits only the prompts: size, duration and model are the
@@ -938,7 +953,12 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     if (numberChanged(chunks, p.chunks ?? 1)) overrides.chunks = Number(chunks);
     if (Number(chunks) <= 1 && Number(p.chunks ?? 1) > 1) overrides.chunkPrompts = [];
     else if (JSON.stringify(chunkPrompts) !== JSON.stringify(p.chunkPrompts || [])) overrides.chunkPrompts = chunkPrompts;
-    if (numberChanged(contextFrames, p.contextFrames ?? 0)) overrides.contextFrames = Number(contextFrames);
+    const submittedContextFrames = chainingActive ? displayedContextFrames : 0;
+    if (numberChanged(submittedContextFrames, p.contextFrames ?? 0)) overrides.contextFrames = submittedContextFrames;
+    if (chainingActive || p.continuityStrategy != null) {
+      const continuityStrategy = submittedContextFrames > 0 ? 'window' : 'frame';
+      if (continuityStrategy !== p.continuityStrategy) overrides.continuityStrategy = continuityStrategy;
+    }
     const setNumericOverride = (key, value, original, clearable = false) => {
       if (value === '') {
         if (clearable && original != null) overrides[key] = null;
@@ -1033,8 +1053,8 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
           mode={p.mode || 'text'} currentModel={currentModel}
           numFrames={displayedNumFrames} onNumFramesChange={setNumFrames}
           chunks={chunks} onChunksChange={setChunks} keyframesActive={chainingLocked}
-          chunkPrompts={chunkPrompts} onChunkPromptChange={setChunkPromptAt} chainingActive={chunks > 1 && !chainingLocked}
-          contextFrames={contextFrames} onContextFramesChange={setContextFrames}
+          chunkPrompts={chunkPrompts} onChunkPromptChange={setChunkPromptAt} chainingActive={chainingActive}
+          contextFrames={displayedContextFrames} onContextFramesChange={setContextFrames}
           fps={displayedFps} onFpsChange={setFps} seed={seed} onSeedChange={setSeed} onRandomSeed={() => setSeed(Math.floor(Math.random() * 2147483647))}
           steps={steps} onStepsChange={setSteps} guidanceScale={guidanceScale} onGuidanceScaleChange={setGuidanceScale}
           speedProfileId={speedProfileId} onSpeedProfileChange={setSpeedProfileId}
@@ -1056,7 +1076,7 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
       )}
       <div className="flex items-center justify-end gap-2 pt-1">
         <button type="button" onClick={onCancel} className="px-3 py-1 text-xs text-port-text-muted hover:text-white">Cancel</button>
-        <button type="submit" className="inline-flex items-center gap-1 px-3 py-1 bg-port-accent text-white text-xs rounded hover:bg-port-accent/90"><RotateCw className="w-3 h-3" />Retry with changes</button>
+        <button type="submit" disabled={continuationPending} title={continuationPending ? 'Waiting for the model continuation capability.' : undefined} className="inline-flex items-center gap-1 px-3 py-1 bg-port-accent text-white text-xs rounded hover:bg-port-accent/90 disabled:opacity-50"><RotateCw className="w-3 h-3" />Retry with changes</button>
       </div>
     </form>
   );

@@ -21,11 +21,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_CONTEXT_FRAMES, MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES,
-  supportsContextWindow as serverSupportsContextWindow,
+  supportsContextWindow as serverSupportsContextWindow, publicContinuationCapability, continuationContract,
 } from './videoContinuity.js';
 import {
   DEFAULT_CONTEXT_FRAMES as CLIENT_DEFAULT_CONTEXT_FRAMES,
-  CONTEXT_FRAME_OPTIONS,
+  CONTEXT_FRAME_OPTIONS, contextFrameOptionsForModel, frameOptionsForModel, videoChainChunkModes,
   supportsContextWindow as clientSupportsContextWindow,
 } from '../../client/src/lib/videoGenParams.js';
 
@@ -53,8 +53,25 @@ describe('continuation context window — server/client parity', () => {
 
   it('agrees on which runtimes can use a window', () => {
     for (const runtime of ['ltx2', 'ltx25', 'mlx_video', 'minimax_h3', 'minimax_h3_cuda', 'wan22', 'fastvideo', undefined]) {
-      expect(clientSupportsContextWindow({ runtime })).toBe(serverSupportsContextWindow({ runtime }));
+      const model = { runtime, continuationCapability: publicContinuationCapability({ runtime }) };
+      expect(clientSupportsContextWindow(model)).toBe(serverSupportsContextWindow(model));
+      if (!serverSupportsContextWindow(model)) expect(contextFrameOptionsForModel(model)).toEqual([0]);
     }
     expect(clientSupportsContextWindow(null)).toBe(serverSupportsContextWindow(null));
   });
+  it('honors a server refusal even for a legacy window runtime', () => {
+    expect(clientSupportsContextWindow({ runtime: 'ltx2', continuationCapability: {
+      temporalContext: false, unavailableReason: 'Pin unverified',
+    } })).toBe(false);
+  });
+
+  it('keeps H3 history and output frame grids independent of LTX stride', () => {
+    const model = { runtime: 'minimax_h3', frameStride: 4, frameOptions: [61, 121],
+      continuationCapability: { temporalContext: true, historyFrames: 17, outputLayout: 'new-output-only' } };
+    expect(videoChainChunkModes({ model, mode: 'image', chaining: true, contextFrames: 17 })).toEqual(['image', 'text']);
+    expect(contextFrameOptionsForModel(model)).toEqual([0, 17]);
+    expect(frameOptionsForModel(model, 125)).toEqual([61, 121]);
+    expect(continuationContract(model.runtime).latentFrameStride).toBeUndefined();
+  });
+
 });

@@ -185,11 +185,27 @@ describe('AdvancedParamsPanel', () => {
       expect(screen.queryByLabelText('Continuity')).toBeNull();
     });
 
-    it('stays hidden on a runtime that ignores the window', () => {
-      // Offering the control where the server discards the value would be a
-      // knob that silently does nothing.
-      renderPanel({ currentModel: { runtime: 'minimax_h3' }, chunks: 3, chainingActive: true });
-      expect(screen.queryByLabelText('Continuity')).toBeNull();
+    it('discloses the unverified pin and keeps temporal context unavailable', () => {
+      renderPanel({ currentModel: { runtime: 'minimax_h3', continuationCapability: {
+        temporalContext: false, historyFrames: 17, backendPin: 'example-pin',
+        unavailableReason: 'No paired hardware motion/audio evidence.',
+      } }, chunks: 3, chainingActive: true, contextFrames: 22 });
+      expect(screen.getByLabelText('Continuity').value).toBe('0');
+      expect(screen.getByRole('option', { name: 'Temporal context unavailable' }).disabled).toBe(true);
+      expect(screen.getByText(/No paired hardware motion\/audio evidence/)).toBeTruthy();
+      expect(screen.getByText(/Backend: example-pin/)).toBeTruthy();
+    });
+
+    it('offers only the verified fixed history and an explicit still opt-out', () => {
+      const onContextFramesChange = vi.fn();
+      renderPanel({ currentModel: { runtime: 'minimax_h3', continuationCapability: {
+        temporalContext: true, historyFrames: 17, backendPin: 'example-verified-pin',
+      } }, chunks: 3, chainingActive: true, contextFrames: 22, onContextFramesChange });
+      const control = screen.getByLabelText('Continuity');
+      expect(control.value).toBe('17');
+      expect([...control.options].map((option) => option.value)).toEqual(['0', '17']);
+      fireEvent.change(control, { target: { value: '0' } });
+      expect(onContextFramesChange).toHaveBeenCalledWith(0);
     });
 
     it('shows the selected window on a chaining ltx2 render', () => {

@@ -226,6 +226,7 @@ export async function validateVideoRetryParams(params = {}) {
   const frameCountError = wan22FrameCountError(model, numFrames);
   if (frameCountError) throw frameCountError;
   await validateMiniMaxH3SpeedParams(model, params, settings);
+  return model;
 }
 
 /**

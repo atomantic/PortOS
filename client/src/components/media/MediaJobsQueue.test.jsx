@@ -140,7 +140,73 @@ const failedCodexDefaultEffortJob = {
   params: { prompt: 'a fox', mode: 'codex', model: 'gpt-5.6-luna' },
 };
 
+describe('MediaJobsQueue — continuation retry', () => {
+  const verified = { id: 'verified-h3', name: 'Example verified H3', runtime: 'minimax_h3', supportedModes: ['text', 'image'],
+    continuationCapability: { temporalContext: true, historyFrames: 17 } };
+  const unavailable = { ...verified, id: 'unverified-h3', name: 'Example unverified H3',
+    continuationCapability: { temporalContext: false, historyFrames: 17, unavailableReason: 'Hardware verification pending.' } };
+  const openRetry = async (user, params) => {
+    getVideoGenStatus.mockResolvedValue({ models: [verified, unavailable] });
+    listQueueMediaJobs.mockResolvedValue([{ id: 'continuation-retry', kind: 'video', status: 'failed', error: 'Example failure',
+      params: { modelId: verified.id, prompt: 'Example moving subject', mode: 'text', chunks: 3, ...params } }]);
+    render(<MediaJobsQueue kind="video" />);
+    await expandReel(user);
+    await user.click(await screen.findByLabelText('Edit and retry'));
+    await screen.findByRole('option', { name: verified.name });
+  };
+
+  it('clears a recorded temporal request when switching to an unverified model', async () => {
+    const user = userEvent.setup();
+    await openRetry(user, { contextFrames: 17, continuityStrategy: 'window' });
+    expect(screen.getByLabelText('Continuity')).toHaveValue('17');
+    await user.selectOptions(screen.getByLabelText('Model'), unavailable.id);
+    expect(screen.getByLabelText('Continuity')).toHaveValue('0');
+    expect(screen.getByText(/Temporal context unavailable: Hardware verification pending/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Retry with changes/ }));
+    expect(retryMediaJob).toHaveBeenCalledWith('continuation-retry', {
+      modelId: unavailable.id, contextFrames: 0, continuityStrategy: 'frame',
+      draftDecode: null, speedProfileId: null, textEncoderId: 'stock',
+    }, { silent: true });
+  });
+
+  it('restores an explicit still-only receipt and submits the visible temporal choice when changed', async () => {
+    const user = userEvent.setup();
+    await openRetry(user, { contextFrames: 22, continuityStrategy: 'frame' });
+    expect(screen.getByLabelText('Continuity')).toHaveValue('0');
+    await user.selectOptions(screen.getByLabelText('Continuity'), '17');
+    await user.click(screen.getByRole('button', { name: /Retry with changes/ }));
+    expect(retryMediaJob).toHaveBeenCalledWith('continuation-retry', {
+      contextFrames: 17, continuityStrategy: 'window',
+    }, { silent: true });
+  });
+});
+
 describe('MediaJobsQueue — unavailable state', () => {
+  it('discloses unavailable continuation and distinguishes unmeasured queued history from still-only delivery', async () => {
+    const reason = 'The pinned adapter has no verified hardware comparison.';
+    const continuation = { requestedStrategy: 'window', effectiveStrategy: 'frame', contextFrames: 0,
+      actualHistoryFrames: 0, runtime: 'minimax_h3_cuda', backendPin: 'diffusers==0.42.0', capability: false,
+      unavailableReason: reason };
+    listQueueMediaJobs.mockResolvedValue([{ id: 'example-continuation', kind: 'video', status: 'queued',
+      params: { modelId: 'example-h3', prompt: 'Example motion', continuation } }]);
+    render(<MediaJobsQueue kind="video" />);
+    await userEvent.click(await screen.findByText('Continuation details'));
+    const receipt = screen.getByRole('region', { name: 'Continuation receipt' });
+    expect(receipt).toHaveTextContent('Requested strategyTemporal window');
+    expect(receipt).toHaveTextContent('Effective strategyLast frame only');
+    expect(receipt).toHaveTextContent('Actual history0 frames');
+    expect(receipt).toHaveTextContent('minimax_h3_cuda');
+    expect(receipt).toHaveTextContent('diffusers==0.42.0');
+    expect(receipt).toHaveTextContent(reason);
+
+    listQueueMediaJobs.mockResolvedValue([{ id: 'example-continuation', kind: 'video', status: 'running',
+      params: { modelId: 'example-h3', continuation: { ...continuation, effectiveStrategy: 'window',
+        contextFrames: 17, actualHistoryFrames: null, capability: true, unavailableReason: null } } }]);
+    act(() => emitSocket('media-jobs:changed', {}));
+    await waitFor(() => expect(receipt).toHaveTextContent('Actual historyNot measured'));
+    expect(receipt).toHaveTextContent('Admitted context17 frames');
+  });
+
   it('does not report a failed queue probe as an empty queue', async () => {
     listQueueMediaJobs.mockRejectedValue(new Error('offline'));
 

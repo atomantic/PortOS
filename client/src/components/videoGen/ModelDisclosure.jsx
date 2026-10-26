@@ -174,6 +174,16 @@ export default function ModelDisclosure({
               <MemoryProfileFact model={model} systemMemoryGb={systemMemoryGb} />
               <Fact label="Supported modes">{modes}</Fact>
               <Fact label="Runtime">{model?.runtime || null}</Fact>
+              <Fact label="Temporal continuation">
+                {model?.continuationCapability
+                  ? (model.continuationCapability.temporalContext === true
+                    ? 'Verified temporal context · last-frame opt-out available'
+                    : `Unavailable: ${model.continuationCapability.unavailableReason || 'No verified temporal continuation contract.'}`)
+                  : null}
+              </Fact>
+              {model?.continuationCapability?.backendPin && (
+                <Fact label="Continuation backend pin">{model.continuationCapability.backendPin}</Fact>
+              )}
             </dl>
             <p className="mt-2 text-[10px] text-gray-500">
               {disclosure?.reviewedAt

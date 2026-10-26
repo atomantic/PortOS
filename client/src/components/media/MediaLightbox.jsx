@@ -22,6 +22,7 @@ import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { formatDateTime, formatDateNumeric, formatDurationMs, formatBytes } from '../../utils/formatters';
 import AttributionList from './AttributionList';
 import SentPromptPanel from './SentPromptPanel';
+import ContinuationDetails from '../videoGen/ContinuationDetails';
 
 // Intentionally NOT migrated to <ui/Modal> or <components/Drawer>. The
 // prev/next buttons sit as viewport-edge siblings of the card (not children
@@ -823,6 +824,8 @@ function SettingsPane({
         )}
 
         <AttributionList record={item} />
+
+        {isVideo && <ContinuationDetails continuation={item.raw?.continuation || item.continuation} />}
 
         {meta.length > 0 && (
           <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1">

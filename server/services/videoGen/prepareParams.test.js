@@ -622,7 +622,7 @@ describe.each(['wan22', 'wan22_cuda'])('Wan frame admission — %s', (runtime) =
   it('accepts an explicit grid count instead of an invalid model default', async () => {
     const params = { modelId: 'wan_test', mode: 'text', numFrames: 81 };
     await expect(prepare(params)).resolves.toMatchObject({ effectiveNumFrames: 81 });
-    await expect(validateVideoRetryParams(params)).resolves.toBeUndefined();
+    await expect(validateVideoRetryParams(params)).resolves.toMatchObject({ id: 'wan_test' });
   });
 });
 

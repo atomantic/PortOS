@@ -15,6 +15,7 @@ import {
   videoChainChunkModes,
   DEFAULT_DRAFT_DECODE_ID,
   resolveDraftDecodeForModel,
+  selectedContextFramesForModel,
 } from './videoGenParams.js';
 import { isDefaultVideoStreamingMode } from './videoStreamingMode.js';
 
@@ -253,11 +254,13 @@ function referenceImageFields({ currentModel, referenceImageFiles = [], referenc
   };
 }
 
-function chunkFields({ chainingActive, chunks, beats, contextFrames }) {
+function chunkFields({ chainingActive, chunks, beats, contextFrames, currentModel }) {
+  const selectedContext = selectedContextFramesForModel(currentModel, contextFrames);
   return {
     chunks: chainingActive ? chunks : '',
     chunkPrompts: beats.some((beat) => beat.trim()) ? JSON.stringify(beats) : '',
-    contextFrames: chainingActive ? String(contextFrames) : '',
+    contextFrames: chainingActive ? String(selectedContext) : '',
+    continuityStrategy: chainingActive ? (selectedContext > 0 ? 'window' : 'frame') : undefined,
   };
 }
 
@@ -343,7 +346,7 @@ function localVideoSubmission(args, { composed, withEnvelope, effectiveDisableAu
     ...frameSourceFields({ ...args, runtime: currentModel?.runtime, legacyFflf }),
     ...icReferenceFields(args),
     ...referenceImageFields(args),
-    ...chunkFields({ chainingActive, chunks, beats, contextFrames }),
+    ...chunkFields({ chainingActive, chunks, beats, contextFrames, currentModel }),
   };
 }
 
