@@ -26,6 +26,24 @@ const scene = {
 async function openEnvironment(fixture, { warmup = false } = {}) {
   const page = await fixture.browser.newPage({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 2 });
   page.setDefaultTimeout(10000);
+  await page.addInitScript(() => {
+    // Only timing/method names from this synthetic fixture, capped per page.
+    window.greyboxGpuCalls = [];
+    for (const type of [window.WebGLRenderingContext, window.WebGL2RenderingContext]) {
+      for (const method of ['compileShader', 'linkProgram', 'getProgramParameter', 'getShaderParameter', 'drawElements', 'drawArrays']) {
+        const original = type?.prototype[method];
+        if (!original) continue;
+        type.prototype[method] = function (...args) {
+          const start = performance.now();
+          try { return original.apply(this, args); }
+          finally {
+            const elapsed = Math.round(performance.now() - start);
+            if (elapsed >= 100 && window.greyboxGpuCalls.length < 32) window.greyboxGpuCalls.push({ method, elapsed });
+          }
+        };
+      }
+    }
+  });
   const state = { captures: [], errors: [], viewerRequests: 0, phase: 'navigation' };
   const ingredient = { id: 'example-place', type: 'place', name: 'Example environment', tags: [], payload: { description: 'Synthetic browser fixture', greybox: structuredClone(scene) } };
   const media = [];
@@ -98,9 +116,11 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     expect(await page.locator('[data-testid="greybox-viewer"] canvas').isVisible()).toBe(true);
     await page.evaluate(() => window.greyboxReadinessEvidence?.());
+    const slowGpuCalls = await page.evaluate(() => window.greyboxGpuCalls);
+    if (slowGpuCalls.length) console.info(`Greybox startup GPU calls: ${JSON.stringify(slowGpuCalls)}`);
     return { page, state, ingredient };
   } catch (error) {
-    const readiness = await page.evaluate(() => window.greyboxReadinessEvidence?.());
+    const readiness = await page.evaluate(() => ({ ...window.greyboxReadinessEvidence?.(), gpuCalls: window.greyboxGpuCalls }));
     const viewers = await page.getByTestId('greybox-viewer').evaluateAll(elements => elements.map(el => ({
       rect: el.getBoundingClientRect().toJSON(), canvases: [...el.querySelectorAll('canvas')].map(c => ({
         rect: c.getBoundingClientRect().toJSON(), width: c.width, height: c.height, visibility: getComputedStyle(c).visibility, display: getComputedStyle(c).display,
