@@ -6,7 +6,7 @@
  * remain readable.
  */
 import { describe, it as vitestIt, expect, beforeEach as vitestBeforeEach, afterEach, afterAll, vi } from 'vitest';
-import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat, lstat } from 'fs/promises';
+import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, link, utimes, truncate, chmod, stat, lstat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { createHash } from 'node:crypto';
@@ -1547,15 +1547,21 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const c = await reviewedCheckout('compact-cache-cardinality');
     const root = await moduleCache(c, { count: 0, bytes: 1 });
     const count = 80000;
+    const fixtureStarted = performance.now();
+    const payloads = Array.from({ length: 256 }, (_, index) => join(scratch, `cache-fixture-payload-${index}`));
+    for (let offset = 0; offset < payloads.length; offset += 32) await Promise.all(payloads.slice(offset, offset + 32).map(path => writeFile(path, 'x')));
     let oldMetadataBytes = 0;
     for (let offset = 0; offset < count; offset += 32) {
       await Promise.all(Array.from({ length: Math.min(32, count - offset) }, async (_, index) => {
         const name = (offset + index).toString(16).padStart(64, '0');
         oldMetadataBytes += Buffer.byteLength(JSON.stringify({ path: `server/.cache/vitest/modules/${name}`,
           bytes: 1, sha256: '0'.repeat(64), disposableCache: true }));
-        await writeFile(join(root, name), 'x');
+        // Share fixture storage, while the service still opens and hashes every
+        // distinct path. Mutation cases below use independent ordinary files.
+        await link(payloads[(offset + index) % payloads.length], join(root, name));
       }));
     }
+    console.log(`📏 Cache fixture: ${JSON.stringify({ entries: count, creationMs: Math.ceil(performance.now() - fixtureStarted) })}`);
     expect(oldMetadataBytes).toBeGreaterThan(16 * 1024 * 1024);
     const initialHeap = process.memoryUsage().heapUsed;
     let peakHeap = initialHeap;
