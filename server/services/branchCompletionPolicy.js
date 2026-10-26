@@ -135,6 +135,49 @@ function completionDecision({ repoPath, branch, prUrl, tip, agents }) {
 const reviewTarget = policy => policy.agent.metadata?.reviewLoopMergeTarget;
 const retirementPr = policy => policy.prUrl || reviewTarget(policy)?.url;
 
+/** Validate a persisted review-task handoff, not an inferred physical-owner edge.
+ * Both explicit resume chains remain bound to the same captured generation. */
+export function reviewedDeliveryHandoffValid(input, agents, handoff, agentId) {
+  const task = handoff?.task, meta = task?.metadata;
+  const review = handoff?.reviewChain, source = handoff?.sourceChain;
+  if (!Array.isArray(agents) || !Array.isArray(review) || !Array.isArray(source)
+    || !review.length || !source.length || review.length + source.length > 25
+    || review[0] !== agentId || source.at(-1) !== meta?.sourceAgentId
+    || task?.status !== 'completed' || ![true, 'true'].includes(meta?.reviewLoopFollowUp)
+    || meta.reviewLoopPRUrl !== input.prUrl || meta.reviewLoopPRBranch !== input.branch
+    || meta.reviewLoopLeaveOpen === true || meta.reviewLoopLeaveOpen === 'true'
+    || !meta.sourceTaskId || task.id === meta.sourceTaskId) return false;
+  const byId = new Map(agents.map(agent => [agent?.id, agent]));
+  const ids = [...review, ...source];
+  if (byId.size !== agents.length || new Set(ids).size !== ids.length) return false;
+  const current = byId.get(source[0]);
+  const instance = current?.metadata?.instanceId;
+  if (!instance || instance === 'unknown') return false;
+  for (const chain of [review, source]) {
+    for (let index = 0; index < chain.length; index++) {
+      const agent = byId.get(chain[index]);
+      if (!agent || agent.status !== 'completed' || agent.metadata?.instanceId !== instance
+        || agent.taskId !== (chain === review ? task.id : meta.sourceTaskId)
+        || agent.result?.executionSuccess === false || agent.result?.validationPassed === false
+        || (agent.result?.success !== true && agent.result?.executionSuccess !== true)
+        || agent.metadata?.blocker || agent.result?.taskOutcome?.recovery?.mode === 'approval') return false;
+      const captures = agent.metadata.completedCheckouts?.filter(row => completedCheckoutReceiptValid(agent, row)
+        && samePath(row.repoPath, input.repoPath) && row.branch === input.branch
+        && samePath(row.path, agent.metadata.workspacePath) && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation));
+      if (captures?.length !== 1) return false;
+      if (chain === review && (agent.metadata.reviewLoopMergeTarget?.url !== input.prUrl
+        || agent.metadata.reviewLoopMergeTarget?.branch !== input.branch)) return false;
+      if (index && (byId.get(chain[index - 1]).metadata.resumedFromAgentId !== agent.id
+        || !(Date.parse(agent.completedAt) <= Date.parse(byId.get(chain[index - 1]).startedAt)))) return false;
+    }
+  }
+  const original = byId.get(source.at(-1)), firstReview = byId.get(review.at(-1));
+  return samePath(current.metadata.workspacePath, input.checkoutPath)
+    && !firstReview.metadata.resumedFromAgentId
+    && Date.parse(original.completedAt) <= Date.parse(firstReview.startedAt)
+    && Date.parse(byId.get(review[0]).completedAt) <= Date.parse(current.startedAt);
+}
+
 /** A moved pathname is not a new generation when exact captured administration
  * and an explicit completed same-task, same-instance resume chain agree. */
 function resumedDeliveryPath(policy, input, proof) {
@@ -174,7 +217,8 @@ function continuedDelivery(policy, input) {
     && (!policy.tip || [proof.originalPrHead, proof.capturedHead].includes(policy.tip))
     && policy.agent.metadata?.completedCheckouts?.some(row => completedCheckoutReceiptValid(policy.agent, row)
       && samePath(row.repoPath, input.repoPath) && row.branch === input.branch
-      && (samePath(row.path, input.checkoutPath) || resumedDeliveryPath(policy, input, proof))
+      && (samePath(row.path, input.checkoutPath) || resumedDeliveryPath(policy, input, proof)
+        || reviewedDeliveryHandoffValid(input, input.agents, proof.reviewHandoff, policy.agent.id))
       && row.head === proof.capturedHead && row.capturedAt === proof.capturedAt
       && isDeepStrictEqual(row.incarnation, proof.checkoutIncarnation)
       && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation))) || null;

@@ -68,7 +68,7 @@ describe('moved same-generation completed-owner retirement policy (real Git)', (
     if (mode === 'unproven-capture') owner.metadata.completedCheckouts[0].agentId = 'unbound-agent';
     if (mode === 'manual-handoff') owner.metadata.prCompletionPolicy = 'leave-open';
     const original = structuredClone(agents);
-    const deliveryContinuations = await readCheckoutDeliveryContinuations(input, agents);
+    const deliveryContinuations = await readCheckoutDeliveryContinuations(input, agents, { getTaskById: async () => null });
     const decision = reviewedRetirementPolicy({ ...input, agents, deliveryContinuations });
     const admitted = ['failed-successor', 'successful-successor'].includes(mode);
     if (admitted) {
@@ -77,5 +77,46 @@ describe('moved same-generation completed-owner retirement policy (real Git)', (
       expect(decision.reason).toBeNull();
     } else expect(decision.reason).not.toBeNull();
     expect(agents).toEqual(original); // Never rewrite failed execution or refund its budgets.
+  });
+});
+
+
+describe('persisted interleaved review-task handoff (real Git)', () => {
+  it.each(['delivered-review-chain', 'wrong-target', 'wrong-source', 'wrong-instance', 'active-reviewer',
+    'undelivered-review-head', 'missing-task', 'unrelated-review-task'])('retains exact handoff guards: %s', async mode => {
+    const { agents, input, owner, successor } = fixture();
+    const reviewers = [0, 1, 2].map(index => {
+      const agent = structuredClone(owner);
+      agent.id = `reviewer-${index}`; agent.taskId = 'review-task';
+      agent.startedAt = `2026-01-02T0${index + 1}:00:00.000Z`;
+      agent.completedAt = `2026-01-02T0${index + 1}:30:00.000Z`;
+      agent.metadata.workspacePath = join(root, `review-${index}`);
+      agent.metadata.reviewLoopMergeTarget = { url: prUrl, branch };
+      if (index) agent.metadata.resumedFromAgentId = `reviewer-${index - 1}`;
+      const row = agent.metadata.completedCheckouts[0];
+      Object.assign(row, { agentId: agent.id, path: agent.metadata.workspacePath,
+        startedAt: agent.startedAt, capturedAt: agent.completedAt });
+      return agent;
+    });
+    agents.splice(1, 0, ...reviewers);
+    const task = { id: 'review-task', status: 'completed', metadata: { reviewLoopFollowUp: 'true',
+      sourceAgentId: owner.id, sourceTaskId: owner.taskId, reviewLoopPRUrl: prUrl, reviewLoopPRBranch: branch } };
+    if (mode === 'wrong-target') task.metadata.reviewLoopPRUrl = 'https://github.com/example/repo/pull/99';
+    if (mode === 'wrong-source') task.metadata.sourceAgentId = successor.id;
+    if (mode === 'wrong-instance') reviewers[1].metadata.instanceId = 'foreign';
+    if (mode === 'active-reviewer') reviewers[1].status = 'running';
+    if (mode === 'undelivered-review-head') reviewers[0].metadata.completedCheckouts[0].head = unrelated;
+    if (mode === 'unrelated-review-task') task.metadata.sourceTaskId = 'unrelated-task';
+    const original = structuredClone(agents);
+    const deliveryContinuations = await readCheckoutDeliveryContinuations(input, agents,
+      { getTaskById: async id => mode !== 'missing-task' && id === task.id ? task : null });
+    const decision = reviewedRetirementPolicy({ ...input, agents, deliveryContinuations });
+    if (mode === 'delivered-review-chain') {
+      expect(deliveryContinuations).toHaveLength(5);
+      expect(deliveryContinuations.find(row => row.agentId === reviewers[2].id).reviewHandoff).toMatchObject({
+        reviewChain: ['reviewer-2', 'reviewer-1', 'reviewer-0'], sourceChain: [successor.id, owner.id] });
+      expect(decision.reason).toBeNull();
+    } else expect(decision.reason).not.toBeNull();
+    expect(agents).toEqual(original);
   });
 });
