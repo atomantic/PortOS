@@ -3,6 +3,7 @@ import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObserva
 import { WORKSPACE_TEST_CACHE_ROOTS } from '../lib/workspaceTestCacheRoots.js';
 import { isAgentScratchPath, matchesScratchRoot } from '../lib/agentScratchPaths.js';
 import { WORKTREE_NODE_MODULES_MARKER } from '../lib/worktreeNodeModules.js';
+import { createNpmRetirementVerifier } from '../lib/npmRetirementPayload.js';
 /**
  * Operator-scoped retirement of a merged checkout that branch reconciliation
  * reported but cannot retire on its own (#12002): one outside the managed
@@ -43,7 +44,7 @@ export async function releaseCheckoutWithoutArchive(context, prepare) {
   const retained = context.retainValidationEvidence === true
     ? await retainCompletedCheckoutValidation(context, prepared) : null;
   const preservedFiles = [...(context.preservedFiles || []), ...(retained?.files || [])];
-  await assertNoUniqueIgnoredCheckoutPayload(context.path, execGit, context.ignoredPaths, preservedFiles);
+  await assertNoUniqueIgnoredCheckoutPayload(context.path, execGit, context.ignoredPaths, preservedFiles, context.repoPath);
   if (!retained) return prepared;
   const verify = prepared.verify;
   return { ...prepared, preservedFiles, validationEvidence: retained.evidence,
@@ -52,7 +53,7 @@ export async function releaseCheckoutWithoutArchive(context, prepare) {
 }
 
 /** Git cleanliness alone omits ignored files. Links retain their target bytes. */
-export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGit, ignoredPaths = [], preservedFiles = []) {
+export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGit, ignoredPaths = [], preservedFiles = [], primaryRepoPath = null) {
   const present = await lstat(path).catch(error => {
     if (error.code === 'ENOENT') return null;
     throw error;
@@ -65,11 +66,13 @@ export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGi
   const ignored = new Set(zLines(Buffer.isBuffer(result.stdout) ? archiveText(result.stdout) : result.stdout));
   const work = archiveWork();
   const verifiedCaches = new Map();
+  const npmPayload = createNpmRetirementVerifier(path, primaryRepoPath, work);
   for (const listed of ignored) {
     const { rel, info } = await listedContentEntry(path, listed, work);
     if (info.isSymbolicLink() || isAgentScratchPath(rel) || matchesScratchRoot(rel, ignoredPaths)) continue;
     if (rel === `node_modules/${WORKTREE_NODE_MODULES_MARKER}` && info.isFile() && info.size === 0) continue;
     if (info.isFile() && await disposableTestCache(path, rel, ignored, verifiedCaches, work)) continue;
+    if (info.isFile() && await npmPayload(rel).catch(cacheInspectionFailure)) continue;
     const preserved = preservedFiles.find(file => file.scope === 'content' && file.path === rel);
     if (info.isFile() && typeof preserved?.data === 'string') {
       const bytes = Buffer.from(preserved.data, 'base64');
@@ -857,7 +860,21 @@ async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { 
 /** Keep a small validation record in the repository's persistent common Git
  * administration, outside the retiring worktree. No repository snapshot or
  * history copy is made. Content-addressed publication is durable and replayable. */
-async function retainValidationReceipt(repoPath, review, verifyOnly = false) {
+export async function captureRetirementValidationReceipt(path, runGit = execGit) {
+  const rel = '.cache/pregate/report.json';
+  const info = await lstat(join(path, rel)).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  if (!info) return null;
+  if (!info.isFile() || info.size > 64 * 1024) throw new Error('retirement-validation-preservation-unavailable');
+  const result = await runGit(['ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--', rel], path,
+    { maxBuffer: GIT_OUTPUT_BYTES, bufferOutput: true });
+  if (result.exitCode !== 0) throw new Error('worktree-status-unavailable');
+  if (!zLines(Buffer.isBuffer(result.stdout) ? archiveText(result.stdout) : result.stdout).includes(rel)) return null;
+  const bytes = await archiveBytes(await archiveFile(path, join(path, rel)), archiveWork(), 64 * 1024);
+  JSON.parse(bytes.toString('utf8'));
+  return { scope: 'content', path: rel, sha256: evidenceHash(bytes), data: bytes.toString('base64') };
+}
+
+export async function retainValidationReceipt(repoPath, review, verifyOnly = false) {
   const receipt = review?.validationReceipt;
   if (!receipt) return null;
   if (review.kind || review.comparison.disposition !== 'integrated' || review.release.head !== review.forge.prHead

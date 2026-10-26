@@ -473,7 +473,7 @@ async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log =
     const reason = verifyRemoval ? await verifyRemoval(holder, entries).catch(() => 'worktree-ownership-unreadable') : null;
     if (reason) return reason;
     const { assertNoUniqueIgnoredCheckoutPayload } = await import('./heldCheckoutRecovery.js');
-    const payloadHold = await assertNoUniqueIgnoredCheckoutPayload(worktreePath, execGit, ignoredPaths, preservedFiles)
+    const payloadHold = await assertNoUniqueIgnoredCheckoutPayload(worktreePath, execGit, ignoredPaths, preservedFiles, repo)
       .then(() => null, error => error.message || 'checkout-not-disposable');
     if (payloadHold) return payloadHold;
     // Ownership/content checks await I/O. Refresh their registration afterward;
@@ -2432,7 +2432,7 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
               const status = await execGit(['status', '--porcelain'], worktreePath).then(r => r.stdout, () => null);
               if (status === null || !classifyWorktreeDirt(status).clean) return 'worktree-dirty';
               if (!await hasBranchMergeEvidence(parentRepo, wt.head, target).catch(() => false)) return 'unmerged';
-              return assertNoUniqueIgnoredCheckoutPayload(worktreePath).then(() => null,
+              return assertNoUniqueIgnoredCheckoutPayload(worktreePath, execGit, [], [], parentRepo).then(() => null,
                 error => error.message || 'checkout-not-disposable');
             },
           },
