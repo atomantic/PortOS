@@ -18,30 +18,47 @@ const { PATHS } = await import('../../lib/fileUtils.js');
 const runway = await import('./runway.js');
 const { imageGenEvents } = await import('../imageGenEvents.js');
 const terminals = new Map();
+const terminalWaiters = new Map();
 const json = (value) => ({ ok: true, json: async () => value });
 let output;
 let calls;
 let nextTask;
+let downloadRequested;
+let taskPolled;
 
 beforeEach(async () => {
   await mkdir(PATHS.images, { recursive: true });
   const raw = Buffer.from(Array.from({ length: 64 * 64 * 3 }, (_, i) => i * 37 % 256));
   output = await sharp(raw, { raw: { width: 64, height: 64, channels: 3 } }).jpeg().toBuffer();
   calls = []; nextTask = { status: 'SUCCEEDED', output: ['https://example.com/result'] };
+  downloadRequested = Promise.withResolvers(); taskPolled = Promise.withResolvers();
   imageGenEvents.on('completed', onComplete); imageGenEvents.on('failed', onFailed);
   vi.stubGlobal('fetch', vi.fn(async (url, opts = {}) => {
     calls.push({ url, method: opts.method || 'GET', body: opts.body ? JSON.parse(opts.body) : null, headers: opts.headers });
     if (opts.method === 'POST') return json({ id: 'task-example' });
     if (opts.method === 'DELETE') return json({});
-    if (url.endsWith('/task-example')) return json(nextTask);
+    if (url.endsWith('/task-example')) { taskPolled.resolve(); return json(nextTask); }
+    downloadRequested.resolve();
     return { ok: true, arrayBuffer: async () => output };
   }));
 });
-const onComplete = (event) => terminals.set(event.generationId, { type: 'completed', ...event });
-const onFailed = (event) => terminals.set(event.generationId, { type: 'failed', ...event });
-const terminal = async (id) => { await vi.waitFor(() => expect(terminals.has(id)).toBe(true)); return terminals.get(id); };
+const recordTerminal = (type, event) => {
+  const result = { type, ...event };
+  terminals.set(event.generationId, result);
+  terminalWaiters.get(event.generationId)?.resolve(result);
+  terminalWaiters.delete(event.generationId);
+};
+const onComplete = (event) => recordTerminal('completed', event);
+const onFailed = (event) => recordTerminal('failed', event);
+// Completion includes native image conversion and atomic filesystem writes.
+// Await the event under the test's deadline, rather than imposing a 1s poll.
+const terminal = (id) => {
+  if (terminals.has(id)) return Promise.resolve(terminals.get(id));
+  if (!terminalWaiters.has(id)) terminalWaiters.set(id, Promise.withResolvers());
+  return terminalWaiters.get(id).promise;
+};
 afterEach(async () => {
-  runway.cancelAll(); vi.useRealTimers(); vi.unstubAllGlobals(); terminals.clear();
+  runway.cancelAll(); vi.useRealTimers(); vi.unstubAllGlobals(); terminals.clear(); terminalWaiters.clear();
   imageGenEvents.off('completed', onComplete); imageGenEvents.off('failed', onFailed);
   await rm(root, { recursive: true, force: true });
 });
@@ -52,7 +69,7 @@ describe('Runway image workflow', () => {
     let job;
     try {
       job = await runway.generateImage({ prompt: '  A garden  ', width: 1920, height: 1080 });
-      await vi.waitFor(() => expect(calls.some((call) => call.url === 'https://example.com/result')).toBe(true));
+      await downloadRequested.promise;
       await new Promise((resolve) => setImmediate(resolve));
       expect(existsSync(join(PATHS.images, job.filename))).toBe(false);
       expect(terminals.has(job.jobId)).toBe(false);
@@ -117,7 +134,7 @@ describe('Runway image workflow', () => {
   it('waits on the same throttled task and cancels it without a resubmission', async () => {
     nextTask = { status: 'THROTTLED' };
     const job = await runway.generateImage({ prompt: 'A garden' });
-    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/task-example'))).toBe(true));
+    await taskPolled.promise;
     expect(runway.cancel(job.jobId)).toBe(true);
     expect(await terminal(job.jobId)).toMatchObject({ type: 'failed' });
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);

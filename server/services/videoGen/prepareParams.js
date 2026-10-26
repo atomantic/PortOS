@@ -1,4 +1,3 @@
-import { validateA2vLoraStages } from './loraStages.js';
 /**
  * prepareVideoGenParams — pre-dispatch preparation for POST /video-gen.
  *
@@ -124,6 +123,7 @@ export async function validateVideoRetryParams(params = {}) {
     model = knownModels.find((entry) => entry.id === modelId);
   }
   model = model && withHardwareCompatibility(model, capabilities, model.hardwareRequirements);
+  const { validateA2vLoraStages } = await import('./loraStages.js');
   await validateA2vLoraStages({ strengths: params.a2vLoraStageStrengths, model,
     mode: params.mode, hasLoras: params.loras?.length > 0 });
   if (!model) {
@@ -389,6 +389,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
     capabilities,
     effectiveModel.hardwareRequirements,
   );
+  const { validateA2vLoraStages } = await import('./loraStages.js');
   await validateA2vLoraStages({ strengths: body.a2vLoraStageStrengths, model: effectiveModel,
     backend, mode: body.mode, hasLoras: body.loraFilenames?.length > 0 })
     .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; });

@@ -1,3 +1,4 @@
+import { catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema } from '../lib/catalogGreyboxValidation.js';
 import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.js';
 // Creative Ingredients Catalog HTTP routes, mounted at /api/catalog. Backs
 // the Catalog page, Ingest workflow, picker integrations, and peer sync.
@@ -25,10 +26,6 @@ import {
   catalogMediaLibraryQuerySchema,
   catalogMediaDetachSchema,
   catalogMediaFileUploadSchema,
-  catalogGreyboxDraftSchema,
-  catalogGreyboxSaveSchema,
-  catalogGreyboxCaptureSchema,
-  catalogGreyboxRenderSchema,
   catalogMediaVoiceMemoSchema,
   catalogPortraitSetSchema,
   catalogIngredientQuerySchema,

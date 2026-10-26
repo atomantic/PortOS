@@ -135,17 +135,33 @@ describe('recovery output-hook dispatch (#3182)', () => {
 
   it('awaits the scheduled outcome ledger and finishes even when that write fails', async () => {
     const { recordTaskTypeSuccess, recordTaskTypeFailure } = await import('./taskSchedule.js');
+    const ledgerEntered = Promise.withResolvers();
     let rejectLedger;
-    recordTaskTypeSuccess.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectLedger = reject; }));
+    recordTaskTypeSuccess.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectLedger = reject;
+      ledgerEntered.resolve();
+    }));
     const completion = finalizeAgent({
       agentId: persistedAgent.id, task: TASK, success: true, exitCode: 0,
       duration: 1000, outputBuffer: '',
     });
 
-    await vi.waitFor(() => expect(recordTaskTypeSuccess).toHaveBeenCalledWith('example-output-hook', 'app-example'));
-    expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ taskOutcome: { status: 'completed', reason: 'The task delivery criteria passed.' } }) }), 'internal');
-    expect(processAgentCompletion).not.toHaveBeenCalled();
-    rejectLedger(new Error('ledger write failed'));
+    try {
+      // Cold finalization can load async dependencies before entering this
+      // ledger. Synchronize on that boundary under the test's own deadline.
+      expect(await Promise.race([
+        ledgerEntered.promise.then(() => 'ledger'),
+        completion.then(() => 'completed'),
+      ])).toBe('ledger');
+      expect(recordTaskTypeSuccess).toHaveBeenCalledWith('example-output-hook', 'app-example');
+      expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ taskOutcome: { status: 'completed', reason: 'The task delivery criteria passed.' } }) }), 'internal');
+      expect(processAgentCompletion).not.toHaveBeenCalled();
+    } finally {
+      // Drain finalization even when an ordering assertion fails, so its
+      // pending write cannot escape into another test's mocks or fixtures.
+      rejectLedger?.(new Error('ledger write failed'));
+      await completion.catch(() => {});
+    }
 
     await expect(completion).resolves.toMatchObject({ success: true });
     expect(recordTaskTypeFailure).not.toHaveBeenCalled();
