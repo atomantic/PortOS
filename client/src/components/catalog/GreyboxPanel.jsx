@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Camera, Check, Loader2, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -52,8 +52,6 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
   const locked = readOnly || record.payload?.locked === true;
   const blocked = !!busy || disabled;
 
-  useEffect(() => { onBusyChange?.(Boolean(busy)); }, [busy, onBusyChange]);
-
   // The prompt a draft would send, composed by the server, shown before the
   // button is pressed. Debounced; a superseded response is dropped.
   useEffect(() => {
@@ -67,8 +65,9 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
     return () => { active = false; clearTimeout(timer); };
   }, [record.id, record.updatedAt, instruction, fromScratch, saved]);
 
-  // Selecting a shot moves the camera to it and adopts its lens and aspect. A
-  // save re-creates the shot object, so only a change of shot re-snaps the view.
+  // Selecting a shot adopts its lens and aspect; the viewer moves its own camera
+  // (`shotView`). A save re-creates the shot object, so only a change of shot id
+  // re-applies either.
   const appliedShotId = useRef(null);
   useEffect(() => {
     if (!shot) {
@@ -79,11 +78,10 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
     appliedShotId.current = shot.id;
     setLens(shot.focalLengthMm);
     setAspect(shot.aspect);
-    viewerRef.current?.setView({ position: shot.position, target: shot.target });
   }, [shot]);
 
-  // Only the viewer's first mount reads this; later selections go through setView.
-  const [initialView] = useState(() => (shot ? { position: shot.position, target: shot.target } : undefined));
+  // The viewer applies it once per id, so a new object after a save is harmless.
+  const shotView = useMemo(() => (shot ? { id: shot.id, position: shot.position, target: shot.target } : null), [shot]);
 
   const selectShot = (id) => setParams((prev) => { const next = new URLSearchParams(prev); if (id) next.set('shot', id); else next.delete('shot'); return next; }, { replace: true });
 
@@ -94,11 +92,15 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
     return updated;
   };
 
-  const run = async (name, fn) => {
+  // The parent holds its Save while a write is in flight. It is told directly (not
+  // via an effect) so the release still fires if the tab was left mid-write.
+  const run = (name, fn) => {
     setBusy(name);
-    const result = await fn();
-    setBusy('');
-    return result;
+    onBusyChange?.(true);
+    return fn().finally(() => {
+      setBusy('');
+      onBusyChange?.(false);
+    });
   };
 
   const currentView = () => {
@@ -228,7 +230,7 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
           <div className="space-y-3 min-w-0">
             <Suspense fallback={<div className="h-64 flex items-center justify-center text-sm text-gray-400"><Loader2 size={16} className="animate-spin mr-2" aria-hidden="true" />Loading viewer…</div>}>
-              <GreyboxViewer key={record.id} ref={viewerRef} scene={scene} aspect={aspect} focalLengthMm={lens} initialView={initialView} />
+              <GreyboxViewer key={record.id} ref={viewerRef} scene={scene} aspect={aspect} focalLengthMm={lens} shotView={shotView} />
             </Suspense>
             <div className="grid gap-3 sm:grid-cols-2">
               <label htmlFor="greybox-lens" className="text-xs text-gray-400">
