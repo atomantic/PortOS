@@ -125,10 +125,16 @@ export async function spawnAndWatchVideo({
     return true;
   };
   const persistTermination = async (exitCode, signal, reason) => {
-    await flushMemoryEvidence();
-    await recordVideoExecutionDiagnostics(jobId, { termination: {
-      exitCode, signal, reason, observedAt: new Date().toISOString(),
-    } });
+    // The pre-launch receipt gates execution; later diagnostics must never
+    // replace a known render outcome or an admission refusal.
+    try {
+      await flushMemoryEvidence();
+      await recordVideoExecutionDiagnostics(jobId, { termination: {
+        exitCode, signal, reason, observedAt: new Date().toISOString(),
+      } });
+    } catch (error) {
+      console.error(`❌ Video termination evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`);
+    }
   };
   // No child and no claim exist yet, so this startup owner releases what the
   // caller handed over. A refusal (busy holder) and a claim I/O rejection both
@@ -149,7 +155,7 @@ export async function spawnAndWatchVideo({
   } catch (err) {
     console.error(`❌ Video generation claim acquisition [${jobId.slice(0, 8)}]: ${err.message}`);
     await releaseUnclaimedStartup();
-    await persistTermination(null, null, 'refused').catch(error => console.error(`❌ Video startup evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`));
+    await persistTermination(null, null, 'refused');
     throw err;
   }
   if (!heavyClaim.ok) {
@@ -370,10 +376,7 @@ export async function spawnAndWatchVideo({
       // Defensive cleanup includes audio passed directly without the route's
       // uploadedTempPaths tracking. Duplicate unlinks remain harmless.
       return cleanupFailedRender().then(async () => {
-        await persistTermination(null, null, 'failed').catch(error => {
-          retainOwnership();
-          console.error(`❌ Video spawn evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`);
-        });
+        await persistTermination(null, null, 'failed');
         broadcastSse(job, { type: 'error', error: reason });
         videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }) });
         closeJobAfterDelay(videoJobState.jobs, jobId);
@@ -592,7 +595,8 @@ export async function spawnAndWatchVideo({
             }
           } else if (signal) {
             // Signal → actionable cause (SIGABRT = the macOS Metal command-buffer
-            // watchdog only when stderr proves it, SIGBUS/SIGSEGV = a native MLX/Metal crash, SIGKILL = OOM),
+            // watchdog only when stderr proves it, SIGBUS/SIGSEGV = a native MLX/Metal crash;
+            // SIGKILL alone does not prove OOM),
             // stamped with the runtime fingerprint that died so the report is
             // self-documenting. See describeSignalDeath in generateVideoHelpers.js.
             reason = describeSignalDeath(signal, {
@@ -662,10 +666,7 @@ export async function spawnAndWatchVideo({
         // process. The job may already be partway through finalize, so force the
         // error state and emit the terminal event the client is waiting on.
         job.status = 'error';
-        await persistTermination(code, signal, preparation?.wasCanceled() || videoJobState.cancelEpoch !== cancelEpochAtStart ? 'canceled' : 'failed').catch(error => {
-          retainOwnership();
-          console.error(`❌ Video termination evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`);
-        });
+        await persistTermination(code, signal, preparation?.wasCanceled() || videoJobState.cancelEpoch !== cancelEpochAtStart ? 'canceled' : 'failed');
         console.error(`❌ Video close handler failed [${jobId.slice(0, 8)}]: ${err.message}`);
         broadcastSse(job, { type: 'error', error: `Generation failed: ${err.message}` });
         videoGenEvents.emit('failed', { generationId: jobId, error: err.message, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }), ...(batch ? { results: batchResults } : {}) });
@@ -863,10 +864,7 @@ export async function spawnAndWatchVideo({
     stopAbandonedChild(firstProc);
     if (videoJobState.activeProcess === firstProc) videoJobState.activeProcess = null;
     await cleanupFailedRender();
-    await persistTermination(null, null, 'refused').catch(error => {
-      retainOwnership();
-      console.error(`❌ Video startup evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`);
-    });
+    await persistTermination(null, null, 'refused');
     job.status = 'error';
     const reason = err.message || 'Video generation failed before the render child was wired';
     const refused = err.status >= 400 && err.status < 500;

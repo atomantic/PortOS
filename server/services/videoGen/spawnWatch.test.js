@@ -290,6 +290,7 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     const owner = { pid: 202 };
     videoJobState.activeProcess = owner;
     mocks.claim.mockResolvedValue({ ok: false, message: 'Another render owns the lane', holder: { id: 'other-render' } });
+    mocks.diagnostics.mockRejectedValueOnce(new Error('termination storage unavailable'));
 
     await expect(spawnAndWatchVideo(params)).rejects.toMatchObject({
       status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: { id: 'other-render' } },
@@ -353,6 +354,26 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     expect(failed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ generationId: params.jobId, error: 'Exit code 7' }));
     expect(completed).not.toHaveBeenCalled();
     expect(mocks.history).toEqual([]);
+  });
+
+  it.each([0, 7])('preserves exit %s and its published outcome when termination evidence cannot be written', async (exitCode) => {
+    await spawnAndWatchVideo(params);
+    mocks.diagnostics.mockRejectedValueOnce(new Error('termination storage unavailable'));
+
+    await closeChild(exitCode);
+
+    expectCleanup();
+    if (exitCode === 0) {
+      expect(job.status).toBe('complete');
+      expect(completed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ generationId: params.jobId }));
+      expect(failed).not.toHaveBeenCalled();
+      expect(mocks.history).toEqual([expect.objectContaining({ id: params.jobId })]);
+    } else {
+      expect(job.status).toBe('error');
+      expect(failed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ error: 'Exit code 7' }));
+      expect(completed).not.toHaveBeenCalled();
+      expect(mocks.history).toEqual([]);
+    }
   });
 
   it('waits for physical close and upload/preview cleanup after an error on a live child', async () => {
