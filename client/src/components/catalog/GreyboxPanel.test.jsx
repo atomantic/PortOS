@@ -111,7 +111,7 @@ describe('GreyboxPanel', () => {
       .mockResolvedValueOnce({ mediaKey: 'close.png' });
     show({ record: { ...record, payload: { greybox: { ...scene, shots } } }, media: [{ role: 'greybox-shot:wide', mediaKey: 'old.png' }] });
     fireEvent.click(await screen.findByRole('button', { name: 'Re-capture all shots (2)' }));
-    expect(screen.getByText(/Render 2 saved shots and replace 1 existing reference images/)).toBeInTheDocument();
+    expect(screen.getByText(/Saved shots: 2. Existing reference images to replace: 1/)).toBeInTheDocument();
     expect(renderCatalogGreyboxShot).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Re-capture all shots' }));
     expect(renderCatalogGreyboxShot.mock.calls).toEqual([['plc-1', 'wide', { silent: true }]]);
@@ -227,6 +227,7 @@ describe('GreyboxPanel', () => {
     fireEvent.click(screen.getByLabelText('Dancer'));
     fireEvent.change(screen.getByLabelText('Pose for Dancer'), { target: { value: 'Waving' } });
     expect(screen.queryByRole('button', { name: 'Capture reference image' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Re-capture all shots/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save layout edits' }));
     await screen.findByRole('button', { name: 'Block' });
     expect(saveCatalogGreybox).toHaveBeenCalledWith('plc-1', expect.objectContaining({

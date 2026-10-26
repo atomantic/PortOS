@@ -200,7 +200,7 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
       onCaptured?.();
     }
     setConfirmRecapture(false);
-    if (captured === saved.shots.length) toast.success(`Re-captured ${formatCount(captured)} shots`);
+    if (captured === saved.shots.length) toast.success(`Re-captured ${formatCount(captured)} shot${captured === 1 ? '' : 's'}`);
   });
 
   const removeShot = () => run('shot', async () => {
@@ -396,7 +396,7 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
               <div className="space-y-2">
                 {saved?.shots.length > 0 && (confirmRecapture
                   ? <div className="space-y-2">
-                    <p className="text-xs text-gray-400">Render {formatCount(saved.shots.length)} saved shots and replace {formatCount(saved.shots.filter((s) => captureForShot(media, s.id)).length)} existing reference images. Saved camera angles will be used.</p>
+                    <p className="text-xs text-gray-400">Saved shots: {formatCount(saved.shots.length)}. Existing reference images to replace: {formatCount(saved.shots.filter((s) => captureForShot(media, s.id)).length)}. Saved camera angles will be used.</p>
                     <ConfirmButtonPair confirmText="Re-capture all shots" onConfirm={recaptureAll} onCancel={() => setConfirmRecapture(false)}
                       busy={blocked} busyText="Capturing…" tone="warning" className="flex-wrap" />
                   </div>

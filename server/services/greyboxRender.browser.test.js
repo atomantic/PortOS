@@ -32,9 +32,12 @@ const scene = greyboxSceneSchema.parse({
     { id: 'column', type: 'cylinder', radius: 0.6, height: 3, position: [-2, 1.5, 0] },
     { id: 'stage', type: 'extrude', outline: [[-2, -2], [2, -2], [1, 1], [-1, 1]], height: 0.8, position: [2, 0, -2] },
   ],
-  anchors: [{ id: 'figure', label: 'Example figure', kind: 'figure', position: [1, 0, 2] }],
+  anchors: [
+    { id: 'figure', label: 'Example figure', kind: 'figure', position: [1, 0, 2] },
+    { id: 'excluded', label: 'Excluded prop', kind: 'prop', position: [-1, 0, 2] },
+  ],
   landmarks: [{ id: 'pin', label: 'Hidden helper', position: [0, 2, 0] }],
-  shots: [{ id: 'wide', label: 'Wide', position: [8, 6, 12], target: [0, 1, 0], focalLengthMm: 28, aspect: '16:9' }],
+  shots: [{ id: 'wide', label: 'Wide', position: [8, 6, 12], target: [0, 1, 0], focalLengthMm: 28, aspect: '16:9', figures: [{ anchorId: 'figure' }] }],
 });
 
 describe.skipIf(!canRun)('greybox captures in real Chrome', () => {
