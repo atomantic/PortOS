@@ -229,3 +229,16 @@ it('shows verified eventual delivery instead of the earlier pre-merge contention
   expect(screen.getByText('Task incomplete')).toBeInTheDocument();
   expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
 });
+
+it('shows verified publication before any terminal result and retains it after synchronization fails', () => {
+  const publication = { status: 'verified', tag: 'v1.2.3', releaseUrl: 'https://github.com/example/repo/releases/tag/v1.2.3', publishedAt: '2026-01-01T12:00:00Z' };
+  const agent = { status: 'running', metadata: { releasePublication: publication } };
+  const view = render(<AgentResultLine agent={agent} />);
+  expect(screen.getByText('Published — synchronization not yet verified')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'v1.2.3' })).toHaveAttribute('href', publication.releaseUrl);
+  expect(view.container.querySelector('time')).toHaveAttribute('datetime', publication.publishedAt);
+  expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+  view.rerender(<AgentResultLine agent={{ ...agent, result: { success: false, error: 'Synchronization failed' } }} />);
+  expect(screen.getByText('Published — synchronization not yet verified')).toBeInTheDocument();
+  expect(screen.getByText('Synchronization failed')).toBeInTheDocument();
+});

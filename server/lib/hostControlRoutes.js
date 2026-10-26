@@ -489,6 +489,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/agents/:id/relaunch',
   'POST /api/cos/agents/:id/btw',
   'POST /api/cos/agents/:id/security-scan',
+  'POST /api/cos/agents/:id/release-publication',
   'POST /api/cos/jobs',
   'PUT /api/cos/jobs/:id',
   // Toggle arms an existing job, shell jobs included, for its next run.
