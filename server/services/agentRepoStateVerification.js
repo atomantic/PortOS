@@ -383,9 +383,12 @@ export async function verifyAgentRepoState(input) {
       return settled ? result : { ...result, verified: false, skipReason: 'cleanup-receipt-settlement-unverified' };
     }
     const outcomes = result.branches || [result];
+    // A retirement policy refusal is a preservation hold, not failed delivery.
+    // Keep its persisted obligation pending for service replay; requeueing the
+    // original task would launch another review agent against an already merged PR.
     const unsupported = prStaysOpen(input.task) ? { skipReason: 'leave-open-cleanup-unsupported' } : outcomes.find(item => [REPO_STATE_SKIPS.DISABLED, REPO_STATE_SKIPS.NOT_WORKTREE,
       REPO_STATE_SKIPS.PERSISTENT_WORKTREE, REPO_STATE_SKIPS.DISCARDED_WORKTREE,
-      'retirement-app-unavailable', 'retirement-app-ambiguous', 'retirement-policy-not-legacy-completed'].includes(item.skipReason)
+      'retirement-app-unavailable', 'retirement-app-ambiguous'].includes(item.skipReason)
       || (item.skipReason === 'cleanup-delivery-unverified' && (['OPEN', 'CLOSED'].includes(item.observed?.prState)
         || (item.observed?.prState === null && item.observed?.prUrl === null && item.observed?.unreadable?.length === 0))));
     if (cleanupPending && unsupported) {
