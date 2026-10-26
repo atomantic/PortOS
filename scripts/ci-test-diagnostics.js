@@ -37,6 +37,18 @@ export function processExitDiagnostic(run) {
   return `Vitest process exit event: code=${final.eventCode}; exitCode=${final.exitCode}.`;
 }
 
+export function collectionDiagnostic(run) {
+  const c = run.collection;
+  if (c?.limit !== 5 || !Array.isArray(c.failures) || c.failures.length > 5
+    || ![null, 'unsafe', 'assertion-limit'].includes(c.stop)
+    || !['complete', 'unverified'].includes(c.coverage)) {
+    return 'Release-candidate collection evidence malformed or unavailable; coverage unverified.';
+  }
+  return `Release-candidate assertion collection: ${c.failures.length}/5; stop=${c.stop || 'none'}; coverage=${c.coverage}. `
+    + 'Only failures recorded before the stop are collection candidates; independence requires investigation. '
+    + 'In-flight/unfinished tests and later output are unverified; a red run never authorizes green memo or attestation.';
+}
+
 function readReport(path, limit = 100_000) {
   if (statSync(path).size > limit) throw new Error('report exceeds limit');
   return JSON.parse(readFileSync(path, 'utf8'));
@@ -72,6 +84,12 @@ export async function collectTestDiagnostics(root, {
       lines.push(`Launcher ${invocation.completed ? 'completed' : 'interrupted or completion not recorded'}; `
         + `exit=${Number.isInteger(invocation.status) ? invocation.status : 'unavailable'}; `
         + `signal=${/^SIG[A-Z]+$/.test(invocation.signal) ? invocation.signal : 'none'}.`);
+      if (invocation.policy === 'release-candidate') {
+        const candidate = invocation.candidate;
+        const sha = value => /^[a-f0-9]{40}$/.test(value ?? '') ? value : 'unavailable';
+        lines.push(`Release-candidate provenance: head=${sha(candidate?.head)}; base=${sha(candidate?.base)}; checkout=${sha(candidate?.checkout)}; `
+          + `selection=${/^[a-f0-9]{64}$/.test(candidate?.selectionSha256 ?? '') ? candidate.selectionSha256 : 'unavailable'}.`);
+      }
       const boundary = ['direct npm process', 'cmd.exe -> npm.cmd'].includes(invocation.commandBoundary) ? invocation.commandBoundary : 'unavailable';
       lines.push(`Observed command boundary: ${boundary}.`);
       for (const [event, value] of [['exit', invocation.childExit], ['close', invocation.childClose]]) {
@@ -89,6 +107,7 @@ export async function collectTestDiagnostics(root, {
         || !Number.isInteger(run.completedCount) || !Number.isInteger(run.errorCount)) throw Error('invalid progress');
       const reason = ['passed', 'failed', 'interrupted', 'not-finished'].includes(run.reason) ? run.reason : 'unavailable';
       lines.push(processExitDiagnostic(run));
+      if (run.collection) lines.push(collectionDiagnostic(run));
       lines.push(`Vitest progress: reason=${reason}; completed=${run.completedCount}; unhandledErrors=${run.errorCount}.`);
       lines.push(`Queued/unfinished modules (up to 100): ${run.activeModules.slice(0, 100).map(diagnosticTestFile).join(', ') || 'none recorded'}`);
       lines.push(`Last completed modules (up to 100): ${run.completedModules.slice(-100).map(diagnosticTestFile).join(', ') || 'none recorded'}`);

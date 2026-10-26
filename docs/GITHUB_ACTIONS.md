@@ -1548,3 +1548,40 @@ all stop recovery. The existing Actions write grant is reused without adding
 permissions. Private repositories that cannot read the PR with that grant remain
 held rather than expanding authority. No PR checkout or code executes in this
 privileged observer; both scripts run from the default branch's sparse checkout.
+
+## Bounded frozen release-candidate failure collection
+
+CI explicitly sets `PORTOS_CI_TEST_POLICY=release-candidate` only for same-repository
+`codex/release-*` pull requests targeting `release`. Ordinary PRs, nightly runs,
+release pushes and local `test:ci` keep bail=1. The shared launcher supplies one
+bail flag, raises it to five for that policy, and disables both Vitest retries
+and the launcher's native-crash retry. Existing worker caps, shard selection,
+quiet groups, database isolation and deadlines do not change.
+
+The lifecycle reporter records up to five assertion failures, preserving the
+first. Failed hooks (including assertion failures in hooks), collection errors,
+non-assertion errors, unhandled errors and process teardown timeouts stop safe
+collection. Vitest receives graceful cancellation; the launcher independently
+monitors atomic reporter evidence and cancels its owned process tree on unsafe
+or malformed evidence, using existing escalation and settlement guards. Already
+running work can finish during cancellation; its later output is **unverified**,
+not additional independent regressions. Failed assertions are candidates for
+investigation, not proof that failures are independent or predate an amendment.
+Capped, interrupted, unsafe or missing-evidence runs remain red and cannot write
+green memo entries or support CI-skipping attestation. First-cause run evidence
+and process-settlement refusals remain in each attempt's diagnostics directory.
+
+`invocation.json` binds policy, candidate head, tested checkout, actual checkout
+base, shard, selection digest, workflow run ID/attempt and start/finish times.
+`run.json` contains the bounded assertion list, stop reason and coverage status;
+the ordinary JSON report and process evidence remain available. Report coverage
+as unverified after any stop, including tests that never ran. A successful shard
+alone is not evidence that the whole candidate passed.
+
+For hosted before/after comparisons, group workflow rounds by exact candidate
+head/base and selection digest. Use Actions job queued/start/completion times to
+separate queue time from execution time; sum job execution minutes for
+runner-minutes and report failures collected per invocation. Keep non-reproducing
+failures and classify amendment-introduced regressions separately from failures
+shown to exist at the original cutoff. No hosted duration improvement is claimed
+by this implementation; a local synthetic collection test cannot measure it.
