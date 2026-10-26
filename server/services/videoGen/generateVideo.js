@@ -360,7 +360,7 @@ async function resolveRequestedDraftDecoder({ model, draftDecode, jobId }) {
   return draftDecoder;
 }
 
-async function renderLocalVideo(preparation, { pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, a2vLoraStageStrengths, loras = null, icReferencePaths = null, referenceImagePaths = null, referenceVideoPaths = null, referenceAudioPaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [], continuityStrategy, contextFrames, continuation = null, historyContext = null }) {
+async function renderLocalVideo(preparation, { pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, a2vLoraStageStrengths, loras = null, icReferencePaths = null, referenceImagePaths = null, referenceVideoPaths = null, referenceAudioPaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [], continuityStrategy, contextFrames, continuation = null, historyContext = null, executionParent = null }) {
   const sourceAudioProvenance = audioConditioning == null ? null : federatedSourceAudioSchema.parse(audioConditioning);
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
@@ -748,6 +748,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
   await startPreparedLocalVideo({
     preparation,
     jobId,
+    executionParent,
     meta,
     batch,
     cleanupTempFiles,
@@ -840,13 +841,13 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
 // (its busy-claim, setup-error and child-terminal paths each release the same
 // resources), so a throw out of it is rethrown untouched.
 async function startPreparedLocalVideo({
-  preparation, jobId, meta, batch, cleanupTempFiles, displaySleep, buildParams, watchParams,
+  preparation, jobId, executionParent, meta, batch, cleanupTempFiles, displaySleep, buildParams, watchParams,
 }) {
   const job = { ...meta, clients: [], status: 'running' };
   let stepwiseDir = null;
   let handedOff = false;
   try {
-    await recordVideoExecution(jobId, { ...meta, ...(batch ? { batchSeeds: batch.map(item => item.seed) } : {}) });
+    await recordVideoExecution(jobId, { ...meta, ...(executionParent ? { executionParent } : {}), ...(batch ? { batchSeeds: batch.map(item => item.seed) } : {}) });
     // Each render gets one private preview directory. Runners overwrite the
     // fixed `preview.png` path atomically, so a long render cannot accumulate
     // one PNG per step and a stale preview can never cross job boundaries.
@@ -874,13 +875,13 @@ async function startPreparedLocalVideo({
 
     handedOff = true;
     await spawnAndWatchVideo({
-      jobId, preparation, batch, cleanupTempFiles, stepwiseDir, job, bin, args, meta, videoGenSettings, ...watchParams,
+      jobId, executionParent, preparation, batch, cleanupTempFiles, stepwiseDir, job, bin, args, meta, videoGenSettings, ...watchParams,
     });
   } catch (err) {
     if (handedOff) throw err;
     await recordVideoExecutionDiagnostics(jobId, { termination: {
       exitCode: null, signal: null, reason: preparation.wasCanceled() ? 'canceled' : 'refused', observedAt: new Date().toISOString(),
-    } }).catch(error => console.error(`❌ Video preparation evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`));
+    } }, ...(executionParent ? [executionParent] : [])).catch(error => console.error(`❌ Video preparation evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`));
     job.status = 'error';
     const reason = err.message || 'Failed to prepare video generation';
     console.error(`❌ Video generation preparation error [${jobId.slice(0, 8)}]: ${reason}`);

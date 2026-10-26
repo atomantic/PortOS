@@ -59,6 +59,30 @@ export const videoExecutionSchema = z.object({
   diagnostics: videoExecutionDiagnosticsSchema.optional(),
 });
 
+// Queue identity is separate from the random per-render id used by a chain.
+const executionJobId = z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/);
+export const videoExecutionParentSchema = z.object({
+  jobId: executionJobId,
+  segmentIndex: z.number().int().min(0).max(7),
+  segmentCount: z.number().int().min(2).max(8),
+}).strict().refine(value => value.segmentIndex < value.segmentCount, 'Segment index must be inside the chain');
+
+export const videoSegmentExecutionSchema = videoExecutionSchema.extend({
+  childJobId: executionJobId,
+  segmentIndex: z.number().int().min(0).max(7),
+  segmentCount: z.number().int().min(2).max(8),
+}).refine(value => value.segmentIndex < value.segmentCount, 'Segment index must be inside the chain');
+
+export const videoSegmentExecutionsSchema = z.array(videoSegmentExecutionSchema).max(8).refine(values =>
+  new Set(values.map(value => value.segmentIndex)).size === values.length
+  && new Set(values.map(value => value.childJobId)).size === values.length
+  && values.every(value => value.segmentCount === values[0].segmentCount), 'Segment receipts must be unique and describe one chain');
+
+export const videoSegmentReplayReceiptSchema = z.object({
+  parentJobId: executionJobId,
+  segments: videoSegmentExecutionsSchema.refine(values => values.length > 0, 'Replay needs a prior segment receipt'),
+});
+
 export function mergeVideoExecutionDiagnostics(receipt, patch) {
   const diagnostics = videoExecutionDiagnosticsSchema.parse(patch);
   const previous = receipt.diagnostics || {};

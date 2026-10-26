@@ -92,6 +92,25 @@ const start = async (overrides = {}) => {
 };
 
 describe('bounded chain delivery', () => {
+  it('maps queued segments to their outer receipt and replays only matching saved seeds', async () => {
+    fixtures.probe.mockReset().mockResolvedValue(49);
+    expect((await start({ executionQueueJobId: 'example-chain', segmentSeeds: [411, null, 733], segmentSeedBase: null })).completed).toBeDefined();
+    const calls = fixtures.render.mock.calls.map(([params]) => params);
+    expect(calls.map(({ seed }) => seed)).toEqual([411, undefined, 733]);
+    expect(calls.map(({ executionParent }) => executionParent)).toEqual([0, 1, 2].map(segmentIndex => ({
+      jobId: 'example-chain', segmentIndex, segmentCount: 3,
+    })));
+    fixtures.render.mockClear();
+    expect((await start({ seed: 17, executionQueueJobId: 'example-chain', segmentSeeds: [411, null, 733], segmentSeedBase: null })).completed).toBeDefined();
+    expect(fixtures.render.mock.calls.map(([params]) => params.seed)).toEqual([17, 18, 19]);
+  });
+
+  it('refuses a queued execution identity that does not belong to the outer chain', async () => {
+    await expect(generateChainedVideo({ chunks: 3, jobId: 'example-chain', executionQueueJobId: 'wrong-parent', prompt: 'Example scene' }))
+      .rejects.toMatchObject({ code: 'VIDEO_EXECUTION_PARENT_MISMATCH' });
+    expect(fixtures.render).not.toHaveBeenCalled();
+  });
+
   it('delivers all new frames once across three chunks and measures bounded matching audio intervals', async () => {
     expect((await start()).completed).toBeDefined();
     const renders = fixtures.render.mock.calls.map(([params]) => params);

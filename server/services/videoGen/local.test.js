@@ -2879,7 +2879,7 @@ describe('generateVideo — LoRA trigger-word weaving (#4665)', () => {
 });
 
 describe('generateVideo — heavy claim setup cleanup (#4364)', () => {
-  it('retains resolved settings before a pre-watch argument failure and performs startup cleanup', async () => {
+  it('retains resolved segment settings and parent mapping before a pre-watch argument failure', async () => {
     const recorder = await import('./executionRecorder.js');
     const renderArgs = await import('./renderArgs.js');
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
@@ -2887,12 +2887,13 @@ describe('generateVideo — heavy claim setup cleanup (#4364)', () => {
     const recordExecution = vi.fn(async () => true);
     const recordDiagnostics = vi.fn(async () => true);
     recorder.setVideoExecutionRecorder({ recordExecution, recordDiagnostics });
+    const executionParent = { jobId: 'queue-outer', segmentIndex: 1, segmentCount: 3 };
     const build = vi.spyOn(renderArgs, 'buildArgs').mockImplementationOnce(() => { throw new Error('synthetic argument refusal'); });
     try {
-      await expect(generateVideo({ jobId: 'pre-watch-receipt', modelId: 'ltx2_unified', prompt: 'Synthetic action', seed: 37,
+      await expect(generateVideo({ jobId: 'pre-watch-receipt', executionParent, modelId: 'ltx2_unified', prompt: 'Synthetic action', seed: 37,
         width: 512, height: 512, numFrames: 25, fps: 24, mode: 'text' })).rejects.toThrow('synthetic argument refusal');
-      expect(recordExecution).toHaveBeenCalledWith('pre-watch-receipt', expect.objectContaining({ seed: 37, width: 512, height: 512, numFrames: 25, steps: 30 }));
-      expect(recordDiagnostics).toHaveBeenCalledWith('pre-watch-receipt', { termination: expect.objectContaining({ reason: 'refused' }) });
+      expect(recordExecution).toHaveBeenCalledWith('pre-watch-receipt', expect.objectContaining({ seed: 37, width: 512, height: 512, numFrames: 25, steps: 30, executionParent }));
+      expect(recordDiagnostics).toHaveBeenCalledWith('pre-watch-receipt', { termination: expect.objectContaining({ reason: 'refused' }) }, executionParent);
       expect(spawnDetached).not.toHaveBeenCalled();
     } finally {
       build.mockRestore();

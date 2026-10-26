@@ -61,7 +61,7 @@ import { generateVideo, resolveVideoModel, defaultVideoModelId } from './generat
 // chunk i's prompt, and a null/blank/missing entry falls back to the main
 // `prompt`. It is destructured out of `rest` on purpose so the per-chunk
 // generateVideo() calls below never receive the whole list.
-export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames, continuityStrategy, jobId: outerJobId, ...rest }) {
+export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames, continuityStrategy, executionQueueJobId, segmentSeeds, segmentSeedBase, jobId: outerJobId, ...rest }) {
   if (Number(chunks) > 1 && Number(rest.batchSize) > 1) {
     throw new ServerError('A render batch cannot be combined with chained clips.', { status: 400, code: 'VIDEO_BATCH_CONFLICT' });
   }
@@ -70,6 +70,9 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
     return generateVideo({ jobId: outerJobId, continuityStrategy, contextFrames, ...rest });
   }
   if (!outerJobId) throw new ServerError('generateChainedVideo requires jobId', { status: 500, code: 'INTERNAL' });
+  if (executionQueueJobId != null && executionQueueJobId !== outerJobId) {
+    throw new ServerError('Queued chain execution must belong to its outer job.', { status: 400, code: 'VIDEO_EXECUTION_PARENT_MISMATCH' });
+  }
 
   const chainModel = resolveVideoModel(rest.modelId || defaultVideoModelId());
   const chainError = videoChainUnsupportedError(chainModel);
@@ -249,9 +252,10 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
     // chunk visually varied while remaining reproducible from the user's
     // chosen seed. When seed is unset, generateVideo picks one randomly
     // per chunk (existing behavior).
-    const chunkSeed = rest.seed != null && rest.seed !== ''
-      ? Number(rest.seed) + i
-      : undefined;
+    const requestedSeed = rest.seed == null || rest.seed === '' ? null : Number(rest.seed);
+    const replaySeed = Array.isArray(segmentSeeds) && segmentSeedBase === requestedSeed ? segmentSeeds[i] : null;
+    const chunkSeed = Number.isSafeInteger(replaySeed) && replaySeed >= 0
+      ? replaySeed : (requestedSeed != null ? requestedSeed + i : undefined);
 
     // LTX consumes a prepared tail clip; new-output-only adapters consume an
     // interval of the untouched prior chunk and own their video/audio decode.
@@ -272,6 +276,9 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
       prompt: chunkPrompt,
       seed: chunkSeed,
       jobId: innerJobId,
+      ...(executionQueueJobId ? { executionParent: {
+        jobId: executionQueueJobId, segmentIndex: i, segmentCount: totalChunks,
+      } } : {}),
       // window hop: condition on the tail clip cut from the prior chunk, so
       // the model reads motion out of it rather than a single static pose.
       // frame hop: condition on the prior chunk's extracted last frame.

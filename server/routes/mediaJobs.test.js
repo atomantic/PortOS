@@ -194,6 +194,34 @@ describe('mediaJobs routes', () => {
     expect(stubs.removeArchivedJob).toHaveBeenCalledWith('j-img');
   });
 
+  it('POST /:id/retry preserves prior chain receipts and seeds while respecting explicit setting overrides', async () => {
+    const segment = { version: 1, preparedAt: '2026-10-26T00:00:00.000Z', seed: 7,
+      childJobId: 'example-child', segmentIndex: 0, segmentCount: 2,
+      parameters: { modelId: 'example-h3', width: 320, height: 192, numFrames: 25, fps: 24, steps: 9,
+        sourceVideoPath: '/private/source.mp4' },
+      diagnostics: { termination: { exitCode: null, signal: 'SIGTERM', reason: 'canceled', observedAt: '2026-10-26T00:01:00.000Z' } },
+    };
+    const original = { id: 'example-parent', kind: 'video', status: 'canceled', owner: null,
+      params: { modelId: 'example-h3', chunks: 2, seed: 40, segmentSeeds: [7, null], segmentSeedBase: 40 },
+      videoExecutions: [segment],
+    };
+    jobStore.set(original.id, original);
+    const response = await request(makeApp()).post('/api/media-jobs/example-parent/retry').send({ params: { steps: 12, seed: 42 } });
+    expect(response.status).toBe(200);
+    const params = stubs.enqueueJob.mock.calls[0][0].params;
+    expect(params).toMatchObject({ steps: 12, seed: 42, segmentSeeds: [7, null], segmentSeedBase: 40,
+      segmentReplayReceipt: { parentJobId: original.id, segments: [{ seed: 7, parameters: { steps: 9 }, diagnostics: { termination: { reason: 'canceled' } } }] } });
+    expect(JSON.stringify(params.segmentReplayReceipt)).not.toContain('/private');
+    expect(stubs.removeArchivedJob).not.toHaveBeenCalled();
+    expect(jobStore.get(original.id)).toMatchObject({ status: 'canceled', videoExecutions: [segment] });
+    original.videoExecutions = [{ ...segment, segmentIndex: 9 }];
+    const invalid = await request(makeApp()).post('/api/media-jobs/example-parent/retry').send({});
+    expect(invalid.status).toBe(409);
+    expect(invalid.body.code).toBe('VIDEO_SEGMENT_RECEIPT_INVALID');
+    expect(stubs.enqueueJob).toHaveBeenCalledTimes(1);
+    expect(stubs.removeArchivedJob).not.toHaveBeenCalled();
+  });
+
   it('POST /:id/retry merges body.params overrides onto the original params', async () => {
     jobStore.set('j-edit', {
       id: 'j-edit', kind: 'image', owner: null, status: 'failed',
