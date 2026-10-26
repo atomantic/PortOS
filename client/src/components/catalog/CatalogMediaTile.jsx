@@ -53,7 +53,7 @@ export default function CatalogMediaTile({
       {isImage && (isPortrait || (!m.readOnly && onSetPortrait)) && (
         <div className="p-2 border-t border-port-border">
           {isPortrait ? <span className="inline-flex items-center gap-1 text-xs text-port-warning"><Star size={12} aria-hidden="true" /> Canonical image</span>
-            : <button type="button" onClick={() => onSetPortrait(m.mediaKey)} className="min-h-11 text-xs text-port-accent inline-flex items-center gap-1">
+            : <button type="button" onClick={() => onSetPortrait(m.mediaKey)} className="min-h-11 rounded border border-port-border px-2 py-1 text-xs text-port-accent inline-flex items-center gap-1 hover:bg-port-accent/10">
               <Star size={12} aria-hidden="true" /> Set as canonical image
             </button>}
         </div>
