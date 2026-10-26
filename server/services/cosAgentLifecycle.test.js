@@ -716,6 +716,57 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(persisted.metadata.completedCheckouts).toEqual([evidence]);
   });
 
+  for (const inline of [false, true]) seedBodies.it(`recovers an unknown terminal capture through verified merge proof, inline=${inline}`, async () => {
+    const scratch = await mkdtemp(join(tmpdir(), 'portos-reviewed-capture-'));
+    try {
+      const repo = join(scratch, 'repo'), checkout = join(scratch, 'checkout');
+      await materializeGitRepo(repo);
+      await execGit(['worktree', 'add', '-b', 'feature/reviewed', checkout, 'main'], repo);
+      const actual = await vi.importActual('./completedCheckoutEvidence.js');
+      captureCheckoutSeeds.mockImplementationOnce(actual.captureCheckoutSeeds);
+      captureCompletedCheckouts.mockImplementationOnce(actual.captureCompletedCheckouts);
+      const agentId = 'reviewed-unknown', prUrl = 'https://github.com/example/repo/pull/7';
+      await registerAgent(agentId, 'reviewed-task', { isWorktree: true, sourceWorkspace: repo,
+        workspacePath: checkout, worktreeBranch: 'feature/reviewed',
+        ...(inline ? { prOpenedBy: 'agent-inline', configOpenPR: true,
+          prDeliveryTarget: { branch: 'feature/reviewed', workspacePath: checkout } }
+          : { reviewLoopMergeTarget: { url: prUrl, branch: 'feature/reviewed' } }) });
+      const merged = vi.spyOn(await import('./completedCheckoutEvidence.js'), 'readMergedClaimEvidence').mockResolvedValue(null);
+      const head = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
+      const unavailable = vi.spyOn(await import('./worktreeManager.js'), 'listWorktrees')
+        .mockRejectedValueOnce(new Error('completion inventory unavailable'))
+        .mockRejectedValueOnce(new Error('preterminal fallback unavailable'));
+      const completed = await completeAgent(agentId, { success: true });
+      unavailable.mockRestore();
+      expect(completed.metadata.checkoutCapture).toMatchObject({ status: 'pending', unknown: true, targets: [] });
+      const originalResult = structuredClone(completed.result);
+      delete mockCosState.state.agents[agentId];
+      expect(await retryCompletionCheckoutCapture(agentId)).toBe(false); // No guessed historical head.
+      const retirement = { repoPath: repo, branch: 'feature/reviewed', path: checkout, head, prUrl, verifiedMergedHead: head };
+      expect(await retryCompletionCheckoutCapture(agentId, { retirement: { ...retirement, prUrl: prUrl + '0' } })).toBe(false);
+      expect(await retryCompletionCheckoutCapture(agentId, { retirement: { ...retirement, verifiedMergedHead: 'a'.repeat(40) } })).toBe(false);
+      mockCosState.state.agents['later-owner'] = { id: 'later-owner', status: 'completed', startedAt: new Date().toISOString(),
+        metadata: { sourceWorkspace: repo, workspacePath: checkout, worktreeBranch: retirement.branch } };
+      expect(await retryCompletionCheckoutCapture(agentId, { retirement })).toBe(false);
+      delete mockCosState.state.agents['later-owner'];
+      if (inline) {
+        merged.mockResolvedValue({ prUrl, mergedAt: new Date().toISOString() });
+        mockCosState.state.agents['later-owner'] = { id: 'later-owner', status: 'running', startedAt: new Date().toISOString(),
+          metadata: { sourceWorkspace: repo, workspacePath: checkout, worktreeBranch: retirement.branch } };
+        expect(await retryCompletionCheckoutCapture(agentId)).toBe(false);
+        delete mockCosState.state.agents['later-owner'];
+      }
+      expect(await retryCompletionCheckoutCapture(agentId, inline ? {} : { retirement })).toBe(true);
+      const saved = await getAgent(agentId);
+      expect(saved.result).toEqual(originalResult);
+      expect(saved.completedAt).toBe(completed.completedAt);
+      expect(saved.metadata.completedCheckouts).toEqual([expect.objectContaining({ version: 2, head })]);
+      expect(completedCheckoutReceiptValid(saved, saved.metadata.completedCheckouts[0])).toBe(true);
+      expect(await retryCompletionCheckoutCapture(agentId, { retirement })).toBe(false);
+      merged.mockRestore();
+    } finally { await rm(scratch, { recursive: true, force: true }); }
+  });
+
   for (const scenario of ['unchanged', 'physical-generation', 'new-owner', 'later-head', 'orphan-empty', 'orphan-physical-generation', 'orphan-new-owner', 'orphan-later-head']) {
     seedBodies.it(`recovers only the original completion physical seed after restart, scenario=${scenario}`, async () => {
       const orphan = scenario.startsWith('orphan-');

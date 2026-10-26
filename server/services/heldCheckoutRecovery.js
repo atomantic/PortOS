@@ -1004,6 +1004,8 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
   const app = await getAppById(appId);
   if (!app?.repoPath) return { ok: false, reason: 'app-not-found' };
   const outcome = await getBranchReconcileOutcome(appId);
+  const retired = bindRemovedCheckoutRelease(outcome, release);
+  if (retired) return prepareRemovedCheckoutBranch({ appId, release: retired, prUrl, kind }, opts);
   release = bindInventoriedRelease(outcome, release);
   if (!release) return { ok: false, reason: 'release-not-in-inventory' };
   const reviewOptions = { ...opts, forgeAccount: app.forgeAccount ?? null };
@@ -1039,10 +1041,13 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
       for (const agent of Array.isArray(policies) ? policies : []) {
         const meta = agent.metadata || {};
         const knownPr = meta.branchCompletionPolicy?.prUrl || meta.reviewLoopMergeTarget?.url;
-        if (agent.status !== 'completed' || agent.result?.orphaned !== true || agent.result.validationPassed === false
-          || knownPr !== prUrl || meta.checkoutCapture?.status !== 'captured' || meta.completedCheckouts?.length !== 0
+        const seededOrphan = agent.result?.orphaned === true && meta.checkoutCapture?.status === 'captured';
+        const pendingExecution = agent.result?.executionSuccess === true && meta.checkoutCapture?.status === 'pending';
+        if (agent.status !== 'completed' || (!seededOrphan && !pendingExecution) || agent.result.validationPassed === false
+          || knownPr !== prUrl || meta.completedCheckouts?.length !== 0
           || !meta.checkoutSeeds?.some(seed => seed.repoPath === repoPath && seed.branch === release.branch && seed.path === checkoutPath)) continue;
-        recovered = await retry(agent.id || agent.agentId, { retirement: { ...release, repoPath, path: checkoutPath } }).catch(() => false) || recovered;
+        recovered = await retry(agent.id || agent.agentId, { retirement: { ...release, repoPath, path: checkoutPath,
+          ...(pendingExecution && { prUrl, verifiedMergedHead: forge.prHead }) } }).catch(() => false) || recovered;
       }
       if (recovered) prepared = await review();
     }
@@ -1986,6 +1991,8 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   const app = await getAppById(appId);
   if (!app?.repoPath) return { ok: false, reason: 'app-not-found' };
   const outcome = await taskSchedule.getBranchReconcileOutcome(appId);
+  const retired = bindRemovedCheckoutRelease(outcome, release);
+  if (retired) return finalizeRemovedCheckoutBranch({ appId, release: retired, review }, opts);
   release = bindInventoriedRelease(outcome, release);
   if (!release) return { ok: false, reason: 'release-not-in-inventory' };
   const inventoryCurrent = async () => (await taskSchedule.getBranchReconcileOutcome(appId))?.remaining?.some(entry => sameRelease(entry, release)) === true;
@@ -2011,4 +2018,116 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
     });
   }
   return result;
+}
+
+/** Canonical physical removal, not missing inventory, selects ref finalization.
+ * Ambiguous generations stay unresolved; callers cannot invent a receipt. */
+function removedCheckoutReceipts(outcome) {
+  const rows = [...(outcome?.retired || []), ...Object.values(outcome?.retirementReceiptEvidence || {})];
+  const unique = new Map();
+  for (const row of rows) {
+    const key = JSON.stringify([row.path, row.branch, row.head, row.checkoutIdentity, row.retiredAt]);
+    if (!unique.has(key) || (row.branchDeleted === true && row.branchFinalizedAt)) unique.set(key, row);
+  }
+  return [...unique.values()];
+}
+
+function bindRemovedCheckoutRelease(outcome, release) {
+  const matches = removedCheckoutReceipts(outcome).filter(row => row.path === release.path && row.branch === release.branch
+    && row.head === release.head && release.branch && row.checkoutIdentity && Number.isFinite(Date.parse(row.retiredAt))
+    && (row.branchDeleted === false || (row.branchDeleted === true && row.branchFinalizedAt))
+    && (!release.checkoutIdentity || row.checkoutIdentity === release.checkoutIdentity)
+    && (!release.retiredAt || row.retiredAt === release.retiredAt));
+  const unique = new Map(matches.map(row => [JSON.stringify([row.checkoutIdentity, row.retiredAt]), row]));
+  if (unique.size !== 1) return null;
+  const receipt = [...unique.values()][0];
+  return { ...release, checkoutIdentity: receipt.checkoutIdentity, retiredAt: receipt.retiredAt };
+}
+
+async function reviewRemovedCheckoutBranch({ appId, release, prUrl, kind }, opts = {}) {
+  if (kind) return { ok: false, reason: 'retirement-exact-delivery-required' };
+  const [{ getAppById }, { getBranchReconcileOutcome }, { buildCheckoutRetirementReview, readRetirementForgeEvidence }] = await Promise.all([
+    import('./apps.js'), import('./taskSchedule.js'), import('./heldCheckoutReview.js'),
+  ]);
+  const app = await getAppById(appId);
+  if (!app?.repoPath) return { ok: false, reason: 'app-not-found' };
+  const outcome = await getBranchReconcileOutcome(appId);
+  if (!bindRemovedCheckoutRelease(outcome, release)) return { ok: false, reason: 'retirement-removal-receipt-changed' };
+  const receipt = removedCheckoutReceipts(outcome).find(row => row.path === release.path && row.branch === release.branch
+    && row.head === release.head && row.checkoutIdentity === release.checkoutIdentity && row.retiredAt === release.retiredAt);
+  if (PROTECTED_BRANCHES.includes(release.branch)) return { ok: false, reason: 'protected-branch' };
+  const absent = await lstat(release.path).then(() => false, error => error.code === 'ENOENT');
+  if (!absent) return { ok: false, reason: 'checkout-path-recreated' };
+  const holders = await listWorktrees(app.repoPath).catch(() => null);
+  if (!holders || holders.some(row => shortBranch(row.branch) === release.branch)) return { ok: false, reason: 'branch-has-new-holder' };
+  const ref = `refs/heads/${release.branch}`;
+  const missing = await execGit(['show-ref', '--verify', '--quiet', ref], app.repoPath,
+    { ignoreExitCode: true }).then(row => row.exitCode === 1, () => false);
+  const tip = missing ? null : await execGit(['rev-parse', '--verify', ref], app.repoPath).then(row => row.stdout.trim(), () => null);
+  if ((!missing && tip !== release.head) || (receipt.branchDeleted === true && !missing)) {
+    return { ok: false, reason: 'branch-ref-changed-or-recreated' };
+  }
+  const owner = await ownerReason({ repoPath: app.repoPath, tree: { path: release.path }, branch: release.branch,
+    readAgents: opts.readAgents || readClaimOwnershipAgents, reviewed: true });
+  if (owner) return { ok: false, reason: owner };
+  const options = { ...opts, forgeAccount: app.forgeAccount ?? null };
+  const forge = await (opts.readForge || readRetirementForgeEvidence)(app.repoPath, release.branch, prUrl,
+    reviewForgeOptions(release, null, options)).catch(() => null);
+  if (forge?.prUrl !== prUrl || forge.prHead !== release.head || forge.scopeProof !== 'exact-delivered-head') {
+    return { ok: false, reason: 'retirement-exact-delivery-unverified' };
+  }
+  const identity = await integratedPolicyReviewIdentity(app.repoPath, release, prUrl, forge);
+  if (!identity) return { ok: false, reason: 'retirement-local-objects-missing' };
+  const policy = await retirementPolicy(app.repoPath, release.branch, options, identity);
+  if (policy.reason) return { ok: false, reason: policy.reason };
+  // A retry after ref CAS/persistence failure reviews the same physical removal.
+  // Actual ref absence changes the action, never the original receipt or grant.
+  const { branchFinalizedAt: _finalizedAt, branchFinalization: _finalization,
+    settledObservations: _settledObservations, ...removalReceipt } = receipt;
+  const review = await buildCheckoutRetirementReview({ repoPath: app.repoPath,
+    release: { ...release, appId, receipt: { ...removalReceipt, branchDeleted: false } }, prUrl,
+    contentFingerprint: null, administrationFingerprint: null, policy }, { readForge: async () => forge })
+    .catch(error => ({ reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-review-unavailable' }));
+  return review.reason ? { ok: false, reason: review.reason } : { ok: true, review, missing };
+}
+
+async function prepareRemovedCheckoutBranch(input, opts) {
+  const prepared = await withClaimOwnershipLock(() => reviewRemovedCheckoutBranch(input, opts));
+  return prepared.ok ? { ok: true, review: prepared.review } : prepared;
+}
+
+async function finalizeRemovedCheckoutBranch({ appId, release, review }, opts = {}) {
+  if (!review || review.kind || review.acceptSuperseded) return { ok: false, reason: 'retirement-exact-delivery-required' };
+  return withClaimOwnershipLock(async () => {
+    const input = { appId, release, prUrl: review.prUrl };
+    const current = await reviewRemovedCheckoutBranch(input, opts);
+    if (!current.ok) return current;
+    if (current.review.digest !== review.digest) return { ok: false, reason: 'retirement-review-changed' };
+    const recheck = async () => {
+      await opts.beforeMutation?.();
+      const fresh = await reviewRemovedCheckoutBranch(input, opts);
+      if (!fresh.ok || fresh.review.digest !== review.digest) throw new Error(fresh.reason || 'retirement-review-changed');
+      return fresh;
+    };
+    const record = async kind => {
+      const { recordRetiredCheckoutBranchFinalization } = await import('./taskSchedule.js');
+      await recordRetiredCheckoutBranchFinalization(appId, release, kind);
+    };
+    let branchDeleted = false;
+    const result = await (async () => {
+      if (current.missing) {
+        const fresh = await recheck();
+        if (!fresh.missing) return false;
+        branchDeleted = true;
+        await record('observed-absent');
+        return true;
+      }
+      return deleteCompletedLocalBranch(current.review.repoPath, release.branch, release.head, {
+        beforeMutation: recheck,
+        onRetired: async () => { branchDeleted = true; await record('deleted'); },
+      });
+    })().catch(error => ({ reason: error.message }));
+    return result === true ? { ok: true, branchDeleted: true } : { ok: false, ...(branchDeleted && { branchDeleted: true }),
+      reason: result?.reason || 'branch-ref-changed-or-delete-failed' };
+  });
 }

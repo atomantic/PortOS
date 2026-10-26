@@ -2451,7 +2451,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['original', 'repo-alias', 'recreated-pointer', 'active-owner', 'different-pr-head', 'failed-validation', 'missing-terminal-head', 'late-writer'])('recovers a merged orphan only from its exact early generation: %s', async scenario => {
+  it.each(['original', 'repo-alias', 'pending-execution', 'recreated-pointer', 'active-owner', 'different-pr-head', 'failed-validation', 'missing-terminal-head', 'late-writer'])('recovers a merged orphan only from its exact early generation: %s', async scenario => {
     const c = await reviewedCheckout(`orphan-${scenario}`);
     await execGit(['worktree', 'unlock', c.path], repo);
     Object.assign(c.release, { locked: false, lockReason: null });
@@ -2470,6 +2470,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     agent.status = 'completed';
     agent.completedAt = new Date().toISOString();
     agent.metadata.completedCheckouts = [];
+    if (scenario === 'pending-execution') {
+      agent.result = { ...agent.result, orphaned: false, executionSuccess: true };
+      agent.metadata.checkoutCapture = { status: 'pending', targets: [], unknown: true };
+    }
     if (scenario === 'missing-terminal-head') agent.metadata.checkoutCapture = { status: 'captured' };
     if (scenario === 'late-writer') {
       await writeFile(join(c.path, 'later-user.txt'), 'later independent work\n');
@@ -2485,7 +2489,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     c.opts.recoverCheckoutCapture = async (id, { retirement }) => {
       expect(id).toBe(agent.id);
       expect(retirement).toMatchObject({ ...c.release, repoPath: realpathSync(repo), path: realpathSync(c.path) });
-      const captured = await evidence.captureSeededCompletionCheckouts(agent);
+      if (scenario === 'pending-execution') expect(retirement).toMatchObject({ prUrl: c.forge.prUrl, verifiedMergedHead: c.release.head });
+      const captured = await evidence.captureSeededCompletionCheckouts(agent, { retirement });
       if (!captured) return false;
       agent.metadata.completedCheckouts = captured;
       recoveries++;
@@ -2500,7 +2505,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     if (scenario === 'different-pr-head') c.forge.prHead = 'b'.repeat(40);
     const prepared = await c.prepare();
     expect(agent.result).toEqual(originalResult);
-    if (!['original', 'repo-alias'].includes(scenario)) {
+    if (!['original', 'repo-alias', 'pending-execution'].includes(scenario)) {
       expect(prepared.ok).toBe(false);
       expect(await registered(c.path)).toBe(true);
       expect(await archives()).toEqual([]);
@@ -2508,7 +2513,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       if (scenario === 'late-writer') expect(await readFile(join(c.path, 'later-user.txt'), 'utf8')).toBe('later independent work\n');
       return;
     }
-    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, orphanedExecution: true }] } } });
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false,
+      ...(scenario === 'pending-execution' ? { continuedDelivery: { capturedHead: c.release.head } } : { orphanedExecution: true }) }] } } });
     const receipt = agent.metadata.completedCheckouts[0];
     expect(receipt).toMatchObject({ version: 2, head: c.release.head });
     expect(evidence.completedCheckoutReceiptValid(agent, receipt)).toBe(true);
@@ -3386,6 +3392,170 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
     expect(await registered(c.release.path)).toBe(true);
     expect(await lockText(c.release.path)).toBe(c.release.lockReason);
+  });
+  async function removedCheckoutWithSurvivingRef(name) {
+    const c = await reviewedCheckout(name, { normalMerge: true });
+    c.forge.scopeProof = 'exact-delivered-head';
+    const checkoutIdentity = await readRetirementCheckoutIdentity(c.path);
+    await execGit(['worktree', 'unlock', c.path], repo);
+    await execGit(['worktree', 'remove', '--force', c.path], repo);
+    await recordHeldCheckoutRetirement('app-1', { ...c.release, checkoutIdentity, branchDeleted: false });
+    const receipt = (await getBranchReconcileOutcome('app-1')).retired[0];
+    const release = { path: receipt.path, head: receipt.head, branch: receipt.branch,
+      checkoutIdentity, locked: false, lockReason: null };
+    const input = { appId: 'app-1', release, prUrl: c.forge.prUrl };
+    const prepared = await prepareInventoriedCheckoutRetirement(input, c.opts);
+    expect(prepared).toMatchObject({ ok: true });
+    const request = { appId: 'app-1', release, review: { digest: prepared.review.digest, prUrl: c.forge.prUrl, acceptSuperseded: false } };
+    return { ...c, release, input, request, receipt };
+  }
+
+  it('finalizes only the surviving ref and preserves the canonical physical-removal receipt on retry', async () => {
+    const c = await removedCheckoutWithSurvivingRef('ref-only-finalization');
+    await recordHeldCheckoutRetirement('app-1', c.receipt); // Replayed physical-removal producer.
+    expect((await getBranchReconcileOutcome('app-1')).retired).toEqual([c.receipt]);
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toEqual({ ok: true, branchDeleted: true });
+    expect(await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${c.release.branch}`], repo, { ignoreExitCode: true }))
+      .toMatchObject({ exitCode: 1 });
+    const outcome = await getBranchReconcileOutcome('app-1');
+    expect(outcome.retired).toHaveLength(1);
+    expect(outcome.retired[0]).toMatchObject({ ...c.receipt, branchDeleted: true, branchFinalizedAt: expect.any(String) });
+    expect(Object.values(outcome.retirementReceiptEvidence)).toContainEqual(outcome.retired[0]);
+    await recordHeldCheckoutRetirement('app-1', c.receipt); // A late partial phase cannot regress completion.
+    expect((await getBranchReconcileOutcome('app-1')).retired).toEqual(outcome.retired);
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toEqual({ ok: true, branchDeleted: true });
+    expect((await getBranchReconcileOutcome('app-1')).retired[0]).toEqual(outcome.retired[0]);
+    await execGit(['branch', c.release.branch, c.release.head], repo);
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toMatchObject({ ok: false, reason: 'branch-ref-changed-or-recreated' });
+  });
+
+  it.each(['tip', 'holder', 'receipt', 'forge', 'path', 'policy', 'owner', 'repository'])(
+    'refuses ref-only finalization when reviewed %s changes before mutation', async change => {
+      const c = await removedCheckoutWithSurvivingRef(`ref-only-${change}`);
+      let ownerStarted = false;
+      const result = await retireInventoriedCheckout(c.request, { ...c.opts, beforeMutation: async () => {
+        if (change === 'repository') injected.app.repoPath = external;
+        if (change === 'tip') await execGit(['update-ref', `refs/heads/${c.release.branch}`, c.forge.changeBase], repo);
+        if (change === 'holder') await execGit(['worktree', 'add', join(external, 'new-holder'), c.release.branch], repo);
+        if (change === 'receipt') (await getBranchReconcileOutcome('app-1')).retired[0].checkoutIdentity = 'f'.repeat(64);
+        if (change === 'forge') c.forge.prHead = c.forge.changeBase;
+        if (change === 'path') await mkdir(c.release.path);
+        if (change === 'policy') injected.policies[0].status = 'running';
+        if (change === 'owner') ownerStarted = true;
+      }, ...(change === 'owner' && { readAgents: async () => ownerStarted ? [{ id: 'active-owner', status: 'running',
+        metadata: { claimBranches: [c.release.branch], sourceWorkspace: repo } }] : [] }) });
+      expect(result.ok).toBe(false);
+      expect((await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${c.release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(0);
+      expect((await getBranchReconcileOutcome('app-1')).retired[0].branchDeleted).toBe(false);
+    });
+
+  it('requires the exact canonical removal receipt and exact PR delivery for ref-only review', async () => {
+    const c = await removedCheckoutWithSurvivingRef('ref-only-invalid-proof');
+    expect(await prepareInventoriedCheckoutRetirement({ ...c.input, release: { ...c.release, checkoutIdentity: '0'.repeat(64) } }, c.opts))
+      .toMatchObject({ ok: false, reason: 'release-not-in-inventory' });
+    expect(await prepareInventoriedCheckoutRetirement({ ...c.input, prUrl: 'https://github.com/example/repo/pull/999' }, c.opts))
+      .toMatchObject({ ok: false, reason: 'retirement-exact-delivery-unverified' });
+  });
+
+  it('keeps explicit human handoffs and stale ref-only approvals refused', async () => {
+    const c = await removedCheckoutWithSurvivingRef('ref-only-handoff');
+    expect(await retireInventoriedCheckout({ ...c.request, review: { ...c.request.review, digest: '0'.repeat(64) } }, c.opts))
+      .toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
+    expect(await prepareInventoriedCheckoutRetirement(c.input, c.opts))
+      .toMatchObject({ ok: false, reason: 'pr-completion-human-handoff' });
+    expect(await prepareInventoriedCheckoutRetirement({ ...c.input, appId: 'different-app' }, c.opts))
+      .toMatchObject({ ok: false, reason: 'app-not-found' });
+  });
+
+  it('retries ref-only receipt persistence after CAS without deleting twice or changing retiredAt', async () => {
+    const c = await removedCheckoutWithSurvivingRef('ref-only-persistence-failure');
+    let deletions = 0;
+    retirementFaults.onBranchDelete = async () => { deletions++; };
+    retirementFaults.failScheduleWrite = retirementFaults.scheduleWrites + 1;
+    expect(await retireInventoriedCheckout(c.request, c.opts))
+      .toEqual({ ok: false, branchDeleted: true, reason: 'synthetic receipt persistence failure' });
+    expect((await getBranchReconcileOutcome('app-1')).retired[0]).toEqual(c.receipt);
+    expect((await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${c.release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
+    retirementFaults.failScheduleWrite = null;
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toEqual({ ok: true, branchDeleted: true });
+    expect(deletions).toBe(1);
+    const retired = (await getBranchReconcileOutcome('app-1')).retired;
+    expect(retired).toHaveLength(1);
+    expect(retired[0]).toMatchObject({ ...c.receipt, branchDeleted: true, branchFinalizedAt: expect.any(String),
+      branchFinalization: { kind: 'observed-absent' } });
+  });
+
+  it('keeps post-CAS receipt recovery held by a new owner or recreated ref', async () => {
+    const c = await removedCheckoutWithSurvivingRef('ref-only-retry-holder');
+    retirementFaults.failScheduleWrite = retirementFaults.scheduleWrites + 1;
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toMatchObject({ ok: false, branchDeleted: true });
+    retirementFaults.failScheduleWrite = null;
+    const owner = async () => [{ id: 'new-owner', status: 'running', metadata: {
+      claimBranches: [c.release.branch], sourceWorkspace: repo,
+    } }];
+    expect(await retireInventoriedCheckout(c.request, { ...c.opts, readAgents: owner }))
+      .toMatchObject({ ok: false, reason: 'claim-owner-active' });
+    await execGit(['branch', c.release.branch, c.forge.changeBase], repo);
+    expect(await retireInventoriedCheckout(c.request, c.opts))
+      .toMatchObject({ ok: false, reason: 'branch-ref-changed-or-recreated' });
+    expect((await getBranchReconcileOutcome('app-1')).retired[0]).toEqual(c.receipt);
+  });
+
+  it('finalizes ref-only removal evidence after display eviction without settling the partial receipt early', async () => {
+    const c = await removedCheckoutWithSurvivingRef('ref-only-evicted');
+    const before = await getBranchReconcileOutcome('app-1');
+    expect(Object.values(before.retirementReceiptEvidence)).toContainEqual(c.receipt);
+    const { hasRetirementReceipt } = await import('../lib/reconcileRetirementEvidence.js');
+    expect(hasRetirementReceipt(before, c.release)).toBe(false);
+    for (let index = 0; index < 21; index++) await recordHeldCheckoutRetirement('app-1', {
+      path: `/synthetic/eviction-${index}`, branch: `feature/eviction-${index}`, head: c.release.head,
+      checkoutIdentity: `${index}`.padStart(64, '0'), branchDeleted: true,
+    });
+    const evicted = await getBranchReconcileOutcome('app-1');
+    expect(evicted.retired.some(row => row.branch === c.release.branch)).toBe(false);
+    expect(Object.values(evicted.retirementReceiptEvidence)).toContainEqual(c.receipt);
+    // Reload JSON as a restart would: durable evidence must be sufficient alone.
+    injected.schedule = JSON.parse(JSON.stringify(injected.schedule));
+    const prepared = await prepareInventoriedCheckoutRetirement(c.input, c.opts);
+    expect(prepared.ok).toBe(true);
+    expect(await retireInventoriedCheckout({ ...c.request, review: { ...c.request.review, digest: prepared.review.digest } }, c.opts))
+      .toEqual({ ok: true, branchDeleted: true });
+    const final = await getBranchReconcileOutcome('app-1');
+    const receipt = Object.values(final.retirementReceiptEvidence).find(row => row.branch === c.release.branch);
+    expect(receipt).toMatchObject({ ...c.receipt, branchDeleted: true, branchFinalizedAt: expect.any(String),
+      branchFinalization: { kind: 'deleted' } });
+    expect(hasRetirementReceipt(final, c.release)).toBe(true);
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toEqual({ ok: true, branchDeleted: true });
+  });
+
+  it('clears and audits only current matching branch-only ref-finalization inventory rows', async () => {
+    const c = await removedCheckoutWithSurvivingRef('ref-only-branch-inventory');
+    const removed = [{ branch: c.release.branch, reason: 'cleanup-disabled' },
+      { branch: c.release.branch, path: c.release.path, head: c.release.head, reason: 'cleanup-disabled' }];
+    const kept = [{ branch: c.release.branch, head: c.forge.changeBase, reason: 'cleanup-disabled' },
+      { branch: c.release.branch, checkoutIdentity: 'f'.repeat(64), reason: 'cleanup-disabled' },
+      { branch: c.release.branch, path: '/synthetic/different-checkout', reason: 'cleanup-disabled' },
+      { branch: 'feature/other', reason: 'cleanup-disabled' }];
+    (await getBranchReconcileOutcome('app-1')).remaining = [...removed, ...kept];
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toEqual({ ok: true, branchDeleted: true });
+    const outcome = await getBranchReconcileOutcome('app-1');
+    expect(outcome.remaining).toEqual(kept);
+    const receipt = outcome.retired.find(row => row.branch === c.release.branch);
+    expect(receipt.retiredAt).toBe(c.receipt.retiredAt);
+    expect(receipt.settledObservations).toEqual(removed.map(observation => ({ observation, settledAt: receipt.branchFinalizedAt })));
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toEqual({ ok: true, branchDeleted: true });
+    // A delayed ordinary inventory row requires fresh absence and its own audit.
+    const delayed = { branch: c.release.branch, reason: 'cleanup-disabled', observedAt: new Date().toISOString() };
+    (await getBranchReconcileOutcome('app-1')).remaining.push(delayed);
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toEqual({ ok: true, branchDeleted: true });
+    const replayed = await getBranchReconcileOutcome('app-1');
+    expect(replayed.remaining).toEqual(kept);
+    expect(replayed.retired[0].branchFinalizedAt).toBe(receipt.branchFinalizedAt);
+    expect(replayed.retired[0].branchFinalization).toEqual({ kind: 'deleted' });
+    const audit = replayed.retired[0].settledObservations.find(row => JSON.stringify(row.observation) === JSON.stringify(delayed));
+    expect(audit).toBeDefined();
+    expect(Date.parse(audit.settledAt)).toBeGreaterThanOrEqual(Date.parse(delayed.observedAt));
   });
 
 });

@@ -83,6 +83,10 @@ const EXCLUSIVE_TESTS = [
   '../scripts/ci-test-plan.test.js',
   // Three real nested runners need quiet startup, with owned cancellation.
   '../scripts/workspaceCaches.test.js',
+  // Real nested launchers and Git subprocess workflows exceeded their existing
+  // Windows deadlines in the parallel group; retain deadlines on a quiet worker.
+  '../scripts/ciTestPolicy.test.js',
+  'services/git.sharedRecovery.test.js',
   '../scripts/persistentMindProcessAuditCleanup.test.js',
   '../scripts/writersRoomPromotionCleanup.test.js',
 ];

@@ -84,6 +84,8 @@ function claimRecoveryFence(directory, io, stat) {
     try {
       // The descriptor identifies our creation even if its parent or pathname
       // was replaced before this read; a path stat could identify another owner.
+      io.writeFileSync(transitionFd, bytes);
+      io.fsyncSync(transitionFd);
       transitionStat = physical(io.fstatSync(transitionFd));
       if (stat(legacyTransition)) unfinished();
       if (physical(stat(lock)) !== physical(observed) || readOwner(lock)?.bytes.equals(holder.bytes) !== true || !dead(holder.pid))
@@ -93,7 +95,11 @@ function claimRecoveryFence(directory, io, stat) {
     } finally {
       try {
         // Release only our exact marker, including after successful retirement.
-        if (transitionStat && physical(stat(transition)) === transitionStat) io.unlinkSync(transition);
+        const current = stat(transition);
+        // Windows numeric file identities can alias. The unique owner bytes
+        // also bind this marker, so a replacement is never our cleanup target.
+        if (transitionStat && current?.isFile() && physical(current) === transitionStat
+          && current.size === bytes.length && io.readFileSync(transition).equals(bytes)) io.unlinkSync(transition);
       } finally { io.closeSync(transitionFd); }
     }
   }

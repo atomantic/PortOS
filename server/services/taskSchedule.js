@@ -1078,9 +1078,10 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     for (const receipt of outcome.retired || []) {
       const recordedArchive = receipt.archiveDir ?? null;
       const archiveKept = recordedArchive === null || (typeof recordedArchive === 'string' && recordedArchive.length > 0);
-      if (retirementReceiptSettles(receipt) && receipt.retiredAt && archiveKept) {
+      if ((retirementReceiptSettles(receipt) || (receipt.branchDeleted === false && receipt.branch && receipt.checkoutIdentity))
+        && receipt.retiredAt && archiveKept) {
         const normalized = { ...receipt, archiveDir: recordedArchive };
-        receipts[identity(normalized)] ??= receipt.retiredAt;
+        if (retirementReceiptSettles(receipt)) receipts[identity(normalized)] ??= receipt.retiredAt;
         evidence[identity(normalized)] ??= normalized;
       }
     }
@@ -1088,6 +1089,18 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     const archiveKept = recordedArchive === null || (typeof recordedArchive === 'string' && recordedArchive.length > 0);
     const receiptId = (branchDeleted === true || checkoutOnlyReceipt) && archiveKept
       ? identity({ path, branch, head, archiveDir: recordedArchive, branchDeleted, checkoutIdentity, checkoutOnly: checkoutOnlyReceipt }) : null;
+    if (branchDeleted === false && branch && checkoutIdentity && archiveKept
+      && [...(outcome.retired || []), ...Object.values(evidence)].some(row => sameRetirementCheckout(row, { path, branch, head })
+        && row.checkoutIdentity === checkoutIdentity && typeof row.branchDeleted === 'boolean'
+        && Number.isFinite(Date.parse(row.retiredAt)))) {
+      // Replayed physical removal cannot mint another timestamp or regress a
+      // receipt whose surviving ref has already been finalized.
+      const repaired = await repairReceiptObservations(appId, { ...outcome,
+        retirementReceiptIdentities: receipts, retirementReceiptEvidence: evidence });
+      const changed = JSON.stringify(repaired) !== JSON.stringify(outcome);
+      if (changed) record.branchReconcileOutcome = repaired;
+      return { result: record.branchReconcileOutcome, changed };
+    }
     if (receiptId && receipts[receiptId]) {
       // Keep the original timestamp. Fill a missing checkout identity so a
       // later inventory row can match the receipt that already settled this tuple.
@@ -1110,6 +1123,10 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
       ...(checkoutOnlyReceipt && { checkoutOnly: true }), ...(checkoutIdentity && { checkoutIdentity }) };
     const retired = [receipt, ...(outcome.retired || [])].slice(0, RETIRED_CHECKOUTS_KEPT);
     if (receiptId) evidence[receiptId] = receipt;
+    else if (branchDeleted === false && branch && checkoutIdentity && archiveKept) {
+      // Physical removal is durable evidence, but does not settle its surviving ref.
+      evidence[identity(receipt)] = receipt;
+    }
     const retirementObligations = unresolvedRetirements({ ...outcome, retired, retirementReceiptEvidence: evidence });
     record.branchReconcileOutcome = await repairReceiptObservations(appId, {
       ...outcome, retirementObligations,
@@ -1123,6 +1140,52 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
       retired,
     });
     return { result: record.branchReconcileOutcome, changed: true };
+  });
+}
+
+/** Finalize a canonical removal receipt after ref CAS or verified ref absence.
+ * Keep the physical retirement time; finalization has its own current time. */
+export async function recordRetiredCheckoutBranchFinalization(appId, release, kind) {
+  if (!['deleted', 'observed-absent'].includes(kind)) throw new Error('retirement-finalization-kind-invalid');
+  return updateSchedule(async schedule => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    const outcome = record.branchReconcileOutcome || {};
+    const matches = row => row.path === release.path && row.branch === release.branch && row.head === release.head
+      && row.checkoutIdentity === release.checkoutIdentity && row.retiredAt === release.retiredAt;
+    const rows = [...(outcome.retired || []), ...Object.values(outcome.retirementReceiptEvidence || {})];
+    const prior = rows.find(row => matches(row) && row.branchDeleted === true && row.branchFinalizedAt)
+      || rows.find(row => matches(row) && row.branchDeleted === false);
+    if (!prior) throw new Error('retirement-removal-receipt-changed');
+    const now = new Date().toISOString();
+    const covered = row => row.branch === release.branch && !row.checkoutIdentity && !row.checkoutIncarnation
+      && (row.path == null || row.path === release.path) && (row.head == null || row.head === release.head)
+      && [row.observedAt, row.createdAt].every(time => time == null || (Number.isFinite(Date.parse(time)) && Date.parse(time) <= Date.parse(now)));
+    const observations = (outcome.remaining || []).filter(covered);
+    if (prior.branchDeleted === true && !observations.length) return { result: prior, changed: false };
+    const settledObservations = [...(prior.settledObservations || [])];
+    for (const observation of observations) {
+      if (!settledObservations.some(row => row.settledAt === now && JSON.stringify(row.observation) === JSON.stringify(observation))) {
+        settledObservations.push({ observation, settledAt: now });
+      }
+    }
+    if (settledObservations.length > 1000) throw new Error('retirement-settled-observations-limit-exceeded');
+    const receipt = { ...prior, branchDeleted: true,
+      branchFinalizedAt: prior.branchDeleted === true ? prior.branchFinalizedAt : now,
+      branchFinalization: prior.branchDeleted === true ? prior.branchFinalization : { kind },
+      ...(settledObservations.length && { settledObservations }) };
+    const key = createHash('sha256').update(JSON.stringify([
+      receipt.archiveDir ?? receipt.checkoutIdentity ?? null, receipt.path, receipt.branch, receipt.head, true,
+    ])).digest('hex');
+    const retired = (outcome.retired || []).map(row => matches(row) ? receipt : row);
+    const evidence = Object.fromEntries(Object.entries(outcome.retirementReceiptEvidence || {})
+      .filter(([, row]) => !(matches(row) && row.branchDeleted === false)));
+    evidence[key] = receipt;
+    const updated = { ...outcome, retired, updatedAt: now, remaining: (outcome.remaining || []).filter(row => !covered(row)),
+      retirementReceiptIdentities: { ...outcome.retirementReceiptIdentities, [key]: prior.retiredAt },
+      retirementReceiptEvidence: evidence };
+    updated.retirementObligations = unresolvedRetirements(updated);
+    record.branchReconcileOutcome = await repairReceiptObservations(appId, updated);
+    return { result: receipt, changed: true };
   });
 }
 
