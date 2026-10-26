@@ -14,7 +14,7 @@ import { mkdtemp, rm, writeFile, cp, mkdir, readdir } from 'fs/promises';
 import { rmSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, basename } from 'path';
-import { execGit } from './execGit.js';
+import { assertGitWorkSettled, execGit } from './execGit.js';
 import { assertTempPath } from './tempPathGuard.js';
 
 export const SKIP_HEAVY_INTEGRATION = ['1', 'true', 'yes'].includes(
@@ -79,9 +79,13 @@ async function cleanupTemplates() {
   lifecycle.closing = true;
   try {
     while (lifecycle.operations.size) await Promise.allSettled([...lifecycle.operations]);
+    // Fixture operations may still launch Git while they drain. Fence the
+    // supervisor only after those operations finish, before removing templates.
+    await globalThis.__portosGitSupervisorCleanup?.();
     const failures = [];
     for (const dir of [...dirs]) {
       try {
+        assertGitWorkSettled(dir);
         await rm(dir, { recursive: true, force: true });
         dirs.splice(dirs.indexOf(dir), 1);
         lifecycle.owners.delete(dir);
@@ -103,7 +107,7 @@ function rememberTemplate(scratch) {
   globalThis.__portosGitTemplateExitHooked = true;
   process.on('exit', () => {
     for (const dir of dirs) {
-      try { rmSync(dir, { recursive: true, force: true }); }
+      try { assertGitWorkSettled(dir); rmSync(dir, { recursive: true, force: true }); }
       catch (error) {
         console.error(`❌ Git template exit cleanup failed: ${dir}: ${error.message}`);
         process.exitCode = 1;
@@ -230,6 +234,7 @@ async function materializeGitRepoOwned(dest, { identity } = {}) {
  */
 async function resetGitSandboxOwned({ scratch, repo, initialHead, assertPath = repo }) {
   assertTempPath(assertPath, 'git sandbox reset');
+  assertGitWorkSettled(scratch || repo);
   // A test can delete `repo` itself (simulating a checkout that vanished
   // mid-run) — rebuild it from the template rather than handing every git
   // call below a cwd that no longer exists. The template's own working copy
@@ -283,6 +288,7 @@ async function resetGitSandboxOwned({ scratch, repo, initialHead, assertPath = r
  */
 async function resetGitWorktreeSandboxOwned(repo, initialHead, assertPath = repo) {
   assertTempPath(assertPath, 'git worktree sandbox reset');
+  assertGitWorkSettled(repo);
   // A missing `repo` has no worktrees to list — let resetGitSandbox()'s own
   // rebuild-from-template handle it below instead of handing `worktree list`
   // a cwd that doesn't exist.
@@ -303,6 +309,7 @@ async function resetGitWorktreeSandboxOwned(repo, initialHead, assertPath = repo
     }
     // The first entry is always `repo` itself, never a grown worktree.
     for (const { path, locked } of entries.slice(1)) {
+      assertGitWorkSettled(path);
       if (locked) await execGit(['worktree', 'unlock', path], repo, { ignoreExitCode: true });
       await execGit(['worktree', 'remove', '--force', path], repo, { ignoreExitCode: true });
       await rm(path, { recursive: true, force: true }).catch(() => {});
@@ -315,6 +322,7 @@ async function resetGitWorktreeSandboxOwned(repo, initialHead, assertPath = repo
 export async function destroyGitSandbox(scratch) {
   if (!scratch) return;
   assertTempPath(scratch, 'recursive sandbox delete');
+  assertGitWorkSettled(scratch);
   await rm(scratch, { recursive: true, force: true });
 }
 

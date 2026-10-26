@@ -32,6 +32,17 @@ async function openEnvironment(fixture, { warmup = false, phase = (_name, work) 
     window.greyboxGpuCalls = [];
     window.greyboxDrawCalls = 0;
     window.greyboxCallCounts = {};
+    window.greyboxPngTimings = [];
+    const toDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function (...args) {
+      const start = performance.now();
+      try { return toDataURL.apply(this, args); }
+      finally {
+        if (window.greyboxPngTimings.length < 8) window.greyboxPngTimings.push({
+          elapsedMs: Math.round(performance.now() - start), width: this.width, height: this.height,
+        });
+      }
+    };
     for (const type of [window.WebGLRenderingContext, window.WebGL2RenderingContext]) {
       for (const method of ['compileShader', 'linkProgram', 'getProgramParameter', 'getShaderParameter', 'getParameter', 'getExtension', 'drawElements', 'drawArrays', 'readPixels', 'finish', 'flush', 'clientWaitSync', 'texImage2D', 'bufferData']) {
         const original = type?.prototype[method];
@@ -59,9 +70,14 @@ async function openEnvironment(fixture, { warmup = false, phase = (_name, work) 
   const state = { captures: [], errors: [], viewerRequests: 0, phase: 'navigation', progress: [] };
   const started = Date.now();
   const mark = phase => { if (state.progress.length < 32) state.progress.push({ phase, elapsedMs: Date.now() - started }); };
+  page.on('request', request => {
+    const url = new URL(request.url());
+    if (url.pathname === '/api/catalog/ingredients/example-place/details' && url.searchParams.get('view') === 'media') mark('media-request');
+  });
   page.on('response', response => {
-    const path = new URL(response.url()).pathname;
-    if (path === '/api/catalog/ingredients/example-place/details') mark(`details:${response.status()}`);
+    const url = new URL(response.url());
+    const path = url.pathname;
+    if (path === '/api/catalog/ingredients/example-place/details') mark(`${url.searchParams.get('view') === 'media' ? 'media' : 'details'}:${response.status()}`);
     if (path.endsWith('/shots/overhead/capture')) mark(`capture-response:${response.status()}`);
   });
   const ingredient = { id: 'example-place', type: 'place', name: 'Example environment', tags: [], payload: { description: 'Synthetic browser fixture', greybox: structuredClone(scene) } };
@@ -87,7 +103,9 @@ async function openEnvironment(fixture, { warmup = false, phase = (_name, work) 
       state.captures.push(route.request().postDataJSON());
       const row = { id: 'capture', kind: 'reference', role: 'greybox-shot:overhead', mediaKey: 'example-capture.png' };
       media.splice(0, media.length, row);
-      return route.fulfill({ json: row });
+      await route.fulfill({ json: row });
+      mark('capture-fulfilled');
+      return;
     }
     if (url.pathname === '/data/images/example-capture.png') return route.fulfill({ contentType: 'image/png', body: Buffer.from(state.captures.at(-1).dataBase64, 'base64') });
     if (url.pathname.startsWith('/api/')) {
@@ -151,7 +169,7 @@ async function openEnvironment(fixture, { warmup = false, phase = (_name, work) 
     await session.detach();
     const slowGpuCalls = await page.evaluate(() => window.greyboxGpuCalls);
     if (slowGpuCalls.length) console.info(`Greybox startup GPU calls: ${JSON.stringify(slowGpuCalls)}`);
-    return { page, state, ingredient };
+    return { page, state, ingredient, mark };
   } catch (error) {
     const finalMetrics = await metrics();
     const durations = Object.fromEntries(Object.entries(finalMetrics).map(([name, value]) => [name, value - initialMetrics[name]]));
@@ -268,7 +286,7 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
 
   it('uploads an oriented L floor at fixed landscape/portrait resolution and restores the HiDPI viewport', async ({ onTestFailed }) => {
     const phase = createTestPhaseDiagnostics(onTestFailed);
-    const { page, state, ingredient } = await phase('open-environment', () => openEnvironment(fixture, { phase }));
+    const { page, state, ingredient, mark } = await phase('open-environment', () => openEnvironment(fixture, { phase }));
     try {
       expect(state.viewerRequests).toBeGreaterThan(0);
       expect(new URL(page.url()).searchParams.get('shot')).toBe('overhead');
@@ -303,9 +321,10 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
           };
         }));
         state.phase = `capture ${aspect}`;
+        mark('capture-click-start');
         await phase(`${frame}-capture-and-media`, () => Promise.all([
           page.waitForResponse(response => response.url().endsWith('/details?view=media')),
-          page.getByRole('button', { name: /(?:Capture|Replace) reference image/ }).click(),
+          page.getByRole('button', { name: /(?:Capture|Replace) reference image/ }).click().then(() => mark('capture-click-done')),
         ]));
         const bufferSizes = await phase(`${frame}-buffer-sizes`, () => page.evaluate(() => window.captureBufferSizes()));
         expect(Math.max(...bufferSizes.map(([w, h]) => w * h))).toBeLessThanOrEqual(Math.max(before.width * before.height, width * height));
@@ -326,7 +345,8 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
       expect(state.errors).toEqual([]);
     } catch (error) {
       const gpuCalls = await page.evaluate(() => window.greyboxGpuCalls);
-      throw new Error(`${state.phase}: ${error.message}; captures: ${state.captures.length}; progress: ${JSON.stringify(state.progress)}; gpu calls: ${JSON.stringify(gpuCalls)}; browser errors: ${state.errors.join('; ')}`, { cause: error });
+      const pngTimings = await page.evaluate(() => window.greyboxPngTimings);
+      throw new Error(`${state.phase}: ${error.message}; captures: ${state.captures.length}; progress: ${JSON.stringify(state.progress)}; png timings: ${JSON.stringify(pngTimings)}; gpu calls: ${JSON.stringify(gpuCalls)}; browser errors: ${state.errors.join('; ')}`, { cause: error });
     } finally { await phase('page-close', () => page.close()); }
   }, 60000);
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -269,41 +269,49 @@ it('builds the same plan from an explicit working-tree override as from the equi
   }
 });
 
-it('schedules the real client precision-copy import chain for a shared scoring change', () => {
+describe('real shared-source import chains', () => {
   const cwd = fileURLToPath(new URL('../', import.meta.url));
-  const source = 'server/lib/postScoring.js';
-  const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
-  const plan = buildCiTestPlan(inputs.changedFiles, inputs);
+  let inputs;
+  // These read-only plans share one real-tree snapshot. Synthetic mutation and
+  // recollection regressions below keep their separate per-call snapshots.
+  beforeAll(() => {
+    inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [
+      'server/lib/postScoring.js', 'server/lib/editorial/checkInfra/taxonomy.js',
+    ], cwd });
+  });
 
-  expect(plan.full).toBe(false);
-  expect(plan.server.mode).toBe('related');
-  expect(plan.server.sources).toContain(source);
-  expect(plan.client.mode).toBe('related');
-  expect(plan.client.sources).toContain(source);
-  expect(plan.build).toBe(true);
-  // The test names its client helper, not postScoring: only import-graph
-  // selection can reach this regression through the intermediate module.
-  expect(inputs.pathContractTests[source]).not.toContain('client/src/lib/estimationTolerance.test.js');
-  expect(staticImportClosure(join(cwd, 'client/src/lib/estimationTolerance.test.js')).files)
-    .toContain(join(cwd, source));
-});
+  it('schedules the real client precision-copy import chain for a shared scoring change', () => {
+    const source = 'server/lib/postScoring.js';
+    const plan = buildCiTestPlan([source], inputs);
 
-it('schedules the real taxonomy-to-validation consumer chain for a nested editorial leaf', () => {
-  const cwd = fileURLToPath(new URL('../', import.meta.url));
-  const source = 'server/lib/editorial/checkInfra/taxonomy.js';
-  const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
-  const plan = buildCiTestPlan(inputs.changedFiles, inputs);
+    expect(plan.full).toBe(false);
+    expect(plan.server.mode).toBe('related');
+    expect(plan.server.sources).toContain(source);
+    expect(plan.client.mode).toBe('related');
+    expect(plan.client.sources).toContain(source);
+    expect(plan.build).toBe(true);
+    // The test names its client helper, not postScoring: only import-graph
+    // selection can reach this regression through the intermediate module.
+    expect(inputs.pathContractTests[source]).not.toContain('client/src/lib/estimationTolerance.test.js');
+    expect(staticImportClosure(join(cwd, 'client/src/lib/estimationTolerance.test.js')).files)
+      .toContain(join(cwd, source));
+  });
 
-  expect(plan.full).toBe(false);
-  expect(plan.server.mode).toBe('related');
-  expect(plan.server.sources).toEqual([source]);
-  // Explicit guards stay additive to the traversal.
-  expect(plan.server.files).toEqual(expect.arrayContaining(ALWAYS_RUN_TESTS.filter((path) => path.startsWith('server/'))));
-  // validation.test.js reaches the leaf only through pipelineValidation; it names
-  // neither the leaf nor the editorial feature, so only traversal selects it.
-  expect(plan.server.files).not.toContain('server/lib/validation.test.js');
-  expect(staticImportClosure(join(cwd, 'server/lib/validation.test.js')).files)
-    .toContain(join(cwd, source));
+  it('schedules the real taxonomy-to-validation consumer chain for a nested editorial leaf', () => {
+    const source = 'server/lib/editorial/checkInfra/taxonomy.js';
+    const plan = buildCiTestPlan([source], inputs);
+
+    expect(plan.full).toBe(false);
+    expect(plan.server.mode).toBe('related');
+    expect(plan.server.sources).toEqual([source]);
+    // Explicit guards stay additive to the traversal.
+    expect(plan.server.files).toEqual(expect.arrayContaining(ALWAYS_RUN_TESTS.filter((path) => path.startsWith('server/'))));
+    // validation.test.js reaches the leaf only through pipelineValidation; it names
+    // neither the leaf nor the editorial feature, so only traversal selects it.
+    expect(plan.server.files).not.toContain('server/lib/validation.test.js');
+    expect(staticImportClosure(join(cwd, 'server/lib/validation.test.js')).files)
+      .toContain(join(cwd, source));
+  });
 });
 
 it('keeps exact-file selection for a test-only diff and traverses a nested feature leaf for a differently named consumer', () => {
@@ -1823,6 +1831,11 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'server/lib/nativeTrash.test.js',
       'server/lib/nativeTrash.smoke.test.js',
       'server/lib/bufferedSpawn.js',
+      'server/lib/execGit.js',
+      'server/lib/windowsGitProcess.js',
+      'server/lib/windowsGitProcess.test.js',
+      'server/lib/windowsGitProcess.protocol.test.js',
+      'server/lib/windowsGitSupervisor.cs',
       'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/pathSafety.js',
       'server/lib/mockPathsDataRoot.js',
@@ -1876,6 +1889,13 @@ describe('Windows escalation on a full plan (#7440)', () => {
       // `windows: true` here is a direct consequence of WINDOWS_RISK_RULES.
       expect(plan(['server/services/auth.js']).windows).toBe(false);
       expect(plan(['server/lib/bufferedSpawn.js']).windows).toBe(true);
+    });
+
+    it('selects the Windows Git process regressions for test-only changes (#13703)', () => {
+      const tests = ['server/lib/windowsGitProcess.test.js', 'server/lib/windowsGitProcess.protocol.test.js'];
+      const selected = buildCiTestPlan(tests, { trackedFiles: [...TRACKED, ...WINDOWS_CONTRACT_TESTS, ...tests], clientDependencies: [] });
+      expect(selected).toMatchObject({ full: false, windows: true, windowsMode: 'files' });
+      expect(selected.windowsFiles).toEqual([...new Set([...WINDOWS_CONTRACT_TESTS, ...tests])].sort());
     });
 
     it.each(['js', 'test.js'])('runs checkout retirement %s changes on Windows (#13562)', extension => {

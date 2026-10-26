@@ -96,4 +96,5 @@ afterEach(() => drainDetachedWrites());
 // touch git don't pay for its import graph.
 afterAll(async () => {
   await globalThis.__portosCleanupGitTemplates?.();
+  await globalThis.__portosGitSupervisorCleanup?.();
 });
