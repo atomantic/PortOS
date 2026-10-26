@@ -357,3 +357,13 @@ it('snapshots universe photography for rendering and respects an explicit disabl
   expect(disabled.data.prompt).toBe(body.prompt);
   expect(disabled.data.visualProfile).toBeUndefined();
 });
+
+it('leaves FableLoom authored intent for its compiler instead of composing photography twice', async () => {
+  const { naturalUniverseVisualProfile } = await import('../../lib/universeVisualProfile.js');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  const result = await run({ prompt: 'A cautious arrival', negativePrompt: 'authored avoid', visualProfileOverride: naturalUniverseVisualProfile(), fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' } });
+  expect(result.data.prompt).toBe('A cautious arrival');
+  expect(result.data.negativePrompt).toBe('authored avoid');
+  expect(result.data.visualProfile).toBeUndefined();
+  expect(result.data.visualProfileOverride).toBeDefined();
+});

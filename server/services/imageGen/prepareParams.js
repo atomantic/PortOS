@@ -140,7 +140,9 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
     const { getUniverseVisualProfile } = await import('../universeBuilder/crud.js');
     profile = await getUniverseVisualProfile(data.universeRun.universeId);
   }
-  data = applyImageVisualProfile(data, profile);
+  // FableLoom's canon compiler owns the photography block. Keep authored
+  // intent untouched until that compiler has resolved explicit overrides.
+  if (!data.fableLoom) data = applyImageVisualProfile(data, profile);
   let initImagePath = null;
   const uploadedTempPaths = [];
   const initUpload = files?.initImage;
