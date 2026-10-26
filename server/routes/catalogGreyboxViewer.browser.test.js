@@ -67,6 +67,27 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
       return { page, state, ingredient };
     }
     expect(state.viewerRequests).toBe(0);
+    // Keep bounded, synthetic-only evidence when Chromium's actionability
+    // check stalls. Timer samples distinguish moving layout from a renderer
+    // that stopped producing animation frames; neither retries the action.
+    await page.evaluate(() => {
+      const evidence = { frames: 0, samples: [], started: performance.now() };
+      let frame;
+      const tick = () => { evidence.frames++; frame = requestAnimationFrame(tick); };
+      frame = requestAnimationFrame(tick);
+      const timer = setInterval(() => {
+        const button = [...document.querySelectorAll('button')].find(el => el.textContent.includes('Overhead'));
+        evidence.samples.push({ elapsed: Math.round(performance.now() - evidence.started), frames: evidence.frames,
+          rect: button?.getBoundingClientRect().toJSON(), disabled: button?.disabled,
+          visibility: document.visibilityState, fonts: document.fonts.status });
+        if (evidence.samples.length === 44) { clearInterval(timer); cancelAnimationFrame(frame); }
+      }, 250);
+      window.greyboxReadinessEvidence = () => {
+        clearInterval(timer); cancelAnimationFrame(frame);
+        delete window.greyboxReadinessEvidence;
+        return evidence;
+      };
+    });
     state.phase = 'viewer attachment';
     await page.getByRole('tab', { name: 'Greybox', exact: true }).click();
     await page.locator('[data-testid="greybox-viewer"] canvas').waitFor({ state: 'attached' });
@@ -76,15 +97,17 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     // Demand rendering and Html placement finish after React commits.
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     expect(await page.locator('[data-testid="greybox-viewer"] canvas').isVisible()).toBe(true);
+    await page.evaluate(() => window.greyboxReadinessEvidence?.());
     return { page, state, ingredient };
   } catch (error) {
+    const readiness = await page.evaluate(() => window.greyboxReadinessEvidence?.());
     const viewers = await page.getByTestId('greybox-viewer').evaluateAll(elements => elements.map(el => ({
       rect: el.getBoundingClientRect().toJSON(), canvases: [...el.querySelectorAll('canvas')].map(c => ({
         rect: c.getBoundingClientRect().toJSON(), width: c.width, height: c.height, visibility: getComputedStyle(c).visibility, display: getComputedStyle(c).display,
       })),
     })));
     await page.close();
-    throw new Error(`${state.phase}: ${error.message}; viewers: ${JSON.stringify(viewers)}; browser errors: ${state.errors.join('; ')}`, { cause: error });
+    throw new Error(`${state.phase}: ${error.message}; viewers: ${JSON.stringify(viewers)}; readiness: ${JSON.stringify(readiness)}; browser errors: ${state.errors.join('; ')}`, { cause: error });
   }
 }
 
