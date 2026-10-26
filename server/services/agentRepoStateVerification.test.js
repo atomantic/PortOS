@@ -1127,6 +1127,27 @@ it.each(['draft', 'leave-open'])('reports divergence without cleanup or recovery
 });
 
 describe('claim-swarm completion', () => {
+  it.each(['released', 'still-bound', 'seeded', 'ref-present', 'foreign-capture'])('settles only artifact-free released selections: %s', async scenario => {
+    const selected = 'claim/issue-10';
+    const delivered = 'claim/issue-11';
+    const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
+      repoPath: scenario === 'foreign-capture' ? '/foreign' : '/repo', branch: delivered, path: WORKTREE, head: HEAD,
+      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const state = { ...agentState({ isWorktree: false, worktreeBranch: null, workspacePath: '/repo',
+      claimBranches: scenario === 'still-bound' ? [selected, delivered] : [delivered],
+      claimReleasedBranches: [selected], checkoutCapture: { status: 'captured' }, completedCheckouts: [captured],
+      checkoutSeeds: scenario === 'seeded' ? [{ branch: selected }] : [] }),
+      id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT };
+    if (scenario === 'ref-present') readLocalBranchPresence.mockResolvedValue(true);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/11', detail: 'MERGED' });
+    await run({ agentState: state });
+    const released = recordCleanupOutcome.mock.calls.some(([, row]) => row.branch === selected
+      && row.reason === 'released-selection-no-local-artifacts');
+    expect(released).toBe(scenario === 'released');
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it('retains each missing claim checkout without spawning bookkeeping agents', async () => {
     const branches = ['claim/issue-11', 'claim/issue-12'];
     findPullRequestForBranch.mockImplementation(async branch => ({ status: 'found', detail: 'OPEN', number: branches.indexOf(branch) + 11,
