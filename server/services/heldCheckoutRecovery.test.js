@@ -2741,10 +2741,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     receipt.repoPath += '/.';
     receipt.path += '/.';
     const original = structuredClone(attempts);
-    // Keep physical repository, checkout and generation binding here. Persisted
-    // task/PR/validation/handoff permutations run at the admission boundary.
-    for (const [target, key, value] of [[receipt, 'repoPath', join(scratch, 'unrelated-repo')],
+    // Keep authority refusals on the real continuation/rewrite fallback, as well
+    // as physical repository, checkout and generation binding.
+    for (const [target, key, value] of [[attempts[2].metadata, 'resumedFromAgentId', null],
+      [attempts[0], 'taskId', 'other-task'], [attempts[0].result, 'validationPassed', false],
+      [attempts[0].metadata, 'prCompletionPolicy', 'leave-open'],
+      [attempts[0].metadata, 'reviewLoopMergeTarget', { branch: c.release.branch, url: 'https://github.com/example/repo/pull/99' }],
+      [receipt, 'repoPath', join(scratch, 'unrelated-repo')],
       [receipt, 'path', join(external, 'unrelated-checkout')],
+      [attempts[0].metadata.completedCheckouts[0], 'head', 'b'.repeat(40)],
       [attempts[0].metadata.completedCheckouts[0], 'incarnation', { pointer: { ino: 'other' } }]]) {
       const prior = target[key]; target[key] = value;
       const refused = await c.prepare();
