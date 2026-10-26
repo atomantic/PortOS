@@ -179,7 +179,7 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(slices(posix, '/repo').flat().sort()).toEqual([...files].sort());
   });
 
-  it('slices shards exactly like Vitest\'s sequencer', () => {
+  it('partitions all four Windows slices exactly like Vitest\'s sequencer', () => {
     expect([1, 2, 3].map((index) => vitestShardRange(7, index, 3))).toEqual([[0, 3], [3, 5], [5, 7]]);
     expect([1, 2].map((index) => vitestShardRange(1, index, 2))).toEqual([[0, 1], [1, 1]]);
     const fixture = mkdtempSync(join(tmpdir(), 'portos-shard-parity-'));
@@ -193,11 +193,11 @@ describe('planTestMemo and recordTestMemo', () => {
       const vitest = join(import.meta.dirname, '..', '..', 'server', 'node_modules', 'vitest', 'vitest.mjs');
       const env = { ...process.env, NODE_ENV: 'test', TMPDIR: host, TMP: host, TEMP: host, NODE_DISABLE_COMPILE_CACHE: '1', PORTOS_CI_TEST_SELECTION: '' };
       delete env.PORTOS_TEST_TEMP_ROOT;
-      for (const index of [1, 2, 3]) {
+      for (const index of [1, 2, 3, 4]) {
         const report = join(fixture, `shard${index}.json`);
-        execFileSync(process.execPath, [vitest, 'run', `--shard=${index}/3`, '--config', join(fixture, 'vitest.config.mjs'), '--root', fixture, '--reporter=json', `--outputFile=${report}`], { cwd: fixture, env, encoding: 'utf8', timeout: 60_000 });
+        execFileSync(process.execPath, [vitest, 'run', `--shard=${index}/4`, '--config', join(fixture, 'vitest.config.mjs'), '--root', fixture, '--reporter=json', `--outputFile=${report}`], { cwd: fixture, env, encoding: 'utf8', timeout: 60_000 });
         const ran = JSON.parse(readFileSync(report, 'utf8')).testResults.map((suite) => suite.name.replace(/\\/g, '/').split('/').pop()).sort();
-        expect(ran, `shard ${index}`).toEqual(vitestShardSlice(files, { repoRoot: fixture, scope: '.', index, count: 3 }).sort());
+        expect(ran, `shard ${index}`).toEqual(vitestShardSlice(files, { repoRoot: fixture, scope: '.', index, count: 4 }).sort());
       }
     } finally {
       rmSync(fixture, { recursive: true, force: true });

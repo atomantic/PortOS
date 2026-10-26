@@ -1279,7 +1279,8 @@ describe('CI test impact planner', () => {
     expect(re.test("'generate_ltx2xpy'")).toBe(false);
   });
 
-  it('shards full plans and related graphs while keeping small exact-file plans on one runner', () => {
+  it('uses four full Windows shards while keeping small exact-file plans on one runner', () => {
+    expect(FULL_SUITE_SHARDS.windows).toBe(4);
     expect(shardIndexes('full', 3)).toEqual([1, 2, 3]);
     expect(shardIndexes('related', 3)).toEqual([1]);
     expect(shardIndexes('files', 3)).toEqual([1]);
@@ -1299,7 +1300,7 @@ describe('CI test impact planner', () => {
     const relatedWindows = buildCiTestPlan(['server/lib/bufferedSpawn.js'], { trackedFiles: TRACKED });
     expect(relatedWindows).toMatchObject({ full: false, windowsMode: 'related',
       windowsSources: ['server/lib/bufferedSpawn.js'],
-      shards: { server: [1, 2], client: [1], windows: [1, 2, 3] } });
+      shards: { server: [1, 2], client: [1], windows: [1, 2, 3, 4] } });
     expect(relatedWindows.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS.filter(path => TRACKED.includes(path)).sort());
     const exactWindows = buildCiTestPlan(['server/lib/bufferedSpawn.test.js'], { trackedFiles: TRACKED });
     expect(exactWindows).toMatchObject({ windowsMode: 'files', shards: { windows: [1] } });
@@ -1719,7 +1720,8 @@ describe('Windows escalation on a full plan (#7440)', () => {
     ...options,
   });
 
-  it('runs the contract baseline for a full trigger windows-server cannot observe', () => {
+  it('keeps the 43-contract Windows baseline on one job despite the larger full matrix', () => {
+    expect(WINDOWS_CONTRACT_TESTS).toHaveLength(43);
     const downgraded = plan(['client/vite.config.js']);
 
     // Still a full plan for every Linux suite — only the 2x job narrows.
