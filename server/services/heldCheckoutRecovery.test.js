@@ -3076,7 +3076,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(after.retirementObligations).toEqual(before.retirementObligations);
   });
 
-  describe.each(['content', 'index', 'administration', 'default', 'pr-head', 'policy', 'submodule'])('changed %s evidence between review and confirmation', change => {
+  describe.each(['content', 'index', 'administration', 'default', 'pr-head', 'policy', 'submodule', 'inventory'])('changed %s evidence between review and confirmation', change => {
     let c;
     let prepared;
     // Fixture construction, preview and confirmation are distinct real-Git
@@ -3100,6 +3100,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       if (change === 'pr-head') c.forge.prHead = c.forge.defaultHead;
       if (change === 'policy') injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
       if (change === 'submodule') await writeFile(join(c.path, 'vendor', 'unique.txt'), 'submodule work');
+      if (change === 'inventory') injected.schedule.executions = {};
       const result = await c.confirm(prepared.review);
       expect(result.ok).toBe(false);
       expect(await registered(c.release.path)).toBe(true);
