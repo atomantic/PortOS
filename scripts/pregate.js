@@ -449,8 +449,7 @@ async function withMergedPregateTree(repoRoot, mergedWith, run) {
       symlinkSync(source, join(scratch, workspace, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     }
     console.log(`🌳 Merged-tree guards: HEAD ${head.slice(0, 12)} + base ${base.slice(0, 12)} = tree ${tree.slice(0, 12)}.`);
-    const comparisonBase = readGit(['merge-base', head, base], scratch);
-    return await run({ root: scratch, base, head, tree, comparisonBase });
+    return await run({ root: scratch, base, head, tree });
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -722,11 +721,11 @@ async function main() {
   assertNodeVersion();
 
   if (options.mergedWith) {
-    const status = await withMergedPregateTree(REPO_ROOT, options.mergedWith, async ({ root, comparisonBase }) => {
+    const status = await withMergedPregateTree(REPO_ROOT, options.mergedWith, async ({ root, base }) => {
       const owner = installOwnerCancellation();
       try {
         const outcome = await runStage({ name: 'merged-tree guards', script: 'pregate.js',
-          args: ['--guards-only', '--base', comparisonBase, ...(options.planOnly ? ['--plan-only'] : [])],
+          args: ['--guards-only', '--base', base, ...(options.planOnly ? ['--plan-only'] : [])],
           env: { PORTOS_TEST_MEMO: 'off' },
         }, owner, { repoRoot: root });
         if (outcome.error || outcome.unsettled) throw new Error(outcome.error?.message || outcome.unsettled);

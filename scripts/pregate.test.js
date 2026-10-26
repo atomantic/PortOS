@@ -400,7 +400,7 @@ describe('pregate hidden-content invocation', () => {
   });
 
   // A branch and base can each be green while their combined route inventory fails.
-  it('runs guards on the exact merged tree, propagates failure, and preserves caller state and receipt', () => {
+  it('runs guards against the checked base on the exact merged tree, propagates failure, and preserves caller state and receipt', () => {
     git('config', 'core.autocrlf', 'true');
     mkdirSync(join(root, 'server/routes'), { recursive: true });
     write('server/routes/universe-builder.js', 'export const mutation = false;\n');
@@ -416,6 +416,9 @@ describe('pregate hidden-content invocation', () => {
       import { resolve } from 'path';
       import { pathToFileURL } from 'url';
       if (process.env.PORTOS_TEST_MEMO !== 'off') throw new Error('merged guards reused memo');
+      if (process.env.CI_BASE_SHA !== process.env.PREGATE_FIXTURE_BASE) {
+        throw new Error('guard stages received a different base from the checked merge target');
+      }
       for (const file of JSON.parse(process.env.CI_TEST_FILES)) {
         if (file.endsWith('hostControlRoutes.test.js')) await import(pathToFileURL(resolve(file)));
       }
@@ -429,7 +432,7 @@ describe('pregate hidden-content invocation', () => {
     const movedBase = git('rev-parse', 'HEAD');
     git('checkout', '-qb', 'feature', common);
     const invoke = (...flags) => spawnSync(process.execPath, ['scripts/pregate.js', ...flags], {
-      cwd: root, encoding: 'utf8', env: { ...process.env, PORTOS_TEST_MEMO: 'on' },
+      cwd: root, encoding: 'utf8', env: { ...process.env, PORTOS_TEST_MEMO: 'on', PREGATE_FIXTURE_BASE: flags.at(-1) },
     });
     mkdirSync(join(root, '.cache/pregate'), { recursive: true });
     write(PREGATE_REPORT_PATH, 'original attestation receipt');

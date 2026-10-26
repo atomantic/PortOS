@@ -27,7 +27,7 @@ node scripts/portos-api.js get /api/api-docs/catalog.json   # discover endpoints
 
 Details: [docs/AGENT_API_KEY.md](../../../docs/AGENT_API_KEY.md).
 
-For an outside terminal agent delivering a reviewed PR, use the supported [external merge-admission flow](../../../docs/AGENT_API_KEY.md#outside-agent-merge-admission). It binds a per-run secret and verified operator identity to the server-validated app, linked checkout and exact PR head/base; do not invent or borrow a CoS `agentId`.
+For an outside terminal agent delivering a reviewed PR, use the supported [external merge-admission flow](../../../docs/AGENT_API_KEY.md#outside-agent-merge-admission). After exact-head required CI and configured reviews pass, send `action: prepare` and require `prepared: true` before fetching the base and running combined-tree guards. Only after those guards pass, send `action: acquire`, require `admitted: true`, and complete the final live checks and pinned merge. Verify the merge and release admission before cleanup. Direct legacy acquisition does not reserve guard preparation. The flow binds a per-run secret and verified operator identity to the server-validated app, linked checkout and exact PR head/base; do not invent or borrow a CoS `agentId`.
 
 For FableLoom static package handoff, use `fableloom-export preflight|start LOOM`
 with `--episodes EP1,EP2`, `--player true`, `--characters true`, `--voice true`,
