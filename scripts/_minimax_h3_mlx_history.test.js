@@ -104,11 +104,18 @@ with tempfile.TemporaryDirectory() as tmp:
     args = NS(source_video=str(source), output=str(output), seed=0, prompt='Example', num_frames=124,
               steps=9, anchor=[], height=768, width=1344)
     scratch = []
+    def cancel():
+        # Windows os.kill(SIGTERM) uses TerminateProcess without dispatching
+        # Python's handler. Exercise the handler there and a process signal on POSIX.
+        if sys.platform == 'win32':
+            signal.raise_signal(signal.SIGTERM)
+        else:
+            os.kill(os.getpid(), signal.SIGTERM)
     def save(path, *_):
         scratch.append(path.parent)
         path.write_bytes(b'partial')
         path.with_suffix('.wav').write_bytes(b'owned temporary audio')
-        ${mode === 'cancel' ? 'os.kill(os.getpid(), signal.SIGTERM)' : "raise RuntimeError('example interruption')"}
+        ${mode === 'cancel' ? 'cancel()' : "raise RuntimeError('example interruption')"}
     try:
         with contextlib.redirect_stdout(io.StringIO()): runner.render_outputs(Pipe(), args, [], save)
         raise AssertionError('interruption lost')
