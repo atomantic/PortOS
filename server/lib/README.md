@@ -1027,3 +1027,5 @@ migration with explicit recognition of the outgoing shipped defaults.
 
 | `releasePublication.js` | Validated request for forge-verified release publication milestones. |
 | `releaseSynchronization.js` | Frozen continuation policy fields shared by publication enrollment and task update guards. |
+
+| `testCacheRetirementProof.js` | Bounded, versioned streaming proofs of independently recognized Vitest module caches for current merged-checkout retirement; binds marker bytes, ordered file digests and directory generations without changing historical archive formats. |

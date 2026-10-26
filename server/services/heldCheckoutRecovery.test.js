@@ -66,12 +66,16 @@ const SYMLINKS = process.platform !== 'win32';
 const retirementFaults = vi.hoisted(() => ({ onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null }));
 const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null }));
 
-const cacheFaults = vi.hoisted(() => ({ onOpen: null, onRead: null }));
+const cacheFaults = vi.hoisted(() => ({ onOpen: null, afterOpen: null, onRead: null, onLstat: null }));
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, open: async (...args) => {
+  return { ...actual, lstat: async (...args) => {
+    await cacheFaults.onLstat?.(args[0]);
+    return actual.lstat(...args);
+  }, open: async (...args) => {
     await cacheFaults.onOpen?.(args[0]);
     const handle = await actual.open(...args);
+    await cacheFaults.afterOpen?.(args[0]);
     const read = handle.read.bind(handle);
     handle.read = async (...readArgs) => {
       await cacheFaults.onRead?.(args[0]);
@@ -165,7 +169,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     receiptTiming.current = remoteSquash || task.name.startsWith('settles a normally merged checkout before the next scan')
       ? { entryPoint: remoteSquash ? 'remote squash receipt' : task.name.endsWith('cleanupMerged') ? 'cleanupMerged' : 'early reaper', started: performance.now(), phases: {} } : null;
     await receiptTiming.run('fixture-setup', async () => {
-      Object.assign(cacheFaults, { onOpen: null, onRead: null });
+      Object.assign(cacheFaults, { onOpen: null, afterOpen: null, onRead: null, onLstat: null });
       Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
       Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null, onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null });
       scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
@@ -1653,6 +1657,40 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(reads).toBe(0);
     expect(await registered(c.path)).toBe(true);
     expect(await readFile(join(outside, 'a'.repeat(40)), 'utf8')).toBe('outside bytes must never be read');
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+  });
+
+  it('detects an ancestor temporarily redirected and restored before the descriptor fence', async () => {
+    const c = await reviewedCheckout('compact-cache-restored-ancestor');
+    const root = await moduleCache(c, { bytes: 24 });
+    const module = join(root, 'a'.repeat(40));
+    const originalBytes = await readFile(module);
+    const ancestor = dirname(dirname(root));
+    const saved = join(scratch, 'original-cache-ancestor');
+    const outside = join(scratch, 'outside-cache-ancestor');
+    await mkdir(join(outside, 'vitest/modules'), { recursive: true });
+    await writeFile(join(outside, 'vitest/modules', 'a'.repeat(40)), 'outside payload must not be read');
+    let swapped = false;
+    let restored = false;
+    let reads = 0;
+    cacheFaults.onLstat = async path => {
+      if (path !== module || swapped) return;
+      swapped = true;
+      await rename(ancestor, saved);
+      await symlink(outside, ancestor, process.platform === 'win32' ? 'junction' : 'dir');
+    };
+    cacheFaults.afterOpen = async path => {
+      if (path !== module || restored) return;
+      await rm(ancestor, { recursive: true });
+      await rename(saved, ancestor);
+      restored = true;
+    };
+    cacheFaults.onRead = path => { if (path === module) reads++; };
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-test-cache-changed' });
+    expect(swapped && restored).toBe(true);
+    expect(reads).toBe(0);
+    expect(await readFile(module)).toEqual(originalBytes);
+    expect(await registered(c.path)).toBe(true);
     expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
   });
 

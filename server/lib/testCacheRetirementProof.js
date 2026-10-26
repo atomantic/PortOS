@@ -29,11 +29,11 @@ async function directoryFence(checkout, root, work) {
     for (const entry of directories) {
       work.check();
       const current = await lstat(entry.path, { bigint: true });
-      if (!current.isDirectory() || !sameIdentity(entry.info, current)
+      if (!current.isDirectory() || !sameIdentity(entry.info, current) || entry.info.ctimeNs !== current.ctimeNs
         || (settled && entry === directories.at(-1) && !sameFile(entry.info, current))) throw changed();
     }
   };
-  return { check, identity: directories.map(({ info }) => [String(info.dev), String(info.ino), String(info.birthtimeNs)]) };
+  return { check, identity: directories.map(({ info }) => [String(info.dev), String(info.ino), String(info.birthtimeNs), String(info.ctimeNs)]) };
 }
 
 // Open without following a leaf link, then verify the descriptor and every
