@@ -47,8 +47,8 @@ Director, music video) can use it, not just one video.
    pass), is saved through the normal gallery path, and attaches to the place as
    a `reference` media row tagged `greybox-shot:<shotId>`. Re-capturing replaces
    by tag. This reuses the existing reference-library UI, conditioning and
-   backup with no new image store. A server-side capture (headless browser) is a
-   later phase so autopilot can capture without an open tab.
+   backup with no new image store. Server-side capture also supports autopilot
+   without an open tab (see the headless capture contract below).
 5. **Music-video wiring is opt-in per shot and visible.** The set subject keeps
    its catalog link. A video shot may name a `greyboxShotId` on its place; the
    capture is added to that shot's reference images with role `set`. Per the
@@ -106,3 +106,37 @@ duplicate ids, out-of-range coordinates, and unknown part types; absent field
 reads as "no greybox". Later phases: viewer renders the starter rink, a saved
 shot's capture round-trips through the reference library, and a music-video shot
 with a `greyboxShotId` lists the capture and its additions in "Show full prompt".
+
+## Headless capture contract (#13696)
+
+`POST /api/catalog/ingredients/:id/greybox/shots/:shotId/render` accepts an
+empty object and returns the attached reference media row (201). It reads the
+saved primitive scene and camera, renders the same `GreyboxViewer` used in the
+tab, and replaces only that shot's tagged reference through the existing
+per-shot queue. Rendering and replacement share the queue with in-tab uploads;
+one owned browser runs at a time. If the saved layout changes during rendering,
+the endpoint returns `GREYBOX_CHANGED` (409) without replacing the reference.
+Unsupported GLB scenes return `GREYBOX_NOT_RENDERABLE` (422).
+
+The renderer compiles a self-contained viewer from the installed client build
+tools on first request, never at boot. Its disposable composition context sees
+only that script, a static page and the supplied scene data, with the generated
+preview CSP, blocked unknown requests, locked loopback and required OS network
+isolation (Seatbelt on macOS, bubblewrap on Linux). Unsupported hosts fail
+closed. It does not use a user browser profile, instance credentials, live data
+mounts or an HTTP server.
+
+`greyboxCaptureSettings` defines the shared 1,280-pixel long edge, rounded short
+edge, shot aspect and 35mm-equivalent vertical field of view. The registered
+browser test compares decoded source-viewer and standalone PNG pixels across
+landscape, portrait and ultrawide frames at different focal lengths. The
+tolerance is mean absolute channel error at most 1 on the 0–255 scale, allowing
+GPU antialias rounding; each image must also contain visible scene detail.
+Hosts with OS isolation additionally exercise the production renderer with no
+Greybox tab open and verify scratch cleanup.
+
+“Re-capture all shots” displays the saved shot count and how many references it
+will replace before confirmation. It renders each saved camera once, in order,
+without changing an unsaved orbit/lens. A failure reports completed progress and
+leaves the failed and remaining shots untouched; it does not retry. Only an
+explicit request starts rendering; there is no boot capture or provider call.

@@ -8,13 +8,15 @@ import { BROWSER_FIDELITY_ONLY_FILES, BROWSER_FIDELITY_TESTS } from './lib/brows
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
-// Scans the tracked tree, so it is registered in ALWAYS_RUN_TESTS (#10312).
+// Scans the working tree, so it is registered in ALWAYS_RUN_TESTS (#10312).
 describe('cross-workspace browser suite registry', () => {
   it('lists exactly the suites that guard canRun with the browser suite gate', () => {
     // Real browser contracts also use legacy .test.js names. Discover every
     // gated fixture, excluding only the gate's own unit tests.
-    const gated = execFileSync('git', ['grep', '-l', 'browserSuiteCanRun(', '--', 'server/**/*.test.js', ':!server/lib/browserSuiteGate*.test.js'], { cwd: root, encoding: 'utf8' })
-      .split('\n').filter(Boolean).sort();
+    // Pregate includes untracked sources; a new registered suite must not look
+    // missing merely because it has not been staged yet. NULs preserve paths.
+    const gated = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '--deduplicate', '-z', '--', 'server/**/*.test.js', ':!server/lib/browserSuiteGate*.test.js'], { cwd: root, encoding: 'utf8' })
+      .split('\0').filter(Boolean).filter((file) => readFileSync(join(root, file), 'utf8').includes('browserSuiteCanRun(')).sort();
     expect(gated).toEqual([...BROWSER_SUITES].sort());
   });
 
