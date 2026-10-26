@@ -97,6 +97,7 @@ print(json.dumps({'id':args.speed_profile,'steps':args.steps,'adapter':args.spee
   it('refuses stale runtime, changed pins, missing base cache and corrupt adapters on submissions and retries', async () => {
     resolveMiniMaxH3MlxSpeedCapable.mockResolvedValue(false);
     await expect(prepare()).rejects.toMatchObject({ code: 'MINIMAX_H3_SPEED_RUNTIME_UNSUPPORTED' });
+    expect(resolveByovRuntimeLoraCapable).not.toHaveBeenCalled();
     resolveMiniMaxH3MlxSpeedCapable.mockResolvedValue(true);
     listVideoModels.mockReturnValue([{ ...model, revision: 'b'.repeat(40) }]);
     await expect(prepare()).rejects.toMatchObject({ code: 'MINIMAX_H3_SPEED_MODEL_UNSUPPORTED' });

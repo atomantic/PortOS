@@ -69,8 +69,8 @@ export async function prepareMiniMaxH3SpeedProfile(params, settings) {
   const reason = miniMaxH3SpeedProfileDeclineReason(params);
   if (reason) throw new ServerError(reason.message, { status: 400, code: reason.code });
   if (!isVideoModelTermsAccepted(params.model, acceptedVideoModelTerms(settings))) throw videoModelTermsError(params.model);
-  if (!(await resolveByovRuntimeLoraCapable(params.model.runtime))
-    || (params.model.runtime === 'minimax_h3' && !(await resolveMiniMaxH3MlxSpeedCapable()))) {
+  if ((params.model.runtime === 'minimax_h3' && !(await resolveMiniMaxH3MlxSpeedCapable()))
+    || !(await resolveByovRuntimeLoraCapable(params.model.runtime))) {
     throw new ServerError('LightX2V requires its pinned H3 runtime and scheduler/quantized-LoRA capability probes. Install or repair the selected MiniMax H3 runtime in Video Gen.',
       { status: 400, code: 'MINIMAX_H3_SPEED_RUNTIME_UNSUPPORTED' });
   }
