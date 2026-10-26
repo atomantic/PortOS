@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { composeStyledPrompt, stylePromptAdditions } from '../lib/composeStyledPrompt';
 import {
   FAL_IMAGE_MODEL_IDS, RUNWAY_IMAGE_MODEL_IDS,
@@ -127,6 +127,7 @@ function useImageGenBackendRuntime() {
 
 export function useImageGenPageRuntime() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const settingsOpen = searchParams.get('settings') === '1';
   const openSettings = () => setSearchParams((previous) => {
@@ -140,7 +141,7 @@ export function useImageGenPageRuntime() {
     return next;
   });
   const backend = useImageGenBackendRuntime();
-  const form = useImageGenForm({ searchParams, setSearchParams, backend });
+  const form = useImageGenForm({ searchParams, setSearchParams, backend, handoffStylePreset: location.state?.imageStylePreset });
   const gallery = useImageGenGallery({ previewParam: searchParams.get('preview') });
   const [flux2Status, setFlux2Status] = useState(null);
   const [flux2InstallOpen, setFlux2InstallOpen] = useState(false);

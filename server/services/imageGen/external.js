@@ -110,7 +110,7 @@ function startProgressPolling(baseUrl, generationId) {
 let activeJob = null;
 export const getActiveJob = () => activeJob;
 
-export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, height, steps, cfgScale, seed, cleanC2PA = false, denoise = false }) {
+export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, height, steps, cfgScale, seed, visualProfile, visualProfileRevision, promptAdditions, cleanC2PA = false, denoise = false }) {
   const baseUrl = validateSdUrl(sdapiUrl);
   const model = await detectModel(baseUrl);
   const isFlux = model?.toLowerCase().includes('flux');
@@ -159,14 +159,16 @@ export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, h
       await ensureDir(PATHS.images);
       const filename = `${randomUUID()}.png`;
       const pngPath = join(PATHS.images, filename);
-      return publishImageFiles([pngPath], async () => {
+      const sidecarPath = visualProfile ? join(PATHS.images, `${filename.slice(0, -4)}.json`) : null;
+      return publishImageFiles([pngPath, ...(sidecarPath ? [sidecarPath] : [])], async () => {
         await atomicWrite(pngPath, Buffer.from(data.images[0], 'base64'));
         const reason = await rejectDegenerateFrame(pngPath);
         if (reason) throw new ServerError(reason, { status: 502, code: 'DEGENERATE_FRAME' });
+        if (sidecarPath) await atomicWrite(sidecarPath, JSON.stringify({ prompt, negativePrompt, width, height, steps, cfgScale, seed, model, mode: IMAGE_GEN_MODE.EXTERNAL, generationId, createdAt: new Date().toISOString(), visualProfile, visualProfileRevision, promptAdditions }, null, 2));
         // Auto-clean BEFORE the SSE complete fires so the URL the client opens
-        // serves the cleaned bytes. External mode has no sidecar — pass null so
-        // the helper just patches the PNG in place.
-        await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath, sidecarPath: null, mode: IMAGE_GEN_MODE.EXTERNAL });
+        // serves the cleaned bytes. Profile renders also preserve their source
+        // metadata; legacy renders keep the existing PNG-only behavior.
+        await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath, sidecarPath, mode: IMAGE_GEN_MODE.EXTERNAL });
         const path = `/data/images/${filename}`;
         console.log(`🖼️ Image saved: ${filename}`);
         activeJob = null;

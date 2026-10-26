@@ -45,7 +45,7 @@ const revokeIfBlob = (url) => {
 const loadImageModels = () => listImageModels({ silent: true });
 const loadLoraLibrary = () => listLorasFull({ silent: true });
 
-export function useImageGenForm({ searchParams, setSearchParams, backend }) {
+export function useImageGenForm({ searchParams, setSearchParams, backend, handoffStylePreset = null }) {
   const {
     status,
     effectiveMode,
@@ -282,7 +282,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     const get = (key) => searchParams.get(key);
     if (get('prompt')) {
       setPrompt(get('prompt'));
-      setStylePreset(null);
+      setStylePreset(handoffStylePreset);
       setSelectedUniverse(null);
     }
     if (get('negativePrompt')) setNegativePrompt(get('negativePrompt'));
