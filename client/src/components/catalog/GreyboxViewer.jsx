@@ -176,6 +176,7 @@ const GreyboxViewer = forwardRef(function GreyboxViewer({ scene, aspect = '16:9'
       ref={labelPortal}
       className="relative mx-auto rounded-lg overflow-hidden border border-port-border bg-black"
       style={{ aspectRatio: ratio, width: `min(100%, ${70 * ratio}vh)` }}
+      data-port-graphics-surface="webgl"
       data-testid="greybox-viewer"
     >
       {scene.source === 'glb' && modelFailure?.src === modelSrc ? <div role="alert" className="p-4 text-sm text-port-text">

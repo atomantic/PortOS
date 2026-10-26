@@ -24,10 +24,7 @@ const scene = {
 };
 
 async function openEnvironment(fixture, { warmup = false } = {}) {
-  // Exercise the supported reduced-motion path: animated glass backdrops can
-  // stall SwiftShader's first canvas paint without moving the shot button.
-  // The scene, real pointer actions, HiDPI buffer and capture checks stay intact.
-  const page = await fixture.browser.newPage({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 2, reducedMotion: 'reduce' });
+  const page = await fixture.browser.newPage({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 2, reducedMotion: 'no-preference' });
   page.setDefaultTimeout(10000);
   await page.addInitScript(() => {
     // Only timing/method names from this synthetic fixture, capped per page.
@@ -109,6 +106,7 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
       return { page, state, ingredient };
     }
     expect(state.viewerRequests).toBe(0);
+    expect(await page.evaluate(() => getComputedStyle(document.body, '::after').animationPlayState)).toBe('running');
     // Keep bounded, synthetic-only evidence when Chromium's actionability
     // check stalls. Observe actual draw calls without scheduling a continuous
     // animation-frame probe in a demand-rendered scene.
@@ -130,6 +128,11 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     state.phase = 'viewer attachment';
     await page.getByRole('tab', { name: 'Greybox', exact: true }).click();
     await page.locator('[data-testid="greybox-viewer"] canvas').waitFor({ state: 'attached' });
+    expect(await page.evaluate(() => ({
+      reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+      base: getComputedStyle(document.body, '::before').animationPlayState,
+      glow: getComputedStyle(document.body, '::after').animationPlayState,
+    }))).toEqual({ reducedMotion: false, base: 'running', glow: 'paused' });
     state.phase = 'shot selection';
     await page.getByRole('button', { name: /Overhead/, pressed: false }).click();
     await page.waitForFunction(() => document.querySelector('#greybox-lens')?.value === '28');
@@ -283,6 +286,9 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
         expect(afterSize).toEqual(beforeSize);
         expect(ingredient.payload.greybox.shots[0].aspect).toBe(aspect);
       }
+      await page.getByRole('tab', { name: 'Plates', exact: true }).click();
+      await page.getByTestId('greybox-viewer').waitFor({ state: 'detached' });
+      expect(await page.evaluate(() => getComputedStyle(document.body, '::after').animationPlayState)).toBe('running');
       expect(state.errors).toEqual([]);
     } catch (error) {
       const gpuCalls = await page.evaluate(() => window.greyboxGpuCalls);
