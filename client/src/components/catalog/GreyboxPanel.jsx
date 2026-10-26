@@ -30,6 +30,13 @@ const actionButton = 'min-h-[40px] inline-flex items-center justify-center gap-1
 const EMPTY_LLM = { providerId: '', model: '', effort: '' };
 const AUTO = 'Default — the active provider';
 
+// Identity reads group media by its owning ingredient before recency. A
+// retained source's older export can therefore precede the replacement on the
+// surviving identity. Use the newest attachment consistently after refreshes
+// and remounts, even when detaching the previous export failed.
+const latestModel = (media = []) => media.filter((row) => row.kind === 'model' && !row.deleted)
+  .reduce((latest, row) => !latest || (row.createdAt || '') > (latest.createdAt || '') ? row : latest, null);
+
 /**
  * The Greybox tab of an Environment: orbit a coarse 3D layout of the place,
  * save camera angles as shots, capture a shot as a reference image on the
@@ -41,7 +48,8 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
   const [params, setParams] = useSearchParams();
   const viewerRef = useRef(null);
   const [modelOverride, setModelOverride] = useState(null);
-  const model = modelOverride?.recordId === record.id ? modelOverride.row : (media || []).find((row) => row.kind === 'model' && !row.deleted);
+  const syncedModel = latestModel(media || []);
+  const model = modelOverride?.recordId === record.id ? modelOverride.row : syncedModel;
   const saved = record.payload?.greybox ?? null;
   const [draft, setDraft] = useState(null);
   const [manual, setManual] = useState(null);
@@ -59,9 +67,8 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
 
   useEffect(() => {
     if (modelOverride?.recordId !== record.id) return;
-    const synced = (media || []).filter((row) => row.kind === 'model' && !row.deleted);
-    if (modelOverride.row ? synced.some((row) => row.mediaKey === modelOverride.row.mediaKey) : synced.length === 0) setModelOverride(null);
-  }, [record.id, media, modelOverride]);
+    if (modelOverride.row ? syncedModel?.mediaKey === modelOverride.row.mediaKey : !syncedModel) setModelOverride(null);
+  }, [record.id, syncedModel, modelOverride]);
 
   const scene = draft?.greybox || manual || saved;
   const editErrors = manual ? greyboxEditErrors(manual) : [];
