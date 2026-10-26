@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { basename, join } from 'path';
 import { tmpdir, totalmem } from 'os';
 import { MINIMAX_H3_HOST_RESERVE_GB } from '../../lib/minimaxH3Memory.js';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 // Pure table, no mocking involved — a static import survives vi.resetModules().
 import { INSPIRE_DEFAULT_IMAGE_STRENGTH } from '../../lib/videoReferenceModes.js';
 
@@ -82,6 +82,7 @@ const fsPromisesMock = vi.hoisted(() => ({
 
 vi.mock('../../lib/fileUtils.js', () => ({
   tryReadFile: vi.fn().mockResolvedValue(null),
+  sha256File: vi.fn(async (path) => createHash('sha256').update(path).digest('hex')),
   ensureDir: vi.fn(async () => {}),
   PATHS: MOCK_PATHS,
   readJSONFile: vi.fn(async () => []),
