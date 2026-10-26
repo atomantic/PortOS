@@ -608,6 +608,7 @@ export default function CanonCard({
         aria-label={`Render reference for ${entry.name}`}
       >
         {inFlightJobId ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
+        <span className="ml-1 text-xs">Generate image</span>
       </button>
       {kind.key === 'places' && onRenderCleanPlate ? (
         <button
