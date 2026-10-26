@@ -493,7 +493,8 @@ async function resumeCompletedDeliveryParent(task) {
     // the follow-up target; it independently checks the captured head, current
     // forge state, ownership and physical checkout before recording settlement.
     const result = parent.result;
-    const recoveredDelivery = m.mergedReviewFollowUp?.status === 'verified'
+    const recoveredDelivery = !!parsePullRequestUrl(m.reviewLoopPRUrl)
+      && m.mergedReviewFollowUp?.status === 'verified'
       && m.mergedReviewFollowUp.prUrl === m.reviewLoopPRUrl
       && m.reviewLoopPRBranch === parent.metadata?.worktreeBranch
       && result?.deliveryRecoveryOwned === true && result.executionSuccess === true
@@ -618,6 +619,19 @@ async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false } = {}
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
   if (!skipPrelude) {
     await reconcileReleasedSelectionHistory(agents);
+    // Replay completed handoffs after restart as well as at their event. Only
+    // terminal parents with unfinished delivery qualify; ordinary completed
+    // history never incurs a forge probe. Existing batch bounds still apply.
+    const parents = new Set(agents.filter(agent => agent.status === 'completed'
+      && agent.result?.deliveryRecoveryOwned === true && agent.result.executionSuccess === true
+      && agent.metadata?.repoStateVerification?.deliveryVerified !== true)
+      .map(agent => agent.id || agent.agentId));
+    if (parents.size) {
+      const followUps = (await readAllTasksFlat()).filter(task => task.status === 'completed'
+        && task.metadata?.mergedReviewFollowUp?.status === 'verified'
+        && parents.has(task.metadata.sourceAgentId)).slice(0, COMPLETION_RECOVERY_BATCH_SIZE);
+      for (const task of followUps) await resumeCompletedDeliveryParent(task);
+    }
     const { reconcileCleanupThreads } = await import('./brainTaskThreads.js');
     await reconcileCleanupThreads({ dryRun: false }).catch(error => emitLog('warn', `Cleanup thread reconciliation deferred: ${error.message}`));
     const { recoverLegacyDeliveryBlocks } = await import('./deliveryRecovery.js');

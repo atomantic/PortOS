@@ -347,7 +347,7 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(state.result).toEqual({ success: false, executionSuccess: true, cleanupPending: true });
   });
 
-  it.each([true, false])('reconciles an eventual merge after a terminal pre-merge report only with fresh exact-head proof (%s)', async integrated => {
+  it.each([{ integrated: true }, { integrated: false }, { integrated: true, restart: true }])('reconciles an eventual merge after a terminal pre-merge report with exact proof (%j)', async ({ integrated, restart }) => {
     const capture = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
       startedAt: CREATED_AT, capturedAt: CREATED_AT, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
     const originalResult = { success: false, executionSuccess: true, deliveryRecoveryOwned: true,
@@ -363,7 +363,10 @@ describe('verifyAgentRepoState — clean runs', () => {
       reviewLoopPRUrl: 'https://github.com/example/repo/pull/7',
       mergedReviewFollowUp: { status: 'verified', prUrl: 'https://github.com/example/repo/pull/7' } } };
     queuedTasks([followUp]);
-    await observeCompletedTask(followUp);
+    if (restart) {
+      readBranchCompletionPolicies.mockResolvedValueOnce([state]);
+      await sweepRepoStateVerifications();
+    } else await observeCompletedTask(followUp);
     if (integrated) expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ deliveryVerified: true }));
     else expect(recordRepoStateVerification).not.toHaveBeenCalled();
     expect(state.result).toEqual(originalResult);
