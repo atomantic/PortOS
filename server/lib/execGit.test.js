@@ -6,7 +6,8 @@ vi.mock('./childProcess.js', () => ({
 }));
 
 import { spawn } from './childProcess.js';
-import { execGit, execGitSafe } from './execGit.js';
+vi.mock('./windowsGitProcess.js', () => ({ startGit: (args, options, wire) => wire(spawn('git', args, options)) }));
+import { assertGitWorkSettled, execGit, execGitSafe, withGitMutationLifetime } from './execGit.js';
 
 const makeChild = () => {
   const child = new EventEmitter();
@@ -36,6 +37,11 @@ describe('execGit', () => {
       cwd: '/repo',
       shell: false
     });
+  });
+
+  it('rejects embedded NUL before a native command line could truncate an argument', async () => {
+    await expect(execGit(['status', 'prefix\0suffix'], '/repo')).rejects.toThrow(/without NUL/);
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it('forwards an explicit credential environment without merging ambient variables', async () => {
@@ -168,7 +174,8 @@ describe('execGit', () => {
     await expect(promise).resolves.toEqual({
       exitCode: 1,
       stdout: '',
-      stderr: 'git command timed out after 0.5s: git fetch'
+      stderr: 'git command timed out after 0.5s',
+      settlement: 'held', settlementReason: 'tree-unconfirmed'
     });
   });
 
@@ -188,6 +195,59 @@ describe('execGit', () => {
     const promise = execGit(['status'], '/repo');
     child.emit('error', new Error('spawn ENOENT'));
     await expect(promise).rejects.toThrow(/ENOENT/);
+  });
+
+  it('holds mutation admission and teardown when cancellation cannot confirm pipe settlement', async () => {
+    const child = makeChild();
+    child.pid = 12345;
+    child.cancelOwnedGit = vi.fn();
+    child.gitSettlement = new Promise(() => {});
+    spawn.mockReturnValue(child);
+    const retain = vi.fn();
+    const result = withGitMutationLifetime(() => execGit(['fetch', 'private-argument'], '/held-fixture/repo', { timeout: 100 }), retain).catch(error => error);
+    vi.advanceTimersByTime(100);
+    expect(child.cancelOwnedGit).toHaveBeenCalledOnce();
+    expect(retain).not.toHaveBeenCalled();
+    child.emit('exit', 1);
+    expect(() => assertGitWorkSettled('/held-fixture')).toThrow(/settlement is held/);
+    vi.advanceTimersByTime(5000);
+    const failure = await result;
+    expect(failure).toMatchObject({ code: 'GIT_TIMEOUT', settlement: 'held', settlementReason: 'pipes-unconfirmed' });
+    expect(failure.message).not.toContain('private-argument');
+    expect(retain).toHaveBeenCalledOnce();
+    expect(() => assertGitWorkSettled('/held-fixture')).toThrow(/settlement is held/);
+    expect(() => assertGitWorkSettled('/held-fixture-neighbor')).not.toThrow();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('waits for owned-tree evidence after close before releasing mutation admission', async () => {
+    const child = makeChild();
+    child.cancelOwnedGit = vi.fn();
+    let confirm;
+    child.gitSettlement = new Promise(resolve => { confirm = resolve; });
+    spawn.mockReturnValue(child);
+    const retain = vi.fn();
+    const result = withGitMutationLifetime(() => execGit(['status'], '/settled-fixture/repo', { timeout: 100 }), retain).catch(error => error);
+    vi.advanceTimersByTime(100);
+    child.emit('close', 1);
+    expect(() => assertGitWorkSettled('/settled-fixture')).toThrow(/settlement is held/);
+    confirm({ settled: true, launched: true, exitCode: 1, reason: 'settled' });
+    expect(await result).toMatchObject({ code: 'GIT_TIMEOUT', settlement: 'settled' });
+    expect(retain).not.toHaveBeenCalled();
+    expect(() => assertGitWorkSettled('/settled-fixture')).not.toThrow();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('retains an unconfirmed tree despite closed pipes and a zero supervisor exit', async () => {
+    const child = makeChild();
+    child.gitSettlement = Promise.resolve({ settled: false, reason: 'termination-unconfirmed' });
+    spawn.mockReturnValue(child);
+    const retain = vi.fn();
+    const result = withGitMutationLifetime(() => execGit(['status'], '/unconfirmed-fixture'), retain);
+    child.emit('close', 0);
+    await expect(result).rejects.toMatchObject({ code: 'GIT_SETTLEMENT_HELD', settlement: 'held', settlementReason: 'termination-unconfirmed' });
+    expect(retain).toHaveBeenCalledOnce();
+    expect(() => assertGitWorkSettled('/unconfirmed-fixture')).toThrow(/settlement is held/);
   });
 
   it('falls back to a generic error message when stderr is empty on non-zero exit', async () => {

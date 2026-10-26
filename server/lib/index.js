@@ -448,6 +448,7 @@ export * from './hostShutdown.js';
 export * from './httpDrain.js';
 export * from './upgradeFallback.js';
 export * from './execGit.js';
+export * from './windowsGitProcess.js';
 export * from './ffmpeg.js';
 export * from './ffmpegFilterGraph.js';
 export * from './forgeAccessErrors.js';
