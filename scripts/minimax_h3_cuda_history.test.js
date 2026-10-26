@@ -129,7 +129,7 @@ print('owned scratch and no-clobber publication')`)).toBe('owned scratch and no-
   });
 
   it.skipIf(!native)('uses native modular denoising and media fixtures to retain clean history and decode target output only', () => {
-    expect(execFileSync(python, [join(dir, 'fixtures/minimax_h3_cuda_history_fixture.py'), dir], {
+    expect(execFileSync(python, [join(dir, 'minimax_h3_cuda_history_fixture.py'), dir], {
       encoding: 'utf8', timeout: 60_000,
     }).trim()).toBe('native CUDA history fixtures passed');
   });

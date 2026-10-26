@@ -32,7 +32,7 @@ output.
 
 ## Verified evidence
 
-The weight-free fixture `scripts/fixtures/minimax_h3_cuda_history_fixture.py`
+The weight-free fixture `scripts/minimax_h3_cuda_history_fixture.py`
 ran on Windows with Python 3.13, CPU PyTorch 2.12.0, and the exact CUDA runtime
 dependency pins. It uses real PyAV decoding, native modular layout, packing,
 schedulers, denoising and unpacking, with small synthetic model components:
