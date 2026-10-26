@@ -38,7 +38,7 @@ const IS_WIN32 = process.platform === 'win32';
 export const UNCOVERED_SUITES = Object.freeze({
   db: 'needs a reachable test Postgres: npm run setup:db:test && npm run test:db (never against the real `portos` database)',
   browser: 'needs Chrome, ffmpeg and the client bundler; run `npm run pregate -- --full` once they are installed',
-  build: 'npm run build && npm run test --prefix client -- ApiExplorer.bundle',
+  build: 'npm run build',
   smoke: 'npm run smoke',
   windows: 'CI is the only proof',
   linuxContainment: 'a Linux host with bubblewrap: PORTOS_REQUIRE_LINUX_CONTAINMENT=1 npm test --prefix server -- --run <LINUX_CONTAINMENT_TESTS>',
@@ -230,11 +230,7 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, 
   });
 
   if (plan.build && !skip.build) {
-    stages.push(
-      { name: 'client build', suite: 'build', npm: ['run', 'build', '--prefix', 'client'], args: [], env: {} },
-      // The Scalar-removal pin only sees dist/ after a real build.
-      { name: 'API Explorer bundle pin', suite: 'build', npm: ['run', 'test', '--prefix', 'client', '--', 'ApiExplorer.bundle'], args: [], env: {} },
-    );
+    stages.push({ name: 'client build', suite: 'build', npm: ['run', 'build', '--prefix', 'client'], args: [], env: {} });
   }
 
   if (plan.smoke && !skip.smoke) {

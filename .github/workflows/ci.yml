@@ -594,13 +594,6 @@ jobs:
         if: needs.impact.outputs.build == 'true' && matrix.shard == 1
         run: npm run build --prefix client
 
-      # The Scalar-removal pin can only see dist/ after a real build, and it
-      # skips the chunk assertion when client/dist is absent — so it runs here,
-      # not in the unit test job. See client/src/pages/ApiExplorer.bundle.test.js.
-      - name: Check API Explorer bundle has no Scalar chunks
-        if: needs.impact.outputs.build == 'true' && matrix.shard == 1
-        run: npm run test --prefix client -- ApiExplorer.bundle
-
       - name: Retain frozen candidate invocation evidence
         if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

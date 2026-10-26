@@ -345,8 +345,8 @@ export const WINDOWS_RISK_RULES = [
 
 // These are the cross-platform contracts that cannot be faithfully simulated
 // by pinning process.platform on Linux. For a Windows-risk PR, Vitest also
-// adds import-graph-related tests for the diff; this stable baseline catches
-// spawn, shell, PowerShell, PTY, and path regressions without rerunning every
+// adds import-graph-related tests for native-risk sources in the diff. This
+// baseline catches spawn, shell, PowerShell, PTY, and path regressions without rerunning every
 // platform-independent server assertion. Full CI still runs the entire suite.
 export const WINDOWS_CONTRACT_TESTS = [
   'server/services/htmlComposition/ownedBrowser.test.js',
@@ -1327,8 +1327,11 @@ function buildSuitePlan(changedFiles, {
     || serverSources.some((path) => dbDependencies === null || dbDependencies.includes(path));
 
   const windows = hasWindowsRiskFile(changed);
+  // Linux owns the complete server diff. Native selection follows only its
+  // existing risk inputs, so an unrelated edit cannot widen a test-only plan.
+  const windowsSources = serverSources.filter(path => hasWindowsRiskFile([path]));
   const windowsMode = windows
-    ? (serverSources.length > 0 ? 'related' : 'files')
+    ? (windowsSources.length > 0 ? 'related' : 'files')
     : 'skip';
 
   let reason = 'Vitest related-test fallback';
@@ -1365,7 +1368,7 @@ function buildSuitePlan(changedFiles, {
       // A risk tag must select the changed contract itself as well as baseline.
       ...directTests.filter(path => isServerRunnerFile(path) && hasWindowsRiskFile([path])),
     ]) : [],
-    windowsSources: windowsMode === 'related' ? serverSources : [],
+    windowsSources: windowsMode === 'related' ? windowsSources : [],
   }, { appRouteOnly, linuxRunnerExcludes: new Set([...dbTests, ...BROWSER_SUITES]) });
 }
 

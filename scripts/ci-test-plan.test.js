@@ -1570,6 +1570,23 @@ describe('CI test impact planner', () => {
     expect(winHelper.windows).toBe(true);
   });
 
+  it.each([
+    'server/lib/bufferedSpawn.js',
+    'server/lib/windowsGitProcess.protocol.test.js',
+  ])('does not broaden native coverage for an unrelated server edit beside %s', native => {
+    const neutral = 'server/lib/zodCompat.js';
+    const options = {
+      trackedFiles: [...TRACKED, ...WINDOWS_CONTRACT_TESTS, native, neutral],
+      clientDependencies: [],
+    };
+    const nativeOnly = buildCiTestPlan([native], options);
+    const mixed = buildCiTestPlan([native, neutral], options);
+    expect(mixed.full).toBe(false);
+    expect({ mode: mixed.windowsMode, files: mixed.windowsFiles, sources: mixed.windowsSources, shards: mixed.shards.windows })
+      .toEqual({ mode: nativeOnly.windowsMode, files: nativeOnly.windowsFiles, sources: nativeOnly.windowsSources, shards: nativeOnly.shards.windows });
+    expect(mixed.server.sources).toContain(neutral);
+  });
+
   it.each(['js', 'test.js'])('runs owned-browser Windows contracts when its %s file changes', extension => {
     const source = 'server/services/htmlComposition/ownedBrowser.js';
     const test = 'server/services/htmlComposition/ownedBrowser.test.js';

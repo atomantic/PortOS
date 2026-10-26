@@ -177,7 +177,7 @@ focused unit tests: edited test files and sibling tests for changed sources,
 including untracked tests, without expanding through transitive imports.
 
 `npm run pregate -- --full` opts into the CI-selected broad suites locally:
-server and client tests, the client build and its API Explorer bundle pin, the
+server and client tests, the client build, the
 boot smoke, browser suites (smoke profile, prerequisites required rather than
 skipped), and the serial `portos_test` DB suite last and alone. Each stage
 receives the environment the matching job sets. A suite the machine cannot run
@@ -230,8 +230,8 @@ record: `docs/plans/2026-10-18-ci-local-first-merge-gate.md`). After the push,
 pushed head, and the impact planner skips what it attests to:
 
 - **What is attested.** Only receipt stages that ran and passed: the
-  hidden-content scan, lint, server and client tests, the client build and its
-  bundle pin, the boot smoke, the browser suites and the DB suite, and the
+  hidden-content scan, lint, server and client tests, the client build,
+  the boot smoke, the browser suites and the DB suite, and the
   shipped prompt-history guard. A suite pregate reported as not run — skipped
   by a `--skip-*` flag, left to CI by a downgraded full plan, or missing a
   prerequisite — is not attested, and a downgraded full plan never attests
@@ -645,8 +645,7 @@ The selected work is split across parallel jobs:
   failed at setup time. (`browser/` gets no such step: zero dependencies, and
   its lockfile is deliberately gitignored.)
 - **Client tests and build** — affected client tests, plus the production build
-  whenever client source changed. Build and the Scalar-removal bundle pin run on
-  shard 1 only.
+  whenever client source changed. The build runs on shard 1 only.
 - **Lint client** — Biome over the changed client sources, in its own job. It used
   to be a shard-1 step on the client job. Steps within a job run sequentially, so
   that put ~31 s of Biome in front of the slowest shard's tests rather than beside
@@ -804,8 +803,8 @@ under the cap and client `related` plans stay on one runner. Vitest refuses a
 shard count above the number of files it resolved, so a runner fans out only
 when at least that many explicit selectors are files the Linux job actually
 runs (DB and browser suites have their own jobs); each shard repeats Vitest's
-related-graph pass, the trade the Windows job already makes. Once-only steps — smoke boot, the client build, the
-Scalar-removal bundle pin — pin themselves to shard 1; lint is not among them,
+related-graph pass, the trade the Windows job already makes. Once-only steps — smoke boot and the client build —
+pin themselves to shard 1; lint is not among them,
 because it has its own job (see above). `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are
 free, so the fan-out costs only concurrency.
@@ -968,6 +967,25 @@ that at zero wall-clock cost, so the matrix stayed at 3 at that point.
 The later full-suite capacity measurements below justify its current four shards.
 `max-parallel` is not an alternative — it lowers peak concurrency, not total
 occupancy.
+
+### Windows selection for mixed changes
+
+Scoped Windows plans keep the existing 43 native contracts and explicitly edited
+native tests. Related-test inputs include only changed sources already matched by
+the Windows risk rules. Linux keeps the complete server source selection, including
+schema, migration and data-integrity contracts. A platform-neutral server change
+therefore does not turn a native-test-only edit into a broad Windows related plan.
+Changes to actual native sources retain their related-test closure; unclassified
+pipeline/full triggers and full scheduled/release validation remain conservative.
+
+For the representative diff `server/lib/windowsGitProcess.protocol.test.js` plus
+`server/lib/zodCompat.js`, a replay of the real repository input snapshot changes
+Windows from four related-test jobs (44 explicit contracts plus the schema source)
+to one exact-file job containing those same 44 native contracts. Linux retains the
+schema source and its related coverage. This measures selection and setup count;
+no execution-time or runner-minute improvement is claimed. The obsolete Scalar
+package/chunk absence suite and its separate post-build Vitest invocation are
+removed; production client builds still run.
 
 ### Windows full-suite capacity
 
