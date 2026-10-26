@@ -280,6 +280,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     const present = IMAGE_GEN_RESTORE_PARAM_KEYS.filter((key) => searchParams.get(key) != null);
     if (!initFile && present.length === 0) return;
     const get = (key) => searchParams.get(key);
+    if (handoffStylePreset) setStylePreset(handoffStylePreset);
     if (get('prompt')) {
       setPrompt(get('prompt'));
       setStylePreset(handoffStylePreset);
