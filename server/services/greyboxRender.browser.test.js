@@ -24,7 +24,8 @@ const canRun = browserSuiteCanRun('Greybox capture parity', { Chrome: chrome, cl
 // hosts providing its mechanism. Other hosts still run browser pixel parity.
 const isolatedHost = process.platform === 'darwin' && existsSync('/usr/bin/sandbox-exec')
   || process.platform === 'linux' && existsSync('/usr/bin/bwrap');
-const { greyboxViewerBundle, GREYBOX_CAPTURE_HTML, renderGreyboxPng } = await import('./greyboxRender.js');
+const { getGreyboxCapturePage } = await import('./greyboxCapturePage.js');
+const { renderGreyboxPng } = await import('./greyboxRender.js');
 const scene = greyboxSceneSchema.parse({
   parts: [
     { id: 'floor', type: 'box', size: [12, 0.1, 10], position: [0, -0.05, 0] },
@@ -40,6 +41,7 @@ describe.skipIf(!canRun)('greybox captures in real Chrome', () => {
   let fixture;
   let server;
   let script;
+  let html;
   const setup = createOwnedFixtureSetup({ cleanup: async () => {
     try {
       const outcomes = await Promise.allSettled([fixture?.close(), server?.close()]);
@@ -48,6 +50,7 @@ describe.skipIf(!canRun)('greybox captures in real Chrome', () => {
     } finally { cleanupTempDataRoots(); }
   } });
   beforeAll(() => setup.run(async (phase) => {
+    ({ html, script } = await phase('bundle', getGreyboxCapturePage));
     const { createServer } = await import(pathToFileURL(requireClient.resolve('vite')).href);
     const { default: react } = await import(pathToFileURL(requireClient.resolve('@vitejs/plugin-react')).href);
     await phase('vite', async () => {
@@ -57,7 +60,7 @@ describe.skipIf(!canRun)('greybox captures in real Chrome', () => {
         plugins: [react(), { name: 'greybox-fixture', configureServer(server) {
           server.middlewares.use('/greybox-test', async (_req, res) => {
             res.setHeader('Content-Type', 'text/html');
-            res.end(await server.transformIndexHtml('/greybox-test', GREYBOX_CAPTURE_HTML.replace('<script src="/viewer.js"></script>', '<script type="module" src="/src/components/catalog/GreyboxCapture.jsx"></script>')));
+            res.end(await server.transformIndexHtml('/greybox-test', html.replace('<script src="/viewer.js"></script>', '<script type="module" src="/src/components/catalog/GreyboxCapture.jsx"></script>')));
           });
         } }],
         server: { host: '127.0.0.1', port: 0, watch: null, hmr: false },
@@ -65,7 +68,6 @@ describe.skipIf(!canRun)('greybox captures in real Chrome', () => {
       await server.listen();
     });
     await phase('browser', async () => { fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true } }); });
-    script = await phase('bundle', greyboxViewerBundle);
   }));
   afterAll(() => setup.close());
 
@@ -75,14 +77,17 @@ describe.skipIf(!canRun)('greybox captures in real Chrome', () => {
     for (const [aspect, focalLengthMm] of [['16:9', 28], ['9:16', 50], ['21:9', 18]]) {
       const shot = { ...scene.shots[0], aspect, focalLengthMm };
       const tab = await fixture.browser.newPage({ viewport: { width: 900, height: 700 }, deviceScaleFactor: 2 });
-      const standalone = await fixture.browser.newPage({ viewport: { width: 600, height: 500 } });
+      const standalone = isolatedHost ? null : await fixture.browser.newPage({ viewport: { width: 600, height: 500 } });
       try {
         await tab.goto(`${server.resolvedUrls.local[0]}greybox-test`);
         await tab.waitForFunction(() => typeof globalThis.captureGreybox === 'function');
         const inTab = await tab.evaluate(({ scene, shot }) => globalThis.captureGreybox(scene, shot), { scene, shot });
-        await standalone.setContent(GREYBOX_CAPTURE_HTML.replace('<script src="/viewer.js"></script>', ''));
-        await standalone.addScriptTag({ content: script });
-        const headless = await standalone.evaluate(({ scene, shot }) => globalThis.captureGreybox(scene, shot), { scene, shot });
+        if (standalone) {
+          await standalone.setContent(html.replace('<script src="/viewer.js"></script>', ''));
+          await standalone.addScriptTag({ content: script });
+        }
+        const headless = isolatedHost ? `data:image/png;base64,${await renderGreyboxPng(scene, shot)}`
+          : await standalone.evaluate(({ scene, shot }) => globalThis.captureGreybox(scene, shot), { scene, shot });
         const reference = await sharp(Buffer.from(inTab.split(',')[1], 'base64')).raw().toBuffer({ resolveWithObject: true });
         const actual = await sharp(Buffer.from(headless.split(',')[1], 'base64')).raw().toBuffer({ resolveWithObject: true });
         const { width, height } = greyboxCaptureSettings(shot);
@@ -95,7 +100,7 @@ describe.skipIf(!canRun)('greybox captures in real Chrome', () => {
         for (let i = 0; i < actual.data.length; i += actual.info.channels) colors.add(actual.data.subarray(i, i + 3).toString('hex'));
         expect(colors.size).toBeGreaterThan(20);
         captures.push(headless);
-      } finally { await tab.close(); await standalone.close(); }
+      } finally { await tab.close(); await standalone?.close(); }
     }
     expect(new Set(captures).size).toBe(3);
   });

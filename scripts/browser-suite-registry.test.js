@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { BROWSER_FIDELITY_ONLY_FILES, BROWSER_FIDELITY_TESTS } from './lib/browserTestProfiles.js';
+import { existingPaths } from './lib/trackedFiles.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -15,8 +16,9 @@ describe('cross-workspace browser suite registry', () => {
     // gated fixture, excluding only the gate's own unit tests.
     // Pregate includes untracked sources; a new registered suite must not look
     // missing merely because it has not been staged yet. NULs preserve paths.
-    const gated = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '--deduplicate', '-z', '--', 'server/**/*.test.js', ':!server/lib/browserSuiteGate*.test.js'], { cwd: root, encoding: 'utf8' })
-      .split('\0').filter(Boolean).filter((file) => readFileSync(join(root, file), 'utf8').includes('browserSuiteCanRun(')).sort();
+    const paths = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '--deduplicate', '-z', '--', 'server/**/*.test.js', ':!server/lib/browserSuiteGate*.test.js'], { cwd: root, encoding: 'utf8' })
+      .split('\0').filter(Boolean);
+    const gated = existingPaths(root, paths).filter((file) => readFileSync(join(root, file), 'utf8').includes('browserSuiteCanRun(')).sort();
     expect(gated).toEqual([...BROWSER_SUITES].sort());
   });
 
