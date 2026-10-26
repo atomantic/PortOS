@@ -23,6 +23,8 @@ describe('useModelInputPreview', () => {
     await act(async () => { resolvers[1]({ sentPrompt: 'a red fox' }); });
     await act(async () => { resolvers[0]({ sentPrompt: 'a fox' }); });
     expect(result.current.preview).toEqual({ sentPrompt: 'a red fox' });
+    rerender({ body: { prompt: 'another character' } });
+    expect(result.current.preview).toBeNull();
   });
 
   it('reports a refusal as the error to show', async () => {

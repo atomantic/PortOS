@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   enqueueJob: vi.fn(),
   getImageModels: vi.fn(),
   getBoard: vi.fn(),
+  listMediaForIngredient: vi.fn(),
+  imageFiles: new Set(),
 }));
 
 vi.mock('../lib/imageCleanDefaults.js', () => ({
@@ -24,6 +26,11 @@ vi.mock('../services/catalogDB.js', () => ({
   getIngredient: (...args) => mocks.getIngredient(...args),
   getIngredientIdentityIds: async id => [id],
   listLiveRefsForIngredient: (...args) => mocks.listLiveRefsForIngredient(...args),
+  listMediaForIngredient: (...args) => mocks.listMediaForIngredient(...args),
+}));
+vi.mock('../lib/pathSafety.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolveImageInputPath: (path) => mocks.imageFiles.has(path.split('/').pop()) ? path : null,
 }));
 vi.mock('../services/universeBuilder.js', () => ({
   getUniverse: (...args) => mocks.getUniverse(...args),
@@ -72,14 +79,83 @@ const queuedParams = (n = 0) => mocks.enqueueJob.mock.calls[n][0].params;
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.listLiveRefsForIngredient.mockResolvedValue([]);
+  mocks.listMediaForIngredient.mockResolvedValue([]);
+  mocks.imageFiles.clear();
   mocks.getSettings.mockResolvedValue({ imageGen: { mode: 'local', local: { pythonPath: '/python', modelId: 'dev' } } });
-  mocks.getImageModels.mockReturnValue([{ id: 'dev', hardwareCompatibility: { state: 'available' } }]);
+  mocks.getImageModels.mockReturnValue([{ id: 'dev', runner: 'flux2', hardwareCompatibility: { state: 'available' } }]);
   mocks.enqueueJob.mockReturnValue({ jobId: 'job-1', position: 1 });
   mocks.updateUniverse.mockResolvedValue({});
   mocks.getBoard.mockResolvedValue(null);
 });
 
 describe('catalog sheet routes', () => {
+  // Proves the images shown before Generate are the same ordered inputs queued,
+  // and prevents derived sheets or a different form becoming identity fallback.
+  it('previews and queues portrait and canon images once, excluding derived and alternate-form media', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...character, payload: {
+      ...character.payload, primaryImageRef: 'canon.png', imageRefs: ['canon.png', 'profile.png'],
+    } });
+    mocks.listMediaForIngredient.mockResolvedValue([
+      { kind: 'portrait', mediaKey: 'portrait.png' },
+      { kind: 'reference', mediaKey: 'old-sheet.png', role: 'sheet:standard' },
+      { kind: 'reference', mediaKey: 'archive.png', role: 'archive:portrait' },
+      { kind: 'reference', mediaKey: 'child.png', library: { guide: true, variant: { formId: 'child' } } },
+    ]);
+    ['portrait.png', 'canon.png', 'profile.png'].forEach((name) => mocks.imageFiles.add(name));
+    const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
+    expect(res.status).toBe(200);
+    const preview = res.body.preview;
+    expect(preview.referenceImages.map((ref) => [ref.filename, ref.status])).toEqual([
+      ['portrait.png', 'included'], ['canon.png', 'included'], ['profile.png', 'included'],
+    ]);
+    expect(preview.referenceImages[1]).toMatchObject({ source: 'Primary canon image', url: '/data/images/canon.png' });
+    expect(JSON.stringify(preview)).not.toContain(process.cwd());
+    const queued = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
+    expect(queued.status).toBe(200);
+    expect(queuedParams().referenceImagePaths.map((path) => path.split('/').pop())).toEqual(['portrait.png', 'canon.png', 'profile.png']);
+    expect(queuedParams().prompt).toBe(preview.sentPrompt);
+    expect(preview.promptAdditions.find((a) => a.id === 'character-identity').text).toContain('facial features');
+  });
+
+  it('honors explicit guides and previews the provider cap without rewriting an override', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...character, payload: { primaryImageRef: 'unused.png' } });
+    mocks.getSettings.mockResolvedValue({ imageGen: { mode: 'agy', agy: { enabled: true } } });
+    mocks.listMediaForIngredient.mockResolvedValue(['one', 'two', 'three', 'four'].map((name) => ({
+      kind: 'reference', mediaKey: `${name}.png`, library: { guide: true },
+    })));
+    ['one', 'two', 'three', 'four'].forEach((name) => mocks.imageFiles.add(`${name}.png`));
+    const body = { overridePrompt: 'My exact sheet prompt' };
+    const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+    expect(res.status).toBe(200);
+    expect(res.body.preview.referenceImages.map((ref) => ref.status)).toEqual(['included', 'included', 'included', 'limit']);
+    expect(res.body.preview.referenceImages.every((ref) => ref.source === 'Render guide')).toBe(true);
+    expect(res.body.preview.sentPrompt).toBe(body.overridePrompt);
+    await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+    expect(queuedParams().referenceImagePaths).toHaveLength(3);
+    expect(queuedParams().prompt).toBe(body.overridePrompt);
+  });
+
+  it('shows a missing guide and refuses to silently render without it', async () => {
+    mocks.getIngredient.mockResolvedValue(character);
+    mocks.listMediaForIngredient.mockResolvedValue([{ kind: 'reference', mediaKey: 'missing.png', library: { guide: true } }]);
+    const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
+    expect(res.body.preview.referenceImages).toEqual([{ filename: 'missing.png', source: 'Render guide', status: 'missing' }]);
+    const queued = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
+    expect(queued.status).toBe(400);
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('refuses a local model that would discard the reference images', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...character, payload: { primaryImageRef: 'canon.png' } });
+    mocks.imageFiles.add('canon.png');
+    mocks.getImageModels.mockReturnValue([{ id: 'dev', runner: 'mflux', hardwareCompatibility: { state: 'available' } }]);
+    const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
+    expect(res.body.preview.referenceImages[0].status).toBe('unsupported');
+    const queued = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
+    expect(queued.status).toBe(400);
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+  });
+
   it('refuses a foreign canonical target before rendering or looking up settings', async () => {
     const { assertCatalogIdentityWritable } = await import('../services/catalogDB/identityAccess.js');
     assertCatalogIdentityWritable.mockRejectedValueOnce(Object.assign(new Error('Canonical owner required'), { status: 409, code: 'CATALOG_IDENTITY_FOREIGN' }));
@@ -116,14 +192,19 @@ describe('catalog sheet routes', () => {
     mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
     mocks.getUniverse.mockResolvedValue({
       id: 'universe-1', name: 'Example Universe', influences: { embrace: [] },
-      characters: [{ id: 'char-entry-1', name: 'Example Hero', ingredientId: 'cat-chr-1' }],
+      characters: [{ id: 'char-entry-1', name: 'Example Hero', ingredientId: 'cat-chr-1', primaryImageRef: 'canonical.png' }],
     });
+    mocks.imageFiles.add('canonical.png');
+    const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
+    expect(preview.body.preview.referenceImages).toMatchObject([{ filename: 'canonical.png', status: 'included' }]);
     const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ delegatedTo: 'universe', universeId: 'universe-1', entryId: 'char-entry-1', variant: 'standard' });
     const params = queuedParams();
     expect(params.characterSheet).toMatchObject({ universeId: 'universe-1', entryId: 'char-entry-1', variant: 'standard' });
     expect(params.catalogAttach).toBeUndefined();
+    expect(params.referenceImagePaths[0]).toMatch(/canonical\.png$/);
+    expect(params.prompt).toBe(preview.body.preview.sentPrompt);
   });
 
   it('refuses a variant the type does not offer, and a locked record', async () => {

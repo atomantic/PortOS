@@ -4,9 +4,8 @@
  * Generates a single dense artist reference sheet per universe canon
  * character from a structured TEXT prompt that describes every zone of
  * the sheet (turnaround, expressions, palette, wardrobe, props, gestures).
- * No init image or multi-reference input is required — the rich prompt
- * itself is the "template", so the renderer works equally well across
- * any image-gen backend (codex, local, future nano-banana).
+ * Canonical character images condition likeness when available; the prompt
+ * supplies the sheet layout and the record's authored details.
  *
  * The route returns the generation id immediately; this module subscribes
  * to mediaJobEvents to copy the result into data/image-refs/ and stamp
@@ -23,6 +22,7 @@ import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { purgeReferenceSheetFromAllUniverses } from './universeCanon.js';
 import { universeAestheticLine } from '../lib/universeVisualStyle.js';
 import { promptAddition } from '../lib/modelInput.js';
+import { characterSheetReferenceCandidates, resolveCharacterSheetReferences } from '../lib/characterSheetReferences.js';
 import { enqueueJob, getJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
@@ -400,8 +400,9 @@ export async function buildSheetRenderParams({
   renderPin = {},
   styleChip = { id: 'universe-style', label: 'Universe style' },
   negativesLabel = 'Character sheet negatives',
+  referenceCandidates = [],
 }) {
-  const prompt = typeof options.overridePrompt === 'string' && options.overridePrompt.trim()
+  let prompt = typeof options.overridePrompt === 'string' && options.overridePrompt.trim()
     ? options.overridePrompt
     : built.prompt;
   const negativePrompt = typeof options.overrideNegativePrompt === 'string' && options.overrideNegativePrompt.trim()
@@ -453,6 +454,7 @@ export async function buildSheetRenderParams({
   };
 
   let modelId = null;
+  let localModel = null;
   let params;
   const cloud = sheetTarget.cloud;
   if (cloud) {
@@ -460,7 +462,8 @@ export async function buildSheetRenderParams({
     modelId = cloud.modelId;
     params = { ...baseParams, ...cloud.providerParams };
   } else if (activeMode === IMAGE_GEN_MODE.LOCAL) {
-    modelId = selectLocalImageModelFromSettings(settings, options.modelId)?.id || null;
+    localModel = selectLocalImageModelFromSettings(settings, options.modelId);
+    modelId = localModel?.id || null;
     if (!modelId) {
       throw new ServerError(
         'No local image-gen models are registered. Install a model via `bash scripts/setup-image-video.sh` before generating a reference sheet.',
@@ -474,7 +477,30 @@ export async function buildSheetRenderParams({
       { status: 400, code: 'UNIVERSE_CHARACTER_SHEET_UNSUPPORTED_MODE' },
     );
   }
-  return { params, prompt, negativePrompt, modelId, activeMode };
+  const references = resolveCharacterSheetReferences(referenceCandidates, activeMode, modelId, localModel);
+  if (references.paths.length) {
+    params.referenceImagePaths = references.paths;
+    if (prompt === built.prompt) {
+      const text = 'Use the attached canonical character images as the identity reference. Preserve the character’s facial features, proportions, skin, hair, markings and distinctive likeness across every view. Apply the requested age, wardrobe and visual direction while keeping the same character identity.';
+      prompt += `\n\n${text}`;
+      params.prompt = prompt;
+      params.promptAdditions = [...(params.promptAdditions || []), promptAddition('character-identity', 'Canonical character likeness', text)];
+    }
+  }
+  return { params, prompt, negativePrompt, modelId, activeMode, referenceImages: references.images };
+}
+
+export function assertSheetReferencesAvailable(referenceImages) {
+  if (referenceImages.some((ref) => ref.status === 'unsupported')) {
+    throw new ServerError('Canonical references need FLUX.2 or Qwen Image 2.1 on the local backend, or a cloud image backend. Select a supported sheet render target before generating.', {
+      status: 400, code: 'CHARACTER_SHEET_REFERENCES_UNSUPPORTED',
+    });
+  }
+  if (referenceImages.some((ref) => ref.status === 'missing')) {
+    throw new ServerError('A canonical reference image is unavailable. Restore it or update the character’s references before generating a sheet.', {
+      status: 400, code: 'CHARACTER_SHEET_REFERENCE_MISSING',
+    });
+  }
 }
 
 // Load + guard one universe character and build its sheet params. Shared by
@@ -500,19 +526,24 @@ async function prepareCharacterSheet(universeId, entryId, options) {
     );
   }
   const built = variantConfig.build(universe, character);
+  const media = character.ingredientId
+    ? await import('./catalogDB.js').then(({ listMediaForIngredient }) => listMediaForIngredient(character.ingredientId))
+    : [];
   const sheet = await buildSheetRenderParams({
     built, options, styleLine: universeAestheticLine(universe), renderPin: recordRenderPin(universe),
+    referenceCandidates: characterSheetReferenceCandidates(character, media),
   });
   return { variant, variantConfig, universe, character, ...sheet };
 }
 
 /** What a universe character's sheet render would send, without queueing it. */
 export async function previewCharacterReferenceSheet(universeId, entryId, options = {}) {
-  const { params } = await prepareCharacterSheet(universeId, entryId, options);
+  const { params, referenceImages } = await prepareCharacterSheet(universeId, entryId, options);
   return {
     sentPrompt: params.prompt,
     ...(params.negativePrompt ? { sentNegativePrompt: params.negativePrompt } : {}),
     promptAdditions: params.promptAdditions || [],
+    referenceImages,
   };
 }
 
@@ -527,8 +558,9 @@ export async function previewCharacterReferenceSheet(universeId, entryId, option
  */
 export async function renderCharacterReferenceSheet(universeId, entryId, options = {}) {
   const {
-    variant, variantConfig, universe, character, params, prompt, modelId, activeMode,
+    variant, variantConfig, universe, character, params, prompt, modelId, activeMode, referenceImages,
   } = await prepareCharacterSheet(universeId, entryId, options);
+  assertSheetReferencesAvailable(referenceImages);
 
   // Resolve (or create) the universe's media collection up front, then attach
   // a `universeRun` tag to the job so `universeBuilderCollectionHook` files

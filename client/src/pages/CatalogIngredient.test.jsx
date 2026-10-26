@@ -1042,6 +1042,26 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     expect(screen.queryByAltText('mood.png')).toBeNull();
   });
 
+  it('shows the server-selected canonical references beside Generate with full-size links and omissions', async () => {
+    const api = await import('../services/apiCatalog');
+    api.previewCatalogSheet.mockResolvedValue({ preview: {
+      sentPrompt: 'Example sheet with canonical identity', promptAdditions: [],
+      referenceImages: [
+        { filename: 'canon.png', source: 'Render guide', status: 'included', url: '/data/image-refs/canon.png' },
+        { filename: 'extra.png', source: 'Render guide', status: 'limit', url: '/data/images/extra.png' },
+        { filename: 'missing.png', source: 'Canon image', status: 'missing' },
+      ],
+    } });
+    await renderPage('/casting/cat-chr-hero/sheets');
+    const references = await screen.findByRole('region', { name: 'Canonical reference images' });
+    expect(within(references).getByAltText('Canonical reference 1')).toHaveAttribute('src', '/data/image-refs/canon.png');
+    expect(within(references).getByRole('link', { name: /Open canonical reference 1/ })).toHaveAttribute('href', '/data/image-refs/canon.png');
+    expect(within(references).getByText('Will be sent to the model')).toBeInTheDocument();
+    expect(within(references).getByText(/Not sent.*limit/)).toBeInTheDocument();
+    expect(within(references).getByText(/Missing file/)).toBeInTheDocument();
+    expect(api.renderCatalogSheet).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['character', '/casting/example/profile'],
     ['place', '/environments/example/profile'],

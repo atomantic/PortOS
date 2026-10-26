@@ -12,6 +12,7 @@ import { asyncHandler } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validation.js';
 import {
   renderCharacterReferenceSheet,
+  previewCharacterReferenceSheet,
   deleteCharacterReferenceSheet,
   listSheetVariants,
   getCharacterReferenceSheet,
@@ -45,6 +46,13 @@ router.post('/:id/characters/:entryId/render-reference-sheet', asyncHandler(asyn
   const result = await renderCharacterReferenceSheet(req.params.id, req.params.entryId, options)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
+}));
+
+router.post('/:id/characters/:entryId/reference-sheet/preview', asyncHandler(async (req, res) => {
+  const options = validateRequest(renderReferenceSheetSchema, req.body ?? {});
+  const preview = await previewCharacterReferenceSheet(req.params.id, req.params.entryId, options)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json({ preview });
 }));
 
 // Delete a character's reference sheet — unlinks the PNG from

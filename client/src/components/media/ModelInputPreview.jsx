@@ -1,4 +1,5 @@
 import SentPromptPanel from './SentPromptPanel';
+import ModelReferenceImages from './ModelReferenceImages';
 
 /**
  * What Generate will send (#11317): the server's preview, built by the same
@@ -10,7 +11,8 @@ export default function ModelInputPreview({ preview, prompt }) {
   const sent = preview?.preview;
   if (!sent) return null;
   return (
-    <div className="text-xs">
+    <div className="text-xs space-y-3">
+      <ModelReferenceImages images={sent.referenceImages} />
       <SentPromptPanel
         prompt={prompt}
         sentPrompt={sent.sentPrompt}

@@ -19,8 +19,8 @@ export function useModelInputPreview(fetchPreview, body, { enabled = true } = {}
     const current = ++generation.current;
     const timer = setTimeout(() => {
       fetchPreview(JSON.parse(key), { silent: true })
-        .then((preview) => { if (current === generation.current) setState({ preview, error: null }); })
-        .catch((err) => { if (current === generation.current) setState({ preview: null, error: err?.message || 'Preview failed' }); });
+        .then((preview) => { if (current === generation.current) setState({ key, fetchPreview, preview, error: null }); })
+        .catch((err) => { if (current === generation.current) setState({ key, fetchPreview, preview: null, error: err?.message || 'Preview failed' }); });
     }, PREVIEW_DELAY_MS);
     return () => {
       clearTimeout(timer);
@@ -28,7 +28,8 @@ export function useModelInputPreview(fetchPreview, body, { enabled = true } = {}
     };
   }, [fetchPreview, key]);
 
-  return enabled ? state : { preview: null, error: null };
+  return enabled && state.key === key && state.fetchPreview === fetchPreview
+    ? { preview: state.preview, error: state.error } : { preview: null, error: null };
 }
 
 export default useModelInputPreview;
