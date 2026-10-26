@@ -60,8 +60,10 @@ if (mode !== 'child') {
       const outcome = withCheckoutPublication(root, () => execGit(supervisedArgs, root, { timeout: 1500 })).catch(error => error);
       await waitForFile(supervisedReady);
       await expect(destroyGitSandbox(root)).rejects.toMatchObject({ code: 'GIT_SETTLEMENT_HELD' });
+      const drained = globalThis.__portosGitSupervisorCleanup().then(() => null, error => error);
       const failure = await outcome;
       expect(failure).toMatchObject({ code: 'GIT_TIMEOUT', settlement: 'settled' });
+      expect(await drained).toBeNull();
       expect(neighbor.exitCode).toBe(null);
       expect(() => assertGitWorkSettled(root)).not.toThrow();
       const reservation = await reserveCheckoutRetirement(root, 'confirmed-cancellation');

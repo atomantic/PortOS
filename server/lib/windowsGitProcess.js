@@ -12,7 +12,7 @@ const compilerKey = Symbol.for('portos.windowsGitSupervisor');
 function supervisor() {
   let state = process[compilerKey];
   if (!state) {
-    state = { active: new Set(), held: false };
+    state = { active: new Set(), operations: new Set(), held: false, closing: false };
     process[compilerKey] = state;
     state.ready = (async () => {
       const directory = await mkdtemp(join(tmpdir(), 'portos-git-supervisor-'));
@@ -37,7 +37,7 @@ function supervisor() {
     process[exitKey] = true;
     process.once('exit', () => {
       const current = process[compilerKey];
-      if (current?.directory && !current.active.size && !current.held) {
+      if (current?.directory && !current.active.size && !current.operations.size && !current.held) {
         try { rmSync(current.directory, { recursive: true, force: true }); } catch { /* preserve a locked resource */ }
       }
     });
@@ -45,17 +45,26 @@ function supervisor() {
   // Vitest workers do not necessarily exit after a suite. Their existing
   // resource teardown invokes this without importing the Git dependency graph.
   globalThis.__portosGitSupervisorCleanup = async () => {
-    await state.ready.catch(() => {});
-    const directory = state.directory;
-    if (state.active.size || state.held) throw Object.assign(new Error('Git work settlement is held'), { code: 'GIT_SETTLEMENT_HELD' });
-    if (directory) await rm(directory, { recursive: true, force: true });
-    if (process[compilerKey] === state) delete process[compilerKey];
-    delete globalThis.__portosGitSupervisorCleanup;
+    state.closing = true;
+    let timer;
+    const deadline = new Promise(resolve => { timer = setTimeout(() => resolve(false), 5000); });
+    try {
+      while (state.operations.size || state.active.size) {
+        const pending = [...state.operations, ...[...state.active].map(child => child.gitSettlement)];
+        const drained = await Promise.race([Promise.allSettled(pending).then(() => true), deadline]);
+        if (!drained) throw held();
+      }
+      if (state.held) throw held();
+      if (state.directory) await rm(state.directory, { recursive: true, force: true });
+      if (process[compilerKey] === state) delete process[compilerKey];
+      delete globalThis.__portosGitSupervisorCleanup;
+    } finally { clearTimeout(timer); }
   };
   return state.ready;
 }
 
 const unavailable = () => Object.assign(new Error('Windows Git containment unavailable'), { code: 'GIT_CONTAINMENT_UNAVAILABLE' });
+const held = () => Object.assign(new Error('Git work settlement is held'), { code: 'GIT_SETTLEMENT_HELD' });
 
 /** Wire terminal listeners in the spawn tick, before sending the launch request. */
 export function startGit(args, options, wire) {
@@ -63,7 +72,10 @@ export function startGit(args, options, wire) {
   const commandArgs = [...args];
   const childOptions = { ...options, cwd: resolvePath(options.cwd), env: { ...(options.env ?? process.env) } };
   const inheritedPath = process.env.PATH || '';
-  return supervisor().then(async ({ directory, executable, state, findCommandOnPath }) => {
+  const ready = supervisor();
+  const owner = process[compilerKey];
+  if (owner.closing) return Promise.reject(unavailable());
+  const operation = ready.then(async ({ directory, executable, state, findCommandOnPath }) => {
     const env = childOptions.env;
     const pathKey = Object.keys(env).sort().find(key => key.toUpperCase() === 'PATH');
     // Match Node's Windows lookup fallback without adding ambient credentials
@@ -99,5 +111,9 @@ export function startGit(args, options, wire) {
     child.stdin.on('error', () => {}); // A racing supervisor exit is handled by its receipt.
     wire(child);
     child.stdin.write(`${JSON.stringify([gitExecutable, ...commandArgs])}\n`);
+    await child.gitSettlement;
   }).catch(() => { throw unavailable(); });
+  owner.operations.add(operation);
+  void operation.then(() => owner.operations.delete(operation), () => owner.operations.delete(operation));
+  return operation;
 }
