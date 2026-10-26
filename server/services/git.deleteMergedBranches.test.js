@@ -50,6 +50,24 @@ describe('delete merged branches', () => {
     expect(execGit).toHaveBeenCalledWith(['push', `--force-with-lease=refs/heads/feature/done:${HEAD}`, '--', REMOTE, ':refs/heads/feature/done'], '/repo', { ignoreExitCode: true });
     expect(readBranchCompletionHold).toHaveBeenCalledWith({ repoPath: '/repo', branch: 'feature/done', tip: HEAD, retirement: true });
   });
+  it('limits local and remote retirement to selected branches without weakening owner/protected holds', async () => {
+    local.push('feature/other'); remote.push('origin/feature/other');
+    const selected = new Set(['feature/done', 'release']);
+    const result = await deleteMergedBranches('/repo', { onlyBranches: selected });
+    expect(result.deleted.map(row => row.name)).toEqual(['feature/done']);
+    expect(cleanupMerged).toHaveBeenCalledTimes(1);
+    expect(cleanupMerged.mock.calls[0][2]).toEqual([{ branch: 'feature/done' }]);
+    expect(execGit.mock.calls.filter(([args]) => args[0] === 'push').every(([args]) => !args.join(' ').includes('feature/other'))).toBe(true);
+    cleanupMerged.mockClear();
+    expect((await deleteMergedBranches('/repo', { onlyBranches: selected, excludeBranches: new Set(['feature/done']) })).deleted).toEqual([]);
+    expect(cleanupMerged).not.toHaveBeenCalled();
+  });
+  it('refuses an invalid selector before any retirement and treats an empty internal selection as no work', async () => {
+    await expect(deleteMergedBranches('/repo', { onlyBranches: ['feature/done'] })).rejects.toThrow('selector');
+    expect(execGit).not.toHaveBeenCalled();
+    expect((await deleteMergedBranches('/repo', { onlyBranches: new Set() })).deleted).toEqual([]);
+    expect(cleanupMerged).not.toHaveBeenCalled();
+  });
   it.each(['archive-failed', 'worktree-locked', 'worktree-dirty', 'claim-owner-active'])('retains both refs on %s', async reason => {
     held = reason;
     const result = await deleteMergedBranches('/repo');
