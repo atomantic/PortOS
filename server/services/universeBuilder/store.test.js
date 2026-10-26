@@ -86,6 +86,7 @@ describe('universe store facade — file backend', () => {
     await s.writeRecord('u-1', {
       id: 'u-1', name: 'A', logline: 'nope', createdAt: '2026-01-01T00:00:00.000Z',
       influences: { embrace: ['ink'], avoid: [] },
+      visualProfile: { version: 1, finishing: { mode: 'preview' } },
     });
     await s.writeRecord('u-2', { id: 'u-2', name: 'B', deleted: true });
     // Same row keys db.listStyles returns — the service derives tokens from
@@ -96,6 +97,7 @@ describe('universe store facade — file backend', () => {
       influences: { embrace: ['ink'], avoid: [] },
       stylePrompt: undefined,
       negativePrompt: undefined,
+      visualProfile: { version: 1, finishing: { mode: 'preview' } },
       createdAt: '2026-01-01T00:00:00.000Z',
     }]);
   });
