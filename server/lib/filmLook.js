@@ -222,7 +222,7 @@ export function sameFilmLook(a, b) {
   const left = normalizeFilmLook(a);
   const right = normalizeFilmLook(b);
   if (!left || !right) return left === right;
-  return FILM_LOOK_CONTROLS.every((control) => left[control.id] === right[control.id]);
+  return left.version === right.version && FILM_LOOK_CONTROLS.every((control) => left[control.id] === right[control.id]);
 }
 
 /** The control record for an id (label, term, hint, range). */

@@ -78,6 +78,7 @@ describe('film look filter markup', () => {
     expect(values[128]).toBeCloseTo(128 / 255, 3);
     expect(markup).toContain('in2="SourceGraphic" operator="in"');
     expect(normalizeFilmLook({ ...old, shoulder: 0.5 }).version).toBe(2);
+    expect(sameFilmLook({ version: 1, halation: 0.3 }, { version: 2, halation: 0.3 })).toBe(false);
   });
   it('is self-contained, inactive for a neutral look, and a pure function of the frame', () => {
     // The preview and render pages receive this function by toString(): a module-scope reference would throw here.
