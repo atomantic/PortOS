@@ -486,7 +486,8 @@ export async function recordVideoExecution(jobId, meta) {
     job.videoExecutions = videoSegmentExecutionsSchema.parse([
       ...segments.filter(entry => entry.segmentIndex !== segmentIndex), segment,
     ].sort((a, b) => a.segmentIndex - b.segmentIndex));
-    const segmentSeedBase = job.params?.seed ?? null;
+    const requestedSeed = job.params?.seed;
+    const segmentSeedBase = requestedSeed == null || requestedSeed === '' ? null : Number(requestedSeed);
     const previousSeeds = job.params?.segmentSeedBase === segmentSeedBase && Array.isArray(job.params?.segmentSeeds)
       ? job.params.segmentSeeds : [];
     const segmentSeeds = Array.from({ length: segmentCount }, (_, index) => {

@@ -1008,16 +1008,21 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'failed');
   });
 
-  it('starts a new segment seed base after a retry clears its outer seed', async () => {
+  it.each([
+    [undefined, 12345, null, [12345, null]],
+    [null, 12345, null, [12345, null]],
+    ['', 12345, null, [12345, null]],
+    ['40', 40, 40, [40, 41]],
+  ])('normalizes retry seed base %s consistently with the chain renderer', async (requestedSeed, resolvedSeed, expectedBase, expectedSeeds) => {
     const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
-      modelId: 'example-mlx', chunks: 2, segmentSeeds: [40, 41], segmentSeedBase: 40,
+      modelId: 'example-mlx', chunks: 2, seed: requestedSeed, segmentSeeds: [40, 41], segmentSeedBase: 40,
     } });
     await waitFor(() => stubs.generateChainedVideo.mock.calls.length === 1);
     await mediaJobQueue.recordVideoExecution('example-cleared-seed-child', {
-      modelId: 'example-mlx', seed: 12345, width: 320, height: 192, numFrames: 25, fps: 24, steps: 9,
+      modelId: 'example-mlx', seed: resolvedSeed, width: 320, height: 192, numFrames: 25, fps: 24, steps: 9,
       executionParent: { jobId, segmentIndex: 0, segmentCount: 2 },
     });
-    expect(mediaJobQueue.getJob(jobId).params).toMatchObject({ segmentSeeds: [12345, null], segmentSeedBase: null });
+    expect(mediaJobQueue.getJob(jobId).params).toMatchObject({ segmentSeeds: expectedSeeds, segmentSeedBase: expectedBase });
     videoGenEvents.emit('failed', { generationId: jobId, error: 'Synthetic interruption' });
     await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'failed');
   });
