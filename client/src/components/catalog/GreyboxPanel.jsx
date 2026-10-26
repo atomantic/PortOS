@@ -65,22 +65,23 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
     return () => { active = false; clearTimeout(timer); };
   }, [record.id, record.updatedAt, instruction, fromScratch, saved]);
 
-  // Selecting a shot adopts its lens and aspect; the viewer moves its own camera
-  // (`shotView`). A save re-creates the shot object, so only a change of shot id
-  // re-applies either.
-  const appliedShotId = useRef(null);
+  // Selecting a shot (or a draft re-framing it) adopts its lens and aspect; the
+  // viewer moves its own camera (`shotView`). A save re-creates the shot object
+  // with the same framing, which changes nothing.
+  const appliedShotKey = useRef(null);
   useEffect(() => {
     if (!shot) {
-      appliedShotId.current = null;
+      appliedShotKey.current = null;
       return;
     }
-    if (appliedShotId.current === shot.id) return;
-    appliedShotId.current = shot.id;
+    const key = `${shot.id}:${shot.focalLengthMm}:${shot.aspect}`;
+    if (appliedShotKey.current === key) return;
+    appliedShotKey.current = key;
     setLens(shot.focalLengthMm);
     setAspect(shot.aspect);
   }, [shot]);
 
-  // The viewer applies it once per id, so a new object after a save is harmless.
+  // The viewer applies it once per framing, so a new object after a save is harmless.
   const shotView = useMemo(() => (shot ? { id: shot.id, position: shot.position, target: shot.target } : null), [shot]);
 
   const selectShot = (id) => setParams((prev) => { const next = new URLSearchParams(prev); if (id) next.set('shot', id); else next.delete('shot'); return next; }, { replace: true });
