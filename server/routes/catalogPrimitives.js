@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { catalogPrimitiveOwnerSchema, catalogPrimitiveForkSchema } from '../lib/catalogValidation.js';
+import { catalogPrimitiveOwnerSchema, catalogPrimitiveForkSchema, catalogRefinementSchema } from '../lib/catalogValidation.js';
 import { getIngredient } from '../services/catalogDB/ingredients.js';
 import { getPrimitiveContext, setPrimitiveOwner, forkPrimitive } from '../services/catalogPrimitives.js';
 
@@ -22,4 +22,14 @@ router.post('/fork', asyncHandler(async (req, res) => {
   res.status(201).json(await forkPrimitive(req.params.id, body));
 }));
 
+router.post('/refine/compose', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogRefinementSchema, req.body);
+  const { refineCatalogDraft } = await import('../services/catalogRefinement.js');
+  res.json(await refineCatalogDraft(req.params.id, body, { preview: true }));
+}));
+router.post('/refine', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogRefinementSchema, req.body);
+  const { refineCatalogDraft } = await import('../services/catalogRefinement.js');
+  res.json(await refineCatalogDraft(req.params.id, body));
+}));
 export default router;
