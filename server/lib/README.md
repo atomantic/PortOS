@@ -1026,4 +1026,4 @@ migration with explicit recognition of the outgoing shipped defaults.
 | `catalogRedesign.js` | Shared editable redesign fields and per-field limits for catalog creative conversations. |
 
 | `releasePublication.js` | Validated request for forge-verified release publication milestones. |
-| `releaseSynchronization.js` | Frozen continuation policy fields shared by publication enrollment and task update guards. |
+| `releaseSynchronization.js` | Frozen continuation policy fields and mandatory synchronization obligations shared by publication enrollment, verification and task update guards. |

@@ -8,17 +8,24 @@ import { z } from 'zod';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { RELEASE_SYNC_POLICY_KEYS, RELEASE_SYNC_FROZEN_METADATA_KEYS } from '../lib/releaseSynchronization.js';
+import { RELEASE_SYNC_POLICY_KEYS, RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
 import { storedForm } from '../lib/cosTaskRows.js';
+import { cosEvents } from './cosEvents.js';
 
 const queue = createFileWriteQueue();
 const identitySchema = z.string().regex(/^[a-f0-9]{64}$/);
 const ownerSchema = z.object({ agentId: z.string().min(1), taskId: z.string().min(1), startedAt: z.string().datetime(), workspace: z.string().min(1) }).strict();
+const obligationSchema = z.object({ status: z.enum(['pending', 'blocked', 'verified']),
+  verifiedAt: z.string().datetime().optional(), blocker: z.string().optional(), evidence: z.record(z.string(), z.unknown()).optional() }).strict()
+  .refine(value => value.status !== 'verified' || (value.verifiedAt && value.evidence && Object.keys(value.evidence).length > 0));
 const entrySchema = z.object({
   version: z.literal(1), identity: identitySchema, owner: ownerSchema,
   publication: z.object({ identity: identitySchema, status: z.literal('verified') }).passthrough(),
   task: z.object({ id: z.string(), metadata: z.object({ releaseSynchronization: z.object({ identity: identitySchema }).passthrough() }).passthrough() }).passthrough(),
-  obligations: z.record(z.string(), z.object({ status: z.literal('pending') })),
+  obligations: z.object(Object.fromEntries(RELEASE_SYNC_OBLIGATIONS.map(key => [key, obligationSchema]))).strict(),
+  synchronization: z.object({ status: z.enum(['pending', 'running', 'blocked', 'verified']),
+    attempts: z.number().int().nonnegative(), checkedAt: z.string().datetime(), retryAt: z.string().datetime().nullable(),
+    verifiedAt: z.string().datetime().nullable(), blocker: z.string().nullable() }).strict().optional(),
   checkouts: z.array(z.unknown()), registeredAt: z.string().datetime().nullable(),
   attempts: z.number().int().nonnegative(), lastAttemptAt: z.string().datetime().nullable(),
   blocker: z.string().nullable(), retryAt: z.string().datetime().nullable(),
@@ -31,7 +38,8 @@ async function readOutbox() {
   const parsed = outboxSchema.safeParse(value);
   if (!parsed.success || Object.entries(parsed.data.publications).some(([key, entry]) => key !== entry.identity
     || entry.publication.identity !== key || entry.task.id !== `task-release-sync-${key}`
-    || entry.task.metadata.releaseSynchronization.identity !== key)) refuse('Release synchronization outbox is unreadable');
+    || entry.task.metadata.releaseSynchronization.identity !== key
+    || (entry.synchronization?.status === 'verified' && RELEASE_SYNC_OBLIGATIONS.some(name => entry.obligations[name].status !== 'verified')))) refuse('Release synchronization outbox is unreadable');
   return parsed.data;
 }
 
@@ -67,9 +75,7 @@ async function newEntry(agent, publication) {
   const id = `task-release-sync-${publication.identity}`;
   const entry = entrySchema.parse({ version: 1, identity: publication.identity, owner, publication,
     checkouts, registeredAt: null, attempts: 0, lastAttemptAt: null, blocker: null, retryAt: null,
-    obligations: Object.fromEntries(['candidateFixes', 'releaseAncestry', 'synchronizationPr', 'localReview',
-      'hostedReview', 'requiredCi', 'mergeAdmission', 'qualitySnapshot', 'processSettlement', 'retirement']
-      .map(key => [key, { status: 'pending' }])),
+    obligations: Object.fromEntries(RELEASE_SYNC_OBLIGATIONS.map(key => [key, { status: 'pending' }])),
     task: { id, description: `Synchronize verified release ${publication.tag} (${publication.repository})`,
       status: 'pending', priority: source.priority || 'MEDIUM', autoApproved: true, approvalRequired: false,
       metadata: { ...policy, ...reviews, analysisType: 'release-sync', targetInstanceId: instanceId,
@@ -105,7 +111,7 @@ async function registerEntry(entry) {
   entry.blocker = null;
   entry.retryAt = null;
   await saveReleaseSynchronization(entry);
-  return { taskId: saved.id, registeredAt: entry.registeredAt, synchronizationVerified: false };
+  return { taskId: saved.id, registeredAt: entry.registeredAt, synchronizationVerified: entry.synchronization?.status === 'verified' };
 }
 
 async function retainFailure(entry, error) {
@@ -158,7 +164,7 @@ export async function recoverReleaseSynchronizationHandoffs(agents) {
       console.log(`🚫 Release synchronization handoff retained for ${agent.id}: ${error.code || 'registration-unavailable'}`);
     });
   }
-  return queue(async () => {
+  const due = await queue(async () => {
     const outbox = await readOutbox();
     for (const entry of Object.values(outbox.publications).filter(value => !value.registeredAt && !attempted.has(value.identity)
       && (!value.retryAt || Date.parse(value.retryAt) <= Date.now()))) {
@@ -166,5 +172,65 @@ export async function recoverReleaseSynchronizationHandoffs(agents) {
         await retainFailure(entry, error);
       });
     }
+    return Object.values(outbox.publications).filter(entry => entry.registeredAt
+      && entry.synchronization?.status !== 'verified'
+      && (!entry.synchronization?.retryAt || Date.parse(entry.synchronization.retryAt) <= Date.now()))
+      .sort((left, right) => (left.synchronization?.checkedAt || '').localeCompare(right.synchronization?.checkedAt || ''))
+      .slice(0, 3).map(entry => entry.task.id);
+  });
+  for (const taskId of due) await verifyReleaseSynchronizationTask(taskId, { agents, respectRetryAt: true });
+}
+
+async function verifyEntry(entry, agents) {
+  const result = agents.some(agent => agent.taskId === entry.task.id)
+    ? await (await import('./releaseSynchronizationEvidence.js')).inspectReleaseSynchronization(entry, agents)
+    : { status: 'pending', blocker: 'continuation-not-started', obligations: entry.obligations };
+  const attempts = (entry.synchronization?.attempts || 0) + 1;
+  const checkedAt = new Date().toISOString();
+  entry.obligations = result.obligations;
+  entry.synchronization = { status: result.status, attempts, checkedAt,
+    blocker: result.blocker, verifiedAt: result.status === 'verified' ? checkedAt : null,
+    retryAt: result.status === 'verified' ? null : new Date(Date.now() + Math.min(30 * 60_000, 60_000 * 2 ** Math.min(attempts - 1, 5))).toISOString() };
+  // Receipt persistence precedes change events and checkout retirement.
+  await saveReleaseSynchronization(entry);
+  cosEvents.emit('tasks:changed', { action: 'release-synchronization', taskId: entry.task.id });
+  return entry.synchronization;
+}
+
+/** Inspect one continuation independently of its execution verdict. Only this task's enrolled outbox can authorize inspection.
+ */
+export function verifyReleaseSynchronizationTask(taskId, { agents = null, respectRetryAt = false } = {}) {
+  return queue(async () => {
+    const outbox = await readOutbox();
+    const entry = Object.values(outbox.publications).find(value => value.task.id === taskId && value.registeredAt);
+    if (!entry || entry.synchronization?.status === 'verified') return entry?.synchronization || null;
+    if (respectRetryAt && entry.synchronization?.retryAt && Date.parse(entry.synchronization.retryAt) > Date.now()) return entry.synchronization;
+    const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+    return verifyEntry(entry, agents || await readBranchCompletionPolicies({ repairIndex: false }));
+  });
+}
+
+/** Retirement runs this outside its ownership fence. The ordinary retirement
+ * transaction still rechecks the exact generation and all removal authority.
+ */
+export function retainReleaseSynchronizationReview(release) {
+  return queue(async () => {
+    const outbox = await readOutbox();
+    const entries = Object.values(outbox.publications).filter(entry => entry.registeredAt && entry.synchronization?.status !== 'verified');
+    if (!entries.length) return true;
+    const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+    const { retirementCheckoutIdentityFromPointer } = await import('../lib/retirementCheckoutObservation.js');
+    const agents = await readBranchCompletionPolicies({ repairIndex: false });
+    for (const entry of entries) {
+      const owns = agents.some(agent => agent.taskId === entry.task.id && agent.metadata?.checkoutSeeds?.some(seed =>
+        seed.branch === release.branch && seed.path === release.path
+        && retirementCheckoutIdentityFromPointer(seed.incarnation?.pointer) === release.checkoutIdentity));
+      if (!owns) continue;
+      await verifyEntry(entry, agents);
+      const review = entry.obligations.localReview;
+      if (review.status !== 'verified' || review.evidence?.headSha !== release.head
+        || review.evidence.checkoutIdentity !== release.checkoutIdentity) return false;
+    }
+    return true;
   });
 }

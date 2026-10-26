@@ -448,7 +448,16 @@ export async function verifyAgentRepoState(input) {
  * periodic bounded sweep remains the durable fallback if the process exits. */
 const releasedCompletionRuns = createSingleFlight();
 export function resumeAgentCompletionRetirement(agentId) {
-  return releasedCompletionRuns.run(agentId, () => resumeReleasedCompletion(agentId));
+  return releasedCompletionRuns.run(agentId, async () => {
+    const result = await resumeReleasedCompletion(agentId);
+    const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+    const agent = await getAgentRecord(agentId);
+    if (agent?.status === 'completed' && agent.metadata?.taskAnalysisType === 'release-sync') {
+      const { verifyReleaseSynchronizationTask } = await import('./releaseSynchronization.js');
+      await verifyReleaseSynchronizationTask(agent.taskId);
+    }
+    return result;
+  });
 }
 
 async function resumeReleasedCompletion(agentId) {

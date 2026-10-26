@@ -28,7 +28,9 @@ describe.skipIf(!runDb)('publication ownership on PostgreSQL', () => {
     expect(outcomes.filter(result => result.status === 'fulfilled')).toHaveLength(1);
     expect(outcomes.filter(result => result.status === 'rejected')).toHaveLength(1);
     const saved = (await readReleaseSynchronizationOutbox()).publications[identity];
-    const advanced = { ...saved, attempts: 1, registeredAt: '2026-01-01T00:00:00Z' };
+    const advanced = { ...saved, attempts: 1, registeredAt: '2026-01-01T00:00:00Z',
+      obligations: { retirement: { status: 'blocked', blocker: 'exact-retirement-receipt-unverified' } },
+      synchronization: { status: 'blocked', attempts: 1 } };
     await saveReleaseSynchronization(advanced);
     expect((await readReleaseSynchronizationOutbox()).publications[identity]).toEqual(advanced);
     await expect(saveReleaseSynchronization({ ...advanced, task: { id: 'task-competing' } })).rejects.toThrow('immutable ownership');

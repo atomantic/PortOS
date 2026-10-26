@@ -236,8 +236,31 @@ physical checkout seeds. It never transfers checkout authority. The continuation
 uses the procedure below and ordinary delivery, admission and retirement recovery.
 Completed task history still owns its publication identity and cannot be deleted
 through task CRUD. Execution success does **not** mark synchronization verified:
-individual obligations remain pending until independently verified. The remaining
-verification and status-view slices are tracked in #13772 and #13773 under #13760.
+individual obligations remain pending until independently verified. A bounded recovery
+sweep checks the same outbox after restart, including completed task/agent history.
+It records pending, running, blocked or verified synchronization separately from the
+original publication timestamp and link. Transport failures retain successful
+revision-bound proof and durable retry times; conflicting owners remain blocked.
+
+Verification inspects the exact same-repository synchronization PR/head, its merged
+development ancestry (including the candidate head and published promotion),
+completed pre-PR local-review lifecycle, exact-head hosted approvals and checks
+green at merge, and server admission history or a coordinator merge receipt. The
+retirement service retains the continuation's private local-review receipt before
+removing its checkout; retirement refuses an uncollected receipt. Legacy or missing
+review evidence is a blocker, never a synthesized clean review. The historical
+reviewed head stays historical when later hosted feedback changes the PR.
+
+The development quality snapshot must include the available local numeric
+measurements; an independently observed lack of local measurements is recorded
+explicitly as a no-evidence result. Publication does not run providers to create
+quality evidence. Runtime, runner, PID and checkout process checks establish
+process settlement separately from task execution success. Every retained physical
+checkout generation requires its exact service retirement receipt plus checkout
+and local/remote ref absence; generic delivery/retirement recovery remains the
+only writer of those receipts. No verifier merges a PR, changes a published tag,
+steals a checkout, or resets a task retry budget. Status-view integration is
+tracked in #13773 under #13760.
 
 #### 6. Synchronize back without changing the published release
 
