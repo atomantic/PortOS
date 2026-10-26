@@ -31,7 +31,7 @@ const SOURCE_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 function filmLookBakePage(look, { width, height, src }) {
   const built = filmLookFilterMarkup(normalizeFilmLook(look), { frame: 0, width, height });
   return `<!doctype html><html><head><meta charset="utf-8"><title>Film look</title>
-<style>html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden;background:#000}img{display:block;width:${width}px;height:${height}px;filter:${built.active ? built.css : 'none'}}</style>
+<style>html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden;background:${look.version === 2 ? 'transparent' : '#000'}}img{display:block;width:${width}px;height:${height}px;filter:${built.active ? built.css : 'none'}}</style>
 </head><body>${built.svg}<img src="${src}" alt=""></body></html>\n`;
 }
 
@@ -70,6 +70,7 @@ export async function applyFilmLookBake({ filename, sourceMeta, look: input, sig
     await writeFile(join(scratch, 'index.html'), filmLookBakePage(look, { width, height, src }));
     page = await openComposition(`${FILM_LOOK_SCRATCH_DIR}/${id}`, { signal, ownedBrowser: true });
     await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+    if (look.version === 2) await page.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
     // The resize relays out the page; the screenshot waits for the paint after it.
     await page.evaluate('new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     page.check();

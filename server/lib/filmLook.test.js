@@ -42,6 +42,8 @@ describe('film look settings', () => {
     expect(filmLookSchema.safeParse({ grain: 1.5 }).success).toBe(false);
     expect(filmLookSchema.safeParse({ castColor: 'green' }).success).toBe(false);
     expect(filmLookSchema.safeParse({ preset: 'polaroid', grain: 0.5, grainColor: true }).success).toBe(true);
+    expect(filmLookSchema.safeParse({ version: 3 }).success).toBe(false);
+    expect(normalizeFilmLook({ version: 3, grain: 0.5 })).toBeNull();
   });
 
   it('scales a look toward clean: effects shrink, shaping values stay, and the amount is clamped', () => {
@@ -60,6 +62,23 @@ describe('film look settings', () => {
 });
 
 describe('film look filter markup', () => {
+  it('preserves legacy tone behavior and uses a monotonic shoulder/toe only for the new recipes', () => {
+    const old = normalizeFilmLook({ version: 1, contrast: 0.1, grain: 0.2 });
+    expect(old.version).toBe(1);
+    expect(filmLookFilterMarkup(old).filter).not.toContain('type="table"');
+    const look = filmLookPreset('natural-35mm');
+    expect(look.version).toBe(2);
+    const markup = filmLookFilterMarkup(look).filter;
+    const values = /tableValues="([^"]+)"/.exec(markup)[1].split(' ').map(Number);
+    expect(values).toHaveLength(256);
+    expect(values[0]).toBe(0);
+    expect(values[255]).toBeLessThan(1);
+    expect(values[255]).toBeGreaterThan(0.8);
+    expect(values.every((v, i) => i === 0 || v >= values[i - 1])).toBe(true);
+    expect(values[128]).toBeCloseTo(128 / 255, 3);
+    expect(markup).toContain('in2="SourceGraphic" operator="in"');
+    expect(normalizeFilmLook({ ...old, shoulder: 0.5 }).version).toBe(2);
+  });
   it('is self-contained, inactive for a neutral look, and a pure function of the frame', () => {
     // The preview and render pages receive this function by toString(): a module-scope reference would throw here.
     const standalone = new Function(`return (${filmLookFilterMarkup.toString()});`)();
