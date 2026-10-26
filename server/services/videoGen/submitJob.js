@@ -91,6 +91,7 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
       ['LoRA weights', body.loraFilenames?.length],
       ['per-stage user LoRA strengths', !isDefaultA2vLoraStages(body.a2vLoraStageStrengths)],
       ['chained chunks', body.chunks > 1],
+      ['an explicit continuation strategy', body.continuityStrategy != null],
       ['warm render batches', body.batchSize > 1],
       ['the Grok backend', body.backend === 'grok'],
       ['a FableLoom scene tag', body.fableLoom],
@@ -446,6 +447,8 @@ const submitLocalLane = async ({ body, prepared, localPerformanceParams, enqueue
     ...(prepared.effectiveChunkPrompts ? { chunkPrompts: prepared.effectiveChunkPrompts } : {}),
     // Zero is a real last-frame-chaining value; only nullish means absent.
     ...(prepared.effectiveContextFrames != null ? { contextFrames: prepared.effectiveContextFrames } : {}),
+    ...(body.continuityStrategy != null ? { continuityStrategy: body.continuityStrategy } : {}),
+    ...(prepared.continuation ? { continuation: prepared.continuation } : {}),
     loras: prepared.loras,
     icReferencePaths: prepared.icReferencePaths,
     ...(prepared.referenceImagePaths?.length ? { referenceImagePaths: prepared.referenceImagePaths } : {}),

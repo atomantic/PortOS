@@ -57,7 +57,8 @@ import {
 } from './runtimes.js';
 import { getSettings } from '../settings.js';
 import { loadHistory, saveHistory, mutateVideoHistory, getHistoryItem } from './history.js';
-import { VIDEO_MODE_GATED_RUNTIMES } from './modeContract.js';
+import { sanitizeContinuation } from '../../lib/videoContinuationProvenance.js';
+import { VIDEO_MODE_GATED_RUNTIMES, videoContinuityContractError } from './modeContract.js';
 import { videoJobState, beginPreparation } from './jobState.js';
 import {
   assertRenderModeContract,
@@ -81,7 +82,7 @@ import {
 } from '../../lib/videoDraftDecoders.js';
 import { isDefaultVideoStreamingMode } from '../../lib/videoStreamingMode.js';
 import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
-import { extendLatentFrames, supportsContextWindow } from '../../lib/videoContinuity.js';
+import { extendLatentFrames, supportsContextWindow, publicContinuationCapability, resolveContinuityRequest } from '../../lib/videoContinuity.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 // Re-export the extracted runtime + history surface so existing deep imports
 // (`from '../videoGen/local.js'`) keep resolving every symbol they used to.
@@ -132,6 +133,7 @@ export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id
 const decorateVideoModel = (m) => (m ? {
   ...m,
   supportsWarmBatch: supportsWarmVideoBatch(m),
+  continuationCapability: publicContinuationCapability(m),
   a2vLoraStageCapable: a2vLoraStageCapable(m.runtime),
   lastFrameAnchored: modelAnchorsLastFrame(m),
   runtimeLoraCapable: byovRuntimeLoraCapable(m.runtime),
@@ -358,7 +360,7 @@ async function resolveRequestedDraftDecoder({ model, draftDecode, jobId }) {
   return draftDecoder;
 }
 
-async function renderLocalVideo(preparation, { pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, a2vLoraStageStrengths, loras = null, icReferencePaths = null, referenceImagePaths = null, referenceVideoPaths = null, referenceAudioPaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [] }) {
+async function renderLocalVideo(preparation, { pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, a2vLoraStageStrengths, loras = null, icReferencePaths = null, referenceImagePaths = null, referenceVideoPaths = null, referenceAudioPaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [], continuityStrategy, contextFrames, continuation = null, historyContext = null, executionParent = null }) {
   const sourceAudioProvenance = audioConditioning == null ? null : federatedSourceAudioSchema.parse(audioConditioning);
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
@@ -370,6 +372,26 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
   const { modelId: selectedModelId, model } = await resolveVideoModelSelection(modelId, { resolveModel: resolveVideoModel });
   modelId = selectedModelId;
   if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
+  const continuityError = videoContinuityContractError({ model, continuityStrategy, contextFrames });
+  if (continuityError) throw continuityError;
+  if (historyContext) {
+    const historyError = videoContinuityContractError({ model, continuityStrategy: 'window', contextFrames });
+    if (historyError) throw historyError;
+  }
+  const safeContinuation = sanitizeContinuation(continuation);
+  const requestedStrategy = continuityStrategy ?? (safeContinuation?.requestedStrategy === 'auto'
+    ? undefined : safeContinuation?.requestedStrategy);
+  const replayContinuityError = videoContinuityContractError({ model,
+    continuityStrategy: requestedStrategy, contextFrames: contextFrames ?? safeContinuation?.contextFrames });
+  if (replayContinuityError) throw replayContinuityError;
+  const currentContinuation = resolveContinuityRequest({ model, continuityStrategy: requestedStrategy,
+    contextFrames: contextFrames ?? safeContinuation?.contextFrames });
+  const resolvedContinuation = (safeContinuation || continuityStrategy != null) ? {
+    ...currentContinuation,
+    actualHistoryFrames: (extendFromVideoPath || historyContext)
+      && currentContinuation.effectiveStrategy === 'window'
+      ? (historyContext?.frames ?? safeContinuation?.actualHistoryFrames ?? null) : 0,
+  } : null;
   validateVideoBatch({ batchSize, seed }, model);
   if (!isHardwareCompatible(model.hardwareCompatibility)) {
     throw new ServerError(
@@ -638,6 +660,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
     // prompt + seed + dials are the whole input. `renderInputsVersion` is the
     // marker that both are trustworthy; records without it are legacy and must
     // not be assumed unconditioned. Neither field carries a staging path.
+    ...(resolvedContinuation ? { continuation: sanitizeContinuation(resolvedContinuation) } : {}),
     renderInputsVersion: RENDER_INPUTS_VERSION,
     conditioning: describeRenderConditioning({
       sourceImagePath: resolvedSourceImage,
@@ -725,6 +748,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
   await startPreparedLocalVideo({
     preparation,
     jobId,
+    executionParent,
     meta,
     batch,
     cleanupTempFiles,
@@ -748,6 +772,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
       height: h,
       numFrames: parsedNumFrames,
       fps: parsedFps,
+      continuityStrategy, contextFrames, historyContext,
       steps: actualSteps,
       stage2Steps: actualStage2Steps,
       guidance: actualGuidance,
@@ -816,13 +841,13 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
 // (its busy-claim, setup-error and child-terminal paths each release the same
 // resources), so a throw out of it is rethrown untouched.
 async function startPreparedLocalVideo({
-  preparation, jobId, meta, batch, cleanupTempFiles, displaySleep, buildParams, watchParams,
+  preparation, jobId, executionParent, meta, batch, cleanupTempFiles, displaySleep, buildParams, watchParams,
 }) {
   const job = { ...meta, clients: [], status: 'running' };
   let stepwiseDir = null;
   let handedOff = false;
   try {
-    await recordVideoExecution(jobId, { ...meta, ...(batch ? { batchSeeds: batch.map(item => item.seed) } : {}) });
+    await recordVideoExecution(jobId, { ...meta, ...(executionParent ? { executionParent } : {}), ...(batch ? { batchSeeds: batch.map(item => item.seed) } : {}) });
     // Each render gets one private preview directory. Runners overwrite the
     // fixed `preview.png` path atomically, so a long render cannot accumulate
     // one PNG per step and a stale preview can never cross job boundaries.
@@ -850,13 +875,13 @@ async function startPreparedLocalVideo({
 
     handedOff = true;
     await spawnAndWatchVideo({
-      jobId, preparation, batch, cleanupTempFiles, stepwiseDir, job, bin, args, meta, videoGenSettings, ...watchParams,
+      jobId, executionParent, preparation, batch, cleanupTempFiles, stepwiseDir, job, bin, args, meta, videoGenSettings, ...watchParams,
     });
   } catch (err) {
     if (handedOff) throw err;
     await recordVideoExecutionDiagnostics(jobId, { termination: {
       exitCode: null, signal: null, reason: preparation.wasCanceled() ? 'canceled' : 'refused', observedAt: new Date().toISOString(),
-    } }).catch(error => console.error(`❌ Video preparation evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`));
+    } }, ...(executionParent ? [executionParent] : [])).catch(error => console.error(`❌ Video preparation evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`));
     job.status = 'error';
     const reason = err.message || 'Failed to prepare video generation';
     console.error(`❌ Video generation preparation error [${jobId.slice(0, 8)}]: ${reason}`);

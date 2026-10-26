@@ -45,7 +45,10 @@ export const cancel = () => {
   videoJobState.cancelEpoch += 1;
   // Flag a chain so its orchestrator stops between chunks, then terminate the
   // child currently holding the local GPU lane when one exists.
-  if (videoJobState.activeChain) videoJobState.activeChain.stopped = true;
+  if (videoJobState.activeChain) {
+    videoJobState.activeChain.stopped = true;
+    videoJobState.activeChain.abortController?.abort();
+  }
   if (!videoJobState.activeProcess) {
     if (videoJobState.activeChain) return true;
     // 'pending': the job is ours and still preparing; the render will abort

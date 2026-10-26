@@ -61,6 +61,7 @@ const MUXING_DONE_RE = /\[Decoding video \+ audio \+ muxing\]\s+done in/i;
 
 export async function spawnAndWatchVideo({
   jobId,
+  executionParent = null,
   batch = null,
   speedProfileId = null,
   preparation = null,
@@ -102,7 +103,7 @@ export async function spawnAndWatchVideo({
     memoryTimer = null;
     if (Object.keys(memoryEvidence).length) {
       const memory = { ...memoryEvidence };
-      memoryWrites = memoryWrites.catch(() => {}).then(() => recordVideoExecutionDiagnostics(jobId, { memory }));
+      memoryWrites = memoryWrites.catch(() => {}).then(() => recordVideoExecutionDiagnostics(jobId, { memory }, ...(executionParent ? [executionParent] : [])));
     }
     return memoryWrites;
   };
@@ -136,7 +137,7 @@ export async function spawnAndWatchVideo({
       await recordVideoExecutionDiagnostics(jobId, {
         ...(Object.keys(memoryEvidence).length ? { memory: { ...memoryEvidence } } : {}),
         termination: { exitCode, signal, reason, observedAt: new Date().toISOString() },
-      });
+      }, ...(executionParent ? [executionParent] : []));
     } catch (error) {
       console.error(`❌ Video termination evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`);
     }
@@ -154,7 +155,7 @@ export async function spawnAndWatchVideo({
   };
   let heavyClaim;
   try {
-    await recordVideoExecution(jobId, { ...meta, modelId, seed: actualSeed, width: w, height: h,
+    await recordVideoExecution(jobId, { ...meta, ...(executionParent ? { executionParent } : {}), modelId, seed: actualSeed, width: w, height: h,
       numFrames: parsedNumFrames, steps: actualSteps, ...(batch ? { batchSeeds: batch.map(item => item.seed) } : {}) });
     heavyClaim = await claimHeavyLocalJob({ kind: 'local video generation', id: jobId });
   } catch (err) {
@@ -889,7 +890,7 @@ export async function spawnAndWatchVideo({
     if (memoryReport.blockers.length) throw new Error(gpuBlockersMessage(memoryReport.blockers));
     const admission = miniMaxH3LiveMemoryAdmission({ model, totalMemoryGb: memoryReport.totalGb, availableMemoryGb: memoryReport.availableGb });
     if (admission?.memory) {
-      await recordVideoExecutionDiagnostics(jobId, { memory: admission.memory });
+      await recordVideoExecutionDiagnostics(jobId, { memory: admission.memory }, ...(executionParent ? [executionParent] : []));
     }
     if (admission?.decline) throw new ServerError(admission.decline.message, { status: 409, code: admission.decline.code });
     if (admission) args.push('--memory-budget-bytes', String(admission.memory.budgetBytes));

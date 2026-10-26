@@ -46,7 +46,7 @@ import {
 } from '../../lib/videoTextEncoders.js';
 import { minimaxH3ControlError } from './minimaxH3Controls.js';
 import { wan22FrameCountError } from './wan22Controls.js';
-import { resolveContextFrames } from '../../lib/videoContinuity.js';
+import { resolveContextFrames, resolveContinuityRequest } from '../../lib/videoContinuity.js';
 import {
   IC_LORA_MODE_VALUES, icLoraSpecForMode,
   assertIcReferenceCount, describeIcReferenceRange,
@@ -77,7 +77,7 @@ import {
 } from '../../lib/systemCapabilities.js';
 // Straight from the leaf, not through local.js: the suites that exercise this
 // module mock local.js wholesale, and a mocked rule table would assert nothing.
-import { videoModeContractError, videoChainUnsupportedError, videoReferenceModeError } from './modeContract.js';
+import { videoModeContractError, videoChainUnsupportedError, videoReferenceModeError, videoContinuityContractError } from './modeContract.js';
 import { resolveByovRuntimeLoraCapable, videoLoraUnsupportedError } from './runtimes.js';
 import { validateVideoBatch } from './batch.js';
 import { audioDurationToFrames } from './audioDuration.js';
@@ -138,6 +138,8 @@ export async function validateVideoRetryParams(params = {}) {
     && !supportsVideoTextEncoder(model, params.textEncoderId)) {
     throw videoTextEncoderUnsupportedError(model, params.textEncoderId);
   }
+  const continuityError = videoContinuityContractError({ model, continuityStrategy: params.continuityStrategy, contextFrames: params.contextFrames });
+  if (continuityError) throw continuityError;
   validateVideoBatch(params, model);
   const mode = params.mode || (params.sourceImagePath ? 'image' : 'text');
   const modeError = videoModeContractError({
@@ -331,6 +333,12 @@ export function resolveRequestedVideoBackend({ body, uploads, settings, localOnl
 export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys }) {
   const settings = await getSettings();
   const backend = resolveRequestedVideoBackend({ body, uploads, settings, localOnlyParamKeys });
+  if (backend !== VIDEO_GEN_MODE.LOCAL && body.continuityStrategy != null) {
+    await cleanupMultipartTemp(uploads);
+    throw new ServerError('Explicit continuation strategy requires a local video backend.', {
+      status: 400, code: 'VIDEO_CONTINUITY_UNSUPPORTED',
+    });
+  }
   const runwaySpecial = backend === VIDEO_GEN_MODE.RUNWAY && RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode);
   if (!runwaySpecial && (RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode) || uploads.runwayVideo || uploads.runwayCharacterVideo)) {
     await cleanupMultipartTemp(uploads);
@@ -893,6 +901,12 @@ async function resolvePreparedParams({
       { status: 400, code: 'A2V_RUNTIME_UNSUPPORTED' },
     );
   }
+  const continuityError = videoContinuityContractError({ model: effectiveModel,
+    continuityStrategy: body.continuityStrategy, contextFrames: body.contextFrames });
+  if (continuityError) {
+    await cleanupStaged();
+    throw continuityError;
+  }
   // Chunk chaining needs image-to-video on any runtime — the same rule
   // generateChainedVideo enforces at dispatch, applied once here so a doomed
   // chain never reaches the persisted queue.
@@ -1321,6 +1335,10 @@ async function resolvePreparedParams({
     ? resolveContextFrames(body.contextFrames)
     : undefined;
 
+  const continuation = effectiveChunks > 1 || body.continuityStrategy != null
+    ? resolveContinuityRequest({ model: effectiveModel, continuityStrategy: body.continuityStrategy, contextFrames: body.contextFrames })
+    : undefined;
+
   return {
     backend,
     pythonPath,
@@ -1343,6 +1361,7 @@ async function resolvePreparedParams({
     effectiveChunks,
     effectiveChunkPrompts,
     effectiveContextFrames,
+    continuation,
     discardSourceImage,
     cleanupStaged,
   };

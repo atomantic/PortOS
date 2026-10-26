@@ -1,3 +1,4 @@
+import { sanitizeContinuation } from '../lib/videoContinuationProvenance.js';
 import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from '../lib/videoLoraStageValidation.js';
 /**
  * Video Generation Routes — local LTX backend.
@@ -291,6 +292,7 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
   // the live pin, owns accept/refuse. Absence and 'auto' are the same
   // request (the bridge's own default).
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.STREAMING_MODE]: z.enum(VIDEO_STREAMING_MODES).optional(),
+  [VIDEO_GEN_LOCAL_ONLY_FIELDS.CONTINUITY_STRATEGY]: z.enum(['frame', 'window']).optional(),
 });
 
 const generateBodySchema = z.object({
@@ -411,7 +413,8 @@ const generateBodySchema = z.object({
   // A window carries motion across the seam where a single still can't; `0`
   // opts back into last-frame chaining, and absence takes the default. Only
   // meaningful on a runtime with an extend pipeline — elsewhere it's ignored,
-  // not rejected. See lib/videoContinuity.js.
+  // not rejected for legacy requests. Explicit window admission is enforced
+  // separately and never silently falls back. See lib/videoContinuity.js.
   contextFrames: optionalInt(MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES, 'contextFrames'),
   // History id of a prior render to extend natively (ltx2 runtime only —
   // routes through ExtendPipeline.extend_from_video which conditions on
@@ -1137,6 +1140,9 @@ const pickJobParams = (job) => {
   for (const k of ACTIVE_JOB_PARAM_FIELDS) {
     if (params[k] !== undefined) out[k] = params[k];
   }
+  if (['frame', 'window'].includes(params.continuityStrategy)) out.continuityStrategy = params.continuityStrategy;
+  const continuation = sanitizeContinuation(params.continuation);
+  if (continuation) out.continuation = continuation;
   // keyframes ride a separate mapping rather than the raw whitelist: they're
   // stored as { path, index } where `path` is an absolute gallery path (the
   // same internal-path-leak the whitelist exists to prevent — see the

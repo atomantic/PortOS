@@ -15,6 +15,7 @@ import { refineMediaPrompt } from '../services/mediaPromptRefiner.js';
 import { saveMediaPromptExamination, listMediaPromptExaminations, getMediaPromptExamination } from '../services/mediaPromptHistory.js';
 import { promptFromMedia } from '../services/mediaPromptFromMedia.js';
 import { CODEX_EFFORT_LEVELS } from '../lib/providerModels.js';
+import { videoSegmentReplayReceiptSchema } from '../services/mediaJobQueue/videoExecution.js';
 import { sanitizeJob } from '../services/mediaJobQueue/sanitizeJob.js';
 import { isRemoteMediaJob } from '../services/mediaJobQueue/remoteMediaJob.js';
 import { validateVideoRetryParams } from '../services/videoGen/prepareParams.js';
@@ -369,6 +370,16 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     ),
   );
   const params = { ...job.params, ...overrides };
+  const priorSegments = job.kind === 'video' && !isRemoteMediaJob(job)
+    ? videoSegmentReplayReceiptSchema.safeParse({ parentJobId: job.id, segments: job.videoExecutions })
+    : null;
+  if (priorSegments && !priorSegments.success && job.videoExecutions != null
+    && !(Array.isArray(job.videoExecutions) && job.videoExecutions.length === 0)) {
+    throw new ServerError('Stored chain execution receipts are invalid; the original attempt has been preserved.', {
+      status: 409, code: 'VIDEO_SEGMENT_RECEIPT_INVALID',
+    });
+  }
+  if (priorSegments?.success) params.segmentReplayReceipt = priorSegments.data;
   if (job.kind === 'video') {
     const bounds = VIDEO_RETRY_BOUNDS_SCHEMA.safeParse(rawOverrides);
     if (!bounds.success) throw new ServerError('Video retry settings are outside the supported range', { status: 400, code: 'VALIDATION_ERROR' });
@@ -413,12 +424,9 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     params.remoteMedia = { ...marker, cancelRequested: false, reconcile: false };
   }
   const result = await enqueueJob({ kind: job.kind, params, owner: job.owner });
-  // Drop the original failed/canceled row from archive — the new job inherits
-  // its work, and leaving both visible just lets users keep clicking Retry on
-  // the dead row and stacking duplicate jobs. If the prune returns false the
-  // archive doesn't have this id (unusual — getJob() found it above), so log
-  // a warning instead of silently masking duplicate history.
-  if (!removeArchivedJob(job.id)) {
+  // Prior chain attempts keep their only execution evidence under the existing
+  // archive retention policy. The new job carries one snapshot, not a ledger.
+  if (!priorSegments?.success && !removeArchivedJob(job.id)) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] retry: archive prune found nothing to drop — old row may persist in /api/media-jobs`);
   }
   res.json({ ...result, retriedFrom: job.id });

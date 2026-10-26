@@ -1,7 +1,47 @@
+import { resolveContinuityRequest } from '../../lib/videoContinuity.js';
 import { describe, expect, it } from 'vitest';
 import { sanitizeJob } from './sanitizeJob.js';
 
 describe('sanitizeJob', () => {
+  it('projects bounded continuation evidence without worker paths or unsupported nested values', () => {
+    const continuation = resolveContinuityRequest({ model: { runtime: 'minimax_h3' }, continuityStrategy: 'frame' });
+    const projected = sanitizeJob({ kind: 'video', params: { continuityStrategy: 'frame', continuation: {
+      ...continuation, sourceVideoPath: '/private/original.mp4', scratch: '/private/scratch.mp4',
+    } } });
+    expect(projected.params).toMatchObject({ continuityStrategy: 'frame', continuation });
+    expect(JSON.stringify(projected)).not.toContain('/private');
+    const malformed = sanitizeJob({ kind: 'video', params: { continuityStrategy: { sourcePath: '/private/input.mp4' }, continuation: {
+      ...continuation, actualHistoryFrames: 999999,
+    } } });
+    expect(malformed.params).not.toHaveProperty('continuation');
+    expect(malformed.params).not.toHaveProperty('continuityStrategy');
+    const historical = sanitizeJob({ kind: 'video', params: { continuation: {
+      ...continuation, backendPin: 'diffusers==0.41.0', unavailableReason: 'The prior adapter lacked a verified history contract.',
+    } } });
+    expect(historical.params.continuation).toMatchObject({ backendPin: 'diffusers==0.41.0', unavailableReason: 'The prior adapter lacked a verified history contract.' });
+    const unsafe = sanitizeJob({ kind: 'video', params: { continuation: {
+      ...continuation, backendPin: '/private/runtime', unavailableReason: 'Source missing: /tmp/private-input.mp4',
+    } } });
+    expect(unsafe.params.continuation).toMatchObject({ backendPin: null, unavailableReason: null });
+  });
+
+  it('projects bounded segment receipts without internal mapping or replay paths', () => {
+    const receipt = { version: 1, preparedAt: '2026-10-26T00:00:00.000Z', seed: 7,
+      childJobId: 'example-child', segmentIndex: 0, segmentCount: 2,
+      parameters: { modelId: 'example-h3', width: 320, height: 192, numFrames: 25, fps: 24, steps: 9,
+        sourceVideoPath: '/private/source.mp4' },
+      executionParent: { jobId: 'example-parent', sourcePath: '/private/worker' },
+    };
+    const safe = sanitizeJob({ kind: 'video', videoExecutions: [receipt], params: {
+      segmentSeeds: [7, null], segmentSeedBase: null, executionQueueJobId: '/private/queue',
+      segmentReplayReceipt: { parentJobId: 'example-prior-parent', segments: [receipt], sourcePath: '/private/replay' },
+    } });
+    expect(safe.videoExecutions).toMatchObject([{ childJobId: 'example-child', segmentIndex: 0, seed: 7 }]);
+    expect(safe.params.segmentReplayReceipt).toMatchObject({ parentJobId: 'example-prior-parent', segments: [{ seed: 7 }] });
+    expect(JSON.stringify(safe)).not.toMatch(/private|executionParent|segmentSeeds|executionQueueJobId/);
+    expect(sanitizeJob({ kind: 'video', videoExecutions: [receipt, receipt] })).not.toHaveProperty('videoExecutions');
+  });
+
   it('projects bounded video execution evidence without raw subprocess data or classifying a signal as OOM', () => {
     const receipt = { version: 1, preparedAt: '2026-10-26T00:00:00.000Z', seed: 7, batchSeeds: [7, 8],
       parameters: { modelId: 'example-h3', width: 768, height: 768, numFrames: 141, fps: 24, steps: 9, sourceImagePath: '/private/example.png' },

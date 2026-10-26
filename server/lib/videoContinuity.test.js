@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_CONTEXT_FRAMES, MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES,
@@ -189,5 +190,21 @@ describe('runtime continuation timing boundary', () => {
     expect(() => { continuationContract('minimax_h3').temporalContext = true; }).toThrow(TypeError);
     expect(extendLatentFrames(97, 'ltx2')).toBe(12);
     expect(supportsContextWindow({ runtime: 'minimax_h3' })).toBe(false);
+  });
+});
+
+describe('history adapter pin parity', () => {
+  it('reports the pins and output layout the merged adapters enforce without claiming fidelity', () => {
+    const mlx = readFileSync(new URL('../../scripts/_minimax_h3_mlx_history.py', import.meta.url), 'utf8');
+    const runtimes = readFileSync(new URL('../services/videoGen/runtimes.js', import.meta.url), 'utf8');
+    const cuda = JSON.parse(readFileSync(new URL('../../scripts/minimax_h3_cuda_history.json', import.meta.url), 'utf8'));
+    const contract = continuationContract('minimax_h3');
+    expect(mlx).toContain(`PIN = "${contract.backendPin}"`);
+    expect(runtimes).toContain(`MINIMAX_H3_EXPECTED_REVISION = '${contract.backendPin}'`);
+    expect(continuationContract('minimax_h3_cuda').backendPin).toBe(`diffusers==${cuda.runtimePackages.diffusers}`);
+    for (const runtime of ['minimax_h3', 'minimax_h3_cuda']) {
+      expect(continuationContract(runtime)).toMatchObject({ temporalContext: false,
+        historyFrames: cuda.historyFrames, audioSampleRate: cuda.audioSampleRate, outputLayout: cuda.outputLayout });
+    }
   });
 });

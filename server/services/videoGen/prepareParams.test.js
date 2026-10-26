@@ -660,11 +660,30 @@ describe('prepareVideoGenParams — MiniMax H3 contract', () => {
     getSettings.mockResolvedValue(settingsWith([H3_TERMS]));
   });
 
+  it.each(['minimax_h3', 'minimax_h3_cuda'])('refuses unverified temporal admission and replay for %s while preserving legacy frame hops', async (runtime) => {
+    listVideoModels.mockReturnValue([{ ...H3_MODEL, runtime }]);
+    const request = { modelId: H3_MODEL.id, mode: 'text', chunks: 3, continuityStrategy: 'window' };
+    const pendingUpload = upload('sourceImage');
+    await expect(prepare(request, { sourceImage: pendingUpload })).rejects.toMatchObject({ status: 400, code: 'VIDEO_TEMPORAL_UNAVAILABLE' });
+    expect(copyFileMock).not.toHaveBeenCalled();
+    expect(unlinkMock).toHaveBeenCalledWith(pendingUpload.path);
+    await expect(validateVideoRetryParams(request)).rejects.toMatchObject({ status: 400, code: 'VIDEO_TEMPORAL_UNAVAILABLE' });
+    const legacy = await prepare({ modelId: H3_MODEL.id, mode: 'text', chunks: 3 });
+    expect(legacy.continuation).toMatchObject({ requestedStrategy: 'auto', effectiveStrategy: 'frame', actualHistoryFrames: 0, capability: false, runtime });
+    expect(legacy.continuation.unavailableReason).toMatch(/hardware|comparison/i);
+    const optedOut = await prepare({ ...request, continuityStrategy: 'frame', contextFrames: 0 });
+    expect(optedOut.continuation).toMatchObject({ requestedStrategy: 'frame', effectiveStrategy: 'frame', contextFrames: 0 });
+  });
+
   it('prepares an H3 text render without a recorded license acknowledgement', async () => {
     getSettings.mockResolvedValueOnce(settingsWith(undefined));
     const prepared = await prepare({ modelId: H3_MODEL.id, mode: 'text' });
     expect(prepared.effectiveModelId).toBe(H3_MODEL.id);
     expect(prepared.effectiveChunks).toBe(1);
+  });
+
+  it('does not silently discard an explicit continuation strategy on a hosted backend', async () => {
+    await expect(prepare({ backend: 'grok', continuityStrategy: 'window' })).rejects.toMatchObject({ status: 400, code: 'VIDEO_CONTINUITY_UNSUPPORTED' });
   });
 
   it('does not apply the local MiniMax gate to an explicit Grok render', async () => {

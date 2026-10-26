@@ -174,6 +174,25 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     expect(mocks.release).toHaveBeenCalledOnce();
   });
 
+  it('keeps queued segment identity on resolved settings, memory and cancellation receipts', async () => {
+    params.model = h3Model();
+    const executionParent = { jobId: 'queue-outer', segmentIndex: 1, segmentCount: 3 };
+    params.executionParent = executionParent;
+    await spawnAndWatchVideo(params);
+    expect(mocks.record).toHaveBeenCalledWith(params.jobId, expect.objectContaining({ seed: 42, executionParent }));
+    child.stderr.emit('data', Buffer.from('H3MEMORY:{"peakAllocatedBytes":900}\n'));
+    await vi.advanceTimersByTimeAsync(250);
+    videoJobState.cancelEpoch += 1;
+    child.signalCode = 'SIGTERM';
+    child.emit('close', null, 'SIGTERM');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.diagnostics).toHaveBeenLastCalledWith(params.jobId, expect.objectContaining({
+      memory: { peakAllocatedBytes: 900 }, termination: expect.objectContaining({ signal: 'SIGTERM', reason: 'canceled' }),
+    }), executionParent);
+    expect(mocks.diagnostics.mock.calls.every(call => call[2] === executionParent)).toBe(true);
+    expect(failed).toHaveBeenCalledOnce();
+  });
+
   it('does not launch when the execution receipt cannot be made durable', async () => {
     mocks.record.mockRejectedValue(new Error('receipt storage unavailable'));
     await expect(spawnAndWatchVideo(params)).rejects.toThrow('receipt storage unavailable');

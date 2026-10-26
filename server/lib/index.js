@@ -258,6 +258,7 @@ export * from './meatspaceRowIdentity.js';
 export * from './meetingUrl.js';
 export * from './minimaxH3Memory.js';
 export * from './videoContinuity.js';
+export * from './videoContinuationProvenance.js';
 export * from './videoDisclosure.js';
 export * from './videoPromptLinter.js';
 export * from './videoDraftDecoders.js';
