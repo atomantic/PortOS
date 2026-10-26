@@ -3,13 +3,13 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import GreyboxPanel from './GreyboxPanel';
-import { captureCatalogGreyboxShot, draftCatalogGreybox, previewCatalogGreyboxPrompt, saveCatalogGreybox } from '../../services/apiCatalog';
+import { captureCatalogGreyboxShot, detachCatalogIngredientMedia, uploadCatalogIngredientMediaFile, draftCatalogGreybox, previewCatalogGreyboxPrompt, saveCatalogGreybox } from '../../services/apiCatalog';
 import toast from '../ui/Toast';
 import { blankGreybox } from '../../lib/greybox';
 import { GREYBOX_STARTERS } from '../../lib/greyboxStarters';
 
 vi.mock('../../services/apiCatalog', () => ({
-  captureCatalogGreyboxShot: vi.fn(), draftCatalogGreybox: vi.fn(), previewCatalogGreyboxPrompt: vi.fn(), saveCatalogGreybox: vi.fn(),
+  detachCatalogIngredientMedia: vi.fn(), uploadCatalogIngredientMediaFile: vi.fn(), captureCatalogGreyboxShot: vi.fn(), draftCatalogGreybox: vi.fn(), previewCatalogGreyboxPrompt: vi.fn(), saveCatalogGreybox: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('../musicVideo/MusicVideoLlmPicker', () => ({
@@ -19,7 +19,7 @@ const view = vi.hoisted(() => ({ position: [1, 2, 3], target: [0, 1, 0] }));
 vi.mock('./GreyboxViewer', () => ({
   default: forwardRef(function Viewer(props, ref) {
     useImperativeHandle(ref, () => ({ getView: () => view, setView: vi.fn(), capture: () => 'data:image/png;base64,QUJD' }));
-    return <div data-testid="viewer" data-selected={props.selected}>
+    return <div data-testid="viewer" data-selected={props.selected} data-model-src={props.modelSrc}>
       <button type="button" disabled={!props.onMoveAnchor} onClick={() => props.onMoveAnchor(props.scene.anchors[0]?.id, [1.2, 0, -2.3])}>Move anchor</button>
     </div>;
   }),
@@ -41,12 +41,42 @@ const show = (props = {}) => render(
 
 beforeEach(() => {
   vi.resetAllMocks();
+  detachCatalogIngredientMedia.mockResolvedValue({});
   captureCatalogGreyboxShot.mockResolvedValue({ mediaKey: 'cap.png' });
   previewCatalogGreyboxPrompt.mockResolvedValue({ sentPrompt: 'PREVIEW PROMPT', promptAdditions: [{ id: 'greybox-place', label: 'Place', text: 'Rink' }] });
   saveCatalogGreybox.mockImplementation(async (id, greybox) => ({ id, payload: { greybox } }));
 });
 
 describe('GreyboxPanel', () => {
+  it('attaches a Blender export, preserves shots, switches sources and detaches the model', async () => {
+    uploadCatalogIngredientMediaFile.mockResolvedValue({ mediaKey: 'example.glb', kind: 'model', role: 'greybox-model' });
+    detachCatalogIngredientMedia.mockResolvedValue({});
+    show();
+    await screen.findByTestId('viewer');
+    fireEvent.change(screen.getByLabelText(/(?:Attach|Replace) Blender export \(.glb\)/), { target: { files: [new File(['fake model'], 'layout.glb', { type: 'model/gltf-binary' })] } });
+    await waitFor(() => expect(uploadCatalogIngredientMediaFile).toHaveBeenCalledWith('plc-1', expect.objectContaining({ filename: 'layout.glb', mimeType: 'model/gltf-binary', role: 'greybox-model' }), { silent: true }));
+    await waitFor(() => expect(screen.getByTestId('viewer')).toHaveAttribute('data-model-src', '/data/models/example.glb'));
+    expect(saveCatalogGreybox).toHaveBeenLastCalledWith('plc-1', { ...scene, source: 'glb' }, expect.anything());
+    fireEvent.change(screen.getByLabelText('Layout source'), { target: { value: 'spec' } });
+    await waitFor(() => expect(saveCatalogGreybox).toHaveBeenLastCalledWith('plc-1', scene, expect.anything()));
+    fireEvent.change(screen.getByLabelText('Layout source'), { target: { value: 'glb' } });
+    await waitFor(() => expect(saveCatalogGreybox).toHaveBeenLastCalledWith('plc-1', { ...scene, source: 'glb' }, expect.anything()));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove model' }));
+    await waitFor(() => expect(detachCatalogIngredientMedia).toHaveBeenCalledWith('plc-1', { kind: 'model', mediaKey: 'example.glb' }, { silent: true }));
+    await waitFor(() => expect(screen.getByTestId('viewer')).not.toHaveAttribute('data-model-src'));
+    expect(saveCatalogGreybox).toHaveBeenLastCalledWith('plc-1', scene, expect.anything());
+  });
+
+  it('replaces the attached model only after its new source is saved', async () => {
+    const old = { mediaKey: 'old.glb', kind: 'model', role: 'greybox-model' };
+    uploadCatalogIngredientMediaFile.mockResolvedValue({ ...old, mediaKey: 'new.glb' });
+    show({ media: [old], record: { ...record, payload: { greybox: { ...scene, source: 'glb' } } } });
+    await screen.findByTestId('viewer');
+    fireEvent.change(screen.getByLabelText(/(?:Attach|Replace) Blender export \(.glb\)/), { target: { files: [new File(['replacement'], 'new.glb')] } });
+    await waitFor(() => expect(detachCatalogIngredientMedia).toHaveBeenCalledWith('plc-1', { kind: 'model', mediaKey: 'old.glb' }, { silent: true }));
+    expect(saveCatalogGreybox.mock.invocationCallOrder[0]).toBeLessThan(detachCatalogIngredientMedia.mock.invocationCallOrder[0]);
+  });
+
   it('previews an AI draft with the exact prompt and stores it only when applied', async () => {
     const drafted = { ...scene, parts: [...scene.parts, { id: 'booth', type: 'box', size: [3, 2, 2], position: [0, 1, -6], rotationDegrees: [0, 0, 0] }] };
     draftCatalogGreybox.mockResolvedValue({ greybox: drafted, edited: true, sentPrompt: 'FULL PROMPT', promptAdditions: [{ id: 'greybox-contract', label: 'Greybox scene contract', text: 'rules' }], providerId: 'p1', model: 'm1' });

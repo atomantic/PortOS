@@ -635,9 +635,12 @@ describe('catalogValidation — catalogSyncEnvelopeSchema media block', () => {
     expect(() => catalogMediaMetadataSchema.parse({ parameters: 'x'.repeat(64 * 1024 + 1) })).toThrow();
   });
 
-  it('tolerates a forward (unknown) media kind on the wire', () => {
+  it('tolerates a model and a forward unknown media kind on the wire independently of the local attachment enum', () => {
     expect(() => catalogSyncEnvelopeSchema.parse({
-      media: [{ ingredientId: 'i1', mediaKey: 'a.png', kind: 'future-kind', createdAt: '2026-01-01T00:00:00Z' }],
+      media: [
+        { ingredientId: 'i1', mediaKey: 'layout.glb', kind: 'model', createdAt: '2026-01-01T00:00:00Z' },
+        { ingredientId: 'i1', mediaKey: 'a.png', kind: 'future-kind', createdAt: '2026-01-01T00:00:00Z' },
+      ],
     })).not.toThrow();
   });
 

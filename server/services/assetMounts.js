@@ -103,6 +103,7 @@ const ASSET_DIRS = {
   // Voice-over WAVs rendered by the pipeline audio stage — the AudioStage UI
   // pulls them inline via <audio src="/data/audio/<filename>">.
   '/data/audio': () => PATHS.audio,
+  '/data/models': () => PATHS.models,
   // Machine-local voice-profile benchmarks and managed engine artifacts. The
   // character editor exposes benchmark WAVs only; profile metadata remains
   // behind its authenticated API.

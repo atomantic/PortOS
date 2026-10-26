@@ -37,6 +37,8 @@ describe.skipIf(!chrome)('manual greybox in Chromium', () => {
             if (id === '\0picker-stub') return 'export default () => null;';
             if (id === '\0api-stub') return `
               export const saveCatalogGreybox = async (id, greybox) => ({id, payload: {greybox}});
+              export const detachCatalogIngredientMedia = async () => ({});
+              export const uploadCatalogIngredientMediaFile = async () => ({});
               export const captureCatalogGreyboxShot = async () => ({});
               export const draftCatalogGreybox = async () => { throw Error('Unexpected provider call'); };
               export const previewCatalogGreyboxPrompt = async () => ({});

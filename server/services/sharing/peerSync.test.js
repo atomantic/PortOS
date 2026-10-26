@@ -5878,7 +5878,7 @@ describe('media-library federation (#1566)', () => {
         assets: [{ filename: 'remote.wav', kind: 'audio', sha256: 'c'.repeat(64) }],
       };
       vi.mocked(peerFetch).mockImplementation(async (url) => {
-        if (String(url).endsWith('/library-manifest')) return { ok: true, json: async () => manifest };
+        if (String(url).endsWith('/library-manifest?models=1')) return { ok: true, json: async () => manifest };
         return { ok: false }; // byte pull fails → nothing lands on disk
       });
       const res = await syncMediaLibraryFromPeer(peer);
@@ -5921,7 +5921,7 @@ describe('media-library federation (#1566)', () => {
         assets: [{ filename: 'heal.wav', kind: 'audio' }], // existence-only diff
       };
       vi.mocked(peerFetch).mockImplementation(async (url) => {
-        if (String(url).endsWith('/library-manifest')) return { ok: true, json: async () => manifest };
+        if (String(url).endsWith('/library-manifest?models=1')) return { ok: true, json: async () => manifest };
         return {
           ok: true,
           headers: new Headers({ 'content-length': String(bytes.length) }),
@@ -5954,7 +5954,7 @@ describe('media-library federation (#1566)', () => {
       };
       const bytes = Buffer.from('audio-bytes-that-landed');
       vi.mocked(peerFetch).mockImplementation(async (url) => {
-        if (String(url).endsWith('/library-manifest')) return { ok: true, json: async () => manifest };
+        if (String(url).endsWith('/library-manifest?models=1')) return { ok: true, json: async () => manifest };
         // Asset byte fetch — a Response-like the cap-checker accepts.
         return {
           ok: true,
@@ -5985,7 +5985,7 @@ describe('media-library federation (#1566)', () => {
       }) });
       await syncMediaLibraryWithAllPeers();
       const manifestUrls = vi.mocked(peerFetch).mock.calls
-        .map((c) => String(c[0])).filter((u) => u.endsWith('/library-manifest'));
+        .map((c) => String(c[0])).filter((u) => u.endsWith('/library-manifest?models=1'));
       expect(manifestUrls).toHaveLength(1);
       expect(manifestUrls[0]).toContain('10.0.0.4');
     });

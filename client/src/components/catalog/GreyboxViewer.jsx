@@ -1,8 +1,10 @@
-import { forwardRef, memo, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import { forwardRef, memo, Suspense, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
-import { Edges, Grid, Html, OrbitControls } from '@react-three/drei';
+import { Edges, Grid, Html, OrbitControls, useGLTF } from '@react-three/drei';
 import { aspectRatio, fovFromFocalLength, partColor } from '../../lib/greybox';
+import useClonedGltf, { GltfPrimitive } from '../../hooks/useClonedGltf';
+import ErrorBoundary from '../ErrorBoundary';
 import useGreyboxAnchorDrag from './useGreyboxAnchorDrag';
 
 const BACKGROUND = '#1b1e24';
@@ -11,6 +13,19 @@ const PROP_COLOR = '#4aa8a0';
 const CAPTURE_LONG_EDGE = 1280;
 const DEFAULT_VIEW = Object.freeze({ position: [0, 8, 18], target: [0, 0, 0] });
 const rad = (deg) => (deg * Math.PI) / 180;
+
+// Preserve Blender's meter scale and origin: fitting/centering would move saved
+// cameras and anchors. Only the cloned scene's material references are replaced.
+function GreyboxModel({ src, onReady }) {
+  const { scene } = useClonedGltf(src);
+  const material = useMemo(() => new THREE.MeshStandardMaterial({ color: '#8a8f98', roughness: 1, metalness: 0, side: THREE.DoubleSide }), []);
+  useEffect(() => {
+    scene.traverse((object) => { if (object.isMesh) object.material = material; });
+    onReady(src);
+    return () => { onReady(null); material.dispose(); };
+  }, [scene, material, src, onReady]);
+  return <GltfPrimitive object={scene} />;
+}
 
 // A closed XZ floor outline swept up from y=0. ExtrudeGeometry sweeps a shape
 // drawn in XY along +Z; rotating -90° about X turns that sweep into +Y and maps
@@ -74,7 +89,7 @@ const AnchorProxy = memo(function AnchorProxy({ anchor, selected, onSelect, onMo
 // panel. Capture re-renders at a set resolution (independent of the viewport) and
 // hides the editor helpers (grid, landmark pins) so the reference holds only the
 // layout and figure proxies.
-function ViewApi({ apiRef, layout, shotView, focalLengthMm, aspect, helpersRef }) {
+function ViewApi({ apiRef, layout, shotView, focalLengthMm, aspect, helpersRef, modelReady }) {
   const { camera, gl, scene, controls, invalidate } = useThree();
   const appliedViewId = useRef(null);
 
@@ -107,6 +122,7 @@ function ViewApi({ apiRef, layout, shotView, focalLengthMm, aspect, helpersRef }
   useImperativeHandle(apiRef, () => ({
     getView: () => ({ position: camera.position.toArray(), target: controls ? controls.target.toArray() : [0, 0, 0] }),
     capture: () => {
+      if (!modelReady) return null;
       const ratio = aspectRatio(aspect);
       const [width, height] = ratio >= 1
         ? [CAPTURE_LONG_EDGE, Math.round(CAPTURE_LONG_EDGE / ratio)]
@@ -134,7 +150,7 @@ function ViewApi({ apiRef, layout, shotView, focalLengthMm, aspect, helpersRef }
         hidden.forEach(([object, visible]) => { object.visible = visible; });
       }
     },
-  }), [camera, gl, scene, controls, aspect, helpersRef, invalidate]);
+  }), [camera, gl, scene, controls, aspect, helpersRef, invalidate, modelReady]);
   return null;
 }
 
@@ -144,8 +160,11 @@ function ViewApi({ apiRef, layout, shotView, focalLengthMm, aspect, helpersRef }
  * moves the camera when its id or framing changes. `ref` exposes `getView()` and
  * `capture()` (PNG data URL).
  */
-const GreyboxViewer = forwardRef(function GreyboxViewer({ scene, aspect = '16:9', focalLengthMm = 35, shotView = null, selected = '', onSelect, onMoveAnchor, activeShot = null }, ref) {
+const GreyboxViewer = forwardRef(function GreyboxViewer({ scene, aspect = '16:9', focalLengthMm = 35, shotView = null, selected = '', onSelect, onMoveAnchor, activeShot = null, modelSrc = null }, ref) {
   const helpersRef = useRef(null);
+  const [readyModel, setReadyModel] = useState(null);
+  const [modelFailure, setModelFailure] = useState(null);
+  const modelReady = scene.source !== 'glb' || (!!modelSrc && readyModel === modelSrc);
   // The event target can be the canvas itself; HTML labels need a DOM overlay.
   const labelPortal = useRef(null);
   const ratio = aspectRatio(aspect);
@@ -159,6 +178,10 @@ const GreyboxViewer = forwardRef(function GreyboxViewer({ scene, aspect = '16:9'
       style={{ aspectRatio: ratio, width: `min(100%, ${70 * ratio}vh)` }}
       data-testid="greybox-viewer"
     >
+      {scene.source === 'glb' && modelFailure?.src === modelSrc ? <div role="alert" className="p-4 text-sm text-port-text">
+        The Blender model could not be loaded. Replace it or retry.
+        <button type="button" className="ml-2 underline" onClick={() => { useGLTF.clear(modelSrc); setModelFailure(null); }}>Retry model</button>
+      </div> : <ErrorBoundary key={modelSrc || 'spec'} fallback={null} onError={(error) => setModelFailure({ src: modelSrc, error })}>
       <Canvas
         camera={{ position: start.position, fov: fovFromFocalLength(focalLengthMm), near: 0.1, far: 2000 }}
         gl={{ preserveDrawingBuffer: true, antialias: true }}
@@ -185,11 +208,13 @@ const GreyboxViewer = forwardRef(function GreyboxViewer({ scene, aspect = '16:9'
             </group>
           ))}
         </group>
-        {scene.parts.map((part) => <PartMesh key={part.id} part={part} color={partColor(scene, part)} selected={selected === `parts:${part.id}`} onSelect={onSelect} />)}
+        {scene.source === 'glb' && modelSrc && <Suspense fallback={null}><GreyboxModel src={modelSrc} onReady={setReadyModel} /></Suspense>}
+        {scene.source !== 'glb' && scene.parts.map((part) => <PartMesh key={part.id} part={part} color={partColor(scene, part)} selected={selected === `parts:${part.id}`} onSelect={onSelect} />)}
         {scene.anchors.filter((anchor) => !visibleAnchors || visibleAnchors.has(anchor.id)).map((anchor) => <AnchorProxy key={anchor.id} anchor={anchor} selected={selected === `anchors:${anchor.id}`} onSelect={onSelect} onMove={onMoveAnchor} labelPortal={labelPortal} />)}
         <OrbitControls makeDefault target={start.target} maxPolarAngle={Math.PI * 0.98} />
-        <ViewApi apiRef={ref} layout={scene} shotView={shotView} focalLengthMm={focalLengthMm} aspect={aspect} helpersRef={helpersRef} />
+        <ViewApi apiRef={ref} layout={scene} shotView={shotView} focalLengthMm={focalLengthMm} aspect={aspect} helpersRef={helpersRef} modelReady={modelReady} />
       </Canvas>
+      </ErrorBoundary>}
     </div>
   );
 });

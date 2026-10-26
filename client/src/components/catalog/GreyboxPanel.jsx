@@ -2,12 +2,14 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Camera, Check, Loader2, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import toast from '../ui/Toast';
+import { readFileAsBase64 } from '../../utils/fileUpload';
 import { GREYBOX_STARTERS } from '../../lib/greyboxStarters';
 import MusicVideoLlmPicker from '../musicVideo/MusicVideoLlmPicker';
 import SentPromptPanel from '../media/SentPromptPanel';
+import FilePickerButton from '../ui/FilePickerButton';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import GreyboxEditor from './GreyboxEditor';
-import { captureCatalogGreyboxShot, draftCatalogGreybox, previewCatalogGreyboxPrompt, saveCatalogGreybox } from '../../services/apiCatalog';
+import { captureCatalogGreyboxShot, detachCatalogIngredientMedia, uploadCatalogIngredientMediaFile, draftCatalogGreybox, previewCatalogGreyboxPrompt, saveCatalogGreybox } from '../../services/apiCatalog';
 import {
   GREYBOX_ASPECTS,
   DEFAULT_FOCAL_LENGTH_MM,
@@ -37,6 +39,8 @@ const AUTO = 'Default — the active provider';
 export default function GreyboxPanel({ record, media, readOnly = false, disabled = false, onBusyChange, onSaved, onCaptured }) {
   const [params, setParams] = useSearchParams();
   const viewerRef = useRef(null);
+  const [modelOverride, setModelOverride] = useState(null);
+  const model = modelOverride?.recordId === record.id ? modelOverride.row : (media || []).find((row) => row.kind === 'model' && !row.deleted);
   const saved = record.payload?.greybox ?? null;
   const [draft, setDraft] = useState(null);
   const [manual, setManual] = useState(null);
@@ -49,6 +53,12 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
   const [newShotName, setNewShotName] = useState('');
   const [preview, setPreview] = useState(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+
+  useEffect(() => {
+    if (modelOverride?.recordId !== record.id) return;
+    const synced = (media || []).filter((row) => row.kind === 'model' && !row.deleted);
+    if (modelOverride.row ? synced.some((row) => row.mediaKey === modelOverride.row.mediaKey) : synced.length === 0) setModelOverride(null);
+  }, [record.id, media, modelOverride]);
 
   const scene = draft?.greybox || manual || saved;
   const editErrors = manual ? greyboxEditErrors(manual) : [];
@@ -157,7 +167,7 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
     // move or shot change while saving cannot change what is uploaded.
     const next = framedShot();
     const dataUrl = viewerRef.current?.capture();
-    if (!dataUrl) return;
+    if (!dataUrl) { toast.error('Wait for the Blender model to finish loading before capturing.'); return; }
     // Save the camera first when it moved, so the capture matches the saved shot.
     if (next && JSON.stringify(next) !== JSON.stringify(shot) && !(await persist(withShot(saved, next)))) return;
     const row = await captureCatalogGreyboxShot(record.id, shot.id, dataUrl.split(',')[1], { silent: true })
@@ -200,6 +210,38 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
       setDraft(null);
       setInstruction('');
       toast.success('Greybox saved');
+    }
+  });
+
+  const attachModel = (file) => run('model', async () => {
+    if (!file) return;
+    if (!/\.glb$/i.test(file.name) || file.size > 24 * 1024 * 1024) {
+      toast.error('Choose a .glb file up to 24 MB.');
+      return;
+    }
+    const row = await readFileAsBase64(file)
+      .then((dataBase64) => uploadCatalogIngredientMediaFile(record.id, { dataBase64, mimeType: 'model/gltf-binary', filename: file.name, role: 'greybox-model' }, { silent: true }))
+      .catch((err) => { toast.error(err?.message || 'Failed to attach the model'); return null; });
+    if (!row) return;
+    setModelOverride({ recordId: record.id, row });
+    onCaptured?.();
+    if (!(await persist({ ...(saved || blankGreybox()), source: 'glb' }))) return;
+    if (model && model.mediaKey !== row.mediaKey) {
+      await detachCatalogIngredientMedia(record.id, { mediaKey: model.mediaKey, kind: 'model' }, { silent: true })
+        .catch((err) => toast.error(err?.message || 'The previous model could not be detached'));
+      onCaptured?.();
+    }
+  });
+
+  const removeModel = () => run('model', async () => {
+    if (!model) return;
+    // Switch first so a failed detach leaves a recoverable, attached model.
+    if (saved?.source === 'glb' && !(await persist({ ...saved, source: 'spec', parts: saved.parts.length ? saved.parts : blankGreybox().parts }))) return;
+    const removed = await detachCatalogIngredientMedia(record.id, { mediaKey: model.mediaKey, kind: 'model' }, { silent: true })
+      .then(() => true).catch((err) => { toast.error(err?.message || 'Failed to detach the model'); return false; });
+    if (removed) {
+      setModelOverride({ recordId: record.id, row: null });
+      onCaptured?.();
     }
   });
 
@@ -264,15 +306,28 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
         </div>
       )}
 
-      {scene && scene.source === 'glb' && (
-        <p className="text-sm text-port-warning">This greybox uses an attached Blender model, which the viewer does not display yet. Its shots and anchors are kept.</p>
-      )}
+      {!locked && <div className="flex flex-wrap items-center gap-2">
+        <FilePickerButton accept=".glb,model/gltf-binary" className={actionButton} disabled={blocked || !!manual || !!draft}
+          onChange={(event) => attachModel(event.target.files?.[0])}>
+          {model ? 'Replace Blender export (.glb)' : 'Attach Blender export (.glb)'}
+        </FilePickerButton>
+        {model && <>
+          <button type="button" className={actionButton} disabled={blocked || !!manual || !!draft} onClick={removeModel}>Remove model</button>
+          {saved && <label htmlFor="greybox-source" className="text-xs text-gray-400">Layout source
+            <select id="greybox-source" value={saved.source} disabled={blocked || !!manual || !!draft} className="ml-2 min-h-[40px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white"
+              onChange={(event) => { const source = event.target.value; void run('source', () => persist({ ...saved, source, parts: source === 'spec' && !saved.parts.length ? blankGreybox().parts : saved.parts })); }}>
+              <option value="spec">Layout parts</option><option value="glb">Blender model</option>
+            </select>
+          </label>}
+        </>}
+      </div>}
+      {scene?.source === 'glb' && !model && <p role="status" className="text-sm text-port-warning">The Blender model is missing or has not synced yet. Attach the export to render this layout.</p>}
 
-      {scene && scene.source !== 'glb' && (
+      {scene && (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
           <div className="space-y-3 min-w-0">
             <Suspense fallback={<div className="h-64 flex items-center justify-center text-sm text-gray-400"><Loader2 size={16} className="animate-spin mr-2" aria-hidden="true" />Loading viewer…</div>}>
-              <GreyboxViewer key={record.id} ref={viewerRef} scene={editErrors.length ? saved : scene} aspect={aspect} focalLengthMm={lens} shotView={shotView}
+              <GreyboxViewer key={record.id} ref={viewerRef} scene={editErrors.length ? saved : scene} modelSrc={model ? `/data/models/${encodeURIComponent(model.mediaKey)}` : null} aspect={aspect} focalLengthMm={lens} shotView={shotView}
                 activeShot={shot} selected={selected} onSelect={selectItem} onMoveAnchor={!locked && !blocked && !draft && !confirmRemove ? moveAnchor : undefined} />
             </Suspense>
             <div className="grid gap-3 sm:grid-cols-2">

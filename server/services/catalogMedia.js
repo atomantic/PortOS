@@ -6,7 +6,7 @@ import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
 // is the other seam: take a file the user dropped/picked, or a memo they just
 // recorded, and attach it DIRECTLY to an ingredient that already exists.
 //
-// Bytes land in a peer-federating library dir (images/audio/videos) so the
+// Bytes land in a peer-federating library dir (images/audio/videos/models) so the
 // `media_key` reference federates through catalogSync while the file itself
 // federates through peerMediaLibrarySync — the same two-layer path gallery
 // attachments already use. Nothing here calls hashImageForManifest; the library
@@ -52,8 +52,9 @@ const mediaAttachOptions = ({ role = null, caption = null, metadata = {} } = {})
  * `{ category, kind, ext }` or `null` for a MIME we don't federate (documents
  * have no library dir yet, so attaching one would break references on peers).
  */
-export function classifyUploadMime(mimeType) {
+export function classifyUploadMime(mimeType, filename = null) {
   const mime = (mimeType || '').toLowerCase().split(';')[0].trim();
+  if (mime === 'model/gltf-binary' || ((!mime || mime === 'application/octet-stream') && /\.glb$/i.test(filename || ''))) return { category: 'model', kind: 'model', ext: 'glb' };
   if (mime.startsWith('image/')) return { category: 'image', kind: 'reference', ext: 'png' };
   if (mime.startsWith('audio/')) return { category: 'audio', kind: 'audio', ext: AUDIO_EXT[mime] || 'webm' };
   if (mime.startsWith('video/')) return { category: 'video', kind: 'video', ext: VIDEO_EXT[mime] || 'mp4' };
@@ -108,7 +109,7 @@ async function requireIngredient(getIngredientFn, ingredientId) {
 /**
  * Persist an uploaded file into the media library and attach it to an
  * ingredient. Images route through `saveUploadedGalleryImage` (magic-byte
- * sniffed, re-encoded to PNG, EXIF-baked); audio/video are stored as-is. Returns
+ * sniffed, re-encoded to PNG, EXIF-baked); audio/video are stored as-is; models require a binary glTF 2 header. Returns
  * the attached media row. `deps` lets tests run without DB/disk.
  */
 export async function uploadIngredientMediaFile(
@@ -123,9 +124,9 @@ export async function uploadIngredientMediaFile(
 ) {
   await assertWritableFn(ingredientId);
   await requireIngredient(getIngredientFn, ingredientId);
-  const classified = classifyUploadMime(mimeType);
+  const classified = classifyUploadMime(mimeType, filename);
   if (!classified) {
-    throw new ServerError(`Unsupported file type "${mimeType}" — attach an image, audio, or video file.`, {
+    throw new ServerError(`Unsupported file type "${mimeType}" — attach an image, audio, video, or GLB model file.`, {
       status: 422, code: 'UNSUPPORTED_MEDIA',
     });
   }
@@ -143,7 +144,10 @@ export async function uploadIngredientMediaFile(
 
   const buffer = Buffer.from(dataBase64, 'base64');
   if (buffer.length === 0) throw new ServerError('Empty file upload', { status: 400, code: 'VALIDATION_ERROR' });
-  const dir = classified.category === 'audio' ? PATHS.audio : PATHS.videos;
+  if (classified.category === 'model' && (buffer.length < 12 || buffer.toString('ascii', 0, 4) !== 'glTF' || buffer.readUInt32LE(4) !== 2 || buffer.readUInt32LE(8) !== buffer.length)) {
+    throw new ServerError('The file is not a valid binary glTF 2 model', { status: 422, code: 'UNSUPPORTED_MEDIA' });
+  }
+  const dir = { audio: PATHS.audio, video: PATHS.videos, model: PATHS.models }[classified.category];
   const mediaKey = await persistFileFn(buffer, dir, classified.ext);
   console.log(`📎 Catalog media upload: ${classified.kind} ${mediaKey} → ingredient ${ingredientId} (${(buffer.length / 1024).toFixed(0)}KB, ${filename || 'unnamed'})`);
   return attachUnderLease(attachMediaFn, ingredientId, mediaKey, classified.kind, mediaAttachOptions(meta));
