@@ -6,6 +6,7 @@
 import { startGit } from './windowsGitProcess.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { StringDecoder } from 'node:string_decoder';
+import { realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve as resolvePath, sep } from 'node:path';
 
 const mutationLifetime = new AsyncLocalStorage();
@@ -23,11 +24,16 @@ export const withGitMutationLifetime = (work, onUncertain) => {
 
 const ownedWork = process[Symbol.for('portos.ownedGitWork')] ??= new Set();
 const CANCELLATION_BUDGET_MS = 5000;
+const ownedDirectory = directory => {
+  try { return realpathSync.native(directory); }
+  catch { return resolvePath(directory); }
+};
 
 /** Fixture teardown cannot discard a directory still owned by Git or a helper. */
 export function assertGitWorkSettled(directory) {
+  const root = ownedDirectory(directory);
   for (const work of ownedWork) {
-    const path = relative(resolvePath(directory), work.cwd);
+    const path = relative(root, work.cwd);
     if (path === '' || (!isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`))) {
       throw Object.assign(new Error('Git work settlement is held'), { code: 'GIT_SETTLEMENT_HELD', settlement: 'held' });
     }
@@ -68,7 +74,7 @@ export function execGit(args, cwd, options = {}) {
     const timeout = options.timeout || 30000;
     const onUncertain = owner?.onUncertain;
     const started = performance.now();
-    const work = { cwd: resolvePath(cwd) };
+    const work = { cwd: ownedDirectory(cwd) };
     ownedWork.add(work);
     let wired = false;
     let startup;

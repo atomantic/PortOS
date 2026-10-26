@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 vi.mock('./childProcess.js', () => ({
   spawn: vi.fn()
@@ -276,6 +279,25 @@ describe('execGit', () => {
     failStartup(new Error('containment startup failed'));
     await expect(result).rejects.toThrow('containment startup failed');
     expect(() => assertGitWorkSettled('/starting-fixture')).not.toThrow();
+  });
+
+  it('holds teardown across junction or symlink spellings of the owned directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'portos-owned-git-path-'));
+    const physical = join(root, 'physical'), alias = join(root, 'alias');
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    let pending;
+    try {
+      await mkdir(physical);
+      await symlink(physical, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      pending = execGit(['status'], alias);
+      expect(() => assertGitWorkSettled(physical)).toThrow(/held/);
+      expect(() => assertGitWorkSettled(alias)).toThrow(/held/);
+    } finally {
+      child.emit('close', 0);
+      if (pending) await pending;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('refuses detached Git work after its mutation permit lifetime has ended', async () => {
