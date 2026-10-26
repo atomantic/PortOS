@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
@@ -26,7 +26,7 @@ const scene = {
 async function openEnvironment(fixture, { warmup = false } = {}) {
   const page = await fixture.browser.newPage({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 2 });
   page.setDefaultTimeout(10000);
-  const state = { captures: [], errors: [], viewerRequests: 0 };
+  const state = { captures: [], errors: [], viewerRequests: 0, phase: 'navigation' };
   const ingredient = { id: 'example-place', type: 'place', name: 'Example environment', tags: [], payload: { description: 'Synthetic browser fixture', greybox: structuredClone(scene) } };
   const media = [];
   page.on('pageerror', error => state.errors.push(error.message));
@@ -59,18 +59,32 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
   });
   try {
     await page.goto(`${fixture.origin}environments/example-place/plates`);
+    state.phase = 'Greybox tab';
     await page.getByRole('tab', { name: 'Greybox', exact: true }).waitFor();
-    if (!warmup) expect(state.viewerRequests).toBe(0);
+    if (warmup) {
+      state.phase = 'lazy chunk compilation';
+      await page.evaluate("import('/src/components/catalog/GreyboxViewer.jsx').then(() => true)");
+      return { page, state, ingredient };
+    }
+    expect(state.viewerRequests).toBe(0);
+    state.phase = 'viewer attachment';
     await page.getByRole('tab', { name: 'Greybox', exact: true }).click();
-    await page.locator('[data-testid="greybox-viewer"] canvas').waitFor();
+    await page.locator('[data-testid="greybox-viewer"] canvas').waitFor({ state: 'attached' });
+    state.phase = 'shot selection';
     await page.getByRole('button', { name: /Overhead/, pressed: false }).click();
     await page.waitForFunction(() => document.querySelector('#greybox-lens')?.value === '28');
     // Demand rendering and Html placement finish after React commits.
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(await page.locator('[data-testid="greybox-viewer"] canvas').isVisible()).toBe(true);
     return { page, state, ingredient };
   } catch (error) {
+    const viewers = await page.getByTestId('greybox-viewer').evaluateAll(elements => elements.map(el => ({
+      rect: el.getBoundingClientRect().toJSON(), canvases: [...el.querySelectorAll('canvas')].map(c => ({
+        rect: c.getBoundingClientRect().toJSON(), width: c.width, height: c.height, visibility: getComputedStyle(c).visibility, display: getComputedStyle(c).display,
+      })),
+    })));
     await page.close();
-    throw new Error(`${error.message}; browser errors: ${state.errors.join('; ')}`, { cause: error });
+    throw new Error(`${state.phase}: ${error.message}; viewers: ${JSON.stringify(viewers)}; browser errors: ${state.errors.join('; ')}`, { cause: error });
   }
 }
 
@@ -113,14 +127,19 @@ async function waitForRedraw(page, previous) {
 
 describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
   let fixture;
-  beforeAll(async () => {
+  // Separate browser processes keep one scenario's WebGL lifecycle from
+  // delaying the next. Warmup compiles the lazy chunk without mounting a canvas.
+  beforeEach(async () => {
+    fixture = undefined;
     const { createServer } = await import(bundler[0]);
     const { default: react } = await import(bundler[1]);
+    const { default: tailwind } = await import(bundler[2]);
     fixture = await startBrowserFixture({
       name: 'catalog-greybox', createServer, chromium,
       launchOptions: { executablePath: chrome, args: ['--mute-audio', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] },
       viteConfig: temp => ({
         configFile: false, root: client, cacheDir: join(temp, 'vite-cache'),
+        css: { postcss: { plugins: [tailwind({ base: client })] } },
         resolve: { dedupe: ['three'] },
         optimizeDeps: { entries: ['src/pages/CatalogIngredient.jsx', 'src/components/catalog/GreyboxPanel.jsx', 'src/components/catalog/GreyboxViewer.jsx'], include: ['react', 'react-dom/client', 'react-router'] },
         plugins: [react(), {
@@ -165,7 +184,7 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
       },
     });
   }, BROWSER_FIXTURE_STARTUP_MS);
-  afterAll(() => fixture?.close());
+  afterEach(() => fixture?.close());
 
   it('uploads an oriented L floor at fixed landscape/portrait resolution and restores the HiDPI viewport', async () => {
     const { page, state, ingredient } = await openEnvironment(fixture);
@@ -217,6 +236,7 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
         for (const text of ['Example landmark', 'Example figure']) {
           const label = page.getByTestId('greybox-viewer').getByText(text, { exact: true });
           await label.waitFor({ state: 'visible' });
+          expect(await label.evaluate(el => getComputedStyle(el).fontSize)).toBe('10px');
           const contrast = await label.evaluate(label => {
             const style = getComputedStyle(label);
             const luminance = color => {
