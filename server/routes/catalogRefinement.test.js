@@ -39,6 +39,13 @@ describe('catalog redesign conversation boundary', () => {
     }
     expect(state.run).not.toHaveBeenCalled();
   });
+  it('rejects a user-defined type that collides with an object prototype key before execution', async () => {
+    state.get.mockResolvedValue({ id: 'custom', type: 'constructor', name: 'Custom item' });
+    state.run.mockResolvedValue({ text: JSON.stringify({ reply: 'Revised', draft: { name: 'New design' } }) });
+    const response = await request(app).post('/ingredients/custom/refine').send({ ...input, draft: { name: 'Old design' } });
+    expect(response.status).toBe(400);
+    expect(state.run).not.toHaveBeenCalled();
+  });
   it('rejects provider field injection and over-limit proposals without truncation', async () => {
     for (const draft of [{ physicalDescription: 'valid', voiceId: 'injected' }, { physicalDescription: 'x'.repeat(2001) }]) {
       state.run.mockResolvedValue({ text: JSON.stringify({ reply: 'Proposal', draft }) });
