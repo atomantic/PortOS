@@ -1906,10 +1906,32 @@ describe('taskSchedule', () => {
     })
   })
 
+  describe('design audit defaults (#13737)', () => {
+    // Regression: a catalog-only registration could appear in Quality without
+    // a dispatchable task or the correct operator-selected delivery posture.
+    it('generates an on-demand, issue-filing design task with rendered evidence and opt-in fixes', async () => {
+      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('design')
+      expect(TASK_TYPE_DESCRIPTIONS.design).toContain('Rendered design audit')
+      expect(DEFAULT_TASK_INTERVALS.design).toMatchObject({
+        type: INTERVAL_TYPES.ON_DEMAND, enabled: true,
+        taskMetadata: { fileIssues: true, useWorktree: false, openPR: false, readOnly: false }
+      })
+      expect(MANAGED_AGENT_OPTIONS.design).toBeUndefined()
+      const prompt = await getTaskPrompt('design')
+      expect(prompt).toContain('{trackerInstructions}')
+      expect(prompt).toContain('{modeInstructions}')
+      expect(prompt).toContain('AND inspect screenshots')
+      expect(prompt).toContain('six route/state/viewport/theme captures')
+      expect(prompt).toContain('Apps without themes skip')
+      expect(prompt).toContain('not accepted defects or automatically actionable tracker items')
+      expect(prompt).toContain('even in implement mode')
+    })
+  })
+
   describe('ux defaults (#3273)', () => {
     it('is registered as a self-improvement task type with a description', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('ux')
-      expect(TASK_TYPE_DESCRIPTIONS['ux']).toBe('UX/design audit — file issues (default) or implement fixes')
+      expect(TASK_TYPE_DESCRIPTIONS['ux']).toBe('UX audit — file issues (default) or implement fixes')
     })
 
     it('defaults to on-demand + enabled with file-issues on (worktree/PR off)', () => {
@@ -1944,8 +1966,8 @@ describe('taskSchedule', () => {
       expect(modeContractFor(true)).toContain('open a PR, create a branch')
       // Named checklist, not vibes.
       expect(prompt).toContain('above the fold')
-      expect(prompt).toContain('1440x900')
-      expect(prompt).toContain('375x812')
+      expect(prompt).toContain('sampled desktop viewport')
+      expect(prompt).toContain('narrow task-flow sample')
       // Explicitly defers to the sibling task types it would otherwise duplicate.
       expect(prompt).toContain('ui-bugs')
       expect(prompt).toContain('mobile-responsive')

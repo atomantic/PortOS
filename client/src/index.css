@@ -1503,6 +1503,13 @@ html[data-port-theme="lumen-glass-day"] body::after {
   will-change: transform;
 }
 
+/* Moving the viewport-sized glow invalidates glass backdrops while WebGL is
+   initializing. Keep its current appearance, but pause that decorative layer
+   while a graphics surface owns the page; ordinary theme motion stays enabled. */
+html[data-port-theme="lumen-glass-day"] body:has([data-port-graphics-surface="webgl"])::after {
+  animation-play-state: paused;
+}
+
 @keyframes portos-glass-drift-a {
   0%   { background-position: 0 0, 0 0, 0 0, 0 0, 0 0; }
   100% { background-position: 0 0, 0 0, 0 0, 10vw -5vh, -8vw 6vh; }

@@ -25,6 +25,21 @@ describe('scheduled audit measurement workflow', () => {
     expect(auditQualityInstructions('react-lifecycle')).toContain('"category":"ui-lifecycle"');
   });
 
+  it('persists Design screenshot coverage through the existing assessment and slice history contract', async () => {
+    const designReport = sliceReport({ category: 'design', slice: 'client/src/components/media',
+      sliceScore: null, coverage: 'unavailable', confidence: 'low', worstSeverity: 0,
+      summary: 'Screenshot inspection blocked; visual coverage untested.', scannedFiles: 0, totalFiles: 3 });
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const summary = `${sentinel(designReport)}AUDIT_SLICE: client/src/components/media`;
+    await expect(recordAuditQuality({ task, taskType: 'design', agentId: 'design-run',
+      workspacePath: '/repo', success: true, assessedAt }, {
+      readFile: vi.fn().mockResolvedValue(JSON.stringify({ summary, payload: null })),
+      query, ensureSchema: vi.fn(),
+    })).resolves.toBe(true);
+    expect(query.mock.calls[0][1]).toEqual(['portos-default', 'design', 'design-run',
+      assessedAt, JSON.stringify(designReport), 'client/src/components/media']);
+  });
+
   it('accepts the structured sentinel envelope and uses server-owned app, category and run provenance', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
     const ensureSchema = vi.fn();

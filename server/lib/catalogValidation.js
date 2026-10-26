@@ -942,3 +942,6 @@ export const catalogRefinementSchema = z.object({
   model: z.string().max(200).optional(),
   effort: z.enum(EFFORT_LEVELS).optional(),
 }).strict();
+
+// Scene, camera and output size always come from the saved record/contract.
+export const catalogGreyboxRenderSchema = z.object({}).strict();

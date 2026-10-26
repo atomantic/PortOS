@@ -389,7 +389,7 @@ function IngredientEditor() {
       .catch((err) => { toast.error(err?.message || 'Failed to set portrait'); return false; });
     if (!ok) return;
     refreshMedia();
-    toast.success('Portrait set');
+    toast.success('Canonical image set');
   };
 
   const handleDetachMedia = async (mediaKey, kind) => {
@@ -1547,6 +1547,7 @@ function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = 
                   className="w-full aspect-square object-contain" />
                 <figcaption className="text-xs text-gray-400 p-2 break-words">
                   {filename === primaryImageRef ? 'Primary canon reference' : 'Canon reference'}
+                  {!readOnly && onSetPortrait && <button type="button" onClick={() => onSetPortrait(filename)} className="block min-h-11 text-port-accent">Set as canonical image</button>}
                   {canonRemoval && <CanonReferenceRemoval key={filename} {...canonRemoval} filename={filename} />}
                 </figcaption>
               </figure>

@@ -28,6 +28,7 @@ import {
   catalogGreyboxDraftSchema,
   catalogGreyboxSaveSchema,
   catalogGreyboxCaptureSchema,
+  catalogGreyboxRenderSchema,
   catalogMediaVoiceMemoSchema,
   catalogPortraitSetSchema,
   catalogIngredientQuerySchema,
@@ -61,7 +62,7 @@ import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalog
 import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
-import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, saveGreybox } from '../services/catalogGreybox.js';
+import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxShot, saveGreybox } from '../services/catalogGreybox.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
 import { getBoard as getMoodBoard } from '../services/moodBoard/index.js';
@@ -725,6 +726,13 @@ router.put('/ingredients/:id/greybox', asyncHandler(async (req, res) => {
 router.post('/ingredients/:id/greybox/shots/:shotId/capture', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogGreyboxCaptureSchema, req.body);
   const media = await captureGreyboxShot(req.params.id, req.params.shotId, body);
+  res.status(201).json(media);
+  catalogEvents.emit('primitive-changed', { ingredientId: req.params.id });
+}));
+
+router.post('/ingredients/:id/greybox/shots/:shotId/render', asyncHandler(async (req, res) => {
+  validateRequest(catalogGreyboxRenderSchema, req.body ?? {});
+  const media = await renderGreyboxShot(req.params.id, req.params.shotId);
   res.status(201).json(media);
   catalogEvents.emit('primitive-changed', { ingredientId: req.params.id });
 }));

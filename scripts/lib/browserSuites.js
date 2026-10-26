@@ -11,6 +11,7 @@ export const BROWSER_SUITES = [
   'server/services/codeAnimation/export.realBrowser.test.js',
   'server/services/fableLoom/static-player/player.browser.test.js',
   'server/services/federatedMedia/sourceAudio.browser.test.js',
+  'server/services/greyboxRender.browser.test.js',
   'server/services/htmlComposition/index.test.js',
   'server/services/musicVideo/animaticCapture.browser.test.js',
   'server/services/musicVideo/compositionRender.test.js',
