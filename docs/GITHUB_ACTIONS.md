@@ -868,6 +868,11 @@ Windows runs the baseline. Likewise only the pipeline scripts the Windows job ex
 `ci-test-plan`, `run-ci-lint`, `scan-diff-hidden-content` and `verify-ci-status` run on Linux jobs
 only. The nightly run and the candidate → `release` PR keep the complete matrix as the net.
 
+The client Vitest configuration also keeps Windows at that contract baseline:
+the Windows job executes the server runner. Server Vitest configuration and
+shared pool changes still escalate Windows; a mixed client/server change keeps
+the stronger requirement. All Linux suites remain full for either config change.
+
 **Dependency manifests decide per package.** The planner's 32-PR sample in
 October 2026 traced every full plan to a lockfile/manifest change (4),
 `server/lib/validation.js` (2) or `.github/workflows/ci.yml` (2). A lockfile
@@ -1437,16 +1442,21 @@ required CI gate.
 Use the workflow-dispatch button for an immediate full run. A PR also chooses
 full CI automatically when its impact cannot be classified safely.
 
-### Rebase Before Push
+### Before Push
 
-Since CI may auto-commit changelog archives, always rebase before pushing:
+Fetch the intended base and inspect the branch and working tree before pushing:
 
 ```bash
 git fetch origin main
-git rebase origin/main
 npm run pregate
-git push
 ```
+
+Commit intended changes and push to the branch's verified remote destination.
+Integrate the fetched base when there is an actual conflict, an enforced
+up-to-date policy, or evidenced semantic overlap; rerun pregate after a rebase.
+A moving main alone does not require a new head or another hosted CI run.
+Managed merges still require fresh combined-tree structural guards and live
+head/base checks under the merge policy in the root AGENTS.md.
 
 ## Adapting for Sub-Projects
 

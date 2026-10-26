@@ -781,6 +781,7 @@ describe('CI test impact planner', () => {
     for (const path of [
       '.github/workflows/ci.yml',
       'server/vitest.config.js',
+      'client/vitest.config.js',
       'client/src/test/setup.js',
       'server/lib/validation.js',
       // The client lint configuration. Both of these carry real enforced rules —
@@ -1713,16 +1714,21 @@ describe('needsSlashdoSubmodule', () => {
 // WINDOWS_CONTRACT_TESTS baseline — reduced, never skipped (issue #7440).
 describe('Windows escalation on a full plan (#7440)', () => {
   // The contract baseline resolves against tracked files, so a downgrade is
-  // only observable when the contract tests exist in the tree.
-  const TRACKED_WITH_CONTRACTS = [...TRACKED, ...WINDOWS_CONTRACT_TESTS];
+  // only observable when the contract tests exist in the tree. Use real owners
+  // instead of inventing configured paths that may have moved or disappeared.
+  const repo = fileURLToPath(new URL('../', import.meta.url));
+  const TRACKED_WITH_CONTRACTS = [
+    ...TRACKED.filter(path => !WINDOWS_CONTRACT_TESTS.includes(path)),
+    ...WINDOWS_CONTRACT_TESTS.filter(path => existsSync(join(repo, path))),
+  ];
   const plan = (files, options = {}) => buildCiTestPlan(files, {
     trackedFiles: TRACKED_WITH_CONTRACTS,
     ...options,
   });
 
-  it('keeps the 43-contract Windows baseline on one job despite the larger full matrix', () => {
+  it.each(['client/vite.config.js', 'client/vitest.config.js'])('runs the Windows contract baseline for client-only configuration: %s', (path) => {
     expect(WINDOWS_CONTRACT_TESTS).toHaveLength(43);
-    const downgraded = plan(['client/vite.config.js']);
+    const downgraded = plan([path]);
 
     // Still a full plan for every Linux suite — only the 2x job narrows.
     expect(downgraded.full).toBe(true);
@@ -1749,12 +1755,14 @@ describe('Windows escalation on a full plan (#7440)', () => {
     expect(wide.shards.windows).toEqual([1]);
   });
 
-  it('escalates when ANY matching trigger is Windows-relevant, not just the reported one', () => {
-    // The reason line reports the first match in sorted-path order, which here
-    // is the client-only one. The Windows decision must still see server/index.js.
-    const mixed = plan(['client/vite.config.js', 'server/index.js']);
+  it.each([
+    ['client/vite.config.js', 'server/index.js'],
+    ['client/vitest.config.js', 'server/vitest.config.js'],
+  ])('escalates a mixed client/native trigger: %s + %s', (clientConfig, nativeEntry) => {
+    // The reported client-only reason must not hide a later native trigger.
+    const mixed = plan([clientConfig, nativeEntry]);
 
-    expect(mixed.reason).toContain('client/vite.config.js');
+    expect(mixed.reason).toContain(clientConfig);
     expect(mixed.windowsMode).toBe('full');
     expect(mixed.shards.windows).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.windows));
   });

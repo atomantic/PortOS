@@ -46,6 +46,9 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
   // Exact SVG-filter screenshots hit the 30s CI budget alongside parallel tests.
   'lib/filmLook.browser.test.js',
   'lib/filmLookGpu.browser.test.js',
+  // Save-frame pixel parity uses the same exact SVG film look and two-second
+  // paused-video settle contract; keep unrelated browser work out of its budget.
+  'services/musicVideo/animaticCapture.browser.test.js',
   'lib/musicVideoTitleCard.browser.test.js',
   'services/htmlComposition/index.test.js',
   'services/musicVideo/documentRender.browser.test.js',
@@ -69,6 +72,9 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
 const EXCLUSIVE_TESTS = [
   ...EXCLUSIVE_CAPTURE_TESTS,
   'services/databaseMaintenanceCutover.test.js',
+  // The generated shell/curl ownership proof retains its native process
+  // deadlines; run it after parallel fixture work instead of sharing that load.
+  'routes/cosAgentRoutes.ownershipResponse.test.js',
   'services/creativeDirector/videoAssembly.test.js',
   'services/musicVideo/publishKit.test.js',
   'services/musicVideo/sharingCopy.test.js',

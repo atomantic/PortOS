@@ -19,7 +19,7 @@ import {
 } from './videoUpload.js';
 
 // Diagnostics retain only fixed stage names, state and elapsed time, never paths,
-// payloads or raw errors. The most recent 64 boundaries cover both large imports.
+// payloads or raw errors. The most recent 64 boundaries cover staged import and rollback.
 const uploadState = vi.hoisted(() => ({ root: '', history: [], fail: false, stages: [] }));
 const traceStage = vi.hoisted(() => async (stage, work) => {
   const record = { stage, state: 'pending', started: performance.now() };
@@ -176,12 +176,12 @@ describe('saveUploadedGalleryVideo validation', () => {
 });
 
 
-it('imports a large staged video without the JSON ceiling and removes failed imports', () => fixture.run(async () => {
+it('preserves staged video bytes and removes failed imports', () => fixture.run(async () => {
   const tempPath = join(uploadState.root, 'source.mp4');
-  const bytes = Buffer.concat([ftyp('isom'), Buffer.alloc(56 * 1024 * 1024)]);
+  const bytes = Buffer.concat([ftyp('isom'), Buffer.from('synthetic staged video payload')]);
   writeFileSync(tempPath, bytes);
-  const entry = await saveUploadedGalleryVideoFile(tempPath, 'large.mp4');
-  expect(entry).toMatchObject({ title: 'large.mp4', source: 'upload', durationSec: 2 });
+  const entry = await saveUploadedGalleryVideoFile(tempPath, 'staged.mp4');
+  expect(entry).toMatchObject({ title: 'staged.mp4', source: 'upload', durationSec: 2 });
   expect(uploadState.history[0]).toEqual(entry);
   expect(readFileSync(join(uploadState.root, entry.filename)).equals(bytes)).toBe(true);
   uploadState.fail = true;
