@@ -22,6 +22,8 @@ export const ADMISSION_QUEUE_TIMEOUT_MS = 15_000;
 // This is not a forge-side fence: a merge request already in flight at the
 // deadline may still land, with the same exposure as two CLEAN merges.
 export const AGENT_LEASE_MAX_HOLD_MS = 5 * 60 * 1000;
+export const MERGE_PREPARATION_MAX_HOLD_MS = 20 * 60 * 1000;
+const PREPARATION_WAIT_IDLE_MS = 3 * 60 * 1000;
 export const MERGE_ADMISSION_OUTCOMES = ['merged', 'leave-open', 'resync'];
 const MERGE_ADMISSION_HISTORY_LIMIT = 25;
 const MERGE_HANDOFF_RECEIPT_LIMIT = 25;
@@ -81,10 +83,11 @@ function sameAgentRecords(cached, stored) {
     && ids.every((id) => Object.hasOwn(stored, id) && JSON.stringify(cached[id]) === JSON.stringify(stored[id]));
 }
 
+let stateStorePromise;
 async function transaction(work, operation) {
   // Lazy: almost every task-generator suite reaches prWatcher, even when no
   // pending merge exists. Admission needs runtime state only on the merge path.
-  const { withStateLock, readMergeAdmissionStateForSafetyCheck, loadState, saveState } = await import('./cosState.js');
+  const { withStateLock, readMergeAdmissionStateForSafetyCheck, loadState, saveState } = await (stateStorePromise ??= import('./cosState.js'));
   const queuedAt = clock.now();
   // Each phase runs until the next begins; `phase.stage` names are its stages.
   const span = lagProbe.begin('queue');
@@ -132,16 +135,20 @@ async function transaction(work, operation) {
       if (!snapshot?.trusted || !isPlainObject(snapshot.agents) || !isPlainObject(snapshot.mergeAdmissions)) {
         return refuse('ownership-unreadable');
       }
+      const preparations = Object.hasOwn(snapshot, 'mergePreparations') ? snapshot.mergePreparations : {};
+      if (!isPlainObject(preparations)) return refuse('ownership-unreadable');
       const state = await measure('stateLoad', loadState);
       // A recovered/defaulted or externally replaced state is not proof of an
       // empty ownership set. Do not let the cache overwrite contradictory disk.
       if (!sameAgentRecords(state.agents, snapshot.agents)
-        || JSON.stringify(state.mergeAdmissions ?? {}) !== JSON.stringify(snapshot.mergeAdmissions)) {
+        || JSON.stringify(state.mergeAdmissions ?? {}) !== JSON.stringify(snapshot.mergeAdmissions)
+        || JSON.stringify(state.mergePreparations ?? {}) !== JSON.stringify(preparations)) {
         return refuse('ownership-stale');
       }
       // Copy before mutation: a failed atomic write must not admit from a cache
       // that falsely remembers a successful grant/release.
-      const next = { ...state, agents: { ...state.agents }, mergeAdmissions: { ...snapshot.mergeAdmissions } };
+      const next = { ...state, agents: { ...state.agents }, mergeAdmissions: { ...snapshot.mergeAdmissions },
+        mergePreparations: structuredClone(preparations) };
       return work(next, (value) => measure('persistence', () => saveState(value, { onStage: stage('persistence') })), measure);
     });
     // Once started, the queue owns the entire transaction through durable
@@ -176,17 +183,90 @@ async function inactive(lease, state) {
   return sameAgent(lease, owner) && owner.status === 'completed' && Number.isFinite(Date.parse(owner.completedAt));
 }
 
+// A preparation turn orders only ready participants' guards and merge attempts.
+// It is not admission: final ownership/head/base/check gates remain mandatory.
+// Legacy callers join at acquire, behind any preparation already requested.
+const preparationOwner = owner => owner.kind === 'agent'
+  ? `agent:${owner.agentId}:${owner.startedAt}:${owner.taskId}`
+  : owner.kind === 'external' ? `external:${owner.externalOwner}`
+    : owner.kind === 'pending' || owner.preparationKey ? `pending:${owner.key || owner.preparationKey}` : `sweep:${owner.serverOwner}`;
+const preparationTarget = owner => owner.kind === 'external'
+  ? JSON.stringify({ ...owner.target, baseSha: null })
+  : owner.kind === 'agent' ? JSON.stringify({ headSha: owner.headSha ?? null, reconcileTarget: owner.reconcileTarget ?? null }) : null;
+const validPreparation = row => isPlainObject(row) && typeof row.owner === 'string'
+  && typeof row.token === 'string' && Number.isFinite(row.requestedAt) && Number.isFinite(row.seenAt)
+  && (row.grantedAt === null || Number.isFinite(row.grantedAt));
+async function prepare(state, save, repository, owner, { yieldTurn = false } = {}) {
+  const now = Date.now();
+  if (Object.hasOwn(state.mergeAdmissions, repository) && !validLease(state.mergeAdmissions[repository], repository)) {
+    return refuse('lease-unreadable');
+  }
+  const stored = Object.hasOwn(state.mergePreparations, repository) ? state.mergePreparations[repository] : [];
+  if (!Array.isArray(stored) || !stored.every(validPreparation)) return refuse('preparation-unreadable');
+  const identity = preparationOwner(owner);
+  const target = preparationTarget(owner);
+  let rows = structuredClone(stored).filter(row => {
+    const agent = row.agent && state.agents[row.agent.agentId];
+    if (agent && sameAgent(row.agent, agent) && agent.status === 'completed' && Number.isFinite(Date.parse(agent.completedAt))) return false;
+    return row.grantedAt === null ? now - row.seenAt < PREPARATION_WAIT_IDLE_MS
+      : now - row.grantedAt < MERGE_PREPARATION_MAX_HOLD_MS;
+  });
+  if (rows[0] && rows[0].token !== stored[0]?.token && rows[0].grantedAt === null) rows[0].seenAt = now;
+  let row = rows.find(item => item.owner === identity);
+  // Changes to a verified registered target join at the tail. Own-branch
+  // claims have no server-pinned head here: their trusted parent must yield
+  // before substantive remediation. Base movement preserves the deadline.
+  if (yieldTurn || (row && row.target !== target)) {
+    const previous = rows[0]?.token;
+    rows = rows.filter(item => item.owner !== identity);
+    if (rows[0] && rows[0].token !== previous && rows[0].grantedAt === null) rows[0].seenAt = now;
+    row = null;
+  }
+  if (!yieldTurn) {
+    if (!row) {
+      row = { owner: identity, target, ...(owner.kind === 'agent' ? { agent: { agentId: owner.agentId, startedAt: owner.startedAt, taskId: owner.taskId } } : {}), token: randomUUID(), requestedAt: now, seenAt: now, grantedAt: null };
+      rows.push(row);
+    }
+    if (row.grantedAt === null && now - row.seenAt >= 30_000) row.seenAt = now;
+    const held = state.mergeAdmissions[repository];
+    if (rows[0] === row && row.grantedAt === null && (!held || await inactive(held, state))) row.grantedAt = now;
+  }
+  state.mergePreparations[repository] = rows;
+  // Polls need durable liveness, but never renew the granted turn's deadline.
+  if (JSON.stringify(stored) !== JSON.stringify(rows)) await save(state);
+  if (yieldTurn) return { yielded: true };
+  return row.grantedAt !== null && rows[0] === row
+    ? { prepared: true, preparationToken: row.token, expiresAt: new Date(row.grantedAt + MERGE_PREPARATION_MAX_HOLD_MS).toISOString() }
+    : { prepared: false, reason: 'preparation-waiting', retryAfterMs };
+}
+function finishPreparation(state, repository, owner) {
+  const rows = state.mergePreparations[repository];
+  if (!Array.isArray(rows)) return;
+  const next = rows.filter(row => row.owner !== preparationOwner(owner));
+  if (next[0] && next[0].token !== rows[0]?.token && next[0].grantedAt === null) next[0].seenAt = Date.now();
+  state.mergePreparations[repository] = next;
+}
+
 async function admit(state, save, repository, owner, measure) {
   const held = state.mergeAdmissions[repository];
-  if (Object.hasOwn(state.mergeAdmissions, repository)) {
-    if (!validLease(held, repository)) return refuse('lease-unreadable');
-    // Re-entry keeps a live token; an expired one is voided and re-minted below.
-    if (owner.kind === 'agent' && held.kind === 'agent' && held.agentId === owner.agentId && held.startedAt === owner.startedAt
-      && held.taskId === owner.taskId && !expired(held)) {
-      return { admitted: true, token: held.token, repository };
-    }
-    if (!await measure('ownerRecovery', () => inactive(held, state))) return refuse('owner-active-or-unverified');
+  if (Object.hasOwn(state.mergeAdmissions, repository) && !validLease(held, repository)) return refuse('lease-unreadable');
+  const available = !held || await measure('ownerRecovery', () => inactive(held, state));
+  // Old sweeps have no retained receipt turn and must not leave ghost waiters.
+  if (owner.kind === 'sweep' && !owner.preparationKey && !available) return refuse('owner-active-or-unverified');
+  if (held && available) finishPreparation(state, repository, held);
+  // Persist the turn and lease together on a grant. Refused waiters still keep
+  // their durable place; no second whole-state write is needed on acquisition.
+  let changed = false;
+  const turn = await prepare(state, async () => { changed = true; }, repository, owner);
+  const refuseOrReenter = async result => {
+    if (changed) await save(state);
+    return result;
+  };
+  if (held && owner.kind === 'agent' && held.kind === 'agent' && sameAgent(held, { ...owner, id: owner.agentId }) && !expired(held)) {
+    return refuseOrReenter({ admitted: true, token: held.token, repository });
   }
+  if (!available) return refuseOrReenter(refuse('owner-active-or-unverified'));
+  if (!turn.prepared) return refuseOrReenter({ ...refuse(turn.reason), prepared: false });
   const lease = { ...owner, repository, token: randomUUID(), acquiredAt: new Date().toISOString() };
   state.mergeAdmissions[repository] = lease;
   if (owner.kind === 'sweep') sweepTokens.add(lease.token);
@@ -433,7 +513,7 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
     if (!repository) return refuse('repository-unreadable');
     // Releasing an owned token must remain possible after merge deletes or
     // switches the checkout. Acquire/check still require the assigned target.
-    const participant = action === 'release' ? true : await measure('origin', () => verifiedParticipant(agent, repository, state.agents));
+    const participant = ['release', 'yield'].includes(action) ? true : await measure('origin', () => verifiedParticipant(agent, repository, state.agents));
     if (!participant && isCleanupRecovery(agent)) {
       return { admitted: false, reason: 'recovery-merge-target-unverified', retryable: false,
         message: 'Leave the PR and branch intact and report this blocker: this recovery has no verified registered parent PR target. Retrying cannot change that; only a freshly filed recovery can.' };
@@ -450,6 +530,11 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
           message: 'Leave the PR/worktree intact. A detached review checkout must match its registered launch head and live PR; create a fresh supported follow-up for a changed target.' };
       }
       return refuse('claim-owner-unverified');
+    }
+    if (action === 'prepare' || action === 'yield') {
+      return prepare(state, save, repository, { kind: 'agent', ...binding(agent),
+        ...(participant.headSha ? { headSha: participant.headSha } : {}),
+        ...(participant.reconcileTarget ? { reconcileTarget: participant.reconcileTarget } : {}) }, { yieldTurn: action === 'yield' });
     }
     if (action === 'acquire') {
       if (Object.entries(state.mergeAdmissions).some(([key, held]) =>
@@ -484,40 +569,49 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
       lastMergeAdmission: released,
       mergeAdmissionHistory: [...history, released].slice(-MERGE_ADMISSION_HISTORY_LIMIT),
     } };
+    if (outcome !== 'resync') finishPreparation(state, repository, lease);
     await saveLeaseState(state, save, repository);
     return { admitted: false, released: true, outcome };
-  }, ['acquire', 'check', 'release'].includes(action) ? action : 'unknown');
+  }, ['prepare', 'yield', 'acquire', 'check', 'release'].includes(action) ? action : 'unknown');
 }
 
 /** A verified operator session owns only the target validated by the server. */
 export async function externalMergeAdmission(input, resolveOwner) {
   const { action, token, outcome } = input;
-  const operation = ['acquire', 'check', 'release'].includes(action) ? `external-${action}` : 'unknown';
+  const operation = ['prepare', 'yield', 'acquire', 'check', 'release'].includes(action) ? `external-${action}` : 'unknown';
   const validMap = state => Object.entries(state.mergeAdmissions).every(([key, held]) => validLease(held, key));
   const prepared = await transaction(async (state, save, measure) => {
     const externalOwner = await resolveOwner();
     if (!/^[a-f0-9]{64}$/.test(externalOwner || '')) return refuse('external-owner-unverified');
     if (!validMap(state)) return refuse('lease-unreadable');
+    if (action === 'yield') {
+      const match = Object.entries(state.mergePreparations).find(([, rows]) => Array.isArray(rows)
+        && rows.some(row => row.owner === `external:${externalOwner}` && row.token === token));
+      if (!match) return refuse('preparation-owner-mismatch');
+      return prepare(state, save, match[0], { kind: 'external', externalOwner }, { yieldTurn: true });
+    }
     const owned = Object.values(state.mergeAdmissions).find(held => held.kind === 'external'
       && held.externalOwner === externalOwner && held.token === token);
-    if (action !== 'acquire' && !owned) return refuse('lease-owner-mismatch');
+    if (!['acquire', 'prepare'].includes(action) && !owned) return refuse('lease-owner-mismatch');
     // Release remains possible after a merge or a changed/deleted checkout.
     if (action === 'release') {
       if (!MERGE_ADMISSION_OUTCOMES.includes(outcome)) return refuse('outcome-required');
       delete state.mergeAdmissions[owned.repository];
+      if (outcome !== 'resync') finishPreparation(state, owned.repository, owned);
       await saveLeaseState(state, save, owned.repository);
       return { admitted: false, released: true, outcome };
     }
-    if (action !== 'acquire' && action !== 'check') return refuse('action-invalid');
+    if (!['prepare', 'acquire', 'check'].includes(action)) return refuse('action-invalid');
     if (owned && expired(owned)) return refuse('lease-expired');
-    const requested = action === 'acquire' ? input : owned.target;
+    const requested = ['prepare', 'acquire'].includes(action) ? input : owned.target;
     const pr = parsePullRequestUrl(requested.prUrl);
     const repository = pr && repositoryKey({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` });
     if (!repository) return refuse('repository-unreadable');
     const held = state.mergeAdmissions[repository];
-    // Busy repositories do no forge work. The final transaction repeats this
-    // decision after proof, including a revision fence for intervening holders.
-    if (held && !(held.kind === 'external' && held.externalOwner === externalOwner && !expired(held))
+    // Legacy acquire/check keeps its bounded busy fast path. Prepared callers
+    // register order before guard work; unverified targets cannot reserve it.
+    if (action !== 'prepare' && held && !(held.kind === 'external'
+      && held.externalOwner === externalOwner && !expired(held))
       && !await measure('ownerRecovery', () => inactive(held, state))) return refuse('owner-active-or-unverified');
     return { requested, repository, externalOwner, revision: revision(repository), agents: Object.values(state.agents) };
   }, operation);
@@ -544,6 +638,7 @@ export async function externalMergeAdmission(input, resolveOwner) {
     if (JSON.stringify(current.target) !== JSON.stringify(target)) return refuse('lease-target-changed');
     if (await resolveOwner() !== prepared.externalOwner) return refuse('external-owner-changed');
     if (clock.now() - provedAt >= ADMISSION_QUEUE_TIMEOUT_MS) return refuse('external-proof-expired');
+    if (action === 'prepare') return prepare(state, save, repository, { kind: 'external', externalOwner: prepared.externalOwner, target });
     if (held?.kind === 'external' && held.externalOwner === prepared.externalOwner && !expired(held)) {
       if (JSON.stringify(held.target) !== JSON.stringify(target)) return refuse('lease-target-changed');
       return { admitted: true, token: held.token, repository, headSha: target.headSha, baseSha: target.baseSha, baseBranch: target.baseBranch };
@@ -555,21 +650,24 @@ export async function externalMergeAdmission(input, resolveOwner) {
 }
 
 /** A sweep holds admission only around its final read/assessment/merge attempt. */
-export async function withPendingMergeAdmission(origin, work) {
+export async function withPendingMergeAdmission(origin, work, preparationKey = null) {
   const repository = repositoryKey(origin);
   if (!repository) return refuse('repository-unreadable');
   const admission = await transaction((state, save, measure) => admit(state, save, repository, {
-    kind: 'sweep', serverOwner, pid: process.pid,
+    kind: 'sweep', serverOwner, pid: process.pid, ...(preparationKey ? { preparationKey } : {}),
   }, measure), 'sweep-acquire');
   if (!admission.admitted) return admission;
+  let result;
   try {
-    return { admitted: true, result: await work() };
+    result = await work();
+    return { admitted: true, result };
   } finally {
     try {
       const released = await transaction(async (state, save) => {
         const lease = state.mergeAdmissions[repository];
         if (!validLease(lease, repository) || lease.token !== admission.token) return refuse('lease-owner-mismatch');
         delete state.mergeAdmissions[repository];
+        if (!result?.merge?.guardDeferred) finishPreparation(state, repository, lease);
         await saveLeaseState(state, save, repository);
         return { released: true };
       }, 'sweep-release');
@@ -580,4 +678,12 @@ export async function withPendingMergeAdmission(origin, work) {
       sweepTokens.delete(admission.token);
     }
   }
+}
+
+/** Internal pending-receipt scheduling, without transferring ownership. */
+export async function preparePendingMergeAdmission(origin, key, { yieldTurn = false } = {}) {
+  const repository = repositoryKey(origin);
+  if (!repository) return refuse('repository-unreadable');
+  return transaction((state, save) => prepare(state, save, repository, { kind: 'pending', key }, { yieldTurn }),
+    yieldTurn ? 'pending-yield' : 'pending-prepare');
 }

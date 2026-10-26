@@ -79,9 +79,16 @@ invalidates its authority; an interrupted holder remains reserved until the
 five-minute maximum hold elapses. This is the same bounded coordination as CoS
 leases, not a forge-side fence against a merge already in flight at expiry.
 
-Before acquiring, finish all configured reviews, required CI for the exact PR
-head, and this repository's combined-tree structural guards **outside** the
-lease. Keep the checked head and base SHAs and the base branch name. The worktree-private
+Before requesting a preparation turn, finish all configured reviews and required
+CI for the exact PR head. Send the target request shown below with `action: prepare`
+before running combined-tree guards. Only `prepared: true` grants a preparation
+turn; save its `preparationToken` and `expiresAt` privately. Poll a waiting turn
+at `retryAfterMs`, preserving the original workflow wait budget. A turn lasts at
+most 20 minutes, without renewal, and schedules guard preparation across agents,
+external operators, and pending receipts; it is not merge authority.
+
+With your turn, run this repository's combined-tree structural guards **outside**
+the final admission lease. Keep the checked head and base SHAs and the base branch name. The worktree-private
 `portos-review-status` file must name that exact `REVIEW_HEAD` and the workflow's
 `REVIEW_STATUS=clean`, or `optional-inconclusive` when all configured reviewers
 are optional and unavailable. The latter records an attempted head, never a
@@ -173,3 +180,41 @@ node scripts/portos-api.js fableloom-export download LOOM JOB --output story.zip
 cancelled job. Downloads use the same credential transport, write ZIP bytes to a
 new file with private permissions and refuse overwriting an existing file. The
 ZIP is a static managed artifact; these commands do not deploy or host PortOS.
+
+Preparation turns preserve FIFO position across base-only refreshes, without
+renewing the deadline. If the live base changes, refresh the target's `baseSha`,
+repeat `prepare`, require the same unexpired preparation token, and rerun guards.
+If a different token is returned, the old turn expired and the fresh guard run
+belongs to the new turn. Head/checkout changes join at the tail. Yield before
+substantive remediation, a guard failure, or leaving open without a final lease:
+
+```json
+{"action":"yield","token":"<preparation UUID>"}
+```
+
+A `resync` final release retains the bounded preparation position for base-only
+guard refresh; yield separately before substantive remediation. `merged` and
+`leave-open` release both lease and turn. Existing clients can still acquire
+directly: they join the same order at acquisition and cannot overtake participants
+already preparing. Their earlier guard work cannot benefit from preparation
+ordering until they adopt `prepare`. A live lease granted before an upgrade
+keeps its original bounded lifetime. Scheduling does not enable pending handoff,
+change CI/review requirements, or permit stale-base evidence.
+
+Fair position retention applies to ready participants that actively poll. An
+ungranted waiting position expires after three idle minutes, including positions
+behind an active turn. Active pollers retain their position by refreshing their
+waiting heartbeat. Existing
+bounded handoff follow-ups poll every one to two minutes. A legacy pending
+sweep that has fallen back to its longer recovery cadence may miss its offer
+and rejoin later; it cannot block active ready participants until that timer
+fires. This uses the existing polling paths and creates no additional timer.
+
+For external operators, the verified target includes the exact checkout and
+head, so changing those automatically rejoins at the tail. CoS participants
+with a concrete registered head have the same target-change check. Own-branch
+claim parents do not supply a server-pinned checkout head at preparation time;
+their trusted workflow must yield before head changes or substantive remediation.
+Preparation scheduling does not add head certification to those claims. Every
+final merge still requires the existing live head, CI/review, and combined-base
+checks. Finishing a PR releases its row before the parent proceeds to another PR.

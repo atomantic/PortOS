@@ -788,6 +788,23 @@ describe('merge-only PR watcher', () => {
       expect(mergePrMock).not.toHaveBeenCalled();
     });
 
+    it('waits for its preparation turn before spending guard work and yields if CI regresses', async () => {
+      const { app, evidence } = setup();
+      const { preparePendingMergeAdmission } = await import('./cosMergeAdmission.js');
+      const origin = { host: 'github.com', fullName: 'o/r' };
+      await preparePendingMergeAdmission(origin, 'older-receipt');
+      expect(await processPendingMergePrs(app)).toMatchObject({ waiting: 1, merged: 0 });
+      expect(prepareGuardMock).not.toHaveBeenCalled();
+      expect(admissionState.state.mergeAdmissions).toEqual({});
+      const retained = readPendingMergePrs(mockApps.get(app.id))[0];
+      expect(retained.mergePreparationKey).toBeTruthy();
+      evidence.pr.statusCheckRollup = [{ status: 'IN_PROGRESS', conclusion: null }];
+      await processPendingMergePrs(mockApps.get(app.id));
+      expect(admissionState.state.mergePreparations['github.com/o/r'])
+        .toHaveLength(1); // Only the older receipt remains.
+      await preparePendingMergeAdmission(origin, 'older-receipt', { yieldTurn: true });
+    });
+
     it('runs the guard outside admission and merges the unchanged reviewed head inside it', async () => {
       const { app } = setup();
       prepareGuardMock.mockImplementation(async () => {

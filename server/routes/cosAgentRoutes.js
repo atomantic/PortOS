@@ -29,7 +29,7 @@ router.post('/agents/:id/security-scan', asyncHandler(async (req, res) => {
 
 const mergeAdmissionSchema = z.object({
   agentId: z.string().min(1).max(200),
-  action: z.enum(['acquire', 'check', 'release']),
+  action: z.enum(['prepare', 'yield', 'acquire', 'check', 'release']),
   token: z.string().uuid().optional(),
   // Mirrors MERGE_ADMISSION_OUTCOMES; the service stays lazily imported.
   outcome: z.enum(['merged', 'leave-open', 'resync']).optional(),
@@ -45,11 +45,12 @@ router.post('/merge-admission', asyncHandler(async (req, res) => {
 // persisted. Neither an agentId nor a PR's prose can select another owner.
 const externalMergeAdmissionSchema = z.discriminatedUnion('action', [
   z.object({
-    action: z.literal('acquire'), appId: z.string().min(1).max(200),
+    action: z.enum(['prepare', 'acquire']), appId: z.string().min(1).max(200),
     worktreePath: z.string().min(1).max(4096), prUrl: z.string().url().max(2048),
     baseBranch: z.string().min(1).max(255),
     headSha: z.string().regex(/^[a-f0-9]{40}$/), baseSha: z.string().regex(/^[a-f0-9]{40}$/),
   }).strict(),
+  z.object({ action: z.literal('yield'), token: z.string().uuid() }).strict(),
   z.object({ action: z.literal('check'), token: z.string().uuid() }).strict(),
   z.object({ action: z.literal('release'), token: z.string().uuid(),
     outcome: z.enum(['merged', 'leave-open', 'resync']) }).strict(),
