@@ -13,7 +13,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { formatErrorAnnotation, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
-import { RUN_DIAGNOSTIC_MAX_BYTES, collectionDiagnostic, diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
+import { RUN_DIAGNOSTIC_MAX_BYTES, collectionDiagnostic, validCollectionDiagnostic, diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
 import { browserShardSlice } from './lib/browserSuites.js';
 import { browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
@@ -412,7 +412,8 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
         diagnosticWatch = watch(dirname(runReportPath), (_event, name) => {
           if (String(name) !== 'run.json' || !existsSync(runReportPath)) return;
           const run = readCollectionReport(runReportPath);
-          if (!Array.isArray(run?.errors) || !Number.isInteger(run.errorCount)) {
+          if (!Array.isArray(run?.errors) || !run.errors.every(error => typeof error === 'string')
+            || !Number.isInteger(run.errorCount) || run.errorCount < 0 || !validCollectionDiagnostic(run.collection)) {
             abortDiagnostic('malformed-report');
           } else if (run.collection?.stop === 'unsafe') abortDiagnostic('unsafe-report');
         });

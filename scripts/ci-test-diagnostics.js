@@ -40,11 +40,19 @@ export function processExitDiagnostic(run) {
   return `Vitest process exit event: code=${final.eventCode}; exitCode=${final.exitCode}.`;
 }
 
+export function validCollectionDiagnostic(c) {
+  return c?.limit === 5 && Array.isArray(c.failures) && c.failures.length <= 5
+    && c.failures.every(failure => typeof failure?.file === 'string' && typeof failure.name === 'string'
+      && Array.isArray(failure.errors) && failure.errors.every(error => typeof error === 'string'))
+    && [null, 'unsafe', 'assertion-limit'].includes(c.stop)
+    && ['complete', 'unverified'].includes(c.coverage)
+    && (c.stop !== 'assertion-limit' || c.failures.length === 5)
+    && (c.coverage !== 'complete' || (c.stop === null && c.failures.length === 0));
+}
+
 export function collectionDiagnostic(run) {
   const c = run.collection;
-  if (c?.limit !== 5 || !Array.isArray(c.failures) || c.failures.length > 5
-    || ![null, 'unsafe', 'assertion-limit'].includes(c.stop)
-    || !['complete', 'unverified'].includes(c.coverage)) {
+  if (!validCollectionDiagnostic(c)) {
     return 'Release-candidate collection evidence malformed or unavailable; coverage unverified.';
   }
   return `Release-candidate assertion collection: ${c.failures.length}/5; stop=${c.stop || 'none'}; coverage=${c.coverage}. `

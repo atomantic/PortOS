@@ -102,12 +102,12 @@ describe('release-only assertion collection (#13759)', () => {
     expect(result.stderr).toMatch(/unsafe|refused|first cause|unexpectedly|exit code/i);
   }, 25000);
 
-  it('rejects a zero exit with malformed final evidence', () => {
+  it.each(['{}', '{"errors":[],"errorCount":0}'])('rejects zero exit with malformed final evidence %s', (evidence) => {
     const result = launch(`test('control', () => {});`, { extraReporter: `import { writeFileSync } from 'node:fs';
-      export default function () { return { onInit(v) { v.onClose(() => { process.once('exit', () => writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, '{}')); }); } }; }` });
+      export default function () { return { onInit(v) { v.onClose(() => { process.once('exit', () => writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, ${JSON.stringify(evidence)})); }); } }; }` });
     expect(result.status, result.stderr).not.toBe(0);
     expect([0, 143]).toContain(result.invocation.status);
-    expect(result.run).toEqual({});
+    expect(result.run).toEqual(JSON.parse(evidence));
   }, 25000);
 
   it('preserves external cancellation without coverage or memo evidence', () => {
