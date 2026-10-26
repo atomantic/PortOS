@@ -1058,7 +1058,7 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
   // Only a branchless checkout can be settled without a deleted branch; the
   // receipt then records exactly that and never claims a deletion.
   const checkoutOnlyReceipt = checkoutOnly === true && !branch && branchDeleted !== true;
-  return updateSchedule(async (schedule) => {
+  const outcome = await updateSchedule(async (schedule) => {
     const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
     const outcome = record.branchReconcileOutcome || {};
     // Display history is bounded; receipt evidence and replay identity are durable. A delayed retry
@@ -1141,13 +1141,15 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     });
     return { result: record.branchReconcileOutcome, changed: true };
   });
+  if (branchDeleted === true) cosEvents.emit('checkout:retired', { appId, path, branch, head, checkoutIdentity });
+  return outcome;
 }
 
 /** Finalize a canonical removal receipt after ref CAS or verified ref absence.
  * Keep the physical retirement time; finalization has its own current time. */
 export async function recordRetiredCheckoutBranchFinalization(appId, release, kind) {
   if (!['deleted', 'observed-absent'].includes(kind)) throw new Error('retirement-finalization-kind-invalid');
-  return updateSchedule(async schedule => {
+  const receipt = await updateSchedule(async schedule => {
     const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
     const outcome = record.branchReconcileOutcome || {};
     const matches = row => row.path === release.path && row.branch === release.branch && row.head === release.head
@@ -1187,6 +1189,9 @@ export async function recordRetiredCheckoutBranchFinalization(appId, release, ki
     record.branchReconcileOutcome = await repairReceiptObservations(appId, updated);
     return { result: receipt, changed: true };
   });
+  cosEvents.emit('checkout:retired', { appId, path: receipt.path, branch: receipt.branch,
+    head: receipt.head, checkoutIdentity: receipt.checkoutIdentity });
+  return receipt;
 }
 
 /**

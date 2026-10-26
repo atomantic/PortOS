@@ -716,7 +716,7 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(persisted.metadata.completedCheckouts).toEqual([evidence]);
   });
 
-  for (const inline of [false, true]) seedBodies.it(`recovers an unknown terminal capture through verified merge proof, inline=${inline}`, async () => {
+  for (const inline of [false, true, 'claim']) seedBodies.it(`recovers an unknown terminal capture through verified merge proof, inline=${inline}`, async () => {
     const scratch = await mkdtemp(join(tmpdir(), 'portos-reviewed-capture-'));
     try {
       const repo = join(scratch, 'repo'), checkout = join(scratch, 'checkout');
@@ -728,9 +728,14 @@ describe('completeAgent idempotence (#3384)', () => {
       const agentId = 'reviewed-unknown', prUrl = 'https://github.com/example/repo/pull/7';
       await registerAgent(agentId, 'reviewed-task', { isWorktree: true, sourceWorkspace: repo,
         workspacePath: checkout, worktreeBranch: 'feature/reviewed',
-        ...(inline ? { prOpenedBy: 'agent-inline', configOpenPR: true,
+        ...(inline === 'claim' ? { isWorktree: false, configClaimFlow: true, claimBranches: ['feature/reviewed'], workspacePath: repo }
+          : inline ? { prOpenedBy: 'agent-inline', configOpenPR: true,
           prDeliveryTarget: { branch: 'feature/reviewed', workspacePath: checkout } }
           : { reviewLoopMergeTarget: { url: prUrl, branch: 'feature/reviewed' } }) });
+      if (inline === 'claim') {
+        const bound = await getAgent(agentId);
+        await updateAgent(agentId, { metadata: { ...bound.metadata, checkoutSeeds: await actual.captureCheckoutSeeds(bound) } });
+      }
       const merged = vi.spyOn(await import('./completedCheckoutEvidence.js'), 'readMergedClaimEvidence').mockResolvedValue(null);
       const head = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
       const unavailable = vi.spyOn(await import('./worktreeManager.js'), 'listWorktrees')
