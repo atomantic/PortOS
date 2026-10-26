@@ -76,7 +76,7 @@
  */
 import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -108,7 +108,11 @@ export function timerCallbackBodies(blanked) {
 /** Every unguarded await in every async timer callback in one file's source. */
 export function findUnguardedTimerAwaits(src) {
   const blanked = blankLiterals(src);
-  return timerCallbackBodies(blanked).flatMap(({ start, text }) => {
+  return timerAwaitViolations(blanked, timerCallbackBodies(blanked));
+}
+
+function timerAwaitViolations(blanked, bodies) {
+  return bodies.flatMap(({ start, text }) => {
     const line = blanked.slice(0, start).split('\n').length;
     return unguardedAwaits(text).map((chain) => `line ${line}: ${chain}`);
   });
@@ -117,7 +121,46 @@ export function findUnguardedTimerAwaits(src) {
 // Every module extension the tree actually ships, not just `.js`: the operator
 // scripts under `server/scripts/` are `.mjs`, and a `*.js`-only glob would
 // report the tree clean while one of them held an unguarded timer (#7953).
-const trackedServerSources = () => trackedFiles(SERVER_ROOT, ['*.js', '*.mjs', '*.cjs']).filter((f) => f && !f.includes('.test.'));
+let files;
+const trackedServerSources = () => files ??= trackedFiles(SERVER_ROOT, ['*.js', '*.mjs', '*.cjs']).filter((f) => f && !f.includes('.test.'));
+
+let treeScan;
+function scanTree() {
+  if (treeScan) return treeScan;
+  const start = performance.now();
+  let readMs = 0;
+  let lexMs = 0;
+  let analysisMs = 0;
+  let candidates = 0;
+  let slowest = { file: 'none', ms: 0, bytes: 0 };
+  const sites = [];
+  const violations = [];
+  for (const file of trackedServerSources()) {
+    const readStart = performance.now();
+    const src = readFileSync(join(SERVER_ROOT, file), 'utf8');
+    readMs += performance.now() - readStart;
+    // Literal/comment blanking cannot create either identifier from absent text.
+    if (!src.includes('setTimeout') && !src.includes('setInterval')) continue;
+    candidates += 1;
+    const lexStart = performance.now();
+    const blanked = blankLiterals(src);
+    const elapsed = performance.now() - lexStart;
+    lexMs += elapsed;
+    if (elapsed > slowest.ms) slowest = { file, ms: elapsed, bytes: Buffer.byteLength(src) };
+    const analysisStart = performance.now();
+    const bodies = timerCallbackBodies(blanked);
+    if (bodies.length) sites.push(file);
+    for (const hit of timerAwaitViolations(blanked, bodies)) violations.push(`server/${file} ${hit}`);
+    analysisMs += performance.now() - analysisStart;
+  }
+  treeScan = { sites, violations };
+  if (process.env.CI || process.env.PORTOS_SOURCE_SCAN_PROFILE) {
+    console.log(`🔎 timer scan: files=${files.length} candidates=${candidates} read=${readMs.toFixed(1)}ms lex=${lexMs.toFixed(1)}ms analysis=${analysisMs.toFixed(1)}ms total=${(performance.now() - start).toFixed(1)}ms slowestLexer=${slowest.file}:${slowest.bytes}B:${slowest.ms.toFixed(1)}ms`);
+  }
+  return treeScan;
+}
+
+afterAll(() => { treeScan = undefined; files = undefined; });
 
 describe('async timer callbacks own their rejections (#5668)', () => {
   it('scans the server tree', () => {
@@ -135,9 +178,7 @@ describe('async timer callbacks own their rejections (#5668)', () => {
   it('finds the async timer callbacks it is meant to guard', () => {
     // Proves the extractor still recognizes real call sites — without this the
     // scan below could go vacuously green after an unrelated refactor.
-    const sites = trackedServerSources().filter((file) => (
-      timerCallbackBodies(blankLiterals(readFileSync(join(SERVER_ROOT, file), 'utf8'))).length > 0
-    ));
+    const { sites } = scanTree();
     expect(sites).toEqual(expect.arrayContaining([
       'cos-runner/index.js',
       'services/mediaJobQueue/index.js',
@@ -146,12 +187,7 @@ describe('async timer callbacks own their rejections (#5668)', () => {
   });
 
   it('has no unguarded await in any async timer callback', () => {
-    const violations = [];
-    for (const file of trackedServerSources()) {
-      const src = readFileSync(join(SERVER_ROOT, file), 'utf8');
-      if (!src.includes('setTimeout') && !src.includes('setInterval')) continue;
-      for (const hit of findUnguardedTimerAwaits(src)) violations.push(`server/${file} ${hit}`);
-    }
+    const { violations } = scanTree();
 
     expect(
       violations,
