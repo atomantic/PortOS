@@ -135,16 +135,14 @@ function ViewApi({ apiRef, layout, shotView, focalLengthMm, aspect, helpersRef, 
       const helpersVisible = helpersRef.current?.visible;
       if (helpersRef.current) helpersRef.current.visible = false;
       try {
-        gl.setPixelRatio(1);
-        gl.setSize(width, height, false);
+        gl.setDrawingBufferSize(width, height, 1);
         camera.aspect = ratio;
         camera.fov = fov;
         camera.updateProjectionMatrix();
         gl.render(scene, camera);
         return gl.domElement.toDataURL('image/png');
       } finally {
-        gl.setPixelRatio(pixelRatio);
-        gl.setSize(size.x, size.y, false);
+        gl.setDrawingBufferSize(size.x, size.y, pixelRatio);
         camera.aspect = previousAspect;
         camera.fov = previousFov;
         camera.updateProjectionMatrix();
