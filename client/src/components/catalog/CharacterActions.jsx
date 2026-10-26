@@ -15,6 +15,7 @@ export default function CharacterActions({ name, disabled = false, renderDisable
       disabled={blocked || busy || rendering} title={label} aria-label={label}
       className="min-h-11 min-w-11 inline-flex items-center justify-center p-2 rounded text-gray-400 hover:text-port-accent disabled:opacity-30">
       {pending ? <Loader2 size={16} className="animate-spin" /> : <Icon size={16} />}
+      {action === onRender && <span className="ml-1 text-xs">Generate image</span>}
     </button>)}
     {onRemove && <button type="button" onClick={onRemove} title="Remove from this universe; keep the catalog record and assets"
       aria-label={`Remove ${name} from universe`} className="min-h-11 min-w-11 inline-flex items-center justify-center p-2 rounded text-gray-400 hover:text-port-error"><X size={16} /></button>}
