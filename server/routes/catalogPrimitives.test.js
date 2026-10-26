@@ -178,6 +178,17 @@ describe('creative primitive ownership and forks', () => {
     expect(db.state).toEqual(snapshot);
   });
 
+  it('creates an independent same-universe redesign without changing its source or production uses', async () => {
+    const before = structuredClone(db.state.ingredients['cat-chr-source']);
+    const response = await request(app).post(`${path}/fork`).send({ universeId: 'first', name: 'Courier redesign', copyImages: true, operationKey });
+    expect(response.status).toBe(201);
+    expect(response.body.id).not.toBe(before.id);
+    expect(response.body.name).toBe('Courier redesign');
+    expect(db.state.ingredients[before.id]).toEqual(before);
+    expect(db.state.refs).toContainEqual({ ingredientId: response.body.id, refKind: 'universe', refId: 'first', role: 'owner' });
+    expect(db.state.relations).toContainEqual({ fromId: response.body.id, toId: before.id, kind: 'forked-from' });
+  });
+
   it('validates the public request before any write and requires a real destination', async () => {
     const before = structuredClone(db.state);
     expect((await request(app).post(`${path}/fork`).send({ universeId: 'second' })).status).toBe(400);

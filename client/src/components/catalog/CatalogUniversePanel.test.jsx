@@ -30,7 +30,7 @@ describe('primitive ownership and fork controls', () => {
   it.each([false, true])('allows an independent fork from a read-only source unless its identity is fenced (%s)', async (fenced) => {
     forkCatalogIngredient.mockResolvedValue({ id: 'cat-chr-fork', type: 'character' });
     render(<MemoryRouter><Harness readOnly forkBlocked={fenced} /></MemoryRouter>);
-    fireEvent.click(screen.getByRole('button', { name: 'Fork into another universe…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Fork / experiment with redesign…' }));
     await screen.findByRole('option', { name: 'Second world' });
     expect(screen.queryByRole('button', { name: 'Set owning universe' })).toBeNull();
     fireEvent.change(screen.getByLabelText('Destination universe'), { target: { value: 'second' } });
@@ -57,8 +57,8 @@ describe('primitive ownership and fork controls', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Set owning universe' }));
     await waitFor(() => expect(screen.queryByText('Ownership needs review')).toBeNull());
     expect(setCatalogUniverseOwner).toHaveBeenCalledWith('cat-chr-1', 'first', { silent: true });
-    fireEvent.click(screen.getByRole('button', { name: 'Fork into another universe…' }));
-    await screen.findByRole('option', { name: 'Second world' });
+    fireEvent.click(screen.getByRole('button', { name: 'Fork / experiment with redesign…' }));
+    await screen.findByRole('option', { name: 'First world (same universe · redesign)' });
     expect(screen.getByRole('button', { name: 'Create fork' })).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Destination universe'), { target: { value: 'second' } });
     fireEvent.click(screen.getByLabelText('Reuse image files as independent references on the fork'));

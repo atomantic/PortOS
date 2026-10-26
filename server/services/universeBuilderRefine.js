@@ -11,9 +11,10 @@
  * overwrite the draft, so the LLM never silently mutates a saved universe.
  */
 
+import { runCreativeRefinement } from "./creativeRefinement.js";
 import { ServerError } from "../lib/errorHandler.js";
 import { extractNonPlaceholderJson } from "../lib/jsonExtract.js";
-import { assertProvider, resolveProviderAndModel, resolveEffectiveModel, runPromptThroughProvider, assertVisionRunUsedImages } from "./promptRunner.js";
+import { assertProvider, resolveProviderAndModel, resolveEffectiveModel, assertVisionRunUsedImages } from "./promptRunner.js";
 import { resolveAPIProvider } from './aiProvider.js';
 import {
   renderCategoriesForPrompt as renderCategoriesShared,
@@ -268,7 +269,7 @@ const mergeCompositesWithLocks = (originalSheets, llmSheets) => {
 // inside runner.js#buildCliArgs and the TUI paste/idle handshake lives in
 // tuiPromptRunner.js — both reached via runPromptThroughProvider.
 async function runRefine(provider, model, prompt, screenshots = []) {
-  return runPromptThroughProvider({
+  return runCreativeRefinement({
     provider, prompt, source: "universe-builder-refine", model,
     // Vision style-reference path: API providers base64-inline these as
     // image_url blocks; CLI/TUI providers ignore them (the caller forces an API

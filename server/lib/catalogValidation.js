@@ -935,5 +935,13 @@ export const catalogGreyboxCaptureSchema = z.object({
   dataBase64: z.string().min(1).max(32 * 1024 * 1024),
 }).strict();
 
+export const catalogRefinementSchema = z.object({
+  draft: z.record(z.string(), z.string().max(12000)).refine(value => Object.keys(value).length > 0 && Object.keys(value).length <= 8),
+  messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().min(1).max(16000) }).strict()).min(1).max(40),
+  providerId: z.string().min(1).max(200),
+  model: z.string().max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+}).strict();
+
 // Scene, camera and output size always come from the saved record/contract.
 export const catalogGreyboxRenderSchema = z.object({}).strict();

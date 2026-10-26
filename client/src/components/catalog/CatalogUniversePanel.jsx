@@ -106,7 +106,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
           {owner ? <Link to={threadRefUrl('universe', owner.refId)} className="ml-2 text-port-accent hover:underline break-words">{owner.refName || owner.refId}</Link>
             : <span className="ml-2 text-port-warning">{context?.status === 'conflict' ? 'Conflicting owners — review required' : 'Ownership needs review'}</span>}
         </div>
-        <button type="button" onClick={() => setOpen((value) => !value)} className="text-xs text-port-accent hover:underline">{open ? 'Close' : owner || readOnly ? 'Fork into another universe…' : 'Resolve ownership / fork…'}</button>
+        <button type="button" onClick={() => setOpen((value) => !value)} className="text-xs text-port-accent hover:underline">{open ? 'Close' : owner || readOnly ? 'Fork / experiment with redesign…' : 'Resolve ownership / fork…'}</button>
       </div>
       {!owner && <p className="text-xs text-gray-400">Existing references are preserved. Select an owning universe explicitly to establish story and style context.</p>}
       {owner && !refs.some((ref) => ref.refKind === 'universe' && ref.refId === owner.refId) && !readOnly && <button type="button"
@@ -130,7 +130,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
               <select id={`${fieldId}-universe`} value={target} onChange={(event) => setTarget(event.target.value)} disabled={busy}
                 className="w-full rounded border border-port-border bg-port-bg px-2 py-2 text-sm text-white">
                 <option value="">Choose a universe…</option>
-                {universes.filter((universe) => universe.id !== owner?.refId).map((universe) => <option key={universe.id} value={universe.id}>{universe.name}</option>)}
+                {universes.map((universe) => <option key={universe.id} value={universe.id}>{universe.name}{universe.id === owner?.refId ? ' (same universe · redesign)' : ''}</option>)}
               </select></div>
             <div><label htmlFor={`${fieldId}-name`} className="block text-xs text-gray-400 mb-1">Fork name</label>
               <input id={`${fieldId}-name`} value={forkName} maxLength={200} onChange={(event) => setForkName(event.target.value)} disabled={busy}

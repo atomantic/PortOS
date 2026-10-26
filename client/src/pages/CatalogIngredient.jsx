@@ -58,6 +58,7 @@ import CanonReferenceRemoval from '../components/catalog/CanonReferenceRemoval';
 import CatalogLockButton from '../components/catalog/CatalogLockButton';
 import CharacterCanonActions from '../components/catalog/CharacterCanonActions';
 import ObjectAttachmentsEditor from '../components/universe/ObjectAttachmentsEditor';
+import CatalogRedesign from '../components/catalog/CatalogRedesign';
 import CatalogUniversePanel from '../components/catalog/CatalogUniversePanel';
 import CatalogFormsEditor from '../components/catalog/CatalogFormsEditor';
 import CatalogMergePanel from '../components/catalog/CatalogMergePanel';
@@ -794,6 +795,9 @@ function IngredientEditor() {
         </div>}
         <CatalogUniversePanel key={`universe-${record.id}`} ingredient={record} context={record.universeContext}
           onContextChange={applyUniverseContext} readOnly={identityReadOnly} forkBlocked={record.sharedIdentity?.reason === 'CATALOG_IDENTITY_FENCED'} unsaved={isDirty || saving || lookSaving} />
+
+        <CatalogRedesign ingredient={record} payload={payload} disabled={identityReadOnly || payload.locked === true || saving || lookSaving || !!externalDetails}
+          onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} />
 
         {profileVisited && (
           <div hidden={activeTab !== 'profile'} className="space-y-4">
