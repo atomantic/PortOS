@@ -21,6 +21,7 @@ import {
   greyboxPrompt,
   parseGreyboxAnswer,
 } from '../lib/greyboxPrompt.js';
+import { CATALOG_PAYLOAD_MAX_CHARS } from '../lib/catalogValidation.js';
 import * as catalogDB from './catalogDB.js';
 import { uploadIngredientMediaFile } from './catalogMedia.js';
 
@@ -42,16 +43,10 @@ async function requirePlace(ingredientId) {
   return place;
 }
 
-export async function draftGreybox(ingredientId, { instruction, providerId = '', model = '', effort = '', useCurrent = true }) {
-  const place = await requirePlace(ingredientId);
+// The one place the prompt is composed: the preview and the draft both call it,
+// so what the user inspects before sending is exactly what is sent.
+function composeGreyboxPrompt(place, { instruction, useCurrent = true }) {
   const current = useCurrent ? resolveGreybox(place.payload) : null;
-
-  const { provider, selectedModel } = await deps.resolveProvider({ providerId: providerId || null, model: model || null });
-  if (!provider) throw refuse('No AI provider is set up; pick one first.', 'NO_PROVIDER', 503);
-  if (provider.enabled === false) {
-    throw refuse(`Provider "${provider.name || provider.id}" is disabled; enable it in Settings › Providers first.`, 'PROVIDER_DISABLED');
-  }
-
   const instructions = greyboxContractInstructions();
   const placeBlock = greyboxPlaceBlock({ name: place.name, description: place.payload?.description });
   const currentBlock = greyboxCurrentBlock(current);
@@ -62,6 +57,24 @@ export async function draftGreybox(ingredientId, { instruction, providerId = '',
     promptAddition('greybox-place', 'Place', placeBlock),
     promptAddition('greybox-current', 'Current greybox', currentBlock),
   ].filter(Boolean);
+  return { sentPrompt, promptAdditions, edited: Boolean(current) };
+}
+
+/** The exact prompt a draft would send, with no provider call. */
+export async function previewGreyboxPrompt(ingredientId, { instruction, useCurrent = true }) {
+  const { sentPrompt, promptAdditions, edited } = composeGreyboxPrompt(await requirePlace(ingredientId), { instruction, useCurrent });
+  return { sentPrompt, promptAdditions, edited };
+}
+
+export async function draftGreybox(ingredientId, { instruction, providerId = '', model = '', effort = '', useCurrent = true }) {
+  const place = await requirePlace(ingredientId);
+  const { sentPrompt, promptAdditions, edited } = composeGreyboxPrompt(place, { instruction, useCurrent });
+
+  const { provider, selectedModel } = await deps.resolveProvider({ providerId: providerId || null, model: model || null });
+  if (!provider) throw refuse('No AI provider is set up; pick one first.', 'NO_PROVIDER', 503);
+  if (provider.enabled === false) {
+    throw refuse(`Provider "${provider.name || provider.id}" is disabled; enable it in Settings › Providers first.`, 'PROVIDER_DISABLED');
+  }
 
   const result = await deps.runPrompt({
     provider, model: selectedModel, effort: effort || undefined, prompt: sentPrompt, source: 'catalog-greybox',
@@ -73,19 +86,24 @@ export async function draftGreybox(ingredientId, { instruction, providerId = '',
     throw refuse(`${err.message} Try again, or pick another model.`, 'GREYBOX_UNREADABLE', 422);
   }
   console.log(`🧊 Greybox draft for place ${place.id.slice(0, 12)} via ${provider.id}: ${greybox.parts.length} part(s), ${greybox.shots.length} shot(s)`);
-  return { greybox, edited: Boolean(current), sentPrompt, promptAdditions, providerId: provider.id, model: selectedModel || '' };
+  return { greybox, edited, sentPrompt, promptAdditions, providerId: provider.id, model: selectedModel || '' };
 }
 
 /**
  * Store the place's greybox under the row lock (one payload key, never the whole
- * payload). `scene` must already be validated by `greyboxSceneSchema` — the
- * route's body schema does that. Returns the updated place.
+ * payload); `null` removes it. A scene must already be validated by
+ * `greyboxSceneSchema` — the route's body schema does that — and the resulting
+ * payload must still fit the catalog's payload cap, or ordinary profile saves
+ * and federation would reject the record. Returns the updated place.
  */
 export async function saveGreybox(ingredientId, scene, { source = 'user' } = {}) {
   const updated = await catalogDB.setIngredientPayloadKey(ingredientId, 'greybox', scene, {
     source,
     guard: (current) => {
       if (current.type !== 'place') throw refuse('A greybox belongs to a place', 'GREYBOX_NOT_A_PLACE');
+      if (scene && JSON.stringify({ ...current.payload, greybox: scene }).length > CATALOG_PAYLOAD_MAX_CHARS) {
+        throw refuse('This greybox is too large to store with the place; remove some parts.', 'GREYBOX_TOO_LARGE', 413);
+      }
     },
   });
   if (!updated) throw refuse('Place not found', 'NOT_FOUND', 404);

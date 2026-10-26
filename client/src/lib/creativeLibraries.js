@@ -72,12 +72,16 @@ const roleOf = (m) => (typeof m?.role === 'string' ? m.role : '');
 export const isSheetMedia = (m) => roleOf(m).startsWith(SHEET_ROLE_PREFIX);
 export const isPlateMedia = (m) => roleOf(m) === PLATE_ROLE;
 export const isGreyboxShotMedia = (m) => roleOf(m).startsWith(GREYBOX_SHOT_ROLE_PREFIX);
+const greyboxShotIdOf = (m) => roleOf(m).slice(GREYBOX_SHOT_ROLE_PREFIX.length);
 // The wardrobe id a `look:<id>` media row belongs to, or null.
 export const lookIdOf = (m) => (roleOf(m).startsWith(LOOK_ROLE_PREFIX) ? roleOf(m).slice(LOOK_ROLE_PREFIX.length) : null);
 // `liveLookIds` (a Set of the record's wardrobe ids) keeps a deleted look's
-// images visible on References instead of stranding them under a dead role.
-export const isReferenceTabMedia = (m, liveLookIds = null) => {
-  if (isSheetMedia(m) || isPlateMedia(m) || isGreyboxShotMedia(m)) return false;
+// images visible on References instead of stranding them under a dead role;
+// `liveShotIds` (the greybox's shot ids) does the same for a capture whose shot
+// was removed.
+export const isReferenceTabMedia = (m, liveLookIds = null, liveShotIds = null) => {
+  if (isSheetMedia(m) || isPlateMedia(m)) return false;
+  if (isGreyboxShotMedia(m)) return !liveShotIds?.has(greyboxShotIdOf(m));
   const lookId = lookIdOf(m);
   return lookId === null || (liveLookIds ? !liveLookIds.has(lookId) : false);
 };

@@ -7,7 +7,7 @@ const upload = vi.hoisted(() => vi.fn());
 vi.mock('./catalogDB.js', () => db);
 vi.mock('./catalogMedia.js', () => ({ uploadIngredientMediaFile: upload }));
 
-const { draftGreybox, saveGreybox, captureGreyboxShot, __setGreyboxDepsForTests } = await import('./catalogGreybox.js');
+const { draftGreybox, previewGreyboxPrompt, saveGreybox, captureGreyboxShot, __setGreyboxDepsForTests } = await import('./catalogGreybox.js');
 
 const scene = {
   parts: [{ id: 'floor', type: 'box', size: [30, 0.1, 14] }],
@@ -44,6 +44,17 @@ describe('draftGreybox', () => {
   });
 });
 
+describe('previewGreyboxPrompt', () => {
+  it('returns the exact prompt a draft sends without calling a provider', async () => {
+    runPrompt.mockResolvedValue({ text: JSON.stringify(scene) });
+    const preview = await previewGreyboxPrompt('plc-1', { instruction: 'Add a booth' });
+    expect(runPrompt).not.toHaveBeenCalled();
+    const draft = await draftGreybox('plc-1', { instruction: 'Add a booth' });
+    expect(draft.sentPrompt).toBe(preview.sentPrompt);
+    expect(draft.promptAdditions).toEqual(preview.promptAdditions);
+  });
+});
+
 describe('saveGreybox', () => {
   it('writes only the greybox key under the row lock, restricted to places', async () => {
     db.setIngredientPayloadKey.mockResolvedValue(place);
@@ -52,6 +63,22 @@ describe('saveGreybox', () => {
     expect([id, key, value, options.source]).toEqual(['plc-1', 'greybox', scene, 'refine']);
     expect(() => options.guard({ type: 'character' })).toThrow(/belongs to a place/);
     expect(() => options.guard({ type: 'place' })).not.toThrow();
+  });
+
+  it('refuses a scene that would push the payload past the catalog cap', async () => {
+    db.setIngredientPayloadKey.mockResolvedValue(place);
+    const huge = { ...scene, parts: Array.from({ length: 400 }, (_, i) => ({ id: `p${i}`, type: 'box', size: [1, 1, 1], label: 'x'.repeat(600) })) };
+    await saveGreybox('plc-1', huge);
+    await saveGreybox('plc-1', scene);
+    const [{ 3: bigOptions }, { 3: smallOptions }] = db.setIngredientPayloadKey.mock.calls;
+    expect(() => bigOptions.guard({ type: 'place', payload: { description: 'Roller rink' } })).toThrow(/too large/);
+    expect(() => smallOptions.guard({ type: 'place', payload: { description: 'Roller rink' } })).not.toThrow();
+  });
+
+  it('clears the greybox with null', async () => {
+    db.setIngredientPayloadKey.mockResolvedValue(place);
+    await saveGreybox('plc-1', null);
+    expect(db.setIngredientPayloadKey.mock.calls[0].slice(1, 3)).toEqual(['greybox', null]);
   });
 
   it('404s a missing place', async () => {

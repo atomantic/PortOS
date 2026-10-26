@@ -61,7 +61,7 @@ import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalog
 import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
-import { captureGreyboxShot, draftGreybox, saveGreybox } from '../services/catalogGreybox.js';
+import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, saveGreybox } from '../services/catalogGreybox.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
 import { getBoard as getMoodBoard } from '../services/moodBoard/index.js';
@@ -705,11 +705,21 @@ router.post('/ingredients/:id/greybox/draft', asyncHandler(async (req, res) => {
   res.json(await draftGreybox(req.params.id, body));
 }));
 
+router.post('/ingredients/:id/greybox/prompt', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogGreyboxDraftSchema, req.body);
+  res.json(await previewGreyboxPrompt(req.params.id, body));
+}));
+
 router.put('/ingredients/:id/greybox', asyncHandler(async (req, res) => {
   const { greybox, source } = validateRequest(catalogGreyboxSaveSchema, req.body);
   const updated = await saveGreybox(req.params.id, greybox, { source });
   res.json(updated);
   catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
+  // Same fan-out as PATCH: a linked universe's embedded place must not keep the
+  // old layout, or its next Universe Builder edit would write it back.
+  projectToCanon(updated.id, updated).catch((err) => {
+    console.error(`🔁 catalog→canon projection failed for ${updated.id}: ${err.message}`);
+  });
 }));
 
 router.post('/ingredients/:id/greybox/shots/:shotId/capture', asyncHandler(async (req, res) => {
