@@ -1,4 +1,7 @@
 using System;
+using System.Collections;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -6,6 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
+using Microsoft.Win32.SafeHandles;
 
 // The job handle, root process handle and creation time stay private. Job-list
 // assignment is atomic with CreateProcess: no helper can escape before capture.
@@ -40,9 +44,9 @@ public static class WindowsGitSupervisor
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attribute, IntPtr value, IntPtr size, IntPtr previous, IntPtr returned);
     [DllImport("kernel32.dll")] static extern void DeleteProcThreadAttributeList(IntPtr list);
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CreateProcess(string application, StringBuilder command, IntPtr processSecurity, IntPtr threadSecurity, bool inherit, uint flags, IntPtr environment, string cwd, ref StartupEx startup, out ProcessInfo process);
-    [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
-    [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int kind);
-    [DllImport("kernel32.dll", SetLastError=true)] static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr source, IntPtr targetProcess, out IntPtr target, uint access, bool inherit, uint options);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool CreatePipe(out IntPtr read, out IntPtr write, ref Security security, uint size);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
+    [DllImport("kernel32.dll")] static extern bool CancelIoEx(IntPtr handle, IntPtr overlapped);
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateFile(string name, uint access, uint share, ref Security security, uint disposition, uint flags, IntPtr template);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetProcessTimes(IntPtr process, out long created, out long exited, out long kernel, out long user);
@@ -60,23 +64,33 @@ public static class WindowsGitSupervisor
         }
         return result.Append('\\', slashes * 2).Append('"').ToString();
     }
-    static IntPtr DuplicateStandard(int kind) {
-        IntPtr handle;
-        Require(DuplicateHandle(GetCurrentProcess(), GetStdHandle(kind), GetCurrentProcess(), out handle, 0, true, 2));
-        return handle;
+    static readonly object outputLock = new object();
+    static readonly ConcurrentDictionary<string, ManualResetEventSlim> jobs = new ConcurrentDictionary<string, ManualResetEventSlim>();
+    static void Emit(object value) {
+        lock (outputLock) { Console.WriteLine(new JavaScriptSerializer().Serialize(value)); }
     }
-
-    public static int Main(string[] argv) {
-        var json = new JavaScriptSerializer();
+    static bool Pump(string id, string channel, IntPtr handle) {
+        try {
+            using (var stream = new FileStream(new SafeFileHandle(handle, true), FileAccess.Read, 16384, false)) {
+                var buffer = new byte[16384];
+                int count;
+                while ((count = stream.Read(buffer, 0, buffer.Length)) > 0)
+                    Emit(new { kind = "data", id, channel, data = Convert.ToBase64String(buffer, 0, count) });
+                return true;
+            }
+        } catch { return false; }
+    }
+    static void Run(Dictionary<string, object> request, string id, ManualResetEventSlim cancel) {
         IntPtr job = IntPtr.Zero, attributes = IntPtr.Zero, handles = IntPtr.Zero, jobs = IntPtr.Zero;
         IntPtr input = IntPtr.Zero, output = IntPtr.Zero, error = IntPtr.Zero;
+        IntPtr outputRead = IntPtr.Zero, errorRead = IntPtr.Zero, environment = IntPtr.Zero;
         var process = new ProcessInfo();
         bool launched = false, settled = false, initialized = false;
+        bool pumping = false;
+        Task<bool> stdout = null, stderr = null;
         string reason = "launch-failed";
         uint exitCode = 1;
         try {
-            Console.InputEncoding = new UTF8Encoding(false);
-            var args = json.Deserialize<string[]>(Console.ReadLine());
             job = CreateJobObject(IntPtr.Zero, null);
             Require(job != IntPtr.Zero);
             var limits = new ExtendedLimits();
@@ -85,7 +99,10 @@ public static class WindowsGitSupervisor
             var security = new Security { Length = Marshal.SizeOf(typeof(Security)), Inherit = 1 };
             input = CreateFile("NUL", 0x80000000, 3, ref security, 3, 0, IntPtr.Zero);
             Require(input != new IntPtr(-1));
-            output = DuplicateStandard(-11); error = DuplicateStandard(-12);
+            Require(CreatePipe(out outputRead, out output, ref security, 0));
+            Require(CreatePipe(out errorRead, out error, ref security, 0));
+            Require(SetHandleInformation(outputRead, 1, 0));
+            Require(SetHandleInformation(errorRead, 1, 0));
             IntPtr size = IntPtr.Zero;
             InitializeProcThreadAttributeList(IntPtr.Zero, 2, 0, ref size);
             attributes = Marshal.AllocHGlobal(size);
@@ -99,29 +116,39 @@ public static class WindowsGitSupervisor
             var startup = new StartupEx();
             startup.Startup.Size = Marshal.SizeOf(startup); startup.Attributes = attributes;
             startup.Startup.Flags = 0x100; startup.Startup.Input = input; startup.Startup.Output = output; startup.Startup.Error = error;
-            var command = new StringBuilder(Quote(args[0]));
-            for (int index = 1; index < args.Length; index++) command.Append(' ').Append(Quote(args[index]));
-            Require(CreateProcess(args[0], command, IntPtr.Zero, IntPtr.Zero, true, 0x08080000, IntPtr.Zero, null, ref startup, out process));
+            string executable = (string)request["executable"];
+            var command = new StringBuilder(Quote(executable));
+            foreach (object argument in (IEnumerable)request["args"]) command.Append(' ').Append(Quote((string)argument));
+            var env = (Dictionary<string, object>)request["env"];
+            var keys = new List<string>(env.Keys); keys.Sort(StringComparer.OrdinalIgnoreCase);
+            var block = new StringBuilder();
+            foreach (string key in keys) block.Append(key).Append('=').Append((string)env[key]).Append('\0');
+            block.Append('\0');
+            environment = Marshal.StringToHGlobalUni(block.ToString());
+            Require(CreateProcess(executable, command, IntPtr.Zero, IntPtr.Zero, true, 0x08080400, environment, (string)request["cwd"], ref startup, out process));
             launched = true;
+            CloseHandle(output); output = IntPtr.Zero; CloseHandle(error); error = IntPtr.Zero;
+            stdout = Task.Factory.StartNew(() => Pump(id, "stdout", outputRead), TaskCreationOptions.LongRunning);
+            stderr = Task.Factory.StartNew(() => Pump(id, "stderr", errorRead), TaskCreationOptions.LongRunning);
+            pumping = true;
             long created, exited, kernel, user;
             Require(GetProcessTimes(process.Process, out created, out exited, out kernel, out user));
             // Retaining the native handle binds this evidence to this process,
             // even after its PID is recycled. No PID-addressed kills are used.
             Require(created > 0);
-            var cancel = Task.Run(() => Console.ReadLine());
             Stopwatch cancellation = null;
             reason = "inspection-failed";
             while (true) {
                 Accounting accounting;
                 Require(QueryInformationJobObject(job, 1, out accounting, Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero));
-                if (accounting.Active == 0) {
+                if (accounting.Active == 0 && stdout.IsCompleted && stderr.IsCompleted) {
+                    reason = "pipes-unconfirmed";
+                    Require(stdout.Result && stderr.Result);
                     Require(WaitForSingleObject(process.Process, 0) == 0);
                     Require(GetExitCodeProcess(process.Process, out exitCode));
                     settled = true; reason = "settled"; break;
                 }
-                // EOF is cancellation too: losing the owning Node process must
-                // never leave a running Git tree behind.
-                if (cancellation == null && cancel.IsCompleted) {
+                if (cancellation == null && cancel.IsSet) {
                     reason = "termination-unconfirmed";
                     Require(TerminateJobObject(job, 1));
                     cancellation = Stopwatch.StartNew();
@@ -137,12 +164,43 @@ public static class WindowsGitSupervisor
             if (input != IntPtr.Zero && input != new IntPtr(-1)) CloseHandle(input);
             if (output != IntPtr.Zero) CloseHandle(output);
             if (error != IntPtr.Zero) CloseHandle(error);
+            if (pumping) {
+                CancelIoEx(outputRead, IntPtr.Zero); CancelIoEx(errorRead, IntPtr.Zero);
+            } else {
+                if (outputRead != IntPtr.Zero) CloseHandle(outputRead);
+                if (errorRead != IntPtr.Zero) CloseHandle(errorRead);
+            }
             if (initialized) DeleteProcThreadAttributeList(attributes);
-            foreach (IntPtr memory in new[] { attributes, handles, jobs }) if (memory != IntPtr.Zero) Marshal.FreeHGlobal(memory);
+            foreach (IntPtr memory in new[] { attributes, handles, jobs, environment }) if (memory != IntPtr.Zero) Marshal.FreeHGlobal(memory);
         }
         try {
-            File.WriteAllText(argv[0], json.Serialize(new { settled = settled || !launched, launched, exitCode, reason }));
-        } catch { return 1; }
-        return settled ? 0 : 1;
+            Emit(new { kind = "done", id, settled = settled || !launched, launched, exitCode, reason });
+        } catch { /* Owner loss closes every job handle when this process exits. */ }
+        ManualResetEventSlim ignored;
+        WindowsGitSupervisor.jobs.TryRemove(id, out ignored);
+    }
+    public static int Main() {
+        Console.InputEncoding = new UTF8Encoding(false);
+        Console.OutputEncoding = new UTF8Encoding(false);
+        Emit(new { kind = "ready" });
+        try {
+            string line;
+            while ((line = Console.ReadLine()) != null) {
+                var request = new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.Deserialize<Dictionary<string, object>>(line);
+                string id = (string)request["id"];
+                if ((string)request["action"] == "cancel") {
+                    ManualResetEventSlim existing;
+                    if (jobs.TryGetValue(id, out existing)) existing.Set();
+                } else if ((string)request["action"] == "start") {
+                    var cancel = new ManualResetEventSlim();
+                    Require(jobs.TryAdd(id, cancel));
+                    Task.Run(() => Run(request, id, cancel));
+                } else throw new InvalidOperationException();
+            }
+        } catch { /* Invalid control or EOF cancels the exact owned jobs. */ }
+        foreach (var pair in jobs) pair.Value.Set();
+        var deadline = Stopwatch.StartNew();
+        while (!jobs.IsEmpty && deadline.ElapsedMilliseconds < 4000) Thread.Sleep(10);
+        return jobs.IsEmpty ? 0 : 1;
     }
 }

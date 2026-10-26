@@ -6,7 +6,8 @@ vi.mock('./childProcess.js', () => ({
 }));
 
 import { spawn } from './childProcess.js';
-vi.mock('./windowsGitProcess.js', () => ({ startGit: (args, options, wire) => wire(spawn('git', args, options)) }));
+vi.mock('./windowsGitProcess.js', () => ({ startGit: vi.fn((args, options, wire) => wire(spawn('git', args, options))) }));
+import { startGit } from './windowsGitProcess.js';
 import { assertGitWorkSettled, execGit, execGitSafe, withGitMutationLifetime } from './execGit.js';
 
 const makeChild = () => {
@@ -248,6 +249,45 @@ describe('execGit', () => {
     await expect(result).rejects.toMatchObject({ code: 'GIT_SETTLEMENT_HELD', settlement: 'held', settlementReason: 'termination-unconfirmed' });
     expect(retain).toHaveBeenCalledOnce();
     expect(() => assertGitWorkSettled('/unconfirmed-fixture')).toThrow(/settlement is held/);
+  });
+
+  it('drains a live sibling before a failed mutation workflow can release its permit', async () => {
+    const first = makeChild(), second = makeChild();
+    spawn.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    let ended = false;
+    const work = withGitMutationLifetime(() => Promise.all([
+      execGit(['first'], '/fanout-fixture'), execGit(['second'], '/fanout-fixture'),
+    ]), vi.fn()).finally(() => { ended = true; });
+    const failure = work.catch(error => error);
+    first.emit('close', 1);
+    await Promise.resolve(); await Promise.resolve();
+    expect(ended).toBe(false);
+    expect(() => assertGitWorkSettled('/fanout-fixture')).toThrow(/held/);
+    second.emit('close', 0);
+    expect((await failure).message).toBe('git exited with code 1');
+    expect(() => assertGitWorkSettled('/fanout-fixture')).not.toThrow();
+  });
+
+  it('holds fixture teardown while containment startup is pending and clears an unlaunched failure', async () => {
+    let failStartup;
+    startGit.mockImplementationOnce(() => new Promise((resolve, reject) => { failStartup = reject; }));
+    const result = execGit(['status'], '/starting-fixture');
+    expect(() => assertGitWorkSettled('/starting-fixture')).toThrow(/held/);
+    failStartup(new Error('containment startup failed'));
+    await expect(result).rejects.toThrow('containment startup failed');
+    expect(() => assertGitWorkSettled('/starting-fixture')).not.toThrow();
+  });
+
+  it('refuses detached Git work after its mutation permit lifetime has ended', async () => {
+    let resume, late;
+    const later = new Promise(resolve => { resume = resolve; });
+    await withGitMutationLifetime(() => {
+      late = later.then(() => execGit(['status'], '/expired-fixture'));
+    }, vi.fn());
+    const outcome = late.catch(error => error);
+    resume();
+    expect(await outcome).toMatchObject({ code: 'GIT_MUTATION_LIFETIME_CLOSED' });
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it('falls back to a generic error message when stderr is empty on non-zero exit', async () => {

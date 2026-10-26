@@ -1,5 +1,5 @@
 import { once } from 'node:events';
-import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -60,7 +60,9 @@ if (mode !== 'child') {
       const outcome = withCheckoutPublication(root, () => execGit(supervisedArgs, root, { timeout: 1500 })).catch(error => error);
       await waitForFile(supervisedReady);
       await expect(destroyGitSandbox(root)).rejects.toMatchObject({ code: 'GIT_SETTLEMENT_HELD' });
-      const drained = globalThis.__portosGitSupervisorCleanup().then(() => null, error => error);
+      const cleanup = globalThis.__portosGitSupervisorCleanup();
+      expect(globalThis.__portosGitSupervisorCleanup()).toBe(cleanup);
+      const drained = cleanup.then(() => null, error => error);
       const failure = await outcome;
       expect(failure).toMatchObject({ code: 'GIT_TIMEOUT', settlement: 'settled' });
       expect(await drained).toBeNull();
@@ -109,5 +111,42 @@ if (mode !== 'child') {
       expect((await pending).stdout).toBe('selected 界');
       expect(await readFile(join(root, 'example.txt'), 'utf8')).toBe('example\n');
     } finally { vi.unstubAllEnvs(); await destroyGitSandbox(root); }
+  });
+
+  it('isolates overlapping commands by cwd and environment while cancelling only one job', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'portos-git-overlap-'));
+    const first = join(root, 'first'), second = join(root, 'second');
+    await Promise.all([mkdir(first), mkdir(second)]);
+    let cancelled, sibling;
+    const release = join(root, 'release');
+    try {
+      await Promise.all([execGit(['init'], first), execGit(['init'], second)]);
+      const script = join(root, 'overlap.cjs');
+      await writeFile(script, `const fs = require('node:fs');
+const [ready, release] = process.argv.slice(2);
+fs.writeFileSync(ready, 'ready');
+process.stdout.write(JSON.stringify({ cwd: process.cwd(), selected: process.env.EXAMPLE_GIT_ENV }));
+const deadline = Date.now() + 10000;
+const timer = setInterval(() => { if (fs.existsSync(release) || Date.now() > deadline) clearInterval(timer); }, 10);
+`);
+      const args = ready => ['-c', `alias.wait=!${quote(process.execPath)} ${quote(script)} ${quote(ready)} ${quote(release)}`, 'wait'];
+      cancelled = execGit(args(join(root, 'first-ready')), first, { timeout: 1500, env: { EXAMPLE_GIT_ENV: 'first' } }).catch(error => error);
+      let siblingSettled = false;
+      sibling = execGit(args(join(root, 'second-ready')), second, { env: { EXAMPLE_GIT_ENV: 'second 界' } });
+      void sibling.then(() => { siblingSettled = true; }, () => { siblingSettled = true; });
+      await Promise.all([waitForFile(join(root, 'first-ready')), waitForFile(join(root, 'second-ready'))]);
+      const broker = process[Symbol.for('portos.windowsGitSupervisor')].broker;
+      expect(broker.jobs.size).toBe(2);
+      expect(await cancelled).toMatchObject({ code: 'GIT_TIMEOUT', settlement: 'settled' });
+      expect(siblingSettled).toBe(false);
+      expect(process[Symbol.for('portos.windowsGitSupervisor')].broker).toBe(broker);
+      await writeFile(release, 'release');
+      expect(JSON.parse((await sibling).stdout)).toEqual({ cwd: second, selected: 'second 界' });
+      expect(() => assertGitWorkSettled(root)).not.toThrow();
+    } finally {
+      await writeFile(release, 'release');
+      await Promise.allSettled([cancelled, sibling].filter(Boolean));
+      await destroyGitSandbox(root);
+    }
   });
 });

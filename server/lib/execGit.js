@@ -9,8 +9,17 @@ import { StringDecoder } from 'node:string_decoder';
 import { isAbsolute, relative, resolve as resolvePath, sep } from 'node:path';
 
 const mutationLifetime = new AsyncLocalStorage();
-/** Admission owners retain their durable permit when Git/helper exit is uncertain. */
-export const withGitMutationLifetime = (work, onUncertain) => mutationLifetime.run(onUncertain, work);
+/** Admission outlives every admitted command, including siblings of a failed probe. */
+export const withGitMutationLifetime = (work, onUncertain) => {
+  const owner = { onUncertain, pending: new Set(), closed: false };
+  return mutationLifetime.run(owner, async () => {
+    try { return await work(); }
+    finally {
+      while (owner.pending.size) await Promise.allSettled([...owner.pending]);
+      owner.closed = true;
+    }
+  });
+};
 
 const ownedWork = process[Symbol.for('portos.ownedGitWork')] ??= new Set();
 const CANCELLATION_BUDGET_MS = 5000;
@@ -40,7 +49,9 @@ globalThis.__portosAssertGitWorkSettled = assertGitWorkSettled;
  * @returns {Promise<{stdout: string|Buffer, stderr: string|Buffer, exitCode: number|null, signal?: string, terminated?: boolean}>}
  */
 export function execGit(args, cwd, options = {}) {
-  return new Promise((resolve, reject) => {
+  const owner = mutationLifetime.getStore();
+  if (owner?.closed) return Promise.reject(Object.assign(new Error('Git mutation lifetime has ended'), { code: 'GIT_MUTATION_LIFETIME_CLOSED' }));
+  const promise = new Promise((resolve, reject) => {
     // `spawn` treats a missing cwd as `process.cwd()`, so a caller whose repo
     // path came back undefined (a fixture whose temp-dir setup failed, a
     // config lookup that returned nothing) would run `git init` / `git config`
@@ -55,15 +66,18 @@ export function execGit(args, cwd, options = {}) {
     }
     const maxBuffer = options.maxBuffer || 10 * 1024 * 1024;
     const timeout = options.timeout || 30000;
-    const onUncertain = mutationLifetime.getStore();
+    const onUncertain = owner?.onUncertain;
     const started = performance.now();
-    const startup = startGit(args, {
+    const work = { cwd: resolvePath(cwd) };
+    ownedWork.add(work);
+    let wired = false;
+    let startup;
+    try { startup = startGit(args, {
       cwd,
       shell: false,
       ...(options.env ? { env: options.env } : {})
     }, child => {
-      const work = { cwd: resolvePath(cwd) };
-      ownedWork.add(work);
+      wired = true;
 
       let stdout = '';
       let stderr = '';
@@ -156,7 +170,7 @@ export function execGit(args, cwd, options = {}) {
       });
 
       const onClose = (code, signal, settlement) => {
-        if (finished && !child.pid) return;
+        if (finished && !child.pid && !child.gitSupervisor) return;
         if (settlement?.settled === false) {
           failure ||= Object.assign(new Error('Git work settlement is held'), { code: 'GIT_SETTLEMENT_HELD' });
           markUncertain(settlement.reason);
@@ -215,9 +229,20 @@ export function execGit(args, cwd, options = {}) {
             ? Object.assign(new Error('Windows Git supervisor unavailable'), { code: 'GIT_CONTAINMENT_UNAVAILABLE' }) : err);
         }
       });
+    }); } catch (error) {
+      if (!wired) ownedWork.delete(work);
+      reject(error);
+    }
+    startup?.catch(error => {
+      if (!wired) ownedWork.delete(work);
+      reject(error);
     });
-    startup?.catch(reject);
   });
+  if (owner) {
+    owner.pending.add(promise);
+    void promise.then(() => owner.pending.delete(promise), () => owner.pending.delete(promise));
+  }
+  return promise;
 }
 
 // Like execGit but catches rejections (e.g. timeout) into a failed-result shape.
