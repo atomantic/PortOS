@@ -63,6 +63,7 @@ import {
   buildReadOnlyCompletionSection,
   buildToolFreeReasoningCompletionSection,
   buildResumeSection,
+  buildUnnecessaryDispatchSection,
   buildSentinelWriteSteps,
   buildTuiCompletionSection,
   claimReviewersCsv,
@@ -931,6 +932,7 @@ ${pipelineSection}
 ${jiraSection}
 ${orchestrationSection ? `${orchestrationSection}\n` : ''}${issueFilingSection ? `${issueFilingSection}\n` : ''}${simplifySection}
 ${tuiCompletionSection}
+${buildUnnecessaryDispatchSection(task)}
 ${reviewLoopSection}
 ${reviewLoopFollowUpSection}
 ${compactionSection}
@@ -1142,6 +1144,8 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   // actually stalled on an approval gate, and "no human will answer you" is not
   // something the agent can infer from AGENTS.md or its cwd.
   contractSections.push(UNATTENDED_RUN_RULE);
+  const dispatchInvestigation = buildUnnecessaryDispatchSection(task);
+  if (dispatchInvestigation) contractSections.push(dispatchInvestigation);
   if (task.metadata?.prCompletion === PR_COMPLETIONS.DRAFT) contractSections.push(DRAFT_PR_RULE);
   if (isUiAuditTask(task)) contractSections.push(UI_AUDIT_RUNTIME_RULE);
   const securityAuditRuntime = buildSecurityAuditRuntimeSection(task, { providerId, providerCommand, agentId });

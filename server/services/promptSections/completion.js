@@ -357,6 +357,15 @@ function isResumedWorktree(task, worktreeInfo) {
  *
  * Returns '' when this isn't a resume, so callers can interpolate unconditionally.
  */
+// Selection uses durable producer metadata, never the task's free-text description.
+export function buildUnnecessaryDispatchSection(task) {
+  const meta = task?.metadata || {};
+  if (![meta.isInvestigation, meta.reviewLoopFollowUp, meta.gitConflictResolution].some(isTruthyMeta)
+    && !meta.githubNotificationResolve) return '';
+  return `## Unnecessary dispatch investigation
+If you verify the assigned action is already complete or no longer needed, before finishing trace why this run was dispatched: inspect the source task, producer, trigger and recovery evidence, and current target state. A failure that no longer reproduces is not a diagnosis. Prefer a bounded, authorized fix and verify it without asking for confirmation. Otherwise search the owning tracker and add redacted evidence to an existing issue or file an actionable issue. Report source-backed reasoning and the fix or issue link, or evidence of a legitimate race with no actionable defect. Do not invent a defect, repeat an already recorded investigation without new evidence, or dispatch an investigation of this investigation. Preserve ownership, cleanup obligations, budgets and the normal no-action-needed semantics.`;
+}
+
 export function buildResumeSection(task, worktreeInfo) {
   if (!isResumedWorktree(task, worktreeInfo)) return '';
   const priorAgentId = task.metadata.resumedFromAgentId;
@@ -379,8 +388,7 @@ Before you write any code, establish what is already done:
    — \`gh pr list --head ${worktreeInfo.branchName} --state all\` on GitHub,
    \`glab mr list --source-branch ${worktreeInfo.branchName}\` on GitLab.
 
-Then do only what remains. If a PR is already **merged**, the work is done — go
-straight to your completion step and report that. If a PR is already **open**,
+Then do only what remains. If a PR is already **merged**, report that at completion.${buildUnnecessaryDispatchSection(task) ? ' First follow the unnecessary dispatch investigation contract in this prompt.' : ''} If a PR is already **open**,
 finish/land that PR rather than opening a second one. Do NOT redo completed work,
 and do NOT revert its commits unless they are actually wrong.
 `;

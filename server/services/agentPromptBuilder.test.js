@@ -2821,6 +2821,30 @@ describe('buildLightContextPrompt', () => {
   });
 });
 
+describe('unnecessary dispatch contract', () => {
+  it.each([
+    ['merged resolve target', { reviewLoopFollowUp: true, resumedFromAgentId: 'prior' }],
+    ['non-reproducing incident', { isInvestigation: true, resumedFromAgentId: 'prior' }],
+  ])('includes source tracing in both prompt paths for %s', async (_name, metadata) => {
+    const task = makeTask({ metadata });
+    const worktree = { branchName: 'claim/example', worktreePath: '/tmp/wt', baseBranch: 'origin/main', existingBranch: true };
+    const prompts = [buildLightContextPrompt(task, '/r', worktree, { providerId: 'codex', providerCommand: 'codex' }),
+      await buildAgentPrompt(task, {}, '/r', worktree, { providerType: 'api' })];
+    for (const prompt of prompts) {
+      expect(prompt).toContain('## Unnecessary dispatch investigation');
+      expect(prompt).toContain('source task, producer, trigger and recovery evidence');
+      expect(prompt).toContain('no longer reproduces is not a diagnosis');
+      expect(prompt).toContain('evidence of a legitimate race');
+      expect(prompt).toContain('First follow the unnecessary dispatch investigation contract in this prompt');
+    }
+  });
+
+  it('does not grant the contract based on task prose', () => {
+    const prompt = buildLightContextPrompt(makeTask({ description: '[Auto] Investigate agent failure' }), '/r', null, {});
+    expect(prompt).not.toContain('## Unnecessary dispatch investigation');
+  });
+});
+
 describe('buildAgentPrompt — provider type routing', () => {
   it('routes TUI provider through the light path (no roleplay preamble or task header)', async () => {
     const prompt = await buildAgentPrompt(
