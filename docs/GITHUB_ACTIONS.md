@@ -324,6 +324,21 @@ pushed head, and the impact planner skips what it attests to:
   `node scripts/pregate-attest.js --dry-run` shows what would be posted for
   the current receipt and HEAD without posting it.
 
+### Browser workload partition
+
+The browser job uses two runners. Each receives the complete planner selection
+and `CI_SHARD`; the runner assigns files by alternating the canonical
+`BROWSER_SUITES` registry before subtracting any memo entries. Scoped selections
+keep those same owners. This separates the long document-rendering and HTML
+composition suites, which the generic Vitest hash partition clustered together.
+Unknown browser selectors fail rather than being dropped.
+
+Each shard retains the full selected browser profile, the quiet capture project,
+normal motion, fidelity assertions, process containment and the existing
+720-second supervisor deadline. `CI Gate` consumes the matrix's aggregate result,
+so every selected shard must pass. Transform artifacts, test memos and failure
+artifacts have distinct shard keys; a passing shard cannot replace its sibling.
+
 ### Vitest runner tuning
 
 On GitHub Actions, `CI=true` caps the server Vitest runner at `maxWorkers: 4`
