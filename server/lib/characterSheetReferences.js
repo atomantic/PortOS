@@ -17,7 +17,7 @@ export function characterSheetReferenceCandidates(character, media = [], want = 
   if (guides.length) return pickGuideMedia(guides, want).map((m) => ({
     filename: m.mediaKey, source: 'Render guide',
   }));
-  const candidates = pickGuideMedia(images.filter((m) => !/^(?:sheet:|look:|archive:)/.test(m.role || '') || m.kind === 'portrait'), want)
+  const candidates = pickGuideMedia(images.filter((m) => !/^(?:sheet:|look:|archive:)/.test(m.role || '')), want)
     .map((m) => ({ filename: m.mediaKey, source: m.kind === 'portrait' ? 'Portrait' : 'Reference library' }));
   const canon = [
     { filename: character.primaryImageRef, source: 'Primary canon image' },

@@ -99,6 +99,7 @@ describe('catalog sheet routes', () => {
       { kind: 'portrait', mediaKey: 'portrait.png' },
       { kind: 'reference', mediaKey: 'old-sheet.png', role: 'sheet:standard' },
       { kind: 'reference', mediaKey: 'archive.png', role: 'archive:portrait' },
+      { kind: 'portrait', mediaKey: 'old-portrait.png', role: 'archive:portrait' },
       { kind: 'reference', mediaKey: 'child.png', library: { guide: true, variant: { formId: 'child' } } },
     ]);
     ['portrait.png', 'canon.png', 'profile.png'].forEach((name) => mocks.imageFiles.add(name));
