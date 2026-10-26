@@ -8,6 +8,8 @@ import { z } from 'zod';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { RELEASE_SYNC_POLICY_KEYS, RELEASE_SYNC_FROZEN_METADATA_KEYS } from '../lib/releaseSynchronization.js';
+import { storedForm } from '../lib/cosTaskRows.js';
 
 const queue = createFileWriteQueue();
 const identitySchema = z.string().regex(/^[a-f0-9]{64}$/);
@@ -35,9 +37,6 @@ async function readOutbox() {
 
 // Never copy arbitrary agent/task metadata (credentials, old prompts, claims or
 // retry budgets). Review settings are the original delivery obligations.
-const POLICY_KEYS = ['app', 'provider', 'model', 'effort', 'reviewers', 'usernames', 'optionalReviewers',
-  'reviewerModels', 'reviewerEfforts', 'reviewerMaxRounds', 'reviewStopMode', 'prCompletion'];
-
 function synchronizationPrompt(publication) {
   return `Continue the verified release's development synchronization only. Publication is already verified; do not release again.
 Use this task's provisioned isolated worktree and normal PR delivery lifecycle. Merge the exact published promotion commit into this synchronization branch, preserve newer development work, and deliver its PR against development through the configured review/CI/admission workflow. Do not edit the running application's checkout or adopt the publisher's checkout. After an interruption, ordinary delivery recovery retains this task's branch/PR; do not mint another synchronization task.
@@ -54,7 +53,7 @@ async function newEntry(agent, publication) {
   const { getCodeReviewDefaults, resolveReviewLoopOptions } = await import('./codeReview.js');
   const [source, instanceId] = await Promise.all([getTaskById(agent.taskId), getInstanceId()]);
   if (!source || !instanceId || instanceId === UNKNOWN_INSTANCE_ID) refuse('Release synchronization requires its original task and local instance');
-  const policy = Object.fromEntries(POLICY_KEYS.filter(key => source.metadata?.[key] !== undefined).map(key => [key, source.metadata[key]]));
+  const policy = Object.fromEntries(RELEASE_SYNC_POLICY_KEYS.filter(key => source.metadata?.[key] !== undefined).map(key => [key, source.metadata[key]]));
   if (!policy.app) refuse('Release synchronization requires the original target app');
   // Resolve standing settings now; a later settings edit cannot silently shed
   // the reviewers this publication's synchronization was required to satisfy.
@@ -66,7 +65,7 @@ async function newEntry(agent, publication) {
   // generic completion/retirement owner retains them and captures final heads.
   const checkouts = structuredClone(agent.metadata.checkoutSeeds || []);
   const id = `task-release-sync-${publication.identity}`;
-  return entrySchema.parse({ version: 1, identity: publication.identity, owner, publication,
+  const entry = entrySchema.parse({ version: 1, identity: publication.identity, owner, publication,
     checkouts, registeredAt: null, attempts: 0, lastAttemptAt: null, blocker: null, retryAt: null,
     obligations: Object.fromEntries(['candidateFixes', 'releaseAncestry', 'synchronizationPr', 'localReview',
       'hostedReview', 'requiredCi', 'mergeAdmission', 'qualitySnapshot', 'processSettlement', 'retirement']
@@ -79,6 +78,10 @@ async function newEntry(agent, publication) {
           publisherAgentId: owner.agentId, publisherTaskId: owner.taskId, publisherStartedAt: owner.startedAt },
         prompt: synchronizationPrompt(publication) } },
   });
+  // Task scalar metadata uses the legacy string representation. Freeze the
+  // stored form so readback and retry compare the actual persistence contract.
+  entry.task = storedForm(entry.task, 'internal');
+  return entry;
 }
 
 async function registerEntry(entry) {
@@ -93,9 +96,9 @@ async function registerEntry(entry) {
   if (!existing && entry.registeredAt) refuse('Registered release synchronization task is missing; retain its outbox');
   if (!existing) await addTask(entry.task, 'internal', { raw: true, idempotencyKey: key });
   const saved = await getTaskById(entry.task.id);
-  if (!saved || saved.taskType !== 'internal' || saved.metadata?.idempotencyKey !== key
-    || !isDeepStrictEqual(saved.metadata.releaseSynchronization, entry.task.metadata.releaseSynchronization)
-    || saved.metadata.app !== entry.task.metadata.app || saved.metadata.targetInstanceId !== entry.task.metadata.targetInstanceId) {
+  const expectedMetadata = { ...entry.task.metadata, idempotencyKey: key };
+  if (!saved || saved.taskType !== 'internal' || RELEASE_SYNC_FROZEN_METADATA_KEYS
+    .some(field => !isDeepStrictEqual(saved.metadata?.[field], expectedMetadata[field]))) {
     refuse('Release synchronization task has a conflicting owner');
   }
   entry.registeredAt ||= new Date().toISOString();

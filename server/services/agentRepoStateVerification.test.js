@@ -26,6 +26,8 @@ vi.mock('./branchCompletionPolicy.js', async () => ({
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('./agentWorktreeCleanup.js', () => ({ releaseRetryHold: vi.fn(async () => ({})) }));
+vi.mock('./releaseSynchronization.js', () => ({ recoverReleaseSynchronizationHandoffs: vi.fn(async () => {}) }));
+import { recoverReleaseSynchronizationHandoffs } from './releaseSynchronization.js';
 vi.mock('./repoCleanupRecovery.js', () => ({ inspectOrQueueCompletedReview: vi.fn(async () => ({ disposition: 'held', reason: 'delivery-ci-or-review-pending' })) }));
 vi.mock('./repoCleanupObservation.js', async original => ({ ...await original(), readCheckoutPathPresence: vi.fn(async () => false), readLocalBranchPresence: vi.fn(async () => false) }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: vi.fn(async () => ({ host: 'github.com', fullName: 'example/repo', isGithub: true })) }));
@@ -1308,6 +1310,15 @@ describe('durable completion replay', () => {
     expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 1 });
     expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'completed' }));
     expect(addTask).not.toHaveBeenCalled();
+  });
+  it('retains a failed publication outbox while continuing unrelated completion recovery', async () => {
+    recoverReleaseSynchronizationHandoffs.mockRejectedValueOnce(new Error('synthetic malformed outbox'));
+    readBranchCompletionPolicies.mockResolvedValue([archived()]);
+    getTaskById.mockResolvedValue(task());
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'MERGED', url: 'https://github.com/example/repo/pull/7' });
+    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 1 });
+    expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'completed' }));
+    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('Release synchronization handoffs retained'));
   });
   it('backs off repeated machine recovery across restarts without creating tasks', async () => {
     const prior = archived();

@@ -2,6 +2,7 @@ import { auditWorkflow, newAuditMetadata, isLegacyDeepAudit } from '../lib/audit
 import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORGE_MAINTENANCE_REASON } from '../lib/forgeMaintenanceTasks.js';
 import { getSkipReason } from './cosTaskClaim.js';
 import { isDeepStrictEqual } from 'node:util';
+import { RELEASE_SYNC_FROZEN_METADATA_KEYS } from '../lib/releaseSynchronization.js';
 /**
  * CoS Task Store Module
  *
@@ -37,7 +38,7 @@ import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
 import { applyTaskListSave, countCompletedTasks, deleteStoredTask, getCompletedTaskIds, getStoredTask, loadTaskWorkingSet, pageCompletedTasks, readTaskListVersion } from './cosTaskRepository.js';
-import { planListSave, selectWorkingSet } from '../lib/cosTaskRows.js';
+import { planListSave, selectWorkingSet, storedForm } from '../lib/cosTaskRows.js';
 import { buildQueuedTask } from './cosTaskIntake.js';
 import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, classifyRecheckOutcome, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
 import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
@@ -834,9 +835,11 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   const current = tasks[taskIndex];
   // These fields bind an immutable publication dispatch. Ordinary edits,
   // retries and stale completion patches cannot revoke its durable owner.
-  if (current.metadata?.releaseSynchronization && ['releaseSynchronization', 'idempotencyKey', 'app', 'targetInstanceId']
-    .some(key => Object.hasOwn(updates.metadata || {}, key) && !isDeepStrictEqual(current.metadata[key], updates.metadata[key]))) {
-    return { error: 'Release synchronization dispatch ownership is immutable' };
+  if (current.metadata?.releaseSynchronization && updates.metadata) {
+    const nextMetadata = storedForm({ ...current, metadata: { ...current.metadata, ...updates.metadata } }, taskType).metadata;
+    if (RELEASE_SYNC_FROZEN_METADATA_KEYS.some(key => !isDeepStrictEqual(current.metadata[key], nextMetadata[key]))) {
+      return { error: 'Release synchronization dispatch ownership is immutable' };
+    }
   }
   if (expectedTask && Object.entries(expectedTask).some(([key, value]) => !isDeepStrictEqual(current[key], value))) {
     return { statusChanged: true, task: current };

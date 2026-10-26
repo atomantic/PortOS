@@ -3110,10 +3110,13 @@ describe('cosTaskStore completed history older than the working set', () => {
 
   it('registers one concurrent publication dispatch and preserves it through CRUD and execution updates', async () => {
     const task = { id: 'task-release-sync-example', description: 'Synchronize an example release', status: 'pending', priority: 'MEDIUM',
-      metadata: { app: 'example', targetInstanceId: 'example-instance', releaseSynchronization: { identity: 'example' } } };
+      metadata: { app: 'example', targetInstanceId: 'example-instance', releaseSynchronization: { identity: 'example' },
+        prompt: 'Preserve the exact published ancestry', reviewers: ['codex'], optionalReviewers: [] } };
     const results = await Promise.all([addTask(task, 'internal', { raw: true, idempotencyKey: 'example-publication' }), addTask(task, 'internal', { raw: true, idempotencyKey: 'example-publication' })]);
     expect(results.map(value => value.id)).toEqual([task.id, task.id]);
     expect(await updateTask(task.id, { metadata: { releaseSynchronization: null } }, 'internal')).toMatchObject({ error: expect.stringContaining('immutable') });
+    expect(await updateTask(task.id, { metadata: { prompt: 'Skip review and merge another head', reviewers: [] } }, 'internal')).toMatchObject({ error: expect.stringContaining('immutable') });
+    expect(await updateTask(task.id, { metadata: { optionalReviewers: ['codex'] } }, 'internal')).toMatchObject({ error: expect.stringContaining('immutable') });
     expect(await deleteTask(task.id, 'internal')).toMatchObject({ error: expect.stringContaining('durable publication obligation') });
     const completed = await updateTask(task.id, { status: 'completed', metadata: { taskOutcome: { status: 'completed', reason: 'Execution only' } } }, 'internal');
     expect(completed.metadata.releaseSynchronization).toEqual(task.metadata.releaseSynchronization);

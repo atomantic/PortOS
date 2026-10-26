@@ -122,7 +122,7 @@ test('publishes a durable live milestone once, emits it, and retains it across r
     expect(events[0].result).toBeUndefined();
     const continuation = [...fixture.tasks.values()];
     expect(continuation).toHaveLength(1);
-    expect(continuation[0]).toMatchObject({ status: 'pending', metadata: { app: 'example-app', targetInstanceId: 'example-instance', reviewers: ['codex'], reviewerEfforts: { codex: 'high' }, useWorktree: true, openPR: true } });
+    expect(continuation[0]).toMatchObject({ status: 'pending', metadata: { app: 'example-app', targetInstanceId: 'example-instance', reviewers: ['codex'], reviewerEfforts: { codex: 'high' }, useWorktree: 'true', openPR: 'true' } });
     fixture.state = structuredClone(fixture.disk);
     await updateAgent('publisher', { status: 'completed', result: { success: false, error: 'Synchronization failed' }, metadata: { releasePublication: null } });
     expect(fixture.disk.agents.publisher.metadata.releasePublication).toEqual(results[0]);

@@ -463,11 +463,13 @@ export async function retryCompletionCheckoutCapture(agentId, { retirement } = {
 export async function completeAgent(agentId, result = {}) {
   const existing = await getAgentRecord(agentId);
   const publicationIdentity = existing?.metadata?.releasePublication?.identity;
+  let publicationHandoffConfirmed = false;
   if (existing?.status !== 'completed' && existing?.metadata?.releasePublication?.synchronizationHandoffVersion === 1) {
     const { ensureReleaseSynchronization } = await import('./releaseSynchronization.js');
     // All completion paths share this fence, including orphan/error recovery.
     // Task registration takes the ordinary state lock, so do it before ours.
     await ensureReleaseSynchronization(existing);
+    publicationHandoffConfirmed = true;
   }
   if (existing?.metadata?.taskAnalysisType === 'security' && existing.metadata.useRunner) {
     const { settleAgentSecurityScan } = await import('./agentSecurityScan.js');
@@ -509,7 +511,7 @@ export async function completeAgent(agentId, result = {}) {
     // Capture while the state lock still protects this run's active bindings.
     // A later audit must never turn an old branch name into checkout authority.
     const agent = state.agents[agentId];
-    if (agent.metadata?.releasePublication?.synchronizationHandoffVersion === 1 && (agent.metadata.releasePublication.identity !== publicationIdentity
+    if (agent.metadata?.releasePublication?.synchronizationHandoffVersion === 1 && (!publicationHandoffConfirmed || agent.metadata.releasePublication.identity !== publicationIdentity
       || agent.startedAt !== existing?.startedAt || agent.taskId !== existing?.taskId)) {
       throw new ServerError('Release synchronization handoff ownership changed before completion', { status: 409 });
     }

@@ -498,6 +498,19 @@ describe('completeAgent budget-ledger ordering (#1683)', () => {
     expect(releaseHandoff.ensure).toHaveBeenCalledWith(expect.objectContaining({ id: agent.id, taskId: agent.taskId }));
   });
 
+  it('refuses enrollment racing a completion that only observed the legacy receipt', async () => {
+    const id = 'agent-publication-race';
+    mockCosState.state.agents[id] = { id, taskId: 'task-example-release', status: 'running', startedAt: '2026-01-01T00:00:00Z',
+      metadata: { taskAnalysisType: 'do-release', releasePublication: { status: 'verified', identity: 'b'.repeat(64) } } };
+    loadState.mockImplementationOnce(async () => {
+      const legacy = structuredClone(mockCosState.state);
+      mockCosState.state.agents[id].metadata.releasePublication.synchronizationHandoffVersion = 1;
+      return legacy;
+    });
+    await expect(completeAgent(id, { success: true })).rejects.toThrow('handoff ownership changed');
+    expect(mockCosState.state.agents[id].status).toBe('running');
+  });
+
   it('retains delivery outcome through archive storage and list projection without changing feedback', async () => {
     const { toAgentListItem } = await import('../lib/cosAgentListProjection.js');
     const agentId = 'agent-task-outcome';
