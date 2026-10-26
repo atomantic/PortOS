@@ -2021,9 +2021,21 @@ describe('cross-workspace browser suites (#10312)', () => {
       'server/services/codeAnimation/export.realBrowser.test.js',
       'server/services/htmlComposition/index.test.js'];
     expect(plan.full).toBe(false);
-    expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => !runtimeOnly.includes(suite))));
+    expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => suite.includes('/musicVideo') && !runtimeOnly.includes(suite))));
+    expect(plan.browserFiles).not.toContain('server/routes/catalogGreyboxViewer.browser.test.js');
     for (const suite of runtimeOnly) expect(plan.browserFiles).not.toContain(suite);
     expect(plan.suiteReasons.browser).toMatch(/browser suite/);
+  });
+
+  it('selects greybox pixel coverage for its lazy viewer, editor and Environment route', () => {
+    const cwd = fileURLToPath(new URL('../', import.meta.url));
+    for (const source of ['client/src/components/catalog/GreyboxViewer.jsx', 'client/src/components/catalog/GreyboxPanel.jsx', 'client/src/pages/CatalogIngredient.jsx']) {
+      const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
+      const trackedFiles = inputs.trackedFiles.filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
+      const plan = buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles });
+      expect(plan.full).toBe(false);
+      expect(plan.browserFiles).toContain('server/routes/catalogGreyboxViewer.browser.test.js');
+    }
   });
 
   it('runs every registered browser suite on a full plan, and no unregistered browser test', () => {
