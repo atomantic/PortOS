@@ -18,8 +18,13 @@ describe.skipIf(!chrome)('catalog image composer layering', () => {
     fixture = await startBrowserFixture({ name: 'catalog-image-composer', createServer, chromium,
       launchOptions: { executablePath: chrome },
       warmup: async (page, origin) => {
-        await page.goto(`${origin}composer-test`);
-        await page.getByRole('button', { name: 'Generate', exact: true }).waitFor();
+        const pageFailure = new Promise((_, reject) => {
+          page.once('pageerror', error => reject(new Error(`Synthetic composer page failed: ${error.message.slice(0, 1200)}`)));
+        });
+        await Promise.race([pageFailure, (async () => {
+          await page.goto(`${origin}composer-test`);
+          await page.getByRole('button', { name: 'Generate', exact: true }).waitFor();
+        })()]);
       },
       viteConfig: temp => ({
         cacheDir: join(temp, 'vite'), configFile: false,

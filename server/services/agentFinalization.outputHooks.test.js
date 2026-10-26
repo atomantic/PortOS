@@ -503,6 +503,42 @@ describe('recovery output-hook dispatch (#3182)', () => {
     }) }), 'internal');
   });
 
+  it.each(['normal', 'recovered'])('durably parks a typed investigation dependency before %s terminal publication without claiming success', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const service = await import('./investigationDependencyWait.js');
+    const task = { ...TASK, status: 'in_progress', metadata: { isInvestigation: true,
+      blockedSystemRecovery: true, preserveOriginalBudget: true, failureCount: 2, totalSpawnCount: 2 } };
+    const taskOutcome = { status: 'incomplete', reason: 'An existing local owner is fixing the root code.',
+      recovery: { mode: 'dependency-wait', ownerTaskId: 'sys-owner', ownerAgentId: 'agent-owner',
+        prUrl: 'https://github.com/example/repo/pull/7' } };
+    const context = { expectedStatus: 'in_progress', expectedTask: {
+      description: task.description, priority: task.priority, metadata: task.metadata } };
+    const resolve = vi.spyOn(service, 'resolveInvestigationDependencyUpdate').mockResolvedValue({ status: 'blocked',
+      dependencyWaitContext: context, metadata: { ...task.metadata, taskOutcome, blockedCategory: 'internal-dependency',
+        blockedReason: 'Waiting for independently verified delivery.' } });
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.taskOutcome = taskOutcome;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    const order = [];
+    updateTask.mockImplementationOnce(async () => { order.push('durable-wait'); return { status: 'blocked' }; });
+    completeAgent.mockImplementationOnce(async () => { order.push('terminal'); return null; });
+    try {
+      const result = mode === 'normal'
+        ? await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+          finalSummary: JSON.stringify({ summary: taskOutcome.reason, taskOutcome }) })
+        : await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0 });
+      expect(result).toMatchObject({ success: false, taskOutcome });
+      expect(order).toEqual(['durable-wait', 'terminal']);
+      expect(resolve).toHaveBeenCalledWith(task, taskOutcome, persistedAgent.id);
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked', metadata: expect.objectContaining({
+        blockedCategory: 'internal-dependency', failureCount: 2, totalSpawnCount: 2,
+      }) }), 'internal', expect.objectContaining(context));
+      expect(completeAgent).toHaveBeenCalledWith(persistedAgent.id, expect.objectContaining({ success: false }));
+      expect(addTask).not.toHaveBeenCalled();
+      expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
+    } finally { resolve.mockRestore(); }
+  });
+
   it.each(['normal', 'recovered'])('parks a runtime prerequisite through %s public completion without a provider retry', async mode => {
     isProgrammaticIoTaskType.mockReturnValue(false);
     const task = { id: TASK.id, taskType: 'internal', status: 'in_progress', metadata: {

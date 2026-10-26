@@ -1022,3 +1022,5 @@ migration with explicit recognition of the outgoing shipped defaults.
 | `executionOptions.js` | Bounded execution-option definitions, validation, precedence and requested/effective attribution. |
 
 | `providerExecutionOptions.js` | Read-only runtime capabilities and per-dispatch execution-option preparation. |
+
+| `catalogRedesign.js` | Shared editable redesign fields and per-field limits for catalog creative conversations. |

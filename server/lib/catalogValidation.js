@@ -23,6 +23,7 @@ import {
 import { csvIdsParam } from './sharedSchemas.js';
 import { SCRAP_SOURCE_KIND_IDS } from './catalogSourceKinds.js';
 import { GENERATION_METADATA_LIMITS } from './pngMetadata.js';
+import { EFFORT_LEVELS } from './providerModels.js';
 
 import { isTruthyMeta } from './metadataFlags.js';
 // Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
@@ -906,3 +907,10 @@ export const catalogIngredientCardsQuerySchema = z.object({
 }).strict().refine(query => Array.isArray(query.ids) && query.ids.length > 0, { path: ['ids'], message: 'Ingredient ids are required' });
 
 export const catalogIngredientLockSchema = z.object({ locked: z.boolean() }).strict();
+export const catalogRefinementSchema = z.object({
+  draft: z.record(z.string(), z.string().max(12000)).refine(value => Object.keys(value).length > 0 && Object.keys(value).length <= 8),
+  messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().min(1).max(16000) }).strict()).min(1).max(40),
+  providerId: z.string().min(1).max(200),
+  model: z.string().max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+}).strict();

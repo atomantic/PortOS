@@ -177,8 +177,6 @@ export async function forkPrimitive(sourceId, { universeId, name, copyImages = f
     if (access?.reason === 'CATALOG_IDENTITY_FENCED') fail('Wait for the shared identity transition to complete before creating a fork', 'CATALOG_IDENTITY_FENCED');
     const source = await getIngredient(sourceId, { client });
     if (!source) fail('Source ingredient not found', 'CATALOG_NOT_FOUND', 404);
-    const sourceContext = catalogUniverseContext(await refsFor(source.id, client.query.bind(client)));
-    if (sourceContext.owner?.refId === universeId) fail('Choose a different universe for this fork');
     const fork = await createIngredient({ id: `cat-${ingredientIdPrefix(source.type)}-${randomUUID()}`,
       type: source.type, name: name || source.name, tags: source.tags,
       payload: forkPayload(source.type, source.payload, copyImages) },
