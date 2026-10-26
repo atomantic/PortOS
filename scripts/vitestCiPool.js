@@ -72,6 +72,9 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
 const EXCLUSIVE_TESTS = [
   ...EXCLUSIVE_CAPTURE_TESTS,
   'services/databaseMaintenanceCutover.test.js',
+  // The generated shell/curl ownership proof retains its native process
+  // deadlines; run it after parallel fixture work instead of sharing that load.
+  'routes/cosAgentRoutes.ownershipResponse.test.js',
   'services/creativeDirector/videoAssembly.test.js',
   'services/musicVideo/publishKit.test.js',
   'services/musicVideo/sharingCopy.test.js',
