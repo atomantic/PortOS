@@ -16,6 +16,11 @@ vi.mock('../services/apiCatalog', () => ({
   setCatalogIngredientLock: vi.fn(),
   createCatalogIngredient: vi.fn(),
   getCatalogFacets: vi.fn(),
+  getCatalogIngredientDetails: vi.fn(),
+  setCatalogIngredientPortrait: vi.fn(),
+}));
+vi.mock('../components/catalog/GenerateImageControl', () => ({
+  default: ({ name, onComplete }) => <button type="button" onClick={() => onComplete('new-cover.png')}>Generate image for {name}</button>,
 }));
 vi.mock('../services/apiCatalogTypes', () => ({ listCatalogTypes: vi.fn() }));
 vi.mock('../services/apiUniverseBuilder', () => ({ listUniverseNames: vi.fn(async () => [{ id: 'u-1', name: 'Example Universe' }]) }));
@@ -25,7 +30,7 @@ vi.mock('../components/MediaImage', () => ({
 }));
 
 import CreativeLibrary from './CreativeLibrary';
-import { listCatalogIngredients, createCatalogIngredient, getCatalogFacets, setCatalogIngredientLock, getCatalogIngredientCards } from '../services/apiCatalog';
+import { listCatalogIngredients, createCatalogIngredient, getCatalogFacets, setCatalogIngredientLock, getCatalogIngredientCards, getCatalogIngredientDetails, setCatalogIngredientPortrait } from '../services/apiCatalog';
 import { listCatalogTypes } from '../services/apiCatalogTypes';
 
 const renderLibrary = (libraryId, entry) => render(
@@ -105,6 +110,20 @@ describe('CreativeLibrary', () => {
     await waitFor(() => expect(listCatalogIngredients).toHaveBeenLastCalledWith(
       expect.objectContaining({ type: 'place', unlinked: true }),
     ));
+  });
+
+  it('shows the confirmed generated portrait instead of the previous reference cover', async () => {
+    const item = { id: 'example-place', type: 'place', name: 'Example Place', thumbnailKey: 'previous-reference.png', payload: {} };
+    listCatalogIngredients.mockResolvedValue({ items: [item] });
+    getCatalogIngredientDetails.mockResolvedValue({ ingredient: item, media: [{ kind: 'reference', mediaKey: 'previous-reference.png' }] });
+    setCatalogIngredientPortrait.mockResolvedValue({ mediaKey: 'new-cover.png', kind: 'portrait' });
+    renderLibrary('environments', '/environments');
+    expect(await screen.findByRole('img', { name: item.name })).toHaveAttribute('src', '/data/images/previous-reference.png');
+
+    fireEvent.click(screen.getByRole('button', { name: `Generate image for ${item.name}` }));
+
+    await waitFor(() => expect(screen.getByRole('img', { name: item.name })).toHaveAttribute('src', '/data/images/new-cover.png'));
+    expect(setCatalogIngredientPortrait).toHaveBeenCalledWith(item.id, { mediaKey: 'new-cover.png' }, { silent: true });
   });
 
   it('creates a record of its type and opens it', async () => {

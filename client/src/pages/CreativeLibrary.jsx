@@ -34,7 +34,7 @@ const UNLINKED = '__unlinked';
 function LibraryTile({ ingredient }) {
   const [generatedCover, setGeneratedCover] = useState(null);
   const name = ingredient.name || '(untitled)';
-  const cover = ingredientCoverUrl(ingredient) || generatedCover;
+  const cover = generatedCover || ingredientCoverUrl(ingredient);
   const usage = usageSummary(ingredient.usage);
   return (
     <li className="min-w-0 flex flex-col bg-port-card border border-port-border rounded-lg overflow-hidden hover:border-port-accent/60">
