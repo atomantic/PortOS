@@ -51,7 +51,6 @@
  */
 
 import { vi, afterAll, afterEach } from 'vitest';
-import { rmSync } from 'fs';
 import { mockNoPeers } from './lib/mockPathsDataRoot.js';
 import { drainDetachedWrites } from './lib/fileWriteQueue.js';
 import './test/admissionSetup.js';
@@ -95,10 +94,6 @@ afterEach(() => drainDetachedWrites());
 // Without this, one `portos-git-template-*` dir leaked per file per run.
 // Read from globalThis rather than importing the helper, so files that never
 // touch git don't pay for its import graph.
-afterAll(() => {
-  const dirs = globalThis.__portosGitTemplateDirs;
-  if (!Array.isArray(dirs)) return;
-  for (const dir of dirs.splice(0)) {
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* already gone */ }
-  }
+afterAll(async () => {
+  await globalThis.__portosCleanupGitTemplates?.();
 });
