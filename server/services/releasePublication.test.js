@@ -75,7 +75,7 @@ beforeEach(() => {
       html_url: 'https://github.com/example/repo/releases/tag/v1.2.3', published_at: '2026-01-01T01:01:00Z' },
     'actions/runs/34': { id: 34, repository: { full_name: 'example/repo' }, head_sha: merge, head_branch: 'release', event: 'push',
       path: '.github/workflows/release.yml', status: 'completed', conclusion: 'success' },
-    [`git/commits/${merge}`]: { tree: { sha: tree }, parents: [{ sha: head }] },
+    [`git/commits/${merge}`]: { tree: { sha: tree }, parents: [{ sha: root }, { sha: head }] },
     'git/ref/tags/v1.2.3': { ref: 'refs/tags/v1.2.3', object: { type: 'tag', sha: annotated } },
     [`git/tags/${annotated}`]: { object: { type: 'commit', sha: merge } },
   };
@@ -109,6 +109,7 @@ for (const [name, change] of [
   ['unrelated workflow', () => { fixture.replies['actions/runs/34'].path = '.github/workflows/ci.yml'; }],
   ['wrong workflow head', () => { fixture.replies['actions/runs/34'].head_sha = head; }],
   ['changed candidate tree', () => { fixture.replies[`git/commits/${merge}`].tree.sha = 'e'.repeat(40); }],
+  ['mismatched recorded release base', () => { fixture.replies[`git/commits/${merge}`].parents[0].sha = cutoff; }],
   ['missing candidate pin', () => { fixture.replies['pulls/12'].head.sha = root; }],
 ]) test(`refuses ${name} without writing a milestone`, async () => {
   change();

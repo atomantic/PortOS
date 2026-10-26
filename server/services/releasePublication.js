@@ -70,7 +70,8 @@ export async function verifyAgentReleasePublication(agentId, body) {
     api(`git/commits/${promotionMerge}`), api(`git/ref/tags/${tag}`),
   ]);
   const tree = requireSha(promotion.tree?.sha);
-  if (tree !== candidate.tree || !promotion.parents?.some(parent => parent.sha === candidateHead)) {
+  if (tree !== candidate.tree || promotion.parents?.length !== 2
+    || promotion.parents[0].sha !== candidate.releaseBase || promotion.parents[1].sha !== candidateHead) {
     refuse('Promotion did not preserve the verified candidate head and tree');
   }
   const releaseUrl = `https://${origin.host}/${repository}/releases/tag/${tag}`;
