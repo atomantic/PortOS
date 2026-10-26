@@ -1683,6 +1683,11 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
   if (!defaultBranch) return { ok: false, reason: 'default-branch-unavailable' };
   if (branch === defaultBranch) return { ok: false, reason: 'protected-branch' };
 
+  const { retainReleaseSynchronizationReview } = await import('./releaseSynchronization.js');
+  const retainedReview = await retainReleaseSynchronizationReview({ ...release,
+    checkoutIdentity: release.checkoutIdentity || await readRetirementCheckoutIdentity(release.path) }).catch(() => false);
+  if (!retainedReview) return { ok: false, reason: 'release-sync-local-review-unretained' };
+
   // Every ownership check queues behind the claim-ownership lock with a short
   // budget, so the archive runs between two critical sections (#12682).
   const refuse = (reason, archiveLimit, nextAction) => ({ result: { ok: false, reason, ...(archiveLimit && { archiveLimit }), ...(nextAction && { nextAction }) } });

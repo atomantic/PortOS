@@ -451,6 +451,13 @@ export function resumeAgentCompletionRetirement(agentId) {
   return releasedCompletionRuns.run(agentId, () => resumeReleasedCompletion(agentId));
 }
 
+async function verifyReleasedSynchronization(agent) {
+  if (agent?.status === 'completed' && agent.metadata?.taskAnalysisType === 'release-sync') {
+    const { verifyReleaseSynchronizationTask } = await import('./releaseSynchronization.js');
+    await verifyReleaseSynchronizationTask(agent.taskId);
+  }
+}
+
 async function resumeReleasedCompletion(agentId) {
   // A pre-release audit may still be settling an owner-active observation.
   // Wait for it, then start a fresh verification instead of joining its stale result.
@@ -460,7 +467,10 @@ async function resumeReleasedCompletion(agentId) {
   if (agent?.status !== 'completed') return;
   const deliveryPending = agent.result?.cleanupPending === true
     && agent.metadata?.repoStateVerification?.status === 'pending';
-  if (!deliveryPending && agent.metadata?.completionCleanup?.status !== 'pending') return;
+  if (!deliveryPending && agent.metadata?.completionCleanup?.status !== 'pending') {
+    await verifyReleasedSynchronization(agent);
+    return;
+  }
   const { getTaskById } = await import('./cosTaskStore.js');
   const task = await getTaskById(agent.taskId);
   const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
@@ -468,12 +478,16 @@ async function resumeReleasedCompletion(agentId) {
   // Failed/no-change runs can still owe physical cleanup. The owner-release
   // event replays that obligation without changing their original verdict or
   // granting a new task/provider retry budget.
-  if (!deliveryPending) return { verified: false, cleanupReplayed: Boolean(task), skipReason: 'original-result-preserved' };
+  if (!deliveryPending) {
+    await verifyReleasedSynchronization(agent);
+    return { verified: false, cleanupReplayed: Boolean(task), skipReason: 'original-result-preserved' };
+  }
   const current = await getAgentRecord(agentId);
   const result = await verifyAgentRepoState({ agentId, agentState: current, task: task || { id: agent.taskId },
     success: current.result?.success === true, prExpected: isTruthyMeta(task?.metadata?.openPR) });
   const settled = await getAgentRecord(agentId);
   if (task) await replayAgentCompletionCleanup(settled);
+  await verifyReleasedSynchronization(settled);
   return result;
 }
 

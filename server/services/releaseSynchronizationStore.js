@@ -8,7 +8,8 @@ import { createPgFileFacade, resolvePgBackend } from '../lib/pgFileFacade.js';
 import { toPgJson } from '../lib/pgJson.js';
 
 const file = () => join(PATHS.cos, 'release-synchronization.json');
-const immutable = ({ registeredAt: _registeredAt, attempts: _attempts, lastAttemptAt: _lastAttemptAt, blocker: _blocker, retryAt: _retryAt, ...record }) => record;
+const immutable = ({ registeredAt: _registeredAt, attempts: _attempts, lastAttemptAt: _lastAttemptAt, blocker: _blocker, retryAt: _retryAt,
+  obligations: _obligations, synchronization: _synchronization, ...record }) => record;
 const conflict = () => { throw new Error('Release synchronization immutable ownership changed'); };
 
 const facade = createPgFileFacade({
@@ -33,8 +34,8 @@ const facade = createPgFileFacade({
       async save(entry) {
         const { rows } = await query(`INSERT INTO cos_release_synchronizations (identity, record) VALUES ($1, $2::jsonb)
           ON CONFLICT (identity) DO UPDATE SET record = EXCLUDED.record
-          WHERE cos_release_synchronizations.record - ARRAY['registeredAt', 'attempts', 'lastAttemptAt', 'blocker', 'retryAt']
-            = EXCLUDED.record - ARRAY['registeredAt', 'attempts', 'lastAttemptAt', 'blocker', 'retryAt']
+          WHERE cos_release_synchronizations.record - ARRAY['registeredAt', 'attempts', 'lastAttemptAt', 'blocker', 'retryAt', 'obligations', 'synchronization']
+            = EXCLUDED.record - ARRAY['registeredAt', 'attempts', 'lastAttemptAt', 'blocker', 'retryAt', 'obligations', 'synchronization']
           RETURNING identity`, [entry.identity, toPgJson(entry)]);
         if (rows.length !== 1) conflict();
       },
