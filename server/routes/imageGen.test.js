@@ -399,6 +399,23 @@ describe('Image Gen Routes', () => {
       }));
     });
 
+    it('preserves an explicit profile for an unlinked legacy FableLoom scene', async () => {
+      const { naturalUniverseVisualProfile } = await import('../lib/universeVisualProfile.js');
+      const profile = naturalUniverseVisualProfile();
+      profile.finishing.mode = 'save';
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { modelId: 'flux2-klein-9b' } } });
+      compileFableLoomVisualRequest.mockResolvedValueOnce(null);
+      const response = await request(app).post('/api/image-gen/generate').send({
+        prompt: 'An authored scene', visualProfileOverride: profile,
+        fableLoom: { loomId: 'loom-legacy', episodeId: 'ep-1', nodeId: 'node-1' },
+      });
+      expect(response.status).toBe(200);
+      const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
+      expect(params.visualProfile).toEqual(profile);
+      expect(params.prompt.split(profile.generation.lighting)).toHaveLength(2);
+      expect(params.prompt.startsWith('An authored scene')).toBe(true);
+    });
+
     // The install pin used to be read only inside resolveLocalImageModel, so a
     // FableLoom generate with no body modelId compiled capability from `dev`
     // and then queued the pinned FLUX.2 model — stripping refs/LoRAs that the

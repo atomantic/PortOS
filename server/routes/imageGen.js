@@ -581,6 +581,10 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
           },
         },
       } : null;
+    } else {
+      // Legacy unlinked scenes have no canon compilation, but an explicit
+      // request profile still owns its photography and optional finish.
+      Object.assign(params, applyImageVisualProfile(params, data.visualProfileOverride));
     }
   }
 
