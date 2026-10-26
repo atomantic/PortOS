@@ -739,7 +739,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
   if (!observed) return blockWith('probe-incomplete', { skipReason: REPO_STATE_SKIPS.PROBE_INCOMPLETE });
 
   if (observed.worktreePresent === false && observed.localBranchPresent === false) {
-    return settleAbsentCheckout({ metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen: expectation.staysOpen });
+    return settleAbsentCheckout({ agentState, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen: expectation.staysOpen });
   }
   if (originTaskAbsent) return skipped('removed-task-checkout-still-present');
   const issues = classifyRepoStateIssues(expectation, { ...observed, branchName });
@@ -801,12 +801,23 @@ async function resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchNam
 }
 
 /** Already removed checkouts need delivery proof, not a retroactive backup. */
-async function settleAbsentCheckout({ metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen }) {
+async function settleAbsentCheckout({ agentState, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen }) {
   const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
-  const proofUrl = originalPrUrl || observed.prUrl;
-  const forge = proofUrl && observed.prState === 'MERGED' ? await readRetirementForgeEvidence(sourceWorkspace, branchName, proofUrl,
-    { forgeAccount: app?.forgeAccount ?? null }).catch(() => null) : null;
-  const integrated = forge && (await execGit(['merge-base', '--is-ancestor', forge.mergeCommit, forge.targetHead ?? forge.defaultHead], sourceWorkspace,
+  // Opening a PR need not have been requested by the original task. A run
+  // can nevertheless have delivered one itself. Its immutable capture permits
+  // a read-only merge lookup; it never authorizes removal or a made-up receipt.
+  const captures = agentState?.status === 'completed' ? (metadata.completedCheckouts || []).filter(row =>
+    completedCheckoutReceiptValid(agentState, row) && row.branch === branchName
+    && typeof row.repoPath === 'string' && resolve(row.repoPath) === resolve(sourceWorkspace)
+    && typeof row.path === 'string' && worktreePath && resolve(row.path) === resolve(worktreePath)
+    && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(row.head || '') && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer)) : [];
+  const capturedHead = captures.length === 1 ? captures[0].head : null;
+  const delivery = capturedHead && !originalPrUrl && !observed.prState
+    ? await probePrForBranch(sourceWorkspace, branchName).catch(() => null) : observed;
+  const proofUrl = originalPrUrl || delivery?.prUrl;
+  const forge = proofUrl && delivery?.prState === 'MERGED' ? await readRetirementForgeEvidence(sourceWorkspace, branchName, proofUrl,
+    { forgeAccount: app?.forgeAccount ?? null, ...(capturedHead && { exactDeliveredHead: capturedHead }) }).catch(() => null) : null;
+  const integrated = forge && (!capturedHead || forge.prHead === capturedHead) && (await execGit(['merge-base', '--is-ancestor', forge.mergeCommit, forge.targetHead ?? forge.defaultHead], sourceWorkspace,
     { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
   if (!staysOpen && integrated) {
     const { withClaimOwnershipLock } = await import('./cosClaimOwnership.js');

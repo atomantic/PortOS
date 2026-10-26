@@ -10,6 +10,9 @@ const fail = () => { throw new Error('retirement-validation-preservation-unavail
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const artifact = path => /^\.cache\/[^/]+\.(?:log|md|json)$/.test(path)
   || /^\.cache\/test-process-diagnostics\/[0-9a-f-]{36}\.json$/.test(path)
+  // Compiled validation output is preserved as opaque bytes, never executed
+  // or accepted as disposable merely because its filename resembles a cache.
+  || /^scripts\/__pycache__\/[A-Za-z0-9_]+\.cpython-\d+(?:\.opt-\d+)?\.pyc$/.test(path)
   || /^\.cache\/animatic-artifact-check\/animatic-capture\/case-\d+\/(?:frame\.json|displayed\.png|saved\.png)$/.test(path);
 
 /** Source hashes already belong to the complete reviewed content fingerprint.
@@ -32,14 +35,40 @@ export async function captureRunValidationArtifacts(repoPath, release, content, 
       if (!completedCheckoutReceiptValid(agent, row) || row.head !== release.head || row.branch !== release.branch
         || retirementCheckoutIdentityFromPointer(row.incarnation?.pointer) !== release.checkoutIdentity) continue;
       if (await realpath(row.repoPath).catch(() => null) !== repository || await realpath(row.path).catch(() => null) !== checkout) continue;
-      matches.push({ id: agent.id, startedAt: agent.startedAt });
+      matches.push({ id: agent.id, startedAt: agent.startedAt, completedAt: agent.completedAt,
+        parentId: agent.metadata?.resumedFromAgentId ?? null, instanceId: agent.metadata?.instanceId ?? null });
     }
   }
   const owners = [...new Map(matches.map(owner => [JSON.stringify(owner), owner])).values()];
-  if (owners.length !== 1) return null; // Keep unbound diagnostics in their original checkout.
+  if (!owners.length) return null;
+  let lineage;
+  let selected = owners[0];
+  if (owners.length > 1) {
+    // A resumed execution can capture the same physical checkout and head as
+    // its predecessor. Only one complete, nonoverlapping continuation chain
+    // can select the terminal run; unrelated/forked ownership stays held.
+    const byId = new Map(owners.map(owner => [owner.id, owner]));
+    if (byId.size !== owners.length) return null;
+    const parents = new Set(owners.map(owner => owner.parentId).filter(id => byId.has(id)));
+    const leaves = owners.filter(owner => !parents.has(owner.id));
+    if (leaves.length !== 1) return null;
+    selected = leaves[0];
+    const seen = new Set();
+    lineage = [];
+    for (let current = selected; current; current = byId.get(current.parentId)) {
+      if (seen.has(current.id)) return null;
+      seen.add(current.id);
+      lineage.push(current);
+      const parent = byId.get(current.parentId);
+      if (parent && (typeof current.instanceId !== 'string' || !current.instanceId || current.instanceId !== parent.instanceId
+        || Date.parse(current.startedAt) < Date.parse(parent.completedAt))) return null;
+    }
+    if (lineage.length !== owners.length) return null;
+    lineage.reverse();
+  }
   const encodedBytes = files.reduce((sum, file) => sum + 4 * Math.ceil(file.bytes / 3), 0);
-  if (!Number.isSafeInteger(encodedBytes) || encodedBytes + Buffer.byteLength(JSON.stringify(files)) + 4096 > MAX_COMPLETION_DATA_BYTES) fail();
-  return { owner: owners[0], files };
+  if (!Number.isSafeInteger(encodedBytes) || encodedBytes + Buffer.byteLength(JSON.stringify({ files, lineage })) + 4096 > MAX_COMPLETION_DATA_BYTES) fail();
+  return { owner: { id: selected.id, startedAt: selected.startedAt }, files, ...(lineage && { lineage }) };
 }
 
 /** The caller supplies its no-follow, stable-identity bounded source reader.
@@ -55,7 +84,7 @@ export async function retainRunValidationArtifacts(review, readSource, { store =
     files.push({ scope: file.scope, path: file.path, sha256: file.sha256, data: bytes.toString('base64') });
   }
   const value = { version: 1, release: review.release, prUrl: review.forge.prUrl,
-    prHead: review.forge.prHead, mergeCommit: review.forge.mergeCommit, files };
+    prHead: review.forge.prHead, mergeCommit: review.forge.mergeCommit, files, ...(captured.lineage && { lineage: captured.lineage }) };
   const reference = await store(captured.owner, 'retirement-evidence', value);
   const verify = async () => {
     if (JSON.stringify(await read(captured.owner, reference)) !== JSON.stringify(value)) fail();

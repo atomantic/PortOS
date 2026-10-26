@@ -456,6 +456,38 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
+  it('settles captured merged delivery even when the original task did not request opening a PR', async () => {
+    const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const state = { ...agentState({ completedCheckouts: [captured], repoStateVerification: { status: 'pending' } }),
+      id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT, result: { success: false, cleanupPending: true } };
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/7', detail: 'MERGED' });
+    expect(await run({ task: task({ openPR: 'false' }), prExpected: false, success: false, agentState: state }))
+      .toMatchObject({ verified: true });
+    expect(readRetirementForgeEvidence).toHaveBeenCalledWith('/repo', BRANCH, 'https://github.com/example/repo/pull/7',
+      expect.objectContaining({ exactDeliveredHead: HEAD }));
+    expect(updateTask).toHaveBeenLastCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['wrong-head', 'foreign-repository', 'uncaptured', 'ambiguous', 'open', 'unavailable'])('retains an unrequested-PR handoff when captured delivery is %s', async failure => {
+    const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    if (failure === 'foreign-repository') captured.repoPath = '/other-instance';
+    if (failure === 'wrong-head') captured.head = 'f'.repeat(40);
+    const completedCheckouts = failure === 'uncaptured' ? [] : failure === 'ambiguous' ? [captured, { ...captured }] : [captured];
+    const state = { ...agentState({ completedCheckouts, repoStateVerification: { status: 'pending' } }),
+      id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT, result: { success: false, cleanupPending: true } };
+    findPullRequestForBranch.mockResolvedValue(failure === 'unavailable' ? { status: 'unavailable' }
+      : { status: 'found', url: 'https://github.com/example/repo/pull/7', detail: failure === 'open' ? 'OPEN' : 'MERGED' });
+    expect(await run({ task: task({ openPR: false }), prExpected: false, success: false, agentState: state }))
+      .toMatchObject({ verified: false, skipReason: 'absent-checkout-integration-unverified' });
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it.each(['unavailable', 'unmerged', 'not-integrated'])('keeps absent checkout delivery unverified when merge proof is %s', async scenario => {
     if (scenario === 'unavailable') readRetirementForgeEvidence.mockRejectedValue(new Error('forge unavailable'));
     if (scenario === 'unmerged') getPullRequestState.mockResolvedValueOnce({ status: 'known', state: 'OPEN' });
