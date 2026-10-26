@@ -268,9 +268,24 @@ async function commitAdmitted(dir, message, { paths = [] } = {}) {
 /**
  * Check if directory is a git repo
  */
-export async function isRepo(dir) {
+export async function isRepo(dir, { unknownOnError = false } = {}) {
   const result = await execGit(['rev-parse', '--is-inside-work-tree'], dir, { ignoreExitCode: true }).catch(() => null);
-  return result?.stdout.trim() === 'true';
+  // Execution guards retain their default fail-closed boolean contract.
+  if (!unknownOnError) return result?.stdout.trim() === 'true';
+  // A display may only disable Git features after a conclusive probe. Git can
+  // resolve nonzero (ownership/configuration errors), or report interruption.
+  if (!result || result.terminated || result.signal) return undefined;
+  const inside = result.stdout.trim();
+  if (result.exitCode === 0 && (inside === 'true' || inside === 'false')) return inside === 'true';
+  // Recognize only ordinary discovery failure. Unrecognized/localized errors
+  // remain unknown rather than misclassifying a valid but inaccessible repo.
+  // Git distinguishes reaching its search ceiling from reaching a mount point.
+  const diagnostic = result.stderr.trim();
+  const discoveryFailed = diagnostic === 'fatal: not a git repository (or any of the parent directories): .git'
+    || /^fatal: not a git repository \(or any parent up to mount point [^\r\n]+\)\r?\nStopping at filesystem boundary \(GIT_DISCOVERY_ACROSS_FILESYSTEM not set\)\.$/.test(diagnostic);
+  if (result.exitCode === 128 && !inside
+    && discoveryFailed) return false;
+  return undefined;
 }
 
 /** Actionable refusal text shared by task creation and spawn-time worktree prep. */

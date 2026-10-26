@@ -58,7 +58,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/cos/tabs/schedule/TaskModelQuickControls.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/creative-commission/CommissionConfigForm.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/creative-director/CreativeDirectorModelsDrawer.jsx` | Shared structured options or saved provider reference |
-| `client/src/components/creative/CreativeRefinement.jsx` | Selected provider reference on preview and conversation requests |
+| `client/src/components/creative/CreativeRefinement.jsx` | Conversation-local provider reference forwarded unchanged to preview and refinement requests; the host editor owns draft persistence |
 | `client/src/components/decks/DeckLlmPinPicker.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/digital-twin/TwinProviderPicker.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/digital-twin/tabs/AppearanceTab.jsx` | Shared structured options or saved provider reference |

@@ -16,6 +16,11 @@ vi.mock('../services/apiCatalog', () => ({
   setCatalogIngredientLock: vi.fn(),
   createCatalogIngredient: vi.fn(),
   getCatalogFacets: vi.fn(),
+  getCatalogIngredientDetails: vi.fn(),
+  setCatalogIngredientPortrait: vi.fn(),
+}));
+vi.mock('../components/catalog/GenerateImageControl', () => ({
+  default: ({ name, onComplete }) => <button type="button" onClick={() => onComplete('new-cover.png')}>Generate image for {name}</button>,
 }));
 vi.mock('../services/apiCatalogTypes', () => ({ listCatalogTypes: vi.fn() }));
 vi.mock('../services/apiUniverseBuilder', () => ({ listUniverseNames: vi.fn(async () => [{ id: 'u-1', name: 'Example Universe' }]) }));
@@ -25,7 +30,7 @@ vi.mock('../components/MediaImage', () => ({
 }));
 
 import CreativeLibrary from './CreativeLibrary';
-import { listCatalogIngredients, createCatalogIngredient, getCatalogFacets, setCatalogIngredientLock, getCatalogIngredientCards } from '../services/apiCatalog';
+import { listCatalogIngredients, createCatalogIngredient, getCatalogFacets, setCatalogIngredientLock, getCatalogIngredientCards, getCatalogIngredientDetails, setCatalogIngredientPortrait } from '../services/apiCatalog';
 import { listCatalogTypes } from '../services/apiCatalogTypes';
 
 const renderLibrary = (libraryId, entry) => render(
@@ -75,6 +80,18 @@ describe('CreativeLibrary', () => {
     expect(screen.getByRole('link', { name: 'Open Example 0' })).toHaveAttribute('href', '/casting/example-0?returnTo=%2Fcasting%3Fscope%3Dexample-world');
   });
 
+  it('accepts newer overlapping page rows when the visible character IDs stay the same', async () => {
+    const items = Array.from({ length: 48 }, (_, index) => ({ id: `example-${index}`, type: 'character', name: `Example ${index}`, payload: {}, updatedAt: '2026-10-20T00:00:00Z' }));
+    listCatalogIngredients.mockResolvedValueOnce({ items }).mockResolvedValueOnce({ items: [{ ...items[0], name: 'Fresh name', thumbnailKey: 'fresh.png', owningUniverse: { name: 'Fresh universe' }, updatedAt: '2026-10-21T00:00:00Z' }] });
+    renderLibrary('casting', '/casting');
+    await screen.findByRole('link', { name: 'Open Example 0' });
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await screen.findByRole('link', { name: 'Open Fresh name' });
+    expect(screen.getByRole('img', { name: 'Fresh name' })).toHaveAttribute('src', '/data/images/fresh.png');
+    expect(screen.getByText('Universe: Fresh universe')).toBeInTheDocument();
+    expect(getCatalogIngredientCards).not.toHaveBeenCalled();
+  });
+
   it('keeps a concurrently selected cover when an older lock closure confirms, then refreshes bounded card context', async () => {
     const item = { id: 'example', type: 'character', name: 'Example', payload: { locked: false }, thumbnailKey: 'old.png' };
     listCatalogIngredients.mockResolvedValue({ items: [item] });
@@ -105,6 +122,33 @@ describe('CreativeLibrary', () => {
     await waitFor(() => expect(listCatalogIngredients).toHaveBeenLastCalledWith(
       expect.objectContaining({ type: 'place', unlinked: true }),
     ));
+  });
+
+  it.each([['environments', 'place'], ['casting', 'character']])('shows the confirmed generated portrait instead of the previous reference cover in %s', async (library, type) => {
+    const item = { id: 'example-record', type, name: 'Example Record', thumbnailKey: 'previous-reference.png', payload: {} };
+    listCatalogIngredients.mockResolvedValue({ items: [item] });
+    getCatalogIngredientDetails.mockResolvedValue({ ingredient: item, media: [{ kind: 'reference', mediaKey: 'previous-reference.png' }] });
+    setCatalogIngredientPortrait.mockResolvedValue({ mediaKey: 'new-cover.png', kind: 'portrait' });
+    renderLibrary(library, `/${library}`);
+    expect(await screen.findByRole('img', { name: item.name })).toHaveAttribute('src', '/data/images/previous-reference.png');
+
+    fireEvent.click(screen.getByRole('button', { name: `Generate image for ${item.name}` }));
+
+    await waitFor(() => expect(screen.getByRole('img', { name: item.name })).toHaveAttribute('src', '/data/images/new-cover.png'));
+    expect(setCatalogIngredientPortrait).toHaveBeenCalledWith(item.id, { mediaKey: 'new-cover.png' }, { silent: true });
+  });
+
+  it.each([['environments', 'place'], ['casting', 'character']])('yields a generated cover to a newer authoritative portrait in %s', async (library, type) => {
+    const items = Array.from({ length: 48 }, (_, index) => ({ id: `example-${index}`, type, name: `Example ${index}`, payload: {}, thumbnailKey: 'previous-reference.png', updatedAt: '2026-10-20T00:00:00Z' }));
+    listCatalogIngredients.mockResolvedValueOnce({ items }).mockResolvedValueOnce({ items: [{ ...items[0], thumbnailKey: 'chosen-portrait.png', updatedAt: '2026-10-21T00:00:00Z' }] });
+    getCatalogIngredientDetails.mockResolvedValue({ ingredient: items[0], media: [{ kind: 'reference', mediaKey: 'previous-reference.png' }] });
+    setCatalogIngredientPortrait.mockResolvedValue({ mediaKey: 'new-cover.png', kind: 'portrait' });
+    renderLibrary(library, `/${library}`);
+    await screen.findByRole('img', { name: 'Example 0' });
+    fireEvent.click(screen.getByRole('button', { name: 'Generate image for Example 0' }));
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Example 0' })).toHaveAttribute('src', '/data/images/new-cover.png'));
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Example 0' })).toHaveAttribute('src', '/data/images/chosen-portrait.png'));
   });
 
   it('creates a record of its type and opens it', async () => {

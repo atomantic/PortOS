@@ -73,6 +73,14 @@ vi.mock('./mtplxServerManager.js', () => ({
   relaunchMtplxServerWithTuning: (...args) => relaunchMtplxServerWithTuning(...args),
 }));
 
+// Endpoint resolution reads PM2 launch state even on an unsupported host.
+// Keep this managed runtime isolated like llama.cpp and MTPLX: an unmocked
+// read can start a real PM2 daemon that outlives this otherwise passing suite.
+const getSlotstreamServerEndpoint = vi.fn(async () => 'http://127.0.0.1:18030/v1');
+vi.mock('./slotstreamServerManager.js', () => ({
+  getSlotstreamServerEndpoint: (...args) => getSlotstreamServerEndpoint(...args),
+}));
+
 const getSpecDecodePresetStatus = vi.fn(async () => []);
 vi.mock('./specDecodeModels.js', () => ({
   getSpecDecodePresetStatus: (...args) => getSpecDecodePresetStatus(...args),
@@ -152,6 +160,7 @@ beforeEach(() => {
     ? { success: true, unchanged: true }
     : { success: true }));
   getMtplxServerEndpoint.mockReset().mockResolvedValue('http://127.0.0.1:8000/v1');
+  getSlotstreamServerEndpoint.mockReset().mockResolvedValue('http://127.0.0.1:18030/v1');
   relaunchMtplxServerWithTuning.mockReset().mockResolvedValue({ applied: true, reason: null, config: null });
 });
 
@@ -792,6 +801,7 @@ describe('endpoint runtimes', () => {
   it('resolves the endpoint without paying for a status probe', async () => {
     await svc.getAssessmentReport();
     expect(getLlamaServerEndpoint).toHaveBeenCalled();
+    expect(probeOpenAiModels).toHaveBeenCalledWith('http://127.0.0.1:18030/v1', expect.objectContaining({ timeoutMs: 2500 }));
   });
 
   it('measures an endpoint runtime directly instead of through the provider path', async () => {

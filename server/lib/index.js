@@ -45,6 +45,7 @@ export * from './brainThreads.js';
 export * from './humanActions.js';
 export * as catalogIdentityValidation from './catalogIdentityValidation.js';
 export * as catalogValidation from './catalogValidation.js';
+export * as catalogGreyboxValidation from './catalogGreyboxValidation.js';
 export * as catalogMediaLibrary from './catalogMediaLibrary.js';
 export * from './characterSheetReferences.js';
 export * as characterAugmentValidation from './characterAugmentValidation.js';

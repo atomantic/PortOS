@@ -324,6 +324,21 @@ pushed head, and the impact planner skips what it attests to:
   `node scripts/pregate-attest.js --dry-run` shows what would be posted for
   the current receipt and HEAD without posting it.
 
+### Browser workload partition
+
+The browser job uses two runners. Each receives the complete planner selection
+and `CI_SHARD`; the runner assigns files by alternating the canonical
+`BROWSER_SUITES` registry before subtracting any memo entries. Scoped selections
+keep those same owners. This separates the long document-rendering and HTML
+composition suites, which the generic Vitest hash partition clustered together.
+Unknown browser selectors fail rather than being dropped.
+
+Each shard retains the full selected browser profile, the quiet capture project,
+normal motion, fidelity assertions, process containment and the existing
+720-second supervisor deadline. `CI Gate` consumes the matrix's aggregate result,
+so every selected shard must pass. Transform artifacts, test memos and failure
+artifacts have distinct shard keys; a passing shard cannot replace its sibling.
+
 ### Vitest runner tuning
 
 On GitHub Actions, `CI=true` caps the server Vitest runner at `maxWorkers: 4`
@@ -767,9 +782,9 @@ and exceed the bounded test-step budget on one Windows runner. Full Windows
 shards reached 19,911 passing tests in 877.6 seconds before post-test timeout,
 and another reached 1,091/1,100 modules at the 15-minute deadline (2026-10-24,
 #13402). The test step now has 25 minutes within its unchanged 40-minute job (#13301);
-the two-worker cap, matrix size and all tests remain unchanged. Matrices are
+the two-worker cap and all tests remain unchanged. Matrices are
 sized by `FULL_SUITE_SHARDS` in
-`scripts/ci-test-plan.js` (client 3, Windows 3, server 2) — and each job builds
+`scripts/ci-test-plan.js` (client 3, Windows 4, server 2) — and each job builds
 its matrix from that output. The decision has to be made in the planner: a
 job-level `if` cannot read the `matrix` context, so a job cannot skip its own
 extra shards. `scripts/run-ci-tests.js` turns `CI_SHARD=<index>/<count>` into
@@ -944,14 +959,45 @@ measured fixed overhead plus the contract suite); every other figure is measured
 There is **no wall-clock regression**: a downgraded run's Windows job goes from 4.15 min to
 ~1.5 min, so the full path gets *shorter*, and no full-Windows run changes at all.
 
-**Why the matrix is still 3 shards.** Dropping Windows to 2 was measured and
+**Historical three-shard sizing.** Dropping Windows from 3 to 2 was measured and
 rejected. Per-shard step timings put fixed overhead (checkout, setup-node, cache
 restore) at only ~0.83 min of the 4.15-min shard; the rest is the test step. Going
 3 → 2 therefore removes one setup (~1.7 equivalent-minutes, 7%) while adding
 ~1.65 min to the full path's critical chain. Tightening the selection above beat
-that at zero wall-clock cost, so `FULL_SUITE_SHARDS.windows` stays at 3.
+that at zero wall-clock cost, so the matrix stayed at 3 at that point.
+The later full-suite capacity measurements below justify its current four shards.
 `max-parallel` is not an alternative — it lowers peak concurrency, not total
 occupancy.
+
+### Windows full-suite capacity
+
+Full and related Windows plans use four shards; the 43-test contract baseline
+and other focused exact-file plans still use one job. Worker concurrency remains
+two, with the same 25-minute test-step and 40-minute job deadlines. The generic
+Vitest path-hash partition still owns every full-suite file exactly once.
+
+On release CI run `40339302684`, three-shard Windows runner 1 reached its step
+deadline after 1,119 completed modules with only the quiet planner suite left.
+There were no assertion failures. Its largest file,
+`heldCheckoutRecovery.test.js`, took 1,005.5 seconds versus 772.3 seconds in the
+preceding completed run; the planner suite took only 32.6 seconds previously.
+Adding capacity addresses the aggregate backlog rather than suppressing that
+planner contract or extending any deadline.
+
+Measured file durations from the current and preceding runs, including import
+and setup overhead calibrated from their completed jobs, give this sizing model:
+
+| Full Windows shards | Files per shard | Largest estimated shard | Headroom below 1,500 seconds |
+| --- | --- | --- | --- |
+| 3 | 1,128 / 1,128 / 1,127 | 1,592 seconds | None |
+| 4 | 846 / 846 / 846 / 845 | 1,343 seconds | 157 seconds |
+| 5 | 677 / 677 / 677 / 676 / 676 | 1,216 seconds | 284 seconds |
+
+These are planning estimates, not hosted validation results. They use the larger
+observed duration per file, the unchanged two-worker cap, quiet-group sequencing,
+and approximately 0.255 seconds of measured per-file import/setup overhead. The
+five-shard estimate also respects the indivisible 1,005.5-second file. Four is
+the smallest measured partition with room below the unchanged step deadline.
 
 ### Python sidecar scripts
 

@@ -79,6 +79,26 @@ describe('GreyboxPanel', () => {
     expect(saveCatalogGreybox.mock.invocationCallOrder[0]).toBeLessThan(detachCatalogIngredientMedia.mock.invocationCallOrder[0]);
   });
 
+  it('keeps the replacement after a failed detach, identity-grouped media refresh and remount', async () => {
+    const old = { ingredientId: 'original', retained: true, mediaKey: 'old.glb', kind: 'model', createdAt: '2026-10-25T00:00:00.000Z' };
+    const replacement = { ingredientId: record.id, mediaKey: 'new.glb', kind: 'model', role: 'greybox-model', createdAt: '2026-10-26T00:00:00.000Z' };
+    const place = { ...record, payload: { greybox: { ...scene, source: 'glb' } } };
+    uploadCatalogIngredientMediaFile.mockResolvedValue(replacement);
+    detachCatalogIngredientMedia.mockRejectedValue(new Error('Retained attachment cannot be detached'));
+    const panel = (media, key = 'mounted') => <MemoryRouter initialEntries={['/?shot=wide']}>
+      <SavedPanel key={key} record={place} media={media} />
+    </MemoryRouter>;
+    const { rerender } = render(panel([old]));
+    await screen.findByTestId('viewer');
+    fireEvent.change(screen.getByLabelText(/Replace Blender export \(.glb\)/), { target: { files: [new File(['replacement'], 'new.glb')] } });
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Retained attachment cannot be detached'));
+    // Real identity reads group by ingredient id before creation time.
+    rerender(panel([old, replacement]));
+    await waitFor(() => expect(screen.getByTestId('viewer')).toHaveAttribute('data-model-src', '/data/models/new.glb'));
+    rerender(panel([old, replacement], 'remounted'));
+    await waitFor(() => expect(screen.getByTestId('viewer')).toHaveAttribute('data-model-src', '/data/models/new.glb'));
+  });
+
   it('previews an AI draft with the exact prompt and stores it only when applied', async () => {
     const drafted = { ...scene, parts: [...scene.parts, { id: 'booth', type: 'box', size: [3, 2, 2], position: [0, 1, -6], rotationDegrees: [0, 0, 0] }] };
     draftCatalogGreybox.mockResolvedValue({ greybox: drafted, edited: true, sentPrompt: 'FULL PROMPT', promptAdditions: [{ id: 'greybox-contract', label: 'Greybox scene contract', text: 'rules' }], providerId: 'p1', model: 'm1' });

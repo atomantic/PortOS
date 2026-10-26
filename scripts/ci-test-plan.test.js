@@ -1280,7 +1280,8 @@ describe('CI test impact planner', () => {
     expect(re.test("'generate_ltx2xpy'")).toBe(false);
   });
 
-  it('shards full plans and related graphs while keeping small exact-file plans on one runner', () => {
+  it('uses four full Windows shards while keeping small exact-file plans on one runner', () => {
+    expect(FULL_SUITE_SHARDS.windows).toBe(4);
     expect(shardIndexes('full', 3)).toEqual([1, 2, 3]);
     expect(shardIndexes('related', 3)).toEqual([1]);
     expect(shardIndexes('files', 3)).toEqual([1]);
@@ -1300,7 +1301,7 @@ describe('CI test impact planner', () => {
     const relatedWindows = buildCiTestPlan(['server/lib/bufferedSpawn.js'], { trackedFiles: TRACKED });
     expect(relatedWindows).toMatchObject({ full: false, windowsMode: 'related',
       windowsSources: ['server/lib/bufferedSpawn.js'],
-      shards: { server: [1, 2], client: [1], windows: [1, 2, 3] } });
+      shards: { server: [1, 2], client: [1], windows: [1, 2, 3, 4] } });
     expect(relatedWindows.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS.filter(path => TRACKED.includes(path)).sort());
     const exactWindows = buildCiTestPlan(['server/lib/bufferedSpawn.test.js'], { trackedFiles: TRACKED });
     expect(exactWindows).toMatchObject({ windowsMode: 'files', shards: { windows: [1] } });
@@ -1713,14 +1714,20 @@ describe('needsSlashdoSubmodule', () => {
 // WINDOWS_CONTRACT_TESTS baseline — reduced, never skipped (issue #7440).
 describe('Windows escalation on a full plan (#7440)', () => {
   // The contract baseline resolves against tracked files, so a downgrade is
-  // only observable when the contract tests exist in the tree.
-  const TRACKED_WITH_CONTRACTS = [...TRACKED, ...WINDOWS_CONTRACT_TESTS];
+  // only observable when the contract tests exist in the tree. Use real owners
+  // instead of inventing configured paths that may have moved or disappeared.
+  const repo = fileURLToPath(new URL('../', import.meta.url));
+  const TRACKED_WITH_CONTRACTS = [
+    ...TRACKED.filter(path => !WINDOWS_CONTRACT_TESTS.includes(path)),
+    ...WINDOWS_CONTRACT_TESTS.filter(path => existsSync(join(repo, path))),
+  ];
   const plan = (files, options = {}) => buildCiTestPlan(files, {
     trackedFiles: TRACKED_WITH_CONTRACTS,
     ...options,
   });
 
   it.each(['client/vite.config.js', 'client/vitest.config.js'])('runs the Windows contract baseline for client-only configuration: %s', (path) => {
+    expect(WINDOWS_CONTRACT_TESTS).toHaveLength(43);
     const downgraded = plan([path]);
 
     // Still a full plan for every Linux suite — only the 2x job narrows.
@@ -1748,12 +1755,14 @@ describe('Windows escalation on a full plan (#7440)', () => {
     expect(wide.shards.windows).toEqual([1]);
   });
 
-  it('escalates when ANY matching trigger is Windows-relevant, not just the reported one', () => {
-    // The reason line reports the first match in sorted-path order, which here
-    // is the client-only one. The server runner config still escalates Windows.
-    const mixed = plan(['client/vitest.config.js', 'server/vitest.config.js']);
+  it.each([
+    ['client/vite.config.js', 'server/index.js'],
+    ['client/vitest.config.js', 'server/vitest.config.js'],
+  ])('escalates a mixed client/native trigger: %s + %s', (clientConfig, nativeEntry) => {
+    // The reported client-only reason must not hide a later native trigger.
+    const mixed = plan([clientConfig, nativeEntry]);
 
-    expect(mixed.reason).toContain('client/vitest.config.js');
+    expect(mixed.reason).toContain(clientConfig);
     expect(mixed.windowsMode).toBe('full');
     expect(mixed.shards.windows).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.windows));
   });
