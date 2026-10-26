@@ -1,6 +1,7 @@
 /** Fresh forge facts for an operator's checkout-retirement review. No fetch,
  * policy write or saved grant: missing local objects require a separate fetch.
  */
+import { mergeTreeCapability } from '../../lib/gitMergeTree.js';
 import { createHash } from 'node:crypto';
 import { devNull } from 'node:os';
 import { execGit } from '../lib/execGit.js';
@@ -20,6 +21,10 @@ async function detachedDeliveryProof(repoPath, sourceHead, deliveredHead) {
   const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_GRAFT_FILE: devNull };
   const run = async args => (await execGit(['--no-replace-objects', '-c', 'core.commitGraph=false', ...args], repoPath,
     { env, timeout: 5000, maxBuffer: 65536 })).stdout.trim();
+  const capability = mergeTreeCapability(await execGit(['merge-tree', '-h'], repoPath,
+    { env, timeout: 5000, maxBuffer: 65536, ignoreExitCode: true })
+    .catch(() => ({ error: true })));
+  if (!capability.ok) throw new Error(`retirement-${capability.reason}`);
   // A configured custom merge driver could execute code or invent a matching
   // result. This proof never invokes one, even when attributes request it.
   const drivers = await execGit(['config', '--get-regexp', '^merge\\..*\\.driver$'], repoPath,
