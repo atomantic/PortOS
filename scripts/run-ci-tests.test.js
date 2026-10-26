@@ -313,6 +313,9 @@ async function createRunnerSandbox(files) {
     git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
     git('add', '--all');
     git('commit', '-qm', 'runner selection fixture');
+    // The nested CLI calls block this worker's event loop. Observe the idle
+    // broker's exit first so a delayed IPC event cannot exceed its close budget.
+    await globalThis.__portosGitSupervisorCleanup?.();
     return sandbox;
   } catch (error) {
     await destroyGitSandbox(scratch);
