@@ -917,7 +917,8 @@ export const catalogIngredientLockSchema = z.object({ locked: z.boolean() }).str
 // Also the body of the prompt preview, which sends nothing to a provider: the
 // pick fields are accepted and ignored there.
 export const catalogGreyboxDraftSchema = z.object({
-  instruction: z.string().trim().min(1).max(GREYBOX_INSTRUCTION_MAX),
+  // Sent as written: validated for content, never trimmed or otherwise rewritten.
+  instruction: z.string().max(GREYBOX_INSTRUCTION_MAX).refine((v) => v.trim().length > 0, 'instruction is required'),
   providerId: z.string().trim().max(128).optional().default(''),
   model: z.string().trim().max(256).optional().default(''),
   effort: z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional()).transform((v) => v || ''),

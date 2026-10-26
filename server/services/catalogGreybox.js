@@ -10,6 +10,7 @@
  */
 
 import { ServerError } from '../lib/errorHandler.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { promptAddition } from '../lib/modelInput.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../lib/creativeLatitude.js';
 import { resolveGreybox } from '../lib/greyboxScene.js';
@@ -115,7 +116,14 @@ export async function saveGreybox(ingredientId, scene, { source = 'user' } = {})
  * replacing the shot's previous capture. The shot must exist on the stored
  * greybox, so a capture can never outlive the camera that made it unnoticed.
  */
-export async function captureGreyboxShot(ingredientId, shotId, { dataBase64 }) {
+// Two overlapping captures of one shot (two open tabs) must not both read the same
+// previous attachments, or each detaches only that list and both new images stay live.
+const captureQueue = createKeyCachedQueue();
+
+export const captureGreyboxShot = (ingredientId, shotId, body) =>
+  captureQueue(`${ingredientId}:${shotId}`, () => replaceShotCapture(ingredientId, shotId, body));
+
+async function replaceShotCapture(ingredientId, shotId, { dataBase64 }) {
   const place = await requirePlace(ingredientId);
   // Stored scenes were validated on save; no need to re-parse the whole thing.
   const shot = place.payload?.greybox?.shots?.find((s) => s.id === shotId);

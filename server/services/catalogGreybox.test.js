@@ -100,6 +100,24 @@ describe('captureGreyboxShot', () => {
     expect(db.detachMedia).toHaveBeenCalledWith('plc-1', 'old.png', 'reference');
   });
 
+  it('serializes overlapping captures of one shot so only the newest stays attached', async () => {
+    const live = [{ mediaKey: 'old.png', kind: 'reference', role: 'greybox-shot:wide', deleted: false }];
+    db.listMediaForIngredient.mockImplementation(async () => live.map((m) => ({ ...m })));
+    db.detachMedia.mockImplementation(async (_id, key) => { live.splice(live.findIndex((m) => m.mediaKey === key), 1); });
+    let n = 0;
+    upload.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const row = { mediaKey: `new${++n}.png`, kind: 'reference', role: 'greybox-shot:wide', deleted: false };
+      live.push(row);
+      return row;
+    });
+    await Promise.all([
+      captureGreyboxShot('plc-1', 'wide', { dataBase64: 'AAAA' }),
+      captureGreyboxShot('plc-1', 'wide', { dataBase64: 'BBBB' }),
+    ]);
+    expect(live.map((m) => m.mediaKey)).toEqual(['new2.png']);
+  });
+
   it('refuses a shot that is not saved', async () => {
     await expect(captureGreyboxShot('plc-1', 'ghost', { dataBase64: 'AAAA' })).rejects.toMatchObject({ code: 'GREYBOX_SHOT_UNKNOWN' });
     expect(upload).not.toHaveBeenCalled();

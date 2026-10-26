@@ -57,7 +57,7 @@ const AnchorProxy = memo(function AnchorProxy({ anchor }) {
         <meshStandardMaterial color="#ffffff" />
       </mesh>
       <Html position={[0, height + 0.25, 0]} center style={{ pointerEvents: 'none' }}>
-        <span className="px-1 rounded bg-black/70 text-[10px] text-white whitespace-nowrap">{anchor.label}</span>
+        <span className="port-media-overlay-strong px-1 rounded text-[10px] whitespace-nowrap">{anchor.label}</span>
       </Html>
     </group>
   );
@@ -67,8 +67,24 @@ const AnchorProxy = memo(function AnchorProxy({ anchor }) {
 // panel. Capture re-renders at a set resolution (independent of the viewport) and
 // hides the editor helpers (grid, landmark pins) so the reference holds only the
 // layout and figure proxies.
-function ViewApi({ apiRef, layout, focalLengthMm, aspect, helpersRef }) {
+function ViewApi({ apiRef, layout, shotView, focalLengthMm, aspect, helpersRef }) {
   const { camera, gl, scene, controls, invalidate } = useThree();
+  const appliedViewId = useRef(null);
+
+  // A selected shot's camera is applied once the controls exist, whenever the
+  // lazy viewer finished loading relative to the selection.
+  useEffect(() => {
+    if (!shotView) {
+      appliedViewId.current = null;
+      return;
+    }
+    if (!controls || appliedViewId.current === shotView.id) return;
+    appliedViewId.current = shotView.id;
+    camera.position.set(...shotView.position);
+    controls.target.set(...shotView.target);
+    controls.update();
+    invalidate();
+  }, [shotView, controls, camera, invalidate]);
 
   useEffect(() => {
     camera.fov = fovFromFocalLength(focalLengthMm);
@@ -80,16 +96,6 @@ function ViewApi({ apiRef, layout, focalLengthMm, aspect, helpersRef }) {
 
   useImperativeHandle(apiRef, () => ({
     getView: () => ({ position: camera.position.toArray(), target: controls ? controls.target.toArray() : [0, 0, 0] }),
-    setView: ({ position, target }) => {
-      camera.position.set(...position);
-      if (controls) {
-        controls.target.set(...target);
-        controls.update();
-      } else {
-        camera.lookAt(...target);
-      }
-      invalidate();
-    },
     capture: () => {
       const ratio = aspectRatio(aspect);
       const [width, height] = ratio >= 1
@@ -119,13 +125,14 @@ function ViewApi({ apiRef, layout, focalLengthMm, aspect, helpersRef }) {
 
 /**
  * Orbit viewer for a place's greybox. The frame has the selected shot's aspect
- * so what you see is what a capture saves. `ref` exposes `getView()`,
- * `setView({ position, target })` and `capture()` (PNG data URL).
+ * so what you see is what a capture saves. `shotView` (`{ id, position, target }`)
+ * moves the camera when its id changes. `ref` exposes `getView()` and
+ * `capture()` (PNG data URL).
  */
-const GreyboxViewer = forwardRef(function GreyboxViewer({ scene, aspect = '16:9', focalLengthMm = 35, initialView }, ref) {
+const GreyboxViewer = forwardRef(function GreyboxViewer({ scene, aspect = '16:9', focalLengthMm = 35, shotView = null }, ref) {
   const helpersRef = useRef(null);
   const ratio = aspectRatio(aspect);
-  const start = initialView || DEFAULT_VIEW;
+  const start = shotView || DEFAULT_VIEW;
 
   return (
     <div
@@ -152,7 +159,7 @@ const GreyboxViewer = forwardRef(function GreyboxViewer({ scene, aspect = '16:9'
                 <meshBasicMaterial color="#f2d64b" />
               </mesh>
               <Html position={[0, 0.35, 0]} center style={{ pointerEvents: 'none' }}>
-                <span className="px-1 rounded bg-black/70 text-[10px] text-yellow-200 whitespace-nowrap">{l.label}</span>
+                <span className="port-media-overlay-strong px-1 rounded text-[10px] whitespace-nowrap">{l.label}</span>
               </Html>
             </group>
           ))}
@@ -160,7 +167,7 @@ const GreyboxViewer = forwardRef(function GreyboxViewer({ scene, aspect = '16:9'
         {scene.parts.map((part) => <PartMesh key={part.id} part={part} color={partColor(scene, part)} />)}
         {scene.anchors.map((anchor) => <AnchorProxy key={anchor.id} anchor={anchor} />)}
         <OrbitControls makeDefault target={start.target} maxPolarAngle={Math.PI * 0.98} />
-        <ViewApi apiRef={ref} layout={scene} focalLengthMm={focalLengthMm} aspect={aspect} helpersRef={helpersRef} />
+        <ViewApi apiRef={ref} layout={scene} shotView={shotView} focalLengthMm={focalLengthMm} aspect={aspect} helpersRef={helpersRef} />
       </Canvas>
     </div>
   );
