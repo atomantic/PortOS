@@ -374,6 +374,17 @@ void main() {
   vec4 c = unpremul(texelFetch(a, pixel(), 0));
   color = premul(c * slope + intercept);
 }`,
+    transferTable: `uniform sampler2D a; uniform float curve[256];
+float mapped(float x) {
+  float p = clamp(x, 0.0, 1.0) * 255.0;
+  int i = min(254, int(floor(p)));
+  return mix(curve[i], curve[i + 1], p - float(i));
+}
+void main() {
+  if (clipped()) { color = vec4(0.0); return; }
+  vec4 c = unpremul(texelFetch(a, pixel(), 0));
+  color = premul(vec4(mapped(c.r), mapped(c.g), mapped(c.b), c.a));
+}`,
     composite: `uniform sampler2D a; uniform sampler2D b; uniform int op; uniform vec4 k;
 void main() {
   if (clipped()) { color = vec4(0.0); return; }
@@ -781,6 +792,13 @@ void main() {
         for (let col = 0; col < 4; col++) for (let row = 0; row < 4; row++) m.push(values[row * 5 + col]);
         run('matrix', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniformMatrix4fv(u.m, false, m); gl.uniform4f(u.bias, values[4], values[9], values[14], values[19]); });
       } else if (p.type === 'feComponentTransfer') {
+        if (p.funcs.R?.type === 'table') {
+          const values = String(p.funcs.R.tableValues || '').trim().split(/[\s,]+/).map(Number);
+          if (values.length !== 256 || values.some(v => !Number.isFinite(v) || v < 0 || v > 1)
+            || ['G', 'B'].some(c => p.funcs[c]?.type !== 'table' || p.funcs[c].tableValues !== p.funcs.R.tableValues)
+            || (p.funcs.A && p.funcs.A.type !== 'identity')) throw new Error('unsupported film response table');
+          run('transferTable', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniform1fv(u['curve[0]'], values); });
+        } else {
         const slope = [1, 1, 1, 1], intercept = [0, 0, 0, 0];
         ['R', 'G', 'B', 'A'].forEach((channel, i) => {
           const fn = p.funcs[channel];
@@ -789,6 +807,7 @@ void main() {
           slope[i] = num(fn.slope, 1); intercept[i] = num(fn.intercept, 0);
         });
         run('transfer', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniform4f(u.slope, ...slope); gl.uniform4f(u.intercept, ...intercept); });
+        }
       } else if (p.type === 'feComposite') {
         const op = { over: 0, in: 1, arithmetic: 2 }[attrs.operator || 'over'];
         if (op === undefined) throw new Error('unsupported feComposite operator ' + attrs.operator);

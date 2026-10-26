@@ -766,7 +766,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Optional, no migration or backfill; absent retains legacy rendering.
   // v26 = explicit per-shot greybox set references. Older generators ignore the layout
   // and its missing-capture refusal. Optional on existing records; no backfill.
-  musicVideoProjects: 26,
+  // v27 = original version-2 film response controls and recipes. Older
+  // renderers discard these controls and cannot reproduce the chosen finish.
+  musicVideoProjects: 27,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
