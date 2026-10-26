@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import CatalogCard from './CatalogCard';
 import { getCatalogType } from '../../lib/catalogTypes';
@@ -97,8 +97,8 @@ describe('catalog card image actions', () => {
     fireEvent.change(input, { target: { value: 'Temporary edit' } });
     fireEvent.change(input, { target: { value: '' } });
     await waitFor(() => expect(resolveWorld).toBeTypeOf('function'));
-    resolveWorld({ id: 'example-world' });
-    await waitFor(() => expect(screen.queryByLabelText('Loading universe style')).toBeNull());
+    await act(async () => { resolveWorld({ id: 'example-world' }); });
+    expect(screen.queryByLabelText('Loading universe style')).toBeNull();
     expect(input).toHaveValue('');
     expect(screen.getByRole('button', { name: 'Render', exact: true })).toBeDisabled();
   });
