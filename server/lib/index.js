@@ -1000,3 +1000,4 @@ export * from './npmRetirementPayload.js';
 export * from './videoLoraStageValidation.js';
 
 export * from './musicVideoGreybox.js';
+export * from './catalogRedesign.js';
