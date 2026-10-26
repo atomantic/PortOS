@@ -58,6 +58,8 @@ export const TIMED_COOLDOWN_BLOCKED_CATEGORIES = new Set([
  */
 export const PAUSED_BLOCKED_CATEGORIES = new Set([
   ...TIMED_COOLDOWN_BLOCKED_CATEGORIES,
+  'internal-dependency', // Server-owned investigation wait; preserve its pointer and never expire it as a failed task.
+  'internal-dependency-unverified', // Unknown ownership is a retained refusal, never an automatic completion.
   'runtime-verification', // Server-owned boot prerequisite; retain work and never expire or auto-retry.
   'task-approval', // A user decision must retain its checkout and never silently expire.
   'task-recovery-exhausted', // Continuing beyond the retry/spawn limit needs an explicit decision.
