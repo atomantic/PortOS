@@ -347,6 +347,31 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(state.result).toEqual({ success: false, executionSuccess: true, cleanupPending: true });
   });
 
+  it.each([true, false])('reconciles an eventual merge after a terminal pre-merge report only with fresh exact-head proof (%s)', async integrated => {
+    const capture = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
+      startedAt: CREATED_AT, capturedAt: CREATED_AT, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const originalResult = { success: false, executionSuccess: true, deliveryRecoveryOwned: true,
+      taskOutcome: { status: 'incomplete', reason: 'Main moved during three guard rounds.' } };
+    const state = { ...agentState({ instanceId: 'fixture-local', completedCheckouts: [capture],
+      completionCleanup: { status: 'completed', stages: { worktree: { status: 'done', value: [] } } } }),
+      id: 'agent-1', taskId: 'task-1', status: 'completed', result: originalResult };
+    getAgentRecord.mockResolvedValue(state);
+    getTaskById.mockResolvedValue({ ...task(), status: 'completed' });
+    execGit.mockImplementation(async args => ({ exitCode: integrated && args[0] === 'merge-base' ? 0 : 1, stdout: '' }));
+    const followUp = { id: 'follow-up', status: 'completed', metadata: { reviewLoopFollowUp: 'true',
+      sourceAgentId: 'agent-1', sourceTaskId: 'task-1', reviewLoopPRBranch: BRANCH,
+      reviewLoopPRUrl: 'https://github.com/example/repo/pull/7',
+      mergedReviewFollowUp: { status: 'verified', prUrl: 'https://github.com/example/repo/pull/7' } } };
+    queuedTasks([followUp]);
+    await observeCompletedTask(followUp);
+    if (integrated) expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ deliveryVerified: true }));
+    else expect(recordRepoStateVerification).not.toHaveBeenCalled();
+    expect(state.result).toEqual(originalResult);
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+  });
+
   it('replays a failed no-PR run cleanup at owner release without promoting its original result', async () => {
     const state = { id: 'failed-no-pr', taskId: 'failed-task', status: 'completed',
       result: { success: false, executionSuccess: true, taskOutcome: { status: 'blocked' } },

@@ -27,7 +27,8 @@ export default function AgentResultLine({ agent, className = '' }) {
   const merged = cleanup?.committedIntegrationVerified === true;
   // A completed cleanup audit supersedes the old cleanup-only handoff, while
   // unrelated delivery decisions and execution failures keep their own verdict.
-  const cleanupResolved = cleanupComplete && merged && outcome?.recovery?.mode === 'cleanup';
+  const cleanupResolved = cleanupComplete && merged && (outcome?.recovery?.mode === 'cleanup'
+    || (executionSuccess && agent.metadata?.repoStateVerification?.deliveryVerified === true));
   const deliveryHeld = ['blocked', 'incomplete'].includes(outcome?.status) && !cleanupResolved;
   const deliveryComplete = isTaskDeliveryComplete(agent) || cleanupResolved;
   const incomplete = cleanupPending || interruption || scanIncomplete || assessmentUnverified || validationFailed || publicationIncomplete;

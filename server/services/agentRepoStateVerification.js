@@ -487,7 +487,33 @@ async function resumeCompletedDeliveryParent(task) {
     const [parent, instanceId] = await Promise.all([getAgentRecord(m.sourceAgentId), getInstanceId()]);
     if (parent?.taskId !== m.sourceTaskId || !instanceId || instanceId === UNKNOWN_INSTANCE_ID
       || parent.metadata?.instanceId !== instanceId) return;
-    return resumeAgentCompletionRetirement(m.sourceAgentId);
+    // A follow-up can merge after the original run exhausted pre-merge
+    // contention rounds. Its already-completed cleanup ledger is not delivery
+    // proof, nor a reason to ignore this event. Reuse the normal verifier with
+    // the follow-up target; it independently checks the captured head, current
+    // forge state, ownership and physical checkout before recording settlement.
+    const result = parent.result;
+    const recoveredDelivery = m.mergedReviewFollowUp?.status === 'verified'
+      && m.mergedReviewFollowUp.prUrl === m.reviewLoopPRUrl
+      && m.reviewLoopPRBranch === parent.metadata?.worktreeBranch
+      && result?.deliveryRecoveryOwned === true && result.executionSuccess === true
+      && result.validationPassed !== false && !result.executionInterruption
+      && !parent.metadata?.executionInterruption
+      && result.taskOutcome?.status === 'incomplete';
+    if (!recoveredDelivery) return resumeAgentCompletionRetirement(m.sourceAgentId);
+    await verificationRuns.get(m.sourceAgentId)?.catch(() => {});
+    const { getTaskById } = await import('./cosTaskStore.js');
+    const original = await getTaskById(m.sourceTaskId);
+    if (!original || original.status !== 'completed') return;
+    const verified = await verifyAgentRepoState({ agentId: m.sourceAgentId, agentState: parent,
+      task: { ...original, metadata: { ...original.metadata, reviewLoopPRUrl: m.reviewLoopPRUrl } },
+      success: true, prExpected: true });
+    if (verified.verified) {
+      const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+      await recordRepoStateVerification(m.sourceAgentId, { status: 'completed', deliveryVerified: true,
+        checkedAt: new Date().toISOString(), sourceFollowUpTaskId: task.id });
+    }
+    return verified;
   });
 }
 
