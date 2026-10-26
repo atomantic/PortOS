@@ -4,6 +4,8 @@ These apply to React/Vite client code. Universal constraints (functional program
 
 ## UI conventions
 
+- **Actions should look like buttons.** Give user actions a visible button affordance such as a border, padding, and hover/focus treatment; reserve plain text links for navigation and references. Keep controls usable on touch screens.
+
 - **Display timestamps in browser-local time** — use the shared date/time formatters in `utils/formatters.js`; never render an ISO/UTC serialization as a display timestamp. Keep ISO timestamps for transport and persistence. Explicit schedule timezones and date-keyed reporting boundaries retain their domain semantics.
 - **Admin workspace design** — for new or redesigned admin pages, follow [the workspace design guide](../../docs/UX_DESIGN_GUIDE.md): choose a page family, put useful work first, use desktop width for related work/evidence, and preserve icon-prefixed desktop navigation plus CoS-style compact mobile icon rows. Apply incrementally; the guide does not authorize unrelated behavior changes or a global CSS rewrite.
 - **No window.alert/confirm** - use inline confirmations or toast notifications
