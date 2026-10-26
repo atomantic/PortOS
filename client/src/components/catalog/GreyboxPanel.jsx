@@ -1,0 +1,303 @@
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router';
+import { Camera, Check, Loader2, Plus, Sparkles, Trash2, X } from 'lucide-react';
+import toast from '../ui/Toast';
+import MusicVideoLlmPicker from '../musicVideo/MusicVideoLlmPicker';
+import SentPromptPanel from '../media/SentPromptPanel';
+import { captureCatalogGreyboxShot, draftCatalogGreybox, saveCatalogGreybox } from '../../services/apiCatalog';
+import {
+  GREYBOX_ASPECTS,
+  DEFAULT_FOCAL_LENGTH_MM,
+  blankGreybox,
+  captureForShot,
+  shotFromCamera,
+  withShot,
+  withoutShot,
+  roundVec,
+} from '../../lib/greybox';
+
+// three.js stays out of the main chunk: the viewer loads when the tab opens.
+const GreyboxViewer = lazy(() => import('./GreyboxViewer'));
+
+const actionButton = 'min-h-[40px] inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
+const EMPTY_LLM = { providerId: '', model: '', effort: '' };
+const AUTO = 'Default — the active provider';
+
+/**
+ * The Greybox tab of an Environment: orbit a coarse 3D layout of the place,
+ * save camera angles as shots, capture a shot as a reference image on the
+ * place, and have any provider › model › effort create or edit the layout.
+ * The selected shot lives in the URL (`?shot=`). An AI draft is only a preview
+ * until applied; every save goes through the server's scene validation.
+ */
+export default function GreyboxPanel({ record, media, readOnly = false, onSaved, onCaptured }) {
+  const [params, setParams] = useSearchParams();
+  const viewerRef = useRef(null);
+  const saved = record.payload?.greybox ?? null;
+  const [draft, setDraft] = useState(null);
+  const [instruction, setInstruction] = useState('');
+  const [llm, setLlm] = useState(EMPTY_LLM);
+  const [fromScratch, setFromScratch] = useState(false);
+  const [busy, setBusy] = useState('');
+  const [lens, setLens] = useState(DEFAULT_FOCAL_LENGTH_MM);
+  const [aspect, setAspect] = useState('16:9');
+  const [newShotName, setNewShotName] = useState('');
+
+  const scene = draft?.greybox || saved;
+  const shotId = params.get('shot') || '';
+  const shot = scene?.shots?.find((s) => s.id === shotId) || null;
+  const locked = readOnly || record.payload?.locked === true;
+
+  // Selecting a shot moves the camera to it and adopts its lens and aspect. A
+  // save re-creates the shot object, so only a change of shot re-snaps the view.
+  const appliedShotId = useRef(null);
+  useEffect(() => {
+    if (!shot) {
+      appliedShotId.current = null;
+      return;
+    }
+    if (appliedShotId.current === shot.id) return;
+    appliedShotId.current = shot.id;
+    setLens(shot.focalLengthMm);
+    setAspect(shot.aspect);
+    viewerRef.current?.setView({ position: shot.position, target: shot.target });
+  }, [shot]);
+
+  // Only the viewer's first mount reads this; later selections go through setView.
+  const [initialView] = useState(() => (shot ? { position: shot.position, target: shot.target } : undefined));
+
+  const selectShot = (id) => setParams((prev) => { const next = new URLSearchParams(prev); if (id) next.set('shot', id); else next.delete('shot'); return next; }, { replace: true });
+
+  const persist = async (nextScene, { source } = {}) => {
+    const updated = await saveCatalogGreybox(record.id, nextScene, { source, silent: true })
+      .catch((err) => { toast.error(err?.message || 'Failed to save the greybox'); return null; });
+    if (updated) onSaved(updated);
+    return updated;
+  };
+
+  const run = async (name, fn) => {
+    setBusy(name);
+    const result = await fn();
+    setBusy('');
+    return result;
+  };
+
+  const currentView = () => {
+    const view = viewerRef.current?.getView();
+    return view ? { position: roundVec(view.position), target: roundVec(view.target) } : null;
+  };
+
+  const saveNewShot = () => run('shot', async () => {
+    const view = currentView();
+    if (!view || !saved) return;
+    const created = shotFromCamera(saved, { label: newShotName, ...view, focalLengthMm: lens, aspect });
+    if (await persist(withShot(saved, created))) {
+      setNewShotName('');
+      selectShot(created.id);
+    }
+  });
+
+  // The selected shot as framed in the viewer right now.
+  const framedShot = () => {
+    const view = currentView();
+    return view && shot ? { ...shot, ...view, focalLengthMm: Math.round(lens), aspect } : null;
+  };
+
+  const updateShotView = () => run('shot', async () => {
+    const next = framedShot();
+    if (next && saved) await persist(withShot(saved, next));
+  });
+
+  const captureShot = () => run('capture', async () => {
+    if (!shot || !saved) return;
+    const next = framedShot();
+    // Save the camera first when it moved, so the capture matches the saved shot.
+    if (next && JSON.stringify(next) !== JSON.stringify(shot) && !(await persist(withShot(saved, next)))) return;
+    const dataUrl = viewerRef.current?.capture();
+    if (!dataUrl) return;
+    const row = await captureCatalogGreyboxShot(record.id, shot.id, dataUrl.split(',')[1], { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Failed to save the reference'); return null; });
+    if (row) {
+      toast.success(`Saved "${shot.label}" as a reference image`);
+      onCaptured?.();
+    }
+  });
+
+  const removeShot = () => run('shot', async () => {
+    if (!shot || !saved) return;
+    if (await persist(withoutShot(saved, shot.id))) selectShot('');
+  });
+
+  const startBlank = () => run('blank', () => persist(blankGreybox()));
+
+  const generate = () => run('draft', async () => {
+    const res = await draftCatalogGreybox(record.id, {
+      instruction, ...llm, useCurrent: Boolean(saved) && !fromScratch,
+    }, { silent: true }).catch((err) => { toast.error(err?.message || 'The model could not make a greybox'); return null; });
+    if (res) setDraft(res);
+  });
+
+  const applyDraft = () => run('apply', async () => {
+    if (await persist(draft.greybox, { source: 'refine' })) {
+      setDraft(null);
+      setInstruction('');
+      toast.success('Greybox saved');
+    }
+  });
+
+  const selectedCapture = shot ? captureForShot(media, shot.id) : null;
+  const counts = scene ? [[scene.parts, 'part'], [scene.anchors, 'anchor'], [scene.shots, 'shot']]
+    .map(([list, word]) => `${list.length} ${word}${list.length === 1 ? '' : 's'}`).join(' · ') : '';
+
+  return (
+    <section className="space-y-4" aria-label="Greybox">
+      <div className="flex flex-wrap items-center gap-2 justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-white">Greybox layout</h2>
+          <p className="text-xs text-gray-400">A coarse 3D layout of this place. Save camera angles as shots and capture them as reference images for shot generation.</p>
+        </div>
+        {counts && <span className="text-xs text-gray-400">{counts}</span>}
+      </div>
+
+      {!scene && (
+        <div className="rounded-lg border border-dashed border-port-border p-4 text-sm text-gray-300 space-y-3">
+          <p>No greybox yet. Build one by hand from a blank room, or describe it below and let a model draft it.</p>
+          <button type="button" className={actionButton} onClick={startBlank} disabled={locked || !!busy}>
+            {busy === 'blank' ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Plus size={14} aria-hidden="true" />} Start from a blank room
+          </button>
+        </div>
+      )}
+
+      {draft && (
+        <div role="status" className="rounded-lg border border-port-accent/50 bg-port-accent/10 p-3 space-y-3">
+          <p className="text-sm text-white">
+            Draft preview, not saved yet ({draft.providerId}{draft.model ? ` › ${draft.model}` : ''}). {draft.edited ? 'This replaces the current layout.' : ''}
+          </p>
+          <SentPromptPanel prompt={instruction} sentPrompt={draft.sentPrompt} additions={draft.promptAdditions} />
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={actionButton} onClick={applyDraft} disabled={locked || !!busy}>
+              {busy === 'apply' ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Check size={14} aria-hidden="true" />} Apply draft
+            </button>
+            <button type="button" className={actionButton} onClick={() => setDraft(null)} disabled={!!busy}>
+              <X size={14} aria-hidden="true" /> Discard
+            </button>
+          </div>
+        </div>
+      )}
+
+      {scene && scene.source === 'glb' && (
+        <p className="text-sm text-port-warning">This greybox uses an attached Blender model, which the viewer does not display yet. Its shots and anchors are kept.</p>
+      )}
+
+      {scene && scene.source !== 'glb' && (
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="space-y-3 min-w-0">
+            <Suspense fallback={<div className="h-64 flex items-center justify-center text-sm text-gray-400"><Loader2 size={16} className="animate-spin mr-2" aria-hidden="true" />Loading viewer…</div>}>
+              <GreyboxViewer key={record.id} ref={viewerRef} scene={scene} aspect={aspect} focalLengthMm={lens} initialView={initialView} />
+            </Suspense>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label htmlFor="greybox-lens" className="text-xs text-gray-400">
+                Lens: {Math.round(lens)} mm
+                <input id="greybox-lens" type="range" min="14" max="135" step="1" value={lens} onChange={(e) => setLens(Number(e.target.value))} className="w-full" />
+              </label>
+              <label htmlFor="greybox-aspect" className="text-xs text-gray-400">
+                Frame
+                <select id="greybox-aspect" value={aspect} onChange={(e) => setAspect(e.target.value)} className="mt-1 block w-full min-h-[40px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white">
+                  {GREYBOX_ASPECTS.map((a) => <option key={a} value={a}>{a}</option>)}
+                </select>
+              </label>
+            </div>
+            <p className="text-xs text-gray-500">Drag to orbit, scroll to zoom, right-drag to pan. The frame above is exactly what a capture saves.</p>
+          </div>
+
+          <div className="space-y-3 min-w-0">
+            <h3 className="text-sm font-medium text-white">Shots</h3>
+            {scene.shots.length === 0 && <p className="text-xs text-gray-400">No shots yet. Frame the view, name it, and save.</p>}
+            <ul className="space-y-1" aria-label="Saved shots">
+              {scene.shots.map((s) => {
+                const capture = captureForShot(media, s.id);
+                return (
+                  <li key={s.id}>
+                    <button type="button" aria-pressed={s.id === shotId} onClick={() => selectShot(s.id)}
+                      className={`w-full min-h-[44px] flex items-center gap-2 rounded-lg border px-2 text-left text-sm ${s.id === shotId ? 'border-port-accent text-white bg-port-accent/10' : 'border-port-border text-gray-300 hover:text-white'}`}>
+                      {capture
+                        ? <img src={`/data/images/${encodeURIComponent(capture.mediaKey)}`} alt="" loading="lazy" decoding="async" className="h-8 w-12 object-cover rounded" />
+                        : <span className="h-8 w-12 rounded bg-port-bg border border-port-border flex items-center justify-center text-gray-500"><Camera size={14} aria-hidden="true" /></span>}
+                      <span className="min-w-0 flex-1 truncate">{s.label}</span>
+                      <span className="text-[11px] text-gray-500">{s.focalLengthMm}mm · {s.aspect}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+
+            {!draft && !locked && (
+              <div className="space-y-2">
+                <label htmlFor="greybox-new-shot" className="block text-xs text-gray-400">New shot name</label>
+                <div className="flex gap-2">
+                  <input id="greybox-new-shot" value={newShotName} onChange={(e) => setNewShotName(e.target.value)} maxLength={120} placeholder="e.g. DJ booth, low angle"
+                    className="min-w-0 flex-1 min-h-[40px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white" />
+                  <button type="button" className={actionButton} onClick={saveNewShot} disabled={!!busy}>
+                    {busy === 'shot' ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Plus size={14} aria-hidden="true" />} Save view
+                  </button>
+                </div>
+                {shot && (
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" className={actionButton} onClick={updateShotView} disabled={!!busy}>Update “{shot.label}” to this view</button>
+                    <button type="button" className={actionButton} onClick={captureShot} disabled={!!busy}>
+                      {busy === 'capture' ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Camera size={14} aria-hidden="true" />}
+                      {selectedCapture ? 'Replace reference image' : 'Capture reference image'}
+                    </button>
+                    <button type="button" className={actionButton} onClick={removeShot} disabled={!!busy} aria-label={`Delete shot ${shot.label}`}>
+                      <Trash2 size={14} aria-hidden="true" />
+                    </button>
+                  </div>
+                )}
+                {shot && <p className="text-[11px] text-gray-500">Captures attach to this environment as a reference image tagged for this shot, ready to pick as an input to shot image generation.</p>}
+              </div>
+            )}
+
+            {scene.landmarks.length > 0 && (
+              <div>
+                <h3 className="text-sm font-medium text-white">Landmarks</h3>
+                <p className="text-xs text-gray-400">{scene.landmarks.map((l) => l.label).join(' · ')}</p>
+              </div>
+            )}
+            {scene.anchors.length > 0 && (
+              <div>
+                <h3 className="text-sm font-medium text-white">Anchors</h3>
+                <p className="text-xs text-gray-400">{scene.anchors.map((a) => a.label).join(' · ')}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!locked && (
+        <div className="rounded-lg border border-port-border p-3 space-y-3">
+          <h3 className="text-sm font-medium text-white flex items-center gap-1.5"><Sparkles size={14} aria-hidden="true" />{saved ? 'Edit with AI' : 'Create with AI'}</h3>
+          <MusicVideoLlmPicker idPrefix="greybox" value={llm} onChange={setLlm} label="Provider › model › effort"
+            emptyProviderOption={AUTO} fallbackName="The active provider" hint="Runs only when you tap the button. The place description and your words are sent as shown under Show full prompt." />
+          <div>
+            <label htmlFor="greybox-instruction" className="block text-xs text-gray-400 mb-1">
+              {saved && !fromScratch ? 'What should change?' : 'Describe the layout'}
+            </label>
+            <textarea id="greybox-instruction" value={instruction} onChange={(e) => setInstruction(e.target.value)} rows={3} maxLength={4000}
+              placeholder={saved ? 'Move the DJ booth to the east wall and add a rental counter by the entrance' : 'An oval roller-skating rink, 30 by 14 meters, with a rail, a DJ booth, a snack bar and bench seating along the north wall'}
+              className="w-full rounded-lg bg-port-bg border border-port-border p-2 text-sm text-white" />
+          </div>
+          {saved && (
+            <label htmlFor="greybox-scratch" className="flex items-center gap-2 text-xs text-gray-300 min-h-[32px]">
+              <input id="greybox-scratch" type="checkbox" checked={fromScratch} onChange={(e) => setFromScratch(e.target.checked)} />
+              Start over instead of editing the current layout
+            </label>
+          )}
+          <button type="button" className={actionButton} onClick={generate} disabled={!!busy || !instruction.trim()}>
+            {busy === 'draft' ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Sparkles size={14} aria-hidden="true" />}
+            {busy === 'draft' ? 'Drafting…' : saved && !fromScratch ? 'Draft the edit' : 'Draft a greybox'}
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}

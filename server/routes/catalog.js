@@ -25,6 +25,9 @@ import {
   catalogMediaLibraryQuerySchema,
   catalogMediaDetachSchema,
   catalogMediaFileUploadSchema,
+  catalogGreyboxDraftSchema,
+  catalogGreyboxSaveSchema,
+  catalogGreyboxCaptureSchema,
   catalogMediaVoiceMemoSchema,
   catalogPortraitSetSchema,
   catalogIngredientQuerySchema,
@@ -58,6 +61,7 @@ import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalog
 import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
+import { captureGreyboxShot, draftGreybox, saveGreybox } from '../services/catalogGreybox.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
 import { getBoard as getMoodBoard } from '../services/moodBoard/index.js';
@@ -691,6 +695,28 @@ router.post('/ingredients/:id/media/upload', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogMediaFileUploadSchema, req.body);
   const media = await uploadIngredientMediaFile({ ingredientId: req.params.id, ...body });
   res.status(201).json(media);
+}));
+
+// Place greybox. Draft is a provider call on the user's tap (host-control gated,
+// see hostControlRoutes.js) and answers with a preview; save stores or clears it;
+// capture attaches a rendered shot as a reference image.
+router.post('/ingredients/:id/greybox/draft', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogGreyboxDraftSchema, req.body);
+  res.json(await draftGreybox(req.params.id, body));
+}));
+
+router.put('/ingredients/:id/greybox', asyncHandler(async (req, res) => {
+  const { greybox, source } = validateRequest(catalogGreyboxSaveSchema, req.body);
+  const updated = await saveGreybox(req.params.id, greybox, { source });
+  res.json(updated);
+  catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
+}));
+
+router.post('/ingredients/:id/greybox/shots/:shotId/capture', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogGreyboxCaptureSchema, req.body);
+  const media = await captureGreyboxShot(req.params.id, req.params.shotId, body);
+  res.status(201).json(media);
+  catalogEvents.emit('primitive-changed', { ingredientId: req.params.id });
 }));
 
 // Record a voice memo onto an ingredient: transcribe via Whisper, persist the

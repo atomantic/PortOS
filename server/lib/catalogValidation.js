@@ -23,6 +23,10 @@ import {
 import { csvIdsParam } from './sharedSchemas.js';
 import { SCRAP_SOURCE_KIND_IDS } from './catalogSourceKinds.js';
 import { GENERATION_METADATA_LIMITS } from './pngMetadata.js';
+import { greyboxSceneSchema } from './greyboxScene.js';
+import { GREYBOX_INSTRUCTION_MAX } from './greyboxPrompt.js';
+import { EFFORT_LEVELS } from './providerModels.js';
+import { emptyToNull } from './zodCompat.js';
 
 import { isTruthyMeta } from './metadataFlags.js';
 // Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
@@ -905,3 +909,23 @@ export const catalogIngredientCardsQuerySchema = z.object({
 }).strict().refine(query => Array.isArray(query.ids) && query.ids.length > 0, { path: ['ids'], message: 'Ingredient ids are required' });
 
 export const catalogIngredientLockSchema = z.object({ locked: z.boolean() }).strict();
+
+// Place greybox (docs/plans/2026-10-25-place-greybox.md). The draft body is the
+// provider › model › effort pick plus the user's own instruction; the picker's
+// "Default effort" submits '' which clears to undefined.
+export const catalogGreyboxDraftSchema = z.object({
+  instruction: z.string().trim().min(1).max(GREYBOX_INSTRUCTION_MAX),
+  providerId: z.string().trim().max(128).optional().default(''),
+  model: z.string().trim().max(256).optional().default(''),
+  effort: z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional()).transform((v) => v || ''),
+  useCurrent: z.boolean().optional().default(true),
+}).strict();
+
+export const catalogGreyboxSaveSchema = z.object({
+  greybox: greyboxSceneSchema,
+  source: revisionSource,
+}).strict();
+
+export const catalogGreyboxCaptureSchema = z.object({
+  dataBase64: z.string().min(1).max(32 * 1024 * 1024),
+}).strict();
