@@ -3,7 +3,7 @@
  * to avoid a circular dependency (git.js imports worktreeManager.js).
  */
 
-import { startGit } from './windowsGitProcess.js';
+import { startGit, windowsGitFailureMetadata } from './windowsGitProcess.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { StringDecoder } from 'node:string_decoder';
 import { realpathSync } from 'node:fs';
@@ -179,13 +179,14 @@ export function execGit(args, cwd, options = {}) {
         if (finished && !child.pid && !child.gitSupervisor) return;
         if (settlement?.settled === false) {
           failure ||= Object.assign(new Error('Git work settlement is held'), { code: 'GIT_SETTLEMENT_HELD' });
+          Object.assign(failure, windowsGitFailureMetadata(settlement));
           markUncertain(settlement.reason);
         } else if (!child.gitSettlement && (killed || signal)) markUncertain('tree-unconfirmed');
         else ownedWork.delete(work);
         if (finished) return;
         finish();
         if (settlement?.launched === false) {
-          reject(Object.assign(new Error('Windows Git launch failed'), { code: 'GIT_CONTAINMENT_UNAVAILABLE' }));
+          reject(Object.assign(new Error('Windows Git launch failed'), { code: 'GIT_CONTAINMENT_UNAVAILABLE', startupPhase: 'native-launch' }));
           return;
         }
         if (settlement?.settled) {

@@ -9,7 +9,9 @@ vi.mock('./childProcess.js', () => ({
 }));
 
 import { spawn } from './childProcess.js';
-vi.mock('./windowsGitProcess.js', () => ({ startGit: vi.fn((args, options, wire) => wire(spawn('git', args, options))) }));
+vi.mock('./windowsGitProcess.js', async importOriginal => ({
+  ...await importOriginal(), startGit: vi.fn((args, options, wire) => wire(spawn('git', args, options))),
+}));
 import { startGit } from './windowsGitProcess.js';
 import { assertGitWorkSettled, execGit, execGitSafe, withGitMutationLifetime } from './execGit.js';
 

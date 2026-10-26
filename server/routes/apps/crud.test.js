@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { gitProbes, gitProbeDirs } = vi.hoisted(() => ({ gitProbes: [], gitProbeDirs: [] }));
 vi.mock('../../lib/execGit.js', async (importOriginal) => {
   const actual = await importOriginal();
+  const { windowsGitFailureMetadata } = await import('../../lib/windowsGitProcess.js');
   const bounded = value => gitProbeDirs.reduce((text, directory) => text.replaceAll(directory, '<fixture>'), String(value ?? '')).slice(0, 1000);
   return { ...actual, execGit: vi.fn((...args) => {
     const operation = actual.execGit(...args);
@@ -16,7 +17,8 @@ vi.mock('../../lib/execGit.js', async (importOriginal) => {
       void operation.then(result => {
         if (gitProbes.length < 16) gitProbes.push({ stdout: bounded(result.stdout), stderr: bounded(result.stderr), exitCode: result.exitCode, terminated: result.terminated });
       }, error => {
-        if (gitProbes.length < 16) gitProbes.push({ code: bounded(error.code), message: bounded(error.message), settlement: bounded(error.settlement) });
+        if (gitProbes.length < 16) gitProbes.push({ code: bounded(error.code), message: bounded(error.message),
+          settlement: bounded(error.settlement), settlementReason: bounded(error.settlementReason), ...windowsGitFailureMetadata(error) });
       });
     }
     return operation;
