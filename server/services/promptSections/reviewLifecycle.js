@@ -755,7 +755,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const prUrl = metadata.reviewLoopPRUrl || '';
   const prBranch = metadata.reviewLoopPRBranch || '';
   const completedTargetNote = !inline && !localOnly && !leaveOpen
-    ? '\n**Already merged on entry:** Verify the assigned PR/MR state before reviewing. If it is MERGED, this follow-up is a successful `no-action-needed` result: skip reviews, fixes, validation and publication. Preserve local corrections and name their existing follow-up issue; do not reopen this task for separate delivery or unavailable retirement inventory. Request safe reconciliation for retained checkouts, then write the completion sentinel.\n'
+    ? '\n**Already merged on entry:** Verify the assigned PR/MR state before reviewing. If it is MERGED, this follow-up is a successful `no-action-needed` result: skip reviews, fixes, validation and publication for that already-merged target. Before completing, follow the unnecessary dispatch investigation contract; a separate bounded repair still uses its normal delivery gates. Preserve local corrections and name their existing follow-up issue; do not reopen this task for separate delivery or unavailable retirement inventory. Request safe reconciliation for retained checkouts, then write the completion sentinel.\n'
     : '';
   const forkNote = completedTargetNote + buildForkBranchInstructions(prBranch, metadata.forkHead)
     + buildDefaultBranchHeadInstructions(prBranch, isTruthyMeta(metadata.headIsDefaultBranch));
