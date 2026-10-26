@@ -10,7 +10,10 @@ export default function CharacterCard({ ingredient, to = null, onUpdated, action
   const [locking, setLocking] = useState(false);
   const [generatedCover, setGeneratedCover] = useState(null);
   const name = ingredient.name || '(untitled)';
-  const cover = generatedCover || ingredientCoverUrl(ingredient);
+  const persistedCover = ingredientCoverUrl(ingredient);
+  // Bridge the stale card only until an authoritative cover/revision arrives.
+  const cover = generatedCover?.baseline === persistedCover && generatedCover?.revision === ingredient.updatedAt
+    ? generatedCover.src : persistedCover;
   const href = to || (ingredient.id ? ingredientPath(ingredient) : null);
   const role = typeof ingredient.payload?.role === 'string' ? ingredient.payload.role : '';
   const description = [ingredient.payload?.physicalDescription, ingredient.payload?.description].find(value => typeof value === 'string' && value) || 'No description yet.';
@@ -33,7 +36,8 @@ export default function CharacterCard({ ingredient, to = null, onUpdated, action
       {href ? <Link to={href} className="block flex-1 min-w-0" aria-label={`Open ${name}`}>{content}</Link> : <div className="flex-1 min-w-0">{content}</div>}
       <div className="border-t border-port-border p-2 space-y-2">
         {ingredient.id && <CatalogLockButton key={ingredient.id} record={ingredient} disabled={unavailable} onChanged={onUpdated} onPendingChange={setLocking} />}
-        {ingredient.id && !actions && <CatalogImageAction ingredient={ingredient} disabled={unavailable || locking} onCover={setGeneratedCover} />}
+        {ingredient.id && !actions && <CatalogImageAction ingredient={ingredient} disabled={unavailable || locking}
+          onCover={src => setGeneratedCover({ src, baseline: persistedCover, revision: ingredient.updatedAt })} />}
         {typeof actions === 'function' ? actions(locking) : actions}
       </div>
     </article>

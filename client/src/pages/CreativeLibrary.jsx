@@ -34,7 +34,10 @@ const UNLINKED = '__unlinked';
 function LibraryTile({ ingredient }) {
   const [generatedCover, setGeneratedCover] = useState(null);
   const name = ingredient.name || '(untitled)';
-  const cover = generatedCover || ingredientCoverUrl(ingredient);
+  const persistedCover = ingredientCoverUrl(ingredient);
+  // Bridge the stale list row only until an authoritative cover/revision arrives.
+  const cover = generatedCover?.baseline === persistedCover && generatedCover?.revision === ingredient.updatedAt
+    ? generatedCover.src : persistedCover;
   const usage = usageSummary(ingredient.usage);
   return (
     <li className="min-w-0 flex flex-col bg-port-card border border-port-border rounded-lg overflow-hidden hover:border-port-accent/60">
@@ -56,7 +59,7 @@ function LibraryTile({ ingredient }) {
         </span>
       </Link>
       <div className="p-2 border-t border-port-border">
-        <CatalogImageAction ingredient={ingredient} onCover={setGeneratedCover} />
+        <CatalogImageAction ingredient={ingredient} onCover={src => setGeneratedCover({ src, baseline: persistedCover, revision: ingredient.updatedAt })} />
       </div>
     </li>
   );
