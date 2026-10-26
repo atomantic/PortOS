@@ -10,7 +10,7 @@ import { Dice5 } from 'lucide-react';
 import { FormField } from '../ui/FormField';
 import ModelDownloadBadge from '../media/ModelDownloadBadge.jsx';
 import {
-  frameOptionsForModel, fpsOptionsForModel, CHUNK_OPTIONS,
+  isMiniMaxH3SpeedProfile, frameOptionsForModel, fpsOptionsForModel, CHUNK_OPTIONS,
   isModelAllowedForMode, supportsVideoAudioControls, supportsVideoAudioPromptControls,
   CONTEXT_FRAME_OPTIONS, supportsContextWindow,
   DEFAULT_SPEED_PROFILE_ID, speedProfilesForMode,
@@ -125,9 +125,9 @@ export default function AdvancedParamsPanel({
   const draftDecodeOptions = draftDecodeOptionsForModel(currentModel);
   const effectiveDraftDecode = draftDecodeLocked ? DEFAULT_DRAFT_DECODE_ID : draftDecode;
   const activeDraftDecode = draftDecodeOptions.find((o) => o.id === effectiveDraftDecode) || null;
-  const h3Profiles = (currentModel?.speedProfiles || []).filter((p) => p.type === 'minimax-h3-lightx2v');
+  const h3Profiles = (currentModel?.speedProfiles || []).filter((p) => isMiniMaxH3SpeedProfile(p));
   const speedProfiles = speedProfilesForMode(currentModel, speedProfileModes).filter((p) => (
-    p.type !== 'minimax-h3-lightx2v' || (!chainingActive && (width == null || height == null
+    !isMiniMaxH3SpeedProfile(p) || (!chainingActive && (width == null || height == null
       || p.canvases.some(([w, h]) => Number(width) === w && Number(height) === h)))
   ));
   const visibleSpeedProfiles = [...speedProfiles, ...h3Profiles.filter((p) => !speedProfiles.includes(p))];
@@ -137,7 +137,7 @@ export default function AdvancedParamsPanel({
   const activeSpeedProfile = showSpeedProfiles
     ? speedProfiles.find((p) => p.id === speedProfileId) || null
     : null;
-  const incompatibleH3Profile = currentModel?.speedProfiles?.some((p) => p.id === speedProfileId && p.type === 'minimax-h3-lightx2v') && !activeSpeedProfile;
+  const incompatibleH3Profile = currentModel?.speedProfiles?.some((p) => p.id === speedProfileId && isMiniMaxH3SpeedProfile(p)) && !activeSpeedProfile;
   // A profile drives steps AND CFG together, exactly as a samplerLocked model
   // does — leaving either editable would let the user half-override a
   // validated schedule and get neither its speed nor its quality.
@@ -371,7 +371,7 @@ export default function AdvancedParamsPanel({
                   </option>
                 ))}
               </select>
-              {activeSpeedProfile?.type === 'minimax-h3-lightx2v' && (
+              {isMiniMaxH3SpeedProfile(activeSpeedProfile) && (
                 <>
                   <p className="mt-1 text-xs text-gray-500">{activeSpeedProfile.description}</p>
                   <p className="mt-1 text-xs text-gray-500 break-all">{activeSpeedProfile.adapter.file} · alpha {activeSpeedProfile.adapter.alpha}/rank {activeSpeedProfile.adapter.rank} · shifts {activeSpeedProfile.videoShift}/{activeSpeedProfile.audioShift}. No fallback.</p>

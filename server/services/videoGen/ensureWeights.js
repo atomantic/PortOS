@@ -3,9 +3,9 @@ import { findCachedRepoFile, isSafeHfRepoRelativePath } from '../../lib/hfCache.
 import { ServerError } from '../../lib/errorHandler.js';
 import { downloadHfRepo } from '../hfDownload.js';
 import { sha256File } from '../../lib/fileUtils.js';
-import { MINIMAX_H3_LIGHTX2V_PROFILE, isMiniMaxH3SpeedProfileRequest, miniMaxH3SpeedProfileDeclineReason } from '../../lib/minimaxH3SpeedProfiles.js';
+import { MINIMAX_H3_LIGHTX2V_PROFILE, miniMaxH3SpeedProfileContract, isMiniMaxH3SpeedProfileRequest, miniMaxH3SpeedProfileDeclineReason } from '../../lib/minimaxH3SpeedProfiles.js';
 import { acceptedVideoModelTerms, isVideoModelTermsAccepted, videoModelTermsError } from '../../lib/videoDisclosure.js';
-import { resolveByovRuntimeLoraCapable } from './runtimes.js';
+import { resolveByovRuntimeLoraCapable, resolveMiniMaxH3MlxSpeedCapable } from './runtimes.js';
 import { readSafetensorsHeader } from '../../lib/safetensors.js';
 
 export async function validateMiniMaxH3CudaLoras(loras, speedProfile = null) {
@@ -48,6 +48,20 @@ export async function validateMiniMaxH3CudaLoras(loras, speedProfile = null) {
   }
 }
 
+// MLX retains its existing format support. Identity is content-based so a
+// renamed speed adapter cannot run under the stock schedule or attach twice.
+export async function validateMiniMaxH3MlxLoras(loras, speedProfile = null) {
+  const seen = new Set(speedProfile ? [speedProfile.adapter.sha256] : []);
+  for (const lora of loras || []) {
+    const digest = await sha256File(lora.path);
+    if (!speedProfile && digest === MINIMAX_H3_LIGHTX2V_PROFILE.adapter.sha256) {
+      throw new ServerError('The LightX2V adapter requires its named MLX Speed profile. Remove it from the user LoRA stack and select LightX2V under Speed.', { status: 400, code: 'MINIMAX_H3_LORA_PROFILE_REQUIRED' });
+    }
+    if (seen.has(digest)) throw new ServerError('The same H3 adapter was selected more than once, including the LightX2V speed adapter.', { status: 400, code: 'MINIMAX_H3_LORA_DUPLICATE' });
+    seen.add(digest);
+  }
+}
+
 // Each explicit request checks the cache and digest; never download from a
 // render path, and never treat a revision pointer alone as content integrity.
 export async function prepareMiniMaxH3SpeedProfile(params, settings) {
@@ -55,11 +69,12 @@ export async function prepareMiniMaxH3SpeedProfile(params, settings) {
   const reason = miniMaxH3SpeedProfileDeclineReason(params);
   if (reason) throw new ServerError(reason.message, { status: 400, code: reason.code });
   if (!isVideoModelTermsAccepted(params.model, acceptedVideoModelTerms(settings))) throw videoModelTermsError(params.model);
-  if (!(await resolveByovRuntimeLoraCapable(params.model.runtime))) {
-    throw new ServerError('LightX2V requires the pinned H3 CUDA runtime and its scheduler/quantized-LoRA capability probe. Install or repair the MiniMax H3 CUDA runtime in Video Gen.',
+  if (!(await resolveByovRuntimeLoraCapable(params.model.runtime))
+    || (params.model.runtime === 'minimax_h3' && !(await resolveMiniMaxH3MlxSpeedCapable()))) {
+    throw new ServerError('LightX2V requires its pinned H3 runtime and scheduler/quantized-LoRA capability probes. Install or repair the selected MiniMax H3 runtime in Video Gen.',
       { status: 400, code: 'MINIMAX_H3_SPEED_RUNTIME_UNSUPPORTED' });
   }
-  const profile = MINIMAX_H3_LIGHTX2V_PROFILE;
+  const profile = miniMaxH3SpeedProfileContract(params.profileId);
   const adapter = profile.adapter;
   const path = await findCachedRepoFile(adapter.repo, adapter.file, { revision: adapter.revision });
   const info = path ? await stat(path).catch(() => null) : null;
@@ -68,6 +83,7 @@ export async function prepareMiniMaxH3SpeedProfile(params, settings) {
     throw new ServerError('LightX2V v1.3 weights are missing or fail the pinned SHA-256 check. Use Download adapter beside the Speed selector in Video Gen; generation never downloads this adapter.',
       { status: 400, code: 'MINIMAX_H3_SPEED_WEIGHTS_NOT_CACHED' });
   }
+  if (params.model.runtime === 'minimax_h3') await ensureMiniMaxH3Weights(params.model, { cacheOnly: true });
   return { ...profile, adapterPath: path };
 }
 
@@ -90,7 +106,7 @@ const targetIsCached = async ({ repo, revision, only, indexed }) => {
 
 // Called only for an explicit render, after input/hardware validation. Keep the
 // Python renderer offline and finish provisioning before it is spawned.
-export async function ensureMiniMaxH3Weights(model) {
+export async function ensureMiniMaxH3Weights(model, { cacheOnly = false } = {}) {
   if (model.runtime !== 'minimax_h3') return;
   const targets = [{ repo: model.repo, revision: model.revision,
     only: model.repoFiles || [], indexed: !model.repoFiles?.length },
@@ -101,6 +117,8 @@ export async function ensureMiniMaxH3Weights(model) {
       throw new ServerError('MiniMax H3 has an invalid weight manifest.', { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' });
     }
     if (await targetIsCached(target)) continue;
+    if (cacheOnly) throw new ServerError('MiniMax H3 profile rendering requires all pinned base weights already cached. Download the model explicitly in Video Gen.',
+      { status: 400, code: 'MINIMAX_H3_WEIGHTS_NOT_CACHED' });
     console.log('⬇️ MiniMax H3: completing missing model files before rendering');
     const result = await downloadHfRepo({ repo: target.repo, revision: target.revision || null, only: target.only }).promise;
     if (!result.ok || !(await targetIsCached(target))) {

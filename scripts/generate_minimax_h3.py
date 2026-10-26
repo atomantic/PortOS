@@ -70,6 +70,8 @@ STEP_RE = re.compile(r"\bstep\s+(\d+)/(\d+)\b", re.IGNORECASE)
 
 def parse_args() -> argparse.Namespace:
     parser = add_h3_common_args(argparse.ArgumentParser(description=__doc__), steps_default=9)
+    parser.add_argument("--speed-profile", choices=["lightx2v-mlx-v1.3-4step"])
+    parser.add_argument("--speed-adapter")
     parser.add_argument("--runtime-dir", required=True)
     parser.add_argument("--runtime-revision", required=True)
     parser.add_argument("--checkpoint-repo", required=True)
@@ -1012,6 +1014,8 @@ def validate_args(args: argparse.Namespace) -> None:
     for path in args.lora:
         if not Path(path).is_file():
             raise SystemExit(f"LoRA file is missing: {path}")
+    from _minimax_h3_mlx_lightx2v import validate_profile_args
+    validate_profile_args(args)
     # The substitution is all-or-nothing: without the id there is nowhere to
     # build the shim, and without the shim root there is nowhere to put it.
     # Accepting a partial set would silently fall back to the stock conditioner
@@ -1092,6 +1096,10 @@ def render_outputs(pipe, args, images, save_mp4, batch_seeds=None, history=None)
                 print(f"STATUS:Rendering video {index + 1}/{len(batch_seeds)} (seed {seed})", file=sys.stderr, flush=True)
             print("STAGE:inference", file=sys.stderr, flush=True)
             progress = ProgressWriter(preview)
+            if getattr(args, "speed_profile", None):
+                import mlx.core as mx
+                mx.reset_peak_memory()
+                inference_start = time.perf_counter()
             with heartbeat("minimax-h3-inference"), redirect_stdout(progress):
                 if history is not None:
                     from _minimax_h3_mlx_history import render_history
@@ -1110,6 +1118,12 @@ def render_outputs(pipe, args, images, save_mp4, batch_seeds=None, history=None)
                         drop_adaln=True,
                     )
             progress.flush()
+            if getattr(args, "speed_profile", None):
+                from _minimax_h3_mlx_lightx2v import emit_report
+                mx.synchronize()
+                emit_report(args, pipe._portos_speed_schedules, result,
+                            time.perf_counter() - inference_start, mx.get_peak_memory(),
+                            pipe._portos_cold_load_seconds)
 
             output.parent.mkdir(parents=True, exist_ok=True)
             print("STAGE:mux", file=sys.stderr, flush=True)
@@ -1295,6 +1309,7 @@ def main() -> int:
                 load_vision=bool(images),
             )
 
+    cold_load_started = time.perf_counter()
     if decoder_shim is None:
         pipe = load_pipeline(checkpoint_dir)
     else:
@@ -1305,20 +1320,27 @@ def main() -> int:
             fall_back_to_full_decoder(exc)
             pipe = load_pipeline(checkpoint_dir)
 
+    pipe._portos_cold_load_seconds = time.perf_counter() - cold_load_started
+
     # Runtime LoRA application — never a fuse. The DiT is quantized, so the
     # applicator has to take each layer's logical dims from the quantization
     # metadata (packed-uint32 storage shapes match no LoRA) and add the deltas
     # during the forward pass. PortOS only ever passes --lora when its capability
     # probe has already exercised this local applicator, so an import or shape
     # error here is a real contract violation and should surface, not be swallowed.
-    if args.lora:
+    if args.lora or args.speed_profile:
         print("STAGE:apply-loras", file=sys.stderr, flush=True)
         from minimax_h3_lora import apply_loras
 
         apply_loras(
             pipe.dit,
-            [{"path": p, "scale": s} for p, s in zip(args.lora, args.lora_scale)],
+            ([{"path": args.speed_adapter, "scale": 1.0}] if args.speed_profile else [])
+            + [{"path": p, "scale": s} for p, s in zip(args.lora, args.lora_scale)],
         )
+
+    if args.speed_profile:
+        from _minimax_h3_mlx_lightx2v import configure_pipeline
+        pipe._portos_speed_schedules = configure_pipeline(pipe)
 
     report_memory("loaded")
     render_outputs(pipe, args, images, save_mp4, batch_seeds, history)

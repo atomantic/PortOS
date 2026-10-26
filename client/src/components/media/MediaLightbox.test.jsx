@@ -55,6 +55,16 @@ describe('MediaLightbox video element (mobile playback)', () => {
     delete HTMLMediaElement.prototype.play;
   });
 
+  it.each(['minimax-h3-lightx2v', 'minimax-h3-mlx-lightx2v'])('shows the actual %s adapter and schedule report in history', (type) => {
+    render(<MediaLightbox item={{ ...videoItem, raw: {
+      speedProfileId: 'example-profile', speedProfileApplied: {
+        type, denoisingSteps: 4, videoShift: 6, audioShift: 3,
+        adapter: { file: 'example-adapter.safetensors' }, applied: true, fallback: false,
+      },
+    } }} onClose={() => {}} />);
+    expect(screen.getByText(/example-profile · 4 updates · shifts 6\/3 · example-adapter.safetensors · applied, no fallback/)).toBeTruthy();
+  });
+
   it('renders the <video> with a poster + playsInline + muted autoplay baseline so it loads on mobile', () => {
     render(<MediaLightbox item={videoItem} onClose={() => {}} />);
     const video = videoEl();

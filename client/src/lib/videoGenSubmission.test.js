@@ -21,9 +21,9 @@ const baseArgs = (overrides = {}) => ({
   ...overrides,
 });
 
-it('submits the H3 profile without stale sampler overrides and preserves incompatible selections for visible refusal', () => {
-  const model = { id: 'h3', runtime: 'minimax_h3_cuda', speedProfiles: [
-    { id: 'h3-speed', type: 'minimax-h3-lightx2v', modes: ['text', 'image'] },
+it.each(['minimax-h3-lightx2v', 'minimax-h3-mlx-lightx2v'])('submits the %s profile without stale sampler overrides and preserves incompatible selections for visible refusal', (type) => {
+  const model = { id: 'h3', runtime: type === 'minimax-h3-mlx-lightx2v' ? 'minimax_h3' : 'minimax_h3_cuda', speedProfiles: [
+    { id: 'h3-speed', type, modes: ['text', 'image'] },
   ] };
   for (const mode of ['text', 'fflf']) {
     const result = buildVideoGenSubmission(baseArgs({ modelId: model.id, currentModel: model,

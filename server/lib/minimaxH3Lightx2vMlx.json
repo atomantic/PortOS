@@ -1,0 +1,92 @@
+{
+  "id": "lightx2v-mlx-v1.3-4step",
+  "type": "minimax-h3-mlx-lightx2v",
+  "name": "LightX2V v1.3 MLX · 4 updates (experimental)",
+  "description": "Opt-in pinned MLX INT8 text/image profile at 1344×768. Four Euler updates, video/audio shifts 6/3, original split Diffusers adapter. PortOS speed and quality have not been benchmarked. Download the adapter separately before rendering.",
+  "speedupLabel": null,
+  "steps": 5,
+  "denoisingSteps": 4,
+  "guidance": 0,
+  "videoShift": 6,
+  "audioShift": 3,
+  "sigmaPoints": [
+    1,
+    0.75,
+    0.5,
+    0.25,
+    0
+  ],
+  "modes": [
+    "text",
+    "image"
+  ],
+  "canvases": [
+    [
+      1344,
+      768
+    ]
+  ],
+  "model": {
+    "id": "minimax_h3_8bit",
+    "runtime": "minimax_h3",
+    "repo": "pipenetwork/MiniMax-H3-MLX-8bit",
+    "revision": "3ac52081470b0488921c3ec3ba84a39097bf2361"
+  },
+  "geometry": {
+    "layers": 50,
+    "refinerLayers": 2,
+    "hiddenSize": 5376,
+    "attentionSize": 7168,
+    "ffnSize": 14336
+  },
+  "adapter": {
+    "repo": "lightx2v/Minimax-h3-Turbo",
+    "revision": "30f485ed874aa44c8183348ad361c5eabad318da",
+    "file": "minimax_h3_fl2v_turbo_4step_v1.3_768p_bf16.safetensors",
+    "sha256": "97b775707bb5732e01dba0cf3833d3fe2947c953859d4d05ea3bd74894c43d2b",
+    "sizeBytes": 1383677808,
+    "alpha": 8,
+    "rank": 128,
+    "scale": 1
+  },
+  "runtimeRevision": "fcd9e9b79a1d6018d91ac477c0968de1fa067e49",
+  "checkpoint": {
+    "repo": "MiniMaxAI/MiniMax-H3",
+    "revision": "6818f6c32d12b210915e44ad56a4228c2608f160",
+    "files": [
+      "LICENSE",
+      "FL2VA/model_index.json",
+      "FL2VA/audio_vae/config.json",
+      "FL2VA/audio_vae/metadata.json",
+      "FL2VA/audio_vae/model.safetensors",
+      "FL2VA/text_encoder/config.json",
+      "FL2VA/text_encoder/model-00001-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00002-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00003-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00004-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00005-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00006-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00007-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00008-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00009-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00010-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00011-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00014-of-00014.safetensors",
+      "FL2VA/text_encoder/model.safetensors.index.json",
+      "FL2VA/processor/chat_template.json",
+      "FL2VA/processor/merges.txt",
+      "FL2VA/processor/preprocessor_config.json",
+      "FL2VA/processor/tokenizer.json",
+      "FL2VA/processor/tokenizer_config.json",
+      "FL2VA/processor/video_preprocessor_config.json",
+      "FL2VA/processor/vocab.json",
+      "FL2VA/tokenizer/merges.txt",
+      "FL2VA/tokenizer/tokenizer.json",
+      "FL2VA/tokenizer/tokenizer_config.json",
+      "FL2VA/tokenizer/vocab.json",
+      "FL2VA/video_vae/config.json",
+      "FL2VA/video_vae/source/config.json",
+      "FL2VA/video_vae/source/model.safetensors"
+    ]
+  }
+}

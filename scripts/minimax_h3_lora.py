@@ -384,6 +384,7 @@ def _adapter_for(
     external_scale: float,
     source_layout: str,
     declared_qkv_layout: str | None,
+    metadata_alpha: float | None = None,
 ) -> _LoRAProjection:
     if "down" not in tensors or "up" not in tensors:
         raise ValueError(f"MiniMax H3 LoRA target {target!r} needs both down and up tensors.")
@@ -407,6 +408,8 @@ def _adapter_for(
         raise ValueError(f"MiniMax H3 LoRA up rank for {target!r} does not match down rank {rank}.")
     if "alpha" in tensors:
         alpha = _scalar(tensors["alpha"], target)
+    elif metadata_alpha is not None:
+        alpha = metadata_alpha
     elif source_layout.startswith("diffusers") or source_layout.startswith("split_"):
         # LightX2V's published H3 PEFT files use alpha=8 but omit an alpha
         # tensor; their `.default` suffix identifies that Diffusers format.
@@ -444,6 +447,14 @@ def _plan_lora(
     # Resolved per adapter file, so each adapter in a stack keeps its own row
     # order rather than sharing one global permutation.
     declared_qkv_layout = _declared_qkv_layout(metadata, adapter_path.name)
+    metadata_alpha = None
+    if "alpha" in metadata:
+        try:
+            metadata_alpha = float(metadata["alpha"])
+        except (TypeError, ValueError) as error:
+            raise ValueError("MiniMax H3 LoRA alpha metadata must be numeric.") from error
+        if not math.isfinite(metadata_alpha) or metadata_alpha <= 0:
+            raise ValueError("MiniMax H3 LoRA alpha metadata must be finite and positive.")
     groups: dict[tuple[str, str], dict[str, Any]] = {}
     unrecognized: list[str] = []
     for key, value in tensors.items():
@@ -477,6 +488,7 @@ def _plan_lora(
             external_scale,
             source_layout,
             declared_qkv_layout,
+            metadata_alpha,
         )
         planned.append((parent, leaf, adapter))
     return planned

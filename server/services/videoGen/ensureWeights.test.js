@@ -52,6 +52,12 @@ describe('MiniMax render provisioning', () => {
     expect(downloadHfRepo).toHaveBeenCalledTimes(1);
   });
 
+  it('refuses missing indexed shards in cache-only profile rendering without downloading', async () => {
+    missing.add('example/transformer/model-00001-of-00001.safetensors');
+    await expect(ensureMiniMaxH3Weights(model, { cacheOnly: true })).rejects.toMatchObject({ code: 'MINIMAX_H3_WEIGHTS_NOT_CACHED' });
+    expect(downloadHfRepo).not.toHaveBeenCalled();
+  });
+
   it('keeps declared selective downloads scoped', async () => {
     missing.add('example/transformer/config.json');
     await ensureMiniMaxH3Weights({ ...model, repoFiles: ['config.json', 'model.safetensors'] });
