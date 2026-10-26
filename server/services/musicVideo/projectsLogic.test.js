@@ -1109,6 +1109,7 @@ describe('create-schema parity', () => {
     panelId: 'panel-example-1',
     panelRev: 'abc123',
     panelArt: 'panel-art.png',
+    setReference: { subjectId: 'set-example', greyboxShotId: 'wide' },
   };
 
   it('stores every accepted video setting key on the project record', () => {

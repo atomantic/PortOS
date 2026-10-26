@@ -133,7 +133,7 @@ export const conditioningReferences = musicVideoConditioningReferences;
 /** What a scene's `kind` generation needs from a route. `castMedia` is loadSceneCastMedia's result for the scene. */
 export function sceneRequirement(project, scene, stepKind, castMedia = null) {
   return stepKind === 'frame'
-    ? { kind: 'image', conditioning: conditioningReferences(project, scene, castMedia).length }
+    ? { kind: 'image', conditioning: Math.min(4, conditioningReferences(project, scene, castMedia).length + (scene?.setReference?.greyboxShotId ? 1 : 0)) }
     : { kind: 'video', performance: isPerformanceScene(scene) };
 }
 

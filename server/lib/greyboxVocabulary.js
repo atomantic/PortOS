@@ -8,3 +8,11 @@ export const GREYBOX_ASPECTS = Object.freeze(['16:9', '9:16', '1:1', '4:3', '21:
 
 /** Media role on a place's reference image that a saved shot's capture carries. */
 export const GREYBOX_SHOT_ROLE_PREFIX = 'greybox-shot:';
+
+/** Figure placement instructions stay separate from the director's authored text. */
+export function greyboxFigurePromptLines(scene, shot) {
+  return (shot?.figures || []).map((figure) => {
+    const anchor = scene.anchors.find((a) => a.id === figure.anchorId);
+    return anchor ? `${anchor.label} stands at the "${anchor.id}" mark${figure.pose ? `, ${figure.pose}` : ''}` : null;
+  }).filter(Boolean);
+}

@@ -1,3 +1,5 @@
+import useMusicVideoGreyboxPlaces from '../../hooks/useMusicVideoGreyboxPlaces.js';
+import SceneGreyboxReference from './SceneGreyboxReference.jsx';
 import { CheckCircle2, Eye, Play, RotateCcw, SkipForward, Users } from 'lucide-react';
 import LlmRouteNote from './LlmRouteNote.jsx';
 import Pill from '../ui/Pill.jsx';
@@ -42,6 +44,7 @@ function statusLine(stage) {
  * A sheet in review (or approved) takes plain-text feedback below the actions.
  */
 export default function CastAndSetsCheckin({ id, project, stale = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onEditDirection, onApplyFeedback, onRemoveFeedback, onResume, onRebuild, onReconfirm, onRevert, onSkip }) {
+  const greyboxPlaces = useMusicVideoGreyboxPlaces(project);
   const stage = project.castAndSets;
   if (!stage) return null;
   const working = WORKING.has(stage.status) && !stage.interrupted;
@@ -68,6 +71,14 @@ export default function CastAndSetsCheckin({ id, project, stale = null, busy, on
         <StaleApprovalActions revertible={stale?.revertible} busy={busy} onKeep={onReconfirm} onRevert={onRevert}
           keepTitle="Keep this sheet approved on the current concept, style, subjects and song" />
       )}
+      {['review', 'approved'].includes(stage.status) && onEditDirection && (stage.direction?.sets || []).map((set) => (
+        <div key={set.id} className="space-y-1">
+          <p className="text-xs font-medium">Set plate · {set.name}</p>
+          <SceneGreyboxReference project={project} scene={{ sceneId: `plate-${set.id}`, setReference: set.setReference }} places={greyboxPlaces} disabled={busy}
+            onChange={(setReference) => onEditDirection({ sets: [{ id: set.id, setReference }] })} />
+        </div>
+      ))}
+      {stage.greyboxPending && <p role="status" className="text-xs text-port-warning">Greybox selection saved. Regenerate to render the set plates with it.</p>}
       <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview} />
       <div className="flex flex-wrap gap-2">
         {sheet && (
@@ -84,7 +95,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, busy, on
             {onEditDirection && stage.direction?.medium === 'procedural' && (
               <CastAndSetsDirectionEditor key={stage.revision} project={project} direction={stage.direction} busy={busy} onSave={onEditDirection} />
             )}
-            <button type="button" disabled={busy} onClick={onApprove} className={`${buttonClass} bg-port-accent text-white`}>
+            <button type="button" disabled={busy || stage.greyboxPending} onClick={onApprove} className={`${buttonClass} bg-port-accent text-white`}>
               <CheckCircle2 size={14} aria-hidden="true" /> Approve &amp; continue
             </button>
           </>

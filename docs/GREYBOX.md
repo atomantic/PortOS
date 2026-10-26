@@ -71,11 +71,23 @@ and anchors excluded from the selected shot are hidden; layout geometry and the
 shot’s chosen figure stand-ins remain. **Replace reference image** updates
 the capture for that shot.
 
-When preparing shot image generation, pick the Environment's captured image as a
-reference input using that generation screen's reference-image picker. Capturing
-alone does not generate a finished image or automatically add the capture to every
-shot's inputs. Use the capture to guide composition and placement alongside the
-shot's visual prompt and any character references.
+In a Music Video, cast the Environment in Creative setup. On a board shot, use
+**Greybox layout reference** to select that set and one saved camera. Its capture
+appears beside the shot and leads the other set references. Figure placements
+appear as inspectable chips; **Show full prompt** includes them without changing
+the text you wrote. Start and end frames and refines share that layout; a refine
+keeps the frame being edited first. Batch renders record the same additions.
+
+Video generation also sends the capture as an extra reference. Choose a local
+reference-to-video model that accepts extra images; other backends refuse rather
+than ignoring the layout. A removed camera, detached capture or missing file
+blocks generation. Choose a different camera, capture it again, or clear the
+selection to continue.
+
+Cast & Sets offers the same explicit camera choice for each set plate. Selecting
+it saves the choice without running a provider; **Regenerate** renders the new
+plates before they can be approved. Capturing an image or selecting a camera
+alone never starts generation.
 
 ## Create or edit with AI
 

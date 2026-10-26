@@ -647,11 +647,17 @@ export const musicVideoSceneCharacterVariantSchema = z.object({
   wardrobeId: z.string().trim().min(1).max(59).optional(),
 }).strict();
 
+export const musicVideoSceneSetReferenceSchema = z.object({
+  subjectId: z.string().min(1).max(128),
+  greyboxShotId: z.string().min(1).max(51).regex(/^[A-Za-z][A-Za-z0-9_-]*$/).optional(),
+}).strict();
+
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;
 // see musicVideoLayers.js. Only a composed render honors a non-footage layer.
 const sceneLayerFields = {
   // The references (visual spec ids) sent with this shot's frame renders; absent or null = the automatic set.
   frameReferenceIds: z.array(z.string().min(1).max(128)).max(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES).nullable().optional(),
+  setReference: musicVideoSceneSetReferenceSchema.nullable().optional(),
   characterVariant: musicVideoSceneCharacterVariantSchema.nullable().optional(),
   camera: musicVideoSceneCameraSchema.nullable().optional(),
   visualLayer: z.enum(MUSIC_VIDEO_VISUAL_LAYERS).optional(),
@@ -1364,9 +1370,13 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
   }).strict().optional(),
   sets: z.array(z.object({
     id: z.string().min(1).max(64),
-    imageRole: z.enum(['background', 'texture', 'decoration', 'cutout']),
+    imageRole: z.enum(['background', 'texture', 'decoration', 'cutout']).optional(),
+    setReference: musicVideoSceneSetReferenceSchema.nullable().optional(),
   }).strict()).max(8).optional(),
-}).strict();
+}).strict().refine((edits) => {
+  if (!edits.sets?.some((set) => Object.hasOwn(set, 'setReference'))) return true;
+  return !edits.protagonist && !edits.world && edits.sets.every((set) => Object.hasOwn(set, 'setReference') && !Object.hasOwn(set, 'imageRole'));
+}, 'Save greybox selections separately from direction edits.');
 
 // The cutting room floor outro (lib/musicVideoStatsOutro.js): an optional scene
 // after the song tallying the director's choices; null on the project = off.

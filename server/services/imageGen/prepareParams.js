@@ -233,18 +233,38 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   const localModel = mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId, getImageModels(), localModelCandidates) : null;
   if (data.musicVideo?.sceneId) {
     if (!musicVideoProjectLoaded) musicVideoProject = await getMusicVideoProject(data.musicVideo.projectId).catch(() => null);
+    const scene = musicVideoProject?.scenes?.find((entry) => entry.sceneId === data.musicVideo.sceneId);
+    const { loadMusicVideoGreybox } = await import('../musicVideo/greyboxReferences.js');
+    const greybox = await loadMusicVideoGreybox(musicVideoProject, scene);
+    if (greybox) {
+      const fromFrame = data.musicVideo.fromFrame || data.musicVideo.refine;
+      const cachedCapture = data.musicVideo.greyboxImageId;
+      if (cachedCapture && cachedCapture !== greybox.reference.imageId) {
+        for (let i = namedReferenceFiles.length - 1; i >= 0; i--) {
+          if (namedReferenceFiles[i] === cachedCapture && !(fromFrame && i === 0)) namedReferenceFiles.splice(i, 1);
+        }
+      }
+      const existing = namedReferenceFiles.indexOf(greybox.reference.imageId);
+      if (!(fromFrame && existing === 0)) {
+        if (existing >= 0) namedReferenceFiles.splice(existing, 1);
+        namedReferenceFiles.splice(fromFrame ? Math.min(1, namedReferenceFiles.length) : 0, 0, greybox.reference.imageId);
+      }
+    }
     if (data.musicVideo.compose) {
       // The director's text plus each labeled block PortOS adds (#11317), from the
       // composer the server's production run uses for the same still.
-      const scene = musicVideoProject?.scenes?.find((entry) => entry.sceneId === data.musicVideo.sceneId);
       const composed = musicVideoFrameModelInput(musicVideoProject, scene, {
-        slot: data.musicVideo.slot === 'end' ? 'end' : 'start', authored: data.prompt || '',
+        slot: data.musicVideo.slot === 'end' ? 'end' : 'start', authored: data.prompt || '', greybox,
         fromFrame: data.musicVideo.fromFrame === true, refine: data.musicVideo.refine === true,
         // The picked frame comes first; any reference after it is the shot's character or set reference.
         otherReferences: Math.max(0, namedReferenceFiles.length + referenceUploads.length - 1),
       });
       data.prompt = composed.prompt;
       if (composed.promptAdditions.length) data.promptAdditions = [...(data.promptAdditions || []), ...composed.promptAdditions];
+    }
+    if (greybox && !data.musicVideo.compose) {
+      data.prompt = [data.prompt, ...greybox.promptAdditions.map((a) => a.text)].filter(Boolean).join('\n');
+      data.promptAdditions = [...(data.promptAdditions || []), ...greybox.promptAdditions];
     }
     const reservedSlots = referenceUploads.length + (initUpload || data.initImageFile ? 1 : 0);
     const capacity = Math.max(0, musicVideoStyleReferenceCapacity(mode, localModel) - reservedSlots);

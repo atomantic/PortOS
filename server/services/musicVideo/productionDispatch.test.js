@@ -8,7 +8,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { PATHS } from '../../lib/paths.js';
+const greyboxCatalog = vi.hoisted(() => ({ getIngredient: vi.fn(), listMediaForIngredient: vi.fn() }));
+vi.mock('../catalogDB.js', () => greyboxCatalog);
 
 const enqueueJob = vi.fn(async () => ({ jobId: 'job-image' }));
 const submitVideoGenJob = vi.fn(async () => ({ jobId: 'job-video' }));
@@ -214,4 +218,23 @@ describe('production scene dispatch (#9066)', () => {
     expect(submitVideoGenJob.mock.calls[1][0]).toMatchObject({ backend: 'local', mode: 'image' });
     expect(submitVideoGenJob.mock.calls[1][0]).not.toHaveProperty('lastImageFile');
   });
+});
+
+// Catches batch/autopilot frames bypassing the selected layout or failing to record its figure instructions.
+it('conditions batch frames on the live greybox and records its additions', async () => {
+  mkdirSync(PATHS.images, { recursive: true });
+  writeFileSync(join(PATHS.images, 'layout.png'), 'fixture');
+  greyboxCatalog.getIngredient.mockResolvedValue({ type: 'place', payload: { greybox: { anchors: [{ id: 'rail', label: 'Singer' }], shots: [{ id: 'wide', figures: [{ anchorId: 'rail', pose: 'waving' }] }] } } });
+  greyboxCatalog.listMediaForIngredient.mockResolvedValue([{ kind: 'reference', mediaKey: 'layout.png', role: 'greybox-shot:wide' }]);
+  const selected = { ...scene, setReference: { subjectId: 'rink', greyboxShotId: 'wide' } };
+  const cast = { ...project, concept: { ...project.concept, subjects: [{ id: 'rink', kind: 'place', ingredientId: 'cat-rink', name: 'Example Rink' }] } };
+  await dispatchProductionStep({ stepKind: 'frame', project: cast, scene: selected, route: { kind: 'image', mode: 'codex', model: null }, tag, settings });
+  const params = enqueueJob.mock.calls.at(-1)[0].params;
+  expect(basename(params.referenceImagePaths[0])).toBe('layout.png');
+  expect(params.promptAdditions).toContainEqual(expect.objectContaining({ id: 'greybox-figure-0' }));
+  expect(params.prompt).toContain('Singer stands at the "rail" mark, waving');
+  greyboxCatalog.listMediaForIngredient.mockResolvedValue([]);
+  enqueueJob.mockClear();
+  await expect(dispatchProductionStep({ stepKind: 'frame', project: cast, scene: selected, route: { kind: 'image', mode: 'codex', model: null }, tag, settings })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_GREYBOX_UNAVAILABLE' });
+  expect(enqueueJob).not.toHaveBeenCalled();
 });
