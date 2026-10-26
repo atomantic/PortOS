@@ -464,7 +464,7 @@ vi.mock('fs/promises', () => fsPromisesMock);
 const spawnState = vi.hoisted(() => ({ nextExitCode: null }));
 
 const { makeProc } = vi.hoisted(() => ({
-  makeProc: () => {
+  makeProc: (exitCode) => {
     const listeners = {};
     const proc = {
       pid: 12345,
@@ -479,7 +479,7 @@ const { makeProc } = vi.hoisted(() => ({
     };
     // fire close(0) async so the caller's .on('close') handler can register first
     setImmediate(() => {
-      const code = spawnState.nextExitCode ?? 0;
+      const code = exitCode ?? spawnState.nextExitCode ?? 0;
       spawnState.nextExitCode = null;
       proc.exitCode = code;
       listeners.close?.(code, null);
@@ -559,8 +559,9 @@ const renderToTerminal = async (request) => {
   videoGenEvents.on('completed', onCompleted);
   videoGenEvents.on('failed', onFailed);
   try {
-    await generateVideo(request);
+    const result = await generateVideo(request);
     expect(await settled).toEqual({ status: 'completed', error: undefined });
+    return result;
   } finally {
     videoGenEvents.off('completed', onCompleted);
     videoGenEvents.off('failed', onFailed);
@@ -3249,6 +3250,15 @@ describe('generateVideo — Wan MLX-Gen contract', () => {
 });
 
 describe('generateVideo — MiniMax H3 MLX contract', () => {
+  it('fails the owning assertion when mocked render completion fails', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => makeProc(1));
+    await expect(renderToTerminal({
+      jobId: 'h3-terminal-failure', modelId: 'minimax_h3_8bit',
+      prompt: 'Synthetic completion failure', mode: 'text',
+    })).rejects.toThrow(/failed/);
+  });
+
   it('refuses explicit temporal replay and direct history before resolving assets or spawning', async () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     vi.mocked(spawnDetached).mockClear();
@@ -3341,7 +3351,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-keyframes',
       modelId: 'minimax_h3_8bit',
 
@@ -3408,7 +3418,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     process.env.HUGGING_FACE_HUB_TOKEN = 'test-secret-2';
 
     try {
-      await generateVideo({
+      await renderToTerminal({
         jobId: 'h3-args',
         modelId: 'minimax_h3_8bit',
 
@@ -3515,7 +3525,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-stock-encoder',
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',
@@ -3534,7 +3544,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-swapped-encoder',
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',
@@ -3569,7 +3579,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-multishard-encoder',
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',
@@ -3642,7 +3652,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-native-default',
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',
@@ -3671,7 +3681,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     )));
 
     try {
-      await generateVideo({
+      await renderToTerminal({
         jobId: 'h3-invalid-native-default',
         modelId: 'minimax_h3_8bit',
         prompt: 'a fox watches the rain',
@@ -3701,7 +3711,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: `h3-memory-${modelId}`,
       modelId,
       prompt: 'a fox watches the rain',
@@ -3735,7 +3745,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: `h3-embed-cache-${modelId}`,
       modelId,
       prompt: 'a fox watches the rain',
@@ -3787,7 +3797,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
 // the render path must honor it in both directions rather than blanket-rejecting
 // the runtime.
 describe.skipIf(process.platform === 'win32')('MiniMax H3 user LoRAs', () => {
-  const h3Render = (jobId) => generateVideo({
+  const h3Render = (jobId) => renderToTerminal({
     jobId,
     modelId: 'minimax_h3_8bit',
     prompt: 'a fox watches the rain',
@@ -3831,7 +3841,7 @@ describe.skipIf(process.platform === 'win32')('MiniMax H3 user LoRAs', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-lora-ok',
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',
@@ -3856,7 +3866,7 @@ describe.skipIf(process.platform === 'win32')('MiniMax H3 user LoRAs', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-no-lora',
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',
@@ -5091,7 +5101,7 @@ describe('generateVideo — MiniMax H3 CUDA contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-cuda-args',
       modelId: 'minimax_h3_cuda',
       prompt: 'a fox watches the rain',
@@ -5133,7 +5143,7 @@ describe('generateVideo — MiniMax H3 CUDA contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-cuda-fflf',
       modelId: 'minimax_h3_cuda',
       prompt: 'a fox watches the rain',
@@ -5199,7 +5209,7 @@ describe('generateVideo — MiniMax H3 CUDA contract', () => {
       model.id === 'minimax_h3_cuda' ? { ...model, offloadProfile: profile } : model
     )));
 
-    const render = () => generateVideo({
+    const render = () => renderToTerminal({
       jobId: `h3-cuda-offload-${profile}`,
       modelId: 'minimax_h3_cuda',
       prompt: 'a fox watches the rain',
@@ -5227,7 +5237,7 @@ describe('generateVideo — MiniMax H3 CUDA contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-cuda-offload-default',
       modelId: 'minimax_h3_cuda',
       prompt: 'a fox watches the rain',
@@ -6466,7 +6476,7 @@ describe('generateVideo — MiniMax H3 draft decode (#5423)', () => {
     let startedMeta = null;
     const capture = (e) => { if (e.generationId === jobId) startedMeta = e; };
     videoGenEvents.on('started', capture);
-    await generateVideo({
+    await renderToTerminal({
       jobId,
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',
