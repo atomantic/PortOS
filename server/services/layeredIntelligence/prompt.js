@@ -206,7 +206,9 @@ Respond with JSON only (no markdown fences):
     "model": "light | medium | heavy | ultra",   // REQUIRED dispatch capability. Independent of complexity.
     "effort": "low | medium | high | xhigh | max",   // REQUIRED reasoning budget; independent of model AND of complexity
     "goodFirstIssue": false, // true ONLY if a new contributor can ship this without deep repo context (not implied by model:light)
-    "helpWanted": false      // true ONLY under the shared help wanted criteria above
+    "helpWanted": false,     // true ONLY under the shared help wanted criteria above
+    "helpWantedReason": null, // "user-perspectives" for real user input, "hardware-alternatives" for documented OR alternatives with no shared prerequisite; otherwise null
+    "hardwareRequirements": [] // actual combined prerequisites only: windows, macos, linux, cuda, apple-silicon; split independent platform targets
   },
   "pause": {                 // null if not pausing
     "blockOnIssue": "this" or <existing issue number>,

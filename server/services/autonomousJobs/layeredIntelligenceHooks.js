@@ -452,7 +452,7 @@ async function fileProposal({ filer, forgeCli, cwd, apiHost, app, proposal, jira
       cli: forgeCli, cwd, hostname: forgeCli === 'gh' ? apiHost : null,
       title: proposal.title, body: proposal.body, slug: proposal.slug,
       model: proposal.model, effort: proposal.effort,
-      goodFirstIssue: proposal.goodFirstIssue, helpWanted: proposal.helpWanted, planner
+      goodFirstIssue: proposal.goodFirstIssue, helpWanted: proposal.helpWanted, helpWantedReason: proposal.helpWantedReason, hardwareRequirements: proposal.hardwareRequirements, planner
     })
   }
   if (filer === 'jira' && jira) {
@@ -460,7 +460,7 @@ async function fileProposal({ filer, forgeCli, cwd, apiHost, app, proposal, jira
       instanceId: jira.instanceId, projectKey: jira.projectKey, issueType: jira.issueType,
       title: proposal.title, body: proposal.body, slug: proposal.slug,
       model: proposal.model, effort: proposal.effort,
-      goodFirstIssue: proposal.goodFirstIssue, helpWanted: proposal.helpWanted, planner
+      goodFirstIssue: proposal.goodFirstIssue, helpWanted: proposal.helpWanted, helpWantedReason: proposal.helpWantedReason, hardwareRequirements: proposal.hardwareRequirements, planner
     })
   }
   if (filer === 'plan' && cwd) {

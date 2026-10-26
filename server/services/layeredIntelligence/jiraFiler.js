@@ -8,7 +8,7 @@
  * live Jira instance.
  */
 
-import { jiraIssueLabels } from '../../lib/dispatchLabels.js';
+import { jiraIssueLabels, normalizeIssueHardwareRequirements } from '../../lib/dispatchLabels.js';
 import { createTicket, searchIssues, addLabels, escapeJql } from '../jira.js';
 import { LI_LABEL, PLANNED_WORK_LABEL, LI_JIRA_BLOCKING_LABEL } from './constants.js';
 import { slugMarker, extractSlugFromBody } from './dedup.js';
@@ -118,16 +118,19 @@ export async function listJiraBlockingIssues({ instanceId, projectKey, search = 
  */
 export async function fileProposalToJira({
   instanceId, projectKey, issueType = 'Task', title, body, slug,
-  model, effort, goodFirstIssue, helpWanted, planner, create = createTicket
+  model, effort, goodFirstIssue, helpWanted, helpWantedReason, hardwareRequirements, planner, create = createTicket
 } = {}) {
   if (!instanceId || !projectKey) return { success: false, error: 'jira instance/project not configured' };
+  if (!normalizeIssueHardwareRequirements(hardwareRequirements, { helpWanted, helpWantedReason })) {
+    return { success: false, error: 'Invalid hardwareRequirements; use canonical prerequisites and split independent platform targets' };
+  }
   const description = `${scrubForgeIssueText(body)}\n\n${slugMarker(slug)}`;
   const res = await create(instanceId, {
     projectKey,
     summary: scrubForgeIssueText(title),
     description,
     issueType,
-    labels: [LI_LABEL, ...jiraIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner })]
+    labels: [LI_LABEL, ...jiraIssueLabels({ model, effort, goodFirstIssue, helpWanted, helpWantedReason, hardwareRequirements, planner })]
   }).then(r => r, (err) => ({ success: false, error: err?.message || 'jira create failed' }));
   if (!res?.success) return { success: false, error: res?.error || 'jira create failed' };
   return { success: true, key: res.ticketId || null, url: res.url || null };
