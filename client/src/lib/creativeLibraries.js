@@ -1,4 +1,5 @@
 import { Sparkles, Drama, Mountain, Package } from 'lucide-react';
+import { GREYBOX_SHOT_ROLE_PREFIX } from '../../../server/lib/greyboxVocabulary.js';
 
 // Casting, Environments and Objects: focused library pages over the catalog's
 // character, place and object ingredients. The catalog row stays the single
@@ -24,7 +25,7 @@ export const CREATIVE_LIBRARIES = Object.freeze([
   }),
   Object.freeze({
     id: 'environments', type: 'place', path: '/environments', label: 'Environments', singular: 'environment', empty: 'No environments yet.',
-    detailTabs: Object.freeze([PROFILE, SHEETS, tab('plates', 'Plates'), tab('references', 'References')]),
+    detailTabs: Object.freeze([PROFILE, SHEETS, tab('plates', 'Plates'), tab('greybox', 'Greybox'), tab('references', 'References')]),
   }),
   Object.freeze({
     id: 'objects', type: 'object', path: '/objects', label: 'Objects', singular: 'object', empty: 'No objects yet.',
@@ -62,19 +63,25 @@ export function detailTabPath(library, id, tabId) {
 
 // Catalog media roles that belong to their own tab rather than References:
 // rendered sheets (`sheet:<variant>`), wardrobe looks (`look:<id>`) and set
-// plates (`plate`).
+// plates (`plate`). Greybox shot captures (`greybox-shot:<id>`) live on the
+// Greybox tab beside the camera that made them.
 export const SHEET_ROLE_PREFIX = 'sheet:';
 export const LOOK_ROLE_PREFIX = 'look:';
 export const PLATE_ROLE = 'plate';
 const roleOf = (m) => (typeof m?.role === 'string' ? m.role : '');
 export const isSheetMedia = (m) => roleOf(m).startsWith(SHEET_ROLE_PREFIX);
 export const isPlateMedia = (m) => roleOf(m) === PLATE_ROLE;
+export const isGreyboxShotMedia = (m) => roleOf(m).startsWith(GREYBOX_SHOT_ROLE_PREFIX);
+const greyboxShotIdOf = (m) => roleOf(m).slice(GREYBOX_SHOT_ROLE_PREFIX.length);
 // The wardrobe id a `look:<id>` media row belongs to, or null.
 export const lookIdOf = (m) => (roleOf(m).startsWith(LOOK_ROLE_PREFIX) ? roleOf(m).slice(LOOK_ROLE_PREFIX.length) : null);
 // `liveLookIds` (a Set of the record's wardrobe ids) keeps a deleted look's
-// images visible on References instead of stranding them under a dead role.
-export const isReferenceTabMedia = (m, liveLookIds = null) => {
+// images visible on References instead of stranding them under a dead role;
+// `liveShotIds` (the greybox's shot ids) does the same for a capture whose shot
+// was removed.
+export const isReferenceTabMedia = (m, liveLookIds = null, liveShotIds = null) => {
   if (isSheetMedia(m) || isPlateMedia(m)) return false;
+  if (isGreyboxShotMedia(m)) return !liveShotIds?.has(greyboxShotIdOf(m));
   const lookId = lookIdOf(m);
   return lookId === null || (liveLookIds ? !liveLookIds.has(lookId) : false);
 };

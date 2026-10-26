@@ -1,3 +1,4 @@
+import { settleMergedReviewFollowUpBeforeSpawn } from './reviewFollowUpCompletion.js';
 import { isRetirementOnlyRecovery, settleRetirementRecoveryBeforeSpawn } from './retirementRecoveryCompletion.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState } from './cosState.js';
@@ -124,6 +125,15 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
 
   if (isRetirementOnlyRecovery(task) && await settleRetirementRecoveryBeforeSpawn(task)) {
     await context.cleanupOnError('retirement dispatch settled or changed');
+    return null;
+  }
+
+  const reviewSettlement = await settleMergedReviewFollowUpBeforeSpawn(task);
+  if (reviewSettlement) {
+    await context.cleanupOnError('review follow-up settled or changed');
+    // No agent:completed follows this path. Wake normal gated dequeue after
+    // this dispatch unwinds and releases its dedup/capacity reservations.
+    if (reviewSettlement === 'completed') setImmediate(() => cosEvents.emit('cos:dequeue-requested'));
     return null;
   }
 

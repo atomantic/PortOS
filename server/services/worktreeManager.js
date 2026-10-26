@@ -447,6 +447,8 @@ function removalOutcome(worktreePath, { directory, registration }, failure = nul
  *   caller's fresh ownership/content gate, run before Git removal and rechecked
  *   after a refusal to report the current hold.
  *   Callers that share claim ownership hold its lock through this operation.
+ * @param {object[]} [opts.preservedFiles] - byte proofs already durably saved by
+ *   the caller; ignored files still require an exact content/hash match.
  * @returns {Promise<{removed: boolean, directory: string, registration: string, warning: string|null}>}
  *   `warning` is set exactly when `removed` is false.
  */
@@ -459,7 +461,7 @@ export async function forceRemoveWorktreeDir(repo, worktreePath, opts = {}) {
 // Hold reasons that mean the cleanup could not even decide, rather than a gate declining.
 const REMOVAL_FAULT_HOLDS = new Set(['worktree-ownership-unreadable', 'worktree-removal-refused']);
 
-async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval, ignoredPaths = [], beforeMutation = async () => {} } = {}) {
+async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval, ignoredPaths = [], preservedFiles = [], beforeMutation = async () => {} } = {}) {
   const logAll = label && log === 'all';
   let lastFailure = null;
   let heldReason = null;
@@ -471,7 +473,7 @@ async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log =
     const reason = verifyRemoval ? await verifyRemoval(holder, entries).catch(() => 'worktree-ownership-unreadable') : null;
     if (reason) return reason;
     const { assertNoUniqueIgnoredCheckoutPayload } = await import('./heldCheckoutRecovery.js');
-    const payloadHold = await assertNoUniqueIgnoredCheckoutPayload(worktreePath, execGit, ignoredPaths)
+    const payloadHold = await assertNoUniqueIgnoredCheckoutPayload(worktreePath, execGit, ignoredPaths, preservedFiles, repo)
       .then(() => null, error => error.message || 'checkout-not-disposable');
     if (payloadHold) return payloadHold;
     // Ownership/content checks await I/O. Refresh their registration afterward;
@@ -1595,7 +1597,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
   const ignoredPaths = [DONE_SENTINEL_NAME, ...doneSentinelCandidateNames(agentId)];
   const preserve = async () => {
     const { releaseCheckoutWithoutArchive } = await import('./heldCheckoutRecovery.js');
-    return releaseCheckoutWithoutArchive({ repoPath: sourceWorkspace, path: worktreePath, branch: branchName, ignoredPaths }, async () => {
+    return releaseCheckoutWithoutArchive({ repoPath: sourceWorkspace, path: worktreePath, branch: branchName, ignoredPaths, retainValidationEvidence: true }, async () => {
       const tree = (await listWorktrees(sourceWorkspace)).find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath));
       const detached = Boolean(await detachedCheckout());
       if (!tree || (detached ? !tree.detached || tree.branch : tree.branch !== `refs/heads/${branchName}`)) throw new Error('worktree-holder-changed');
@@ -1606,6 +1608,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
       const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path).catch(() => null);
       return {
         head: tree.head, path: tree.path, branch: detached ? null : branchName,
+        integrationTarget: mergeTarget ? (await execGit(['rev-parse', '--verify', `${mergeTarget}^{commit}`], sourceWorkspace)).stdout.trim() : null,
         ...(checkoutIdentity && { checkoutIdentity }),
         verify: async holder => {
           if (!holder || holder.head !== tree.head || Boolean(holder.detached) !== Boolean(tree.detached)) return 'worktree-holder-changed';
@@ -1835,6 +1838,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     finish: async (preservation) => {
       const removal = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
         verifyRemoval: preservation.verify,
+        preservedFiles: preservation.preservedFiles,
         ignoredPaths,
         label: `Worktree remove failed for ${agentId}, falling back to manual cleanup`,
         log: 'all',
@@ -2428,7 +2432,7 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
               const status = await execGit(['status', '--porcelain'], worktreePath).then(r => r.stdout, () => null);
               if (status === null || !classifyWorktreeDirt(status).clean) return 'worktree-dirty';
               if (!await hasBranchMergeEvidence(parentRepo, wt.head, target).catch(() => false)) return 'unmerged';
-              return assertNoUniqueIgnoredCheckoutPayload(worktreePath).then(() => null,
+              return assertNoUniqueIgnoredCheckoutPayload(worktreePath, execGit, [], [], parentRepo).then(() => null,
                 error => error.message || 'checkout-not-disposable');
             },
           },

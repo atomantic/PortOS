@@ -23,6 +23,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { buildPregateReport, guardInputSnapshot, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
+import { assertGitMergeTree } from '../lib/gitMergeTree.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -395,6 +396,7 @@ async function withMergedPregateTree(repoRoot, mergedWith, run) {
   }
   const head = readGit(['rev-parse', '--verify', 'HEAD^{commit}']);
   const base = readGit(['rev-parse', '--verify', `${mergedWith}^{commit}`]);
+  assertGitMergeTree(repoRoot);
   const scratch = mkdtempSync(join(tmpdir(), 'portos-merged-guards-'));
   try {
     // All new merge objects, refs, index entries and generated files live in this disposable clone.
@@ -405,13 +407,30 @@ async function withMergedPregateTree(repoRoot, mergedWith, run) {
     try {
       tree = readGit(['merge-tree', '--write-tree', base, head], scratch).split('\n')[0];
     } catch (error) {
-      throw new Error(`Cannot construct merged guard tree (resolve conflicts before merging): ${error.stdout || error.stderr || error.message}`);
+      const reason = error.status === 1 ? 'resolve conflicts before merging' : 'Git merge-tree failed';
+      throw new Error(`Cannot construct merged guard tree (${reason}): ${error.stdout || error.stderr || error.message}`);
+    }
+    // A shared clone borrows objects, but not its source's promisor remote.
+    // Fetch only blobs missing from this selected tree through the source,
+    // where Git knows how to fulfill its partial-clone promises.
+    const missing = readGit(['rev-list', '--objects', '--no-object-names', '--missing=print', tree], scratch)
+      .split('\n').filter(line => line.startsWith('?')).map(line => line.slice(1));
+    if (missing.length) {
+      const resolved = execFileSync('git', ['cat-file', '--batch-check=%(objectname) %(objecttype)'], {
+        cwd: repoRoot, encoding: 'utf8', input: `${missing.join('\n')}\n`, maxBuffer: 32 * 1024 * 1024,
+      });
+      if (resolved.split('\n').some(line => line.endsWith(' missing'))) {
+        throw new Error('Cannot materialize merged guard tree: source objects remain unavailable.');
+      }
     }
     const commit = execFileSync('git', ['-c', 'user.name=Pregate', '-c', 'user.email=pregate@example.invalid',
       'commit-tree', tree, '-p', base, ...(head === base ? [] : ['-p', head])], {
       cwd: scratch, encoding: 'utf8', input: 'Temporary merged-tree guard validation\n',
     }).trim();
     readGit(['checkout', '--quiet', '--detach', commit], scratch);
+    if (readGit(['status', '--porcelain=v1', '--untracked-files=all'], scratch)) {
+      throw new Error('Cannot validate an incomplete merged guard checkout.');
+    }
     // Submodule bytes must match the merged gitlink too; use existing local objects, never the network.
     const primary = resolve(repoRoot, readGit(['rev-parse', '--git-common-dir']), '..');
     for (const entry of readGit(['ls-tree', '-r', '-z', commit], scratch).split('\0')) {

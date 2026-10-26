@@ -23,7 +23,7 @@ vi.mock('../instanceIdentity.js', () => ({ getInstanceId: async () => 'list-test
 
 const { checkHealth, close, ensureSchema, query } = await import('../../lib/db.js');
 const { requireDbOrSkip } = await import('../../lib/dbTestGate.js');
-const { listIngredients } = await import('./ingredients.js');
+const { listIngredients, getIngredientCards, setIngredientLock } = await import('./ingredients.js');
 const { HOMING_REF_KINDS_SQL, liveHomingTargetSql } = await import('./shared.js');
 
 const health = await checkHealth().catch((error) => ({ connected: false, error: error.message }));
@@ -195,6 +195,42 @@ describe.skipIf(!ready)('listIngredients identity read views (#12989)', () => {
     expect(byId.get(id('op-survivor'))).toEqual({ id: id('op-survivor'), thumbnailKey: `${P}-op-portrait`, usage: { universe: 1, series: 1 } });
   });
 
+  it('uses a sheet-only character cover on lists and hydrated cards, preferring ordinary references', async () => {
+    await insertIngredient('sheet-only', 0);
+    await insertMedia('sheet-only', 'sheet-only-image', 'reference', { role: 'sheet:standard' });
+    const cover = async () => {
+      const list = await listIngredients({ tag: TAG, limit: 200 });
+      const cards = await getIngredientCards([id('sheet-only')]);
+      return [list.items.find(row => row.id === id('sheet-only')).thumbnailKey, cards[0].thumbnailKey];
+    };
+    expect(await cover()).toEqual([`${P}-sheet-only-image`, `${P}-sheet-only-image`]);
+    await insertMedia('sheet-only', 'ordinary-image', 'reference', { secondsAgo: 30 });
+    expect(await cover()).toEqual([`${P}-ordinary-image`, `${P}-ordinary-image`]);
+  });
+
+  it('separates explicit ownership from usage without assigning legacy refs', async () => {
+    await insertIngredient('owned', 0);
+    try {
+      await insertRef('owned', 'universe', UNI, { role: 'owner' });
+      let result = await listIngredients({ tag: TAG, limit: 200 });
+      let row = result.items.find((item) => item.id === id('owned'));
+      expect(row.owningUniverse).toEqual({ id: UNI, name: 'Example Universe' });
+      expect(row.ownershipStatus).toBe('owned');
+      expect(row.usage).toEqual({});
+      expect(result.items.find((item) => item.id === id('linked')).owningUniverse).toBeNull();
+      await insertRef('owned', 'universe', UNI, { role: 'canon-character' });
+      result = await listIngredients({ tag: TAG, limit: 200 });
+      row = result.items.find((item) => item.id === id('owned'));
+      expect(row.usage).toEqual({ universe: 1 });
+      await insertRef('owned', 'universe', DEAD_UNI, { role: 'owner' });
+      row = (await listIngredients({ tag: TAG, limit: 200 })).items.find((item) => item.id === id('owned'));
+      expect(row.owningUniverse).toBeNull();
+      expect(row.ownershipStatus).toBe('conflict');
+    } finally {
+      await query('DELETE FROM catalog_ingredients WHERE id = $1', [id('owned')]);
+    }
+  });
+
   it('pages without changing order and decorates only the returned page', async () => {
     const all = project(await listIngredients({ tag: TAG, limit: 200 }));
     const pages = [];
@@ -204,6 +240,29 @@ describe.skipIf(!ready)('listIngredients identity read views (#12989)', () => {
       pages.push(...project(page));
     }
     expect(pages).toEqual(all);
+  });
+
+  it('hydrates requested aliases and identity fences in three queries independent of batch size', async () => {
+    const expected = new Map([
+      [id('op-source'), { canonicalId: id('op-survivor'), reason: 'CATALOG_IDENTITY_RETAINED' }],
+      [id('op-survivor'), { canonicalId: id('op-survivor'), reason: 'CATALOG_IDENTITY_FOREIGN' }],
+      [id('merge-source'), { canonicalId: id('merge-survivor'), reason: undefined }],
+    ]);
+    const requested = [...expected.keys()];
+    query.mockClear();
+    const cards = await getIngredientCards(requested);
+    expect(query).toHaveBeenCalledTimes(3);
+    expect(cards.map(card => card.id)).toEqual(requested);
+    await expect(setIngredientLock(id('op-source'), true)).rejects.toMatchObject({ code: 'CATALOG_IDENTITY_RETAINED' });
+    await expect(setIngredientLock(id('op-survivor'), true)).rejects.toMatchObject({ code: 'CATALOG_IDENTITY_FOREIGN' });
+    for (const card of cards) {
+      expect(card.canonicalId).toBe(expected.get(card.id).canonicalId);
+      expect(card.sharedIdentity?.reason).toBe(expected.get(card.id).reason);
+    }
+    query.mockClear();
+    const full = await getIngredientCards(Array.from({ length: 50 }, (_, index) => requested[index % requested.length]));
+    expect(query).toHaveBeenCalledTimes(3);
+    expect(full).toHaveLength(50);
   });
 
   // Uniquely catches a regression to per-row view evaluation: a correlated

@@ -3,8 +3,9 @@
 import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join, posix, relative } from 'path';
-import { staticImportClosure, staticImportSpecifiersFromSource, toModuleKey } from '../server/lib/staticImportGraph.js';
+import { staticImportClosure, toModuleKey } from '../server/lib/staticImportGraph.js';
 import { escapeRegExp } from '../server/lib/textUtils.js';
+import { moduleImports } from './lib/sourceTokens.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
@@ -62,7 +63,7 @@ export const sourceReferencePattern = (sourcePath) => (
 // ci.yml because a job-level `if` cannot read the matrix context, so the
 // planner emits the matrix for scoped plans too. Sizing rationale:
 // docs/GITHUB_ACTIONS.md "Full-suite sharding".
-export const FULL_SUITE_SHARDS = { server: 2, client: 3, windows: 3 };
+export const FULL_SUITE_SHARDS = { server: 2, client: 3, windows: 4 };
 
 /** Matrix values for one runner: every shard on a full run, one otherwise. */
 export const shardIndexes = (mode, count) => (
@@ -286,7 +287,7 @@ export const WINDOWS_RISK_RULES = [
   /^scripts\/ps1-bom\.test\.js$/,
   // Shell32 recycling and its opt-in real-bin smoke require an actual Windows runner.
   /^server\/lib\/nativeTrash(?:\.(?:smoke\.)?test)?\.js$/,
-  /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok)\b/,
+  /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok|execGit|windowsGitProcess|windowsGitSupervisor)\b/,
   // The cmd.exe wrap and npm-shim bypass every Windows CLI launch goes through.
   /^server\/lib\/aiToolkit\/internal\/windowsSafeSpawn\.js$/,
   // Path SEMANTICS differ per platform in ways pinPlatform() cannot fake: NTFS
@@ -315,11 +316,16 @@ export const WINDOWS_RISK_RULES = [
   /^server\/services\/worktree(?:Manager|Reap)\b/,
   // Git enumerates NTFS junctions differently from Node lstat (#13562).
   /^server\/services\/heldCheckoutRecovery(?:\.test)?\.js$/,
+  // Scratch locks and cancellation settlement require a real Windows runner;
+  // test-only diffs have no source edge for related-test selection (#13651).
+  /^server\/services\/(?:heldCheckoutExactDelivery\.integration|retirementFixture\.lifecycle)\.test\.js$/,
   /^server\/lib\/shell(?:Cd|Exit|LivenessProbe|ReadinessProbe)(?:\.test)?\.js$/,
   /^server\/lib\/agentGuard\//,
   /^server\/cos-runner\//,
   /^server\/services\/(?:shell|pm2|appBuilder)\b/,
-  /^server\/services\/agentTuiSpawning(?:\.test)?\.js$/,
+  // Prompt delivery moved into this subtree; keep its Windows launch coverage.
+  /^server\/services\/agentTuiSpawning(?:\/|(?:\.test)?\.js$)/,
+  /^server\/services\/tuiPromptRunner(?:\.test)?\.js$/,
   /^server\/services\/htmlComposition\/ownedBrowser(?:\.test)?\.js$/,
   /^server\/services\/autonomousJobs\/execution\.shellSpawn/,
   // The voice fine-tuning service spawns a real Python trainer and settles the
@@ -493,6 +499,8 @@ export const ALWAYS_RUN_TESTS = [
   // breadcrumb, with no import edge back to this file.
   'server/lib/localProviderRuntime.test.js',
   'server/lib/qwenAgentParsers.test.js',
+  // Schema reachability reads consumers as text across the tracked source tree.
+  'server/lib/validationSplit.test.js',
   'server/lib/testDataIsolation.guards.test.js',
   'server/lib/testHelper.test.js',
   // Whole-tree scanner: any server/client file can re-inline a RegExp escape (#8723).
@@ -1545,6 +1553,7 @@ export function forceFullReasonFor({ forceFull, baseRef }) {
 function createDependencySnapshot(files, cwd) {
   const known = new Set(files);
   const sources = new Map();
+  const imports = new Map();
   const staticEdges = new Map();
   const testEdges = new Map();
   const extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts', '.json'];
@@ -1574,22 +1583,19 @@ function createDependencySnapshot(files, cwd) {
     }
     return { dependencies, inconclusive };
   };
+  const importsFor = (file) => {
+    if (!imports.has(file)) imports.set(file, moduleImports(readText(file), { jsx: !/\.[cm]?ts$/.test(file) }));
+    return imports.get(file);
+  };
   const staticDependencies = (file) => {
     if (!staticEdges.has(file)) {
-      staticEdges.set(file, resolve(file, staticImportSpecifiersFromSource(readText(file))));
+      staticEdges.set(file, resolve(file, importsFor(file).statics));
     }
     return staticEdges.get(file);
   };
   const testDependencies = (file) => {
     if (!testEdges.has(file)) {
-      const deferred = [];
-      let computed = false;
-      // Nonliterals and extra matches in comments widen prerequisites safely.
-      for (const match of readText(file).matchAll(/\bimport\s*\(\s*([^)]*)\)/g)) {
-        const literal = match[1].trim().match(/^(['"`])([^'"`]*?)\1\s*(?:,.*)?$/s);
-        if (!literal || literal[2].includes('${')) computed = true;
-        else deferred.push(literal[2]);
-      }
+      const { deferred, computed } = importsFor(file);
       const statics = staticDependencies(file);
       const dynamic = resolve(file, deferred);
       testEdges.set(file, {

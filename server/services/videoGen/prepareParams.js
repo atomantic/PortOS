@@ -45,7 +45,7 @@ import {
 } from '../../lib/videoTextEncoders.js';
 import { minimaxH3ControlError } from './minimaxH3Controls.js';
 import { wan22FrameCountError } from './wan22Controls.js';
-import { resolveContextFrames } from '../../lib/videoContinuity.js';
+import { resolveContextFrames, resolveContinuityRequest } from '../../lib/videoContinuity.js';
 import {
   IC_LORA_MODE_VALUES, icLoraSpecForMode,
   assertIcReferenceCount, describeIcReferenceRange,
@@ -76,11 +76,32 @@ import {
 } from '../../lib/systemCapabilities.js';
 // Straight from the leaf, not through local.js: the suites that exercise this
 // module mock local.js wholesale, and a mocked rule table would assert nothing.
-import { videoModeContractError, videoChainUnsupportedError, videoReferenceModeError } from './modeContract.js';
+import { videoModeContractError, videoChainUnsupportedError, videoReferenceModeError, videoContinuityContractError } from './modeContract.js';
 import { resolveByovRuntimeLoraCapable, videoLoraUnsupportedError } from './runtimes.js';
 import { validateVideoBatch } from './batch.js';
 import { audioDurationToFrames } from './audioDuration.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES } from '../../lib/runwaySpecialVideoModels.js';
+import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
+
+async function validateMiniMaxH3SpeedParams(model, params, settings) {
+  const hasProfile = isMiniMaxH3SpeedProfileRequest(params.speedProfileId);
+  if (!hasProfile && ['minimax_h3', 'minimax_h3_cuda'].includes(model?.runtime) && params.speedProfileId && params.speedProfileId !== 'quality') {
+    throw new ServerError('This H3 model does not offer the requested speed profile. Select Quality or its listed LightX2V profile.', { status: 400, code: 'VIDEO_SPEED_PROFILE_UNSUPPORTED' });
+  }
+  if (!hasProfile && (!['minimax_h3', 'minimax_h3_cuda'].includes(model?.runtime) || !params.loras?.length)) return;
+  const { prepareMiniMaxH3SpeedProfile, validateMiniMaxH3CudaLoras, validateMiniMaxH3MlxLoras } = await import('./ensureWeights.js');
+  const profile = hasProfile ? await prepareMiniMaxH3SpeedProfile({
+    ...params, model, profileId: params.speedProfileId,
+    mode: params.mode || (params.sourceImagePath ? 'image' : 'text'),
+    width: params.width ?? model.defaultWidth,
+    height: params.height ?? model.defaultHeight,
+  }, settings || await getSettings()) : null;
+  if (params.loras?.length) {
+    const { resolveVideoLoras } = await import('./renderArgs.js');
+    const validate = model.runtime === 'minimax_h3' ? validateMiniMaxH3MlxLoras : validateMiniMaxH3CudaLoras;
+    await validate(await resolveVideoLoras(params.loras, { runtime: model.runtime }), profile);
+  }
+}
 
 // Retries reuse persisted worker parameters instead of passing through the
 // multipart preparation path. Keep the model/mode gates here so a model edit
@@ -102,6 +123,9 @@ export async function validateVideoRetryParams(params = {}) {
     model = knownModels.find((entry) => entry.id === modelId);
   }
   model = model && withHardwareCompatibility(model, capabilities, model.hardwareRequirements);
+  const { validateA2vLoraStages } = await import('./loraStages.js');
+  await validateA2vLoraStages({ strengths: params.a2vLoraStageStrengths, model,
+    mode: params.mode, hasLoras: params.loras?.length > 0 });
   if (!model) {
     throw new ServerError(`Unknown modelId: ${modelId}`, { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' });
   }
@@ -115,6 +139,8 @@ export async function validateVideoRetryParams(params = {}) {
     && !supportsVideoTextEncoder(model, params.textEncoderId)) {
     throw videoTextEncoderUnsupportedError(model, params.textEncoderId);
   }
+  const continuityError = videoContinuityContractError({ model, continuityStrategy: params.continuityStrategy, contextFrames: params.contextFrames });
+  if (continuityError) throw continuityError;
   validateVideoBatch(params, model);
   const mode = params.mode || (params.sourceImagePath ? 'image' : 'text');
   const modeError = videoModeContractError({
@@ -200,6 +226,8 @@ export async function validateVideoRetryParams(params = {}) {
   }
   const frameCountError = wan22FrameCountError(model, numFrames);
   if (frameCountError) throw frameCountError;
+  await validateMiniMaxH3SpeedParams(model, params, settings);
+  return model;
 }
 
 /**
@@ -307,6 +335,12 @@ export function resolveRequestedVideoBackend({ body, uploads, settings, localOnl
 export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys }) {
   const settings = await getSettings();
   const backend = resolveRequestedVideoBackend({ body, uploads, settings, localOnlyParamKeys });
+  if (backend !== VIDEO_GEN_MODE.LOCAL && body.continuityStrategy != null) {
+    await cleanupMultipartTemp(uploads);
+    throw new ServerError('Explicit continuation strategy requires a local video backend.', {
+      status: 400, code: 'VIDEO_CONTINUITY_UNSUPPORTED',
+    });
+  }
   const runwaySpecial = backend === VIDEO_GEN_MODE.RUNWAY && RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode);
   if (!runwaySpecial && (RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode) || uploads.runwayVideo || uploads.runwayCharacterVideo)) {
     await cleanupMultipartTemp(uploads);
@@ -355,6 +389,10 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
     capabilities,
     effectiveModel.hardwareRequirements,
   );
+  const { validateA2vLoraStages } = await import('./loraStages.js');
+  await validateA2vLoraStages({ strengths: body.a2vLoraStageStrengths, model: effectiveModel,
+    backend, mode: body.mode, hasLoras: body.loraFilenames?.length > 0 })
+    .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; });
   // Validate modelId before staging (when supplied). Without this the queue
   // would happily accept a typo'd modelId and fail asynchronously inside
   // the worker — leaving a persisted, doomed queue entry.
@@ -866,6 +904,12 @@ async function resolvePreparedParams({
       { status: 400, code: 'A2V_RUNTIME_UNSUPPORTED' },
     );
   }
+  const continuityError = videoContinuityContractError({ model: effectiveModel,
+    continuityStrategy: body.continuityStrategy, contextFrames: body.contextFrames });
+  if (continuityError) {
+    await cleanupStaged();
+    throw continuityError;
+  }
   // Chunk chaining needs image-to-video on any runtime — the same rule
   // generateChainedVideo enforces at dispatch, applied once here so a doomed
   // chain never reaches the persisted queue.
@@ -1258,6 +1302,10 @@ async function resolvePreparedParams({
   // reference clip), so chaining is meaningless — pin to 1 chunk. The IC path
   // also hard-rejects an explicit chunks>1 above; this covers the default.
   const effectiveChunks = (body.mode === 'a2v' || icSpec) ? 1 : (body.chunks ?? 1);
+  await validateMiniMaxH3SpeedParams(effectiveModel, {
+    ...body, loras, sourceImagePath, lastImagePath, keyframes: resolvedKeyframes,
+    extendFromVideoPath, audioFilePath,
+  }, settings).catch(async (error) => { await cleanupStaged(); throw error; });
 
   // Per-chunk prompt beats (#3695) — only meaningful once the RESOLVED request
   // really chains, so a single-chunk render (or an a2v/IC one pinned to 1 above)
@@ -1290,6 +1338,10 @@ async function resolvePreparedParams({
     ? resolveContextFrames(body.contextFrames)
     : undefined;
 
+  const continuation = effectiveChunks > 1 || body.continuityStrategy != null
+    ? resolveContinuityRequest({ model: effectiveModel, continuityStrategy: body.continuityStrategy, contextFrames: body.contextFrames })
+    : undefined;
+
   return {
     backend,
     pythonPath,
@@ -1312,6 +1364,7 @@ async function resolvePreparedParams({
     effectiveChunks,
     effectiveChunkPrompts,
     effectiveContextFrames,
+    continuation,
     discardSourceImage,
     cleanupStaged,
   };

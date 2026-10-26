@@ -45,6 +45,7 @@ import {
   SSE_CLEANUP_DELAY_MS,
 } from '../../lib/sseUtils.js';
 import { videoGenEvents } from '../videoGen/events.js';
+import { setVideoExecutionRecorder } from '../videoGen/executionRecorder.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { trainingEvents } from '../loraTraining/events.js';
 import { audioGenEvents } from '../audioGen/events.js';
@@ -64,6 +65,7 @@ import {
   decideOwnershipRelease, OWNERSHIP_RELEASE,
 } from './recoverySettlement.js';
 import { routedJobParams } from '../federatedMedia/routedJobParams.js';
+import { videoExecutionSchema, videoExecutionParentSchema, videoSegmentExecutionSchema, videoSegmentExecutionsSchema, mergeVideoExecutionDiagnostics } from './videoExecution.js';
 import {
   MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError,
 } from './admission.js';
@@ -91,6 +93,8 @@ const isCloudImageJob = (j) =>
 // pulling the queue in. Re-exported here because that is where callers have
 // always found it.
 export { isRemoteMediaJob };
+
+const boundedVideoChunks = value => Math.min(8, Math.max(1, Math.trunc(Number(value) || 1)));
 
 const jobLane = (job) => mediaJobExecutionLane({
   kind: job.kind,
@@ -444,6 +448,92 @@ export async function updateJobResult(jobId, patch) {
   return true;
 }
 
+// Await this receipt before spawning a local video child. A rejected snapshot
+// must leave the generator unstarted, rather than lose its random seed on exit.
+// Cancellation may settle while metadata resolves; retain that late receipt
+// without changing the terminal state or making the job dispatchable again.
+const segmentExecutionTarget = (childJobId, executionParent) => {
+  const parent = videoExecutionParentSchema.parse(executionParent);
+  const job = findJob(parent.jobId);
+  if (!job || job.kind !== 'video' || isRemoteMediaJob(job) || jobLane(job) !== 'gpu'
+    || !['running', 'failed', 'canceled'].includes(job.status)
+    || boundedVideoChunks(job.params?.chunks) !== parent.segmentCount || childJobId === parent.jobId) {
+    throw new Error('Queued video segment has no matching local parent');
+  }
+  return { job, parent };
+};
+
+export async function recordVideoExecution(jobId, meta) {
+  const target = meta.executionParent == null ? null : segmentExecutionTarget(jobId, meta.executionParent);
+  const job = target?.job || findJob(jobId);
+  if (!job || job.kind !== 'video' || isRemoteMediaJob(job) || !['running', 'failed', 'canceled'].includes(job.status)) return false;
+  const segments = target ? videoSegmentExecutionsSchema.parse(job.videoExecutions || []) : null;
+  const previous = target ? segments.find(entry => entry.segmentIndex === target.parent.segmentIndex) : job.videoExecution;
+  const receipt = videoExecutionSchema.parse({
+    version: 1,
+    preparedAt: previous?.preparedAt || new Date().toISOString(),
+    seed: meta.seed,
+    ...(meta.batchSeeds ? { batchSeeds: meta.batchSeeds } : {}),
+    parameters: meta,
+    ...(previous?.diagnostics ? { diagnostics: previous.diagnostics } : {}),
+  });
+  if (previous && (previous.seed !== receipt.seed || (target && (previous.childJobId !== jobId || previous.segmentCount !== target.parent.segmentCount)))) {
+    throw new Error('Video execution receipt already belongs to a different seed or child');
+  }
+  if (target) {
+    const { segmentIndex, segmentCount } = target.parent;
+    const segment = videoSegmentExecutionSchema.parse({ ...receipt, childJobId: jobId, segmentIndex, segmentCount });
+    job.videoExecutions = videoSegmentExecutionsSchema.parse([
+      ...segments.filter(entry => entry.segmentIndex !== segmentIndex), segment,
+    ].sort((a, b) => a.segmentIndex - b.segmentIndex));
+    const requestedSeed = job.params?.seed;
+    const segmentSeedBase = requestedSeed == null || requestedSeed === '' ? null : Number(requestedSeed);
+    const previousSeeds = job.params?.segmentSeedBase === segmentSeedBase && Array.isArray(job.params?.segmentSeeds)
+      ? job.params.segmentSeeds : [];
+    const segmentSeeds = Array.from({ length: segmentCount }, (_, index) => {
+      const prior = previousSeeds[index];
+      const reusable = Number.isSafeInteger(prior) && prior >= 0 ? prior : null;
+      return job.videoExecutions.find(entry => entry.segmentIndex === index)?.seed ?? reusable;
+    });
+    // Preserve known, not-yet-rerendered seeds; changing the outer seed starts
+    // a new base so the next unchanged retry can reuse this attempt's seeds.
+    job.params = { ...job.params, segmentSeeds, segmentSeedBase };
+  } else {
+    job.videoExecution = receipt;
+    job.params = { ...job.params, seed: receipt.seed };
+  }
+  await persist();
+  return true;
+}
+
+// Call once at admission and once on termination, after accumulating numeric
+// maxima in memory; never persist a snapshot for every subprocess output line.
+export async function recordVideoExecutionDiagnostics(jobId, diagnostics, executionParent) {
+  const target = executionParent == null ? null : segmentExecutionTarget(jobId, executionParent);
+  const job = target?.job || findJob(jobId);
+  if (!job || job.kind !== 'video' || isRemoteMediaJob(job)) return false;
+  if (target) {
+    const segments = videoSegmentExecutionsSchema.parse(job.videoExecutions || []);
+    const index = segments.findIndex(entry => entry.childJobId === jobId && entry.segmentIndex === target.parent.segmentIndex && entry.segmentCount === target.parent.segmentCount);
+    if (index < 0) return false;
+    const previous = segments[index];
+    segments[index] = videoSegmentExecutionSchema.parse({
+      ...mergeVideoExecutionDiagnostics(previous, diagnostics),
+      childJobId: previous.childJobId, segmentIndex: previous.segmentIndex, segmentCount: previous.segmentCount,
+    });
+    job.videoExecutions = segments;
+  } else {
+    if (!job.videoExecution) return false;
+    job.videoExecution = mergeVideoExecutionDiagnostics(job.videoExecution, diagnostics);
+  }
+  await persist();
+  return true;
+}
+
+const installVideoExecutionRecorder = () => setVideoExecutionRecorder({
+  recordExecution: recordVideoExecution, recordDiagnostics: recordVideoExecutionDiagnostics,
+});
+
 export function getRunningJob() {
   return running;
 }
@@ -774,9 +864,11 @@ function captureQueueSnapshot() {
   const canWriteOutcome = (job) => completionAdmitted || job.durabilityPending?.status !== 'completed';
   const hasDeferredCompletion = [...pendingTransitions.keys()].some((job) => !canWriteOutcome(job));
   // Strip non-serializable bits.
-  const serializable = live.map((job) => (canWriteOutcome(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs, durabilityPending, imported }) =>
+  const serializable = live.map((job) => (canWriteOutcome(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs, durabilityPending, imported, videoExecution, videoExecutions }) =>
     ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs,
       ...(imported === true ? { imported } : {}),
+      ...(videoExecution ? { videoExecution } : {}),
+      ...(videoExecutions ? { videoExecutions } : {}),
       ...(status !== 'completed' && durabilityPending?.status === 'completed' ? { durabilityPending } : {}) }),
   );
   const transitions = [...pendingTransitions].filter(([job]) => canWriteOutcome(job));
@@ -849,6 +941,7 @@ async function announceTerminalTransition(job, onDurable = () => {}) {
 }
 
 export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}) {
+  installVideoExecutionRecorder();
   if (initPromise) return initPromise;
   completionRecoveryDeferred = deferCompletionRecovery;
   initPromise = (async () => {
@@ -1810,7 +1903,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
   // Clamp chunks to the same 1-8 bound the route enforces on new submissions.
   // Replayed jobs read params from media-jobs.json which could be hand-edited
   // to an out-of-range value, bypassing the route-layer Zod validation.
-  safeParams.chunks = Math.min(8, Math.max(1, Math.trunc(Number(safeParams.chunks) || 1)));
+  safeParams.chunks = boundedVideoChunks(safeParams.chunks);
 
   await resolveLiveParams(job, safeParams);
 
@@ -1944,7 +2037,8 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
       if (!canRequestCancellation(job)) throw new Error('Provider dispatch stopped after the job reached a terminal outcome');
       // Transient, like terminating: no await between this flag and invocation.
       job.providerInvoked = true;
-      const request = { ...safeParams, jobId: job.id };
+      const request = { ...safeParams, jobId: job.id,
+        ...(job.kind === 'video' && jobLane(job) === 'gpu' && Number(safeParams.chunks) > 1 ? { executionQueueJobId: job.id } : {}) };
       const kickoff = (runtime?.invoke ?? MEDIA_JOB_RUNTIME.image.invoke)(mod, request, safeParams);
       markDispatched();
       await Promise.race([kickoff, abandoned]);
@@ -2048,6 +2142,7 @@ async function assertMusicVideoJobPolicy(kind, params) {
 }
 
 export async function enqueueJob({ kind, params, owner = null }) {
+  installVideoExecutionRecorder();
   if (kind === 'training') refuseRetiredTraining();
   await assertMusicVideoJobPolicy(kind, params);
   if (params?.musicVideo?.sceneId) {

@@ -225,6 +225,87 @@ export function ownTestBodies(it) {
   return { it: ownedIt, drain };
 }
 
+/** Own async fixture callbacks beyond Vitest's timeout/cancellation wrapper. */
+export function ownFixtureWork() {
+  const pending = new Set();
+  const failures = [];
+  const phases = new Map();
+  let cleanup;
+  const cleanupFailures = [];
+  const run = (phase, work) => {
+    // Phase labels are a closed caller-supplied vocabulary, never paths/argv.
+    if (!/^[a-z-]{1,32}$/.test(phase) || (!phases.has(phase) && phases.size === 16)) {
+      throw new Error('Invalid fixture phase');
+    }
+    const row = phases.get(phase) ?? { count: 0, ms: 0, maxMs: 0, active: new Set() };
+    phases.set(phase, row);
+    const started = performance.now();
+    const operation = { started };
+    row.active.add(operation);
+    const workPromise = Promise.resolve().then(work);
+    const settled = workPromise.then(() => {}, () => {}).then(() => {
+      const elapsed = performance.now() - started;
+      row.active.delete(operation);
+      row.count++;
+      row.ms += elapsed;
+      row.maxMs = Math.max(row.maxMs, elapsed);
+      pending.delete(settled);
+    });
+    pending.add(settled);
+    return workPromise;
+  };
+  const wrap = (phase, body) => (...args) => run(phase, async () => {
+    try { return await body(...args); }
+    catch (error) {
+      if (args.at(-1)?.signal?.aborted) failures.push(error);
+      throw error;
+    }
+  });
+  const tests = register => {
+    const owned = (name, body, ...options) => register(name, wrap('test', body), ...options);
+    owned.each = cases => tests(register.each(cases));
+    owned.skipIf = condition => tests(register.skipIf(condition));
+    return owned;
+  };
+  return {
+    run, wrap, tests,
+    cleanup(work) {
+      // A timed-out prepare hook can reach teardown again while the original
+      // removal is still pending. One fixture generation owns one cleanup.
+      if (cleanup) return cleanup;
+      cleanup = (async () => work())();
+      void cleanup.catch(error => cleanupFailures.push(error));
+      return cleanup;
+    },
+    async prepare() {
+      // The original teardown promise still rejects to Vitest. Retain its
+      // error for finish(), while allowing the next independent case to start.
+      await cleanup?.catch(() => {});
+      this.reset();
+      cleanup = null;
+    },
+    async finish(removeDataRoots) {
+      try {
+        await cleanup?.catch(() => {});
+        await this.drain();
+        if (cleanupFailures.length) throw new AggregateError(cleanupFailures, 'Fixture cleanup failed');
+      } finally { await removeDataRoots(); }
+    },
+    async drain() {
+      while (pending.size) await Promise.all(pending);
+      if (failures.length) throw new AggregateError(failures.splice(0), 'Fixture work failed after cancellation');
+    },
+    reset() {
+      if (pending.size) throw new Error('Fixture reset before owned work settled');
+      phases.clear();
+    },
+    summary() {
+      const now = performance.now();
+      return [...phases].map(([phase, row]) => `${phase}=${Math.round(row.ms)}ms/${row.count} max=${Math.round(row.maxMs)}ms active=${row.active.size} oldest=${Math.round(Math.max(0, ...[...row.active].map(operation => now - operation.started)))}ms`).join('; ');
+    },
+  };
+}
+
 /**
  * Build the Proxy returned from a `vi.mock('../lib/fileUtils.js', ...)`
  * factory. Pass the already-resolved `actual` (from `vi.importActual`) and

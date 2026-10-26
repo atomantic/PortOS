@@ -9,10 +9,12 @@
  * backend), then submit clips one at a time in chain order — a 'continue'
  * clip conditions on the clip before it (a last-frame still for local/fal, or
  * `continue_from_clip_id` for reactor's native continuation); a 'fresh' clip
- * starts unconditioned. When a continuation submission or render fails, the
+ * starts unconditioned. Local callers can explicitly select a verified bounded
+ * temporal window instead. When a legacy continuation submission or render fails, the
  * chain re-attempts that ONE clip unconditioned (a fresh re-establish) rather
  * than aborting the whole episode — a broken mid-chain link should degrade to
- * a visible cut, not sink everything rendered before it.
+ * a visible cut, not sink everything rendered before it. Explicit temporal
+ * requests fail rather than delivering an unconditioned substitute.
  *
  * No route/HTTP concerns here — `server/routes/continuousVideoEpisode.js`
  * exposes this over SSE progress, mirroring `chainedVideo.js`'s outer-job
@@ -21,8 +23,11 @@
 
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS } from '../../lib/fileUtils.js';
+import { tmpdir } from 'os';
+import { PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { probeFrameCount, trimVideoFromFrame } from '../../lib/ffmpeg.js';
+import { resolveContinuityRequest, continuationContract, contextPrefixFrames, extendLatentFrames, tailWindowStartFrame } from '../../lib/videoContinuity.js';
 import { broadcastSse, closeJobAfterDelay, attachSseClient as attachSse } from '../../lib/sseUtils.js';
 import { compileScriptToClips } from '../../lib/scriptVideoCompiler.js';
 import { lintClips } from '../../lib/videoPromptLinter.js';
@@ -30,6 +35,7 @@ import { videoGenEvents } from './events.js';
 import { extractLastFrame } from './frameExtraction.js';
 import { getHistoryItem } from './history.js';
 import { stitchVideos } from './stitchVideos.js';
+import { videoContinuityContractError } from './modeContract.js';
 
 export const CONTINUOUS_VIDEO_BACKENDS = Object.freeze(['local', 'reactor', 'fal']);
 
@@ -49,6 +55,26 @@ const BACKEND_MODULES = {
 const episodeJobs = new Map();
 
 export const attachEpisodeSseClient = (jobId, res) => attachSse(episodeJobs, jobId, res);
+
+// The route awaits this before returning a running descriptor; direct callers
+// recheck it before any clip can reach a backend.
+export async function resolveEpisodeContinuity({ backend = 'local', renderOptions = {} } = {}) {
+  const { continuityStrategy, contextFrames } = renderOptions;
+  if (backend !== 'local') {
+    if (continuityStrategy === 'window') {
+      throw new ServerError('Temporal window continuation is unavailable on this episode backend.', { status: 400, code: 'VIDEO_TEMPORAL_UNAVAILABLE' });
+    }
+    return null;
+  }
+  // Existing episode submissions always used stills, including on LTX. Do not
+  // silently change that contract when the caller did not select a strategy.
+  if (continuityStrategy == null) return null;
+  const { resolveVideoModel, defaultVideoModelId } = await BACKEND_MODULES.local();
+  const model = resolveVideoModel(renderOptions.modelId || defaultVideoModelId());
+  const error = videoContinuityContractError({ model, continuityStrategy, contextFrames });
+  if (error) throw error;
+  return resolveContinuityRequest({ model, continuityStrategy, contextFrames });
+}
 
 /**
  * Compile a script against a bible and attach what the linter needs: the
@@ -82,7 +108,7 @@ export function composeEpisodeClips({ scenes, bible, framings = [], compilerOpti
   });
 }
 
-const backendJobParams = ({ backend, clip, conditioning, renderOptions, jobId }) => {
+const backendJobParams = ({ backend, clip, conditioning, renderOptions, continuation, jobId }) => {
   if (backend === 'reactor') {
     return {
       settings: renderOptions.settings,
@@ -119,7 +145,13 @@ const backendJobParams = ({ backend, clip, conditioning, renderOptions, jobId })
     fps: clip.fps,
     numFrames: clip.frames,
     sourceImagePath: conditioning.sourceImagePath || null,
-    mode: conditioning.sourceImagePath ? 'image' : 'text',
+    extendFromVideoPath: conditioning.extendFromVideoPath || null,
+    historyContext: conditioning.historyContext || null,
+    keepExtendSource: false,
+    continuityStrategy: renderOptions.continuityStrategy,
+    contextFrames: renderOptions.contextFrames,
+    continuation: continuation ? { ...continuation, actualHistoryFrames: conditioning.extendFromVideoPath || conditioning.historyContext ? continuation.actualHistoryFrames : 0 } : null,
+    mode: conditioning.extendFromVideoPath ? 'extend' : (conditioning.sourceImagePath ? 'image' : 'text'),
     hidden: true,
     jobId,
   };
@@ -215,6 +247,8 @@ export async function generateContinuousVideoEpisode({
     };
   }
 
+  const continuation = await resolveEpisodeContinuity({ backend, renderOptions });
+  const runtimeContract = continuationContract(continuation?.runtime);
   const { generateVideo: generate } = await BACKEND_MODULES[backend]();
   const outerJob = { id: outerJobId, clients: [], status: 'running' };
   episodeJobs.set(outerJobId, outerJob);
@@ -233,7 +267,7 @@ export async function generateContinuousVideoEpisode({
   const runOneClip = async (clip, conditioning) => {
     const innerJobId = randomUUID();
     const params = backendJobParams({
-      backend, clip, conditioning, renderOptions, jobId: innerJobId,
+      backend, clip, conditioning, renderOptions, continuation, jobId: innerJobId,
     });
     // Listeners are registered BEFORE `generate` is even invoked, so no
     // completion event it emits can fire before we're listening for it. If
@@ -250,62 +284,113 @@ export async function generateContinuousVideoEpisode({
   };
 
   const clipIds = [];
+  const scratchPaths = [];
+  const trims = new Map();
   let previousClip = null;
-  for (let i = 0; i < clips.length; i++) {
-    const clip = clips[i];
-    emitProgress(i, clip.cutType === 'continue' ? 'continuing' : 'establishing');
-    const wantsContinuation = clip.cutType === 'continue' && previousClip;
-    const conditioning = wantsContinuation
-      // eslint-disable-next-line no-await-in-loop
-      ? await buildConditioning(backend, previousClip)
-      : {};
+  try {
+    for (let i = 0; i < clips.length; i++) {
+      const clip = clips[i];
+      emitProgress(i, clip.cutType === 'continue' ? 'continuing' : 'establishing');
+      const wantsContinuation = clip.cutType === 'continue' && previousClip;
+      let conditioning = wantsContinuation && continuation?.effectiveStrategy !== 'window'
+        // eslint-disable-next-line no-await-in-loop
+        ? await buildConditioning(backend, previousClip)
+        : {};
 
-    // eslint-disable-next-line no-await-in-loop
-    let outcome = await runOneClip(clip, conditioning).catch((err) => ({ error: err.message }));
-    if (outcome.error && wantsContinuation) {
-      console.log(`⚠️ Continuous video [${outerJobId.slice(0, 8)}] clip ${i + 1}/${clips.length} continuation failed (${outcome.error}) — re-establishing fresh`);
+      if (wantsContinuation && continuation?.effectiveStrategy === 'window') {
+        const sourcePath = join(PATHS.videos, `${previousClip}.mp4`);
+        const previousTrim = trims.get(previousClip);
+        const frames = previousTrim.startFrame + previousTrim.frames;
+        if (runtimeContract.outputLayout === 'new-output-only') {
+          const historyFrames = runtimeContract.historyFrames;
+          if (frames < historyFrames) throw new ServerError('The prior clip is too short for temporal history.', { status: 400, code: 'VIDEO_CONTINUITY_HISTORY_FAILED' });
+          conditioning = { historyContext: { sourceVideoPath: sourcePath, endFrame: frames, frames: historyFrames } };
+          continuation.actualHistoryFrames = historyFrames;
+        } else {
+          const startFrame = Math.max(trims.get(previousClip)?.startFrame || 0, tailWindowStartFrame({ totalFrames: frames, frames: continuation.contextFrames }));
+          const contextPath = join(tmpdir(), `episode-context-${outerJobId}-${randomUUID()}.mp4`);
+          // Own the destination before ffmpeg writes: partial failures also clean up.
+          scratchPaths.push(contextPath);
+          // eslint-disable-next-line no-await-in-loop
+          const cut = await trimVideoFromFrame(sourcePath, contextPath, { startFrame, fps: clips[i - 1].fps });
+          if (!cut.ok) throw new ServerError(`Failed to prepare temporal episode history: ${cut.reason}`, { status: 400, code: 'VIDEO_CONTINUITY_HISTORY_FAILED' });
+          conditioning = { extendFromVideoPath: contextPath };
+          continuation.actualHistoryFrames = frames - startFrame;
+        }
+      }
+
       // eslint-disable-next-line no-await-in-loop
-      outcome = await runOneClip(clip, {}).catch((err) => ({ error: err.message }));
+      let outcome = await runOneClip(clip, conditioning).catch((err) => ({ error: err.message }));
+      if (outcome.error && wantsContinuation && continuation?.effectiveStrategy !== 'window') {
+        console.log(`⚠️ Continuous video [${outerJobId.slice(0, 8)}] clip ${i + 1}/${clips.length} continuation failed (${outcome.error}) — re-establishing fresh`);
+        // eslint-disable-next-line no-await-in-loop
+        outcome = await runOneClip(clip, {}).catch((err) => ({ error: err.message }));
+      }
+      if (outcome.error) {
+        videoGenEvents.emit('failed', { generationId: outerJobId, error: outcome.error });
+        broadcastSse(outerJob, { type: 'error', error: outcome.error });
+        closeJobAfterDelay(episodeJobs, outerJobId);
+        return {
+          ok: false, jobId: outerJobId, stage: 'generation', failedClipIndex: i, error: outcome.error, clipIds,
+        };
+      }
+      clipIds.push(outcome.innerJobId);
+      if (continuation?.effectiveStrategy === 'window') {
+        // eslint-disable-next-line no-await-in-loop
+        const frames = await probeFrameCount(join(PATHS.videos, `${outcome.innerJobId}.mp4`));
+        if (!Number.isInteger(frames) || frames <= 0) {
+          throw new ServerError('Cannot measure the temporal episode output.', { status: 400, code: 'VIDEO_CONTINUITY_OUTPUT_UNMEASURABLE' });
+        }
+        const hasEcho = wantsContinuation && runtimeContract.outputLayout === 'echoed-history-prefix';
+        const prefix = hasEcho
+          ? contextPrefixFrames({ runtime: continuation.runtime, totalFrames: frames, extendLatents: extendLatentFrames(clip.frames, continuation.runtime) })
+          : 0;
+        if (hasEcho && (prefix <= 0 || prefix >= frames)) {
+          throw new ServerError('Cannot measure the temporal episode output prefix.', { status: 400, code: 'VIDEO_CONTINUITY_OUTPUT_UNMEASURABLE' });
+        }
+        trims.set(outcome.innerJobId, { startFrame: prefix, frames: frames - prefix });
+      }
+      previousClip = outcome.innerJobId;
     }
-    if (outcome.error) {
-      videoGenEvents.emit('failed', { generationId: outerJobId, error: outcome.error });
-      broadcastSse(outerJob, { type: 'error', error: outcome.error });
+
+    videoGenEvents.emit('progress', { generationId: outerJobId, progress: 1, message: 'Stitching episode' });
+    broadcastSse(outerJob, { type: 'progress', progress: 1, message: 'Stitching episode' });
+
+    const stitched = await stitchVideos(clipIds, {
+      id: outerJobId,
+      filenamePrefix: 'episode',
+      historyKey: 'chainedFrom',
+      trims: trims.size ? trims : null,
+      requireExactTrims: continuation?.effectiveStrategy === 'window',
+      continuation,
+    }).catch((err) => ({ error: err.message }));
+    if (stitched?.error) {
+      videoGenEvents.emit('failed', { generationId: outerJobId, error: `Stitch failed: ${stitched.error}` });
+      broadcastSse(outerJob, { type: 'error', error: `Stitch failed: ${stitched.error}` });
       closeJobAfterDelay(episodeJobs, outerJobId);
       return {
-        ok: false, jobId: outerJobId, stage: 'generation', failedClipIndex: i, error: outcome.error, clipIds,
+        ok: false, jobId: outerJobId, stage: 'stitch', error: stitched.error, clipIds,
       };
     }
-    clipIds.push(outcome.innerJobId);
-    previousClip = outcome.innerJobId;
-  }
 
-  videoGenEvents.emit('progress', { generationId: outerJobId, progress: 1, message: 'Stitching episode' });
-  broadcastSse(outerJob, { type: 'progress', progress: 1, message: 'Stitching episode' });
-
-  const stitched = await stitchVideos(clipIds, {
-    id: outerJobId,
-    filenamePrefix: 'episode',
-    historyKey: 'chainedFrom',
-  }).catch((err) => ({ error: err.message }));
-  if (stitched?.error) {
-    videoGenEvents.emit('failed', { generationId: outerJobId, error: `Stitch failed: ${stitched.error}` });
-    broadcastSse(outerJob, { type: 'error', error: `Stitch failed: ${stitched.error}` });
-    closeJobAfterDelay(episodeJobs, outerJobId);
-    return {
-      ok: false, jobId: outerJobId, stage: 'stitch', error: stitched.error, clipIds,
+    const result = {
+      ok: true,
+      jobId: outerJobId,
+      filename: stitched.filename,
+      thumbnail: stitched.thumbnail,
+      path: `/data/videos/${stitched.filename}`,
+      clipIds,
     };
+    videoGenEvents.emit('completed', { generationId: outerJobId, ...result });
+    broadcastSse(outerJob, { type: 'complete', result });
+    closeJobAfterDelay(episodeJobs, outerJobId);
+    return result;
+  } catch (error) {
+    videoGenEvents.emit('failed', { generationId: outerJobId, error: error.message });
+    broadcastSse(outerJob, { type: 'error', error: error.message });
+    closeJobAfterDelay(episodeJobs, outerJobId);
+    return { ok: false, jobId: outerJobId, stage: 'generation', error: error.message, clipIds };
+  } finally {
+    await Promise.all(scratchPaths.map((path) => unlinkGuarded(path).catch(() => {})));
   }
-
-  const result = {
-    ok: true,
-    jobId: outerJobId,
-    filename: stitched.filename,
-    thumbnail: stitched.thumbnail,
-    path: `/data/videos/${stitched.filename}`,
-    clipIds,
-  };
-  videoGenEvents.emit('completed', { generationId: outerJobId, ...result });
-  broadcastSse(outerJob, { type: 'complete', result });
-  closeJobAfterDelay(episodeJobs, outerJobId);
-  return result;
 }

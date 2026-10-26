@@ -1,3 +1,4 @@
+import { isDefaultA2vLoraStages } from './videoLoraStageValidation.js';
 /**
  * One builder for the versioned federated-media submission body.
  *
@@ -41,6 +42,7 @@ const FIELD_MAPS = Object.freeze({
   }),
   video: Object.freeze({
     audioConditioning: 'audioConditioning',
+    a2vLoraStageStrengths: 'a2vLoraStageStrengths',
     negativePrompt: 'negativePrompt',
     width: 'width',
     height: 'height',
@@ -86,6 +88,7 @@ export function buildFederatedMediaRequest({ kind, params, engine }) {
     prompt: params?.prompt,
   };
   for (const [local, wire] of Object.entries(FIELD_MAPS[kind])) {
+    if (local === 'a2vLoraStageStrengths' && isDefaultA2vLoraStages(params?.[local])) continue;
     // `negativePrompt` is the one field where an empty string is meaningless
     // rather than meaningful — the wire schema trims it to '' and then rejects
     // the min(1)-free optional as noise, so treat blank as absent.

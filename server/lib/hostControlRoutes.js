@@ -423,11 +423,16 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/instances/provision-cert',
   // Tailcat: installs the binary (brew / go install) and starts the relay
   // processes; serve opens the remote ingress and reveals its bearer address.
-  // GET status and the DELETEs (they stop a relay) stay open.
+  // Serve capabilities and device trust management require operator authority.
   'POST /api/instances/peers/tailcat',
   'POST /api/instances/peers/tailcat/forwards/:id/retry',
   'POST /api/instances/peers/tailcat/serve',
   'POST /api/instances/peers/tailcat/serve/retry',
+  'GET /api/instances/peers/tailcat/serve',
+  'GET /api/instances/peers/tailcat/devices',
+  'POST /api/instances/peers/tailcat/devices',
+  'PATCH /api/instances/peers/tailcat/devices/enforcement',
+  'DELETE /api/instances/peers/tailcat/devices/:id',
 
   // Apps: create/edit choose the repo path and the start/build commands; the
   // lifecycle and launch routes run them under PM2 or the native launcher.
@@ -739,6 +744,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/video-gen/stitch',
   // Start trim probes/transcodes a new gallery clip with ffprobe/ffmpeg (#11418).
   'POST /api/video-gen/history/:id/trim-start',
+  'POST /api/video-gen/metal-buffer-profiles/clear',
   // Timeline render spawns ffmpeg/ffprobe on the host for segments and audio (#11432).
   'POST /api/video-timeline/projects/:id/render',
   // Music Video ffmpeg renders: final render, per-shot segments, shot preview
@@ -1067,6 +1073,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // sheet route above, whose backend may be an agent harness (Codex). The
   // preview only builds text and stays open.
   'POST /api/catalog/ingredients/:id/sheets',
+  // Greybox draft hands the place and the user's instruction to a caller-chosen
+  // provider (possibly a tool-capable harness). Save and capture are data-only.
+  'POST /api/catalog/ingredients/:id/greybox/draft',
 
   // Importer, Brain and analytics AI (#11036): caller text, stored reference
   // data and a caller-chosen provider reach a non-tool-free runner. Authorize

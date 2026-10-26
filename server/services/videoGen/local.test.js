@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { basename, join } from 'path';
 import { tmpdir, totalmem } from 'os';
 import { MINIMAX_H3_HOST_RESERVE_GB } from '../../lib/minimaxH3Memory.js';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 // Pure table, no mocking involved — a static import survives vi.resetModules().
 import { INSPIRE_DEFAULT_IMAGE_STRENGTH } from '../../lib/videoReferenceModes.js';
 
@@ -19,8 +19,9 @@ const { heavyClaimRelease, heavyClaimHandoff, mockPrepareLocalMemory } = vi.hois
   // omitted so a test can make it fail, which is how the relaunch path's
   // spawned-but-never-wired child becomes observable.
   heavyClaimHandoff: vi.fn(async () => {}),
-  mockPrepareLocalMemory: vi.fn(async () => ({ unloaded: [], availableGb: 64, totalGb: 64, budgetGb: 64, blockers: [] })),
+  mockPrepareLocalMemory: vi.fn(async () => ({ unloaded: [], availableGb: 120, totalGb: 128, budgetGb: 120, blockers: [] })),
 }));
+vi.mock('os', async importOriginal => ({ ...await importOriginal(), totalmem: () => 128 * 1024 ** 3 }));
 vi.mock('../../lib/heavyJobClaim.js', () => ({
   claimHeavyLocalJob: vi.fn(async () => ({
     ok: true, holder: {}, release: heavyClaimRelease, handoffTo: heavyClaimHandoff,
@@ -81,6 +82,7 @@ const fsPromisesMock = vi.hoisted(() => ({
 
 vi.mock('../../lib/fileUtils.js', () => ({
   tryReadFile: vi.fn().mockResolvedValue(null),
+  sha256File: vi.fn(async (path) => createHash('sha256').update(path).digest('hex')),
   ensureDir: vi.fn(async () => {}),
   PATHS: MOCK_PATHS,
   readJSONFile: vi.fn(async () => []),
@@ -142,11 +144,8 @@ vi.mock('../../lib/mediaModels.js', async () => {
         revision: '6818f6c32d12b210915e44ad56a4228c2608f160',
         files: ['LICENSE', 'FL2VA/vae/video/config.json'],
       }],
-      // Deliberately a 1 GB floor rather than the shipped 128 GB: these suites
-      // must assert the same thing on every machine and in CI, and a real floor
-      // would make the capacity gate pass or fail with the runner's own RAM.
-      // The shipped table's numbers are pinned in lib/minimaxH3Memory.test.js.
-      memoryProfiles: [{ id: 'unified-8bit', name: 'Unified 8-bit', minMemoryGb: 1, minVramGb: null, unified: true }],
+      // A fixed host and the real declared floor keep admission independent of CI hardware.
+      memoryProfiles: [{ id: 'unified-8bit', name: 'Unified 8-bit', minMemoryGb: 128, minVramGb: null, unified: true }],
     },
     {
       id: 'minimax_h3_cuda', name: 'MiniMax H3 CUDA int8', runtime: 'minimax_h3_cuda',
@@ -397,6 +396,7 @@ vi.mock('./runtimes.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
+    resolveA2vLoraStageCapable: vi.fn(async () => true),
     byovRuntimeLoraCapable: vi.fn((runtime) => runtime === 'minimax_h3'
       && (h3LoraState.cached ?? h3LoraState.capable)),
     resolveByovRuntimeLoraCapable: vi.fn(async (runtime) => runtime === 'minimax_h3' && h3LoraState.capable),
@@ -465,7 +465,7 @@ vi.mock('fs/promises', () => fsPromisesMock);
 const spawnState = vi.hoisted(() => ({ nextExitCode: null }));
 
 const { makeProc } = vi.hoisted(() => ({
-  makeProc: () => {
+  makeProc: (exitCode) => {
     const listeners = {};
     const proc = {
       pid: 12345,
@@ -480,7 +480,7 @@ const { makeProc } = vi.hoisted(() => ({
     };
     // fire close(0) async so the caller's .on('close') handler can register first
     setImmediate(() => {
-      const code = spawnState.nextExitCode ?? 0;
+      const code = exitCode ?? spawnState.nextExitCode ?? 0;
       spawnState.nextExitCode = null;
       proc.exitCode = code;
       listeners.close?.(code, null);
@@ -560,8 +560,9 @@ const renderToTerminal = async (request) => {
   videoGenEvents.on('completed', onCompleted);
   videoGenEvents.on('failed', onFailed);
   try {
-    await generateVideo(request);
+    const result = await generateVideo(request);
     expect(await settled).toEqual({ status: 'completed', error: undefined });
+    return result;
   } finally {
     videoGenEvents.off('completed', onCompleted);
     videoGenEvents.off('failed', onFailed);
@@ -1200,8 +1201,6 @@ describe('generateChainedVideo — continuation strategy (context window vs last
   const WINDOW_START_HOP = 27;
   // 25 + (49−25) + (49−25) once the echoes come out of the timeline…
   const STITCHED_FRAMES_3_CHUNKS = 73;
-  // …versus the 123 frames actually on the timeline if the cuts don't land.
-  const UNTRIMMED_FRAMES_3_CHUNKS = 123;
 
   const flagValue = (args, flag) => (Array.isArray(args) && args.includes(flag)
     ? args[args.indexOf(flag) + 1] : null);
@@ -1212,7 +1211,7 @@ describe('generateChainedVideo — continuation strategy (context window vs last
    * and the raw child_process spawns (which is where both extractLastFrame's
    * `-sseof` seek and the final concat show up).
    */
-  async function runChain(chainParams, totalChunks, probeFrames = null) {
+  async function runChain(chainParams, totalChunks, probeFrames = null, expectFailure = false) {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const { trimVideoFromFrame, probeFrameCount } = await import('../../lib/ffmpeg.js');
     const { spawn } = await import('../../lib/childProcess.js');
@@ -1243,9 +1242,18 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     );
     videoGenEvents.on('started', (e) => innerJobIds.push(e.generationId));
 
+    const outerJobId = randomUUID();
+    const failed = expectFailure ? new Promise((resolve) => {
+      const listener = (event) => {
+        if (event.generationId !== outerJobId) return;
+        videoGenEvents.off('failed', listener);
+        resolve(event);
+      };
+      videoGenEvents.on('failed', listener);
+    }) : null;
     generateChainedVideo({
       chunks: totalChunks,
-      jobId: randomUUID(),
+      jobId: outerJobId,
       pythonPath: '/usr/bin/python3',
       modelId: 'ltx2_unified',
       prompt: 'test prompt',
@@ -1272,7 +1280,8 @@ describe('generateChainedVideo — continuation strategy (context window vs last
       const id = innerJobIds[i];
       videoGenEvents.emit('completed', { generationId: id, filename: `${id}.mp4`, path: `/data/videos/${id}.mp4` });
     }
-    await waitForStitch();
+    if (failed) await failed;
+    else await waitForStitch();
     videoGenEvents.removeAllListeners('started');
 
     const spawns = vi.mocked(spawn).mock.calls;
@@ -1370,12 +1379,9 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     expect(concat).not.toContain('-f');
   });
 
-  it('falls back to a stream copy when the trimmed filter graph fails, rather than losing the chain', async () => {
-    // The pre-trim implementation degraded to a repeated seam when a chunk
-    // trim failed, because failing there would have discarded every chunk
-    // already rendered. Moving the cut into the concat has to keep that: the
-    // untrimmed chunks were never re-encoded, so they're still in codec
-    // lockstep and the demuxer can still assemble them.
+  it('refuses a repeated-context salvage when the required exact trim fails', async () => {
+    // Completed chunks remain available, but a failed seam trim cannot publish
+    // a stitched clip that repeats history while claiming exact delivery.
     const { spawn } = await import('../../lib/childProcess.js');
     const failingProc = () => {
       const listeners = {};
@@ -1394,17 +1400,11 @@ describe('generateChainedVideo — continuation strategy (context window vs last
       Array.isArray(args) && args.includes('-filter_complex') ? failingProc() : makeProc()
     ));
     try {
-      const { spawns, stitched } = await runChain({}, 3);
+      const { spawns, stitched } = await runChain({}, 3, null, true);
       const concats = spawns.map(([, args]) => args).filter(Array.isArray);
       expect(concats.some((args) => args.includes('-filter_complex'))).toBe(true);
-      // …and the salvage run, which is the plain demuxer stream copy.
-      const copy = concats.find((args) => args.includes('-f') && args.includes('copy'));
-      expect(copy).toBeTruthy();
-      // The echoes are still in the output, so the record must say so — and
-      // "so" is the chunks' MEASURED lengths (25 + 49 + 49), not the numFrames
-      // they were rendered at, which understates an extend render's file by
-      // the whole context window.
-      expect(stitched?.numFrames).toBe(UNTRIMMED_FRAMES_3_CHUNKS);
+      expect(concats.some((args) => args.includes('-f') && args.includes('copy'))).toBe(false);
+      expect(stitched).toBeNull();
     } finally {
       vi.mocked(spawn).mockImplementation(() => makeProc());
     }
@@ -1582,7 +1582,7 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     // Chunk 1's "source" is a temp tail window the stitch already holds; only
     // chunk 0 renders from the user's own clip. A hidden chunk keeps no audio master.
     expect(spliceExtendSource).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      sourcePath: sourceVideoPath, keepMaster: false, outputPath: join(MOCK_PATHS.videos, `${innerJobIds[0]}.mp4`),
+      runtime: 'ltx2', sourcePath: sourceVideoPath, keepMaster: false, outputPath: join(MOCK_PATHS.videos, `${innerJobIds[0]}.mp4`),
     }));
   });
 
@@ -2881,6 +2881,28 @@ describe('generateVideo — LoRA trigger-word weaving (#4665)', () => {
 });
 
 describe('generateVideo — heavy claim setup cleanup (#4364)', () => {
+  it('retains resolved segment settings and parent mapping before a pre-watch argument failure', async () => {
+    const recorder = await import('./executionRecorder.js');
+    const renderArgs = await import('./renderArgs.js');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockClear();
+    const recordExecution = vi.fn(async () => true);
+    const recordDiagnostics = vi.fn(async () => true);
+    recorder.setVideoExecutionRecorder({ recordExecution, recordDiagnostics });
+    const executionParent = { jobId: 'queue-outer', segmentIndex: 1, segmentCount: 3 };
+    const build = vi.spyOn(renderArgs, 'buildArgs').mockImplementationOnce(() => { throw new Error('synthetic argument refusal'); });
+    try {
+      await expect(generateVideo({ jobId: 'pre-watch-receipt', executionParent, modelId: 'ltx2_unified', prompt: 'Synthetic action', seed: 37,
+        width: 512, height: 512, numFrames: 25, fps: 24, mode: 'text' })).rejects.toThrow('synthetic argument refusal');
+      expect(recordExecution).toHaveBeenCalledWith('pre-watch-receipt', expect.objectContaining({ seed: 37, width: 512, height: 512, numFrames: 25, steps: 30, executionParent }));
+      expect(recordDiagnostics).toHaveBeenCalledWith('pre-watch-receipt', { termination: expect.objectContaining({ reason: 'refused' }) }, executionParent);
+      expect(spawnDetached).not.toHaveBeenCalled();
+    } finally {
+      build.mockRestore();
+      recorder.setVideoExecutionRecorder(null);
+    }
+  });
+
   it('releases the claim when local setup fails before spawn', async () => {
     mockPrepareLocalMemory.mockRejectedValueOnce(new Error('memory setup failed'));
 
@@ -3229,6 +3251,49 @@ describe('generateVideo — Wan MLX-Gen contract', () => {
 });
 
 describe('generateVideo — MiniMax H3 MLX contract', () => {
+  it('fails the owning assertion when mocked render completion fails', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => makeProc(1));
+    await expect(renderToTerminal({
+      jobId: 'h3-terminal-failure', modelId: 'minimax_h3_8bit',
+      prompt: 'Synthetic completion failure', mode: 'text',
+    })).rejects.toThrow(/failed/);
+  });
+
+  it('refuses explicit temporal replay and direct history before resolving assets or spawning', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockClear();
+    for (const conditioning of [
+      { continuityStrategy: 'window', contextFrames: 17 },
+      { historyContext: { sourceVideoPath: '/mock/prior.mp4', endFrame: 124, frames: 17 } },
+    ]) {
+      await expect(generateVideo({ modelId: 'minimax_h3_8bit', prompt: 'A paper boat on a pond',
+        ...conditioning })).rejects.toMatchObject({ code: 'VIDEO_TEMPORAL_UNAVAILABLE' });
+    }
+    expect(spawnDetached).not.toHaveBeenCalled();
+  });
+
+  it('records current frame behavior instead of replaying stale window provenance', async () => {
+    const { atomicWrite } = await import('../../lib/fileUtils.js');
+    const jobId = 'h3-stale-window-provenance';
+    await renderToTerminal({
+      jobId, modelId: 'minimax_h3_8bit', prompt: 'A paper boat on a pond',
+      mode: 'text', numFrames: 124, fps: 24,
+      continuation: {
+        requestedStrategy: 'auto', effectiveStrategy: 'window',
+        contextFrames: 22, actualHistoryFrames: 22, runtime: 'ltx2',
+        capability: true, backendPin: null, unavailableReason: null,
+      },
+    });
+    const record = vi.mocked(atomicWrite).mock.calls
+      .flatMap(([, value]) => Array.isArray(value) ? value : [])
+      .find(value => value.id === jobId);
+    expect(record.continuation).toMatchObject({
+      requestedStrategy: 'auto', effectiveStrategy: 'frame', actualHistoryFrames: 0,
+      contextFrames: 0, runtime: 'minimax_h3', capability: false,
+    });
+  });
+
   // H3 anchors keyframes at the first/last latent frame only, so the ltx2
   // arbitrary-index array and every non-keyframe conditioning channel stay out.
   it.each([
@@ -3287,7 +3352,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-keyframes',
       modelId: 'minimax_h3_8bit',
 
@@ -3354,7 +3419,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     process.env.HUGGING_FACE_HUB_TOKEN = 'test-secret-2';
 
     try {
-      await generateVideo({
+      await renderToTerminal({
         jobId: 'h3-args',
         modelId: 'minimax_h3_8bit',
 
@@ -3461,7 +3526,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-stock-encoder',
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',
@@ -3480,7 +3545,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-swapped-encoder',
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',
@@ -3515,7 +3580,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-multishard-encoder',
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',
@@ -3588,7 +3653,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-native-default',
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',
@@ -3617,7 +3682,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     )));
 
     try {
-      await generateVideo({
+      await renderToTerminal({
         jobId: 'h3-invalid-native-default',
         modelId: 'minimax_h3_8bit',
         prompt: 'a fox watches the rain',
@@ -3647,7 +3712,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: `h3-memory-${modelId}`,
       modelId,
       prompt: 'a fox watches the rain',
@@ -3657,7 +3722,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const [, args] = spawnMock.mock.calls.find(([, childArgs]) => (
       Array.isArray(childArgs) && childArgs.some((arg) => basename(String(arg)) === helper)
     ));
-    expect(args[args.indexOf('--min-system-memory-gb') + 1]).toBe('1');
+    expect(args[args.indexOf('--min-system-memory-gb') + 1]).toBe(modelId === 'minimax_h3_8bit' ? '128' : '1');
     expect(args[args.indexOf('--memory-headroom-gb') + 1]).toBe(String(MINIMAX_H3_HOST_RESERVE_GB));
     // Only the MLX lane takes a server-selected profile: on CUDA the tier is
     // VRAM-driven, so it stays the runner's call on --offload-profile.
@@ -3681,7 +3746,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: `h3-embed-cache-${modelId}`,
       modelId,
       prompt: 'a fox watches the rain',
@@ -3733,7 +3798,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
 // the render path must honor it in both directions rather than blanket-rejecting
 // the runtime.
 describe.skipIf(process.platform === 'win32')('MiniMax H3 user LoRAs', () => {
-  const h3Render = (jobId) => generateVideo({
+  const h3Render = (jobId) => renderToTerminal({
     jobId,
     modelId: 'minimax_h3_8bit',
     prompt: 'a fox watches the rain',
@@ -3777,7 +3842,7 @@ describe.skipIf(process.platform === 'win32')('MiniMax H3 user LoRAs', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-lora-ok',
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',
@@ -3802,7 +3867,7 @@ describe.skipIf(process.platform === 'win32')('MiniMax H3 user LoRAs', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-no-lora',
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',
@@ -5037,7 +5102,7 @@ describe('generateVideo — MiniMax H3 CUDA contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-cuda-args',
       modelId: 'minimax_h3_cuda',
       prompt: 'a fox watches the rain',
@@ -5079,7 +5144,7 @@ describe('generateVideo — MiniMax H3 CUDA contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-cuda-fflf',
       modelId: 'minimax_h3_cuda',
       prompt: 'a fox watches the rain',
@@ -5145,7 +5210,7 @@ describe('generateVideo — MiniMax H3 CUDA contract', () => {
       model.id === 'minimax_h3_cuda' ? { ...model, offloadProfile: profile } : model
     )));
 
-    const render = () => generateVideo({
+    const render = () => renderToTerminal({
       jobId: `h3-cuda-offload-${profile}`,
       modelId: 'minimax_h3_cuda',
       prompt: 'a fox watches the rain',
@@ -5173,7 +5238,7 @@ describe('generateVideo — MiniMax H3 CUDA contract', () => {
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
-    await generateVideo({
+    await renderToTerminal({
       jobId: 'h3-cuda-offload-default',
       modelId: 'minimax_h3_cuda',
       prompt: 'a fox watches the rain',
@@ -6165,6 +6230,13 @@ describe('generateVideo — LTX-2/2.5 block streaming (#6499)', () => {
     return call[1];
   };
 
+  it('replays an A2V schedule into the helper without dropping selected LoRA strength', async () => {
+    const args = await renderArgs({ jobId: 'a2v-stage-replay', mode: 'a2v', audioFilePath: '/mock/audio.wav',
+      a2vLoraStageStrengths: [0, 1], loras: [{ filename: 'example.safetensors', scale: 0.7 }] });
+    expect(args[args.indexOf('--a2v-lora-stage-strengths') + 1]).toBe('[0,1]');
+    expect(JSON.parse(args[args.indexOf('--user-loras') + 1])[0].strength).toBe(0.7);
+  });
+
   it('threads an explicit request into the helper argv', async () => {
     const args = await renderArgs({ jobId: 'stream-explicit', mode: 'text', streamingMode: 'stream' });
     expect(args[args.indexOf('--streaming-mode') + 1]).toBe('stream');
@@ -6205,6 +6277,13 @@ describe('generateVideo — LTX-2/2.5 block streaming (#6499)', () => {
       expect(started).toBeTruthy();
       return started;
     };
+
+    it('saves requested stage multipliers on A2V history, including the legacy default', async () => {
+      const input = { mode: 'a2v', audioFilePath: '/mock/audio.wav', loras: [{ filename: 'example.safetensors', scale: 0.7 }] };
+      expect(await metaFor('a2v-stage-meta', { ...input, a2vLoraStageStrengths: [0, 1] }))
+        .toMatchObject({ a2vLoraStageStrengths: [0, 1], loraScales: [0.7] });
+      expect(await metaFor('a2v-stage-legacy-meta', input)).toMatchObject({ a2vLoraStageStrengths: [1, 1] });
+    });
 
     it('stamps the REQUESTED mode', async () => {
       const meta = await metaFor('stream-meta-explicit', { streamingMode: 'stream' });
@@ -6398,7 +6477,7 @@ describe('generateVideo — MiniMax H3 draft decode (#5423)', () => {
     let startedMeta = null;
     const capture = (e) => { if (e.generationId === jobId) startedMeta = e; };
     videoGenEvents.on('started', capture);
-    await generateVideo({
+    await renderToTerminal({
       jobId,
       modelId: 'minimax_h3_8bit',
       prompt: 'a fox watches the rain',

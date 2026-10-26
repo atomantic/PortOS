@@ -3,6 +3,9 @@ import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  record: vi.fn(),
+  diagnostics: vi.fn(),
+  memory: null,
   claim: vi.fn(),
   release: vi.fn(),
   handoff: vi.fn(),
@@ -15,13 +18,26 @@ const mocks = vi.hoisted(() => ({
   thumbnail: vi.fn(),
   history: [],
   mlx: false,
+  signature: vi.fn(),
+  profiles: null,
+  outputs: new Map(),
 }));
 
+vi.mock('./executionRecorder.js', () => ({ recordVideoExecution: mocks.record, recordVideoExecutionDiagnostics: mocks.diagnostics }));
 vi.mock('../../lib/heavyJobClaim.js', () => ({ claimHeavyLocalJob: mocks.claim }));
 vi.mock('../../lib/detachedSpawn.js', () => ({ spawnDetached: mocks.spawn }));
 // No real renderer, caffeinate, GPU unloading, credentials, history, or disk writes.
 vi.mock('../../lib/childProcess.js', () => ({ spawn: () => new EventEmitter() }));
-vi.mock('fs', async (importOriginal) => ({ ...(await importOriginal()), watch: mocks.watch }));
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, watch: mocks.watch,
+    existsSync: path => mocks.outputs.has(path) || actual.existsSync(path),
+    statSync: path => mocks.outputs.get(path) || actual.statSync(path),
+  };
+});
+vi.mock('./metalBufferProfiles.js', async importOriginal => ({
+  ...await importOriginal(), getMetalBufferProfiles: () => mocks.profiles, metalBufferExecutionSignature: mocks.signature,
+}));
 vi.mock('../../lib/fileUtils.js', () => ({
   PATHS: { videos: '/mock/videos', videoThumbnails: '/mock/thumbnails' },
   rmGuarded: mocks.rm,
@@ -31,11 +47,11 @@ vi.mock('../../lib/fileUtils.js', () => ({
 vi.mock('../../lib/ffmpeg.js', () => ({
   optimizeForStreaming: mocks.optimize,
   generateThumbnail: mocks.thumbnail,
-  probeFrameCount: vi.fn(),
-  probeVideoDuration: vi.fn(),
+  probeFrameCount: vi.fn(async () => 25),
+  probeVideoDuration: vi.fn(async () => 25 / 24),
 }));
 vi.mock('../localMemory.js', () => ({
-  prepareLocalMemory: async () => ({ blockers: [], unloaded: [] }),
+  prepareLocalMemory: async () => mocks.memory,
   gpuBlockersMessage: vi.fn(),
 }));
 vi.mock('../hfToken.js', () => ({ hfChildEnv: async () => ({}) }));
@@ -47,6 +63,7 @@ vi.mock('./runtimes.js', () => ({
   runtimeUsesMlx: () => mocks.mlx,
   invalidateByovReadyCache: vi.fn(),
   pickDeathFingerprint: async () => null,
+  currentMetalProfileFingerprint: async () => null,
 }));
 vi.mock('./extendSplice.js', () => ({ spliceExtendSource: mocks.splice }));
 vi.mock('./displayPower.js', () => ({
@@ -63,6 +80,7 @@ import { pinArch, pinPlatform } from '../../lib/testHelper.js';
 import { videoGenEvents } from './events.js';
 import { videoJobState } from './jobState.js';
 import { spawnAndWatchVideo } from './spawnWatch.js';
+import { _createMetalBufferProfiles } from './metalBufferProfiles.js';
 
 // Watchdog timing, buffered early exits, and Gemma retry/cancellation already
 // have generateVideo boundary coverage in local.test.js. These tests pin the
@@ -78,7 +96,12 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     vi.useFakeTimers();
     vi.resetAllMocks();
     mocks.history = [];
+    mocks.memory = { blockers: [], unloaded: [], totalGb: 128, availableGb: 120 };
+    mocks.record.mockResolvedValue(true);
+    mocks.diagnostics.mockResolvedValue(true);
     mocks.mlx = false;
+    mocks.signature.mockResolvedValue(null);
+    mocks.outputs.clear();
     mocks.release.mockResolvedValue();
     mocks.handoff.mockResolvedValue();
     mocks.claim.mockResolvedValue({ ok: true, release: mocks.release, handoffTo: mocks.handoff });
@@ -132,6 +155,130 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     await vi.advanceTimersByTimeAsync(0);
   };
 
+  const h3Model = () => ({ runtime: 'minimax_h3', memoryProfiles: [{ id: 'unified-8bit', minMemoryGb: 128 }] });
+
+  it.each([[64, 'MINIMAX_H3_HEADROOM_INSUFFICIENT'], [0, 'MINIMAX_H3_HEADROOM_INSUFFICIENT'], [null, 'MINIMAX_H3_MEMORY_UNKNOWN']])('refuses H3 with live available RAM %s before launch and releases the claim', async (availableGb, code) => {
+    params.model = h3Model();
+    mocks.memory.availableGb = availableGb;
+    await expect(spawnAndWatchVideo(params)).rejects.toMatchObject({ code });
+    expect(mocks.record).toHaveBeenCalledWith(params.jobId, expect.objectContaining({ seed: 42, width: 512, numFrames: 25 }));
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(mocks.release).toHaveBeenCalledOnce();
+    expect(mocks.diagnostics).toHaveBeenCalledWith(params.jobId, expect.objectContaining({ termination: expect.objectContaining({ reason: 'refused' }) }));
+  });
+
+  it('refuses an unknown H3 placement requirement without inventing a budget', async () => {
+    params.model = { runtime: 'minimax_h3', memoryProfiles: [] };
+    await expect(spawnAndWatchVideo(params)).rejects.toMatchObject({ code: 'MINIMAX_H3_MEMORY_UNKNOWN' });
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(mocks.release).toHaveBeenCalledOnce();
+  });
+
+  it('keeps queued segment identity on resolved settings, memory and cancellation receipts', async () => {
+    params.model = h3Model();
+    const executionParent = { jobId: 'queue-outer', segmentIndex: 1, segmentCount: 3 };
+    params.executionParent = executionParent;
+    await spawnAndWatchVideo(params);
+    expect(mocks.record).toHaveBeenCalledWith(params.jobId, expect.objectContaining({ seed: 42, executionParent }));
+    child.stderr.emit('data', Buffer.from('H3MEMORY:{"peakAllocatedBytes":900}\n'));
+    await vi.advanceTimersByTimeAsync(250);
+    videoJobState.cancelEpoch += 1;
+    child.signalCode = 'SIGTERM';
+    child.emit('close', null, 'SIGTERM');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.diagnostics).toHaveBeenLastCalledWith(params.jobId, expect.objectContaining({
+      memory: { peakAllocatedBytes: 900 }, termination: expect.objectContaining({ signal: 'SIGTERM', reason: 'canceled' }),
+    }), executionParent);
+    expect(mocks.diagnostics.mock.calls.every(call => call[2] === executionParent)).toBe(true);
+    expect(failed).toHaveBeenCalledOnce();
+  });
+
+  it('does not launch when the execution receipt cannot be made durable', async () => {
+    mocks.record.mockRejectedValue(new Error('receipt storage unavailable'));
+    await expect(spawnAndWatchVideo(params)).rejects.toThrow('receipt storage unavailable');
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(mocks.claim).not.toHaveBeenCalled();
+    expect(mocks.release).not.toHaveBeenCalled();
+  });
+
+  it('passes the admitted allocator envelope and drains bounded measured peaks before a signal failure', async () => {
+    params.model = h3Model();
+    await spawnAndWatchVideo(params);
+    expect(mocks.spawn.mock.calls[0][1]).toContain('--memory-budget-bytes');
+    expect(mocks.spawn.mock.calls[0][1]).toContain(String(112 * 1024 ** 3));
+    child.stderr.emit('data', Buffer.from('H3MEMORY:{"peakAllocatedBytes":900,"peakRssBytes":500,"allocatorApplied":true,"allocatorLimitBytes":1024}\n'));
+    child.stderr.emit('data', Buffer.from('H3MEMORY:{"peakAllocatedBytes":700,"peakRssBytes":600,"privatePath":"/private/example"}\n'));
+    child.stderr.emit('data', Buffer.from('H3MEMORY:{"peakAllocatedBytes":-1,"peakRssBytes":"not-measured"}\n'));
+    child.signalCode = 'SIGKILL';
+    child.emit('close', null, 'SIGKILL');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.diagnostics).toHaveBeenLastCalledWith(params.jobId, {
+      memory: { peakAllocatedBytes: 900, peakRssBytes: 600, allocatorApplied: true, allocatorLimitBytes: 1024 },
+      termination: expect.objectContaining({ exitCode: null, signal: 'SIGKILL', reason: 'failed' }),
+    });
+    expect(failed).toHaveBeenCalledOnce();
+  });
+
+  it('retries the accumulated telemetry after a transient write failure and retains the actual signal', async () => {
+    params.model = h3Model();
+    await spawnAndWatchVideo(params);
+    mocks.diagnostics.mockRejectedValueOnce(new Error('temporary evidence storage failure'));
+    child.stderr.emit('data', Buffer.from('H3MEMORY:{"peakAllocatedBytes":900}\n'));
+    await vi.advanceTimersByTimeAsync(250);
+    child.signalCode = 'SIGKILL';
+    child.emit('close', null, 'SIGKILL');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.diagnostics).toHaveBeenLastCalledWith(params.jobId, {
+      memory: { peakAllocatedBytes: 900 }, termination: expect.objectContaining({ signal: 'SIGKILL', reason: 'failed' }),
+    });
+    expect(mocks.diagnostics).toHaveBeenCalledWith(params.jobId, { memory: { peakAllocatedBytes: 900 } });
+    expect(failed).toHaveBeenCalledOnce();
+  });
+
+  it('attempts memory and signal together when an immediate close hits a final evidence write failure', async () => {
+    params.model = h3Model();
+    await spawnAndWatchVideo(params);
+    mocks.diagnostics.mockClear();
+    mocks.diagnostics.mockRejectedValueOnce(new Error('final evidence storage unavailable'));
+    child.stderr.emit('data', Buffer.from('H3MEMORY:{"peakAllocatedBytes":900}\n'));
+    child.signalCode = 'SIGKILL';
+    child.emit('close', null, 'SIGKILL');
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.diagnostics).toHaveBeenCalledExactlyOnceWith(params.jobId, {
+      memory: { peakAllocatedBytes: 900 }, termination: expect.objectContaining({ signal: 'SIGKILL', reason: 'failed' }),
+    });
+    expect(failed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ error: expect.stringContaining('Process killed') }));
+    expect(completed).not.toHaveBeenCalled();
+  });
+
+  it('delivers spawn failure even when its diagnostic receipt cannot be written', async () => {
+    await spawnAndWatchVideo(params);
+    mocks.diagnostics.mockRejectedValueOnce(new Error('termination storage unavailable'));
+    child.pid = undefined;
+    child.emit('error', new Error('spawn ENOENT'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(failed).toHaveBeenCalledOnce();
+    expect(failed.mock.calls[0][0].error).toContain('spawn ENOENT');
+    expect(mocks.release).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(videoJobState.jobs.has(params.jobId)).toBe(false);
+  });
+
+  it.each([['linux', 'x64', false], ['win32', 'x64', false], ['darwin', 'arm64', false], ['darwin', 'x64', true]])('preserves non-Metal status/history on %s %s (MLX=%s)', async (platform, arch, mlx) => {
+    const restorePlatform = pinPlatform(platform);
+    const restoreArch = pinArch(arch);
+    mocks.mlx = mlx;
+    try {
+      await spawnAndWatchVideo(params);
+      expect(job.metalBufferPolicy).toBeUndefined();
+      expect(job.clients[0].write.mock.calls.flat().join('')).not.toMatch(/Metal buffer/);
+      await closeChild(0);
+      expect(mocks.history[0]).not.toHaveProperty('metalBufferPolicy');
+    } finally { restoreArch(); restorePlatform(); }
+  });
+
   describe('SIGABRT cause classification', () => {
     const abortWith = async (stderrText) => {
       child.stderr.emit('data', Buffer.from(stderrText));
@@ -182,6 +329,7 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     const owner = { pid: 202 };
     videoJobState.activeProcess = owner;
     mocks.claim.mockResolvedValue({ ok: false, message: 'Another render owns the lane', holder: { id: 'other-render' } });
+    mocks.diagnostics.mockRejectedValueOnce(new Error('termination storage unavailable'));
 
     await expect(spawnAndWatchVideo(params)).rejects.toMatchObject({
       status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: { id: 'other-render' } },
@@ -247,6 +395,26 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     expect(mocks.history).toEqual([]);
   });
 
+  it.each([0, 7])('preserves exit %s and its published outcome when termination evidence cannot be written', async (exitCode) => {
+    await spawnAndWatchVideo(params);
+    mocks.diagnostics.mockRejectedValueOnce(new Error('termination storage unavailable'));
+
+    await closeChild(exitCode);
+
+    expectCleanup();
+    if (exitCode === 0) {
+      expect(job.status).toBe('complete');
+      expect(completed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ generationId: params.jobId }));
+      expect(failed).not.toHaveBeenCalled();
+      expect(mocks.history).toEqual([expect.objectContaining({ id: params.jobId })]);
+    } else {
+      expect(job.status).toBe('error');
+      expect(failed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ error: 'Exit code 7' }));
+      expect(completed).not.toHaveBeenCalled();
+      expect(mocks.history).toEqual([]);
+    }
+  });
+
   it('waits for physical close and upload/preview cleanup after an error on a live child', async () => {
     const cleanup = Promise.withResolvers();
     params.cleanupTempFiles.mockReturnValue(cleanup.promise);
@@ -291,6 +459,128 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     expect(failed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ error: 'output could not be optimized' }));
     expect(completed).not.toHaveBeenCalled();
     expect(mocks.history).toEqual([]);
+  });
+
+  describe('proven Metal buffer reuse', () => {
+    let restore;
+    let saved;
+    const makeChild = pid => Object.assign(new EventEmitter(), {
+      pid, stdout: new EventEmitter(), stderr: new EventEmitter(), exitCode: null, signalCode: null, killed: false, kill: vi.fn(),
+    });
+    beforeEach(() => {
+      const restorePlatform = pinPlatform('darwin');
+      const restoreArch = pinArch('arm64');
+      restore = () => { restoreArch(); restorePlatform(); };
+      mocks.mlx = true;
+      mocks.signature.mockResolvedValue('a'.repeat(64));
+      saved = JSON.stringify({ version: 1, entries: [] });
+      mocks.profiles = _createMetalBufferProfiles({ file: 'unused', read: async () => saved,
+        write: async (_file, data) => { saved = JSON.stringify(data); } });
+    });
+    afterEach(() => { restore(); vi.unstubAllEnvs(); });
+    const abort = async () => {
+      child.stderr.emit('data', Buffer.from('kIOGPUCommandBufferCallbackErrorTimeout\n'));
+      child.signalCode = 'SIGABRT';
+      child.emit('close', null, 'SIGABRT');
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    const recover = async () => {
+      const retry = makeChild(202);
+      mocks.spawn.mockResolvedValueOnce(child).mockResolvedValueOnce(retry);
+      await spawnAndWatchVideo(params);
+      await vi.advanceTimersByTimeAsync(1000);
+      await abort();
+      child = retry;
+      expect(mocks.spawn).toHaveBeenCalledTimes(2);
+      expect(mocks.spawn.mock.calls[0][2].env.MLX_MAX_OPS_PER_BUFFER).toBeUndefined();
+      expect(mocks.spawn.mock.calls[1][2].env).toMatchObject({ MLX_MAX_OPS_PER_BUFFER: '4', MLX_MAX_MB_PER_BUFFER: '16' });
+      child.stdout.emit('data', Buffer.from(JSON.stringify({ video_path: params.outputPath }) + '\n'));
+      mocks.outputs.set(params.outputPath, { size: 100, mtimeMs: Date.now() });
+    };
+
+    it('learns only after verified publication, then starts matching jobs at the caps and invalidates a second watchdog', async () => {
+      await recover();
+      expect(JSON.parse(saved).entries).toEqual([]);
+      await closeChild(0);
+      expect(JSON.parse(saved).entries).toHaveLength(1);
+      expect(mocks.history[0].metalBufferPolicy).toMatchObject({ policy: 'reactive-retry', abortedAttemptMs: 1000 });
+      child = makeChild(303);
+      mocks.spawn.mockResolvedValue(child);
+      job.status = 'running';
+      await spawnAndWatchVideo(params);
+      expect(mocks.spawn.mock.lastCall[2].env).toMatchObject({ MLX_MAX_OPS_PER_BUFFER: '4', MLX_MAX_MB_PER_BUFFER: '16' });
+      expect(job.metalBufferPolicy.policy).toBe('learned-initial');
+      await abort();
+      expect(mocks.spawn).toHaveBeenCalledTimes(3);
+      expect(JSON.parse(saved).entries).toEqual([]);
+      expect(job.status).toBe('error');
+    });
+
+    it.each(['publication', 'unverified-output', 'ownership', 'canceled', 'late-cancel', 'clear', 'failed', 'teardown'])('does not learn from %s recovery', async failure => {
+      await recover();
+      if (failure === 'publication') mocks.optimize.mockRejectedValue(new Error('publication failed'));
+      if (failure === 'unverified-output') mocks.outputs.clear();
+      if (failure === 'ownership') mocks.release.mockRejectedValue(new Error('claim release uncertain'));
+      if (failure === 'canceled') child.killed = true;
+      if (failure === 'late-cancel') mocks.optimize.mockImplementation(async () => { videoJobState.cancelEpoch += 1; });
+      if (failure === 'clear') {
+        const activeEnv = { ...mocks.spawn.mock.lastCall[2].env };
+        await mocks.profiles.clear();
+        expect(mocks.spawn.mock.lastCall[2].env).toEqual(activeEnv);
+      }
+      if (failure === 'teardown') {
+        child.signalCode = 'SIGABRT';
+        child.emit('close', null, 'SIGABRT');
+        await vi.advanceTimersByTimeAsync(0);
+      } else await closeChild(failure === 'failed' ? 1 : 0);
+      expect(JSON.parse(saved).entries).toEqual([]);
+    });
+
+    it('a partially published retry batch cannot teach the next job', async () => {
+      params.batch = [{ id: 'batch-first', index: 0, seed: 42, filename: 'first.mp4' }, { id: 'batch-second', index: 1, seed: 43, filename: 'second.mp4' }];
+      const retry = makeChild(202);
+      mocks.spawn.mockResolvedValueOnce(child).mockResolvedValueOnce(retry);
+      await spawnAndWatchVideo(params);
+      await abort();
+      child = retry;
+      child.stdout.emit('data', Buffer.from(JSON.stringify({ video_path: join('/mock/videos', 'first.mp4'), batch_index: 0, seed: 42 }) + '\n'));
+      await closeChild(0);
+      expect(mocks.history).toHaveLength(1);
+      expect(JSON.parse(saved).entries).toEqual([]);
+      expect(job.status).toBe('error');
+    });
+
+    it('a cache write error preserves an otherwise successful render', async () => {
+      await recover();
+      vi.spyOn(mocks.profiles, 'learn').mockRejectedValue(new Error('cache unavailable'));
+      await closeChild(0);
+      expect(job.status).toBe('complete');
+      expect(mocks.history).toHaveLength(1);
+      expect(failed).not.toHaveBeenCalled();
+      expect(job.metalBufferPolicy.diagnostic).toBe('cache-write-failed');
+    });
+
+    it('does not learn a requested sampler profile whose runner reports degradation', async () => {
+      params.speedProfileId = 'fast';
+      await recover();
+      child.stdout.emit('data', Buffer.from('SPEEDPROFILE:{"id":"fast","degraded":["adapter-unavailable"]}\n'));
+      await closeChild(0);
+      expect(job.status).toBe('complete');
+      expect(JSON.parse(saved).entries).toEqual([]);
+    });
+
+    it('operator caps and non-MLX execution bypass learned settings', async () => {
+      await mocks.profiles.learn(await mocks.profiles.lookup('a'.repeat(64)));
+      vi.stubEnv('MLX_MAX_MB_PER_BUFFER', '32');
+      await spawnAndWatchVideo(params);
+      expect(mocks.signature).not.toHaveBeenCalled();
+      expect(job.metalBufferPolicy.policy).toBe('operator');
+      await closeChild(0);
+      vi.unstubAllEnvs();
+      mocks.mlx = false;
+      await spawnAndWatchVideo(params);
+      expect(mocks.spawn.mock.lastCall[2].env.MLX_MAX_MB_PER_BUFFER).toBeUndefined();
+    });
   });
 
   describe('native Extend source splice', () => {

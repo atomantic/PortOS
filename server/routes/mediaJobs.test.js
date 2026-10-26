@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { validateVideoRetryParams } from '../services/videoGen/prepareParams.js';
 
 // Stub the queue so we control which jobs exist for the retry endpoint without
 // running the real worker. enqueueJob / cancelJob etc. are returned as vi.fn so
@@ -41,7 +42,7 @@ vi.mock('../services/mediaJobQueue/sanitizeJob.js', async (importOriginal) => {
   } };
 });
 vi.mock('../services/videoGen/prepareParams.js', () => ({
-  validateVideoRetryParams: vi.fn(),
+  validateVideoRetryParams: vi.fn(() => ({ runtime: 'ltx25' })),
 }));
 
 const mediaJobsRouter = (await import('./mediaJobs.js')).default;
@@ -194,6 +195,34 @@ describe('mediaJobs routes', () => {
     expect(stubs.removeArchivedJob).toHaveBeenCalledWith('j-img');
   });
 
+  it('POST /:id/retry preserves prior chain receipts and seeds while respecting explicit setting overrides', async () => {
+    const segment = { version: 1, preparedAt: '2026-10-26T00:00:00.000Z', seed: 7,
+      childJobId: 'example-child', segmentIndex: 0, segmentCount: 2,
+      parameters: { modelId: 'example-h3', width: 320, height: 192, numFrames: 25, fps: 24, steps: 9,
+        sourceVideoPath: '/private/source.mp4' },
+      diagnostics: { termination: { exitCode: null, signal: 'SIGTERM', reason: 'canceled', observedAt: '2026-10-26T00:01:00.000Z' } },
+    };
+    const original = { id: 'example-parent', kind: 'video', status: 'canceled', owner: null,
+      params: { modelId: 'example-h3', chunks: 2, seed: 40, segmentSeeds: [7, null], segmentSeedBase: 40 },
+      videoExecutions: [segment],
+    };
+    jobStore.set(original.id, original);
+    const response = await request(makeApp()).post('/api/media-jobs/example-parent/retry').send({ params: { steps: 12, seed: 42 } });
+    expect(response.status).toBe(200);
+    const params = stubs.enqueueJob.mock.calls[0][0].params;
+    expect(params).toMatchObject({ steps: 12, seed: 42, segmentSeeds: [7, null], segmentSeedBase: 40,
+      segmentReplayReceipt: { parentJobId: original.id, segments: [{ seed: 7, parameters: { steps: 9 }, diagnostics: { termination: { reason: 'canceled' } } }] } });
+    expect(JSON.stringify(params.segmentReplayReceipt)).not.toContain('/private');
+    expect(stubs.removeArchivedJob).not.toHaveBeenCalled();
+    expect(jobStore.get(original.id)).toMatchObject({ status: 'canceled', videoExecutions: [segment] });
+    original.videoExecutions = [{ ...segment, segmentIndex: 9 }];
+    const invalid = await request(makeApp()).post('/api/media-jobs/example-parent/retry').send({});
+    expect(invalid.status).toBe(409);
+    expect(invalid.body.code).toBe('VIDEO_SEGMENT_RECEIPT_INVALID');
+    expect(stubs.enqueueJob).toHaveBeenCalledTimes(1);
+    expect(stubs.removeArchivedJob).not.toHaveBeenCalled();
+  });
+
   it('POST /:id/retry merges body.params overrides onto the original params', async () => {
     jobStore.set('j-edit', {
       id: 'j-edit', kind: 'image', owner: null, status: 'failed',
@@ -341,8 +370,47 @@ describe('mediaJobs routes', () => {
         guidanceScale: 3, seed: 42, imageStrength: 0.5, tiling: 'spatial',
         disableAudio: true, textEncoderId: 'stock', chunks: 2,
         chunkPrompts: ['opening', 'climax'], contextFrames: 12,
+        continuation: { requestedStrategy: 'auto', effectiveStrategy: 'window', contextFrames: 12,
+          actualHistoryFrames: null, runtime: 'ltx25', capability: true, backendPin: null, unavailableReason: null },
       },
     });
+  });
+
+  it('POST /:id/retry preserves explicit continuation changes and the offered 73-frame window', async () => {
+    const originalJob = {
+      id: 'example-continuation-retry', kind: 'video', status: 'failed',
+      params: { modelId: 'example-ltx', prompt: 'Example motion', chunks: 3, continuityStrategy: 'window', contextFrames: 22,
+        continuation: { runtime: 'ltx25', requestedStrategy: 'window', effectiveStrategy: 'window', contextFrames: 22,
+          actualHistoryFrames: 22, capability: true, hops: [{ startFrame: 0, endFrameExclusive: 22 }] } },
+    };
+    jobStore.set(originalJob.id, originalJob);
+    validateVideoRetryParams.mockResolvedValueOnce({ runtime: 'minimax_h3' });
+    const app = makeApp();
+    const frame = await request(app).post('/api/media-jobs/example-continuation-retry/retry')
+      .send({ params: { modelId: 'example-h3', continuityStrategy: 'frame', contextFrames: 0 } });
+    expect(frame.status).toBe(200);
+    expect(stubs.enqueueJob.mock.calls.at(-1)[0].params).toMatchObject({ continuityStrategy: 'frame', contextFrames: 0 });
+    expect(stubs.enqueueJob.mock.calls.at(-1)[0].params.continuation).toMatchObject({
+      runtime: 'minimax_h3', requestedStrategy: 'frame', effectiveStrategy: 'frame', actualHistoryFrames: 0, capability: false,
+    });
+    expect(stubs.enqueueJob.mock.calls.at(-1)[0].params.continuation).not.toHaveProperty('hops');
+
+    jobStore.set(originalJob.id, originalJob);
+    validateVideoRetryParams.mockResolvedValueOnce({ runtime: 'ltx25' });
+    const window = await request(app).post('/api/media-jobs/example-continuation-retry/retry')
+      .send({ params: { continuityStrategy: 'window', contextFrames: 73 } });
+    expect(window.status).toBe(200);
+    expect(stubs.enqueueJob.mock.calls.at(-1)[0].params).toMatchObject({ continuityStrategy: 'window', contextFrames: 73 });
+    expect(stubs.enqueueJob.mock.calls.at(-1)[0].params.continuation).toMatchObject({
+      runtime: 'ltx25', requestedStrategy: 'window', effectiveStrategy: 'window', contextFrames: 73, actualHistoryFrames: null,
+    });
+
+    jobStore.set(originalJob.id, originalJob);
+    stubs.enqueueJob.mockClear();
+    const invalid = await request(app).post('/api/media-jobs/example-continuation-retry/retry')
+      .send({ params: { continuityStrategy: 'unverified' } });
+    expect(invalid.status).toBe(400);
+    expect(stubs.enqueueJob).not.toHaveBeenCalled();
   });
 
   // #4875 — resolveVideoSampler ranks a speed profile ABOVE explicit

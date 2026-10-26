@@ -31,12 +31,27 @@ vi.mock('../../lib/portosAuthCore.js', async () => {
 });
 
 // The peer registry resolves its own path (not through the PATHS proxy), so
-// stub its reader: the gate must never read this machine's real instances.json.
+// contain both reads and wake-probe mutations in the same in-memory registry.
 const instanceRegistry = vi.hoisted(() => ({ data: { self: null, peers: [] } }));
 vi.mock('./instanceIdentity.js', async () => ({
   ...(await vi.importActual('./instanceIdentity.js')),
   loadData: async () => instanceRegistry.data,
+  withData: async (mutate) => mutate(instanceRegistry.data),
+  getInstanceId: async () => 'self-example-instance',
 }));
+
+// Hoisted doubles also cover the instances module retained by the global
+// no-peer mock across this suite's resetModules calls.
+const peerProbe = vi.hoisted(() => ({ fetch: vi.fn(), connect: vi.fn() }));
+vi.mock('../lib/peerHttpClient.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  peerFetch: peerProbe.fetch,
+}));
+vi.mock('./peerSocketRelay.js', () => ({
+  connectToPeer: peerProbe.connect,
+  disconnectFromPeer: vi.fn(),
+}));
+vi.mock('./instanceEvents.js', () => ({ instanceEvents: { emit: vi.fn() } }));
 
 // Direct settings.json writes that also drop the getSettings() read cache —
 // see server/lib/settingsTestUtil.js for why the reset is required here
@@ -1323,35 +1338,70 @@ describe('paired peer credential (#8356)', () => {
     const instances = await import('./instances.js');
     instances.__resetPeerWakesForTests();
     const wakeSpy = vi.spyOn(instances, 'wakePeerProbe');
+    const probeFetch = peerProbe.fetch.mockImplementation(async () => ({
+      ok: true,
+      json: async () => ({}),
+    }));
+    const connect = peerProbe.connect;
 
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'example-password' });
-    const peerRecord = pairedPeer({ status: 'offline', nextProbeAt: new Date(Date.now() + 3_600_000).toISOString() });
+    const peerRecord = pairedPeer({ address: '192.0.2.30', port: 5555, status: 'offline' });
+    const putPeerInBackoff = () => Object.assign(peerRecord, {
+      status: 'offline', nextProbeAt: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    putPeerInBackoff();
     writePeers([peerRecord]);
     const app = await buildApp();
     const headers = await peerHeaders();
 
-    // 1st inbound request: wakes probe
-    const res1 = await withHeaders(request(app).get('/api/peer-sync/manifest'), headers);
-    expect(res1.status).toBe(200);
-    expect(res1.body.auth.method).toBe('peer');
-    await vi.waitFor(() => expect(wakeSpy).toHaveBeenCalledTimes(1));
-    expect(wakeSpy).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'peer-record' }));
+    vi.useFakeTimers();
+    try {
+      // 1st inbound request: wakes probe
+      const res1 = await withHeaders(request(app).get('/api/peer-sync/manifest'), headers);
+      expect(res1.status).toBe(200);
+      expect(res1.body.auth.method).toBe('peer');
+      await vi.waitFor(() => expect(wakeSpy).toHaveBeenCalledTimes(1));
+      expect(wakeSpy).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'peer-record' }));
+      await vi.runAllTimersAsync();
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(peerRecord.nextProbeAt).toBeNull();
+      expect(probeFetch.mock.calls.map(([url]) => url)).toEqual([
+        'http://192.0.2.30:5555/api/system/health/details',
+        'http://192.0.2.30:5555/api/apps?view=probe',
+        'http://192.0.2.30:5555/api/instances/sync-status?forPeer=self-example-instance',
+      ]);
+      putPeerInBackoff();
 
-    // 2nd inbound request immediately: auth succeeds, calls wakePeerProbe which rate-limits
-    const res2 = await withHeaders(request(app).get('/api/peer-sync/manifest'), headers);
-    expect(res2.status).toBe(200);
-    expect(res2.body.auth.method).toBe('peer');
-    await vi.waitFor(() => expect(wakeSpy).toHaveBeenCalledTimes(2));
+      // 2nd inbound request immediately: auth succeeds, calls wakePeerProbe which rate-limits
+      const res2 = await withHeaders(request(app).get('/api/peer-sync/manifest'), headers);
+      expect(res2.status).toBe(200);
+      expect(res2.body.auth.method).toBe('peer');
+      await vi.waitFor(() => expect(wakeSpy).toHaveBeenCalledTimes(2));
 
-    // Verify rate limiter directly rejects duplicate wake within 30s
-    expect(instances.wakePeerProbe(peerRecord)).toBe(false);
+      // Verify rate limiter directly rejects duplicate wake within 30s
+      expect(instances.wakePeerProbe(peerRecord)).toBe(false);
+      await vi.runAllTimersAsync();
+      expect(probeFetch).toHaveBeenCalledTimes(3);
 
-    // After 30s window (simulated by resetting wake timer), wake is allowed again
-    instances.__resetPeerWakesForTests();
-    expect(instances.wakePeerProbe(peerRecord)).toBe(true);
-
-    wakeSpy.mockRestore();
+      // The real rate limiter admits another wake after its 30s window.
+      vi.advanceTimersByTime(instances.PEER_WAKE_RATE_LIMIT_MS);
+      expect(instances.wakePeerProbe(peerRecord)).toBe(true);
+      await vi.runAllTimersAsync();
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(probeFetch).toHaveBeenCalledTimes(6);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      // authGate starts a dynamic import and wakePeerProbe detaches its work.
+      // Drain both before restoring collaborators, including on assertion failure.
+      await vi.dynamicImportSettled();
+      await vi.runAllTimersAsync();
+      instances.__resetPeerWakesForTests();
+      vi.useRealTimers();
+      wakeSpy.mockRestore();
+      probeFetch.mockReset();
+      connect.mockClear();
+    }
   });
 });
 

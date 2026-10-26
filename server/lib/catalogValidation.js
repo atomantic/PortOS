@@ -73,8 +73,9 @@ const tags = z.array(tag).max(BIBLE_LIMITS.TAGS_PER_ENTRY_MAX).optional();
 // size at the JSON.stringify length to keep a single user accident from
 // landing a 50-MB blob in the catalog. The extraction service is responsible
 // for shape correctness; the schema only enforces the boundary.
+export const CATALOG_PAYLOAD_MAX_CHARS = 200_000;
 const payload = z.record(z.string(), z.unknown())
-  .refine((p) => JSON.stringify(p).length <= 200_000, {
+  .refine((p) => JSON.stringify(p).length <= CATALOG_PAYLOAD_MAX_CHARS, {
     message: 'payload exceeds 200KB JSON size cap',
   })
   .optional();
@@ -264,6 +265,8 @@ export const catalogIngredientCreateSchema = z.object({
   name: z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX),
   payload,
   tags,
+  universeId: z.string().trim().min(1).max(120).optional(),
+  operationKey: z.string().uuid().optional(),
 }).strict();
 
 // Revision-history sources, mirrored from the catalog_ingredient_revisions
@@ -280,6 +283,16 @@ export const catalogIngredientPatchSchema = z.object({
   tags,
   source: revisionSource,
   actor: revisionActor,
+}).strict();
+
+export const catalogPrimitiveOwnerSchema = z.object({
+  universeId: z.string().trim().min(1).max(120),
+}).strict();
+
+export const catalogPrimitiveForkSchema = catalogPrimitiveOwnerSchema.extend({
+  name: z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX).optional(),
+  copyImages: z.boolean().default(false),
+  operationKey: z.string().uuid(),
 }).strict();
 
 // /ingredients/:id/revisions — paginated history list. Newest first.
@@ -469,7 +482,7 @@ export const catalogMediaDetachSchema = z.object({
 }).strict();
 
 // File-upload attach body: raw base64 bytes + the browser-reported MIME. The
-// server decides the media `kind` (image→reference, audio, video) from the MIME
+// server decides the media `kind` (image→reference, audio, video, model) from the MIME
 // and persists into the matching federating library dir before attaching — the
 // client never picks the storage kind. 32 MB base64 (~24 MB raw) upper-bounds a
 // runaway paste; per-category size is re-checked server-side.
@@ -881,3 +894,15 @@ export const catalogMergeHistoryQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(10),
   offset: z.coerce.number().int().min(0).default(0),
 }).strict();
+
+// Full detail remains the compatibility default; profile and media are purpose-specific projections.
+export const catalogIngredientDetailQuerySchema = z.object({
+  view: z.enum(['full', 'profile', 'media']).default('full'),
+  includeEmbedding: z.enum(['true', 'false']).optional(),
+}).strip();
+
+export const catalogIngredientCardsQuerySchema = z.object({
+  ids: csvIdsParam({ max: 50, maxIdLength: 80 }),
+}).strict().refine(query => Array.isArray(query.ids) && query.ids.length > 0, { path: ['ids'], message: 'Ingredient ids are required' });
+
+export const catalogIngredientLockSchema = z.object({ locked: z.boolean() }).strict();

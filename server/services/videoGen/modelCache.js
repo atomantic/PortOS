@@ -16,6 +16,7 @@ import { repoForModel, getTextEncoderRepo, isHfRepoId } from '../../lib/mediaMod
 import { IC_LORA_WEIGHT_KEYS, icLoraSpecByKey, icLoraRepos } from '../../lib/icLoraWeights.js';
 import { downloadableVideoTextEncoders, downloadableVideoTextEncoder } from '../../lib/videoTextEncoders.js';
 import { downloadableVideoDraftDecoders } from '../../lib/videoDraftDecoders.js';
+import { isPinnedMiniMaxH3SpeedProfile } from '../../lib/minimaxH3SpeedProfiles.js';
 import {
   inspectModelCache, verifyModelCache, repairModelCache,
   verifyCachedRepoFiles, repairCachedRepoFiles, summarizeVerify, aggregateVerifies,
@@ -42,7 +43,17 @@ const safeOnlyList = (owner, files, label) => {
 
 const videoModelLabel = (model) => `Video model "${model?.id}"`;
 
-export const modelDownloadTargets = (model) => {
+export const speedProfileDownloadTarget = (model, profileId) => {
+  const profile = model?.speedProfiles?.find((p) => p?.id === profileId);
+  if (!isPinnedMiniMaxH3SpeedProfile(model, profile)) {
+    throw new ServerError('This model does not offer that downloadable speed profile.', { status: 400, code: 'VIDEO_SPEED_PROFILE_UNSUPPORTED' });
+  }
+  const adapter = profile.adapter;
+  return { repo: adapter.repo, revision: adapter.revision, only: [adapter.file] };
+};
+
+export const modelDownloadTargets = (model, { speedProfileId } = {}) => {
+  if (speedProfileId) return [speedProfileDownloadTarget(model, speedProfileId)];
   const repo = repoForModel(model);
   if (!repo) return [];
   // `repoFiles` narrows the model's OWN repo to an explicit file list, the way
@@ -150,12 +161,19 @@ export const modelCacheStatus = async (model, cache = null) => {
     return cache.get(key);
   };
   const verifies = await Promise.all(targets.map(readTarget));
+  const h3Profile = model?.speedProfiles?.find((profile) => isPinnedMiniMaxH3SpeedProfile(model, profile));
+  const profileVerify = h3Profile ? await verifyDownloadTarget(speedProfileDownloadTarget(model, h3Profile.id)) : null;
+  const speedProfiles = profileVerify ? [{ id: h3Profile.id, repo: h3Profile.adapter.repo,
+    cached: profileVerify.status === 'ok', sizeBytes: profileVerify.sizeBytes,
+    integrity: summarizeVerify(profileVerify),
+  }] : null;
   return {
     repo: targets[0].repo,
     requiredRepos: [...new Set(targets.map((target) => target.repo))],
     cached: verifies.every((verify) => verify.status === 'ok'),
     sizeBytes: verifies.reduce((sum, verify) => sum + (verify.sizeBytes || 0), 0),
     integrity: aggregateVerifies(verifies),
+    ...(speedProfiles ? { speedProfiles } : {}),
   };
 };
 

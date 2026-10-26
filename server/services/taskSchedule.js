@@ -932,7 +932,18 @@ export async function getBranchReconcileInventory(appId) {
   const outcome = await getBranchReconcileOutcome(appId);
   const { reconcileLegacyRetirementRecords } = await import('./legacyRetirementReconciliation.js');
   const current = await reconcileLegacyRetirementRecords(appId, outcome).catch(() => outcome);
-  return reconcileMissingInventory(appId, current);
+  if (![...(current?.remaining || []), ...(current?.retirementObligations || [])].some(row => isObligationRow(row))) return reconcileMissingInventory(appId, current);
+  // Recover persisted receipt bindings after restart too; compare/write inside the
+  // normal serialized store, without replaying an old retirement transaction.
+  const repaired = await updateSchedule(async schedule => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    const before = record.branchReconcileOutcome;
+    const after = await repairReceiptObservations(appId, before);
+    const changed = after !== before;
+    if (changed) record.branchReconcileOutcome = after;
+    return { result: after, changed };
+  });
+  return reconcileMissingInventory(appId, repaired);
 }
 
 const missingPreservationObligation = row => ({ ...row, reason: 'retirement-provenance-unverified' });
@@ -997,12 +1008,53 @@ export async function recordHeldCheckoutPreservation(appId, { path, branch, head
 
 const RETIRED_CHECKOUTS_KEPT = 20;
 
+/** Preserve bounded checkout-only evidence before an explicitly accepted,
+ * published supersession is removed. This is preparation, never a receipt or
+ * a claim that the source was merged. Existing inventory obligations stay. */
+const SUPERSEDED_SOURCE_EVIDENCE_BYTES = 1024 * 1024;
+
+export async function recordSupersededCheckoutPreservation(appId, release, review) {
+  if (review?.kind !== 'preserved-supersession' || !review.preservedSource
+    || !sameRetirementObservation(review.release, release) || review.preservedSource.head !== release.head
+    || !/^[a-f0-9]{64}$/.test(review.digest || '')) return false;
+  return updateSchedule(async schedule => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    const outcome = record.branchReconcileOutcome;
+    if (!outcome?.remaining?.some(row => sameRetirementCheckout(row, release))) return { result: false, changed: false };
+    const prior = outcome.supersededSourceEvidence?.[review.digest];
+    const proof = { release, source: review.preservedSource, replacement: { prUrl: review.forge.prUrl,
+      prHead: review.forge.prHead, mergeCommit: review.forge.mergeCommit },
+      contentFingerprint: review.contentFingerprint, administrationFingerprint: review.administrationFingerprint };
+    if (prior) return { result: JSON.stringify(prior.proof) === JSON.stringify(proof), changed: false };
+    const retiredDigests = new Set([...(outcome.retired || []), ...Object.values(outcome.retirementReceiptEvidence || {})]
+      .map(receipt => receipt.supersessionDigest).filter(Boolean));
+    const currentRows = [...outcome.remaining, ...(outcome.retirementObligations || [])];
+    const retained = Object.fromEntries(Object.entries(outcome.supersededSourceEvidence || {}).filter(([digest, saved]) =>
+      retiredDigests.has(digest) || currentRows.some(row => sameRetirementObservation(row, saved.proof?.release || {}))));
+    const next = { ...retained, [review.digest]: { proof, preservedAt: new Date().toISOString() } };
+    // Never evict completed evidence that may contain the only private bytes.
+    // Bound the whole encoded store instead; a full store retains the original
+    // checkout. Stale, unconsumed preparations are safely pruned on success.
+    if (Buffer.byteLength(JSON.stringify(next)) > SUPERSEDED_SOURCE_EVIDENCE_BYTES) return { result: false, changed: false };
+    record.branchReconcileOutcome = { ...outcome, supersededSourceEvidence: next };
+    return { result: true, changed: true };
+  });
+}
+
+// This is receipt bookkeeping, never checkout mutation. It can run under the
+// schedule writer even when its caller already owns the claim lock: do not
+// acquire that lock recursively. Fresh absence/owner checks only narrow repair.
+async function repairReceiptObservations(appId, outcome) {
+  const { reconcileRecordedReceiptObservations } = await import('./legacyRetirementReconciliation.js');
+  return reconcileRecordedReceiptObservations(appId, outcome).catch(() => outcome);
+}
+
 /**
  * Drop a retired checkout from the last inventory and keep a short record of
  * where its archive went. Status is untouched: only the next sweep can say the
  * repository converged.
  */
-export async function recordHeldCheckoutRetirement(appId, { path, branch, branchDeleted, head, archiveDir, checkoutIdentity, checkoutOnly = false }) {
+export async function recordHeldCheckoutRetirement(appId, { path, branch, branchDeleted, head, archiveDir, checkoutIdentity, checkoutOnly = false, supersessionDigest = null, validationEvidence = null }) {
   // Only a branchless checkout can be settled without a deleted branch; the
   // receipt then records exactly that and never claims a deletion.
   const checkoutOnlyReceipt = checkoutOnly === true && !branch && branchDeleted !== true;
@@ -1041,19 +1093,25 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
       // later inventory row can match the receipt that already settled this tuple.
       const prior = evidence[receiptId];
       if (prior && checkoutIdentity && !prior.checkoutIdentity) evidence[receiptId] = { ...prior, checkoutIdentity };
-      const changed = JSON.stringify(receipts) !== JSON.stringify(outcome.retirementReceiptIdentities || {})
-        || JSON.stringify(evidence) !== JSON.stringify(outcome.retirementReceiptEvidence || {});
-      if (changed) record.branchReconcileOutcome = { ...outcome, retirementReceiptIdentities: receipts, retirementReceiptEvidence: evidence };
+      if (evidence[receiptId] && validationEvidence && !evidence[receiptId].validationEvidence) {
+        evidence[receiptId] = { ...evidence[receiptId], validationEvidence };
+      }
+      const repaired = await repairReceiptObservations(appId, { ...outcome, retirementReceiptIdentities: receipts, retirementReceiptEvidence: evidence });
+      const changed = JSON.stringify(repaired) !== JSON.stringify(outcome);
+      if (changed) record.branchReconcileOutcome = repaired;
       return { result: record.branchReconcileOutcome, changed };
     }
     const retiredAt = new Date().toISOString();
     if (receiptId) receipts[receiptId] = retiredAt;
-    const receipt = { path, ...(branch && { branch }), head, branchDeleted: checkoutOnlyReceipt ? false : branchDeleted, archiveDir: recordedArchive, retiredAt,
+    const receipt = { path, ...(branch && { branch }), head,
+      ...(validationEvidence && { validationEvidence }),
+      ...(supersessionDigest && outcome.supersededSourceEvidence?.[supersessionDigest]
+        && { disposition: 'superseded-preserved', supersessionDigest }), branchDeleted: checkoutOnlyReceipt ? false : branchDeleted, archiveDir: recordedArchive, retiredAt,
       ...(checkoutOnlyReceipt && { checkoutOnly: true }), ...(checkoutIdentity && { checkoutIdentity }) };
     const retired = [receipt, ...(outcome.retired || [])].slice(0, RETIRED_CHECKOUTS_KEPT);
     if (receiptId) evidence[receiptId] = receipt;
     const retirementObligations = unresolvedRetirements({ ...outcome, retired, retirementReceiptEvidence: evidence });
-    record.branchReconcileOutcome = {
+    record.branchReconcileOutcome = await repairReceiptObservations(appId, {
       ...outcome, retirementObligations,
       retirementReceiptIdentities: receipts, retirementReceiptEvidence: evidence,
       updatedAt: retiredAt,
@@ -1063,7 +1121,7 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
             || (!entry.checkoutIdentity && sameRetirementCheckout(entry, receipt))))
         : outcome.remaining ?? null,
       retired,
-    };
+    });
     return { result: record.branchReconcileOutcome, changed: true };
   });
 }

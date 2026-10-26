@@ -278,6 +278,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
     textCues: (composition.textCues || []).filter((cue) => cue?.text && cue.startSec != null && cue.endSec != null),
     composition: {
       mode: composition.mode || 'concat',
+      ...(typeof project?.lyricOverlayEnabled === 'boolean' ? { lyricOverlayEnabled: project.lyricOverlayEnabled } : {}),
       style: composition.style || null,
       posterSec: composition.posterSec ?? null,
       overlay: composition.overlay || null,

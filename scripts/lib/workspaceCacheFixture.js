@@ -51,6 +51,9 @@ function checkout(host, name, workspace, configName, dependencies) {
   delete fixture.options.env.PORTOS_CI_BROWSER_OWNER;
   // Not a `_test` database: the DB run lock stands down, so the fixture neither needs `pg` nor queues behind a real run.
   fixture.options.env.PGTESTDATABASE = 'workspace_cache_fixture';
+  // Match the CLI cap before config evaluation; otherwise vitestCiPool still
+  // launches git to discover the live host budget for a one-worker fixture.
+  fixture.options.env.PORTOS_PREGATE_MAX_WORKERS = '1';
   const root = fixture.args[fixture.args.indexOf('--root') + 1];
   unlinkSync(join(root, 'node_modules'));
   link(dependencies, join(root, 'node_modules'));
@@ -98,8 +101,12 @@ function checkout(host, name, workspace, configName, dependencies) {
   return { ...fixture, args: [fixture.args[0], ...args], options: { ...fixture.options, cwd }, root };
 }
 
-async function run(fixture, signal) {
+async function run(fixture, signal, onChild = () => {}, name = 'dev') {
+  const started = performance.now();
+  onChild({ name, state: 'started', elapsedMs: 0 });
   const result = await runFixtureToCompletion(fixture, undefined, { signal });
+  onChild({ name, state: result.closeConfirmed ? 'closed' : 'unconfirmed',
+    elapsedMs: Math.round(performance.now() - started), status: result.status });
   if (result.error) {
     result.error.stdout = result.stdout;
     result.error.stderr = result.stderr;
@@ -110,10 +117,14 @@ async function run(fixture, signal) {
   return output;
 }
 
-async function runTogether(fixtures, signal) {
+async function runTogether(fixtures, signal, onChild, prefix = 'dev') {
   // Settle every owned child before the caller removes their shared host.
-  const results = await Promise.allSettled(fixtures.map(fixture => run(fixture, signal)));
-  for (const result of results) if (result.status === 'rejected') throw result.reason;
+  const results = await Promise.allSettled(fixtures.map((fixture, index) => run(fixture, signal, onChild, `${prefix}-${index + 1}`)));
+  // Preserve an unconfirmed sibling even when an earlier child only aborted.
+  const failures = results.filter(result => result.status === 'rejected');
+  const unconfirmed = failures.find(result => result.reason?.code === 'FIXTURE_CLOSE_UNCONFIRMED');
+  if (unconfirmed) throw unconfirmed.reason;
+  if (failures.length) throw failures[0].reason;
   return results.map(result => result.value);
 }
 
@@ -122,18 +133,20 @@ const cachedModules = root => snapshot(join(root, 'modules')).filter(([name]) =>
 
 // Assertions are supplied by the owning Vitest workspace; this shared fixture
 // imports only Node builtins and dependency-free fixture support.
-export async function checkWorkspaceCacheIsolation(workspace, configName, cacheName, expect, signal) {
+export async function checkWorkspaceCacheIsolation(workspace, configName, cacheName, expect, signal, { phase = (_name, operation) => operation(), onHost = () => {}, onChild = () => {} } = {}) {
   const contract = WORKSPACE_TEST_CACHE_ROOTS[configName === 'vitest.config.db.js' ? 'db' : workspace];
   expect(contract.workspace).toBe(workspace);
   expect(contract.cacheDir).toBe(`.cache/${cacheName}`);
     const host = mkdtempSync(join(tmpdir(), 'workspace-cache-'));
+    let cleanupConfirmed = true;
     try {
+      onHost(host);
       const dependencies = primaryDependencies(host, workspace);
       const primary = [snapshot(join(dependencies, '.vite')), snapshot(join(dependencies, '.vite-temp'))];
       const a = checkout(host, 'a', workspace, configName, dependencies);
       const b = checkout(host, 'b', workspace, configName, dependencies);
       const primaryModules = snapshot(join(dependencies, '.vitest-cache'));
-      await runTogether([a, b], signal);
+      await phase('cache-initial-publications', () => runTogether([a, b], signal, onChild, 'initial'));
       expect(snapshot(join(dependencies, '.vitest-cache'))).toEqual(primaryModules);
       const cacheA = join(a.root, '.cache', cacheName);
       const cacheB = join(b.root, '.cache', cacheName);
@@ -146,7 +159,7 @@ export async function checkWorkspaceCacheIsolation(workspace, configName, cacheN
       const modules = cachedModules(cacheA);
       const sibling = snapshot(cacheB);
       const names = snapshot(cacheA).map(([name]) => name);
-      await run(a, signal);
+      await phase('cache-reuse', () => run(a, signal, onChild, 'reuse-1'));
       expect(cachedModules(cacheA)).toEqual(modules);
       expect(snapshot(cacheA).map(([name]) => name)).toEqual(names);
       expect(snapshot(cacheB)).toEqual(sibling);
@@ -155,13 +168,17 @@ export async function checkWorkspaceCacheIsolation(workspace, configName, cacheN
       rmSync(a.root, { recursive: true });
       expect(existsSync(cacheA)).toBe(false);
       expect(snapshot(cacheB)).toEqual(sibling);
+    } catch (error) {
+      if (error.code === 'FIXTURE_CLOSE_UNCONFIRMED') cleanupConfirmed = false;
+      throw error;
     } finally {
-      rmSync(host, { recursive: true, force: true });
+      if (cleanupConfirmed) rmSync(host, { recursive: true, force: true });
     }
 }
 
 export async function checkDevCacheIsolation(expect, signal) {
     const host = mkdtempSync(join(tmpdir(), 'workspace-dev-cache-'));
+    let cleanupConfirmed = true;
     try {
       const dependencies = primaryDependencies(host, 'client');
       const primary = [snapshot(join(dependencies, '.vite')), snapshot(join(dependencies, '.vite-temp'))];
@@ -197,7 +214,10 @@ export async function checkDevCacheIsolation(expect, signal) {
       expect(outputs[0]).not.toBe(outputs[1]);
       expect([snapshot(join(dependencies, '.vite')), snapshot(join(dependencies, '.vite-temp'))]).toEqual(primary);
       expect(fixtures.map(fixture => relative(host, fixture.options.cwd).replaceAll('\\', '/'))).toEqual(['a/caller', 'b/caller']);
+    } catch (error) {
+      if (error.code === 'FIXTURE_CLOSE_UNCONFIRMED') cleanupConfirmed = false;
+      throw error;
     } finally {
-      rmSync(host, { recursive: true, force: true });
+      if (cleanupConfirmed) rmSync(host, { recursive: true, force: true });
     }
 }

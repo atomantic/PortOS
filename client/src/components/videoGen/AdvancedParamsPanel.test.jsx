@@ -185,11 +185,27 @@ describe('AdvancedParamsPanel', () => {
       expect(screen.queryByLabelText('Continuity')).toBeNull();
     });
 
-    it('stays hidden on a runtime that ignores the window', () => {
-      // Offering the control where the server discards the value would be a
-      // knob that silently does nothing.
-      renderPanel({ currentModel: { runtime: 'minimax_h3' }, chunks: 3, chainingActive: true });
-      expect(screen.queryByLabelText('Continuity')).toBeNull();
+    it('discloses the unverified pin and keeps temporal context unavailable', () => {
+      renderPanel({ currentModel: { runtime: 'minimax_h3', continuationCapability: {
+        temporalContext: false, historyFrames: 17, backendPin: 'example-pin',
+        unavailableReason: 'No paired hardware motion/audio evidence.',
+      } }, chunks: 3, chainingActive: true, contextFrames: 22 });
+      expect(screen.getByLabelText('Continuity').value).toBe('0');
+      expect(screen.getByRole('option', { name: 'Temporal context unavailable' }).disabled).toBe(true);
+      expect(screen.getByText(/No paired hardware motion\/audio evidence/)).toBeTruthy();
+      expect(screen.getByText(/Backend: example-pin/)).toBeTruthy();
+    });
+
+    it('offers only the verified fixed history and an explicit still opt-out', () => {
+      const onContextFramesChange = vi.fn();
+      renderPanel({ currentModel: { runtime: 'minimax_h3', continuationCapability: {
+        temporalContext: true, historyFrames: 17, backendPin: 'example-verified-pin',
+      } }, chunks: 3, chainingActive: true, contextFrames: 22, onContextFramesChange });
+      const control = screen.getByLabelText('Continuity');
+      expect(control.value).toBe('17');
+      expect([...control.options].map((option) => option.value)).toEqual(['0', '17']);
+      fireEvent.change(control, { target: { value: '0' } });
+      expect(onContextFramesChange).toHaveBeenCalledWith(0);
     });
 
     it('shows the selected window on a chaining ltx2 render', () => {
@@ -348,6 +364,35 @@ describe('AdvancedParamsPanel — reference mode before the model catalog loads'
 // reachable without hand-tuning steps/CFG — and so it is NEVER offered where
 // the server would decline it, which would be a dead speed affordance.
 describe('AdvancedParamsPanel — speed profiles', () => {
+  const H3_PROFILE = { id: 'h3-speed', type: 'minimax-h3-lightx2v', name: 'LightX2V experimental',
+    description: 'No measured speed claim.', steps: 5, guidance: 0, modes: ['text', 'image'],
+    canvases: [[1344, 768]], videoShift: 6, audioShift: 3,
+    adapter: { file: 'example-speed.safetensors', alpha: 8, rank: 128 } };
+  const h3 = { runtime: 'minimax_h3_cuda', samplerLocked: true, steps: 8, guidance: 0,
+    supportedModes: ['text', 'image', 'fflf'], speedProfiles: [H3_PROFILE] };
+
+  it.each(['minimax-h3-lightx2v', 'minimax-h3-mlx-lightx2v'])('offers %s on a locked stock sampler and downloads only on a click', (type) => {
+    const onDownload = vi.fn();
+    renderPanel({ currentModel: { ...h3, runtime: type === 'minimax-h3-mlx-lightx2v' ? 'minimax_h3' : 'minimax_h3_cuda', speedProfiles: [{ ...H3_PROFILE, type }] }, speedProfileId: H3_PROFILE.id,
+      speedProfileStatus: { cached: false }, onSpeedProfileDownload: onDownload, width: 1344, height: 768 });
+    expect(screen.getByLabelText('Speed').value).toBe(H3_PROFILE.id);
+    expect(screen.getByText(/alpha 8\/rank 128/)).toBeTruthy();
+    expect(onDownload).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /download.*adapter/i }));
+    expect(onDownload).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText(/Steps/).disabled).toBe(true);
+  });
+
+  it.each(['minimax-h3-lightx2v', 'minimax-h3-mlx-lightx2v'])('retains an incompatible %s selection visibly and leaves Quality reachable', (type) => {
+    const onChange = vi.fn();
+    renderPanel({ currentModel: { ...h3, runtime: type === 'minimax-h3-mlx-lightx2v' ? 'minimax_h3' : 'minimax_h3_cuda', speedProfiles: [{ ...H3_PROFILE, type }] }, mode: 'fflf', speedProfileId: H3_PROFILE.id, onSpeedProfileChange: onChange });
+    const select = screen.getByLabelText('Speed');
+    expect(select.value).toBe(H3_PROFILE.id);
+    expect(screen.getByRole('alert').textContent).toContain('1344×768');
+    fireEvent.change(select, { target: { value: 'quality' } });
+    expect(onChange).toHaveBeenCalledWith('quality');
+  });
+
   const FAST = {
     id: 'fast',
     name: 'Fast',

@@ -11,6 +11,8 @@ import { createVideoDiagnosticTail, normalizeVideoFailure } from '../../lib/vide
 import { createLineReader } from '../../lib/streamLines.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { prepareLocalMemory, gpuBlockersMessage } from '../localMemory.js';
+import { miniMaxH3LiveMemoryAdmission } from '../../lib/minimaxH3Memory.js';
+import { recordVideoExecution, recordVideoExecutionDiagnostics } from './executionRecorder.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { videoGenEvents } from './events.js';
 import {
@@ -28,6 +30,7 @@ import {
   describeSignalDeath,
   isPromptEncodingMetalWatchdog,
   planMetalBufferRetry,
+  METAL_BUFFER_RETRY_ENV,
   bufferChildExit,
 } from './generateVideoHelpers.js';
 import {
@@ -37,6 +40,7 @@ import {
   runtimeUsesMlx,
   invalidateByovReadyCache,
   pickDeathFingerprint,
+  currentMetalProfileFingerprint,
 } from './runtimes.js';
 import { isDisplaySleepEnabled, sleepDisplayForVideo, wakeDisplayForVideo } from './displayPower.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
@@ -56,6 +60,7 @@ const MUXING_DONE_RE = /\[Decoding video \+ audio \+ muxing\]\s+done in/i;
 
 export async function spawnAndWatchVideo({
   jobId,
+  executionParent = null,
   batch = null,
   speedProfileId = null,
   preparation = null,
@@ -69,6 +74,7 @@ export async function spawnAndWatchVideo({
   meta,
   actualSeed,
   model,
+  encoder = null,
   modelId,
   width: w,
   height: h,
@@ -79,10 +85,62 @@ export async function spawnAndWatchVideo({
   // delivered file should keep the original source (see ./extendSplice.js).
   extendSplice = null,
 }) {
+  delete job.metalBufferPolicy;
+  let ownershipSettled = true;
   const retainOwnership = () => {
+    ownershipSettled = false;
     // Chained renders use child job IDs; their ambient owner is the outer job.
     maintenance.markCurrentUnsettled();
     maintenance.markResourceUnsettled('media', jobId);
+  };
+  const cancelEpochAtStart = videoJobState.cancelEpoch;
+  const { getMetalBufferProfiles, metalBufferExecutionSignature } = await import('./metalBufferProfiles.js');
+  let memoryEvidence = {};
+  let memoryTimer = null;
+  let memoryWrites = Promise.resolve();
+  const flushMemoryEvidence = () => {
+    clearTimeout(memoryTimer);
+    memoryTimer = null;
+    if (Object.keys(memoryEvidence).length) {
+      const memory = { ...memoryEvidence };
+      memoryWrites = memoryWrites.catch(() => {}).then(() => recordVideoExecutionDiagnostics(jobId, { memory }, ...(executionParent ? [executionParent] : [])));
+    }
+    return memoryWrites;
+  };
+  const collectMemoryEvidence = (raw) => {
+    if (model.runtime !== 'minimax_h3' || !raw.startsWith('H3MEMORY:') || raw.length > 1024) return false;
+    let sample;
+    try { sample = JSON.parse(raw.slice('H3MEMORY:'.length)); } catch { return true; }
+    for (const key of ['allocatorLimitBytes', 'peakAllocatedBytes', 'peakRssBytes']) {
+      const value = sample?.[key];
+      if (Number.isSafeInteger(value) && value >= 0) {
+        memoryEvidence[key] = key.startsWith('peak') ? Math.max(memoryEvidence[key] || 0, value) : value;
+      }
+    }
+    if (typeof sample?.allocatorApplied === 'boolean') memoryEvidence.allocatorApplied = sample.allocatorApplied;
+    if (!memoryTimer) memoryTimer = setTimeout(() => {
+      void flushMemoryEvidence().catch(err => {
+        console.error(`❌ Video memory evidence persistence failed [${jobId.slice(0, 8)}]: ${err.message}`);
+      });
+    }, 250);
+    return true;
+  };
+  const persistTermination = async (exitCode, signal, reason) => {
+    // The pre-launch receipt gates execution; later diagnostics must never
+    // replace a known render outcome or an admission refusal.
+    clearTimeout(memoryTimer);
+    memoryTimer = null;
+    try {
+      // Batch failures were reported by their timer. Retry the latest memory
+      // together with termination so a memory-write fault cannot omit a signal.
+      await memoryWrites.catch(() => {});
+      await recordVideoExecutionDiagnostics(jobId, {
+        ...(Object.keys(memoryEvidence).length ? { memory: { ...memoryEvidence } } : {}),
+        termination: { exitCode, signal, reason, observedAt: new Date().toISOString() },
+      }, ...(executionParent ? [executionParent] : []));
+    } catch (error) {
+      console.error(`❌ Video termination evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`);
+    }
   };
   // No child and no claim exist yet, so this startup owner releases what the
   // caller handed over. A refusal (busy holder) and a claim I/O rejection both
@@ -97,14 +155,18 @@ export async function spawnAndWatchVideo({
   };
   let heavyClaim;
   try {
+    await recordVideoExecution(jobId, { ...meta, ...(executionParent ? { executionParent } : {}), modelId, seed: actualSeed, width: w, height: h,
+      numFrames: parsedNumFrames, steps: actualSteps, ...(batch ? { batchSeeds: batch.map(item => item.seed) } : {}) });
     heavyClaim = await claimHeavyLocalJob({ kind: 'local video generation', id: jobId });
   } catch (err) {
     console.error(`❌ Video generation claim acquisition [${jobId.slice(0, 8)}]: ${err.message}`);
     await releaseUnclaimedStartup();
+    await persistTermination(null, null, 'refused');
     throw err;
   }
   if (!heavyClaim.ok) {
     await releaseUnclaimedStartup();
+    await persistTermination(null, null, 'refused');
     throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
   }
   const releaseHeavyClaim = () => heavyClaim.release().catch((err) => {
@@ -124,6 +186,14 @@ export async function spawnAndWatchVideo({
   // Hoisted out of the try so a relaunch can respawn with the SAME child env
   // plus smaller MLX command buffers, instead of rebuilding it from scratch.
   let childEnv;
+  let metalProfile = null;
+  let reactiveRecovery = false;
+  const reportMetalPolicy = (policy, diagnostic, message) => {
+    job.metalBufferPolicy = { ...job.metalBufferPolicy, policy, diagnostic };
+    broadcastSse(job, { type: 'status', message, metalBufferPolicy: job.metalBufferPolicy });
+    videoGenEvents.emit('status', { generationId: jobId, message, metalBufferPolicy: job.metalBufferPolicy });
+  };
+  const cacheDiagnostic = () => reportMetalPolicy(job.metalBufferPolicy?.policy || 'stock', 'cache-write-failed', 'Metal buffer profile cache update unavailable; ordinary rendering remains available');
 
   // Runners publish one atomically-replaced `preview.png`. Keep the reader
   // serialized because fs.watch can report several events for one replacement;
@@ -217,6 +287,9 @@ export async function spawnAndWatchVideo({
     // relaunch — reset it explicitly so a phase left open by the child that just
     // died can never be read as the replacement child's state.
     job.promptEncodePhase = null;
+    job.speedProfile = null;
+    job.draftDecode = null;
+    job.streamingPolicy = null;
     // Panel-side completion watchdog. Armed once we see the render's completion
     // marker on stdout; SIGKILLs the child if it hasn't exited after the grace
     // window. clearCompletionWatchdog() runs in every terminal path ('close',
@@ -308,7 +381,8 @@ export async function spawnAndWatchVideo({
       // ENOENT/permission errors leak files in os.tmpdir().
       // Defensive cleanup includes audio passed directly without the route's
       // uploadedTempPaths tracking. Duplicate unlinks remain harmless.
-      return cleanupFailedRender().then(() => {
+      return cleanupFailedRender().then(async () => {
+        await persistTermination(null, null, 'failed');
         broadcastSse(job, { type: 'error', error: reason });
         videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }) });
         closeJobAfterDelay(videoJobState.jobs, jobId);
@@ -407,6 +481,7 @@ export async function spawnAndWatchVideo({
       console.log(`🐍-out [${jobId.slice(0, 8)}] ${line}`);
     });
     const stderrReader = createLineReader((raw) => {
+      if (collectMemoryEvidence(raw)) return;
       recordStderrTail(raw);
       // Record the root-cause module only — downstream imports in the same
       // traceback raise the same error against later names.
@@ -526,7 +601,8 @@ export async function spawnAndWatchVideo({
             }
           } else if (signal) {
             // Signal → actionable cause (SIGABRT = the macOS Metal command-buffer
-            // watchdog only when stderr proves it, SIGBUS/SIGSEGV = a native MLX/Metal crash, SIGKILL = OOM),
+            // watchdog only when stderr proves it, SIGBUS/SIGSEGV = a native MLX/Metal crash;
+            // SIGKILL alone does not prove OOM),
             // stamped with the runtime fingerprint that died so the report is
             // self-documenting. See describeSignalDeath in generateVideoHelpers.js.
             reason = describeSignalDeath(signal, {
@@ -540,6 +616,7 @@ export async function spawnAndWatchVideo({
           }
           if (batch) reason += ` (${batchResults.length}/${batch.length} videos saved to history)`;
           console.error(`❌ Video generation failed [${jobId.slice(0, 8)}]: ${reason}`);
+          await persistTermination(code, signal, preparation?.wasCanceled() || videoJobState.cancelEpoch !== cancelEpochAtStart ? 'canceled' : 'failed');
           broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}` });
           videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: missingPyModule ? normalizeVideoFailure(reason) : failure, ...(batch ? { results: batchResults } : {}) });
         } else {
@@ -555,19 +632,38 @@ export async function spawnAndWatchVideo({
             broadcastSse(job, { type: 'status', message });
             videoGenEvents.emit('status', { generationId: jobId, message });
           }
+          let thumbnail;
           if (batch) {
             if (batchResults.length !== batch.length) throw new Error(`Video batch stopped after ${batchResults.length}/${batch.length} outputs.`);
-            job.status = 'complete';
-            const result = { ...batchResults[0], results: batchResults };
-            broadcastSse(job, { type: 'complete', result });
-            videoGenEvents.emit('completed', { generationId: jobId, ...result });
           } else {
             // Best-effort: a failed splice leaves the model's own output in place.
             if (extendSplice && (await spliceExtendSource({ ...extendSplice, outputPath })).applied) {
               meta.extendSourceOriginal = true;
             }
-            await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory, publication: publications.get(outputPath) });
+            thumbnail = await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, terminal: false, mutateHistory: mutateVideoHistory, publication: publications.get(outputPath) });
           }
+          const effectiveProfileConfirmed = (!speedProfileId || (job.speedProfile?.id === speedProfileId && job.speedProfile.degraded?.length === 0))
+            && (!args.includes('--draft-decoder-id') || job.draftDecode?.applied === true);
+          if (reactiveRecovery && metalProfile && effectiveProfileConfirmed && code === 0 && !signal && !proc.killed && ownershipSettled
+            && videoJobState.cancelEpoch === cancelEpochAtClose && !preparation?.wasCanceled()
+            && [...publications.values()].every(publication => publication.committed)) {
+            const verified = await verifyPostCompletionOutputs({ outputPaths: expectedOutputPaths, completedOutputs,
+              startedAtMs: job.renderStartedAtMs, expectedFrames: parsedNumFrames, fps: meta?.fps });
+            if (verified.ok && ownershipSettled && videoJobState.cancelEpoch === cancelEpochAtClose && !preparation?.wasCanceled()) {
+              await getMetalBufferProfiles().learn(metalProfile).then(result => {
+                if (!result.learned) reportMetalPolicy('reactive-retry', result.diagnostic, 'Metal buffer recovery completed; profile was not retained');
+              }).catch(cacheDiagnostic);
+            }
+          }
+          // Complete only after learning settles, so a completion listener's
+          // next matching render can observe the successful policy.
+          job.status = 'complete';
+          await persistTermination(code, signal, 'completed');
+          const result = batch ? { ...batchResults[0], results: batchResults }
+            : { filename, seed: actualSeed, thumbnail, path: `/data/videos/${filename}` };
+          broadcastSse(job, { type: 'complete', result });
+          videoGenEvents.emit('completed', batch ? { generationId: jobId, ...result }
+            : { generationId: jobId, filename, path: result.path, thumbnail });
         }
       } catch (err) {
         await discardFailedOutputs();
@@ -576,6 +672,7 @@ export async function spawnAndWatchVideo({
         // process. The job may already be partway through finalize, so force the
         // error state and emit the terminal event the client is waiting on.
         job.status = 'error';
+        await persistTermination(code, signal, preparation?.wasCanceled() || videoJobState.cancelEpoch !== cancelEpochAtStart ? 'canceled' : 'failed');
         console.error(`❌ Video close handler failed [${jobId.slice(0, 8)}]: ${err.message}`);
         broadcastSse(job, { type: 'error', error: `Generation failed: ${err.message}` });
         videoGenEvents.emit('failed', { generationId: jobId, error: err.message, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }), ...(batch ? { results: batchResults } : {}) });
@@ -673,6 +770,11 @@ export async function spawnAndWatchVideo({
   // excluded by construction rather than by a list that could drift.
   const maybeRelaunchForMetalWatchdog = async ({ code, signal, childKilled, cancelEpochAtClose, stderr }) => {
     if (code === 0) return false;
+    if (metalProfile?.applied && !childKilled && planMetalBufferRetry({ signal, stderr, mlxRuntime: runtimeUsesMlx(model.runtime) })) {
+      await getMetalBufferProfiles().invalidate(metalProfile).catch(cacheDiagnostic);
+      reportMetalPolicy('learned-initial', 'invalidated', 'Learned Metal buffer settings hit the watchdog again; profile invalidated');
+      return false;
+    }
     // A batch member already in history must never be rendered again over its
     // committed filename by a whole-batch prompt-encode retry.
     if ([...publications.values()].some(publication => publication.started || publication.committed)) return false;
@@ -702,8 +804,11 @@ export async function spawnAndWatchVideo({
     let retryWired = false;
     try {
       metalBufferRetriesUsed += 1;
+      reactiveRecovery = true;
+      job.metalBufferPolicy = { ...job.metalBufferPolicy, abortedAttemptMs: Date.now() - job.renderStartedAtMs };
       const retryArgs = args;
       const retryEnv = { ...childEnv, ...bufferPlan.env };
+      reportMetalPolicy('reactive-retry', metalProfile?.diagnostic || 'not-eligible', 'Retrying with smaller Metal command buffers');
       const message = inEncoder
         ? 'Metal watchdog aborted the prompt encoder — retrying once with smaller command buffers (prompt unchanged)'
         : 'Metal watchdog stopped the GPU — retrying once with smaller command buffers';
@@ -765,9 +870,12 @@ export async function spawnAndWatchVideo({
     stopAbandonedChild(firstProc);
     if (videoJobState.activeProcess === firstProc) videoJobState.activeProcess = null;
     await cleanupFailedRender();
+    await persistTermination(null, null, 'refused');
     job.status = 'error';
     const reason = err.message || 'Video generation failed before the render child was wired';
-    console.error(`❌ Video generation setup error [${jobId.slice(0, 8)}]: ${reason}`);
+    const refused = err.status >= 400 && err.status < 500;
+    const log = refused ? console.log : console.error;
+    log(`${refused ? '🚫' : '❌'} Video generation setup error [${jobId.slice(0, 8)}]: ${reason}`);
     broadcastSse(job, { type: 'error', error: reason });
     videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }) });
     closeJobAfterDelay(videoJobState.jobs, jobId);
@@ -780,6 +888,12 @@ export async function spawnAndWatchVideo({
     // names neither the tenant nor the fix — the throw converges on
     // abandonBeforeWiring like every other pre-wiring failure.
     if (memoryReport.blockers.length) throw new Error(gpuBlockersMessage(memoryReport.blockers));
+    const admission = miniMaxH3LiveMemoryAdmission({ model, totalMemoryGb: memoryReport.totalGb, availableMemoryGb: memoryReport.availableGb });
+    if (admission?.memory) {
+      await recordVideoExecutionDiagnostics(jobId, { memory: admission.memory }, ...(executionParent ? [executionParent] : []));
+    }
+    if (admission?.decline) throw new ServerError(admission.decline.message, { status: 409, code: admission.decline.code });
+    if (admission) args.push('--memory-budget-bytes', String(admission.memory.budgetBytes));
     if (memoryReport.unloaded.length) console.log(`🧹 Video generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
 
     // History-calibrated wall-clock estimate (#3801). `null` when this install
@@ -802,7 +916,6 @@ export async function spawnAndWatchVideo({
     const etaFields = etaEstimate
       ? { etaMs: etaEstimate.etaMs, etaBasis: etaEstimate.basis, etaSampleCount: etaEstimate.sampleCount }
       : { etaMs: null };
-    job.renderStartedAtMs = Date.now();
 
     console.log(`🎬 Generating video [${jobId.slice(0, 8)}]: ${modelId} ${w}x${h} frames=${parsedNumFrames} steps=${actualSteps} eta=${etaEstimate ? `${Math.round(etaEstimate.etaMs / 1000)}s (${etaEstimate.basis}, n=${etaEstimate.sampleCount})` : 'unknown'}`);
     videoGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps, ...meta, ...etaFields });
@@ -833,6 +946,27 @@ export async function spawnAndWatchVideo({
       childEnv.HF_HUB_OFFLINE = '1';
       childEnv.TRANSFORMERS_OFFLINE = '1';
     }
+    const operatorBufferCaps = Object.keys(METAL_BUFFER_RETRY_ENV).some(key => Object.hasOwn(process.env, key) || Object.hasOwn(childEnv, key));
+    const metalEligible = process.platform === 'darwin' && process.arch === 'arm64' && runtimeUsesMlx(model.runtime);
+    if (metalEligible) reportMetalPolicy(operatorBufferCaps ? 'operator' : 'stock', 'not-eligible', operatorBufferCaps ? 'Using operator Metal buffer settings' : 'Using stock Metal buffer settings');
+    if (metalEligible && !operatorBufferCaps) {
+      try {
+        const fingerprint = await currentMetalProfileFingerprint(model.runtime);
+        const signature = await metalBufferExecutionSignature({ model, encoder, runtimeInfo: BYOV_RUNTIME_INFO[model.runtime], fingerprint,
+          bin, args, meta, batch, env: childEnv, policy: METAL_BUFFER_RETRY_ENV });
+        if (signature) {
+          metalProfile = await getMetalBufferProfiles().lookup(signature);
+          if (metalProfile.applied) {
+            Object.assign(childEnv, METAL_BUFFER_RETRY_ENV);
+            metalBufferRetriesUsed = 1;
+          }
+          reportMetalPolicy(metalProfile.applied ? 'learned-initial' : 'stock', metalProfile.diagnostic,
+            metalProfile.applied ? 'Using proven smaller Metal command buffers from a matching successful recovery' : `Metal buffer profile cache: ${metalProfile.diagnostic}`);
+        }
+      } catch {
+        reportMetalPolicy('stock', 'fingerprint-or-cache-unavailable', 'Metal buffer profile evidence unavailable; using ordinary rendering');
+      }
+    }
     // `spawnDetached` double-forks the render child so it reparents to init
     // (PPID=1) and leaves pm2's process tree — without this a `pm2 restart
     // portos-server` (e.g. on the memory ceiling) SIGINTs the in-flight render
@@ -844,6 +978,7 @@ export async function spawnAndWatchVideo({
     // so it can't accumulate under data/videos.
     // Last spawn gate; the spawn call follows with no intervening await.
     preparation?.throwIfCanceled();
+    job.renderStartedAtMs = Date.now();
     firstProc = await spawnDetached(bin, args, {
       env: childEnv,
       controlDir: join(PATHS.videos, '.detached', jobId),

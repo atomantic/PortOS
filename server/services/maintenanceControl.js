@@ -57,9 +57,15 @@ export async function resumeMaintenance(input) {
   const status = maintenance.resume(input);
   // Re-evaluate saved policies. These functions retain their daemon, pause,
   // domain, budget and quota gates; do not call CoS.resume or mind.resume.
-  const [{ dequeueNextTask }, { recheckPersistentMindSchedule }] = await Promise.all([
+  const [{ dequeueNextTask, resumeDeferredCompletions }, { recheckPersistentMindSchedule }] = await Promise.all([
     import('./cos.js'), import('./persistentMindSupervisor.js'),
   ]);
-  await Promise.allSettled([dequeueNextTask(), recheckPersistentMindSchedule()]);
+  // The normal-state response must not wait for filesystem verification. Finish
+  // the bounded deterministic repair before admitting more queued agent work.
+  void resumeDeferredCompletions()
+    .catch(error => console.warn(`⚠️ Completion recovery deferred after maintenance: ${error.message}`))
+    .then(() => dequeueNextTask())
+    .catch(error => console.error(`❌ CoS dequeue after maintenance failed: ${error.message}`));
+  await Promise.allSettled([recheckPersistentMindSchedule()]);
   return status;
 }

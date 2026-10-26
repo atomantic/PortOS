@@ -91,9 +91,9 @@
  * message describes a failure", which no scan can have. The shapes above are
  * rare, and the marker convention is what makes the cheap version worth having.
  */
+import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -249,11 +249,7 @@ const PROCESS_ROOTS = ['server/', 'autofixer/'];
 // One-shot operator CLIs print human-formatted output, and fixtures stub other
 // code; neither is a log stream a marker grep or stderr monitor reads.
 const LINE_SHAPE_EXEMPT_PREFIXES = ['server/scripts/', 'server/test/'];
-const trackedServerSources = () => execFileSync('git', ['ls-files', '*.js', '*.mjs', '*.cjs'], {
-  cwd: REPO_ROOT,
-  encoding: 'utf8',
-  maxBuffer: 64 * 1024 * 1024,
-}).split('\n').filter((f) => f && PROCESS_ROOTS.some((root) => f.startsWith(root)) && !f.includes('.test.'));
+const trackedServerSources = () => trackedFiles(REPO_ROOT, ['*.js', '*.mjs', '*.cjs']).filter((f) => f && PROCESS_ROOTS.some((root) => f.startsWith(root)) && !f.includes('.test.'));
 
 describe('failure lines log at error level (#7945)', () => {
   it('scans both long-running Node process trees', () => {

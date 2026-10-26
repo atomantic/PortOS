@@ -1017,3 +1017,30 @@ describe('walk correction note (#3134)', () => {
     expect(screen.queryByRole('button', { name: /correction note/i })).toBeNull();
   });
 });
+
+describe('local walk endpoint conditioning', () => {
+  it('submits the opt-in for the rendered direction and restores its saved run', () => {
+    const onGenerate = vi.fn();
+    render(
+      <WalkWorkflow
+        record={{ id: 'local-walk-choice' }}
+        reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked', path: 'reference/east.png' }] } }}
+        renders={noRenders()}
+        duration={6}
+        onDurationChange={vi.fn()}
+        onChanged={vi.fn()}
+        {...{
+      provider: 'local',
+      providers: [{ id: 'local', ready: true, returnToIdleAnchorSupported: true }],
+      walk: { runs: [{ id: 'run-east', direction: 'east', status: 'error', returnToIdleAnchor: true }] },
+      onGenerate,
+        }}
+      />,
+    );
+    const checkbox = screen.getByRole('checkbox', { name: 'Return to idle anchor east' });
+    expect(checkbox).toBeChecked();
+    expect(screen.getByAltText('east last conditioning anchor')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Generate walk/ }));
+    expect(onGenerate).toHaveBeenCalledWith('east', { returnToIdleAnchor: true });
+  });
+});

@@ -25,7 +25,10 @@ import TrackWorkflow from './TrackWorkflow.jsx';
 import { approveSpriteTrack } from '../../services/apiSprites.js';
 
 const record = { id: 'example-walker' };
-const reference = { manifest: { mainReference: { locked: true } } };
+const reference = { manifest: {
+  mainReference: { locked: true, path: 'reference/main.png' },
+  anchors: [{ direction: 'east', status: 'locked', path: 'reference/east.png' }],
+} };
 
 const SCANNER_DEF = {
   id: 'scanner', label: 'Scanner action', directional: true, sourceReference: 'anchor',
@@ -225,5 +228,40 @@ describe('a track this client build has never heard of (#3136)', () => {
       />,
     );
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('local endpoint conditioning', () => {
+  const providers = [{ id: 'local', ready: true, returnToIdleAnchorSupported: true }];
+  it('keeps loop choices per track and facing across reload and submits both inputs', () => {
+    const onGenerate = vi.fn();
+    const view = renderTrack(SCANNER_DEF, {}, { provider: 'local', providers, onGenerate });
+    const east = screen.getByRole('checkbox', { name: 'Return to idle anchor east' });
+    expect(east).not.toBeChecked();
+    fireEvent.click(east);
+    expect(screen.getByAltText('east last conditioning anchor')).toBeInTheDocument();
+    const eastCard = east.closest('article');
+    fireEvent.click(eastCard.querySelector('button'));
+    expect(onGenerate).toHaveBeenCalledWith('scanner', {
+      direction: 'east', correctionKey: 'scanner:east', returnToIdleAnchor: true,
+    });
+    expect(screen.getByRole('checkbox', { name: 'Return to idle anchor west' })).not.toBeChecked();
+    view.unmount();
+    const reloaded = renderTrack(SCANNER_DEF, {}, { provider: 'local', providers });
+    expect(screen.getByRole('checkbox', { name: 'Return to idle anchor east' })).toBeChecked();
+    reloaded.unmount();
+    renderTrack(AMBIENT_DEF, {}, { provider: 'local', providers });
+    expect(screen.getByRole('checkbox', { name: 'Return to idle anchor south' })).not.toBeChecked();
+  });
+
+  it('restores the selected mode from a saved run and blocks unsupported admission', () => {
+    renderTrack(AMBIENT_DEF, {
+      runs: [{ id: 'ambient-run', direction: 'south', returnToIdleAnchor: true }],
+    }, { provider: 'local', providers: [{ id: 'local', ready: true, returnToIdleAnchorSupported: false }] });
+    const checkbox = screen.getByRole('checkbox', { name: 'Return to idle anchor south' });
+    expect(checkbox).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Generate' })).toBeDisabled();
+    fireEvent.click(checkbox);
+    expect(screen.getByRole('button', { name: 'Generate' })).toBeEnabled();
   });
 });

@@ -1,3 +1,4 @@
+import { catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema } from '../lib/catalogGreyboxValidation.js';
 import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.js';
 // Creative Ingredients Catalog HTTP routes, mounted at /api/catalog. Backs
 // the Catalog page, Ingest workflow, picker integrations, and peer sync.
@@ -5,6 +6,7 @@ import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.j
 import { Router } from 'express';
 import { isDeepStrictEqual } from 'node:util';
 import * as catalogDB from '../services/catalogDB.js';
+import { catalogEvents } from '../services/catalogEvents.js';
 import * as catalogSync from '../services/catalogSync.js';
 import { resolveRefs, listDanglingRefs } from '../services/catalogRefResolver.js';
 import { projectToCanon } from '../services/catalogCanonProjection.js';
@@ -27,6 +29,9 @@ import {
   catalogMediaVoiceMemoSchema,
   catalogPortraitSetSchema,
   catalogIngredientQuerySchema,
+  catalogIngredientDetailQuerySchema,
+  catalogIngredientCardsQuerySchema,
+  catalogIngredientLockSchema,
   catalogTagQuerySchema,
   catalogScrapCommitSchema,
   catalogExtractRequestSchema,
@@ -54,6 +59,7 @@ import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalog
 import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
+import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxShot, saveGreybox } from '../services/catalogGreybox.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
 import { getBoard as getMoodBoard } from '../services/moodBoard/index.js';
@@ -63,9 +69,11 @@ import { previewCatalogCastImport, commitCatalogCastImport } from '../services/m
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
 import catalogIdentityRouter from './catalogIdentity.js';
+import catalogPrimitivesRouter from './catalogPrimitives.js';
 
 const router = Router();
 router.use('/identity', catalogIdentityRouter);
+router.use('/ingredients/:id', catalogPrimitivesRouter);
 
 router.get('/stats', asyncHandler(async (req, res) => {
   res.json(await catalogDB.getCatalogStats());
@@ -251,6 +259,20 @@ router.get('/facets', asyncHandler(async (_req, res) => {
   res.json(await catalogDB.getCatalogFacets());
 }));
 
+router.get('/ingredient-cards', asyncHandler(async (req, res) => {
+  const { ids } = validateRequest(catalogIngredientCardsQuerySchema, req.query);
+  res.json({ items: await catalogDB.getIngredientCards(ids) });
+}));
+
+router.patch('/ingredients/:id/lock', asyncHandler(async (req, res) => {
+  const { locked } = validateRequest(catalogIngredientLockSchema, req.body);
+  const updated = await catalogDB.setIngredientLock(req.params.id, locked);
+  if (!updated) throw new ServerError('Ingredient not found', { status: 404 });
+  await projectToCanon(updated.id, updated);
+  catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
+  res.json(updated);
+}));
+
 router.get('/ingredients/:id', asyncHandler(async (req, res) => {
   const ing = await catalogDB.getIngredient(req.params.id);
   if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
@@ -269,49 +291,37 @@ router.get('/ingredients/:id', asyncHandler(async (req, res) => {
   });
 }));
 
-// Batched detail hydration: ONE round-trip for everything the detail page loads
-// on mount — refs + sources + relations + revisions + media + missing-media —
-// replacing five separate client requests. Post-mutation refreshes still hit the
-// granular endpoints (revisions / media) so a single attach or restore doesn't
-// re-pull the whole record. Embedding is stripped like the single-ingredient
-// route (opt in with `?includeEmbedding=true`).
+// Full detail remains the compatibility default. Profile and media projections
+// let library editors render before history, images and prose usage are read.
 router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
+  const projection = validateRequest(catalogIngredientDetailQuerySchema, req.query);
   const ing = await catalogDB.getIngredient(req.params.id);
   if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
-  const [refs, sources, relations, revisions, media, missingMedia, sharedIdentity] = await Promise.all([
-    // Live refs only (#1812): the detail page's "Appears in" panel must not
-    // render a chip deep-linking to a soft-deleted universe/series/CD target.
-    // The orphan stays recoverable via the Catalog "Orphaned" album.
-    catalogDB.listLiveRefsForIngredient(req.params.id),
+  if (projection.view === 'media') {
+    const media = await catalogDB.listMediaForIngredient(req.params.id);
+    return res.json({ media, missingMedia: await catalogDB.getMissingMediaForIngredient(req.params.id, { media }) });
+  }
+  const full = projection.view === 'full';
+  const { getPrimitiveContext } = await import('../services/catalogPrimitives.js');
+  const [context, sources, relations, revisions, media, sharedIdentity, coverMedia] = await Promise.all([
+    getPrimitiveContext(req.params.id, { includeDerived: full }),
     catalogDB.listSourcesForIngredient(req.params.id),
     catalogDB.listRelationsForIngredient(req.params.id),
-    catalogDB.listIngredientRevisions(req.params.id, { limit: 50 }),
-    catalogDB.listMediaForIngredient(req.params.id),
-    catalogDB.getMissingMediaForIngredient(req.params.id),
+    full ? catalogDB.listIngredientRevisions(req.params.id, { limit: 50 }) : null,
+    full ? catalogDB.listMediaForIngredient(req.params.id) : null,
     getCatalogIdentityAccess(req.params.id),
+    full ? null : catalogDB.getIngredientMediaCover(req.params.id),
   ]);
-  // "From the same source" (#7617): sibling ingredients extracted from each of
-  // THIS ingredient's source scraps, batched in one query so the detail page
-  // needs no second round-trip to answer "what else came out of this piece?".
-  const siblingsByScrap = await catalogDB.listSiblingIngredientsBySource(
-    req.params.id,
-    sources.map((s) => s.scrapId),
-  );
-  const sourcesWithSiblings = sources.map((s) => ({
-    ...s,
-    siblings: siblingsByScrap.get(s.scrapId) || [],
-  }));
-  const includeEmbedding = req.query.includeEmbedding === 'true';
+  const siblingsByScrap = await catalogDB.listSiblingIngredientsBySource(req.params.id, sources.map((source) => source.scrapId));
+  const sourcesWithSiblings = sources.map((source) => ({ ...source, siblings: siblingsByScrap.get(source.scrapId) || [] }));
   const { embedding, ...rest } = ing;
   res.json({
-    ingredient: includeEmbedding ? { ...rest, embedding } : rest,
-    sharedIdentity,
-    refs,
-    sources: sourcesWithSiblings,
-    relations,                                 // { outbound, inbound }
-    revisions: Array.isArray(revisions?.items) ? revisions.items : [],
-    media,                                      // array of attachments
-    missingMedia,                               // array of { mediaKey, ... }
+    ingredient: projection.includeEmbedding === 'true' ? { ...rest, embedding } : rest,
+    sharedIdentity, refs: context.refs, universeContext: context,
+    sources: sourcesWithSiblings, relations,
+    ...(!full ? { coverMedia } : {}),
+    ...(full ? { revisions: Array.isArray(revisions?.items) ? revisions.items : [], media,
+      missingMedia: await catalogDB.getMissingMediaForIngredient(req.params.id, { media }) } : {}),
   });
 }));
 
@@ -355,14 +365,17 @@ router.post('/ingredient-merges/:id/recover', asyncHandler(async (req, res) => {
 
 router.post('/ingredients', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogIngredientCreateSchema, req.body);
-  const ing = await catalogDB.createIngredient({
+  const input = {
     type: body.type,
     name: body.name,
     payload: body.payload || {},
     tags: body.tags || [],
     ...(await embedIngredient(body)),
-  });
+  };
+  const { createOwnedPrimitive } = await import('../services/catalogPrimitives.js');
+  const ing = body.universeId ? await createOwnedPrimitive(input, body.universeId, body.operationKey) : await catalogDB.createIngredient(input);
   res.status(201).json(ing);
+  catalogEvents.emit('primitive-changed', { ingredientId: ing.id });
 }));
 
 router.patch('/ingredients/:id', asyncHandler(async (req, res) => {
@@ -387,6 +400,7 @@ router.patch('/ingredients/:id', asyncHandler(async (req, res) => {
   );
   if (!updated) throw new ServerError('Ingredient not found', { status: 404 });
   res.json(updated);
+  catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
   // Fan the catalog edit into every linked universe's embedded canon entry so
   // the two stores of record never diverge. Best-effort fire-and-forget: it
   // runs AFTER the response and is outside-request-lifecycle-style fan-out, so
@@ -442,6 +456,7 @@ router.post('/ingredients/:id/revisions/:revisionId/restore', asyncHandler(async
   );
   if (!updated) throw new ServerError('Ingredient not found', { status: 404 });
   res.json(updated);
+  catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
   // A restore changes the same mirrored name/payload fields as an ordinary
   // PATCH, so refresh every linked universe after the Catalog write succeeds.
   // Keep this best-effort and post-response: the restore is already durable,
@@ -453,18 +468,38 @@ router.post('/ingredients/:id/revisions/:revisionId/restore', asyncHandler(async
 }));
 
 router.delete('/ingredients/:id', asyncHandler(async (req, res) => {
+  const refs = await catalogDB.listRefsForIngredient(req.params.id);
+  const targets = await resolveRefs(refs);
+  // Resolution describes targets only. Keep the association's role for the
+  // ownership exemption rather than discarding it with the bounded projection.
+  if (refs.some((ref, index) => targets[index]?.resolved && !(ref.refKind === 'universe' && ref.role === 'owner'))) {
+    throw new ServerError('Remove this primitive from its containers before deleting it. Ownership and media can be kept.', { status: 409, code: 'CATALOG_PRIMITIVE_IN_USE' });
+  }
   await catalogDB.deleteIngredient(req.params.id);
   res.status(204).end();
 }));
 
 router.post('/ingredients/:id/link', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogIngredientLinkSchema, req.body);
+  if (body.refKind === 'universe') {
+    if (body.role === 'owner') throw new ServerError('Use the explicit ownership action', { status: 409 });
+    const { addPrimitiveToUniverse } = await import('../services/catalogPrimitives.js');
+    res.status(201).json(await addPrimitiveToUniverse(req.params.id, body.refId, body.role));
+    return;
+  }
   await catalogDB.linkIngredientToRef(req.params.id, body.refKind, body.refId, body.role);
   res.status(201).json({ success: true });
 }));
 
 router.delete('/ingredients/:id/link', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogIngredientLinkSchema, req.body);
+  if (body.refKind === 'universe' && body.role === 'owner') throw new ServerError('Ownership is separate from container membership', { status: 409 });
+  if (body.refKind === 'universe' && body.role.startsWith('canon-')) {
+    const { removePrimitiveFromUniverse } = await import('../services/catalogPrimitives.js');
+    await removePrimitiveFromUniverse(req.params.id, body.refId, body.role);
+    res.status(204).end();
+    return;
+  }
   await catalogDB.unlinkIngredientFromRef(req.params.id, body.refKind, body.refId, body.role);
   res.status(204).end();
 }));
@@ -660,6 +695,45 @@ router.post('/ingredients/:id/media/upload', asyncHandler(async (req, res) => {
   res.status(201).json(media);
 }));
 
+// Place greybox. Draft is a provider call on the user's tap (host-control gated,
+// see hostControlRoutes.js) and answers with a preview; save stores or clears it;
+// capture attaches a rendered shot as a reference image.
+router.post('/ingredients/:id/greybox/draft', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogGreyboxDraftSchema, req.body);
+  res.json(await draftGreybox(req.params.id, body));
+}));
+
+router.post('/ingredients/:id/greybox/prompt', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogGreyboxDraftSchema, req.body);
+  res.json(await previewGreyboxPrompt(req.params.id, body));
+}));
+
+router.put('/ingredients/:id/greybox', asyncHandler(async (req, res) => {
+  const { greybox, source } = validateRequest(catalogGreyboxSaveSchema, req.body);
+  const updated = await saveGreybox(req.params.id, greybox, { source });
+  res.json(updated);
+  catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
+  // Same fan-out as PATCH: a linked universe's embedded place must not keep the
+  // old layout, or its next Universe Builder edit would write it back.
+  projectToCanon(updated.id, updated).catch((err) => {
+    console.error(`🔁 catalog→canon projection failed for ${updated.id}: ${err.message}`);
+  });
+}));
+
+router.post('/ingredients/:id/greybox/shots/:shotId/capture', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogGreyboxCaptureSchema, req.body);
+  const media = await captureGreyboxShot(req.params.id, req.params.shotId, body);
+  res.status(201).json(media);
+  catalogEvents.emit('primitive-changed', { ingredientId: req.params.id });
+}));
+
+router.post('/ingredients/:id/greybox/shots/:shotId/render', asyncHandler(async (req, res) => {
+  validateRequest(catalogGreyboxRenderSchema, req.body ?? {});
+  const media = await renderGreyboxShot(req.params.id, req.params.shotId);
+  res.status(201).json(media);
+  catalogEvents.emit('primitive-changed', { ingredientId: req.params.id });
+}));
+
 // Record a voice memo onto an ingredient: transcribe via Whisper, persist the
 // audio, and attach a kind:'audio' row with the transcript in caption.
 router.post('/ingredients/:id/media/voice', asyncHandler(async (req, res) => {
@@ -744,6 +818,12 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
     // Serialize retries even when their explicit ingredient/scrap IDs do not
     // exist yet. The transaction releases this lock on commit or rollback.
     await client.query("SELECT pg_advisory_xact_lock(hashtext('catalog-bulk-import'))");
+    // Only a creator's explicit choice establishes ownership. Export bundle
+    // references remain provenance; existing identities retain their owner.
+    if (defaults.universeRef) {
+      const { rows } = await client.query('SELECT id FROM universes WHERE id = $1 AND deleted = false FOR SHARE', [defaults.universeRef]);
+      if (!rows.length) throw new ServerError('Owning universe not found', { status: 404 });
+    }
     const out = [];
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
@@ -766,6 +846,7 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
       const ing = existing
         ? await catalogDB.updateIngredient(entry.id, values, { client })
         : await catalogDB.createIngredient(values, { client });
+      if (!existing && defaults.universeRef) await catalogDB.linkIngredientToRef(ing.id, 'universe', defaults.universeRef, 'owner', { client });
       for (const media of entry.media || []) {
         await catalogDB.attachMedia(ing.id, media.mediaKey, media.kind, { ...media, client });
       }
@@ -778,7 +859,10 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
         // to the /link schema's 64-char limit — a foreign bundle's oversized
         // role would otherwise hit the role VARCHAR(64) constraint and surface
         // as a 500 mid-transaction instead of a clean bulk-import rejection.
-        const role = (defaults.role || perRowRoles[i] || `bulk-${target.refKind}`).slice(0, 64);
+        const importedRole = (defaults.role || perRowRoles[i] || `bulk-${target.refKind}`).slice(0, 64);
+        // A portable bundle's old owner is evidence, not a destination choice.
+        // Fresh explicit ownership was written above; existing owners survive.
+        const role = target.refKind === 'universe' && importedRole === 'owner' ? 'imported-owner' : importedRole;
         await client.query(
           `INSERT INTO catalog_ingredient_refs (ingredient_id, ref_kind, ref_id, role)
            VALUES ($1, $2, $3, $4)

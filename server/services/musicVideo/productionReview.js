@@ -41,6 +41,7 @@ export const documentStoryboardBasis = project => hash({
  * shot's text placement and selected take. A change to any of them makes a check stale.
  */
 export const overlayTextBasis = project => hash({
+  ...(project.lyricOverlayEnabled === false ? { lyricOverlayEnabled: false } : {}),
   document: project.composition?.document?.directory || null, aspect: musicVideoAspect(project), source: source(project),
   textCues: project.composition?.textCues ?? null, overlay: project.composition?.overlay ?? null, style: project.composition?.style ?? null,
   scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer }) =>
@@ -480,6 +481,7 @@ export function productionReviewBasis(project) {
     scenes: (project.scenes || []).map(({ sceneId, lyricText }) => ({ sceneId, lyricText })) });
   const window = project.productionReview?.proof;
   const proof = hash({ storyboard, composition: project.composition,
+    ...(project.lyricOverlayEnabled === false ? { lyricOverlayEnabled: false } : {}),
     window: window && { startSec: window.startSec, endSec: window.endSec },
     scenes: (project.scenes || []).filter(s => !window || s.startSec < window.endSec && s.endSec > window.startSec)
       .map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer }) =>
@@ -512,6 +514,7 @@ function productionApprovalInputs(project) {
     'storyboard shots': h([draft.storyboard, draft.storyboardSource, project.productionReview?.documentStoryboard]), treatment: h(project.treatment), ...scenes };
   const window = project.productionReview?.proof;
   const proof = { ...storyboard, composition: h(project.composition), 'proof window': h(window && [window.startSec, window.endSec]),
+    ...(project.lyricOverlayEnabled === false ? { 'automatic lyric overlays': h(false) } : {}),
     takes: h((project.scenes || []).map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer }) =>
       ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer }))),
     'sound bed': h(project.soundBed), 'video settings': h(project.videoSettings) };

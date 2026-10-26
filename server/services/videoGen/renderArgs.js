@@ -1,3 +1,4 @@
+import { assertA2vLoraStageRequest, isDefaultA2vLoraStages } from '../../lib/videoLoraStageValidation.js';
 /**
  * Local-video render argument assembly and runtime validation.
  *
@@ -14,6 +15,7 @@ import {
   isDefaultI2vReferenceMode, normalizeI2vReferenceMode,
 } from '../../lib/videoReferenceModes.js';
 import { isDefaultVideoStreamingMode } from '../../lib/videoStreamingMode.js';
+import { miniMaxH3SpeedProfileDeclineReason } from '../../lib/minimaxH3SpeedProfiles.js';
 import { extendLatentFrames } from '../../lib/videoContinuity.js';
 import { videoLoraLayoutIssue } from '../../lib/safetensors.js';
 import { formatLoraEffect, loraEffectIssue } from '../../lib/loraEffect.js';
@@ -23,7 +25,8 @@ import { videoLoraFamily, isLtx2FamilyRuntime } from '../../lib/runners.js';
 import {
   isIcLoraMode, icLoraSpecForMode, assertIcReferenceCount, icResolutionIssue,
 } from '../../lib/icLoraWeights.js';
-import { videoModeContractError, videoReferenceModeError } from './modeContract.js';
+import { continuationContract } from '../../lib/videoContinuity.js';
+import { videoModeContractError, videoReferenceModeError, videoContinuityContractError } from './modeContract.js';
 import { minimaxH3ControlError } from './minimaxH3Controls.js';
 import {
   MINIMAX_H3_HOST_RESERVE_GB,
@@ -197,7 +200,7 @@ export const resolveVideoLoras = async (loras, { probeEffect = false, runtime = 
       throw new ServerError(`LoRA not found: ${l.filename}`, { status: 400, code: 'LORA_NOT_FOUND' });
     }
     const layout = await getLoraKeyLayout(l.filename);
-    const issue = runtime === 'minimax_h3' && layout !== 'not_a_lora'
+    const issue = ['minimax_h3', 'minimax_h3_cuda'].includes(runtime) && layout !== 'not_a_lora'
       ? null
       : videoLoraLayoutIssue(layout);
     if (issue) {
@@ -334,7 +337,7 @@ export const ltx25TextEncoderArgs = (textEncoder) => {
   return args;
 };
 
-const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, disableAudio, outputPath, previewDir, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, streamingMode }) => {
+const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, a2vLoraStageStrengths, disableAudio, outputPath, previewDir, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, streamingMode }) => {
   assertByovRuntimeInstalled(model.runtime);
   // Map PortOS UI modes to the helper's subcommand. Native extend on ltx2
   // routes to ExtendPipeline.extend_from_video — conditions on the entire
@@ -456,6 +459,7 @@ const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, hei
   // hook. Emitted as a JSON list of { path, strength }; generate_ltx2.py sets
   // pipe._pending_loras before generation so the deltas fuse at load time
   // (the same mechanism the upstream `ltx-2-mlx generate --lora` CLI uses).
+  if (!isDefaultA2vLoraStages(a2vLoraStageStrengths)) args.push('--a2v-lora-stage-strengths', JSON.stringify(a2vLoraStageStrengths));
   if (Array.isArray(loras) && loras.length > 0) {
     args.push('--user-loras', JSON.stringify(loras.map((l) => ({ path: l.path, strength: l.strength }))));
   }
@@ -525,7 +529,7 @@ const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, hei
     // ExtendPipeline. Shared with the chain orchestrator, which needs the same
     // number to work out how much of the render is echoed source (see
     // `lib/videoContinuity.js`) — the two MUST agree or the trim is wrong.
-    args.push('--extend-frames', String(extendLatentFrames(numFrames)));
+    args.push('--extend-frames', String(extendLatentFrames(numFrames, model.runtime)));
     args.push('--extend-direction', 'after');
   }
   if (helperMode === 'a2v') {
@@ -795,7 +799,7 @@ const miniMaxH3HostMemoryArgs = (model) => {
 // Build args for PipeNetwork's pinned MiniMax H3 MLX port. The helper resolves
 // only exact, already-cached HF revisions; every network download remains an
 // explicit Video Gen UI action guarded by the model's terms acknowledgement.
-const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder, draftDecoder }) => {
+const buildMiniMaxH3Args = ({ historyContext, speedProfile, model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder, draftDecoder }) => {
   assertMiniMaxH3Preflight({
     runtimeId: 'minimax_h3',
     repoLabel: 'transformer repo or revision',
@@ -845,6 +849,8 @@ const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numF
   for (const file of files) args.push('--checkpoint-file', file);
   // Anchor order is packed order: the helper stretches the FIRST keyframe onto
   // the canvas as the geometry anchor, so a first-frame image must lead.
+  if (historyContext) args.push('--source-video', historyContext.sourceVideoPath,
+    '--history-end-frame', String(historyContext.endFrame), '--history-frames', String(historyContext.frames));
   if (sourceImagePath) args.push('--image', sourceImagePath, '--anchor', 'first');
   if (lastImagePath) args.push('--image', lastImagePath, '--anchor', 'last');
   // Runtime (never fused) application — each --lora needs its own --lora-scale,
@@ -852,6 +858,15 @@ const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numF
   // has already rejected LoRAs unless the probe proved this checkout plus the
   // PortOS adapter can apply them to the quantized DiT (see runtimes.js
   // `loraProbeArgs`).
+  if (speedProfile) {
+    const reason = miniMaxH3SpeedProfileDeclineReason({ model, profileId: speedProfile.id, mode,
+      width, height, steps, keyframes, lastImagePath, extendFromVideoPath, audioFilePath });
+    if (reason) throw new ServerError(reason.message, { status: 400, code: reason.code });
+    if (!speedProfile.adapterPath) {
+      throw new ServerError('LightX2V adapter was not resolved from the pinned cache.', { status: 400, code: 'MINIMAX_H3_SPEED_WEIGHTS_NOT_CACHED' });
+    }
+    args.push('--speed-profile', speedProfile.id, '--speed-adapter', speedProfile.adapterPath);
+  }
   for (const l of loras ?? []) args.push('--lora', l.path, '--lora-scale', String(l.strength));
   // Substituted prompt conditioner (lib/videoTextEncoders.js). Absent for the
   // stock choice, so the argv of an unswapped render is byte-identical to what
@@ -898,7 +913,7 @@ const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numF
 // transformer, conditioner, both VAEs and the schedulers in the model's own
 // `repo`, so the file list rides on `repoFiles` and there is no separate
 // upstream-checkpoint dependency to resolve.
-const buildMiniMaxH3CudaArgs = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath }) => {
+const buildMiniMaxH3CudaArgs = ({ historyContext, model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, loras, speedProfile }) => {
   assertMiniMaxH3Preflight({
     runtimeId: 'minimax_h3_cuda',
     repoLabel: 'repo or revision',
@@ -931,6 +946,16 @@ const buildMiniMaxH3CudaArgs = ({ model, prompt, negativePrompt, width, height, 
     ...miniMaxH3HostMemoryArgs(model),
   ];
   for (const file of files) args.push('--repo-file', file);
+  if (speedProfile) {
+    const reason = miniMaxH3SpeedProfileDeclineReason({ model, profileId: speedProfile.id, mode,
+      width, height, steps, keyframes, lastImagePath, extendFromVideoPath, audioFilePath });
+    if (reason) throw new ServerError(reason.message, { status: 400, code: reason.code });
+    if (!speedProfile.adapterPath) {
+      throw new ServerError('LightX2V adapter was not resolved from the pinned cache.', { status: 400, code: 'MINIMAX_H3_SPEED_WEIGHTS_NOT_CACHED' });
+    }
+    args.push('--speed-profile', speedProfile.id, '--speed-adapter', speedProfile.adapterPath);
+  }
+  for (const lora of loras || []) args.push('--lora', lora.path, '--lora-scale', String(lora.strength));
   // A user-pinned offload recipe from data/media-models.json. Omitted, the
   // helper sizes one from the card's own VRAM — the right default, since the
   // registry entry is shared across every install that syncs it and can't know
@@ -950,6 +975,8 @@ const buildMiniMaxH3CudaArgs = ({ model, prompt, negativePrompt, width, height, 
   // Anchor order is packed order, same as the MLX lane: diffusers takes the
   // first keyframe as `image` (which sets the canvas) and the last as
   // `last_image`, so a first-frame image must lead.
+  if (historyContext) args.push('--source-video', historyContext.sourceVideoPath,
+    '--history-end-frame', String(historyContext.endFrame), '--history-frames', String(historyContext.frames));
   if (sourceImagePath) args.push('--image', sourceImagePath, '--anchor', 'first');
   if (lastImagePath) args.push('--image', lastImagePath, '--anchor', 'last');
   return { bin: MINIMAX_H3_CUDA_VENV_PYTHON, args };
@@ -1153,12 +1180,27 @@ export const buildMiniMaxH3Ref2vaArgs = ({
   return { bin: process.execPath, args };
 };
 
-export const buildArgs = ({ upscale, pythonPath, modelId, model, wanModelPath, fastvideoModelPath, fastvideoOmniAssets, referenceImagePaths, referenceVideoPaths, referenceAudioPaths, wanRequiredWeights, ltxModelPath, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, draftDecoder, streamingMode, ffmpegPath, ffprobePath }) => {
+export const buildArgs = ({ continuityStrategy, contextFrames, historyContext, upscale, pythonPath, modelId, model, wanModelPath, fastvideoModelPath, fastvideoOmniAssets, referenceImagePaths, referenceVideoPaths, referenceAudioPaths, wanRequiredWeights, ltxModelPath, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, a2vLoraStageStrengths, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, draftDecoder, streamingMode, ffmpegPath, ffprobePath }) => {
   // Generative upscale (#6511) declines FIRST. It is not a text/image render:
   // it carries no video model, no prompt and no reference mode, so every guard
   // below would either dereference a model it was never given or reject it for
   // lacking a conditioning contract it does not have.
+  assertA2vLoraStageRequest({ strengths: a2vLoraStageStrengths, model, mode, hasLoras: loras?.length > 0 });
   if (upscale) return buildLtxUpscaleArgs({ ...upscale, outputPath });
+  const continuityError = videoContinuityContractError({ model, continuityStrategy, contextFrames });
+  if (continuityError) throw continuityError;
+  if (historyContext) {
+    const historyError = videoContinuityContractError({ model, continuityStrategy: 'window', contextFrames });
+    if (historyError) throw historyError;
+    const contract = continuationContract(model?.runtime);
+    if (contract.adapter !== 'h3-history'
+      || typeof historyContext.sourceVideoPath !== 'string' || !existsSync(historyContext.sourceVideoPath)
+      || !Number.isSafeInteger(historyContext.endFrame) || historyContext.endFrame < contract.historyFrames
+      || historyContext.frames !== contract.historyFrames || fps !== contract.fps
+      || sourceImagePath || lastImagePath || keyframes?.length || speedProfile || loras?.length || draftDecoder) {
+      throw new ServerError('H3 history requires its pinned baseline adapter, exact 17-frame video/audio interval and no image, profile, LoRA or decoder substitutions.', { status: 400, code: 'VIDEO_HISTORY_CONTRACT_INVALID' });
+    }
+  }
   // Reference-mode promise (#4874) — checked HERE rather than inside
   // buildLtx2Args because every runtime reaches this function and only one can
   // honor a loose reference. A wan22/mlx_video/H3 render that fell through to its
@@ -1176,7 +1218,7 @@ export const buildArgs = ({ upscale, pythonPath, modelId, model, wanModelPath, f
   // runtime. Existing notapalindrome models default to runtime: 'mlx_video'
   // (or undefined in legacy registries — see backfillRuntime in mediaModels.js).
   if (isLtx2FamilyRuntime(model.runtime)) {
-    return buildLtx2Args({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, disableAudio, outputPath, previewDir, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, streamingMode });
+    return buildLtx2Args({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, a2vLoraStageStrengths, disableAudio, outputPath, previewDir, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, streamingMode });
   }
   // IC-LoRA remix modes are an LTX-2 primitive (ICLoraPipeline) — no other
   // runtime has an equivalent. The route guards this too, but a non-route
@@ -1192,7 +1234,7 @@ export const buildArgs = ({ upscale, pythonPath, modelId, model, wanModelPath, f
   // Defense-in-depth: LoRAs run only where videoLoraFamily() says they can —
   // ltx2 (handled above), a non-quantized LTX-2.x mlx_video model (the wrapper
   // below), or a minimax_h3 checkout whose probe proved a quant-aware
-  // applicator. All of those macOS/mlx-only. The route already rejects the rest,
+  // applicator (including CUDA's separately probed adapter). The route rejects the rest,
   // but a non-route caller (test, queue replay) — or a Windows install with a
   // hand-edited/synced entry — could reach here. Fail clearly rather than fall
   // through to the generate_win.py branch below, which would silently drop the
@@ -1222,10 +1264,10 @@ export const buildArgs = ({ upscale, pythonPath, modelId, model, wanModelPath, f
     return buildWan22CudaArgs({ model, wanModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath });
   }
   if (model.runtime === 'minimax_h3') {
-    return buildMiniMaxH3Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder, draftDecoder });
+    return buildMiniMaxH3Args({ historyContext, speedProfile, model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder, draftDecoder });
   }
   if (model.runtime === 'minimax_h3_cuda') {
-    return buildMiniMaxH3CudaArgs({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath });
+    return buildMiniMaxH3CudaArgs({ historyContext, model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, loras, speedProfile });
   }
   if (model.runtime === 'minimax_h3_ref2va') {
     return buildMiniMaxH3Ref2vaArgs({

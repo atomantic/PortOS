@@ -192,7 +192,7 @@ export async function resolveSpriteAssetPrompt(recordId, relPath) {
       const rebuild = () => tryBuildTrackVideoPrompt(track ?? WALK_TRACK, {
         name, kind: record.kind, direction: runRecord.direction, chromaKey, correctionPrompt,
       });
-      const stamped = typeof runRecord.prompt === 'string' && runRecord.prompt ? runRecord.prompt : null;
+      const stamped = runRecord.renderPrompt ?? (typeof runRecord.prompt === 'string' && runRecord.prompt ? runRecord.prompt : null);
       const prompt = stamped ?? rebuild();
       if (!prompt) return null;
       return { prompt, designPrompt: null, source: track ?? WALK_TRACK };

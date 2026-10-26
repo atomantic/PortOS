@@ -62,6 +62,10 @@ vi.mock('../services/tailcatPeer.js', async (original) => ({
 }));
 vi.mock('../services/tailcatServe.js', async (original) => ({
   ...(await original()),
+  getTailcatDevices: vi.fn(),
+  approveTailcatDevice: vi.fn(),
+  revokeTailcatDevice: vi.fn(),
+  setTailcatDeviceEnforcement: vi.fn(),
   getTailcatServeStatus: vi.fn(),
   ensureTailcatServe: vi.fn(),
   retryTailcatServe: vi.fn(),
@@ -74,6 +78,10 @@ import {
   forgetTailcatForward,
 } from '../services/tailcatPeer.js';
 import {
+  getTailcatDevices,
+  approveTailcatDevice,
+  revokeTailcatDevice,
+  setTailcatDeviceEnforcement,
   getTailcatServeStatus,
   ensureTailcatServe,
   retryTailcatServe,
@@ -592,5 +600,49 @@ describe('local peer admission configuration', () => {
       .send({ syncSecret: 'synthetic-pair-secret-32-characters-long' });
     expect(res.status).toBe(200);
     expect(instances.updatePeer).toHaveBeenCalledWith('peer-a', { syncSecret: 'synthetic-pair-secret-32-characters-long' });
+  });
+});
+
+describe('Tailcat device management routes', () => {
+  beforeEach(() => { vi.clearAllMocks(); verifySession.mockResolvedValue(true); });
+  const publicKey = `nodekey:${'3'.repeat(64)}`;
+  it('accepts only explicit public identities and boolean enforcement', async () => {
+    approveTailcatDevice.mockResolvedValue({ devices: [{ id: 'example', publicKey }] });
+    expect((await request(buildApp()).post('/api/instances/peers/tailcat/devices').send({ label: 'Example phone', publicKey })).status).toBe(200);
+    expect(approveTailcatDevice).toHaveBeenCalledWith({ label: 'Example phone', publicKey });
+    for (const body of [{ label: 'Phone', publicKey: 'privkey:example' }, { label: 'Phone', publicKey, privateKey: 'example' }]) {
+      expect((await request(buildApp()).post('/api/instances/peers/tailcat/devices').send(body)).status).toBe(400);
+    }
+    setTailcatDeviceEnforcement.mockResolvedValue({ enforcement: { enabled: true } });
+    expect((await request(buildApp()).patch('/api/instances/peers/tailcat/devices/enforcement').send({ enabled: true })).status).toBe(200);
+    expect(setTailcatDeviceEnforcement).toHaveBeenCalledWith(true);
+    expect((await request(buildApp()).patch('/api/instances/peers/tailcat/devices/enforcement').send({ enabled: 'true' })).status).toBe(400);
+    revokeTailcatDevice.mockResolvedValue({ devices: [] });
+    expect((await request(buildApp()).delete('/api/instances/peers/tailcat/devices/example')).status).toBe(200);
+    expect(revokeTailcatDevice).toHaveBeenCalledWith('example');
+    getTailcatDevices.mockResolvedValue({ devices: [] });
+    expect((await request(buildApp()).get('/api/instances/peers/tailcat/devices')).status).toBe(200);
+  });
+
+  it('refuses remote capability holders and header spoofing without an operator session', async () => {
+    verifySession.mockResolvedValue(false);
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.portosAuthContext = { enabled: false }; next(); });
+    app.use((req, res, next) => remoteRequestHandler(() => next())(req, res));
+    app.use('/api/instances', instancesRoutes);
+    app.use(errorMiddleware);
+    for (const [method, path, body] of [
+      ['get', '/devices'], ['post', '/devices', { label: 'Unapproved', publicKey }],
+      ['patch', '/devices/enforcement', { enabled: false }], ['delete', '/devices/example'], ['get', '/serve'],
+    ]) {
+      const response = await request(app)[method](`/api/instances/peers/tailcat${path}`)
+        .set('X-PortOS-Local', 'true').set('X-Forwarded-For', '127.0.0.1').send(body);
+      expect(response.status).toBe(403);
+    }
+    expect(approveTailcatDevice).not.toHaveBeenCalled();
+    expect(setTailcatDeviceEnforcement).not.toHaveBeenCalled();
+    expect(revokeTailcatDevice).not.toHaveBeenCalled();
+    expect(getTailcatDevices).not.toHaveBeenCalled();
   });
 });

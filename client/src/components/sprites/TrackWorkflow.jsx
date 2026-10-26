@@ -1,3 +1,4 @@
+import LocalLoopConditioning, { useLoopConditioning } from './LocalLoopConditioning.jsx';
 import { useMemo } from 'react';
 import { Check, Film, Radio, RefreshCw, Wind } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -33,6 +34,8 @@ export default function TrackWorkflow({
   providersError = null, onRetryProviders = null,
 }) {
   const definition = state?.definition || null;
+  const loopConditioning = useLoopConditioning(record.id, definition?.id);
+  const conditioningSupported = providers?.find((row) => row.id === 'local')?.returnToIdleAnchorSupported === true;
   const runs = state?.runs || [];
   const selection = state?.selection || null;
   const finalized = Boolean(state?.set);
@@ -114,6 +117,11 @@ export default function TrackWorkflow({
           // The shared page-owned corrections map's key for THIS card (#3134,
           // generalized per track+facing in #3136).
           const correctionKey = trackCorrectionKey(definition.id, direction);
+          const returnToIdleAnchor = provider === 'local' && loopConditioning.selected(direction, run);
+          const manifest = reference.manifest;
+          const anchor = directional
+            ? manifest.anchors?.find((item) => item.direction === direction)
+            : manifest.mainReference;
           return (
             <article key={direction} className="rounded border border-port-border bg-port-bg p-2 space-y-2">
               <div className="flex items-center justify-between gap-2">
@@ -122,6 +130,11 @@ export default function TrackWorkflow({
                   {approved ? 'approved' : busy ? run.status : candidate ? 'review' : 'not generated'}
                 </span>
               </div>
+              {run?.conditioningMode && (
+                <p className="text-[10px] text-gray-500">
+                  Rendered: {run.conditioningMode === 'fflf' ? 'paired idle anchors' : 'first idle anchor'}
+                </p>
+              )}
               {preview?.stripPath ? (
                 <img
                   className="h-20 w-full rounded object-contain"
@@ -139,6 +152,17 @@ export default function TrackWorkflow({
                   {/* Optional correction the next render carries (#3134) — same
                       shared page-owned map every other re-roll surface writes,
                       keyed per track+facing (#3136). */}
+                  {provider === 'local' && (
+                    <LocalLoopConditioning
+                      recordId={record.id}
+                      direction={direction}
+                      anchor={anchor}
+                      enabled={returnToIdleAnchor}
+                      onChange={(value) => loopConditioning.change(direction, value)}
+                      disabled={busy}
+                      supported={conditioningSupported}
+                    />
+                  )}
                   {onCorrectionChange && (
                     <CorrectionNoteToggle
                       noteKey={correctionKey}
@@ -151,7 +175,7 @@ export default function TrackWorkflow({
                   <div className="flex gap-1.5">
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || (returnToIdleAnchor && !conditioningSupported)}
                       // Both the request `direction` (only a directional track
                       // sends one — a single-row track's facing is derived
                       // server-side) and the note key are decided HERE, where the
@@ -161,6 +185,7 @@ export default function TrackWorkflow({
                       onClick={() => onGenerate(definition.id, {
                         direction: directional ? direction : undefined,
                         correctionKey,
+                        ...(provider === 'local' ? { returnToIdleAnchor } : {}),
                       })}
                       className="flex-1 rounded border border-port-border px-2 py-1 text-xs text-gray-300 hover:border-port-accent disabled:opacity-50"
                     >

@@ -82,6 +82,14 @@ describe('code frame contract (#9076)', () => {
     expect(there).toBeTruthy();
   });
 
+  it('omits the host lyric pass while keeping timing available to authored actions', () => {
+    const song = buildSongDocument({ ...project, lyricOverlayEnabled: false });
+    const result = _sampleFrame({ song, palette: paletteFromProject(project), sources: {}, t: 0.5, width: 320, height: 180, fps: song.fps });
+    expect(result.textOps).toEqual([]);
+    expect(result.karaoke).toHaveLength(1);
+    expect(song.lyrics).toEqual(buildSongDocument(project).lyrics);
+  });
+
   it('inlines song.json and escapes a lyric that could close the script', () => {
     const song = buildSongDocument(project);
     const doc = buildCodeDocument({

@@ -308,3 +308,15 @@ describe('lyricType text zones', () => {
     expect(rect.y + rect.h).toBeLessThan(1920);
   });
 });
+
+
+it('honors automatic overlay visibility without hiding authored lines or changing timing data', () => {
+  const mv = { ...MV, composition: { lyricOverlayEnabled: false } };
+  const before = structuredClone(mv.lyrics);
+  const automatic = createLyricType(mv);
+  expect(automatic.linesAt(1.5)).toEqual([]);
+  expect(automatic.lines).toEqual([]);
+  const authored = createLyricType(mv, { lines: MV.lyrics });
+  expect(authored.linesAt(1.5)).not.toEqual([]);
+  expect(mv.lyrics).toEqual(before);
+});

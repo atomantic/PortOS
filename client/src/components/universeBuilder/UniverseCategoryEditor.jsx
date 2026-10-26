@@ -540,6 +540,7 @@ function VariationCard({
           title={canRender ? 'Render this variation' : 'Save the world and configure a render backend to enable'} aria-label={canRender ? 'Render this variation' : 'Save the world and configure a render backend to enable'}
         >
           <Play size={14} />
+          <span className="ml-1 text-xs">Generate image</span>
         </button>
       )}
       <button

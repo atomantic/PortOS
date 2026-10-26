@@ -25,6 +25,7 @@ vi.mock('./cosTaskGenerator.js', () => ({
 }));
 vi.mock('./cosAgentLifecycle.js', () => ({
   updateAgent: vi.fn(),
+  getAgentRecord: (...args) => getAgent(...args),
   getAgent: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('./jira.js', () => ({ getInstances: vi.fn(), addComment: vi.fn() }));
@@ -426,6 +427,19 @@ describe('runAgentCompletionCleanup — agentOpensOwnPr mirrors the prompt gate'
       effectiveSuccess: true, outputBuffer: '',
     });
     expect(cleanupAgentWorktree.mock.calls.at(-1)[2].prCreation).toBe('never');
+  });
+
+  it('does not publish a retained tracker-only checkout with legacy PR metadata', async () => {
+    const task = { id: 'tracker-task', taskType: 'internal', metadata: {
+      analysisType: 'reference-watch', workTracker: 'github', worktreeChangesExpected: 'false', openPR: 'true', useWorktree: 'true',
+    } };
+    expect(await cleanupCallFor({ providerId: 'codex-tui', prOpenedBy: 'portos' }, { task }))
+      .toMatchObject({ prCreation: 'never', skipMerge: true });
+    expect(resolveReviewLoopOptions).not.toHaveBeenCalled();
+
+    const codingTask = { ...task, metadata: { ...task.metadata, analysisType: 'security', workTracker: undefined } };
+    expect(await cleanupCallFor({ providerId: 'codex-tui', prOpenedBy: 'portos' }, { task: codingTask }))
+      .toMatchObject({ prCreation: 'always', skipMerge: false });
   });
 });
 

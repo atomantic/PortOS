@@ -37,6 +37,7 @@ import {
   peerSyncRecordSchema,
   peerSyncNowSchema,
   peerPullMetadataSchema,
+  peerLibraryManifestQuerySchema,
   COS_ARCHIVE_DATE_RE,
   COS_AGENT_ID_RE,
   COS_ARCHIVE_FILES,
@@ -176,7 +177,8 @@ router.get('/manifest', asyncHandler(async (req, res) => {
 // `peerAllowsOutbound` alone (no `peerHasCategory`) — see peerPullAuthorization.js.
 router.get('/library-manifest', asyncHandler(async (req, res) => {
   await authorizePeerPull(req, { route: 'library-manifest' });
-  res.json(await buildMediaLibraryManifest());
+  const query = validateRequest(peerLibraryManifestQuerySchema, req.query);
+  res.json(await buildMediaLibraryManifest({ models: query.models === '1' }));
 }));
 
 // --- GET /cos-history-manifest --- advertise this instance's completed-agent

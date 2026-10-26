@@ -29,6 +29,7 @@ cannot hold this model says so in seconds rather than being killed an hour in.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -37,7 +38,7 @@ from _checkpoint_index_guard import validate_checkpoint_indexes  # noqa: E402
 from _runner_common import emit_runtime_fingerprint, establish_process_group, heartbeat  # noqa: E402
 from _minimax_h3_common import (  # noqa: E402
     FPS, add_h3_common_args, emit_result, enforce_system_memory, load_keyframes,
-    resolve_cached_snapshot, validate_h3_output_args,
+    resolve_cached_snapshot, validate_h3_output_args, validate_h3_history_args,
 )
 
 
@@ -97,10 +98,17 @@ def parse_args() -> argparse.Namespace:
                         help="repo-relative diffusers component file that must already be cached (repeatable)")
     parser.add_argument("--offload-profile", choices=OFFLOAD_PROFILES, default="auto",
                         help="weight-placement recipe; 'auto' sizes one from the visible CUDA device")
+    parser.add_argument("--speed-profile", choices=["lightx2v-v1.3-4step"])
+    parser.add_argument("--speed-adapter")
+    parser.add_argument("--lora", action="append", default=[])
+    parser.add_argument("--lora-scale", action="append", type=float, default=[])
     return parser.parse_args()
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    history = validate_h3_history_args(args, supported=True)
+    if history and (args.image or getattr(args, "speed_profile", None) or getattr(args, "lora", [])):
+        raise SystemExit("H3 CUDA history supports the baseline sampler without keyframes, LightX2V or LoRAs.")
     # Everything the H3 checkpoint imposes regardless of runtime — fps, the 32px
     # canvas grid, the 17n+5 frame grid, the sigma floor, keyframe anchoring —
     # lives in the shared module so this runner and the MLX one cannot drift.
@@ -116,6 +124,19 @@ def validate_args(args: argparse.Namespace) -> None:
     )
     if not args.repo_file:
         raise SystemExit("MiniMax H3 needs its pinned component file list (--repo-file).")
+    if len(getattr(args, "lora", [])) != len(getattr(args, "lora_scale", [])):
+        raise SystemExit("Every H3 CUDA LoRA needs exactly one strength.")
+    if getattr(args, "speed_profile", None):
+        from minimax_h3_cuda_lora import CONTRACT, file_digest
+        spec = CONTRACT
+        if (args.model_repo != spec["model"]["repo"] or args.model_revision != spec["model"]["revision"]
+                or [args.width, args.height] not in spec["canvases"] or args.steps != spec["steps"]
+                or "last" in args.anchor or len(args.image) > 1):
+            raise SystemExit("LightX2V requires the pinned H3 CUDA checkpoint, 1344x768, five sigma points and text/first-image input only.")
+        if not args.speed_adapter or file_digest(args.speed_adapter) != spec["adapter"]["sha256"]:
+            raise SystemExit("LightX2V requires its original, SHA-256-verified cached adapter. Use Download adapter in Video Gen.")
+    elif getattr(args, "speed_adapter", None):
+        raise SystemExit("A speed adapter requires its explicit speed profile.")
 
 
 def resolve_offload_profile(requested: str) -> tuple[str, float]:
@@ -162,7 +183,7 @@ def resolve_offload_profile(requested: str) -> tuple[str, float]:
     return affordable[0], total_gb
 
 
-def load_pipeline(snapshot: Path, profile: str):
+def load_pipeline(snapshot: Path, profile: str, adapters=None, *, speed_profile=False):
     """Load the `fl2va` workflow under one of the documented memory recipes.
 
     `fl2va` covers text-to-video too (it is the same `transformer/` partition),
@@ -179,6 +200,9 @@ def load_pipeline(snapshot: Path, profile: str):
         manager = ComponentsManager()
         pipe = ModularPipeline.from_pretrained(str(snapshot), components_manager=manager)
         pipe.load_components(workflow="fl2va", dtype=torch.bfloat16)
+        if adapters:
+            from minimax_h3_cuda_lora import apply_adapters
+            pipe._portos_adapters = apply_adapters(pipe.transformer, adapters, speed_profile=speed_profile)
         manager.enable_auto_cpu_offload(device="cuda", memory_reserve_margin=BF16_DEVICE_RESERVE)
         return pipe
 
@@ -207,6 +231,9 @@ def load_pipeline(snapshot: Path, profile: str):
         ),
     )
     pipe.load_components(workflow="fl2va", dtype=torch.bfloat16)
+    if adapters:
+        from minimax_h3_cuda_lora import apply_adapters
+        pipe._portos_adapters = apply_adapters(pipe.transformer, adapters, speed_profile=speed_profile)
 
     # version=2 int8 tensors are pinnable, which streamed offload needs, and
     # freezing removes the one autograd path the quantized tensors cannot serve.
@@ -244,6 +271,17 @@ def keyframe_kwargs(images: list, anchors: list[str]) -> dict:
 def main() -> int:
     args = parse_args()
     validate_args(args)
+    history = validate_h3_history_args(args, supported=True)
+    if history:
+        from minimax_h3_cuda_history import assert_runtime_contract, decode_history
+        assert_runtime_contract(args)
+        log("STAGE:decode-history")
+        history_frames, history_audio = decode_history(args.source_video, history, args.width, args.height)
+    # Refuse a completed output before any expensive work. Publication repeats
+    # this check atomically, covering another producer completing meanwhile.
+    import os
+    if os.path.lexists(args.output):
+        raise SystemExit("H3 output already exists; choose a new output file.")
     # Read the keyframes first: everything below is ~60 HF cache lookups and a
     # torch/diffusers import, so an unreadable conditioning image should not
     # cost seconds before it reports.
@@ -264,6 +302,11 @@ def main() -> int:
     # Gen" immediately instead of after a multi-second torch import.
     log("STAGE:resolve-cache")
     snapshot = resolve_cached_snapshot(args.model_repo, args.model_revision, args.repo_file)
+    adapters = list(zip(args.lora, args.lora_scale))
+    if args.speed_profile:
+        from minimax_h3_cuda_lora import CONTRACT, assert_runtime_contract
+        assert_runtime_contract()
+        adapters.insert(0, (args.speed_adapter, CONTRACT["adapter"]["scale"]))
 
     import torch
 
@@ -287,7 +330,11 @@ def main() -> int:
 
     log("STAGE:load-pipeline")
     with heartbeat("minimax-h3-cuda-load"):
-        pipe = load_pipeline(snapshot, profile)
+        pipe = load_pipeline(snapshot, profile, adapters, speed_profile=bool(args.speed_profile)) if adapters else load_pipeline(snapshot, profile)
+    if args.speed_profile:
+        pipe.scheduler.set_shift(CONTRACT["videoShift"])
+        pipe.audio_scheduler.set_shift(CONTRACT["audioShift"])
+        torch.cuda.reset_peak_memory_stats()
 
     # No explicit step callback: a ModularPipeline validates its inputs by
     # name against the workflow's declared set, and `callback_on_step_end` is
@@ -296,20 +343,37 @@ def main() -> int:
     # (`makeVideoGenLineHandler`'s `NN%|` branch) — same as every other runner
     # that leaves progress to tqdm.
     log("STAGE:inference")
+    import time
+    inference_start = time.perf_counter()
     with heartbeat("minimax-h3-cuda-inference"):
-        results = pipe(
-            prompt=args.prompt,
-            num_frames=args.num_frames,
-            height=args.height,
-            width=args.width,
-            num_inference_steps=args.steps,
-            # A CPU generator keeps the three documented draws (conditioning,
-            # video, audio) reproducible regardless of which device each
-            # component happens to be resident on under an offload profile.
-            generator=torch.Generator().manual_seed(args.seed),
-            output=["videos", "audio", "sampling_rate"],
-            **keyframe_kwargs(images, args.anchor),
-        )
+        if history:
+            from minimax_h3_cuda_history import run_history
+            results = run_history(pipe, args, history_frames, history_audio)
+        else:
+            results = pipe(
+                prompt=args.prompt,
+                num_frames=args.num_frames,
+                height=args.height,
+                width=args.width,
+                num_inference_steps=args.steps,
+                # Keep the draws reproducible across offload placements.
+                generator=torch.Generator().manual_seed(args.seed),
+                output=["videos", "audio", "sampling_rate"],
+                **keyframe_kwargs(images, args.anchor),
+            )
+    if args.speed_profile:
+        torch.cuda.synchronize()
+        report = {
+            "id": args.speed_profile, "type": CONTRACT["type"], "applied": True, "degraded": [],
+            "adapter": CONTRACT["adapter"], "adapters": pipe._portos_adapters,
+            "sigmaPoints": CONTRACT["sigmaPoints"], "denoisingSteps": CONTRACT["denoisingSteps"],
+            "videoShift": CONTRACT["videoShift"], "audioShift": CONTRACT["audioShift"],
+            "videoSigmas": pipe.scheduler.sigmas.tolist(), "audioSigmas": pipe.audio_scheduler.sigmas.tolist(),
+            "inferenceSeconds": time.perf_counter() - inference_start,
+            "peakAllocatedMb": torch.cuda.max_memory_allocated() / 1e6,
+            "fallback": False,
+        }
+        log("SPEEDPROFILE:" + json.dumps(report))
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -317,13 +381,8 @@ def main() -> int:
     from diffusers.utils.export_utils import encode_video
 
     frames = results["videos"][0]
-    encode_video(
-        frames,
-        fps=FPS,
-        output_path=str(output),
-        audio=results["audio"][0],
-        audio_sample_rate=results["sampling_rate"],
-    )
+    from minimax_h3_cuda_history import mux_owned_output
+    mux_owned_output(output, encode_video, frames, results["audio"][0], results["sampling_rate"])
 
     if not output.is_file() or output.stat().st_size == 0:
         raise RuntimeError(f"MiniMax H3 completed but did not write {output}.")

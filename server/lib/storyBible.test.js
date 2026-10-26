@@ -244,6 +244,13 @@ describe('storyBible — sanitizeCharacter', () => {
     expect(out.sourceSeriesId.length).toBe(BIBLE_LIMITS.SOURCE_SERIES_ID_MAX);
   });
 
+  it('keeps a place greybox through the sanitizer so a profile save does not drop it', () => {
+    const greybox = { version: 1, source: 'spec', parts: [], shots: [] };
+    expect(sanitizePlace({ name: 'Rink', greybox }).greybox).toEqual(greybox);
+    expect(sanitizePlace({ name: 'Rink', greybox: 'junk' })).not.toHaveProperty('greybox');
+    expect(sanitizePlace({ name: 'Rink' })).not.toHaveProperty('greybox');
+  });
+
   it('extras apply identically to settings + objects', () => {
     const s = sanitizePlace({ name: 'Bubble Room', tags: ['indoor'], prompt: 'pastel lab', locked: true });
     expect(s.tags).toEqual(['indoor']);

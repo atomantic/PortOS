@@ -23,3 +23,20 @@ Index of plans other docs point at:
 These are point-in-time design records, not living docs — they are not updated
 to track implementation drift. For current behavior, see the code, `CLAUDE.md`,
 and the topic docs elsewhere under `docs/`.
+
+- [2026-10-25 — creative catalog primitives](./2026-10-25-creative-primitives.md):
+  explicit universe ownership, shared editing, usage labels and independent forks
+  over the existing catalog model, with staged legacy ambiguity.
+
+- [2026-10-25 — Casting detail performance](./2026-10-25-casting-detail-performance.md):
+  measured payload/query scaling, lean first render and lazy secondary reads,
+  with explicit limits on live performance claims.
+
+- [2026-10-25 — shared character workspace](./2026-10-25-character-workspace.md):
+  rich shared cards and one compact canonical editor with explicit drafts,
+  bounded context reads and atomic locks.
+
+- [2026-10-25 — place greybox](./2026-10-25-place-greybox.md):
+  a 3D layout reference (Three.js spec or Blender GLB) as a facet of the Place
+  primitive, with landmarks, figure anchors and camera shots whose captures feed
+  music-video shot references.

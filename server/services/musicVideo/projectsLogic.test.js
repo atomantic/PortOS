@@ -19,7 +19,7 @@ import {
 } from './projectsLogic.js';
 
 import { productionReviewBasis } from './productionReview.js';
-import { musicVideoProjectCreateSchema, musicVideoSceneCreateSchema } from '../../lib/musicVideoValidation.js';
+import { musicVideoProjectCreateSchema, musicVideoProjectUpdateSchema, musicVideoSceneCreateSchema } from '../../lib/musicVideoValidation.js';
 
 const baseProject = () => buildProjectRecord({ name: 'Test MV' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' });
 
@@ -1109,6 +1109,7 @@ describe('create-schema parity', () => {
     panelId: 'panel-example-1',
     panelRev: 'abc123',
     panelArt: 'panel-art.png',
+    setReference: { subjectId: 'set-example', greyboxShotId: 'wide' },
   };
 
   it('stores every accepted video setting key on the project record', () => {
@@ -1126,4 +1127,24 @@ describe('create-schema parity', () => {
     const scene = project.scenes[0];
     expect(scene).toMatchObject(SCENE_SAMPLES);
   });
+});
+
+
+it('round-trips lyric overlay visibility without choosing a renderer or changing lyric timing', () => {
+  const input = musicVideoProjectCreateSchema.parse({ name: 'Example', lyricOverlayEnabled: false,
+    lyricCues: [{ id: 'line', text: 'Example line', startSec: 1, endSec: 2 }] });
+  const project = buildProjectRecord(input, { id: 'mv-example', now: '2026-01-01T00:00:00.000Z' });
+  expect(project.lyricOverlayEnabled).toBe(false);
+  expect(project.composition).toBeNull();
+  const patch = musicVideoProjectUpdateSchema.parse({ lyricOverlayEnabled: true });
+  const enabled = applyProjectPatch(project, patch);
+  expect(enabled.lyricOverlayEnabled).toBe(true);
+  expect(enabled.lyricCues).toEqual(project.lyricCues);
+  expect(productionReviewBasis(enabled).storyboard).toBe(productionReviewBasis(project).storyboard);
+  expect(productionReviewBasis(enabled).proof).not.toBe(productionReviewBasis(project).proof);
+  expect(enabled.composition).toBeNull();
+  expect(cloneProjectRecord(project, { id: 'mv-clone', now: '2026-01-02T00:00:00.000Z' }).lyricOverlayEnabled).toBe(false);
+  expect(mergeProjectRecord(null, sanitizeProjectForSync(project)).next.lyricOverlayEnabled).toBe(false);
+  expect(baseProject()).not.toHaveProperty('lyricOverlayEnabled');
+  expect(() => musicVideoProjectUpdateSchema.parse({ lyricOverlayEnabled: 'false' })).toThrow();
 });

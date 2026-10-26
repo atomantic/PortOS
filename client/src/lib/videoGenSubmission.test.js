@@ -21,6 +21,17 @@ const baseArgs = (overrides = {}) => ({
   ...overrides,
 });
 
+it.each(['minimax-h3-lightx2v', 'minimax-h3-mlx-lightx2v'])('submits the %s profile without stale sampler overrides and preserves incompatible selections for visible refusal', (type) => {
+  const model = { id: 'h3', runtime: type === 'minimax-h3-mlx-lightx2v' ? 'minimax_h3' : 'minimax_h3_cuda', speedProfiles: [
+    { id: 'h3-speed', type, modes: ['text', 'image'] },
+  ] };
+  for (const mode of ['text', 'fflf']) {
+    const result = buildVideoGenSubmission(baseArgs({ modelId: model.id, currentModel: model,
+      mode, speedProfileId: 'h3-speed', steps: '8', guidanceScale: '3' }));
+    expect(result).toMatchObject({ speedProfileId: 'h3-speed', steps: '', guidanceScale: '' });
+  }
+});
+
 describe('buildVideoGenSubmission — block streaming request (#6499)', () => {
   it('sends a non-default mode when the current model runs an LTX-2/2.5 MLX runtime', () => {
     const payload = buildVideoGenSubmission(baseArgs({
@@ -224,10 +235,20 @@ describe('buildVideoGenSubmission — local IC-LoRA, chunks and misc', () => {
   it('inactive chunking sends empty strings; active chunking slices live beats', () => {
     expect(local({ chunkPrompts: ['x'], chunks: 2, contextFrames: 9 }))
       .toMatchObject({ chunks: '', chunkPrompts: '', contextFrames: '' });
-    const p = local({ chainingActive: true, chunks: 2, chunkPrompts: ['one', 'two', 'stale'], contextFrames: 9 });
-    expect(p).toMatchObject({ chunks: 2, contextFrames: '9' });
+    const p = local({ chainingActive: true, chunks: 2, chunkPrompts: ['one', 'two', 'stale'], contextFrames: 11 });
+    expect(p).toMatchObject({ chunks: 2, contextFrames: '11', continuityStrategy: 'window' });
     expect(JSON.parse(p.chunkPrompts)).toEqual(['one', 'two']);
     expect(local({ chainingActive: true, chunks: 2, chunkPrompts: ['', '  '] }).chunkPrompts).toBe('');
+  });
+
+  it('submits the inspected fixed history count and explicit last-frame opt-out', () => {
+    const verified = { runtime: 'minimax_h3', continuationCapability: { temporalContext: true, historyFrames: 17 } };
+    expect(local({ currentModel: verified, chainingActive: true, chunks: 2, contextFrames: 22 }))
+      .toMatchObject({ continuityStrategy: 'window', contextFrames: '17' });
+    expect(local({ currentModel: verified, chainingActive: true, chunks: 2, contextFrames: 0 }))
+      .toMatchObject({ continuityStrategy: 'frame', contextFrames: '0' });
+    expect(local({ currentModel: { ...verified, continuationCapability: { temporalContext: false, historyFrames: 17 } }, chainingActive: true, chunks: 2, contextFrames: 17 }))
+      .toMatchObject({ continuityStrategy: 'frame', contextFrames: '0' });
   });
 
   it('batch size, loras, display sleep and negative prompt follow model support', () => {
@@ -308,4 +329,14 @@ describe('buildVideoGenSubmission — extra reference images', () => {
     }));
     expect(payload.referenceImageFiles).toBeUndefined();
   });
+});
+
+
+it('preserves explicit stage strengths through backend/model changes for visible server refusal and leaves defaults absent', () => {
+  for (const lane of [null, 'grok', 'fal', 'reactor', 'runway']) {
+    const payload = buildVideoGenSubmission(baseArgs({ hostedLane: lane, a2vLoraStageStrengths: [0, 1] }));
+    expect(payload.a2vLoraStageStrengths).toBe('[0,1]');
+  }
+  expect(buildVideoGenSubmission(baseArgs({ a2vLoraStageStrengths: [1, 1] })))
+    .not.toHaveProperty('a2vLoraStageStrengths');
 });

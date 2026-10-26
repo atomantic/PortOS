@@ -24,7 +24,7 @@ import {
   hasAudioStream, bt709TagFilter, buildExtendSpliceArgs, buildExtendNewSpanArgs, buildExtendCopyArgs,
   buildExtendConcatList, installEncodedVideo,
 } from '../../lib/ffmpeg.js';
-import { planExtendSplice } from '../../lib/videoContinuity.js';
+import { continuationContract, planExtendSplice } from '../../lib/videoContinuity.js';
 import { extendMasterPath } from './extendMaster.js';
 
 /** Linear crossfade at the source/generated audio seam (~one 25 Hz audio token). */
@@ -121,7 +121,12 @@ async function copyJoin({ ffmpeg, plan, sourcePath, outputPath, tmpPath, geometr
  * the spliced file is verified and installed over `outputPath`, or
  * `{ applied: false, reason }` with the render left exactly as the model wrote it.
  */
-export async function spliceExtendSource({ sourcePath, outputPath, extendLatents, keepMaster = true }) {
+export async function spliceExtendSource({ runtime, sourcePath, outputPath, extendLatents, keepMaster = true }) {
+  const contract = continuationContract(runtime);
+  // Refuse unknown layouts before touching even a previous audio master.
+  if (!contract.temporalContext || contract.outputLayout !== 'echoed-history-prefix') {
+    return { applied: false, reason: contract.unavailableReason ?? 'This runtime has no verified echoed-history prefix layout.' };
+  }
   const tmpPath = `${outputPath}.splice.mp4`;
   const masterPath = extendMasterPath(outputPath);
   const masterTmp = keepMaster && masterPath ? partPath(masterPath) : null;
@@ -133,7 +138,12 @@ export async function spliceExtendSource({ sourcePath, outputPath, extendLatents
   };
   if (!sourcePath || !existsSync(sourcePath)) return skip('source file missing');
   if (!outputPath || !existsSync(outputPath)) return skip('rendered file missing');
-  const ffmpeg = await findFfmpeg();
+  let ffmpeg;
+  try {
+    ffmpeg = await findFfmpeg({ requiredEncoder: 'libx264' });
+  } catch (err) {
+    return skip(err.message);
+  }
   if (!ffmpeg) return skip('ffmpeg not found');
   // A relaunched render rewrites outputPath, so a master left by an earlier
   // attempt no longer describes it.
@@ -142,7 +152,7 @@ export async function spliceExtendSource({ sourcePath, outputPath, extendLatents
   const [sourceFrames, outputFrames, outputInfo] = await Promise.all([
     probeFrameCount(sourcePath), probeFrameCount(outputPath), probeVideoStreamInfo(outputPath),
   ]);
-  const plan = planExtendSplice({ sourceFrames, outputFrames, extendLatents });
+  const plan = planExtendSplice({ runtime, sourceFrames, outputFrames, extendLatents });
   if (!plan) return skip(`frame layout does not match (source ${sourceFrames ?? '?'}, output ${outputFrames ?? '?'}, +${extendLatents} latents)`);
   if (!outputInfo.width || !outputInfo.height || !outputInfo.fps) return skip('render geometry unreadable');
   const geometry = { width: outputInfo.width, height: outputInfo.height, fps: outputInfo.fps };

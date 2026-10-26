@@ -12,7 +12,7 @@
  * universe's canon.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import {
   Library, Loader2, Users, MapPin, Package, Wand2, Filter, Lock, Unlock, ImagePlus, Sparkles, Plus, ShieldCheck,
 } from 'lucide-react';
@@ -21,16 +21,17 @@ import IngredientPicker from '../IngredientPicker';
 import VisionDescribeModal from './VisionDescribeModal';
 import CorrectiveReferenceModal from './CorrectiveReferenceModal';
 import CastIntegrityPanel from './CastIntegrityPanel';
-import { linkCatalogIngredient } from '../../services/apiCatalog';
+import { createCatalogIngredient, linkCatalogIngredient } from '../../services/apiCatalog';
+import { uuidv4 } from '../../lib/uuid';
 import {
   extractUniverseCanon,
   refineUniverseCharacter,
   differentiateUniverseCast,
-  updateUniverse,
   getUniverseCanonUsage,
   setUniverseCanonLock,
   setUniverseCanonLockAll,
   removeUniverseCanonEntry,
+  removeUniverseCanonImageRef,
   expandUniverseCharacter,
 } from '../../services/apiUniverseBuilder';
 import { generateImage } from '../../services/apiSystem';
@@ -40,46 +41,19 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useMounted from '../../hooks/useMounted';
 import { useCanonPatch } from '../../hooks/useCanonPatch';
 import CanonCard from '../pipeline/CanonCard';
+import UniverseCharacterGrid from './UniverseCharacterGrid';
 import CanonAddEntryForm from './CanonAddEntryForm';
 import { KindSectionProvider, useKindSection } from './KindSectionContext';
 import { pipelineImageCfgToRenderOpts } from '../../lib/pipelineImageDefaults';
 import { buildUniverseSectionRenderTag } from '../../lib/universeRunTag';
 import { universeStylePreset } from '../../lib/universeStylePreset';
 import { descriptorForCanonEntry } from '../../lib/canonPrompt';
-import { applySheetPointer } from '../../lib/sheetPointers';
 import { BIBLE_LIMITS, capImageRefs } from '../../lib/bibleLimits';
 import { formatCount } from '../../utils/formatters';
 
 // A universe's canon list for a kind is sometimes absent on a freshly-created
 // record; normalize to [] so callers can spread/map without a guard each time.
 const getKindList = (u, kindKey) => (Array.isArray(u?.[kindKey]) ? u[kindKey] : []);
-
-// Build an embedded canon entry from a picked catalog ingredient. The
-// ingredient's `payload` already carries the same field names the universe
-// canon sanitizer whitelists (name / physicalDescription / description / …),
-// so we spread it and overlay the canonical name + the durable `ingredientId`
-// stamp that ties this embedded entry back to its catalog row.
-//
-// `id` is intentionally omitted — the server's `ensureId` mints a fresh
-// kind-prefixed id (`chr-`/`plc-`/`obj-`) on save. We must NOT carry the
-// catalog id into `entry.id`; identity lives in `ingredientId` so the
-// peer-reconciliation backfill (`migrateBibleToCatalog`) recreates the same
-// catalog row id on every peer instead of minting a divergent one.
-export function buildCanonEntryFromIngredient(ingredient) {
-  if (!ingredient || typeof ingredient !== 'object') return null;
-  const payload = (ingredient.payload && typeof ingredient.payload === 'object')
-    ? ingredient.payload
-    : {};
-  const entry = { ...payload };
-  // Strip any id/timestamps the payload may carry from its origin record so
-  // the server mints fresh ones and doesn't collide with an existing entry.
-  delete entry.id;
-  delete entry.createdAt;
-  delete entry.updatedAt;
-  entry.name = String(ingredient.name || payload.name || '').trim() || 'Untitled';
-  entry.ingredientId = ingredient.id;
-  return entry;
-}
 
 // `descField` is the writable field bound to the inline description editor in
 // `CanonCard`. `descFor` (used for the render prompt + the read-only fallback
@@ -374,31 +348,6 @@ export default function UniverseCanonSection({
       : `${result.entry?.name || 'Character'} already complete — nothing to fill`);
   };
 
-  // Server already stamped the character via mediaJobEvents — merge the
-  // filename into the local draft instead of refetching the whole universe.
-  // Read from `latestUniverseRef` (not closed-over `universe`) so an edit
-  // that landed during the panel's HEAD-poll wait isn't clobbered by an
-  // older snapshot. No deps on `universe` keeps the callback stable.
-  const handleSheetCompleted = useCallback((entryId, destFilename, variant) => {
-    const latest = latestUniverseRef.current;
-    if (!latest || !destFilename) return;
-    const nextCharacters = (latest.characters || []).map((c) =>
-      c.id === entryId ? applySheetPointer(c, variant, destFilename) : c,
-    );
-    onUniverseChange({ ...latest, characters: nextCharacters });
-    const entryName = nextCharacters.find((c) => c.id === entryId)?.name || 'Character';
-    toast.success(`${entryName} reference sheet ready`);
-  }, [onUniverseChange]);
-
-  const handleSheetDeleted = useCallback((entryId, variant) => {
-    const latest = latestUniverseRef.current;
-    if (!latest) return;
-    const nextCharacters = (latest.characters || []).map((c) =>
-      c.id === entryId ? applySheetPointer(c, variant, null) : c,
-    );
-    onUniverseChange({ ...latest, characters: nextCharacters });
-  }, [onUniverseChange]);
-
   const handleRenderRef = async (kind, entry) => {
     const description = kind.descFor(entry);
     if (!description.trim()) {
@@ -552,11 +501,7 @@ export default function UniverseCanonSection({
     if (errMsg) toast.error(`Render failed: ${errMsg}`);
   }, []);
 
-  // "Pick from Catalog" → copy a shared catalog ingredient into this universe
-  // as a new embedded canon entry and link the ingredient back to the universe
-  // via catalog_ingredient_refs (role `canon-<kind>`). The embedded entry
-  // carries the catalog id as `ingredientId` so the two records stay tied and
-  // peer-reconciliation preserves the same id on every peer.
+  // Server admission checks ownership and appends against the freshest canon.
   const handlePickFromCatalog = useCallback(async (kind, ingredient) => {
     const picked = Array.isArray(ingredient) ? ingredient[0] : ingredient;
     if (!picked || !universe || catalogLinking) return;
@@ -570,50 +515,22 @@ export default function UniverseCanonSection({
       setCatalogPickerKind(null);
       return;
     }
-    const entry = buildCanonEntryFromIngredient(picked);
-    if (!entry) return;
     setCatalogLinking(true);
     setCatalogPickerKind(null);
     const capturedId = universeId;
-    const nextList = [...list, entry];
-    // Optimistic append so the new row shows immediately; the server response
-    // (with the minted entry id) replaces it.
-    onUniverseChange({ ...universe, [kindKey]: nextList });
-    // `{ silent: true }` because the .catch below owns the error toast — without
-    // it the apiCore request() helper would fire a second, duplicate toast.
-    const updated = await updateUniverse(universeId, { [kindKey]: nextList }, { silent: true })
-      .catch((err) => { toast.error(`Add from Catalog failed: ${err.message}`); return null; });
-    if (!updated) {
-      // Revert the optimistic append — the save didn't land, so the phantom
-      // row must not linger. `list` is the pre-append snapshot from this
-      // closure (canon edits are user-driven one-at-a-time, so it's current).
-      if (mountedRef.current && currentUniverseIdRef.current === capturedId) {
-        onUniverseChange({ ...universe, [kindKey]: list });
-      }
-      if (mountedRef.current) setCatalogLinking(false);
-      return;
-    }
-    if (mountedRef.current && currentUniverseIdRef.current === capturedId) onUniverseChange(updated);
-    // Link the catalog ingredient back to the universe so the "Appears in"
-    // panel populates. Non-fatal: the embedded entry already carries the
-    // ingredientId, so a failed link still keeps the records tied.
-    await linkCatalogIngredient(
-      picked.id,
-      { refKind: 'universe', refId: universeId, role: `canon-${kind.apiKind}` },
-      { silent: true },
-    ).catch((err) => { toast.error(`Linked entry, but catalog ref failed: ${err.message}`); });
+    const result = await linkCatalogIngredient(picked.id,
+      { refKind: 'universe', refId: universeId, role: `canon-${kind.apiKind}` }, { silent: true })
+      .catch((err) => { toast.error(`Add from Catalog failed: ${err.message}. Open the canonical editor to resolve ownership or create a fork.`); return null; });
     if (mountedRef.current) setCatalogLinking(false);
+    if (!result) return;
+    if (mountedRef.current && currentUniverseIdRef.current === capturedId && result.universe) onUniverseChange(result.universe);
     toast.success(`Added ${picked.name || 'ingredient'} from Catalog`);
   }, [universe, universeId, onUniverseChange, mountedRef, catalogLinking]);
 
-  // Manual "Add" — mint a blank canon entry from a name the user types (and an
-  // optional description), mirroring the optimistic-append-then-persist shape
-  // of `handlePickFromCatalog`. The entry carries no `id` (the server's
-  // `ensureId` mints a kind-prefixed one) and `locked: false` so the card's
-  // inline editors are usable immediately without a separate unlock click —
-  // the user explicitly created it to fill in, so the lock-by-default contract
-  // (which guards AI-extracted/-arriving entries) doesn't apply here.
+  // Create the canonical primitive with explicit ownership, then attach it.
+  // The receipt key survives a failed attachment so retry cannot mint a twin.
   const [creatingKindKey, setCreatingKindKey] = useState(null);
+  const createOperation = useRef(null);
   const handleCreateEntry = useCallback(async (kind, { name, description }) => {
     const trimmedName = String(name || '').trim();
     if (!trimmedName || !universe || creatingKindKey) return false;
@@ -628,29 +545,23 @@ export default function UniverseCanonSection({
       toast.error(`${trimmedName} is already in this universe`);
       return false;
     }
-    const entry = { name: trimmedName, locked: false };
+    const payload = { locked: false };
     const desc = String(description || '').trim();
-    if (desc && kind.descField) entry[kind.descField] = desc;
+    if (desc && kind.descField) payload[kind.descField] = desc;
+    const submission = { type: kind.apiKind, name: trimmedName, payload, tags: [], universeId };
+    const signature = JSON.stringify(submission);
+    if (createOperation.current?.signature !== signature) createOperation.current = { signature, key: uuidv4() };
     setCreatingKindKey(kindKey);
     const capturedId = universeId;
-    const nextList = [...list, entry];
-    // Optimistic append so the new card shows immediately; the server response
-    // (with the minted entry id) replaces it.
-    onUniverseChange({ ...universe, [kindKey]: nextList });
-    // `{ silent: true }` because the .catch below owns the error toast.
-    const updated = await updateUniverse(universeId, { [kindKey]: nextList }, { silent: true })
-      .catch((err) => { toast.error(`Add ${kind.singular} failed: ${err.message}`); return null; });
-    const stillCurrent = mountedRef.current && currentUniverseIdRef.current === capturedId;
-    if (!updated) {
-      // Revert the optimistic append — the save didn't land. `list` is the
-      // pre-append snapshot (canon edits are user-driven one-at-a-time).
-      if (stillCurrent) onUniverseChange({ ...universe, [kindKey]: list });
-    } else if (stillCurrent) {
-      onUniverseChange(updated);
-    }
+    const ingredient = await createCatalogIngredient({ ...submission, operationKey: createOperation.current.key }, { silent: true })
+      .catch((err) => { toast.error(`Create ${kind.singular} failed: ${err.message}`); return null; });
+    const result = ingredient && await linkCatalogIngredient(ingredient.id,
+      { refKind: 'universe', refId: universeId, role: `canon-${kind.apiKind}` }, { silent: true })
+      .catch((err) => { toast.error(`Created in Catalog; adding to canon failed: ${err.message}. Save again to retry.`); return null; });
+    if (mountedRef.current && currentUniverseIdRef.current === capturedId && result?.universe) onUniverseChange(result.universe);
     if (mountedRef.current) setCreatingKindKey(null);
-    if (updated) toast.success(`Added ${trimmedName}`);
-    return !!updated;
+    if (result) toast.success(`Added ${trimmedName}`);
+    return !!result;
   }, [universe, universeId, onUniverseChange, mountedRef, creatingKindKey]);
 
   // Remove one entry from a canon bucket. Mirrors the X button on category
@@ -697,6 +608,17 @@ export default function UniverseCanonSection({
       return { ...prev, [kindKey]: rest };
     });
     toast.success(`Removed ${target.name || kind.singular} from canon — images and catalog entry kept`);
+  }, [universeId, onUniverseChange, mountedRef]);
+
+  const handleRemoveImageRef = useCallback(async (kind, entryId, filename) => {
+    const capturedId = universeId;
+    const result = await removeUniverseCanonImageRef(universeId, kind.apiKind, entryId, filename, { silent: true })
+      .catch((err) => { toast.error(err.message || 'Could not remove image reference'); return null; });
+    if (!mountedRef.current || currentUniverseIdRef.current !== capturedId) return false;
+    if (!result) return false;
+    onUniverseChange(result.universe);
+    toast.success('Reference removed; image file kept');
+    return true;
   }, [universeId, onUniverseChange, mountedRef]);
 
   // Inline-edit channel for canon fields the user types/picks directly
@@ -760,8 +682,11 @@ export default function UniverseCanonSection({
     refiningId,
     onExpandCharacter: handleExpandCharacter,
     expandingId,
-    onSheetCompleted: handleSheetCompleted,
-    onSheetDeleted: handleSheetDeleted,
+    onCatalogLockChanged: (entryId, updated) => {
+      const latest = latestUniverseRef.current;
+      if (latest) onUniverseChange({ ...latest, characters: (latest.characters || []).map(entry => entry.id === entryId
+        ? { ...entry, locked: updated.payload.locked } : entry) });
+    },
     onToggleLock: (entryId, nextLocked) => handleToggleLock(kind, entryId, nextLocked),
     togglingLockId,
     onPatchEntry: (entryId, patch) => handlePatchEntry(kind, entryId, patch),
@@ -789,6 +714,7 @@ export default function UniverseCanonSection({
     onAddEntry: (payload) => handleCreateEntry(kind, payload),
     creating: creatingKindKey === kind.key,
     onRemoveEntry: (entryId) => handleRemoveEntry(kind, entryId),
+    onRemoveImageRef: (entryId, filename) => handleRemoveImageRef(kind, entryId, filename),
   });
 
   return (
@@ -796,6 +722,7 @@ export default function UniverseCanonSection({
     // deep-links (legacy `/canon` route redirect + PipelineSeries "Manage
     // characters, places, and objects" link). Keep this id stable.
     <section id="canon" className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3 scroll-mt-4">
+      <Link to={`/catalog?universe=${encodeURIComponent(universeId)}`} className="self-start text-xs text-port-accent hover:underline">Manage all universe primitives, ownership and usages in Catalog</Link>
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-sm font-semibold text-white">
@@ -986,33 +913,17 @@ export default function UniverseCanonSection({
 // KindSectionContext — see that module for the published shape and why the bag
 // isn't prop-threaded any more.
 function KindSection() {
+  const context = useKindSection();
   const {
-    kind, universeId, all, totalCount, filtered, usage, renderingJobs,
+    kind, all, totalCount, filtered, usage, renderingJobs,
     onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId,
-    onExpandCharacter, expandingId, onSheetCompleted, onSheetDeleted,
     onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate,
     onDescribeImages = null, onCorrectFromImage = null, seriesNameMap,
     onBulkLock, bulkLocking, fullList, castList = [],
     externalPendingByEntryId = null, compact = false, onRenderAll = null,
     renderingAll = false, onPickFromCatalog = null, catalogLinking = false,
-    onAddEntry = null, creating = false, onRemoveEntry = null,
-  } = useKindSection();
-  // Universe-only character wiring — `null` for non-character kinds so
-  // CanonCard's gate stays `kind === 'characters' && characterExtensions`.
-  // Memoized so the BASE object is stable across re-renders that aren't
-  // expansion-related (refining, lock toggle, etc). The per-card spread
-  // below still allocates a fresh object every render to fold in
-  // `expanding: expandingId === entry.id`; that's unavoidable without
-  // per-card memoization and isn't worth the complexity at typical cast
-  // sizes.
-  const characterExtensions = useMemo(
-    () => (kind.key === 'characters'
-      // `castList` is the universe-wide character list — feeds the
-      // relationship-link target picker in CharacterDetailEditor (#1287).
-      ? { universeId, onExpandCharacter, onSheetCompleted, onSheetDeleted, castList: fullList }
-      : null),
-    [kind.key, universeId, onExpandCharacter, onSheetCompleted, onSheetDeleted, fullList],
-  );
+    onAddEntry = null, creating = false, onRemoveEntry = null, onRemoveImageRef = null,
+  } = context;
   // Universe-only object wiring (#1288) — `null` for non-object kinds so
   // CanonCard's gate stays `kind === 'objects' && objectExtensions`. `castList`
   // is the universe-wide character list (passed in directly, since `fullList`
@@ -1141,7 +1052,7 @@ function KindSection() {
     filtered && totalCount > 0
       ? <p className="text-xs text-gray-500 italic">No {kind.label.toLowerCase()} in the selected series. {formatCount(totalCount)} total in this universe — clear the filter to see them all.</p>
       : <p className="text-xs text-gray-500 italic">No {kind.label.toLowerCase()} yet. Use <em>Add</em> or <em>Extract from prose</em> above to populate this list.</p>
-  ) : (
+  ) : kind.key === 'characters' ? <UniverseCharacterGrid context={context} /> : (
     <ul className="space-y-2">
       {all.map((entry) => (
         <CanonCard
@@ -1171,11 +1082,9 @@ function KindSection() {
           onDescribeImages={onDescribeImages}
           onCorrectFromImage={onCorrectFromImage}
           seriesNameMap={seriesNameMap}
-          characterExtensions={characterExtensions
-            ? { ...characterExtensions, expanding: expandingId === entry.id }
-            : null}
           objectExtensions={objectExtensions}
           onRemove={onRemoveEntry}
+          onRemoveImageRef={onRemoveImageRef}
         />
       ))}
     </ul>

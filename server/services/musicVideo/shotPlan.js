@@ -319,8 +319,8 @@ function directShotsByCast(shots, project) {
       .sort((a, b) => a.line - b.line).at(-1);
     const kinds = markers.filter((m) => m.type === 'direction' && (delivery.includes(m.label) || m.line === line));
     const silence = kinds.some((m) => m.kind === 'silence');
-    const card = silence || kinds.some((m) => ['shouted', 'hits'].includes(m.kind) || /\btitle\b/i.test(m.label))
-      || (shot.lyricText && shot.lyricText.trim().split(/\s+/).length === 1);
+    const card = project.lyricOverlayEnabled !== false && (silence || kinds.some((m) => ['shouted', 'hits'].includes(m.kind) || /\btitle\b/i.test(m.label))
+      || (shot.lyricText && shot.lyricText.trim().split(/\s+/).length === 1));
     const intimate = kinds.some((m) => m.kind === 'whispered' || (m.kind === 'spoken' && /close/i.test(m.label)));
     const sungHook = ['chorus', 'hook', 'refrain'].includes(activeSection?.kind)
       || /^(?:(?:final|last|double|big)\s+)?(?:chorus|hook|refrain)\b/i.test(shot.sectionLabel || '');

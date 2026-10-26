@@ -22,6 +22,7 @@ const effects = vi.hoisted(() => ({
   avatar: vi.fn(async () => ({ path: '/data/images/example.png' })),
   video: vi.fn(async () => ({ jobId: 'example-job' })),
   trim: vi.fn(async () => ({ id: 'example-trim', trimmedFrom: '22222222-2222-4222-8222-222222222222', trimStartSec: 1.25 })),
+  clearMetal: vi.fn(async () => ({ cleared: true })),
   reference: vi.fn(async () => ({})), fork: vi.fn(async () => ({})),
   walk: vi.fn(async () => ({})), track: vi.fn(async () => ({})),
   binding: vi.fn(async () => ({})), publish: vi.fn(async () => ({})),
@@ -44,6 +45,7 @@ vi.mock('../services/instanceIdentity.js', () => ({
   }] })),
 }));
 vi.mock('../services/videoGen/trimStart.js', () => ({ trimHistoryItemStart: effects.trim }));
+vi.mock('../services/videoGen/metalBufferProfiles.js', () => ({ clearMetalBufferProfiles: effects.clearMetal }));
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(), getSettings: vi.fn(async () => ({})),
 }));
@@ -150,6 +152,7 @@ const operations = [
   ['post', '/api/image-gen/generate', { ...imageBody, mode: 'grok' }, effects.enqueue, 200],
   ['post', '/api/image-gen/avatar', {}, effects.avatar, 200],
   ['post', '/api/video-gen', { prompt: 'Example scene', backend: 'grok' }, effects.video, 200],
+  ['post', '/api/video-gen/metal-buffer-profiles/clear', {}, effects.clearMetal, 200],
   ['post', `/api/sprites/${id}/reference/generate`, { target: 'turnaround', mode: 'grok' }, effects.reference, 200],
   ['post', `/api/sprites/${id}/fork`, { name: 'Example fork', designPrompt: 'Example variation' }, effects.fork, 201],
   ['post', `/api/sprites/${id}/walk/generate`, { direction: 'south', correctionPrompt: 'Example correction' }, effects.walk, 200],

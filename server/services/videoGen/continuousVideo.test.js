@@ -2,18 +2,35 @@ import {
   describe, it, expect, vi, beforeEach,
 } from 'vitest';
 
-vi.mock('./generateVideo.js', () => ({ generateVideo: vi.fn() }));
+vi.mock('./generateVideo.js', () => ({
+  generateVideo: vi.fn(),
+  resolveVideoModel: vi.fn(() => ({ runtime: 'ltx2', name: 'Example LTX' })),
+  defaultVideoModelId: () => 'example-ltx',
+}));
+vi.mock('../../lib/ffmpeg.js', () => ({
+  probeFrameCount: vi.fn(async () => 121),
+  trimVideoFromFrame: vi.fn(async () => ({ ok: true })),
+}));
+vi.mock('../../lib/fileUtils.js', () => ({
+  PATHS: { videos: '/fixture/videos', images: '/fixture/images' },
+  unlinkGuarded: vi.fn(async () => {}),
+}));
 vi.mock('./reactor.js', () => ({ generateVideo: vi.fn() }));
 vi.mock('./fal.js', () => ({ generateVideo: vi.fn() }));
 vi.mock('./frameExtraction.js', () => ({ extractLastFrame: vi.fn(async () => ({ filename: 'frame-still.png' })) }));
 vi.mock('./history.js', () => ({ getHistoryItem: vi.fn(async () => ({ clipId: 'reactor-clip-1' })) }));
 vi.mock('./stitchVideos.js', () => ({
-  stitchVideos: vi.fn(async (videoIds, opts) => ({
-    filename: `${opts.id}.mp4`, thumbnail: `${opts.id}-thumb.png`,
-  })),
+  stitchVideos: vi.fn(async (videoIds, opts) => {
+    if (opts.requireExactTrims && videoIds.some((id) => !Number.isInteger(opts.trims?.get(id)?.frames) || opts.trims.get(id).frames <= 0)) {
+      throw new Error('Exact continuation delivery requires a measured trim plan for every chunk');
+    }
+    return { filename: `${opts.id}.mp4`, thumbnail: `${opts.id}-thumb.png` };
+  }),
 }));
 
-const { generateVideo: localGenerate } = await import('./generateVideo.js');
+const { generateVideo: localGenerate, resolveVideoModel } = await import('./generateVideo.js');
+const { probeFrameCount, trimVideoFromFrame } = await import('../../lib/ffmpeg.js');
+const { unlinkGuarded } = await import('../../lib/fileUtils.js');
 const { generateVideo: reactorGenerate } = await import('./reactor.js');
 const { extractLastFrame } = await import('./frameExtraction.js');
 const { getHistoryItem } = await import('./history.js');
@@ -55,6 +72,9 @@ const failOn = (mockFn, error = 'render failed') => mockFn.mockImplementationOnc
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resolveVideoModel.mockReturnValue({ runtime: 'ltx2', name: 'Example LTX' });
+  probeFrameCount.mockResolvedValue(121);
+  trimVideoFromFrame.mockResolvedValue({ ok: true });
 });
 
 describe('composeEpisodeClips', () => {
@@ -144,5 +164,105 @@ describe('generateContinuousVideoEpisode', () => {
   it('rejects an unknown backend', async () => {
     await expect(generateContinuousVideoEpisode({ scenes, bible, backend: 'bogus' }))
       .rejects.toThrow(/Unknown continuous-video backend/);
+  });
+
+  it('refuses an explicitly unavailable H3 temporal episode before any clip renders', async () => {
+    resolveVideoModel.mockReturnValue({ runtime: 'minimax_h3', name: 'Example H3' });
+    await expect(generateContinuousVideoEpisode({
+      scenes, bible, framings: [null, 'medium shot'],
+      renderOptions: { continuityStrategy: 'window' },
+    })).rejects.toMatchObject({ code: 'VIDEO_TEMPORAL_UNAVAILABLE' });
+    expect(localGenerate).not.toHaveBeenCalled();
+    expect(extractLastFrame).not.toHaveBeenCalled();
+  });
+
+  it('delivers three temporal clips with bounded tail/audio cuts and exact prefix trims', async () => {
+    succeedOn(localGenerate);
+    probeFrameCount.mockResolvedValueOnce(121).mockResolvedValueOnce(142)
+      .mockResolvedValueOnce(142);
+    const clips = [
+      { prompt: 'First', cutType: 'fresh', frames: 121, fps: 24 },
+      { prompt: 'Second', cutType: 'continue', frames: 121, fps: 24 },
+      { prompt: 'Third', cutType: 'continue', frames: 121, fps: 24 },
+    ];
+    const result = await generateContinuousVideoEpisode({
+      clips, renderOptions: { continuityStrategy: 'window', contextFrames: 22 },
+    });
+    expect(result.ok).toBe(true);
+    expect(localGenerate.mock.calls.map(([params]) => params.mode)).toEqual(['text', 'extend', 'extend']);
+    expect(extractLastFrame).not.toHaveBeenCalled();
+    expect(trimVideoFromFrame.mock.calls.map(([, , options]) => options)).toEqual([
+      { startFrame: 99, fps: 24 }, { startFrame: 120, fps: 24 },
+    ]);
+    const stitchOptions = stitchVideos.mock.calls[0][1];
+    expect(stitchOptions.requireExactTrims).toBe(true);
+    expect([...stitchOptions.trims.values()]).toEqual([
+      { startFrame: 0, frames: 121 },
+      { startFrame: 22, frames: 120 }, { startFrame: 22, frames: 120 },
+    ]);
+    expect(probeFrameCount).toHaveBeenCalledTimes(3);
+    expect(stitchOptions.continuation.actualHistoryFrames).toBe(22);
+    expect(unlinkGuarded.mock.calls.map(([path]) => path)).toEqual(trimVideoFromFrame.mock.calls.map(([, path]) => path));
+  });
+
+  it('measures a fresh clip after a temporal continuation without trimming its new frames', async () => {
+    succeedOn(localGenerate);
+    probeFrameCount.mockResolvedValueOnce(121).mockResolvedValueOnce(142).mockResolvedValueOnce(121);
+    const result = await generateContinuousVideoEpisode({
+      clips: [
+        { prompt: 'First', cutType: 'fresh', frames: 121, fps: 24 },
+        { prompt: 'Second', cutType: 'continue', frames: 121, fps: 24 },
+        { prompt: 'Third', cutType: 'fresh', frames: 121, fps: 24 },
+      ],
+      renderOptions: { continuityStrategy: 'window', contextFrames: 22 },
+    });
+    expect(result.ok).toBe(true);
+    expect(localGenerate.mock.calls.map(([params]) => params.mode)).toEqual(['text', 'extend', 'text']);
+    expect([...stitchVideos.mock.calls[0][1].trims.values()]).toEqual([
+      { startFrame: 0, frames: 121 }, { startFrame: 22, frames: 120 }, { startFrame: 0, frames: 121 },
+    ]);
+    expect(probeFrameCount).toHaveBeenCalledTimes(3);
+    expect(trimVideoFromFrame).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans a partially prepared temporal tail without removing completed clips or retrying fresh', async () => {
+    succeedOn(localGenerate);
+    trimVideoFromFrame.mockResolvedValueOnce({ ok: false, reason: 'fixture failure' });
+    const result = await generateContinuousVideoEpisode({
+      scenes, bible, framings: [null, 'medium shot'],
+      renderOptions: { continuityStrategy: 'window', contextFrames: 22 },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('fixture failure');
+    expect(result.clipIds).toHaveLength(1);
+    expect(localGenerate).toHaveBeenCalledTimes(1);
+    expect(stitchVideos).not.toHaveBeenCalled();
+    expect(unlinkGuarded).toHaveBeenCalledExactlyOnceWith(trimVideoFromFrame.mock.calls[0][1]);
+  });
+
+  it('refuses an unmeasurable temporal source instead of using its whole clip as history', async () => {
+    succeedOn(localGenerate);
+    probeFrameCount.mockResolvedValueOnce(null);
+    const result = await generateContinuousVideoEpisode({
+      scenes, bible, framings: [null, 'medium shot'],
+      renderOptions: { continuityStrategy: 'window' },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('Cannot measure');
+    expect(localGenerate).toHaveBeenCalledTimes(1);
+    expect(trimVideoFromFrame).not.toHaveBeenCalled();
+    expect(unlinkGuarded).not.toHaveBeenCalled();
+  });
+
+  it('does not retry an explicitly temporal continuation unconditioned when its render fails', async () => {
+    localGenerate.mockImplementationOnce(succeedOnce).mockImplementationOnce((params) => failOnce(params));
+    const result = await generateContinuousVideoEpisode({
+      scenes, bible, framings: [null, 'medium shot'],
+      renderOptions: { continuityStrategy: 'window' },
+    });
+    expect(result.ok).toBe(false);
+    expect(localGenerate).toHaveBeenCalledTimes(2);
+    expect(stitchVideos).not.toHaveBeenCalled();
+    expect(unlinkGuarded).toHaveBeenCalledExactlyOnceWith(trimVideoFromFrame.mock.calls[0][1]);
   });
 });

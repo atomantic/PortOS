@@ -50,7 +50,8 @@ import {
 } from './providerModels.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
 import { agentGuardEnv } from './agentGuard/index.js';
-import { buildSafeCliBaseEnv } from './processEnv.js';
+import { join, resolve } from 'path';
+import { buildSafeCliBaseEnv, withTorchCompilerCacheEnv } from './processEnv.js';
 import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from './agentExecutionProfiles.js';
 
 // Claude Code defaults to 32K output tokens. Thinking-capable local models can
@@ -347,10 +348,10 @@ export function buildCliChildEnv({
   bootstrapEnv = null,
   safetyProfile = null,
 } = {}) {
-  const composed = withSpawnCwdEnv(
+  const composed = withTorchCompilerCacheEnv(withSpawnCwdEnv(
     { ...buildSafeCliBaseEnv(baseEnv, provider), ...composeProviderEnv({ before, provider, model, extra, safetyProfile }) },
     cwd,
-  );
+  ), join(resolve(cwd || process.cwd()), '.cache'));
 
   const env = isPublicReviewNoToolProfile(safetyProfile)
     ? buildPublicReviewCliEnv(composed)

@@ -243,8 +243,11 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/catalog/import/music-videos', RECORDS],
   ['POST /api/catalog/ingredient-merges/:id/recover', RECORDS],
   ['POST /api/catalog/ingredients', RECORDS],
+  ['POST /api/catalog/ingredients/:id/fork', RECORDS],
+  ['PUT /api/catalog/ingredients/:id/owner', RECORDS],
   ['DELETE /api/catalog/ingredients/:id', REMOVES_RECORD],
   ['PATCH /api/catalog/ingredients/:id', RECORDS],
+  ['PATCH /api/catalog/ingredients/:id/lock', RECORDS],
   ['DELETE /api/catalog/ingredients/:id/link', REMOVES_RECORD],
   ['POST /api/catalog/ingredients/:id/link', RECORDS],
   ['DELETE /api/catalog/ingredients/:id/media', REMOVES_RECORD],
@@ -253,6 +256,10 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['PATCH /api/catalog/ingredients/:id/media/library', RECORDS],
   ['POST /api/catalog/ingredients/:id/media/portrait', RECORDS],
   ['POST /api/catalog/ingredients/:id/media/upload', RECORDS],
+  ['POST /api/catalog/ingredients/:id/greybox/prompt', READ_OVER_POST],
+  ['PUT /api/catalog/ingredients/:id/greybox', RECORDS],
+  ['POST /api/catalog/ingredients/:id/greybox/shots/:shotId/capture', RECORDS],
+  ['POST /api/catalog/ingredients/:id/greybox/shots/:shotId/render', RECORDS],
   ['POST /api/catalog/ingredients/:id/media/voice', TOOL_FREE_INFERENCE],
   ['DELETE /api/catalog/ingredients/:id/relations', REMOVES_RECORD],
   ['POST /api/catalog/ingredients/:id/relations', RECORDS],
@@ -1223,6 +1230,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/universe-builder/:id/canon/backfill-descriptions', RECORDS],
   ['POST /api/universe-builder/:id/characters/:entryId/augment/apply', RECORDS],
   ['DELETE /api/universe-builder/:id/characters/:entryId/reference-sheet', REMOVES_RECORD],
+  ['POST /api/universe-builder/:id/characters/:entryId/reference-sheet/preview', READ_OVER_POST],
   ['POST /api/universe-builder/:id/import/markdown', RECORDS],
   ['POST /api/universe-builder/:id/restore-starter', 'Replaces record text with bundled defaults only; no agent, process or filesystem operation.'],
   ['POST /api/universe-builder/:id/style-references', RECORDS],
@@ -1395,7 +1403,7 @@ describe('host-control coverage of mounted mutating routes (#12952)', () => {
 // --- GET routes that reach host-process work (#13097) ---
 
 // Site reasons: one reviewed binding, which ends the trace for every GET.
-const HOST_QUERY = 'Runs one fixed read-only host query (sysctl, nvidia-smi, vm_stat, ps or a process listing, lsof/netstat, du/find, `which`, `defaults read`, an is-running AppleScript, `tailscale status`, `ffmpeg -filters` or `-list_devices`); the caller chooses no command, argument or path, and host state does not change.';
+const HOST_QUERY = 'Runs one fixed read-only host query (sysctl, nvidia-smi, vm_stat, ps or a process listing, lsof/netstat, du/find, `which`, `defaults read`, an is-running AppleScript, `tailscale status`, `ffmpeg -filters`, `-encoders` or `-list_devices`); the caller chooses no command, argument or path, and host state does not change.';
 const VERSION_PROBE = 'Runs an installed tool or interpreter only to check it (`--version`, `brew list`, `--probe`, or a fixed `python -c` import or version script); the executable is PortOS-managed or comes from code or gated settings, and the check installs, starts and changes nothing.';
 const ICLOUD_HEAL = 'Asks iCloud (`brctl download`) to download the evicted file PortOS is already reading; the caller names no path and nothing else runs.';
 const GIT_PROBE = 'Runs a fixed read-only git or gh query (`rev-parse`, `remote get-url`, `status`, `gh api user` or `rate_limit`) and changes no repository or remote state.';
@@ -1416,6 +1424,7 @@ const REVIEWED_PROCESS_SITES = [
   ['server/lib/detachedSpawn.js#processMatches', HOST_QUERY],
   ['server/lib/detachedSpawn.js#queryWin32Command', HOST_QUERY],
   ['server/lib/detachedSpawn.js#snapshotProcesses', HOST_QUERY],
+  ['server/lib/ffmpeg.js#probeEncoderCapability', HOST_QUERY],
   ['server/lib/ffmpeg.js#supportsSetparamsFilter', HOST_QUERY],
   ['server/lib/fileCore.js#dirSize', HOST_QUERY],
   ['server/lib/fullDiskAccess.js#defaultReadProcess', HOST_QUERY],
@@ -1456,6 +1465,7 @@ const REVIEWED_PROCESS_SITES = [
   ['server/services/videoGen/runtimes.js#isByovRuntimeReady', VERSION_PROBE],
   ['server/services/videoGen/runtimes.js#probeRuntimeFingerprint', VERSION_PROBE],
   ['server/services/videoGen/runtimes.js#resolveByovRuntimeLoraCapable', VERSION_PROBE],
+  ['server/services/videoGen/runtimes.js#resolveA2vLoraStageCapable', 'Runs only the fixed LTX A2V seam probe in the installed venv: imports pipeline definitions and reads pinned checkout revision/status; loads no model, downloads nothing and accepts no request-supplied command or path.'],
   ['server/services/ytdlpUpdate.js#readYtDlpVersion', VERSION_PROBE],
 ];
 

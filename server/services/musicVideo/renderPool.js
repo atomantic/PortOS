@@ -9,6 +9,10 @@ const refuse = (message, reasons = []) => {
 export async function applyProjectRenderPool(body) {
   const { getProject } = await import('./projects.js');
   const project = await getProject(body.musicVideo.projectId);
+  if (project?.scenes?.some((s) => s.sceneId === body.musicVideo.sceneId && s.setReference?.greyboxShotId)) {
+    const { withMusicVideoGreyboxInput } = await import('./greyboxReferences.js');
+    body = await withMusicVideoGreyboxInput(body, project);
+  }
   const pool = project?.videoSettings?.renderPool;
   // The shot card's Song audio toggle decides for its own render; else the project's generation mode.
   const supplied = typeof body.musicVideo.songAudio === 'boolean'

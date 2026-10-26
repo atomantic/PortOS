@@ -1,3 +1,4 @@
+import { a2vLoraStageStrengthsSchema } from '../lib/videoLoraStageValidation.js';
 /**
  * Media Job Queue Routes — read + cancel access to the unified image/video
  * render queue. The actual enqueueing happens in /api/video-gen and
@@ -14,14 +15,15 @@ import { refineMediaPrompt } from '../services/mediaPromptRefiner.js';
 import { saveMediaPromptExamination, listMediaPromptExaminations, getMediaPromptExamination } from '../services/mediaPromptHistory.js';
 import { promptFromMedia } from '../services/mediaPromptFromMedia.js';
 import { CODEX_EFFORT_LEVELS } from '../lib/providerModels.js';
+import { videoSegmentReplayReceiptSchema } from '../services/mediaJobQueue/videoExecution.js';
 import { sanitizeJob } from '../services/mediaJobQueue/sanitizeJob.js';
 import { isRemoteMediaJob } from '../services/mediaJobQueue/remoteMediaJob.js';
-import { validateVideoRetryParams } from '../services/videoGen/prepareParams.js';
 import { hostedVideoRetryValidator } from '../services/videoGen/hostedSubmission.js';
 import { I2V_REFERENCE_MODES } from '../lib/videoReferenceModes.js';
 import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 import { DRAFT_DECODE_IDS, isFullDecode } from '../lib/videoDraftDecoders.js';
 import { VIDEO_STREAMING_MODES, isDefaultVideoStreamingMode } from '../lib/videoStreamingMode.js';
+import { MAX_CONTEXT_FRAMES, resolveContinuityRequest } from '../lib/videoContinuity.js';
 
 const router = Router();
 
@@ -301,7 +303,9 @@ const RETRY_OVERRIDE_SCHEMA = z.object({
     .transform((v) => (v === undefined ? undefined : (isDefaultVideoStreamingMode(v) ? null : v))),
   chunks: z.number().int().min(1).max(8).optional(),
   chunkPrompts: z.array(z.string().max(8000)).max(8).optional(),
-  contextFrames: z.number().int().min(0).max(64).optional(),
+  contextFrames: z.number().int().min(0).max(MAX_CONTEXT_FRAMES).optional(),
+  continuityStrategy: z.enum(['frame', 'window']).optional(),
+  a2vLoraStageStrengths: a2vLoraStageStrengthsSchema.nullable().optional(),
   loras: z.array(z.object({
     filename: z.string().min(1).max(255).regex(/^[^/\\]+\.safetensors$/i, 'filename must be a bare .safetensors basename'),
     name: z.string().max(200).optional(),
@@ -367,11 +371,21 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     ),
   );
   const params = { ...job.params, ...overrides };
+  const priorSegments = job.kind === 'video' && !isRemoteMediaJob(job)
+    ? videoSegmentReplayReceiptSchema.safeParse({ parentJobId: job.id, segments: job.videoExecutions })
+    : null;
+  if (priorSegments && !priorSegments.success && job.videoExecutions != null
+    && !(Array.isArray(job.videoExecutions) && job.videoExecutions.length === 0)) {
+    throw new ServerError('Stored chain execution receipts are invalid; the original attempt has been preserved.', {
+      status: 409, code: 'VIDEO_SEGMENT_RECEIPT_INVALID',
+    });
+  }
+  if (priorSegments?.success) params.segmentReplayReceipt = priorSegments.data;
   if (job.kind === 'video') {
     const bounds = VIDEO_RETRY_BOUNDS_SCHEMA.safeParse(rawOverrides);
     if (!bounds.success) throw new ServerError('Video retry settings are outside the supported range', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  for (const key of ['seed', 'steps', 'guidanceScale', 'imageStrength', 'i2vReferenceMode', 'speedProfileId', 'draftDecode', 'streamingMode']) {
+  for (const key of ['seed', 'steps', 'guidanceScale', 'imageStrength', 'i2vReferenceMode', 'speedProfileId', 'draftDecode', 'streamingMode', 'a2vLoraStageStrengths']) {
     if (rawOverrides[key] === null) delete params[key];
   }
   if (rawOverrides.chunks === 1) delete params.chunkPrompts;
@@ -383,7 +397,15 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
   if (job.kind === 'video') {
     const validateHostedRetry = hostedVideoRetryValidator(params.mode);
     if (validateHostedRetry) validateHostedRetry(params);
-    else await validateVideoRetryParams(params);
+    else {
+      const { validateVideoRetryParams } = await import('../services/videoGen/prepareParams.js');
+      const model = await validateVideoRetryParams(params);
+      delete params.continuation;
+      if (Number(params.chunks || 1) > 1 || params.continuityStrategy != null) {
+        params.continuation = resolveContinuityRequest({ model,
+          continuityStrategy: params.continuityStrategy, contextFrames: params.contextFrames });
+      }
+    }
   }
   // Reset Codex effort to the shipped default: dropping the key lets codex.js's
   // fallback (CODEX_IMAGEGEN_DEFAULT_EFFORT) take over, which a merged sentinel
@@ -411,12 +433,9 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     params.remoteMedia = { ...marker, cancelRequested: false, reconcile: false };
   }
   const result = await enqueueJob({ kind: job.kind, params, owner: job.owner });
-  // Drop the original failed/canceled row from archive — the new job inherits
-  // its work, and leaving both visible just lets users keep clicking Retry on
-  // the dead row and stacking duplicate jobs. If the prune returns false the
-  // archive doesn't have this id (unusual — getJob() found it above), so log
-  // a warning instead of silently masking duplicate history.
-  if (!removeArchivedJob(job.id)) {
+  // Prior chain attempts keep their only execution evidence under the existing
+  // archive retention policy. The new job carries one snapshot, not a ledger.
+  if (!priorSegments?.success && !removeArchivedJob(job.id)) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] retry: archive prune found nothing to drop — old row may persist in /api/media-jobs`);
   }
   res.json({ ...result, retriedFrom: job.id });

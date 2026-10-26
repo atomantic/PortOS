@@ -1,3 +1,6 @@
+import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
+import SceneFramePromptPreview from './SceneFramePromptPreview.jsx';
+import SceneGreyboxReference from './SceneGreyboxReference.jsx';
 import { useLayoutEffect, useRef, useState } from 'react';
 import { Activity, ArrowLeftRight, ArrowRight, Image as ImageIcon, ImagePlus, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
@@ -64,10 +67,13 @@ const REFERENCE_LABELS = { '': 'Prompt only', start: 'Start frame', end: 'End fr
  * The References row above them picks the character and set references every frame render sends.
  */
 export default function SceneFrames({
-  project = null, castMedia = null, scene, index, endFrames, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
+  project = null, castMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
   onEditLocal, onSave, onOpenPreview, takeBusy = false, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
   onContinueFromPrevious = null, previousHasClip = false, clipLocked = false, onSwapFrames = null, assetMarks = null, onMarkTake = null,
 }) {
+  const greybox = musicVideoGreyboxReference(project, scene, greyboxPlaces);
+  const [referenceSaving, setReferenceSaving] = useState(false);
+  const greyboxBlocked = greyboxSaving || referenceSaving || Boolean(greybox?.error);
   const [keepStillAsEnd, setKeepStillAsEnd] = useState(false);
   // Which frame each render starts from: the start frame renders from its prompt, the end frame from the start frame.
   const [refs, setRefs] = useState({ start: '', end: 'start' });
@@ -89,7 +95,7 @@ export default function SceneFrames({
     const refChoices = ['', ...['start', 'end'].filter((key) => frames[key])];
     const needsPrompt = !start && !scene.endFramePrompt?.trim();
     const render = () => (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, { referenceImageId: ref ? frames[ref] : null });
-    const refineLocked = !!generating || (!start && clipLocked);
+    const refineLocked = greyboxBlocked || !!generating || (!start && clipLocked);
     const refine = (e) => {
       e.preventDefault();
       if (!instruction.trim() || refineLocked) return;
@@ -105,8 +111,9 @@ export default function SceneFrames({
           onChange={(e) => onEditLocal(scene.sceneId, { [field]: e.target.value })}
           onBlur={(e) => onSave(scene.sceneId, { [field]: e.target.value || null })}
           placeholder={start ? 'Start frame prompt (defaults to the shot prompt)' : 'Where the shot ends, e.g. her head thrown back, eyes white'} />
+        {greybox?.reference && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={ref ? frames[ref] : null} />}
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={render} disabled={!!generating || needsPrompt || (!start && clipLocked)} className={PRIMARY_BUTTON}
+          <button type="button" onClick={render} disabled={greyboxBlocked || !!generating || needsPrompt || (!start && clipLocked)} className={PRIMARY_BUTTON}
             title={needsPrompt ? 'Describe the end frame first' : ref ? `Render from the ${REFERENCE_LABELS[ref].toLowerCase()} with this prompt` : 'Render from this prompt'}>
             {generating ? <Activity size={14} className="animate-spin" /> : start ? <ImageIcon size={14} /> : <Wand2 size={14} />}
             {generating ? 'Generating…' : start ? (imageId ? 'New frame take' : 'Generate frame') : (imageId ? 'New end frame take' : 'Generate end frame')}
@@ -140,6 +147,7 @@ export default function SceneFrames({
             <input id={id(`${which}-refine`)} type="text" value={instruction} onChange={(e) => setInstruction(e.target.value)}
               placeholder="What to change, e.g. remove the hand"
               className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-base sm:text-sm" />
+            {greybox?.reference && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={imageId} instruction={instruction} />}
             <button type="submit" disabled={!instruction.trim() || refineLocked} className={PRIMARY_BUTTON}
               aria-label={`Render refined ${start ? 'start' : 'end'} frame`}>
               <Wand2 size={14} /> Render
@@ -187,8 +195,10 @@ export default function SceneFrames({
   return (
     <section aria-label="Still" className="@container min-w-0 space-y-2">
       <h4 className="text-xs font-medium">{endFrames ? 'Frames' : 'Still'}</h4>
+      <SceneGreyboxReference project={project} scene={scene} places={greyboxPlaces} onSaving={(saving) => { setReferenceSaving(saving); onGreyboxSaving?.(saving); }}
+        onChange={async (setReference) => { const saved = await onSave(scene.sceneId, { setReference }); if (saved !== false) onEditLocal(scene.sceneId, { setReference }); return saved; }} />
       <SceneCastVariant project={project} scene={scene} castMedia={castMedia} onEditLocal={onEditLocal} onSave={onSave} />
-      <SceneFrameReferences project={project} scene={scene} castMedia={castMedia} onEditLocal={onEditLocal} onSave={onSave} />
+      <SceneFrameReferences project={project} scene={scene} castMedia={castMedia} greybox={greybox} onEditLocal={onEditLocal} onSave={onSave} />
       {endFrames ? (
         <div role="group" aria-label="Start and end frames" className="grid gap-3 @sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           {column('start')}

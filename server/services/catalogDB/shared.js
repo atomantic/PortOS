@@ -12,6 +12,7 @@ import { randomUUID } from 'crypto';
 import { pgvectorToArray } from '../../lib/db.js';
 import { ingredientIdPrefix } from '../../lib/catalogTypes.js';
 import { sanitizeCharacter, sanitizePlace, sanitizeObject } from '../../lib/storyBible.js';
+import { greyboxSceneSchema } from '../../lib/greyboxScene.js';
 
 // Story-bible sanitizers keyed by catalog type, for the registry
 // `extractionShape: 'bible'` types ONLY (character/place/object). The catalog
@@ -56,6 +57,17 @@ export function sanitizeBiblePayload(type, name, payload) {
   // version through the sanitize pass.
   if (payload && typeof payload === 'object' && payload.schemaVersion !== undefined) {
     out.schemaVersion = payload.schemaVersion;
+  }
+  // A place's greybox is normalized by its scene schema (defaults applied) on
+  // every ordinary write; one that does not parse is dropped, as the other
+  // sanitizers drop a malformed row, so it can never reach a reader.
+  if (out.greybox !== undefined) {
+    const parsed = greyboxSceneSchema.safeParse(out.greybox);
+    if (parsed.success) out.greybox = parsed.data;
+    else {
+      delete out.greybox;
+      console.log(`🚫 Dropped an invalid greybox from a ${type} payload: ${parsed.error.issues[0]?.message || 'invalid scene'}`);
+    }
   }
   return out;
 }

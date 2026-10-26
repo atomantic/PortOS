@@ -85,7 +85,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v14 = canon entries gained optional `forms[]` (alternate ages, eras and
   // looks/styles beside the canonical present-story form). A <=v13 peer would
   // sanitize them away and LWW the loss back.
-  universes: 14,
+  // v15 = canon places may carry a `greybox` layout (the catalog payload is
+  // mirrored into the embedded entry). A <=v14 peer's `sanitizePlace` would strip
+  // it on an unrelated Universe edit and LWW the loss back. The catalog gate stays
+  // put: catalog peer-receive stores the payload verbatim.
+  universes: 15,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -758,8 +762,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // song), which a v22 re-plan or split rebuilds without. Optional, no backfill.
   // v24 = the panel's art as the shot's frame reference (`scene.panelArt`),
   // which a v23 re-plan or split rebuilds without. Optional, no backfill.
-  // A field added to these normalizers later needs v25.
-  musicVideoProjects: 24,
+  // v25 = per-project automatic lyric-overlay visibility; older renderers ignore it.
+  // Optional, no migration or backfill; absent retains legacy rendering.
+  // v26 = explicit per-shot greybox set references. Older generators ignore the layout
+  // and its missing-capture refusal. Optional on existing records; no backfill.
+  musicVideoProjects: 26,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

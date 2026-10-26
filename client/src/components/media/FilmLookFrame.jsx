@@ -41,7 +41,8 @@ export default function FilmLookFrame({ look, frame = 0, playing = false, classN
   if (!playing) {
     const built = filmLookFilterMarkup(settings, { frame, width: size.width, height: size.height, id: filterId });
     return (
-      <div ref={ref} className={`relative ${className}`} style={built.active ? { filter: built.css } : undefined} data-film-look={built.active ? 'exact' : undefined}>
+      <div ref={ref} className={`relative ${className}`} style={built.active ? { filter: built.css } : undefined} data-film-look={built.active ? 'exact' : undefined}
+        data-film-look-frame={frame} data-film-look-width={size.width} data-film-look-height={size.height}>
         {built.active && <div aria-hidden="true" dangerouslySetInnerHTML={{ __html: built.svg }} />}
         {children}
       </div>

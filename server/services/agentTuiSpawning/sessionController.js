@@ -181,7 +181,9 @@ function createPasteRetryController({
   // The buffer deliberately survives every phase change except `idle`, so
   // delayed TUI output can still confirm a paste that looked failed. The
   // transition helpers below are the ONLY writers of this object.
-  const pasteState = { phase: 'idle', buffer: '' };
+  const pasteState = { phase: 'idle', buffer: '', lastOutputAt: 0 };
+  let pasteSettleTimer = null;
+  let pasteSettleStartedAt = null;
   const armAttempt = () => { pasteState.phase = 'awaiting-marker'; pasteState.buffer = ''; };
   const beginVerify = () => { pasteState.phase = 'awaiting-verify'; };
   // Retains the buffer: a marker painted after the verify window closes must
@@ -269,6 +271,34 @@ function createPasteRetryController({
   // The commit buffer goes to noteInput because it holds the paste chip: a TUI
   // that ignores the submit Enter may never repaint it (createPromptSubmissionGate).
   const submitConfirmedPaste = () => {
+    if (isFinalized()) return;
+    // A late/partial chip proves receipt, not that the input burst has ended.
+    // Measure the existing settle interval from the latest paste output rather
+    // than the initial write (Codex's Windows burst reader suppresses Enter).
+    const remaining = PASTE_TO_ENTER_MIN_DELAY_MS - (Date.now() - pasteState.lastOutputAt);
+    if (isCodexSession && remaining > 0) {
+      pasteSettleStartedAt ??= Date.now();
+      // Reuse Codex's cold-start patience as a fixed cap, never a moving
+      // deadline. Continuous redraws must fail explicitly, not hold forever or
+      // force Enter into an input stream whose state is still unknown.
+      if (Date.now() - pasteSettleStartedAt >= PASTE_COMMIT_PATIENCE_MS) {
+        clearPaste();
+        finishStartupFailure('prompt-not-submitted', 'Codex paste output never settled; no submission Enter was sent.')
+          .catch(err => emitLog('error', `TUI agent ${agentId} unsettled paste cleanup failed: ${err?.message || err}`, { agentId }));
+        return;
+      }
+      if (pasteSettleTimer) clearTimeout(pasteSettleTimer);
+      pasteSettleTimer = setTimeout(() => {
+        pasteSettleTimer = null;
+        try {
+          submitConfirmedPaste();
+        } catch (err) {
+          finishStartupFailure('prompt-submit-failed', `Could not submit the pasted prompt: ${err.message}`)
+            .catch(failure => emitLog('error', `TUI agent ${agentId} submit failure cleanup failed: ${failure?.message || failure}`, { agentId }));
+        }
+      }, remaining);
+      return;
+    }
     const evidence = pasteState.buffer;
     clearPaste();
     if (pasteRetryTimer) {
@@ -296,6 +326,7 @@ function createPasteRetryController({
     // Start capturing post-paste output. Armed BEFORE writing the paste so
     // every chunk that arrives in response gets appended.
     armAttempt();
+    pasteState.lastOutputAt = Date.now();
     write(`\x1b[200~${prompt}\x1b[201~`);
     const attemptSuffix = attemptNum > 1 ? ` [attempt ${attemptNum}/${PASTE_RETRY_MAX_ATTEMPTS}]` : '';
     appendLine(LIFECYCLE_LINES.promptPasted({ session: sessionLabel, reason, attemptSuffix }));
@@ -435,6 +466,7 @@ function createPasteRetryController({
     if (pasteState.phase === 'idle' || !stripped) return;
     // Tail-bounded: see POST_PASTE_BUFFER_CAP for why a few screens is all the
     // commit predicates can use.
+    pasteState.lastOutputAt = Date.now();
     pasteState.buffer = (pasteState.buffer + stripped).slice(-POST_PASTE_BUFFER_CAP);
     // The retry backoff used to be a blind spot: output was discarded after
     // verification failed and before the next attempt began. A late marker or
@@ -452,6 +484,7 @@ function createPasteRetryController({
   // stopRunMachinery's own comment for why every teardown site must go through
   // one chokepoint.
   const cancel = () => {
+    if (pasteSettleTimer) { clearTimeout(pasteSettleTimer); pasteSettleTimer = null; }
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
     if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
     if (pasteRetryTimer) { clearTimeout(pasteRetryTimer); pasteRetryTimer = null; }

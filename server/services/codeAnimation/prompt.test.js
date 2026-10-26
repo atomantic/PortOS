@@ -209,6 +209,14 @@ describe('music-video craft and measured choreography', () => {
   };
   const songSnapshot = prompt => JSON.parse(prompt.match(/^SONG[^\n]*\n([^\n]+)/m)[1]);
 
+  it.each(builders)('gives %s disabled-overlay direction while retaining musical word anchors', (_label, build) => {
+    const song = buildSongDocument({ ...project, lyricOverlayEnabled: false });
+    const prompt = build({ title: 'Example cinematic cut', song, palette: {}, scenes: [] });
+    expect(prompt).toContain('LYRIC VISIBILITY: automatic lyric overlays are disabled');
+    expect(songSnapshot(prompt).lyricOverlayEnabled).toBe(false);
+    expect(songSnapshot(prompt).lyrics).toEqual(song.lyrics);
+  });
+
   it.each(builders)('gives %s the shared craft bar and bounded real feature/word anchors', (_label, build) => {
     const song = buildSongDocument(project);
     const prompt = build({ title: 'Example measured choreography', song, palette: {}, scenes: [] });

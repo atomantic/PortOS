@@ -1,3 +1,5 @@
+import { sanitizeContinuation } from '../lib/videoContinuationProvenance.js';
+import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from '../lib/videoLoraStageValidation.js';
 /**
  * Video Generation Routes — local LTX backend.
  *
@@ -7,6 +9,7 @@
  */
 
 import { withMediaFileSizes } from '../lib/mediaFileInfo.js';
+import { clearMetalBufferProfiles } from '../services/videoGen/metalBufferProfiles.js';
 import { historyListQuerySchema, isHistoryListQuery, listVideoHistoryQuery } from '../services/videoGen/historyList.js';
 import { Router } from 'express';
 import { updateVideoPoster, createSharingCopy } from '../services/videoGen/poster.js';
@@ -29,7 +32,7 @@ import { MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES } from '../lib/videoContinuity.j
 import { I2V_REFERENCE_MODES } from '../lib/videoReferenceModes.js';
 import {
   VIDEO_BACKEND_DISCLOSURES, acceptedVideoModelTerms,
-  videoModelTermsGateId,
+  videoModelTermsGateId, isVideoModelTermsAccepted, videoModelTermsError,
 } from '../lib/videoDisclosure.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { recordUserAction } from '../services/userActions.js';
@@ -257,6 +260,10 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
     (v) => (v == null || v === '' ? undefined : v),
     z.enum(I2V_REFERENCE_MODES).optional(),
   ),
+  [VIDEO_GEN_LOCAL_ONLY_FIELDS.A2V_LORA_STAGE_STRENGTHS]: z.preprocess((v) => {
+    if (typeof v !== 'string') return v;
+    try { return JSON.parse(v); } catch { return v; }
+  }, a2vLoraStageStrengthsSchema.optional().transform((v) => isDefaultA2vLoraStages(v) ? undefined : v)),
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.TILING]: z.enum(VIDEO_TILING_MODES).optional(),
   // Which prompt conditioner reads the prompt (lib/videoTextEncoders.js).
   // Validated loosely here and resolved against the MODEL's own option list in
@@ -265,10 +272,8 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.TEXT_ENCODER_ID]: z.string().min(1).max(64).optional(),
   // Named sampler schedule to render with (lib/videoSpeedProfiles.js). Loosely
   // validated here for the same reason as textEncoderId — the option list is
-  // per-MODEL. Deliberately never rejected downstream either: an id this model
-  // doesn't offer (or a mode the profile isn't validated for) falls back to the
-  // model's own sampler with the reason logged, because a knob that only makes
-  // a render faster must degrade rather than 400 a submitted job.
+  // per-MODEL. Legacy LTX profiles retain their disclosed fallback. H3's typed
+  // adapter/schedule contract refuses incompatible requests before admission.
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.SPEED_PROFILE_ID]: z.string().min(1).max(64).optional(),
   // Decode this render's latents on the model's own decoder or on its declared
   // preview-fidelity one (lib/videoDraftDecoders.js). A closed enum, unlike the
@@ -287,6 +292,7 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
   // the live pin, owns accept/refuse. Absence and 'auto' are the same
   // request (the bridge's own default).
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.STREAMING_MODE]: z.enum(VIDEO_STREAMING_MODES).optional(),
+  [VIDEO_GEN_LOCAL_ONLY_FIELDS.CONTINUITY_STRATEGY]: z.enum(['frame', 'window']).optional(),
 });
 
 const generateBodySchema = z.object({
@@ -407,7 +413,8 @@ const generateBodySchema = z.object({
   // A window carries motion across the seam where a single still can't; `0`
   // opts back into last-frame chaining, and absence takes the default. Only
   // meaningful on a runtime with an extend pipeline — elsewhere it's ignored,
-  // not rejected. See lib/videoContinuity.js.
+  // not rejected for legacy requests. Explicit window admission is enforced
+  // separately and never silently falls back. See lib/videoContinuity.js.
   contextFrames: optionalInt(MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES, 'contextFrames'),
   // History id of a prior render to extend natively (ltx2 runtime only —
   // routes through ExtendPipeline.extend_from_video which conditions on
@@ -639,6 +646,10 @@ router.get('/model-terms', asyncHandler(async (_req, res) => {
   res.json({ accepted: acceptedVideoModelTerms(await getSettings()) });
 }));
 
+router.post('/metal-buffer-profiles/clear', asyncHandler(async (_req, res) => {
+  res.json(await clearMetalBufferProfiles());
+}));
+
 router.post('/model-terms', asyncHandler(async (req, res) => {
   const parsed = videoModelTermsSchema.safeParse(req.body || {});
   if (!parsed.success) failValidation(parsed);
@@ -866,12 +877,16 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
   res.json({ id: model.id, ...await modelCacheStatus(model) });
 }));
 
+const speedProfileDownloadQuerySchema = modelDownloadQuerySchema.extend({ speedProfileId: z.string().min(1).max(64).optional() });
 router.post('/models/:modelId/download', asyncHandler(async (req, res) => {
-  const { force } = validateRequest(modelDownloadQuerySchema, req.query);
+  const { force, speedProfileId } = validateRequest(speedProfileDownloadQuerySchema, req.query);
   const { modelId } = validateRequest(modelDownloadParamsSchema, req.params);
   const model = listVideoModels().find((m) => m.id === modelId);
   if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
-  const repos = modelDownloadTargets(model);
+  if (speedProfileId && !isVideoModelTermsAccepted(model, acceptedVideoModelTerms(await getSettings()))) {
+    throw videoModelTermsError(model, 'adapter download');
+  }
+  const repos = modelDownloadTargets(model, { speedProfileId });
   if (repos.length === 0) throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
   const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
   const pythonPath = runtimeInfo?.hfDownloadPython !== false
@@ -1098,7 +1113,7 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   // Block-streaming request (#6499) — a closed enum with no path, safe to
   // echo so a reloading page restores the picker instead of snapping back to
   // Auto.
-  'streamingMode',
+  'streamingMode', 'a2vLoraStageStrengths',
   'audioStartSec',
   // Grok jobs (#2859 phase 2): the semantic t2v/i2v mode ('mode' holds the
   // 'grok' discriminator for them) and the clip duration — both plain
@@ -1125,6 +1140,9 @@ const pickJobParams = (job) => {
   for (const k of ACTIVE_JOB_PARAM_FIELDS) {
     if (params[k] !== undefined) out[k] = params[k];
   }
+  if (['frame', 'window'].includes(params.continuityStrategy)) out.continuityStrategy = params.continuityStrategy;
+  const continuation = sanitizeContinuation(params.continuation);
+  if (continuation) out.continuation = continuation;
   // keyframes ride a separate mapping rather than the raw whitelist: they're
   // stored as { path, index } where `path` is an absolute gallery path (the
   // same internal-path-leak the whitelist exists to prevent — see the

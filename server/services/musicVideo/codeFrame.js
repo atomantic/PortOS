@@ -94,7 +94,7 @@ export function drawCodeFrame({ ctx, song, palette, sources, t, width, height, f
     const band = 8 + (frame % 4);
     ctx.fillRect(safe.x, safe.y, band, band);
   }
-  paintKaraoke(ctx, { palette, safe, karaoke });
+  if (song.lyricOverlayEnabled !== false) paintKaraoke(ctx, { palette, safe, karaoke });
   return { frame, sectionId: section.id, karaoke };
 }
 

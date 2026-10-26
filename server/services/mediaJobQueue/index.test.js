@@ -961,6 +961,256 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'completed');
   });
 
+  it('persists chained segment receipts and replay seeds under the authoritative queue parent across restart', async () => {
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
+      modelId: 'example-mlx', chunks: 3, executionQueueJobId: 'untrusted-parent',
+      segmentSeeds: [100, 101, 102], segmentSeedBase: null,
+    } });
+    await waitFor(() => stubs.generateChainedVideo.mock.calls.length === 1);
+    expect(stubs.generateChainedVideo.mock.calls[0][0].executionQueueJobId).toBe(jobId);
+    const { recordVideoExecution, recordVideoExecutionDiagnostics } = await import('../videoGen/executionRecorder.js');
+    const meta = { modelId: 'example-mlx', width: 320, height: 192, numFrames: 25, fps: 24, steps: 9,
+      sourceImagePath: '/private/example.png' };
+    for (const segmentIndex of [0, 1]) {
+      const executionParent = { jobId, segmentIndex, segmentCount: 3 };
+      await recordVideoExecution(`example-child-${segmentIndex}`, { ...meta, seed: 100 + segmentIndex, executionParent });
+      await recordVideoExecutionDiagnostics(`example-child-${segmentIndex}`, { termination: {
+        exitCode: 0, signal: null, reason: 'completed', observedAt: new Date().toISOString(),
+      } }, executionParent);
+    }
+    await recordVideoExecution('example-child-0', { ...meta, seed: 100,
+      executionParent: { jobId, segmentIndex: 0, segmentCount: 3 } });
+    const persisted = () => JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs.find(job => job.id === jobId);
+    expect(persisted()).toMatchObject({ params: { segmentSeeds: [100, 101, 102], segmentSeedBase: null },
+      videoExecutions: [
+        { childJobId: 'example-child-0', segmentIndex: 0, seed: 100, parameters: { steps: 9 }, diagnostics: { termination: { reason: 'completed' } } },
+        { childJobId: 'example-child-1', segmentIndex: 1, seed: 101, parameters: { steps: 9 } },
+      ] });
+    expect(persisted().params).not.toHaveProperty('seed');
+    expect(JSON.stringify(persisted().videoExecutions)).not.toContain('/private');
+    videoGenEvents.emit('failed', { generationId: jobId, error: 'Synthetic third-segment refusal' });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'failed');
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'failed',
+      params: { segmentSeeds: [100, 101, 102], segmentSeedBase: null }, videoExecutions: persisted().videoExecutions });
+  });
+
+  it('uses the same bounded queued segment count for dispatch and durable receipt admission', async () => {
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx', chunks: 99 } });
+    await waitFor(() => stubs.generateChainedVideo.mock.calls.length === 1);
+    expect(stubs.generateChainedVideo.mock.calls[0][0]).toMatchObject({ chunks: 8, executionQueueJobId: jobId });
+    await expect(mediaJobQueue.recordVideoExecution('example-bounded-child', {
+      modelId: 'example-mlx', seed: 7, width: 320, height: 192, numFrames: 25, fps: 24, steps: 9,
+      executionParent: { jobId, segmentIndex: 0, segmentCount: 8 },
+    })).resolves.toBe(true);
+    videoGenEvents.emit('failed', { generationId: jobId, error: 'Synthetic interruption' });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'failed');
+  });
+
+  it.each([
+    [undefined, 12345, null, [12345, null]],
+    [null, 12345, null, [12345, null]],
+    ['', 12345, null, [12345, null]],
+    ['40', 40, 40, [40, 41]],
+  ])('normalizes retry seed base %s consistently with the chain renderer', async (requestedSeed, resolvedSeed, expectedBase, expectedSeeds) => {
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
+      modelId: 'example-mlx', chunks: 2, seed: requestedSeed, segmentSeeds: [40, 41], segmentSeedBase: 40,
+    } });
+    await waitFor(() => stubs.generateChainedVideo.mock.calls.length === 1);
+    await mediaJobQueue.recordVideoExecution('example-cleared-seed-child', {
+      modelId: 'example-mlx', seed: resolvedSeed, width: 320, height: 192, numFrames: 25, fps: 24, steps: 9,
+      executionParent: { jobId, segmentIndex: 0, segmentCount: 2 },
+    });
+    expect(mediaJobQueue.getJob(jobId).params).toMatchObject({ segmentSeeds: expectedSeeds, segmentSeedBase: expectedBase });
+    videoGenEvents.emit('failed', { generationId: jobId, error: 'Synthetic interruption' });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'failed');
+  });
+
+  it('retains late chained segment cancellation evidence without changing siblings or reviving the parent', async () => {
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx', chunks: 2, seed: 40 } });
+    await waitFor(() => stubs.generateChainedVideo.mock.calls.length === 1);
+    const { recordVideoExecution, recordVideoExecutionDiagnostics } = await import('../videoGen/executionRecorder.js');
+    const meta = { modelId: 'example-mlx', width: 320, height: 192, numFrames: 25, fps: 24, steps: 9 };
+    const first = { jobId, segmentIndex: 0, segmentCount: 2 };
+    const second = { jobId, segmentIndex: 1, segmentCount: 2 };
+    await recordVideoExecution('example-child-0', { ...meta, seed: 100, executionParent: first });
+    await recordVideoExecutionDiagnostics('example-child-0', { termination: {
+      exitCode: 0, signal: null, reason: 'completed', observedAt: new Date().toISOString(),
+    } }, first);
+    stubs.cancelVideo.mockReturnValue(true);
+    await mediaJobQueue.cancelJob(jobId);
+    videoGenEvents.emit('failed', { generationId: jobId, error: 'Canceled during segment preparation' });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'canceled');
+    await expect(recordVideoExecution('example-child-0', { ...meta, seed: 100, executionParent: second })).rejects.toThrow('Segment receipts must be unique');
+    await recordVideoExecution('example-child-1', { ...meta, seed: 101, executionParent: second });
+    await recordVideoExecutionDiagnostics('example-child-1', { termination: {
+      exitCode: null, signal: 'SIGTERM', reason: 'canceled', observedAt: new Date().toISOString(),
+    } }, second);
+    expect(await recordVideoExecutionDiagnostics('unrelated-child', { memory: { peakRssBytes: 4096 } }, second)).toBe(false);
+    await expect(recordVideoExecution('replacement-child', { ...meta, seed: 101, executionParent: second }))
+      .rejects.toThrow('different seed or child');
+    await expect(recordVideoExecution('example-child-1', { ...meta, seed: 999, executionParent: second }))
+      .rejects.toThrow('different seed or child');
+    expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'canceled',
+      params: { seed: 40, segmentSeeds: [100, 101], segmentSeedBase: 40 }, videoExecutions: [
+        { childJobId: 'example-child-0', diagnostics: { termination: { reason: 'completed' } } },
+        { childJobId: 'example-child-1', diagnostics: { termination: { reason: 'canceled', signal: 'SIGTERM' } } },
+      ] });
+    expect(stubs.generateChainedVideo).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a missing queued segment parent and receipt persistence failure before launch', async () => {
+    const meta = { modelId: 'example-mlx', seed: 7, width: 320, height: 192, numFrames: 25, fps: 24, steps: 9 };
+    await expect(mediaJobQueue.recordVideoExecution('unknown-direct-job', meta)).resolves.toBe(false);
+    await expect(mediaJobQueue.recordVideoExecution('example-child', { ...meta,
+      executionParent: { jobId: 'missing-queue-job', segmentIndex: 0, segmentCount: 2 },
+    })).rejects.toThrow('no matching local parent');
+    const { recordVideoExecution, setVideoExecutionRecorder } = await import('../videoGen/executionRecorder.js');
+    setVideoExecutionRecorder(null);
+    await expect(recordVideoExecution('unknown-direct-job', meta)).resolves.toBe(false);
+    await expect(recordVideoExecution('example-child', { ...meta,
+      executionParent: { jobId: 'missing-queue-job', segmentIndex: 0, segmentCount: 2 },
+    })).rejects.toThrow('recorder is unavailable');
+    // enqueueJob installs the real queue adapter again before dispatch.
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    let rejectReceipt = true;
+    atomicWriteSpy.mockImplementation(async (file, data, ...args) => {
+      if (rejectReceipt && data.jobs?.some(job => job.videoExecutions?.length)) {
+        rejectReceipt = false;
+        throw new Error('Synthetic segment receipt write refusal');
+      }
+      return realWrite(file, data, ...args);
+    });
+    const launch = vi.fn();
+    stubs.generateChainedVideo.mockImplementation(async ({ executionQueueJobId }) => {
+      await recordVideoExecution('example-child', { ...meta,
+        executionParent: { jobId: executionQueueJobId, segmentIndex: 0, segmentCount: 2 },
+      });
+      launch();
+    });
+    try {
+      const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx', chunks: 2 } });
+      await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'failed');
+      expect(launch).not.toHaveBeenCalled();
+      expect(mediaJobQueue.getJob(jobId).error).toContain('Synthetic segment receipt write refusal');
+    } finally {
+      atomicWriteSpy.mockImplementation(realWrite);
+    }
+  });
+
+  it('retains resolved execution seeds and bounded termination evidence across failure, cancellation and restart', async () => {
+    const ids = [];
+    const meta = { seed: 123456, modelId: 'example-mlx', width: 768, height: 768, numFrames: 141, fps: 24, steps: 9, mode: 'fflf' };
+    const { recordVideoExecution, recordVideoExecutionDiagnostics } = await import('../videoGen/executionRecorder.js');
+    for (const reason of ['failed', 'canceled']) {
+      const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx', prompt: 'Synthetic action' } });
+      ids.push(jobId);
+      await waitFor(() => stubs.generateVideo.mock.calls.some(([params]) => params.jobId === jobId));
+      await recordVideoExecution(jobId, meta);
+      const savedBeforeExit = JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs.find(j => j.id === jobId);
+      expect(savedBeforeExit).toMatchObject({ params: { seed: meta.seed }, videoExecution: { seed: meta.seed, parameters: { numFrames: 141 } } });
+      await recordVideoExecutionDiagnostics(jobId, { memory: { peakAllocatedBytes: 4096, allocatorApplied: true } });
+      if (reason === 'canceled') {
+        stubs.cancelVideo.mockReturnValue(true);
+        await mediaJobQueue.cancelJob(jobId);
+      }
+      await recordVideoExecutionDiagnostics(jobId, { memory: { peakAllocatedBytes: 2048 }, termination: {
+        exitCode: null, signal: reason === 'failed' ? 'SIGKILL' : 'SIGTERM', reason, observedAt: new Date().toISOString(),
+      } });
+      videoGenEvents.emit('failed', { generationId: jobId, error: reason === 'failed' ? 'Process killed' : 'Canceled while running' });
+      await waitFor(() => mediaJobQueue.getJob(jobId)?.status === reason);
+    }
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    for (const id of ids) {
+      expect(mediaJobQueue.getJob(id)).toMatchObject({ params: { seed: meta.seed }, videoExecution: {
+        seed: meta.seed, diagnostics: { memory: { peakAllocatedBytes: 4096 }, termination: { exitCode: null } },
+      } });
+    }
+    expect(mediaJobQueue.getJob(ids[0]).videoExecution.diagnostics.termination).toMatchObject({ signal: 'SIGKILL', reason: 'failed' });
+  });
+
+  it('durably retains a first seed resolved after cancellation without reviving the canceled job', async () => {
+    let resolveMetadata;
+    const metadataReady = new Promise(resolve => { resolveMetadata = resolve; });
+    const { recordVideoExecution } = await import('../videoGen/executionRecorder.js');
+    const meta = { seed: 765432, modelId: 'example-mlx', width: 768, height: 768, numFrames: 141, fps: 24, steps: 9 };
+    stubs.generateVideo.mockImplementation(async ({ jobId }) => {
+      await metadataReady;
+      await recordVideoExecution(jobId, meta);
+    });
+    stubs.cancelVideo.mockReturnValue(true);
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    await mediaJobQueue.cancelJob(jobId);
+    videoGenEvents.emit('failed', { generationId: jobId, error: 'Canceled while resolving metadata' });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'canceled');
+    expect(mediaJobQueue.getJob(jobId)).not.toHaveProperty('videoExecution');
+    resolveMetadata();
+    await waitFor(() => JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs
+      .some(job => job.id === jobId && job.status === 'canceled' && job.videoExecution?.seed === meta.seed));
+    await expect(recordVideoExecution(jobId, { ...meta, seed: meta.seed + 1 })).rejects.toThrow('different seed');
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'canceled', params: { seed: meta.seed }, videoExecution: { seed: meta.seed } });
+    expect(stubs.generateVideo).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains one combined memory and signal receipt when terminal settlement recovers a diagnostic write failure', async () => {
+    const { recordVideoExecution, recordVideoExecutionDiagnostics } = await import('../videoGen/executionRecorder.js');
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.some(([params]) => params.jobId === jobId));
+    await recordVideoExecution(jobId, { seed: 37, modelId: 'example-mlx', width: 768, height: 768, numFrames: 141, fps: 24, steps: 9 });
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    let rejectDiagnostic = true;
+    atomicWriteSpy.mockImplementation(async (file, data, ...args) => {
+      if (rejectDiagnostic && data.jobs?.some(job => job.id === jobId && job.videoExecution?.diagnostics?.termination)) {
+        rejectDiagnostic = false;
+        throw new Error('synthetic final evidence disk failure');
+      }
+      return realWrite(file, data, ...args);
+    });
+    try {
+      await expect(recordVideoExecutionDiagnostics(jobId, {
+        memory: { peakAllocatedBytes: 4096 },
+        termination: { exitCode: null, signal: 'SIGKILL', reason: 'failed', observedAt: new Date().toISOString() },
+      })).rejects.toThrow('synthetic final evidence disk failure');
+      videoGenEvents.emit('failed', { generationId: jobId, error: 'Process killed' });
+      await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'failed');
+      await importFresh();
+      await mediaJobQueue.initMediaJobQueue();
+      expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'failed', videoExecution: {
+        diagnostics: { memory: { peakAllocatedBytes: 4096 }, termination: { signal: 'SIGKILL', reason: 'failed' } },
+      } });
+    } finally {
+      atomicWriteSpy.mockImplementation(realWrite);
+    }
+  });
+
+  it('rejects a pre-launch receipt storage failure before the provider can launch its child', async () => {
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    let rejectReceipt = true;
+    atomicWriteSpy.mockImplementation(async (file, data, ...args) => {
+      if (rejectReceipt && data.jobs?.some(j => j.status === 'running' && j.videoExecution)) {
+        rejectReceipt = false;
+        throw Object.assign(new Error('synthetic receipt disk failure'), { code: 'EACCES' });
+      }
+      return realWrite(file, data, ...args);
+    });
+    const launched = vi.fn();
+    stubs.generateVideo.mockImplementation(async ({ jobId }) => {
+      const { recordVideoExecution } = await import('../videoGen/executionRecorder.js');
+      await recordVideoExecution(jobId, { seed: 7, modelId: 'example-mlx', width: 768, height: 768, numFrames: 141, fps: 24, steps: 9 });
+      launched();
+    });
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx' } });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'failed');
+    expect(launched).not.toHaveBeenCalled();
+    expect(mediaJobQueue.getJob(jobId).error).toContain('synthetic receipt disk failure');
+    atomicWriteSpy.mockImplementation(realWrite);
+  });
+
   it('debounce-persists live progress before a terminal transition', async () => {
     const file = join(tempDataDir, 'media-jobs.json');
     const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'restart snapshot' } });

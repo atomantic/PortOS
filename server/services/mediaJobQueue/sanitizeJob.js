@@ -1,7 +1,9 @@
+import { sanitizeContinuation } from '../../lib/videoContinuationProvenance.js';
 import { effectiveJobPrompt } from '../../lib/federatedMediaWire.js';
 import { videoHoldSchema } from './videoHolds.js';
 import { isRemoteMediaJob } from './remoteMediaJob.js';
 import { mediaJobExecutionLane } from '../../lib/generationModes.js';
+import { videoExecutionSchema, videoSegmentExecutionsSchema, videoSegmentReplayReceiptSchema } from './videoExecution.js';
 
 // Public projection of a media job. Keep worker-only paths and subprocess
 // details out of both the queue API and the processing dashboard.
@@ -14,7 +16,7 @@ export const PARAM_ALLOWLIST = new Set([
   // the preview-fidelity decode REQUEST the job was submitted with — projected
   // so the requeue editor can seed its picker from what the job actually asked
   // for instead of snapping every requeue back to Full.
-  'textEncoderId', 'speedProfileId', 'draftDecode', 'streamingMode',
+  'textEncoderId', 'speedProfileId', 'draftDecode', 'streamingMode', 'a2vLoraStageStrengths',
   'chunks', 'chunkPrompts', 'contextFrames', 'loras',
   'cfgScale', 'guidance', 'quantize',
   'runId', 'runtime', 'datasetId', 'characterId', 'characterName',
@@ -83,6 +85,11 @@ export function sanitizeJob(job) {
           : value,
       ]))
     : undefined;
+  if (safeParams && ['frame', 'window'].includes(job.params?.continuityStrategy)) safeParams.continuityStrategy = job.params.continuityStrategy;
+  const continuation = sanitizeContinuation(job.params?.continuation);
+  if (safeParams && continuation) safeParams.continuation = continuation;
+  const segmentReplayReceipt = videoSegmentReplayReceiptSchema.safeParse(job.params?.segmentReplayReceipt);
+  if (safeParams && segmentReplayReceipt.success) safeParams.segmentReplayReceipt = segmentReplayReceipt.data;
   // A remote job's conditioning text lives inside its versioned marker, never
   // in top-level params — that is what makes an older build (which cannot route
   // the marker) fail closed instead of quietly re-rendering the job locally.
@@ -90,6 +97,8 @@ export function sanitizeJob(job) {
   // routing state.
   const remotePrompt = effectiveJobPrompt(job);
   const safeExecution = executionProvenance(job.result?.executionProvenance);
+  const videoExecution = videoExecutionSchema.safeParse(job.videoExecution);
+  const videoExecutions = videoSegmentExecutionsSchema.safeParse(job.videoExecutions);
   const { executionProvenance: _executionProvenance, ...resultWithoutExecution } = job.result && typeof job.result === 'object' ? job.result : {};
   const safeResult = job.result && typeof job.result === 'object'
     ? { ...resultWithoutExecution, ...(safeExecution ? { executionProvenance: safeExecution } : {}) }
@@ -141,6 +150,8 @@ export function sanitizeJob(job) {
     etaMs: job.etaMs,
     error: job.error,
     result: safeResult,
+    ...(videoExecution.success ? { videoExecution: videoExecution.data } : {}),
+    ...(videoExecutions.success ? { videoExecutions: videoExecutions.data } : {}),
     params: safeParams,
   };
 }

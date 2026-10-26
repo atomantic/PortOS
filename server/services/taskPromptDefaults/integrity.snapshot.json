@@ -12,8 +12,8 @@
     "better-test-quality": "8e305f986e9c9066da5db2aee76fc024",
     "branch-cleanup": "529a494633f778f5b9daecdc55fae40c",
     "branch-reconcile": "fe0a7f976e7ffb8d70dac58233b9b093",
-    "claim-issue": "cf6ac149baa6a8b1d80d57b01343225b",
-    "claim-issue-gitlab": "3709d6ba65d4d71b7ab9d403d5bf8c8c",
+    "claim-issue": "450ba70c12711782e83ed3b862156ca6",
+    "claim-issue-gitlab": "f9e28cb8509d8031809ebdd992a1a96c",
     "claim-issue-jira": "b793412731c754db0b88b4d84d7e454f",
     "code-quality": "175fab48fc713b71b4f0574b7cc5fe0b",
     "code-reviewer-implement": "f8cb11be6796874018d0a4d776c8931d",
@@ -24,6 +24,7 @@
     "data-integrity": "5fcc4f5044101e89da5bbf4890c11a1c",
     "data-safety": "25e79bc34cfadeab3cc3969a6c3421c2",
     "dependency-updates": "8ce4e7e33c5c7554b89af7d35a471c31",
+    "design": "118ab916feb90ff079f6e6449f60e7fe",
     "do-release": "22c7fa45352bd013b4208cbe8188b5cd",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
     "documentation": "c94797b4bd3a0d554e225888ed48b76b",
@@ -31,7 +32,7 @@
     "feature-completeness": "00d8916cc6032e74817657375375115b",
     "feature-ideas": "804f62f1dadadbfa8a0bcd4aff16b2e8",
     "infrastructure": "f019bab508f95278ea00c33d69f85818",
-    "issue-reconcile": "ae2b1937dff6e5e8276de04d436880a0",
+    "issue-reconcile": "468b7b725c343775eebd9f57d2a53d1f",
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
     "jira-status-report": "9e4f35b5a9372c4f50f1e10f7ec8050d",
     "media-render-research": "5164eda916760e6f3604b0c80a5f33ec",
@@ -62,7 +63,7 @@
     "ui-lifecycle": "d156882c73593a54c0fd5754eb4c6fa0",
     "upgrade-rehearsal": "e53a4cb57cdc7b5876d709bcd8a68132",
     "user-action-review": "28c1b49e5ca806568077f56fe982ce08",
-    "ux": "14d790bd65e540d00786ecb4e787a61e",
+    "ux": "7a717ced5a1c8df4d76c1f6987747792",
     "workflow-recovery": "628d2ec51c3cd3d8bbd76eacb212dada"
   },
   "PROMPT_VERSIONS": {
@@ -78,8 +79,8 @@
     "better-test-quality": 2,
     "branch-cleanup": 2,
     "branch-reconcile": 12,
-    "claim-issue": 49,
-    "claim-issue-gitlab": 43,
+    "claim-issue": 50,
+    "claim-issue-gitlab": 44,
     "claim-issue-jira": 27,
     "code-quality": 6,
     "code-reviewer-a": 1,
@@ -90,6 +91,7 @@
     "data-integrity": 1,
     "data-safety": 3,
     "dependency-updates": 9,
+    "design": 1,
     "do-release": 21,
     "do-replan": 2,
     "documentation": 9,
@@ -97,7 +99,7 @@
     "feature-completeness": 1,
     "feature-ideas": 11,
     "infrastructure": 3,
-    "issue-reconcile": 9,
+    "issue-reconcile": 10,
     "jira-sprint-manager": 1,
     "jira-status-report": 2,
     "media-render-research": 1,
@@ -125,7 +127,7 @@
     "ui-lifecycle": 3,
     "upgrade-rehearsal": 2,
     "user-action-review": 3,
-    "ux": 8,
+    "ux": 9,
     "workflow-recovery": 1
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 5,
@@ -237,7 +239,8 @@
       "cc5fb5015f536be6f3f2a9681bf5f21a",
       "c9174e5e70203258bf5bf59256b0b158",
       "b2e7d4a99ee4ab2f6781aacfdef4b9f8",
-      "aedd28c470a4813b57be3e8b4dd45f4b"
+      "aedd28c470a4813b57be3e8b4dd45f4b",
+      "cf6ac149baa6a8b1d80d57b01343225b"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",
@@ -281,7 +284,8 @@
       "db6f46db14094581b13646ca281cc8d6",
       "610e9a535ecc828754807f68009b6fd4",
       "ccf8e2a828dd5cb407d80252e974731f",
-      "a16b0f1eea87c4b4421411e24fe4edf8"
+      "a16b0f1eea87c4b4421411e24fe4edf8",
+      "3709d6ba65d4d71b7ab9d403d5bf8c8c"
     ],
     "claim-issue-jira": [
       "496638ec099de9d57686a61a015a3c03",
@@ -404,7 +408,8 @@
       "53e068c533e989ae31025fdfd4a3ecf9",
       "62a2940dfecffaa4902396a4687fd9f7",
       "541afc6566aa012ebc400ccff391ce2b",
-      "716c87476d77d7e4f98613dadc06f228"
+      "716c87476d77d7e4f98613dadc06f228",
+      "ae2b1937dff6e5e8276de04d436880a0"
     ],
     "jira-status-report": [
       "9d374a9d8ccb92c5c8fd0aa9899e79a5"
@@ -541,7 +546,8 @@
       "f90b5f38a7c6264e0d40919a2933ba4c",
       "9f346b8be4408c5a8207d9a8b6080ff0",
       "bb8670c1e6eb28434ad2d45b6dc62177",
-      "41b02e644f3dc5dcb713700c56a56454"
+      "41b02e644f3dc5dcb713700c56a56454",
+      "14d790bd65e540d00786ecb4e787a61e"
     ]
   }
 }

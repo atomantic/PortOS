@@ -52,6 +52,7 @@ vi.mock('../services/instanceIdentity.js', () => ({
 }));
 vi.mock('../services/videoGen/continuousVideo.js', () => ({
   generateContinuousVideoEpisode: effects.continuousVideo,
+  resolveEpisodeContinuity: vi.fn(async () => null),
   composeEpisodeClips: vi.fn(() => [{ prompt: 'Example clip' }]),
   attachEpisodeSseClient: vi.fn(() => false),
   CONTINUOUS_VIDEO_BACKENDS: ['local', 'reactor', 'fal'],

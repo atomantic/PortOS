@@ -241,10 +241,10 @@ describe('pregate hidden-content invocation', () => {
     // Copy the real builtin-only entrypoints so REPO_ROOT targets this fixture.
     // No runners or test files: docs-only changes produce an empty test plan.
     for (const path of [
-      'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
+      'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-      'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/lib/pregateAttestation.js',
+      'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/lib/pregateAttestation.js',
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
@@ -483,7 +483,7 @@ describe('pregate hidden-content invocation', () => {
     expect(snapshot()).toEqual(preConflict);
   });
 
-  it('merges a remote-only base from a shallow source and still reports real conflicts', () => {
+  it.each(['shallow', 'partial'])('merges a remote-only base from a %s source and still reports real conflicts', (kind) => {
     write('scripts/run-ci-tests.js', `
       import { readFileSync } from 'fs';
       if (readFileSync('docs/tracked note.md', 'utf8').trim() !== '# Base update'
@@ -494,7 +494,8 @@ describe('pregate hidden-content invocation', () => {
     git('add', '--all'); git('commit', '-qm', 'merged guard fixture');
     const upstream = root;
     const shallow = join(scratch, 'shallow');
-    git('clone', '--quiet', '--no-local', '--depth', '1', '--', upstream, shallow);
+    git('config', 'uploadpack.allowFilter', 'true');
+    git('clone', '--quiet', '--no-local', ...(kind === 'shallow' ? ['--depth', '1'] : ['--filter=blob:none']), '--', upstream, shallow);
     write(trackedPath, '# Base update\n');
     git('add', '--all'); git('commit', '-qm', 'base update');
     const movedBase = git('rev-parse', 'HEAD');
@@ -511,15 +512,27 @@ describe('pregate hidden-content invocation', () => {
     write('docs/feature.md', '# Independent feature\n');
     git('add', '--all'); git('commit', '-qm', 'feature update');
     git('fetch', '--quiet', 'origin', 'main:refs/remotes/origin/main');
-    expect(git('rev-parse', '--is-shallow-repository')).toBe('true');
+    expect(git('rev-parse', '--is-shallow-repository')).toBe(String(kind === 'shallow'));
     expect(git('rev-parse', 'origin/main')).toBe(movedBase);
     expect(git('for-each-ref', '--format=%(refname)', '--points-at', movedBase, 'refs/heads')).toBe('');
+    if (kind === 'partial') {
+      expect(git('config', '--get', 'remote.origin.promisor')).toBe('true');
+      expect(git('rev-list', '--objects', '--no-object-names', '--missing=print', movedBase)).toMatch(/^\?/m);
+    }
     const tree = git('merge-tree', '--write-tree', 'HEAD', 'origin/main').split('\n')[0];
     const invoke = () => spawnSync(process.execPath, ['scripts/pregate.js', '--guards-only', '--merged-with', 'origin/main'], {
       cwd: root, encoding: 'utf8',
     });
-    const sourceState = () => ({ ...snapshot(), refs: git('show-ref'), shallow: readFileSync(join(root, '.git/shallow')) });
+    const sourceState = () => ({ ...snapshot(), refs: git('show-ref'), ...(kind === 'shallow' ? { shallow: readFileSync(join(root, '.git/shallow')) } : {}) });
     const before = sourceState();
+    if (kind === 'partial') {
+      git('remote', 'set-url', 'origin', join(scratch, 'unavailable-promisor'));
+      const unavailable = invoke();
+      expect(unavailable.status).not.toBe(0);
+      expect(unavailable.stdout).not.toContain('▶️ server tests');
+      expect(sourceState()).toEqual(before);
+      git('remote', 'set-url', 'origin', upstream);
+    }
     const merged = invoke();
     expect(merged.status, merged.stderr).toBe(0);
     expect(merged.stdout).toContain(`= tree ${tree.slice(0, 12)}.`);
@@ -1181,10 +1194,10 @@ describe('the gate end to end', () => {
       git('config', 'user.name', 'Example Contributor');
       git('config', 'user.email', 'contributor@example.com');
       for (const path of [
-        'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
+        'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-        'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/lib/pregateAttestation.js',
+        'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/lib/pregateAttestation.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js', 'server/lib/workspaceTestCacheRoots.js',

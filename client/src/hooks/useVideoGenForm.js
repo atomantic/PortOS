@@ -13,7 +13,7 @@ import {
 } from '../lib/videoGenResolutions';
 import { normalizeVideoTiling } from '../lib/videoTilingOptions';
 import {
-  MAX_CHUNKS,
+  MAX_CHUNKS, supportsContextWindow,
   videoModelMemoryGb, isModelAllowedForMode,
   normalizeFramesForModel, normalizeFpsForModel, audioDurationToFrames,
   icLoraSpecForMode,
@@ -143,6 +143,7 @@ export function useVideoGenForm({
     batchSize, setBatchSize,
     seed, setSeed,
     selectedLoras, setSelectedLoras,
+    a2vLoraStageStrengths, setA2vLoraStageStrengths,
     selectedUniverse, setSelectedUniverse,
     sizeManuallySetRef,
     speedProfileId, setSpeedProfileId,
@@ -405,6 +406,7 @@ export function useVideoGenForm({
     setFps((current) => normalizeFpsForModel(current, nextModel));
     setSteps('');
     setGuidanceScale('');
+    if (!supportsContextWindow(nextModel)) setContextFrames(0);
   }, [models]);
 
   // Validate `modelId` once models are loaded. Two failure modes covered:
@@ -1149,6 +1151,7 @@ export function useVideoGenForm({
     setSpeedProfileId(speedProfileIdFromRecord(item.speedProfileId));
     setDraftDecode(draftDecodeFromRecord(item.draftDecode));
     setStreamingMode(videoStreamingModeFromRecord(item.streamingMode));
+    setA2vLoraStageStrengths(item.a2vLoraStageStrengths ?? [1, 1]);
     // disableAudio: always set explicitly (true/false) so the toggle reliably
     // matches the remixed render. Skipping the false branch would leave the
     // toggle stuck ON when the user remixes a clip that had audio enabled.
@@ -1273,6 +1276,7 @@ export function useVideoGenForm({
     setSpeedProfileId(speedProfileIdFromRecord(p.speedProfileId));
     setDraftDecode(draftDecodeFromRecord(p.draftDecode));
     setStreamingMode(videoStreamingModeFromRecord(p.streamingMode));
+    setA2vLoraStageStrengths(p.a2vLoraStageStrengths ?? [1, 1]);
     if (typeof p.disableAudio === 'boolean') setDisableAudio(p.disableAudio);
     if (p.mode === 'grok') {
       // Grok job: 'grok' is the queue discriminator, not a semantic video
@@ -1316,7 +1320,10 @@ export function useVideoGenForm({
     // raw value rejects that string while `Number(null)`/`Number('')` are both
     // a finite 0 that would wrongly clear the default. Same shape the
     // `guidanceScale` restore above uses, for the same round-tripping reason.
-    if (p.contextFrames != null && p.contextFrames !== '' && Number.isFinite(Number(p.contextFrames))) {
+    const resumedModel = models.find((model) => model.id === (p.modelId || modelId));
+    if (p.continuityStrategy === 'frame' || (resumedModel && !supportsContextWindow(resumedModel))) {
+      setContextFrames(0);
+    } else if (p.contextFrames != null && p.contextFrames !== '' && Number.isFinite(Number(p.contextFrames))) {
       setContextFrames(Number(p.contextFrames));
     }
     // Per-chunk beats (#3695). The server normalizes an absent beat to null;
@@ -1388,7 +1395,7 @@ export function useVideoGenForm({
     numFrames, fps, steps, guidanceScale, seed, batchSize,
     currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode, streamingMode,
     disableAudio, noMusic, imageStrength, i2vReferenceMode,
-    keyframesActive, keyframes, loraFamily, selectedLoras,
+    keyframesActive, keyframes, loraFamily, selectedLoras, a2vLoraStageStrengths,
     lastImageFile, lastImageUpload, extendFromVideoId, audioFile,
     icModeActive, icImageKind, icReferenceFile, icReferenceVideoId,
     icReferenceImageFiles, icStrength, icSkipStage2, referenceImageFiles, referenceVideoIds, referenceAudioFiles,
@@ -1427,6 +1434,7 @@ export function useVideoGenForm({
     modelId, handleModelChange, currentModel, visibleModels,
     loraFamily, videoLoras, loraUnavailableHint,
     selectedLoras, setSelectedLoras,
+    a2vLoraStageStrengths, setA2vLoraStageStrengths,
     // Sampler / output
     width, height, handleResolutionChange,
     numFrames, setNumFrames,

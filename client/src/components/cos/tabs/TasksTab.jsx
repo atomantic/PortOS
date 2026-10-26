@@ -27,8 +27,6 @@ import useAssignableInstances from '../../../hooks/useAssignableInstances';
 import { formatCount } from '../../../utils/formatters';
 import { runningAgentsByTaskId, isSpawningTask } from '../../../lib/cosSpawnWindow';
 import BrailleSpinner from '../../BrailleSpinner';
-import { isDeliveryCleanupHeld } from '../../../../../server/lib/taskRetryHold.js';
-import { DeliveryRecoverySchedule } from '../DeliveryStatus';
 
 // Maps a task-section status → micrographic glyph spec. Animation only on
 // states where motion communicates real work happening (running tasks).
@@ -45,7 +43,7 @@ function SectionGlyph({ status }) {
   return <MicroGlyph variant={spec.variant} state={spec.state} animated={spec.animated} size={13} />;
 }
 
-export default function TasksTab({ completionRecovery, completedRevision = 0, tasks, agents = [], liveOutputs = {}, onRefresh, onTaskAdded, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, apps }) {
+export default function TasksTab({ completedRevision = 0, tasks, agents = [], liveOutputs = {}, onRefresh, onTaskAdded, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, apps }) {
   const [searchParams] = useSearchParams();
   const [userTasksLocal, setUserTasksLocal] = useState([]);
   const [durations, setDurations] = useState(null);
@@ -118,8 +116,6 @@ export default function TasksTab({ completionRecovery, completedRevision = 0, ta
     (task) => isSpawningTask(task, runningAgentByTaskId),
     [runningAgentByTaskId]
   );
-  const isFinalizing = useCallback(task => task.status === 'in_progress'
-    && isDeliveryCleanupHeld(task.metadata) && !runningAgentByTaskId.has(task.id), [runningAgentByTaskId]);
 
   // Split tasks by status for system tasks
   const pendingSystemTasks = useMemo(() =>
@@ -127,10 +123,9 @@ export default function TasksTab({ completionRecovery, completedRevision = 0, ta
     [cosTasks, isSpawning]
   );
   const activeSystemTasks = useMemo(() =>
-    cosTasks.filter(t => (t.status === 'in_progress' || isSpawning(t)) && !isFinalizing(t)),
-    [cosTasks, isSpawning, isFinalizing]
+    cosTasks.filter(t => t.status === 'in_progress' || isSpawning(t)),
+    [cosTasks, isSpawning]
   );
-  const finalizingSystemTasks = useMemo(() => cosTasks.filter(isFinalizing), [cosTasks, isFinalizing]);
   const blockedSystemTasks = useMemo(() =>
     cosTasks.filter(t => t.status === 'blocked'),
     [cosTasks]
@@ -146,10 +141,9 @@ export default function TasksTab({ completionRecovery, completedRevision = 0, ta
     [userTasksLocal, isSpawning]
   );
   const activeUserTasksLocal = useMemo(() =>
-    userTasksLocal.filter(t => (t.status === 'in_progress' || isSpawning(t)) && !isFinalizing(t)),
-    [userTasksLocal, isSpawning, isFinalizing]
+    userTasksLocal.filter(t => t.status === 'in_progress' || isSpawning(t)),
+    [userTasksLocal, isSpawning]
   );
-  const finalizingUserTasksLocal = useMemo(() => userTasksLocal.filter(isFinalizing), [userTasksLocal, isFinalizing]);
   const blockedUserTasksLocal = useMemo(() =>
     userTasksLocal.filter(t => t.status === 'blocked'),
     [userTasksLocal]
@@ -248,22 +242,7 @@ export default function TasksTab({ completionRecovery, completedRevision = 0, ta
   const isUserLoading = tasks?.user == null;
   const isCosLoading = tasks?.cos == null;
   const isQueueLoading = isUserLoading || isCosLoading;
-  const renderFinalizingTasks = (rows, source) => rows.length > 0 && (
-    <section aria-label={`${source === 'internal' ? 'System' : 'User'} tasks finalizing delivery`} className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-      <h3 className="px-3 py-2 text-sm font-medium text-gray-400 border-b border-port-border">
-        Finalizing delivery ({formatCount(rows.length)})
-      </h3>
-      <DeliveryRecoverySchedule recovery={completionRecovery} />
-      <div className="p-2 space-y-1.5">
-        {rows.map(task => (
-          <TaskItem key={task.id} task={task} isSystem={source === 'internal'} selected={isTaskSelected(task, source)}
-            agent={agentById.get(task.metadata.deliveryRecoveryAgentId)}
-            onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted}
-            providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
-        ))}
-      </div>
-    </section>
-  );
+
 
   return (
     <div className="space-y-6">
@@ -280,7 +259,6 @@ export default function TasksTab({ completionRecovery, completedRevision = 0, ta
             <>
               {formatCount(pendingUserTasksLocal.length + pendingSystemTasks.length)} pending
               {' · '}{formatCount(activeUserTasksLocal.length + activeSystemTasks.length)} active
-              {' · '}{formatCount(finalizingUserTasksLocal.length + finalizingSystemTasks.length)} finalizing
               {' · '}{formatCount(blockedUserTasksLocal.length + blockedSystemTasks.length)} blocked
             </>
           )}
@@ -293,7 +271,7 @@ export default function TasksTab({ completionRecovery, completedRevision = 0, ta
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-400">
             <BrailleSpinner text="Loading task queue…" />
           </div>
-        ) : pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && finalizingUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && (tasks.user?.completedCount ?? completedUserTasksLocal.length) === 0 ? (
+        ) : pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && (tasks.user?.completedCount ?? completedUserTasksLocal.length) === 0 ? (
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             <SchematicLabel module="USER" status="EMPTY" glyph="bracket-pair" state="idle" variant="tab" />
             No user tasks. Add one above.
@@ -341,13 +319,12 @@ export default function TasksTab({ completionRecovery, completedRevision = 0, ta
                 </div>
                 <div className="p-2 space-y-1.5">
                   {activeUserTasksLocal.map(task => (
-                    <TaskItem key={task.id} task={task} agent={runningAgentByTaskId.get(task.id)} liveOutput={liveOutputs[runningAgentByTaskId.get(task.id)?.id]} spawning={isSpawning(task)} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+                    <TaskItem key={task.id} task={task} agent={runningAgentByTaskId.get(task.id) || agentById.get(task.metadata?.deliveryRecoveryAgentId)} liveOutput={liveOutputs[runningAgentByTaskId.get(task.id)?.id]} spawning={isSpawning(task)} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
                   ))}
                 </div>
               </div>
             )}
 
-            {renderFinalizingTasks(finalizingUserTasksLocal, 'user')}
 
             {/* Blocked Section */}
             {blockedUserTasksLocal.length > 0 && (
@@ -403,7 +380,7 @@ export default function TasksTab({ completionRecovery, completedRevision = 0, ta
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-400">
             <BrailleSpinner text="Loading system tasks…" />
           </div>
-        ) : pendingSystemTasks.length === 0 && activeSystemTasks.length === 0 && finalizingSystemTasks.length === 0 && blockedSystemTasks.length === 0 && (tasks.cos?.completedCount ?? completedSystemTasks.length) === 0 ? (
+        ) : pendingSystemTasks.length === 0 && activeSystemTasks.length === 0 && blockedSystemTasks.length === 0 && (tasks.cos?.completedCount ?? completedSystemTasks.length) === 0 ? (
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             <SchematicLabel module="COS" status="EMPTY" glyph="bracket-pair" state="idle" variant="tab" />
             No system tasks.
@@ -438,13 +415,12 @@ export default function TasksTab({ completionRecovery, completedRevision = 0, ta
                 </div>
                 <div className="p-2 space-y-1.5">
                   {activeSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem agent={runningAgentByTaskId.get(task.id)} liveOutput={liveOutputs[runningAgentByTaskId.get(task.id)?.id]} spawning={isSpawning(task)} selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+                    <TaskItem key={task.id} task={task} isSystem agent={runningAgentByTaskId.get(task.id) || agentById.get(task.metadata?.deliveryRecoveryAgentId)} liveOutput={liveOutputs[runningAgentByTaskId.get(task.id)?.id]} spawning={isSpawning(task)} selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
                   ))}
                 </div>
               </div>
             )}
 
-            {renderFinalizingTasks(finalizingSystemTasks, 'internal')}
 
             {/* Blocked Section */}
             {blockedSystemTasks.length > 0 && (

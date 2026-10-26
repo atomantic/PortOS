@@ -13,9 +13,13 @@ import { Drama, Mountain, Package, Plus, Search, Loader2, Sparkles, Library, Imp
 import PageHeader from '../components/PageHeader';
 import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import MediaImage from '../components/MediaImage';
+import CharacterCard from '../components/catalog/CharacterCard';
+import CatalogImageAction from '../components/catalog/CatalogImageAction';
+import useCatalogCards from '../hooks/useCatalogCards';
 import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 import toast from '../components/ui/Toast';
 import { listCatalogIngredients, getCatalogFacets, createCatalogIngredient } from '../services/apiCatalog';
+import { listUniverseNames } from '../services/apiUniverseBuilder';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import { usePagedCollection } from '../hooks/usePagedCollection';
 import useUrlParams from '../hooks/useUrlParams';
@@ -28,14 +32,18 @@ const LIBRARY_ICONS = { casting: Drama, environments: Mountain, objects: Package
 const UNLINKED = '__unlinked';
 
 function LibraryTile({ ingredient }) {
+  const [generatedCover, setGeneratedCover] = useState(null);
   const name = ingredient.name || '(untitled)';
-  const cover = ingredientCoverUrl(ingredient);
+  const persistedCover = ingredientCoverUrl(ingredient);
+  // Bridge the stale list row only until an authoritative cover/revision arrives.
+  const cover = generatedCover?.baseline === persistedCover && generatedCover?.revision === ingredient.updatedAt
+    ? generatedCover.src : persistedCover;
   const usage = usageSummary(ingredient.usage);
   return (
-    <li className="min-w-0">
+    <li className="min-w-0 flex flex-col bg-port-card border border-port-border rounded-lg overflow-hidden hover:border-port-accent/60">
       <Link
         to={ingredientPath(ingredient)}
-        className="group flex flex-col h-full bg-port-card border border-port-border rounded-lg overflow-hidden hover:border-port-accent/60"
+        className="group flex flex-col flex-1 min-w-0"
       >
         <div className="aspect-[3/4] w-full bg-port-bg flex items-center justify-center overflow-hidden">
           {cover ? (
@@ -46,9 +54,13 @@ function LibraryTile({ ingredient }) {
         </div>
         <span className="flex flex-col gap-0.5 px-2.5 py-2 min-w-0">
           <span className="text-sm text-white font-medium truncate">{name}</span>
+          <span className="text-[11px] text-gray-400 break-words">{ingredient.owningUniverse ? `Universe: ${ingredient.owningUniverse.name}` : 'Ownership needs review'}</span>
           <span className="text-[11px] text-gray-500 truncate">{usage || 'Not used yet'}</span>
         </span>
       </Link>
+      <div className="p-2 border-t border-port-border">
+        <CatalogImageAction ingredient={ingredient} onCover={src => setGeneratedCover({ src, baseline: persistedCover, revision: ingredient.updatedAt })} />
+      </div>
     </li>
   );
 }
@@ -85,20 +97,32 @@ export default function CreativeLibrary({ libraryId }) {
     return { items, nextCursor: items.length === PAGE_SIZE ? offset + items.length : null };
   }, [library.type, urlQ, scope]);
   const page = usePagedCollection(fetchPage);
+  const cards = useCatalogCards(library.type === 'character' ? page.items.map(item => item.id) : [], { initial: page.items });
 
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: '', content: '' });
+  const [form, setForm] = useState({ name: '', content: '', universeId: '' });
+  const [ownerChoices, setOwnerChoices] = useState(null);
+  const [ownerLoadError, setOwnerLoadError] = useState(false);
+  useEffect(() => {
+    if (!showForm) return;
+    let active = true;
+    listUniverseNames({ silent: true }).then((data) => {
+      if (!Array.isArray(data)) throw new Error('Invalid universe names response');
+      if (active) { setOwnerChoices(data); setOwnerLoadError(false); }
+    }).catch(() => { if (active) setOwnerLoadError(true); });
+    return () => { active = false; };
+  }, [showForm]);
   const [creating, setCreating] = useState(false);
   const contentKey = typeMeta?.primaryContentKey || 'description';
 
   const handleCreate = async (e) => {
     e.preventDefault();
     const name = form.name.trim();
-    if (!name) return;
+    if (!name || !form.universeId) return;
     const content = form.content.trim();
     setCreating(true);
     const created = await createCatalogIngredient(
-      { type: library.type, name, payload: content ? { [contentKey]: content } : {}, tags: [] },
+      { type: library.type, name, universeId: form.universeId, payload: content ? { [contentKey]: content } : {}, tags: [] },
       { silent: true },
     ).catch((err) => { toast.error(err?.message || `Failed to create ${library.singular}`); return null; });
     setCreating(false);
@@ -148,6 +172,16 @@ export default function CreativeLibrary({ libraryId }) {
       <div className="flex-1 min-h-0 overflow-auto p-3 sm:p-4 flex flex-col gap-3">
         {showForm && (
           <form onSubmit={handleCreate} className="p-3 bg-port-card border border-port-border rounded-lg flex flex-col gap-3">
+            <div className="max-w-sm">
+              <label htmlFor="library-new-universe" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Owning universe &amp; style</label>
+              <select id="library-new-universe" value={form.universeId} required onChange={(event) => setForm((previous) => ({ ...previous, universeId: event.target.value }))}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm">
+                <option value="">Choose a universe…</option>
+                {(ownerChoices || []).map((universe) => <option key={universe.id} value={universe.id}>{universe.name}</option>)}
+              </select>
+              {ownerLoadError && <p role="alert" className="text-xs text-port-error">Could not load universes. Close and reopen to retry.</p>}
+              {ownerChoices?.length === 0 && <Link to="/universes/new" className="text-xs text-port-accent hover:underline">Create a universe</Link>}
+            </div>
             <div>
               <label htmlFor="library-new-name" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Name</label>
               <input
@@ -175,7 +209,7 @@ export default function CreativeLibrary({ libraryId }) {
               <button type="button" onClick={() => setShowForm(false)} className="px-3 py-2 min-h-[40px] rounded-lg text-gray-400 hover:text-white text-sm">Cancel</button>
               <button
                 type="submit"
-                disabled={creating || !form.name.trim()}
+                disabled={creating || !form.name.trim() || !form.universeId}
                 className="inline-flex items-center gap-2 px-4 py-2 min-h-[40px] rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
               >
                 {creating && <Loader2 size={14} className="animate-spin" aria-hidden="true" />} Create
@@ -213,13 +247,17 @@ export default function CreativeLibrary({ libraryId }) {
           ))}
         </div>
 
+        {cards.error && <p role="alert" className="text-sm text-port-error">Could not refresh card context. <button type="button" onClick={cards.retry} className="underline">Retry cards</button></p>}
         {page.loaded && page.items.length === 0 ? (
           <div className="bg-port-card border border-port-border rounded-lg p-8 text-center text-sm text-gray-400">
             {urlQ || scope ? `No ${library.label.toLowerCase()} match this filter.` : library.empty}
           </div>
         ) : (
           <ul className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-            {page.items.map((it) => <LibraryTile key={it.id} ingredient={it} />)}
+            {page.items.map((it) => library.type === 'character'
+              ? <CharacterCard key={it.id} ingredient={cards.cards[it.id] || it} onUpdated={cards.update} unavailable={!!cards.error || cards.missing.includes(it.id)}
+                to={`${ingredientPath(it)}?${new URLSearchParams({ returnTo: `${library.path}${searchParams.size ? `?${searchParams}` : ''}` })}`} />
+              : <LibraryTile key={it.id} ingredient={it} />)}
           </ul>
         )}
         <InfiniteScrollFooter hasMore={page.hasMore} loading={page.loading} error={page.error} onLoadMore={page.loadMore} />

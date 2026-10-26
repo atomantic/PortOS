@@ -9,7 +9,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 
 const { PATHS } = await import('../../lib/paths.js');
 const projects = await import('./projects.js');
-const { importDocumentTemplate, importDocumentDirectory, stageGeneratedDocument } = await import('./compositionDocument.js');
+const { importDocumentTemplate, importDocumentDirectory, stageGeneratedDocument, readDocumentFiles } = await import('./compositionDocument.js');
 
 afterAll(() => cleanupTempDataRoots());
 
@@ -106,4 +106,21 @@ describe('shared lyric-type assets in composition documents', () => {
     expect((await buildDocumentPreview({ ...(await projects.getProject(id)), composition: { mode: 'document', document: staged.document } })).html).toContain('data:text/javascript;base64,');
   });
 
+});
+
+
+it('requires a visibility-aware runtime for a document with automatic lyrics disabled', async () => {
+  const { id } = await projects.createProject({ name: 'Example cinematic cut' });
+  const imported = await importDocumentTemplate(id);
+  const project = { ...await projects.getProject(id), lyricOverlayEnabled: false };
+  await expect(readDocumentFiles(project)).resolves.toBeInstanceOf(Map);
+  const { root } = await listed(imported.document);
+  await writeFile(join(root, 'lyricType.js'), 'export const legacyRuntime = true;');
+  await expect(readDocumentFiles(project)).rejects.toMatchObject({ code: 'DOCUMENT_LYRIC_VISIBILITY_UNSUPPORTED', status: 422 });
+  await expect(readDocumentFiles({ ...project, lyricOverlayEnabled: true })).resolves.toBeInstanceOf(Map);
+  await expect(readDocumentFiles(project, { requireLyricVisibility: false })).resolves.toBeInstanceOf(Map);
+  const current = await readFile(new URL('./documentTemplates/shared/lyricType.js', import.meta.url));
+  await writeFile(join(root, 'lyricType.js'), current);
+  await writeFile(join(root, 'engine.js'), 'function drawWords() { /* legacy lyric pass */ }');
+  await expect(readDocumentFiles(project)).rejects.toMatchObject({ code: 'DOCUMENT_LYRIC_VISIBILITY_UNSUPPORTED' });
 });

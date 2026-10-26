@@ -20,6 +20,8 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../services/apiCatalog', () => ({
+  getCatalogIngredientCards: vi.fn(async ids => ids.map(id => ({ id, type: 'character', name: id === 'ing-alex' ? 'Alex' : 'Catalog character', payload: {} }))),
+  setCatalogIngredientLock: vi.fn(),
   listCatalogIngredients: vi.fn(),
   linkCatalogIngredient: vi.fn(),
   unlinkCatalogIngredient: vi.fn(),
@@ -34,6 +36,7 @@ vi.mock('../../services/apiUniverseBuilder', () => ({
   setUniverseCanonLock: vi.fn(),
   setUniverseCanonLockAll: vi.fn(),
   removeUniverseCanonEntry: vi.fn(),
+  removeUniverseCanonImageRef: vi.fn(),
   expandUniverseCharacter: vi.fn(),
 }));
 
@@ -103,6 +106,23 @@ beforeEach(() => {
 });
 
 describe('UniverseCanonSection — remove entry', () => {
+  it('shows shared canonical cards rather than expanded editors, with the catalog-selected cover and return context', async () => {
+    const { getCatalogIngredientCards, setCatalogIngredientLock } = await import('../../services/apiCatalog');
+    getCatalogIngredientCards.mockResolvedValueOnce([{ id: ALEX.ingredientId, type: 'character', name: ALEX.name,
+      thumbnailKey: 'chosen-cover.png', payload: { ...ALEX, locked: true }, owningUniverse: { id: 'uni-1', name: 'Example world' }, usage: { universe: 1 } }]);
+    setCatalogIngredientLock.mockResolvedValue({ id: ALEX.ingredientId, type: 'character', name: ALEX.name, payload: { ...ALEX, locked: false } });
+    await renderSection({ universe: { characters: [ALEX] } });
+    expect(screen.queryByLabelText('Pronouns')).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Alex' })).toHaveAttribute('src', '/data/images/chosen-cover.png');
+    const href = screen.getByRole('link', { name: 'Open Alex' }).getAttribute('href');
+    expect(href).toMatch(/^\/casting\/ing-alex\?returnTo=/);
+    expect(screen.getByRole('button', { name: 'Render reference for Alex' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'AI differentiate Alex' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock Alex' }));
+    await screen.findByRole('button', { name: 'Lock Alex' });
+    expect(setCatalogIngredientLock).toHaveBeenCalledWith(ALEX.ingredientId, false, { silent: true });
+    expect(updateUniverse).not.toHaveBeenCalled();
+  });
   it('calls the canon DELETE endpoint with the kind + entry id, touching nothing else', async () => {
     removeUniverseCanonEntry.mockResolvedValue({
       universe: baseUniverse({ characters: [BLAIR] }),

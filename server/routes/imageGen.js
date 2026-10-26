@@ -262,6 +262,7 @@ const generateSchema = z.object({
     compose: z.boolean().optional(),
     fromFrame: z.boolean().optional(),
     refine: z.boolean().optional(),
+    greyboxImageId: galleryImageFilenameSchema('greybox capture').optional(),
   }).optional(),
   // File the render into this music video's media collection even when no shot
   // keeps it (sheets, tests, alternates): musicVideoCollectionHook for the

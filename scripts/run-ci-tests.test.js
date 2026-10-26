@@ -114,10 +114,14 @@ it('hands Vitest the selection as a file, sliced by the runner for the matrix sh
   }
 }, 150_000);
 
-it('hands the real client fixture consumers to Vitest for a shared browser cleanup change', () => {
+it('hands only real client fixture consumers to Vitest for a shared browser cleanup change', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'portos-client-helper-selection-'));
   try {
     installFakeNpm(fixture, REPORTING_NPM);
+    const unused = collectPlanInputs({ baseSha: 'HEAD', changedFiles: ['scripts/lib/setupDbChoice.js'], cwd: join(import.meta.dirname, '..') });
+    expect(buildCiTestPlan(unused.changedFiles, unused)).toMatchObject({
+      full: false, build: false, client: { mode: 'skip', files: [] },
+    });
     const source = 'scripts/lib/ownedBrowserCleanup.js';
     const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd: join(import.meta.dirname, '..') });
     const plan = buildCiTestPlan(inputs.changedFiles, inputs);
@@ -127,6 +131,13 @@ it('hands the real client fixture consumers to Vitest for a shared browser clean
     expect(plan.server.sources).toContain(source);
     expect(plan.browserFiles.length).toBeGreaterThan(0);
     expect(plan.client.mode).toBe('files');
+    // Real comment-heavy consumers and fixture templates must resolve without
+    // retaining hundreds of unrelated files in the actual runner handoff.
+    for (const test of ['client/src/components/sprites/WalkWorkflow.test.jsx', 'client/src/components/sprites/TrackWorkflow.test.jsx',
+      'client/src/services/apiRounds.test.js', 'client/src/a11yConventions.test.js']) {
+      expect(inputs.clientTestDependencies[test], test).toEqual(expect.any(Array));
+      expect(plan.client.files, test).not.toContain(test);
+    }
     const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'client'], {
       encoding: 'utf8', timeout: 120000,
       env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
@@ -302,6 +313,9 @@ async function createRunnerSandbox(files) {
     git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
     git('add', '--all');
     git('commit', '-qm', 'runner selection fixture');
+    // The nested CLI calls block this worker's event loop. Observe the idle
+    // broker's exit first so a delayed IPC event cannot exceed its close budget.
+    await globalThis.__portosGitSupervisorCleanup?.();
     return sandbox;
   } catch (error) {
     await destroyGitSandbox(scratch);
@@ -334,6 +348,92 @@ it.each(['files', 'full'])('validates the guard proof before the actual %s Vites
   }
   // Include the child's existing 120s budget plus real Git setup/teardown.
   // Windows can otherwise expire the outer 30s test while that child is valid.
+}, 150_000);
+
+
+it('partitions complete browser profiles before per-shard memo reuse and preserves scoped owners', async () => {
+  const sandbox = await createRunnerSandbox(BROWSER_SUITES);
+  const { scratch: fixture, repo: root } = sandbox;
+  try {
+    // A tiny, deterministic base lets the real runner persist genuine memo
+    // entries; fake npm supplies only the process/report boundary, not selection.
+    for (const [file, source] of Object.entries({
+      'server/vitest.config.js': 'export default {};',
+      'server/vitest.setup.js': 'export {};',
+      'scripts/vitestCiPool.js': 'export const vitestCiPool = () => ({});',
+      'server/package.json': '{"name":"server"}',
+      'server/package-lock.json': '{}',
+      'server/node_modules/vitest/package.json': '{"version":"5.0.5"}',
+    })) {
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      writeFileSync(join(root, file), source);
+    }
+    installFakeNpm(fixture, [
+      'const fs = require("fs"), path = require("path");',
+      'const args = process.argv.slice(2);',
+      'const selection = JSON.parse(fs.readFileSync(process.env.PORTOS_CI_TEST_SELECTION, "utf8"));',
+      'const report = args.find(a => a.startsWith("--outputFile.json=")).slice("--outputFile.json=".length);',
+      'fs.writeFileSync(report, JSON.stringify({ numPassedTests: selection.include.length, numFailedTests: 0,',
+      'testResults: selection.include.map(file => ({ name: path.resolve("server", file), status: "passed", assertionResults: [{ status: "passed" }] })) }));',
+      'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: 0 }));',
+      'process.stdout.write(JSON.stringify({ args, selection }) + "\\n");',
+    ].join('\n'));
+    const run = (index, { profile = 'full', files = BROWSER_SUITES, memo = null } = {}) => {
+      const result = spawnSync(process.execPath, [join(root, 'scripts/run-ci-tests.js'), 'server'], {
+        cwd: root, encoding: 'utf8', timeout: 120000,
+        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
+          CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify(files), CI_SHARD: `${index}/2`,
+          PORTOS_CI_BROWSER_OWNER: 'browser', PORTOS_BROWSER_TEST_PROFILE: profile,
+          PORTOS_TEST_MEMO: memo ? '' : 'off', PORTOS_TEST_MEMO_DIR: memo || '',
+          GITHUB_EVENT_NAME: 'push', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+      });
+      const line = result.stdout.split('\n').find(line => line.startsWith('{"args"'));
+      return { ...result, reported: line ? JSON.parse(line) : null };
+    };
+    const selections = {};
+    for (const profile of ['full', 'smoke']) {
+      const runs = [1, 2].map(index => run(index, { profile }));
+      for (const result of runs) {
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.reported.args.some(arg => arg.startsWith('--shard'))).toBe(false);
+      }
+      const slices = runs.map(result => result.reported.selection.include);
+      const expected = BROWSER_SUITES.filter(file => profile !== 'smoke' || !file.endsWith('/musicVideoRichAuthoring.browser.test.js'))
+        .map(file => toWorkspacePath('server', file)).sort();
+      expect(slices.flat().sort()).toEqual(expected);
+      expect(new Set(slices.flat()).size).toBe(expected.length);
+      selections[profile] = slices;
+    }
+    expect(selections.full.map(files => files.length)).toEqual([10, 10]);
+    const owner = file => selections.full.findIndex(files => files.includes(file));
+    expect(owner('services/musicVideo/documentRender.browser.test.js')).not.toBe(owner('services/htmlComposition/index.test.js'));
+    for (const [index, files] of selections.smoke.entries()) for (const file of files) expect(owner(file)).toBe(index);
+    // A scoped list must retain the canonical owners rather than re-numbering
+    // its entries. Memo entries in only one shard must not move another file.
+    const subset = BROWSER_SUITES.filter(file => /documentRender|htmlComposition|RichAuthoring/.test(file));
+    for (const index of [1, 2]) {
+      const scoped = run(index, { files: subset });
+      expect(scoped.status, scoped.stderr).toBe(0);
+      expect(scoped.reported.selection.include).toEqual(selections.full[index - 1].filter(file => subset.includes(`server/${file}`)));
+    }
+    const memo = join(fixture, 'first-shard-memo');
+    const seed = run(1, { memo });
+    expect(seed.status, seed.stderr).toBe(0);
+    expect(seed.stdout).toMatch(/recorded \d+ green entries/);
+    const reused = run(1, { memo });
+    expect(reused.status, reused.stderr).toBe(0);
+    expect(reused.stdout).toContain('skipped 10 of 10 selected files');
+    expect(reused.reported).toBeNull();
+    const fresh = run(2, { memo: join(fixture, 'empty-second-shard-memo') });
+    expect(fresh.status, fresh.stderr).toBe(0);
+    expect(fresh.reported.selection.include).toEqual(selections.full[1]);
+    const mixed = run(1, { files: [...BROWSER_SUITES, 'server/lib/example.test.js'] });
+    expect(mixed.status).not.toBe(0);
+    expect(mixed.stderr).toContain('Unregistered browser shard inputs');
+    expect(mixed.reported).toBeNull();
+  } finally {
+    await destroyGitSandbox(fixture);
+  }
 }, 150_000);
 
 it('keeps explicit browser selectors with their owner after structural guard reuse', async () => {
@@ -450,9 +550,7 @@ describe('ci.yml shard wiring', () => {
 
   it('builds every test runner matrix from the planner and hands each slice to the runner', () => {
     expect(runners.map(([id]) => id).sort()).toEqual(['browser', 'client', 'database', 'server', 'windows-server']);
-    // `browser` runs the planner's cross-workspace browser suites in `files`
-    // mode (#10312): an exact file list has nothing to shard, so it is the one
-    // runner without a matrix.
+    // Browser ownership has its own balanced canonical partition below.
     // `database` is one serial job (a single `portos_test`), also without a matrix.
     for (const [id, body] of runners.filter(([id]) => id !== 'browser' && id !== 'database')) {
       // The fan-out is decided by the impact job, never hardcoded here: a
@@ -484,7 +582,13 @@ describe('ci.yml shard wiring', () => {
     const start = body.indexOf('- name: Run cross-workspace browser suites');
     expect(start).toBeGreaterThan(0);
     const step = body.slice(start, body.indexOf('- name:', start + 1));
+    expect(body).toMatch(/matrix:\n\s+shard: \[1, 2\]/);
+    expect(body).toContain('fail-fast: false');
     expect(step).toContain('CI_TEST_MODE: files');
+    expect(step).toContain('CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}');
+    expect(step).toContain('PORTOS_CI_BROWSER_OWNER: browser');
+    expect(body).toContain('-browser-${{ matrix.shard }}of${{ strategy.job-total }}');
+    expect(body).toContain('name: animatic-capture-diagnostics-${{ matrix.shard }}of${{ strategy.job-total }}');
     expect(step).toContain('CI_TEST_FILES: ${{ needs.impact.outputs.browser_files }}');
     expect(step).toContain("PORTOS_REQUIRE_BROWSER_SUITES: '1'");
     // The client workspace must be installed before the suites bundle it.

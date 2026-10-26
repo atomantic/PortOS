@@ -1,3 +1,5 @@
+import A2vLoraStageControls from '../components/videoGen/A2vLoraStageControls';
+import { isDefaultA2vLoraStages } from '../lib/videoLoraStages';
 import { useRunwayCatalog } from '../hooks/useRunwayCatalog.js';
 import RunwayCatalogStatus from '../components/imageGen/RunwayCatalogStatus.jsx';
 import RunwayVideoInputPanel from '../components/videoGen/RunwayVideoInputPanel.jsx';
@@ -78,7 +80,7 @@ import ModelSelect from '../components/ModelSelect';
 import { FormField } from '../components/ui/FormField';
 import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../components/media/ModelDownloadBadge';
-import { useDownloadableAssets, useModelDownloadStatus, TEXT_ENCODER_DOWNLOAD_ID, textEncoderDownloadId } from '../hooks/useModelDownloadStatus';
+import { useDownloadableAssets, useModelDownloadStatus, TEXT_ENCODER_DOWNLOAD_ID, textEncoderDownloadId, speedProfileDownloadId } from '../hooks/useModelDownloadStatus';
 import TextEncoderPicker from '../components/videoGen/TextEncoderPicker';
 import { useMediaJobSse } from '../hooks/useMediaJobSse';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
@@ -121,7 +123,7 @@ import MusicVideoFilingSelect from '../components/media/MusicVideoFilingSelect';
 import { MUSIC_VIDEO_FILING_PARAM, musicVideoFilingFields, musicVideoOf } from '../lib/musicVideoFiling';
 import { formatCount, formatUsd, timeAgo } from '../utils/formatters';
 import ResolutionField from '../components/media/ResolutionField';
-import { VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
+import { isMiniMaxH3SpeedProfile, VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
 import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
 const MODES = [
@@ -260,6 +262,7 @@ export default function VideoGen() {
     modelId, handleModelChange, currentModel, visibleModels,
     loraFamily, videoLoras, loraUnavailableHint,
     selectedLoras, setSelectedLoras,
+    a2vLoraStageStrengths, setA2vLoraStageStrengths,
     width, height, handleResolutionChange,
     numFrames, setNumFrames, fps, setFps, chunks, setChunks,
     chunkPrompts, setChunkPromptAt, chainingActive,
@@ -828,6 +831,9 @@ export default function VideoGen() {
   // pull before hitting Render.
   const modelDownload = useModelDownloadStatus({ kind: 'video' });
   const modelStatus = modelId ? modelDownload.getStatus(modelId) : null;
+  const selectedH3SpeedProfile = currentModel?.speedProfiles?.find((p) => p.id === speedProfileId && isMiniMaxH3SpeedProfile(p));
+  const speedProfileAssetId = selectedH3SpeedProfile ? speedProfileDownloadId(modelId, speedProfileId) : null;
+  const speedProfileStatus = speedProfileAssetId ? modelDownload.getStatus(speedProfileAssetId) : null;
   const usesSharedTextEncoder = currentModel?.runtime === 'mlx_video' || currentModel?.runtime === 'ltx2';
   const textEncoderInfo = modelDownload.extra.textEncoder || null;
   const textEncoderStatus = textEncoderInfo
@@ -870,6 +876,11 @@ export default function VideoGen() {
       applies: true, extraBlocked: statusLoading || !modelId || !currentModel,
       status: modelStatus, keyPrefix: modelId,
       name: currentModel?.name || modelId, repairLabel: 'Repair model',
+    },
+    {
+      key: 'speed-profile', id: speedProfileAssetId, label: 'LightX2V adapter',
+      applies: !!speedProfileAssetId, status: speedProfileStatus, keyPrefix: speedProfileAssetId,
+      name: 'The LightX2V v1.3 adapter', repairLabel: 'Download adapter again',
     },
     {
       key: 'shared-encoder', id: TEXT_ENCODER_DOWNLOAD_ID, label: 'shared text encoder',
@@ -1627,6 +1638,11 @@ export default function VideoGen() {
             />
           )}
 
+          {(hostedLane || remoteTarget.isRemote) && !isDefaultA2vLoraStages(a2vLoraStageStrengths) && (
+            <A2vLoraStageControls value={a2vLoraStageStrengths} onChange={setA2vLoraStageStrengths}
+              supported={false} disabled={generating} loras={selectedLoras} />
+          )}
+
           {isGrok ? (
             <div className="grid grid-cols-2 gap-3">
               <FormField label="Clip length" labelClassName="block text-xs font-medium text-gray-400 mb-1">
@@ -1923,6 +1939,16 @@ export default function VideoGen() {
               </div>
             )}
 
+
+            {((mode === 'a2v' && currentModel?.a2vLoraStageCapable && selectedLoras.length > 0)
+              || !isDefaultA2vLoraStages(a2vLoraStageStrengths)) && !remoteTarget.isRemote && (
+              <div className="col-span-2 sm:col-span-3">
+                <A2vLoraStageControls value={a2vLoraStageStrengths} onChange={setA2vLoraStageStrengths}
+                  supported={mode === 'a2v' && currentModel?.a2vLoraStageCapable && selectedLoras.length > 0}
+                  disabled={generating} loras={selectedLoras} />
+              </div>
+            )}
+
             {/* LTX model that can't fuse LoRAs (quantized mlx_video — q4/q8) with
                 compatible LoRAs on disk: explain the absence instead of hiding
                 silently, and point at the models that CAN run them. */}
@@ -1978,6 +2004,11 @@ export default function VideoGen() {
               steps={steps} onStepsChange={setSteps}
               guidanceScale={guidanceScale} onGuidanceScaleChange={setGuidanceScale}
               speedProfileId={speedProfileId} onSpeedProfileChange={setSpeedProfileId}
+              speedProfileStatus={speedProfileStatus}
+              onSpeedProfileDownload={() => modelDownload.start(speedProfileAssetId, { force: true })}
+              width={width} height={height}
+              onCancelSpeedProfileDownload={modelDownload.cancel}
+              speedProfileDownloadError={modelDownload.lastError?.modelId === speedProfileAssetId ? modelDownload.lastError.message : null}
               draftDecode={draftDecode} onDraftDecodeChange={setDraftDecode}
               draftDecodeLocked={deliveryModelSelected}
               streamingMode={streamingMode} onStreamingModeChange={setStreamingMode}

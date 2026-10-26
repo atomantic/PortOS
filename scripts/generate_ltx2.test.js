@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -43,6 +44,50 @@ const argsExpr = (overrides = {}) => {
 };
 
 describe.skipIf(!pyBin)('generate_ltx2.py', () => {
+  it('restores A2V adapter and image-rate hooks on failure or cancellation while preserving prompt and audio arguments', () => {
+    runPython(`${importRunner}
+import ltx_runtime_lora as adapters
+import tempfile
+from unittest.mock import patch
+for error, specs in ((RuntimeError, []), (KeyboardInterrupt, [("example.safetensors", 0.7)])):
+    captured = []
+    class Pipeline:
+        def __init__(self, **kwargs):
+            self.dit = None
+            self._loaded = True
+            captured.append(self)
+        def _load_transformer_with_optional_streaming(self, path):
+            raise AssertionError("No weights should load in this fixture")
+        def generate_and_save(self, **kwargs):
+            assert kwargs["prompt"] == "  A paper singer.  "
+            assert kwargs["audio_path"] == "synthetic.wav"
+            raise error("injected failure")
+    sys.argv = ["bridge", "--mode", "a2v", "--prompt", "  A paper singer.  ", "--model", "example", "--output", "example.mp4", "--audio", "synthetic.wav"]
+    args = runner.parse_args()
+    args.user_lora_specs = specs
+    restored = []
+    statuses = []
+    with patch.object(runner, "emit_status", side_effect=statuses.append), patch.object(runner, "_resolve_pipeline", return_value=Pipeline), \
+         patch.object(runner, "configure_streaming_policy", return_value={"active": False}), \
+         patch.object(runner, "_pipeline_optional_kwargs", return_value={}), \
+         patch.object(runner, "_prefer_distilled_lora"), \
+         patch.object(runner, "_refuse_if_streaming_distilled_adapter_missing"), \
+         patch.object(runner, "a2v_audio_covering_clip", return_value=("synthetic.wav", 0.0, None)), \
+         patch.object(runner, "_patch_a2v_image_conditioning_rate", return_value=lambda: restored.append(True)), \
+         patch.object(runner, "_run_with_ltx_stepwise_preview", side_effect=lambda pipe, args, run: run()):
+        try:
+            runner.run_a2v(args)
+            raise AssertionError("Failure was swallowed")
+        except error:
+            pass
+    assert restored == [True]
+    assert ("Applying 1 user LoRA(s): example.safetensors@0.7" in statuses) == bool(specs)
+    assert captured[0].dit is None and captured[0]._loaded is False
+    assert "_pending_loras" not in captured[0].__dict__
+    assert "_load_transformer_with_optional_streaming" not in captured[0].__dict__
+`);
+  });
+
   // A partial flag set would silently fall back to the conditioner packed in the
   // 2.5 model and hand back a render the user has no way to tell apart from the
   // one they asked for, so the boundary rejects it instead of choosing for them.
@@ -1383,6 +1428,7 @@ describe.skipIf(!pyBin)('generate_ltx2.py block streaming (#6499)', () => {
   // real pin whose wrapper merely swallows the kwarg without forwarding it
   // is not misreported as capable.
   const STREAMING_PIPELINE = [
+    'runner.configure_prompt_encode_policy = lambda active: None',
     'class StreamingPipe:',
     '    def __init__(self, model_dir, low_ram_streaming=False, **kw):',
     '        self.model_dir = model_dir',
@@ -1695,6 +1741,7 @@ describe.skipIf(!pyBin)('generate_ltx2.py block streaming (#6499)', () => {
     expect(report).toEqual({
       pipeline: 'one-stage', requestedMode: 'auto', active: false, supports: true,
       reason: 'physical memory is above the 24 GiB auto-stream ceiling',
+      encodePolicy: { mode: 'resident', calls: 0 },
     });
     expect(report.peakMb).toBeUndefined();
   });
@@ -1789,5 +1836,70 @@ shutil.rmtree(tmp)
 `);
     // num_frames / 24 + 0.25s of tail, offset consumed into the cut.
     expect(out.trim().split(/\r?\n/)).toEqual(['4.2917 0.0 True', '4.2917 True', '4.9583']);
+  });
+});
+
+describe.skipIf(!pyBin)('generate_ltx2.py split prompt residency (#13613)', () => {
+  // These catch lazy weight retention, preloading through BasePipeline, CFG
+  // lane cleanup and policy leakage across deliveries at the shared boundary.
+  it.each(['markers-before', 'markers-after', 'gemma3', 'failures'])('preserves embeddings and resource lifetimes: %s', (scenario) => {
+    const result = JSON.parse(runPython(`${importRunner}
+import runpy, json
+fixture = runpy.run_path(str(script.parent / 'fixtures' / 'ltx_prompt_encoding.py'))
+print(json.dumps(fixture['exercise'](runner, ${JSON.stringify(scenario)})))
+`));
+    expect(result.equivalent).toBe(true);
+    expect(result.balancedMarkers).toBe(true);
+    expect(result.report).toMatchObject({ pipeline: 'ic-lora', active: true, encodePolicy: { mode: 'split' } });
+  });
+
+  it('requires reassessing the lifecycle whenever the runtime is re-pinned', () => {
+    const runtimes = readFileSync(join(dirname(script), '../server/services/videoGen/runtimes.js'), 'utf8');
+    const expected = runtimes.match(/export const LTX25_EXPECTED_REVISION = '([a-f0-9]+)'/)[1];
+    expect(runPython(`${importRunner}\nprint(runner._SPLIT_PROMPT_REVISION)`).trim()).toBe(expected);
+  });
+
+  it('refuses to report a configured split that no prompt actually used', () => {
+    const output = runPython(`${importRunner}
+runner._STREAMING_POLICY = {"active": True}
+runner._PROMPT_ENCODE_POLICY = {"mode": "split", "calls": 0}
+try:
+    runner.report_streaming_policy()
+except RuntimeError as exc:
+    print(str(exc))
+else:
+    raise AssertionError('unused optimization reported')
+`);
+    expect(output).toContain('no prompt reached the adapter');
+  });
+
+  it('refuses uninspected source, including missing source, before construction', () => {
+    const output = runPython(`${importRunner}
+from types import SimpleNamespace
+import tempfile, hashlib
+try:
+    runner._split_prompt_runtime_supported(SimpleNamespace())
+except RuntimeError as exc:
+    assert 'unsupported' in str(exc)
+else:
+    raise AssertionError('missing source accepted')
+with tempfile.TemporaryDirectory() as tmp:
+    source = Path(tmp) / 'blocks.py'
+    source.write_text('inspected fixture')
+    blocks = SimpleNamespace(__file__=str(source))
+    runner._SPLIT_PROMPT_BLOCKS_SHA256 = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert runner._split_prompt_runtime_supported(blocks)
+    source.write_text('locally changed source')
+    try:
+        runner._split_prompt_runtime_supported(blocks)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError('modified source accepted')
+    runner._LEGACY_PROMPT_BLOCKS_SHA256 = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert runner._split_prompt_runtime_supported(blocks) is False
+print('verified')
+`);
+    expect(output.trim()).toBe('verified');
   });
 });

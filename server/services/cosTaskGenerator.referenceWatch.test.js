@@ -171,6 +171,16 @@ describe('scheduled reference-watch prompt assembly (#3140)', () => {
     expect(task.metadata.worktreeChangesExpected).toBe(false);
   });
 
+  it('keeps tracker-only reference reviews out of app-default PR delivery', async () => {
+    const task = await generate(makeApp({ workTracker: 'github', defaultOpenPR: true, defaultUseWorktree: true }));
+    expect(task.metadata).toMatchObject({ workTracker: 'github', worktreeChangesExpected: false,
+      noCodeOutput: true, openPR: false, useWorktree: false, simplify: false });
+
+    const fileTask = await generate(makeApp({ workTracker: 'plan', defaultOpenPR: true, defaultUseWorktree: true }));
+    expect(fileTask.metadata).toMatchObject({ worktreeChangesExpected: true, openPR: true, useWorktree: true });
+    expect(fileTask.metadata.noCodeOutput).not.toBe(true);
+  });
+
   it('leaves a non-reference-watch type untouched — no tracker resolution, no metadata stamp', async () => {
     const { readOriginRemoteUrl } = await import('../lib/gitRemote.js');
     const task = await generate(makeApp(), 'code-review');

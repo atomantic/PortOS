@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { resolve as resolvePath } from 'path';
+import { resolveA2vLoraStageCapable } from './runtimes.js';
+vi.mock('./runtimes.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolveA2vLoraStageCapable: vi.fn(async () => true),
+}));
 
 // These assertions describe the COMPOSITION of a staged path, not its
 // separator. prepareParams builds them with path.join/resolve, which emit '\'
@@ -617,7 +622,7 @@ describe.each(['wan22', 'wan22_cuda'])('Wan frame admission — %s', (runtime) =
   it('accepts an explicit grid count instead of an invalid model default', async () => {
     const params = { modelId: 'wan_test', mode: 'text', numFrames: 81 };
     await expect(prepare(params)).resolves.toMatchObject({ effectiveNumFrames: 81 });
-    await expect(validateVideoRetryParams(params)).resolves.toBeUndefined();
+    await expect(validateVideoRetryParams(params)).resolves.toMatchObject({ id: 'wan_test' });
   });
 });
 
@@ -655,11 +660,30 @@ describe('prepareVideoGenParams — MiniMax H3 contract', () => {
     getSettings.mockResolvedValue(settingsWith([H3_TERMS]));
   });
 
+  it.each(['minimax_h3', 'minimax_h3_cuda'])('refuses unverified temporal admission and replay for %s while preserving legacy frame hops', async (runtime) => {
+    listVideoModels.mockReturnValue([{ ...H3_MODEL, runtime }]);
+    const request = { modelId: H3_MODEL.id, mode: 'text', chunks: 3, continuityStrategy: 'window' };
+    const pendingUpload = upload('sourceImage');
+    await expect(prepare(request, { sourceImage: pendingUpload })).rejects.toMatchObject({ status: 400, code: 'VIDEO_TEMPORAL_UNAVAILABLE' });
+    expect(copyFileMock).not.toHaveBeenCalled();
+    expect(unlinkMock).toHaveBeenCalledWith(pendingUpload.path);
+    await expect(validateVideoRetryParams(request)).rejects.toMatchObject({ status: 400, code: 'VIDEO_TEMPORAL_UNAVAILABLE' });
+    const legacy = await prepare({ modelId: H3_MODEL.id, mode: 'text', chunks: 3 });
+    expect(legacy.continuation).toMatchObject({ requestedStrategy: 'auto', effectiveStrategy: 'frame', actualHistoryFrames: 0, capability: false, runtime });
+    expect(legacy.continuation.unavailableReason).toMatch(/hardware|comparison/i);
+    const optedOut = await prepare({ ...request, continuityStrategy: 'frame', contextFrames: 0 });
+    expect(optedOut.continuation).toMatchObject({ requestedStrategy: 'frame', effectiveStrategy: 'frame', contextFrames: 0 });
+  });
+
   it('prepares an H3 text render without a recorded license acknowledgement', async () => {
     getSettings.mockResolvedValueOnce(settingsWith(undefined));
     const prepared = await prepare({ modelId: H3_MODEL.id, mode: 'text' });
     expect(prepared.effectiveModelId).toBe(H3_MODEL.id);
     expect(prepared.effectiveChunks).toBe(1);
+  });
+
+  it('does not silently discard an explicit continuation strategy on a hosted backend', async () => {
+    await expect(prepare({ backend: 'grok', continuityStrategy: 'window' })).rejects.toMatchObject({ status: 400, code: 'VIDEO_CONTINUITY_UNSUPPORTED' });
   });
 
   it('does not apply the local MiniMax gate to an explicit Grok render', async () => {
@@ -927,5 +951,19 @@ describe('prepareVideoGenParams — standalone fal lip sync', () => {
     getSettings.mockResolvedValueOnce(falSettings());
     await expect(prepare({ backend: 'fal', falModelId: LIPSYNC, mode: 'text' }, { audioFile: upload('audioFile', 'line.wav') }))
       .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+  });
+});
+
+
+describe('A2V user-LoRA stage admission on retries', () => {
+  const params = { modelId: 'example-a2v', mode: 'a2v', a2vLoraStageStrengths: [0, 1],
+    loras: [{ filename: 'example.safetensors', scale: 0.8 }], audioFilePath: '/mock/audio.wav', fps: 24, numFrames: 25 };
+  it('refuses an unavailable stage seam and an unsupported CUDA runtime before replacing history', async () => {
+    listVideoModels.mockReturnValue([{ id: params.modelId, runtime: 'ltx25', supportedModes: ['a2v'] }]);
+    resolveA2vLoraStageCapable.mockResolvedValueOnce(false);
+    await expect(validateVideoRetryParams(params)).rejects.toMatchObject({ code: 'A2V_LORA_STAGES_UNSUPPORTED' });
+    listVideoModels.mockReturnValue([{ id: params.modelId, runtime: 'ltx25_cuda', supportedModes: ['a2v'] }]);
+    await expect(validateVideoRetryParams(params)).rejects.toMatchObject({ code: 'A2V_LORA_STAGES_UNSUPPORTED' });
+    await expect(validateVideoRetryParams({ ...params, a2vLoraStageStrengths: [0, NaN] })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
   });
 });

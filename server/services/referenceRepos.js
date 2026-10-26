@@ -41,6 +41,7 @@ import {
 import { DEFAULT_REVIEWER } from '../lib/validation.js';
 import { clampText, fenceBlock, UNTRUSTED_CONTENT_NOTICE } from '../lib/promptFencing.js';
 import { resolveAppWorkTracker, isFileTracker, formatTrackerInstructions } from '../lib/workTracker.js';
+import { FILE_ISSUES_DELIVERY_SETTINGS } from '../lib/auditCatalog.js';
 
 const REFERENCE_REPOS_ROOT = join(PATHS.data, 'cos', 'reference-repos');
 
@@ -751,6 +752,7 @@ export async function triggerReferenceAnalysis(app, ref, snapshot) {
       // Without this downstream task bookkeeping treats a report-shaped run that
       // did its whole job with a clean worktree as missing code work (#3102).
       worktreeChangesExpected: isFileTracker(workTracker.resolved),
+      ...(!isFileTracker(workTracker.resolved) && FILE_ISSUES_DELIVERY_SETTINGS),
       // A multi-line payload here is the agent PROMPT, not the one-line human
       // note — `cosTaskStore.addTask` routes it to `metadata.prompt` on write
       // (#4153, server/lib/cosTaskPrompt.js).

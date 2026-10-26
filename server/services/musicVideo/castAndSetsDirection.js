@@ -595,7 +595,10 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
   const world = { layout: wField('layout'), depth: wField('depth'), lighting: wField('lighting'), camera: wField('camera'), transitions: wField('transitions') };
   const looks = (pick('looks', [])).filter((l) => l.name && l.description).slice(0, CAST_SETS_LIMITS.looks.max)
     .map((l) => ({ name: l.name, description: l.description, chapters: l.chapters || '' }));
-  const sets = hasOwn(parsed, 'sets') ? normalizeSets(parsed.sets, sections, procedural) : (base.sets || []);
+  const sets = (hasOwn(parsed, 'sets') ? normalizeSets(parsed.sets, sections, procedural) : (base.sets || [])).map((set) => {
+    const prior = base.sets?.find((s) => s.id === set.id);
+    return prior?.setReference ? { ...set, setReference: prior.setReference } : set;
+  });
   const songMap = normalizeSongMap(pick('songMap', []), sets, sections);
   const tests = normalizeTests(pick('tests', []), sets, looks);
   const overlayRaw = pick('overlayConcept', { summary: '', elements: [] }) || {};
@@ -652,6 +655,15 @@ const pickText = (source, caps) => Object.fromEntries(
  * unknown set or an edit that would leave the direction unusable.
  */
 export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] } = {}) {
+  if (edits?.sets?.length && !edits.protagonist && !edits.world && edits.sets.every((s) => Object.hasOwn(s, 'setReference') && !Object.hasOwn(s, 'imageRole'))) {
+    const updates = new Map(edits.sets.map((s) => [s.id, s.setReference]));
+    if ([...updates.keys()].some((id) => !previous.sets?.some((s) => s.id === id))) {
+      throw new ServerError('Unknown set', { status: 422, code: 'CAST_SETS_UNKNOWN_SET' });
+    }
+    const sets = previous.sets.map((s) => updates.has(s.id) ? { ...s, setReference: updates.get(s.id) } : s);
+    const changed = sets.filter((s) => JSON.stringify(s.setReference ?? null) !== JSON.stringify(previous.sets.find((old) => old.id === s.id).setReference ?? null)).map((s) => `${s.name} greybox reference`);
+    return { direction: { ...previous, sets }, changed };
+  }
   if (previous?.medium !== 'procedural') {
     throw new ServerError('Only a procedural direction has editable construction and world rules', { status: 409, code: 'CAST_SETS_NOT_PROCEDURAL' });
   }

@@ -54,6 +54,15 @@ vi.mock('./pipeline/refineHelpers.js', () => ({
 const svc = await import('./universeBuilder.js');
 const canonSvc = await import('./universeCanon.js');
 
+vi.mock('./catalogDB/ingredients.js', async (io) => ({ ...await io(),
+  getIngredientIdentityIds: async (id) => [id],
+  getIngredientTimestamps: async () => new Map(),
+}));
+vi.mock('./catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: vi.fn(async () => {}), assertCatalogAssociationRemovable: vi.fn(async () => {}) }));
+vi.mock('./catalogPrimitiveUsage.js', () => ({ assertCanonRemovable: vi.fn(async () => {}) }));
+const unlinkIngredientFromRefMock = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('./catalogDB/refs.js', async (io) => ({ ...await io(), unlinkIngredientFromRef: unlinkIngredientFromRefMock }));
+
 const seedUniverseWithCharacters = async (characters) => {
   const w = await svc.createUniverse({
     name: 'Test Universe',
@@ -178,6 +187,7 @@ describe('universeCanon — removeCanonEntry', () => {
     // Persisted: a fresh read no longer carries the removed entry.
     const reread = (await svc.listUniverses())[0];
     expect(reread.characters.map((c) => c.name)).toEqual(['Blair']);
+    expect(unlinkIngredientFromRefMock).toHaveBeenCalledWith('ing-alex', 'universe', w.id, 'canon-character');
   });
 
   it('removes a locked entry — the lock guards AI rewrites, not user removal', async () => {
@@ -187,6 +197,20 @@ describe('universeCanon — removeCanonEntry', () => {
     const target = w.characters[0];
     const { universe } = await canonSvc.removeCanonEntry(w.id, 'character', target.id);
     expect(universe.characters).toEqual([]);
+  });
+
+  it('restores canon when the membership write fails, allowing the same removal to be retried', async () => {
+    const w = await seedUniverseWithCharacters([
+      { name: 'Example character', ingredientId: 'example-ingredient', imageRefs: ['reference.png'] },
+    ]);
+    const target = w.characters[0];
+    unlinkIngredientFromRefMock.mockRejectedValueOnce(new Error('Association write unavailable'));
+    await expect(canonSvc.removeCanonEntry(w.id, 'character', target.id)).rejects.toThrow('Association write unavailable');
+    expect((await svc.getUniverse(w.id)).characters).toEqual(w.characters);
+    const result = await canonSvc.removeCanonEntry(w.id, 'character', target.id);
+    expect(result.universe.characters).toEqual([]);
+    expect(result.entry.id).toBe(target.id);
+    expect(result.entry.imageRefs).toEqual(['reference.png']);
   });
 
   it('removes from the places and objects buckets too', async () => {

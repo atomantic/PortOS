@@ -267,6 +267,19 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps — chunking', () => {
 });
 
 describe.skipIf(!runDb)('POST /api/catalog/bulk-import — export-bundle ref recreation', () => {
+  it('stages an exported owner as provenance instead of silently adopting its world', async () => {
+    const universeId = `imported-universe-${NONCE}`;
+    const bundle = { version: 1, ref: { kind: 'universe', id: universeId }, ingredients: [
+      { type: 'idea', name: `Imported owner ${NONCE}`, payload: {}, roleForExportedRef: 'owner' },
+    ] };
+    const result = await request(makeApp()).post('/api/catalog/bulk-import').send({ format: 'json', payload: JSON.stringify(bundle) });
+    expect(result.status).toBe(201);
+    const ingredient = result.body.created[0];
+    createdIngredientIds.add(ingredient.id);
+    expect(await catalogDB.listRefsForIngredient(ingredient.id)).toEqual([
+      expect.objectContaining({ refKind: 'universe', refId: universeId, role: 'imported-owner' }),
+    ]);
+  });
   it('recreates the bundle ref link from `bundleRef` and honors per-row role', async () => {
     const seriesId = `test-series-${NONCE}`;
     const bundle = {
@@ -515,12 +528,13 @@ describe.skipIf(!runDb)('ingredient content and history commit together', () => 
     const firstName = `Example first ${NONCE}`;
     const secondName = `Example second ${NONCE}`;
     const refId = `example-universe-${NONCE}`;
+    await query('INSERT INTO universes (id, name) VALUES ($1, $2)', [refId, 'Example rollback world']);
     await expect(withRevisionFailure(/^INSERT INTO catalog_ingredient_revisions/i, () =>
       catalogDB.commitScrap({
         scrapId: scrap.id, universeRef: refId,
         accepted: [{ type: 'idea', name: firstName }, { type: 'idea', name: secondName }],
       }), (params) => params?.[2] === secondName,
-    )).rejects.toThrow('division by zero');
+    ).finally(() => query('DELETE FROM universes WHERE id = $1', [refId]))).rejects.toThrow('division by zero');
     expect((await query('SELECT ingredient_id FROM catalog_ingredient_refs WHERE ref_id = $1', [refId])).rows).toEqual([]);
     expect((await query('SELECT id FROM catalog_ingredients WHERE name = ANY($1)', [[firstName, secondName]])).rows).toEqual([]);
     expect((await query('SELECT ingredient_id FROM catalog_ingredient_sources WHERE scrap_id = $1', [scrap.id])).rows).toEqual([]);
@@ -582,6 +596,9 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/details — batched hy
     createdIngredientIds.add(b.id);
     await catalogDB.linkIngredientRelation(a.id, b.id, 'lives-in');
     await catalogDB.updateIngredient(a.id, { payload: { physicalDescription: 'lead, edited' } }); // → a revision
+    await catalogDB.attachMedia(a.id, 'example-detail-cover.png', 'portrait');
+    await catalogDB.attachMedia(a.id, 'example-detail-reference.png', 'reference');
+    await catalogDB.attachMedia(a.id, 'example-detail-archive.png', 'reference', { role: 'archive:old' });
 
     const r = await request(makeApp()).get(`/api/catalog/ingredients/${a.id}/details`);
     expect(r.status).toBe(200);
@@ -595,6 +612,11 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/details — batched hy
     expect(r.body.revisions.length).toBeGreaterThan(0);          // the edit above
     // The relation A→B shows up as an outbound edge to B.
     expect(r.body.relations.outbound.some((e) => e.toId === b.id && e.kind === 'lives-in')).toBe(true);
+    const profile = await request(makeApp()).get(`/api/catalog/ingredients/${a.id}/details?view=profile`);
+    expect(profile.status).toBe(200);
+    expect(profile.body.coverMedia).toEqual({ portraitKey: 'example-detail-cover.png', referenceKey: 'example-detail-reference.png' });
+    expect(profile.body).not.toHaveProperty('media');
+    expect(profile.body).not.toHaveProperty('revisions');
   });
 
   it('404s for an unknown ingredient id', async () => {
@@ -627,7 +649,7 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/details — batched hy
     expect(rSolo.body.sources[0].siblings).toEqual([]);
   });
 
-  it('omits dangling "Appears in" refs whose target was soft-deleted (#1812)', async () => {
+  it('shows dangling refs without dead links and permits deletion after live usages are removed', async () => {
     const liveUni = `details-live-uni-${NONCE}`;
     const deadUni = `details-dead-uni-${NONCE}`;
     await query('INSERT INTO universes (id, name) VALUES ($1, $2)', [liveUni, `Live Uni ${NONCE}`]);
@@ -636,13 +658,20 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/details — batched hy
     const ing = await catalogDB.createIngredient({ type: 'character', name: `Dangling Probe ${NONCE}` });
     createdIngredientIds.add(ing.id);
     await catalogDB.linkIngredientToRef(ing.id, 'universe', liveUni, 'cast-character');
+    await catalogDB.linkIngredientToRef(ing.id, 'universe', liveUni, 'owner');
     await catalogDB.linkIngredientToRef(ing.id, 'universe', deadUni, 'reference');
 
     const r = await request(makeApp()).get(`/api/catalog/ingredients/${ing.id}/details`);
     expect(r.status).toBe(200);
     const refIds = r.body.refs.map((ref) => ref.refId);
     expect(refIds).toContain(liveUni);        // live target → chip stays
-    expect(refIds).not.toContain(deadUni);    // dangling target → chip dropped
+    expect(refIds).toContain(deadUni);
+    expect(r.body.refs.find((ref) => ref.refId === deadUni)).toMatchObject({ resolved: false, reason: 'missing-target' });
+    expect((await request(makeApp()).delete(`/api/catalog/ingredients/${ing.id}`)).status).toBe(409);
+    expect((await request(makeApp()).delete(`/api/catalog/ingredients/${ing.id}/link`)
+      .send({ refKind: 'universe', refId: liveUni, role: 'cast-character' })).status).toBe(204);
+    expect((await request(makeApp()).delete(`/api/catalog/ingredients/${ing.id}`)).status).toBe(204);
+    expect(await catalogDB.getIngredient(ing.id)).toBeNull();
 
     await query('DELETE FROM catalog_ingredient_refs WHERE ref_id = ANY($1)', [[liveUni, deadUni]]).catch(() => {});
     await query('DELETE FROM universes WHERE id = ANY($1)', [[liveUni, deadUni]]).catch(() => {});
@@ -686,7 +715,7 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
       return row;
     };
     const originalCounts = await counts();
-    expect(originalCounts).toEqual({ sources: '2', ingredients: '2', revisions: '2', refs: '2', edges: '1' });
+    expect(originalCounts).toEqual({ sources: '2', ingredients: '2', revisions: '2', refs: '4', edges: '1' });
     // A fresh process has no request cache: it must replay the durable receipt.
     const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
       import { commitScrap } from './services/catalogDB/commit.js';
@@ -745,9 +774,17 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
     createdIngredientIds.add(idea.id);
 
     const heroRefs = await catalogDB.listRefsForIngredient(hero.id);
-    expect(heroRefs).toEqual([expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'canon-character' })]);
+    expect(heroRefs).toHaveLength(2);
+    expect(heroRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'owner' }),
+      expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'canon-character' }),
+    ]));
     const ideaRefs = await catalogDB.listRefsForIngredient(idea.id);
-    expect(ideaRefs).toEqual([expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'reference' })]);
+    expect(ideaRefs).toHaveLength(2);
+    expect(ideaRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'owner' }),
+      expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'reference' }),
+    ]));
 
     // HAS_ANY_HOMING_REF is true for both — neither buckets as unlinked (#7615 core symptom).
     const facets = await request(makeApp()).get('/api/catalog/facets');
@@ -959,5 +996,38 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients?scrapId= (#7617)', () => {
     const ids = r.body.items.map((i) => i.id);
     expect(ids).toContain(inScrap.id);
     expect(ids).not.toContain(outOfScrap.id);
+  });
+});
+
+describe.skipIf(!runDb)('shared card and lock HTTP boundaries', () => {
+  it('changes only the persisted lock with history and accepts no accidental payload save', async () => {
+    const ingredient = await catalogDB.createIngredient({ type: 'character', name: 'Example courier', payload: { locked: false, physicalDescription: 'A coat.' } });
+    createdIngredientIds.add(ingredient.id);
+    // Simulate a later-version/legacy extension; lock writes must never sanitize it away.
+    await query("UPDATE catalog_ingredients SET payload = payload || $2::jsonb WHERE id = $1", [ingredient.id, { futureCanon: { retained: true }, notes: 'Concurrent saved note.' }]);
+    const before = await catalogDB.getIngredient(ingredient.id);
+    const bad = await request(makeApp()).patch(`/api/catalog/ingredients/${ingredient.id}/lock`).send({ locked: true, payload: { notes: 'Stale draft' } });
+    expect(bad.status).toBe(400);
+    const response = await request(makeApp()).patch(`/api/catalog/ingredients/${ingredient.id}/lock`).send({ locked: true });
+    expect(response.status).toBe(200);
+    expect(response.body.payload).toEqual({ ...before.payload, locked: true });
+    expect(response.body.updatedAt).not.toBe(before.updatedAt);
+    const revisions = await catalogDB.listIngredientRevisions(ingredient.id);
+    expect(revisions.items[0].payload).toEqual(response.body.payload);
+    expect((await request(makeApp()).patch(`/api/catalog/ingredients/${ingredient.id}/lock`).send({ locked: 'true' })).status).toBe(400);
+  });
+  it('hydrates valid80-character IDs with chosen portrait and bounded card fields', async () => {
+    const id = `example-card-${NONCE}-`.padEnd(80, 'x');
+    const ingredient = await catalogDB.createIngredient({ id, type: 'character', name: 'Example guide', payload: { physicalDescription: 'A coat.', notes: 'Long authored content.', voiceCanon: { description: 'Private direction.' } } });
+    createdIngredientIds.add(ingredient.id);
+    await catalogDB.attachMedia(id, 'selected-cover.png', 'portrait');
+    const response = await request(makeApp()).get(`/api/catalog/ingredient-cards?${new URLSearchParams({ ids: `${id},missing-example` })}`);
+    expect(response.status).toBe(200);
+    expect(response.body.items).toHaveLength(1);
+    expect(response.body.items[0]).toMatchObject({ id, canonicalId: id, thumbnailKey: 'selected-cover.png', payload: { physicalDescription: 'A coat.' } });
+    expect(response.body.items[0].payload).not.toHaveProperty('notes');
+    expect(response.body.items[0].payload).not.toHaveProperty('voiceCanon');
+    expect((await request(makeApp()).get('/api/catalog/ingredient-cards')).status).toBe(400);
+    expect((await request(makeApp()).get(`/api/catalog/ingredient-cards?ids=${Array.from({ length: 51 }, (_, i) => `id-${i}`).join(',')}`)).status).toBe(400);
   });
 });

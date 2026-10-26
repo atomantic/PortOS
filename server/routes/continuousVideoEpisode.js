@@ -12,8 +12,10 @@ import { z } from 'zod';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { getSettings } from '../services/settings.js';
 import { lintClips } from '../lib/videoPromptLinter.js';
+import { MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES } from '../lib/videoContinuity.js';
 import {
   generateContinuousVideoEpisode, composeEpisodeClips, attachEpisodeSseClient, CONTINUOUS_VIDEO_BACKENDS,
+  resolveEpisodeContinuity,
 } from '../services/videoGen/continuousVideo.js';
 
 const router = Router();
@@ -51,6 +53,8 @@ const renderOptionsSchema = z.object({
   falDuration: z.number().min(1).max(60).optional(),
   aspectRatio: z.enum(['16:9', '9:16', '1:1']).optional(),
   reactorSeconds: z.number().min(1).max(60).optional(),
+  continuityStrategy: z.enum(['frame', 'window']).optional(),
+  contextFrames: z.number().int().min(MIN_CONTEXT_FRAMES).max(MAX_CONTEXT_FRAMES).optional(),
 });
 
 const compilerOptionsSchema = z.object({
@@ -110,6 +114,7 @@ router.post('/', asyncHandler(async (req, res) => {
   }
 
   const settings = await getSettings();
+  await resolveEpisodeContinuity({ backend, renderOptions });
   const jobId = randomUUID();
   // The orchestrator runs its own multi-clip chain in the background and
   // reports progress over `GET /:jobId/events` (attachEpisodeSseClient) —

@@ -72,6 +72,9 @@ export const THREAD_REF_KINDS = Object.freeze({
   'creative-director': { label: 'Creative Director', external: false, navPath: '/creative-director', segment: true, suffix: '/overview' },
   'music-video': { label: 'Music Videos', external: false, navPath: '/music-video', segment: true },
   'writers-room': { label: "Writers' Room", external: false, navPath: '/writers-room' },
+  work: { label: 'Works', external: false, navPath: '/writers-room', basePath: '/writers-room/works', segment: true },
+  fableloom: { label: 'FableLoom', external: false, navPath: '/fableloom', segment: true },
+  'voice-profile': { label: 'Voice Studio', external: false, navPath: '/voices', segment: true },
 
   // ─── Other PortOS records ────────────────────────────────────────────────
   goal: { label: 'Goal', external: false, navPath: '/goals/list', segment: true },

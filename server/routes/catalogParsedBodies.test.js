@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   embedBatch: vi.fn(),
   ingredientEmbedSeed: vi.fn((entry) => entry),
   updateUniverse: vi.fn(),
+  addPrimitiveToUniverse: vi.fn(),
 }));
 
 vi.mock('../services/catalogDB.js', () => ({
@@ -42,6 +43,7 @@ vi.mock('../services/catalogDB.js', () => ({
   commitScrap: mocks.commitScrap,
 }));
 vi.mock('../services/catalogSync.js', () => ({}));
+vi.mock('../services/catalogPrimitives.js', async (io) => ({ ...await io(), addPrimitiveToUniverse: mocks.addPrimitiveToUniverse }));
 vi.mock('../services/universeBuilder.js', () => ({ updateUniverse: mocks.updateUniverse }));
 vi.mock('../services/embeddings.js', () => ({
   embedIngredient: mocks.embedIngredient,
@@ -72,6 +74,7 @@ beforeEach(() => {
   mocks.embedIngredient.mockResolvedValue({});
   mocks.embedBatch.mockResolvedValue([]);
   mocks.updateUniverse.mockResolvedValue(null);
+  mocks.addPrimitiveToUniverse.mockResolvedValue({ success: true, universe: null });
 });
 
 describe('Catalog explicit draft graphs', () => {
@@ -157,14 +160,14 @@ describe('Catalog parsed write bodies', () => {
 
     expect(linked.status).toBe(201);
     expect(unlinked.status).toBe(204);
-    expect(mocks.linkIngredientToRef).toHaveBeenCalledWith('ing-1', 'universe', 'universe-1', 'cast');
+    expect(mocks.addPrimitiveToUniverse).toHaveBeenCalledWith('ing-1', 'universe-1', 'cast');
     expect(mocks.unlinkIngredientFromRef).toHaveBeenCalledWith('ing-1', 'universe', 'universe-1', 'cast');
 
     const rejected = await request(makeApp())
       .post('/api/catalog/ingredients/ing-1/link')
       .send({ refKind: 'universe', refId: 'universe-1', role: 'x'.repeat(65) });
     expect(rejected.status).toBe(400);
-    expect(mocks.linkIngredientToRef).toHaveBeenCalledTimes(1);
+    expect(mocks.addPrimitiveToUniverse).toHaveBeenCalledTimes(1);
   });
 
   it('uses parsed PATCH metadata and fields', async () => {
@@ -200,11 +203,12 @@ describe('Catalog parsed write bodies', () => {
       return ingredient;
     });
     mocks.getIngredient.mockImplementation(async () => ingredient);
-    mocks.linkIngredientToRef.mockImplementation(async () => {
+    mocks.addPrimitiveToUniverse.mockImplementation(async () => {
       canon.characters = [{
         id: 'canon-1', ingredientId: ingredient.id, name: ingredient.name,
         ...ingredient.payload, createdAt: '2026-09-12T00:00:00.000Z',
       }];
+      return { success: true, universe: canon };
     });
     mocks.listRefsForIngredient.mockResolvedValue([
       { refKind: 'universe', refId: 'universe-1' },

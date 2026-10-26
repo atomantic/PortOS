@@ -47,6 +47,29 @@ async function documentProject() {
   return created.id;
 }
 
+// Observe the exact job before dispatch: fast mock encoders can settle before
+// dispatch returns, and a call made by an earlier job is not this job's result.
+async function startAndWait(projectId, eventName, identity, start) {
+  let started;
+  const early = new Map();
+  const terminal = Promise.withResolvers();
+  const onTerminal = event => {
+    if (event.projectId !== projectId) return;
+    if (!started) early.set(event[identity], event);
+    else if (event[identity] === started[identity]) terminal.resolve(event);
+  };
+  musicVideoEvents.on(eventName, onTerminal);
+  try {
+    started = await start();
+    return early.get(started[identity]) || await terminal.promise;
+  } finally {
+    musicVideoEvents.off(eventName, onTerminal);
+  }
+}
+
+const renderAndWait = (projectId, options) => startAndWait(projectId, 'render', 'jobId', () => renderMusicVideo(projectId, options));
+const excerptAndWait = (projectId, options) => startAndWait(projectId, 'excerpt-render', 'excerptId', () => startExcerptRender(projectId, options));
+
 describe('composition-document render plan', () => {
   it('checks owning production after preparation and again before encoding, releasing refused render slots', async () => {
     const id = await documentProject();
@@ -56,13 +79,13 @@ describe('composition-document render plan', () => {
     await expect(renderMusicVideo(id, { verifyCurrent: refused })).rejects.toMatchObject({ code: 'PRODUCTION_NOT_RUNNING' });
     expect(encodeDocumentComposition).not.toHaveBeenCalled();
     let checks = 0;
-    await renderMusicVideo(id, { verifyCurrent: () => { if (++checks === 2) refused(); } });
-    await vi.waitFor(async () => expect((await projects.getProject(id)).status).toBe('failed'));
+    expect(await renderAndWait(id, { verifyCurrent: () => { if (++checks === 2) refused(); } })).toMatchObject({ status: 'failed' });
+    expect((await projects.getProject(id)).status).toBe('failed');
     expect(checks).toBe(2);
     expect(encodeDocumentComposition).not.toHaveBeenCalled();
     // Both preparation and asynchronous encode refusal release the per-project slot.
-    await renderMusicVideo(id);
-    await vi.waitFor(() => expect(encodeDocumentComposition).toHaveBeenCalledOnce());
+    expect(await renderAndWait(id)).toMatchObject({ status: 'completed' });
+    expect(encodeDocumentComposition).toHaveBeenCalledOnce();
   });
 
   it('refuses a full render and an excerpt while no document is attached, and releases both slots', async () => {
@@ -77,8 +100,10 @@ describe('composition-document render plan', () => {
   it('renders the attached document over the song and files the result', async () => {
     const id = await documentProject();
     const { document } = await importDocumentTemplate(id);
-    const { jobId } = await renderMusicVideo(id);
-    await vi.waitFor(() => expect(mutateVideoHistory).toHaveBeenCalled());
+    mutateVideoHistory.mockClear();
+    const { jobId, status } = await renderAndWait(id);
+    expect(status).toBe('completed');
+    expect(mutateVideoHistory).toHaveBeenCalled();
     const call = encodeDocumentComposition.mock.calls.at(-1)[0];
     expect(call).toMatchObject({
       jobId,
@@ -87,7 +112,7 @@ describe('composition-document render plan', () => {
       plan: { directory: document.directory, songDurationSec: 12.5, durationSec: 12.5, fps: 24, width: 1920, height: 1080 },
     });
     expect(call).not.toHaveProperty('windowStart');
-    await vi.waitFor(async () => expect((await projects.getProject(id)).renderHistoryId).toBe(jobId));
+    expect((await projects.getProject(id)).renderHistoryId).toBe(jobId);
   });
 
   it('renders a faded 9:16 social cut of a 16:9 document project without re-framing the project (#9280)', async () => {
@@ -96,8 +121,9 @@ describe('composition-document render plan', () => {
     encodeDocumentComposition.mockClear();
     const visibility = [{ sceneId: 'example-shot', atSec: 1, status: 'measured', visibleFraction: 0.2, hiddenFraction: 0.8, measuredFraction: 1 }];
     encodeDocumentComposition.mockResolvedValueOnce({ width: 1080, height: 1920, fps: 24, boundaryTimes: [0], footageVisibility: visibility });
-    const { excerptId } = await startExcerptRender(id, { startSec: 1, endSec: 4, aspect: '9:16', fade: true });
-    await vi.waitFor(async () => expect((await projects.getProject(id)).excerpts.find((e) => e.id === excerptId).status).toBe('complete'));
+    const { excerptId, status } = await excerptAndWait(id, { startSec: 1, endSec: 4, aspect: '9:16', fade: true });
+    expect(status).toBe('complete');
+    expect((await projects.getProject(id)).excerpts.find((e) => e.id === excerptId).status).toBe('complete');
     const call = encodeDocumentComposition.mock.calls.at(-1)[0];
     expect(call).toMatchObject({ fade: true, collectFootageVisibility: true, windowStart: 1, windowEnd: 4, plan: { width: 1080, height: 1920 } });
     expect(call.project.treatment.brief.aspectRatio).toBe('9:16');
@@ -133,8 +159,8 @@ describe('composition-document render plan', () => {
       });
     }
     expect(encodeDocumentComposition).not.toHaveBeenCalled();
-    await startExcerptRender(id, { startSec: 1, endSec: 3 });
-    await vi.waitFor(() => expect(encodeDocumentComposition).toHaveBeenCalledOnce());
+    expect(await excerptAndWait(id, { startSec: 1, endSec: 3 })).toMatchObject({ status: 'complete' });
+    expect(encodeDocumentComposition).toHaveBeenCalledOnce();
     expect(encodeDocumentComposition.mock.calls[0][0].project.scenes[0]).toMatchObject({ shotMode: 'cutaway', videoHistoryId: null, referenceImageId: 'still.png' });
     expect((await projects.getProject(id)).scenes[0]).toMatchObject({ shotMode: 'performance', videoHistoryId: 'clip-1' });
   });
@@ -146,14 +172,15 @@ it('rejects a changed film between preparing its reviewed plan and starting the 
   await importDocumentTemplate(id);
   encodeDocumentComposition.mockClear();
   let changed = false;
-  await renderMusicVideo(id, { verifyCurrent: async () => {
+  const result = await renderAndWait(id, { verifyCurrent: async () => {
     if (changed) return;
     changed = true;
     await projects.mutateProjectRecord(id, project => ({ project: { ...project,
       composition: { ...project.composition, posterSec: 2 },
     } }));
   } });
-  await vi.waitFor(async () => expect((await projects.getProject(id)).status).toBe('failed'));
+  expect(result.status).toBe('failed');
+  expect((await projects.getProject(id)).status).toBe('failed');
   expect(encodeDocumentComposition).not.toHaveBeenCalled();
 });
 
@@ -161,49 +188,41 @@ it('rejects a changed film between preparing its reviewed plan and starting the 
 it('persists a document failure for returning operators and clears it after a successful retry', async () => {
   const id = await documentProject();
   await importDocumentTemplate(id);
-  const renderAndWait = async () => {
-    let jobId;
-    const early = new Map();
-    const terminal = Promise.withResolvers();
-    const onRender = event => {
-      if (event.projectId !== id) return;
-      // A fast encoder can settle before dispatch returns its job ID.
-      if (!jobId) early.set(event.jobId, event);
-      else if (event.jobId === jobId) terminal.resolve(event);
-    };
-    musicVideoEvents.on('render', onRender);
-    try {
-      ({ jobId } = await renderMusicVideo(id));
-      return early.get(jobId) || await terminal.promise;
-    } finally {
-      musicVideoEvents.off('render', onRender);
-    }
-  };
   const message = 'Edit portosComposition.durationSec to a whole-frame duration and re-import the document.';
   encodeDocumentComposition.mockRejectedValueOnce(new Error(message));
-  expect(await renderAndWait()).toMatchObject({ projectId: id, status: 'failed', error: `Composition document render failed: ${message}` });
+  expect(await renderAndWait(id)).toMatchObject({ projectId: id, status: 'failed', error: `Composition document render failed: ${message}` });
   expect(await projects.getProject(id)).toMatchObject({
     status: 'failed', renderError: `Composition document render failed: ${message}`,
   });
-  expect(await renderAndWait()).toMatchObject({ projectId: id, status: 'completed', error: null });
+  expect(await renderAndWait(id)).toMatchObject({ projectId: id, status: 'completed', error: null });
   expect(await projects.getProject(id)).toMatchObject({ status: 'complete', renderError: null });
 });
 
 it.each(['error', 'canceled'])('persists document excerpt %s before notifying subscribers to refresh', async (status) => {
   const id = await documentProject();
   await importDocumentTemplate(id);
+  const encoderEntered = Promise.withResolvers();
   let rejectEncode;
-  encodeDocumentComposition.mockImplementationOnce(() => new Promise((resolve, reject) => { rejectEncode = reject; }));
+  encodeDocumentComposition.mockImplementationOnce(() => new Promise((resolve, reject) => {
+    rejectEncode = reject;
+    encoderEntered.resolve();
+  }));
   const { excerptId } = await startExcerptRender(id, { startSec: 0, endSec: 2 });
-  await vi.waitFor(() => expect(rejectEncode).toBeTypeOf('function'));
+  await encoderEntered.promise;
+  expect(rejectEncode).toBeTypeOf('function');
   const snapshots = [];
+  const notification = Promise.withResolvers();
   broadcastSse.mockImplementation((job, frame) => {
-    if (frame.type === status) snapshots.push(projects.getProject(id));
+    if (job.projectId === id && job.excerptId === excerptId && frame.type === status) {
+      snapshots.push(projects.getProject(id));
+      notification.resolve();
+    }
     return broadcastOriginal(job, frame);
   });
   try {
     rejectEncode(Object.assign(new Error('Synthetic encoder interruption'), status === 'canceled' ? { code: 'CANCELED' } : {}));
-    await vi.waitFor(() => expect(snapshots).toHaveLength(1));
+    await notification.promise;
+    expect(snapshots).toHaveLength(1);
     const snapshot = await snapshots[0];
     expect(snapshot.excerpts.find(e => e.id === excerptId)).toMatchObject({ status, jobId: null });
   } finally {

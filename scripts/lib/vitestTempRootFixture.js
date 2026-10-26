@@ -173,10 +173,15 @@ export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RU
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
     let done = false;
     let closeConfirmed = false;
+    let closeTimer;
+    const awaitClose = status => {
+      closeTimer ??= setTimeout(() => finish(status), 2000);
+    };
     const finish = (status) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      clearTimeout(closeTimer);
       signal?.removeEventListener('abort', abort);
       killProcessTree(child, { sweepGroup: true }); // reap any worker the run left behind
       if (!closeConfirmed) {
@@ -190,26 +195,26 @@ export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RU
       error = new Error(`fixture run exceeded ${ceilingMs}ms`);
       killProcessTree(child, { sweepGroup: true });
       // A survivor holding the pipes would defer 'close'; settle regardless.
-      setTimeout(() => finish(null), 2000);
+      awaitClose(null);
     }, ceilingMs);
     const abort = () => {
       error = fixtureAborted(signal, 'fixture run aborted');
       killProcessTree(child, { sweepGroup: true });
-      setTimeout(() => finish(null), 2000);
+      awaitClose(null);
     };
     if (signal?.aborted) abort();
     else signal?.addEventListener('abort', abort, { once: true });
     child.once('error', (spawnError) => {
       error = spawnError;
       // Failed spawns also emit close. Do not release the host on error alone.
-      setTimeout(() => finish(null), 2000);
+      awaitClose(null);
     });
     child.once('close', status => { closeConfirmed = true; finish(status); });
     // Output ends at 'close', which a surviving worker holding the pipes defers:
     // sweep the group as soon as the leader exits, with a bounded wait for the pipes.
     child.once('exit', () => {
       killProcessTree(child, { sweepGroup: true });
-      setTimeout(() => finish(child.exitCode), 2000);
+      if (!done) awaitClose(child.exitCode);
     });
   });
 }

@@ -350,7 +350,7 @@ describe('catalogTypes — user-defined types (runtime layer)', () => {
 describe('catalogTypes — media kinds', () => {
   it('exposes the documented media kinds, frozen + unique', () => {
     expect(Object.isFrozen(MEDIA_KINDS)).toBe(true);
-    for (const k of ['portrait', 'reference', 'audio', 'video', 'document']) {
+    for (const k of ['portrait', 'reference', 'audio', 'video', 'document', 'model']) {
       expect(MEDIA_KIND_IDS).toContain(k);
     }
     expect(new Set(MEDIA_KIND_IDS).size).toBe(MEDIA_KIND_IDS.length);

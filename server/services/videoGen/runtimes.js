@@ -248,7 +248,7 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     // Three things must hold before a render is even attempted, and each fails
     // as an unusable install rather than as a bad render: diffusers must carry
     // the H3 modular integration (merged to main after v0.39.0 and released in
-    // diffusers 0.40.0, which is the version pinned by the requirements file),
+    // diffusers 0.40.0; the requirements file now pins 0.42.0),
     // torchao must be present
     // (int8 weight-only is the only way the 133 GB bf16 pair fits a consumer
     // card), and CUDA must actually be visible. A CPU-only torch is the trap
@@ -257,6 +257,7 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     importProbe: 'import torch; from diffusers import MiniMaxH3Transformer3DModel; from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference; import torchao; assert torch.cuda.is_available(), "no CUDA device"',
     // Mirror scripts/generate_minimax_h3_cuda.py's emit_runtime_fingerprint list.
     fingerprintPackages: ['torch', 'diffusers', 'transformers', 'torchao', 'accelerate', 'huggingface-hub'],
+    loraProbeArgs: [join(PATHS.root, 'scripts', 'minimax_h3_cuda_lora.py'), '--probe'],
   },
   ltx25_cuda: {
     id: 'ltx25_cuda',
@@ -464,16 +465,19 @@ const summarizeProbeStderr = (stderr) => stderr.replace(/\s+/g, ' ').trim() || '
 // `label` names the runtime and which probe ran, so a status request that fans
 // out over several runtimes produces attributable lines. It must never carry a
 // filesystem path — venv paths embed the OS username.
-function runVenvProbe(venvPython, args, label) {
+function runVenvProbe(venvPython, args, label, { unsupportedExitCode } = {}) {
   return new Promise((resolve) => {
     let stderr = '';
     let settled = false;
     let timer = null;
-    const finish = (ok, icon, outcome) => {
+    const finish = (ok, icon, outcome, routine = false) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (!ok) console.error(`${icon} ${label} probe ${outcome}: ${summarizeProbeStderr(stderr)}`);
+      if (!ok) {
+        const log = routine ? console.log : console.error;
+        log(`${icon} ${label} probe ${outcome}: ${summarizeProbeStderr(stderr)}`);
+      }
       resolve(ok);
     };
     const child = spawn(venvPython, args, safeChildProcessOptions({
@@ -496,9 +500,13 @@ function runVenvProbe(venvPython, args, label) {
       if (!child.killed) child.kill('SIGKILL');
       finish(false, '❌', 'timed out after 30s');
     }, 30000);
-    child.on('close', (code, signal) => finish(
-      code === 0, '⚠️', signal ? `was killed by ${signal}` : `exited ${code}`,
-    ));
+    child.on('close', (code, signal) => {
+      if (unsupportedExitCode !== undefined && code === unsupportedExitCode && !signal) {
+        finish(false, '🚫', 'does not support this capability', true);
+      } else {
+        finish(code === 0, '⚠️', signal ? `was killed by ${signal}` : `exited ${code}`);
+      }
+    });
     // Node's spawn-error message interpolates the full interpreter path, which
     // embeds the OS username — the code alone says what went wrong.
     child.on('error', (err) => finish(false, '❌', `could not be spawned (${err?.code || 'unknown error'})`));
@@ -514,6 +522,7 @@ function runVenvProbe(venvPython, args, label) {
 const loraCapabilityCache = new Map();
 const loraProbeFlight = createSingleFlight();
 export function invalidateByovLoraCapabilityCache(runtimeId) {
+  if (runtimeId) a2vLoraStageCache.delete(runtimeId); else a2vLoraStageCache.clear();
   if (runtimeId) loraCapabilityCache.delete(runtimeId); else loraCapabilityCache.clear();
 }
 
@@ -533,6 +542,16 @@ export async function resolveByovRuntimeLoraCapable(runtimeId) {
     loraCapabilityCache.set(runtimeId, capable);
     return capable;
   });
+}
+
+// A profile request verifies the sampler seams independently of the optional
+// user-LoRA capability. No model weights or network access enter this probe.
+export async function resolveMiniMaxH3MlxSpeedCapable() {
+  if (!existsSync(MINIMAX_H3_VENV_PYTHON) || !await isByovRuntimeCurrent('minimax_h3')) return false;
+  return runVenvProbe(MINIMAX_H3_VENV_PYTHON, [
+    join(PATHS.root, 'scripts', '_minimax_h3_mlx_lightx2v.py'), '--probe',
+    MINIMAX_H3_REPO_DIR, MINIMAX_H3_EXPECTED_REVISION,
+  ], 'MiniMax H3 MLX LightX2V');
 }
 
 // Sync read of the same fact, for the sync paths that decorate model payloads
@@ -577,7 +596,10 @@ export async function warmByovLoraCapabilities() {
   // `.catch` because this runs on a request path where a future throw must not
   // take the whole model-list response down with it — the values are discarded.
   await Promise.all(Object.keys(BYOV_RUNTIME_INFO)
-    .map((runtimeId) => resolveByovRuntimeLoraCapable(runtimeId).catch(() => {})));
+    .map(async (runtimeId) => {
+      await resolveByovRuntimeLoraCapable(runtimeId).catch(() => {});
+      await resolveA2vLoraStageCapable(runtimeId).catch(() => {});
+    }));
 }
 
 // Single user-facing reason a video model can't take LoRAs. Lives here, beside
@@ -597,7 +619,7 @@ export function videoLoraUnsupportedError(model, modelId) {
     // entries, and this runtime only appears in the Windows catalog, so the
     // advice would name models the user cannot select.
     return new ServerError(
-      `MiniMax H3 on CUDA cannot apply LoRAs. Model "${modelId}" renders through diffusers' MiniMaxH3ModularPipeline, which has no LoRA path for H3. No video model in the Windows catalog takes LoRAs today.`,
+      `The installed MiniMax H3 CUDA runtime cannot apply split Diffusers LoRAs. Repair the H3 CUDA runtime in Video Gen to install the pinned scheduler and quantization-aware adapter support, then retry model "${modelId}".`,
       { status: 400, code: 'MINIMAX_H3_LORA_UNSUPPORTED' },
     );
   }
@@ -746,6 +768,15 @@ async function probeRuntimeFingerprint(runtimeId) {
   return inFlight;
 }
 
+// Reuse needs current evidence, rather than the status page's process-lifetime
+// observation. Missing/unverified runtime evidence leaves reactive recovery intact.
+export async function currentMetalProfileFingerprint(runtimeId) {
+  if (!BYOV_RUNTIME_INFO[runtimeId]?.expectedRevision || !await isByovRuntimeCurrent(runtimeId)) return null;
+  invalidateRuntimeFingerprintCache(runtimeId);
+  const fingerprint = await probeRuntimeFingerprint(runtimeId);
+  return fingerprint?.error ? null : fingerprint;
+}
+
 // Host runtime fingerprint computed in Node — cheap, always present (no python).
 // chip/os/arch are useful even before any BYOV runtime is installed.
 export function hostRuntimeFingerprint() {
@@ -809,4 +840,23 @@ export async function pickDeathFingerprint({ emitted = null, runtimeId = null } 
   const block = await resolveRuntimeFingerprint().catch(() => null);
   if (!block) return null;
   return (runtimeId && block.runtimes?.[runtimeId]) || block.host || null;
+}
+
+// This capability is separate from ordinary user LoRAs: only inspected A2V
+// stage seams may change their strength mid-render. No weights are loaded.
+const a2vLoraStageCache = new Map();
+const a2vLoraStageFlight = createSingleFlight();
+export const a2vLoraStageCapable = (runtimeId) => a2vLoraStageCache.get(runtimeId) === true;
+export async function resolveA2vLoraStageCapable(runtimeId, { fresh = false } = {}) {
+  if (!['ltx2', 'ltx25'].includes(runtimeId)) return false;
+  const cached = a2vLoraStageCache.get(runtimeId);
+  if (!fresh && cached !== undefined) return cached;
+  const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (!existsSync(info.venvPython)) return false;
+  return a2vLoraStageFlight.run(runtimeId, async () => {
+    const capable = await runVenvProbe(info.venvPython,
+      [join(PATHS.root, 'scripts', 'ltx_a2v_lora_probe.py')], `${runtimeId} A2V stage LoRA capability`, { unsupportedExitCode: 2 });
+    a2vLoraStageCache.set(runtimeId, capable);
+    return capable;
+  });
 }

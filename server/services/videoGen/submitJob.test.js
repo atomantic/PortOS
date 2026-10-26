@@ -1,3 +1,6 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { PATHS } from '../../lib/paths.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../lib/maintenanceAdmission.js', () => ({ maintenance: { run: (_kind, _resource, fn) => fn() } }));
@@ -9,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   compileFableLoomVisualRequest: vi.fn(),
   enqueueJob: vi.fn(),
   fableLoomVideoCapabilities: vi.fn(),
+  getIngredient: vi.fn(),
+  listMediaForIngredient: vi.fn(),
   getMusicVideoProject: vi.fn(async () => null),
   getLoom: vi.fn(async () => null),
   prepareRemoteMediaJob: vi.fn(),
@@ -21,6 +26,8 @@ const mocks = vi.hoisted(() => ({
   discardSourceAudioWindow: vi.fn(async () => ({ ok: true })),
   unlink: vi.fn(async () => {}),
 }));
+
+vi.mock('../catalogDB.js', () => ({ getIngredient: mocks.getIngredient, listMediaForIngredient: mocks.listMediaForIngredient }));
 
 vi.mock('fs/promises', async (load) => ({ ...await load(), unlink: mocks.unlink }));
 vi.mock('./modelSelection.js', () => ({ resolveVideoModelSelection: mocks.resolveVideoModelSelection }));
@@ -117,6 +124,13 @@ describe('submitVideoGenJob', () => {
     expect(mocks.prepareVideoGenParams).not.toHaveBeenCalled();
   });
 
+  it('refuses temporal intent that the federated wire cannot express', async () => {
+    await expect(submitVideoGenJob({ prompt: 'a clip', mediaProviderPeerId: 'peer-1', continuityStrategy: 'window' }, {}))
+      .rejects.toMatchObject({ status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
+    expect(mocks.prepareRemoteMediaJob).not.toHaveBeenCalled();
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+  });
+
   it('submits a Grok job with the cloud response contract', async () => {
     const cleanupStaged = vi.fn(async () => {});
     mocks.prepareVideoGenParams.mockResolvedValue({
@@ -147,10 +161,13 @@ describe('submitVideoGenJob', () => {
   });
 
   it('submits a local job with the effective model response contract', async () => {
-    mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({ effectiveContextFrames: 0 }));
+    const continuation = { requestedStrategy: 'frame', effectiveStrategy: 'frame', contextFrames: 0,
+      actualHistoryFrames: 0, runtime: 'minimax_h3', capability: false, backendPin: null, unavailableReason: 'hardware evidence pending' };
+    mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({ effectiveContextFrames: 0, continuation }));
 
     await expect(submitVideoGenJob({
       prompt: 'Example shot',
+      continuityStrategy: 'frame',
       width: 1280,
       height: 720,
     }, {})).resolves.toEqual({
@@ -167,6 +184,8 @@ describe('submitVideoGenJob', () => {
         numFrames: 121,
         mode: 'text',
         contextFrames: 0,
+        continuityStrategy: 'frame',
+        continuation,
       }),
     }));
     const params = mocks.enqueueJob.mock.calls[0][0].params;
@@ -652,4 +671,29 @@ describe('shot intent at the video submission boundary', () => {
     expect(mocks.enqueueJob).not.toHaveBeenCalled();
     expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
   });
+});
+
+// Catches an omitted layout at the video submission boundary, and a removed capture.
+it('queues a video with the live layout and recorded figures, and queues nothing when the capture is removed', async () => {
+  vi.clearAllMocks();
+  mocks.enqueueJob.mockReturnValue(queued);
+  mocks.preparePerformanceShot.mockResolvedValue(null);
+  mkdirSync(PATHS.images, { recursive: true });
+  writeFileSync(join(PATHS.images, 'layout.png'), 'fixture');
+  const selected = { sceneId: 's1', prompt: 'She waves', setReference: { subjectId: 'rink', greyboxShotId: 'wide' } };
+  mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', concept: { subjects: [{ id: 'rink', name: 'Example Rink', kind: 'place', ingredientId: 'cat-rink' }] }, scenes: [selected] });
+  mocks.getIngredient.mockResolvedValue({ type: 'place', payload: { greybox: { anchors: [{ id: 'rail', label: 'Singer' }], shots: [{ id: 'wide', figures: [{ anchorId: 'rail', pose: 'waving' }] }] } } });
+  mocks.listMediaForIngredient.mockResolvedValue([{ kind: 'reference', role: 'greybox-shot:wide', mediaKey: 'layout.png' }]);
+  mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({ referenceImagePaths: [join(PATHS.images, 'layout.png')] }));
+  const body = { prompt: 'She waves', backend: 'local', musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true } };
+  await submitVideoGenJob(body, {});
+  expect(mocks.prepareVideoGenParams.mock.calls[0][0].body.referenceImageFiles).toEqual(['layout.png']);
+  const params = mocks.enqueueJob.mock.calls[0][0].params;
+  expect(params.referenceImagePaths).toEqual([join(PATHS.images, 'layout.png')]);
+  expect(params.prompt).toContain('Singer stands at the "rail" mark, waving');
+  expect(params.promptAdditions).toContainEqual(expect.objectContaining({ id: 'greybox-figure-0' }));
+  mocks.enqueueJob.mockClear();
+  mocks.listMediaForIngredient.mockResolvedValue([]);
+  await expect(submitVideoGenJob(body, {})).rejects.toMatchObject({ code: 'MUSIC_VIDEO_GREYBOX_UNAVAILABLE' });
+  expect(mocks.enqueueJob).not.toHaveBeenCalled();
 });

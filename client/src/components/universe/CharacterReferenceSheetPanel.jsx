@@ -13,10 +13,11 @@
  *  - `entry.referenceSheets[<id>]`   → every other variant
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Camera, Loader2, RefreshCcw, ExternalLink, Trash2 } from 'lucide-react';
 import {
   renderCharacterReferenceSheet,
+  previewCharacterReferenceSheet,
   deleteCharacterReferenceSheet,
   fetchReferenceSheetVariants,
   getCharacterReferenceSheet,
@@ -28,6 +29,8 @@ import { readSheetPointer, LEGACY_SHEET_VARIANT_ID } from '../../lib/sheetPointe
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import MediaImage from '../MediaImage';
+import ModelInputPreview from '../media/ModelInputPreview';
+import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 
 const SHEET_EVENTS = ['reference-sheet:changed'];
 
@@ -43,6 +46,9 @@ function VariantRow({
   const pendingRef = useRef(false);
   const mountedRef = useMounted();
   const { status, error, progress } = useMediaJobProgress(jobId);
+  const fetchPreview = useCallback(({ savedEntry: _entry, ...body }, options) =>
+    previewCharacterReferenceSheet(universeId, entry.id, body, options).then((result) => result.preview), [universeId, entry.id]);
+  const preview = useModelInputPreview(fetchPreview, { variant: variant.id, savedEntry: entry }, { enabled: !locked });
   const { data: sheet, updateData } = useSocketResource(
     () => getCharacterReferenceSheet(universeId, entry.id, variant.id, { silent: true }), {
       events: SHEET_EVENTS,
@@ -159,6 +165,7 @@ function VariantRow({
           )}
         </div>
       </div>
+      <ModelInputPreview preview={preview} prompt="" />
       {existing ? (
         <button
           type="button"

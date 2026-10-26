@@ -1,5 +1,6 @@
 /** A separate remote ingress: Tailcat's localhost hop must not imply local authority. */
 import { createTailscaleServers, watchCertReload } from '../../lib/tailscale-https.js';
+import { remoteDesktopBroker } from './remoteDesktop.js';
 import { PORTS } from '../lib/ports.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { markRemoteServer, remoteRequestHandler } from '../lib/requestOrigin.js';
@@ -7,11 +8,12 @@ import { markRemoteServer, remoteRequestHandler } from '../lib/requestOrigin.js'
 let configuration = null;
 let listener = null;
 let starting = null;
-let stopWatching = null;
+let stopListener = null;
 
 // Configure only; no listener or Tailcat process starts at import/boot.
-export function configureTailcatIngress({ app, io, certDir, httpsEnabled }) {
-  configuration = { app, io, certDir, httpsEnabled };
+export function configureTailcatIngress({ app, io, certDir, httpsEnabled, broker = remoteDesktopBroker }) {
+  stopTailcatIngress();
+  configuration = { app, io, certDir, httpsEnabled, broker };
 }
 
 export function createTailcatIngressServer(app, { certDir, httpsEnabled } = {}) {
@@ -31,10 +33,28 @@ export function ensureTailcatIngress() {
   if (listener?.listening) return Promise.resolve();
   if (starting) return starting;
   if (!configuration) return Promise.reject(new ServerError('Tailcat ingress is not configured', { status: 503 }));
-  const { app, io, certDir, httpsEnabled: apiHttpsEnabled } = configuration;
+  const { app, io, certDir, broker, httpsEnabled: apiHttpsEnabled } = configuration;
   const { server, httpsEnabled } = createTailcatIngressServer(app, { certDir, httpsEnabled: apiHttpsEnabled });
   listener = server;
-  starting = new Promise((resolve, reject) => {
+  const sockets = new Set();
+  let rejectStartup;
+  let unmountDesktop;
+  let stopWatching;
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+  });
+  const dispose = () => {
+    rejectStartup?.(new Error('Tailcat ingress stopped during startup'));
+    stopWatching?.();
+    unmountDesktop?.();
+    // HTTP closeAllConnections excludes upgrades, including Socket.IO and noVNC.
+    for (const socket of sockets) socket.destroy();
+    server.close();
+  };
+  stopListener = dispose;
+  const attempt = new Promise((resolve, reject) => {
+    rejectStartup = reject;
     server.once('error', reject);
     server.listen(PORTS.TAILCAT_INGRESS, '127.0.0.1', () => {
       // Listen callbacks are outside Express's error boundary.
@@ -43,27 +63,28 @@ export function ensureTailcatIngress() {
         server.removeListener('error', reject);
         server.on('error', (err) => console.error(`❌ Tailcat ingress failed: ${err.message}`));
         io.attach(server);
+        unmountDesktop = broker.mountWebSocket(server);
         markRemoteServer(server);
         if (httpsEnabled) stopWatching = watchCertReload(server, certDir);
+        rejectStartup = null;
         resolve();
       } catch (err) {
         reject(err);
       }
     });
   }).catch((err) => {
-    stopTailcatIngress();
+    if (listener === server) stopTailcatIngress();
+    else dispose();
     throw new ServerError(`Could not start Tailcat ingress: ${err.message}`, { status: 503 });
-  }).finally(() => { starting = null; });
-  return starting;
+  }).finally(() => { if (starting === attempt) starting = null; });
+  starting = attempt;
+  return attempt;
 }
 
 export function stopTailcatIngress() {
-  stopWatching?.();
-  stopWatching = null;
-  const server = listener;
   listener = null;
-  if (!server) return;
-  server.closeAllConnections?.();
-  // Socket.IO's shutdown closes upgraded connections. Never wait for them here.
-  server.close();
+  starting = null;
+  const stop = stopListener;
+  stopListener = null;
+  stop?.();
 }

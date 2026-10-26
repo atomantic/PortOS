@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { observeTestProcesses, processAttribution, processIdentity } from './lib/testProcessAttribution.js';
 import { killTestProcessesUnder, sweepStaleRunRoots, verifyPendingTestProcesses } from './lib/vitestStaleRunRoots.js';
+import { readTestProcesses } from './lib/testOwnedProcesses.js';
 import { cleanupRunTempRoot } from './vitestTempRootSetup.js';
 
 vi.mock('node:fs', async importOriginal => {
@@ -152,4 +153,54 @@ it.each(['missing', 'terminal', 'different-parent', 'unreadable'])('does not att
     dispose();
     expect(processAttribution(root, processIdentity(record)).attribution).toBe('unavailable');
   } finally { dispose(); rmSync(root, { recursive: true, force: true }); }
+});
+
+// Regression: pool-close evidence must explain inspection failures without
+// exporting OS error payloads or converting unknown ownership into permission.
+it.skipIf(process.platform === 'win32').each([
+  ['timeouts', 'timeout', 'timeout', 'reader-unavailable'],
+  ['permissions', 'permission-denied', 'spawn-failed', 'reader-unavailable'],
+  ['malformed', 'invalid-output', 'invalid-output', 'reader-unavailable'],
+  ['wrong-shape', 'invalid-output', 'invalid-output', 'reader-unavailable'],
+  ['reader-exit', 'reader-failed', 'reader-failed', 'reader-unavailable'],
+  ['ancestry', 'success', null, 'ancestry-unavailable'],
+  ['fallback', 'timeout', 'success', 'available'],
+])('retains bounded %s inspection evidence at pool close', (mode, primary, fallback, reason) => {
+  const host = mkdtempSync(join(tmpdir(), 'inspection-evidence-'));
+  const root = mkdtempSync(join(host, 'pvt-'));
+  const reportPath = join(host, 'report.json');
+  const kill = vi.fn();
+  let time = 0;
+  const exec = vi.fn(command => {
+    time += command === 'ps' ? 11 : 7;
+    if (mode === 'malformed') return 'private-argv /private/path secret-env=hidden 900001';
+    if (mode === 'wrong-shape') return command === 'ps' ? 'private-invalid-row' : '{"pid":900001}';
+    if (mode === 'ancestry') return JSON.stringify([{ pid: 900001, ppid: 1, start: 'private-birth' }]);
+    if (mode === 'fallback' && command === 'ps') {
+      return `${process.pid} 1 ${process.getuid()} S Fri Oct 16 12:00:00 2026 node private-argv\n`;
+    }
+    throw Object.assign(new Error('private-argv /private/path secret-env=hidden 900001'), {
+      code: mode === 'permissions' ? (command === 'ps' ? 'ENOENT' : 'EPERM') : mode === 'reader-exit' ? 'PRIVATE_CODE' : 'ETIMEDOUT',
+      stdout: 'private-output', stderr: 'private-error', pid: 900001,
+    });
+  });
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    cleanupRunTempRoot(root, { reportPath, platform: 'darwin',
+      contain: (path, callbacks) => killTestProcessesUnder(path, { ...callbacks, kill,
+        read: (pids, options) => readTestProcesses(pids, { ...options, platform: 'darwin', exec, now: () => time }) }) });
+    const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+    const attempts = [{ reader: 'darwin-python', outcome: primary, elapsedMs: 7 },
+      ...(fallback ? [{ reader: 'legacy-ps', outcome: fallback, elapsedMs: 11 }] : [])];
+    expect(report).toMatchObject({ version: 1, boundary: 'pool-closed', inspected: reason === 'available',
+      pendingVerified: true, total: 0, terminated: 0, unsettled: reason === 'available' ? 0 : 1,
+      inspection: { reason, attempts }, processes: [] });
+    expect(exec).toHaveBeenCalledTimes(attempts.length);
+    expect(kill).not.toHaveBeenCalled();
+    expect(existsSync(root)).toBe(reason !== 'available');
+    expect(process.exitCode).toBe(reason === 'available' ? originalExit : 1);
+    expect(JSON.stringify(report)).not.toMatch(/private|secret|900001|PRIVATE_CODE|stdout|stderr/);
+    expect(JSON.stringify([console.warn.mock.calls, console.error.mock.calls])).not.toMatch(/private|secret|900001/);
+  } finally { rmSync(host, { recursive: true, force: true }); }
 });

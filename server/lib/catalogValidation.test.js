@@ -16,6 +16,7 @@ import {
   catalogIngredientCreateSchema,
   catalogIngredientPatchSchema,
   catalogIngredientQuerySchema,
+  catalogIngredientCardsQuerySchema,
   catalogIngredientLinkSchema,
   catalogScrapCommitSchema,
   catalogSyncEnvelopeSchema,
@@ -634,9 +635,12 @@ describe('catalogValidation — catalogSyncEnvelopeSchema media block', () => {
     expect(() => catalogMediaMetadataSchema.parse({ parameters: 'x'.repeat(64 * 1024 + 1) })).toThrow();
   });
 
-  it('tolerates a forward (unknown) media kind on the wire', () => {
+  it('tolerates a model and a forward unknown media kind on the wire independently of the local attachment enum', () => {
     expect(() => catalogSyncEnvelopeSchema.parse({
-      media: [{ ingredientId: 'i1', mediaKey: 'a.png', kind: 'future-kind', createdAt: '2026-01-01T00:00:00Z' }],
+      media: [
+        { ingredientId: 'i1', mediaKey: 'layout.glb', kind: 'model', createdAt: '2026-01-01T00:00:00Z' },
+        { ingredientId: 'i1', mediaKey: 'a.png', kind: 'future-kind', createdAt: '2026-01-01T00:00:00Z' },
+      ],
     })).not.toThrow();
   });
 
@@ -705,5 +709,18 @@ describe('catalogUrlIngestSchema — SSRF guard', () => {
     // [::192.168.0.1] → [::c0a8:1] decodes to a private LAN v4 → allowed, same as
     // the bare 192.168.x case above. Confirms the new branch doesn't over-block.
     expect(() => catalogUrlIngestSchema.parse({ url: 'http://[::192.168.0.1]/x' })).not.toThrow();
+  });
+});
+
+describe('catalog card query boundary', () => {
+  it('requires an explicit nonempty ID batch, including omitted/blank optional CSV inputs', () => {
+    for (const query of [{}, { ids: '' }, { ids: ' , ' }, { ids: null }]) {
+      expect(catalogIngredientCardsQuerySchema.safeParse(query).success).toBe(false);
+    }
+  });
+  it('preserves80-character IDs and refuses a batch beyond50 without truncation', () => {
+    const id = 'example-'.padEnd(80, 'x');
+    expect(catalogIngredientCardsQuerySchema.parse({ ids: id }).ids).toEqual([id]);
+    expect(catalogIngredientCardsQuerySchema.safeParse({ ids: Array.from({ length: 51 }, (_, i) => `example-${i}`) }).success).toBe(false);
   });
 });

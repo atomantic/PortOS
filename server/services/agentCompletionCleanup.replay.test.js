@@ -16,6 +16,7 @@ vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTa
 vi.mock('./cosTaskGenerator.js', () => ({ checkStagePrecondition: () => ({ passed: true }) }));
 vi.mock('./cosAgentLifecycle.js', () => ({
   getAgent: async () => JSON.parse(await readFile(fixture.recordPath, 'utf8')),
+  getAgentRecord: async () => JSON.parse(await readFile(fixture.recordPath, 'utf8')),
   updateAgent: vi.fn(),
   recordCompletionCleanup: async (_id, startedAt, patch) => {
     if (fixture.failWrite) throw new Error('synthetic durable write failure');
@@ -211,6 +212,20 @@ describe('durable post-ingestion cleanup replay', () => {
     cleanupAgentWorktree.mockResolvedValue(['CI failed; original branch and checkout retained']);
     await finish();
     expect((await saved()).metadata.completionCleanup).toMatchObject({ status: 'pending', stages: { worktree: { status: 'held' } } });
+  });
+
+  it('rechecks a held checkout immediately after release without replaying completed handoffs', async () => {
+    cleanupAgentWorktree.mockResolvedValueOnce(['Original execution still owns the checkout']).mockResolvedValue([]);
+    await finish();
+    const held = await saved();
+    expect(held.metadata.completionCleanup.stages.worktree).toMatchObject({ status: 'held', retryable: false });
+    const handoffs = updateTask.mock.calls.length;
+    await Promise.all([replayAgentCompletionCleanup(held), replayAgentCompletionCleanup(held)]);
+    expect(cleanupAgentWorktree).toHaveBeenCalledTimes(2);
+    expect(updateTask).toHaveBeenCalledTimes(handoffs);
+    expect((await saved()).metadata.completionCleanup).toMatchObject({ status: 'completed', stages: { worktree: { status: 'done' } } });
+    await replayAgentCompletionCleanup(await saved());
+    expect(cleanupAgentWorktree).toHaveBeenCalledTimes(2);
   });
 
   it('never acknowledges a replacement or sends its checkout to cleanup', async () => {

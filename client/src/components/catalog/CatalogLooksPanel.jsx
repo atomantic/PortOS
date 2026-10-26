@@ -73,8 +73,7 @@ function LookGenerate({ ingredientId, wardrobe, initialUniverseId, blockedReason
     previewCatalogSheet(ingredientId, optionsBody, options).then((r) => r?.preview
       ? { ...r.preview, requestKey: JSON.stringify({ ...optionsBody, savedStamp: stamp }) } : null), [ingredientId]);
   const loadedPreview = useModelInputPreview(fetchPreview, previewBody);
-  // The hook retains its last result while a new request debounces. A changed
-  // field must immediately invalidate that result's permission to render.
+  // Only a response for the current direction may enable generation.
   const current = loadedPreview.preview?.requestKey === requestKey;
   const preview = current ? loadedPreview : { preview: null, error: loadedPreview.error };
   const direction = preview.preview?.visualDirection;

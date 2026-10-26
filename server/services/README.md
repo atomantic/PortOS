@@ -6,6 +6,10 @@ image-generation paths below are useful entry points when tracing render jobs.
 
 | Module | Responsibility |
 | --- | --- |
+| `catalogPrimitives.js` | Explicit creative primitive ownership, safe universe membership, independent forks and durable retry receipts. |
+| `catalogDB/ingredients.js` | Canonical ingredient CRUD/history, atomic flag-only locks and bounded requested-ID card projections with batched cover/ownership/identity context. |
+| `catalogDB/media.js` | Ingredient media associations, metadata-free profile covers (`getIngredientMediaCover`) and integrity checks that can reuse already-read media rows. |
+| `catalogPrimitiveUsage.js` | Indexed/derived creative usage aggregation and exact canon-pointer removal guards for FableLoom and local voice profiles. |
 | `deadOwnerReservations.js` | Boot and orphan-sweep reconcile for reservations whose admitting process died: stamps settled Output publication rows unsettled for receipt recovery, and releases only cli-run or mind-turn residue whose owning record proves completion. |
 | `branchReconcileRetirement.js` | Retires exact-head, integrated checkouts through fresh fenced archive proof; reserves bounded cognitive review only for source/history differences. |
 | `repoCleanupRecovery.js` | Reserves one bounded exact-owner review or code-repair obligation, rechecks policy and delivery evidence before publication, and never queues a provider for routine holds. |
@@ -13,6 +17,7 @@ image-generation paths below are useful entry points when tracing render jobs.
 | `branchReconcileCompletion.js` | Runs ownership-checked merged and superseded cleanup on coordinator completion, independent of perpetual scheduling. |
 | `initializedCheckoutRecovery.js` | Explicit macOS private-module checkout archive, standalone recovery proof, durable reservation, reversible whole-directory quarantine and transaction-bound branch finalization/receipt replay; automatic module cleanup remains blocked. |
 | `heldCheckoutReview.js` | Selects the merged PR for an exact local head and computes fresh forge identity, merged PR/default refs and exact code comparisons for a digest-bound operator retirement; no saved consent or policy rewrites. |
+| `retirementRunValidation.js` | Retains bounded reviewed validation outputs in the exact completed run’s private evidence store before checkout retirement. |
 | `heldCheckoutRecovery.js` | Prepares scoped retirement reviews and preserves checkout content, empty gitlinks and private Git administration before ownership-checked removal and expected-head local ref deletion. Pending-merge receipts use `retirePendingMergeCheckout`, which independently verifies the merged head and refuses locks, supersession and initialized submodules. |
 | `cosClaimOwnershipState.js` | Shared ownership lock, per-checkout retirement fence with `retireWithUnlockedArchive` (archives run between two lock sections), and fail-closed live-agent reader used by claim binding and worktree cleanup. Re-exported by `cosClaimOwnership.js` for existing callers; does not import reconciliation. |
 | `systemActivityNotify.js` | Coalesced activity invalidation signal and LLM lifecycle adapters; producers do not import media execution. |

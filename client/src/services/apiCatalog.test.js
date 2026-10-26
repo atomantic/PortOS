@@ -123,3 +123,32 @@ it('serializes the source note ids so the server can consume them in the commit 
   await commitCatalogScrapDraft('example-scrap', [], { creativeNoteIds: [], silent: true });
   expect(JSON.parse(request.mock.lastCall[1].body)).toEqual({ accepted: [] });
 });
+
+
+it('serializes detail projection options without changing full-detail compatibility', async () => {
+  const { getCatalogIngredientDetails } = await import('./apiCatalog.js');
+  await getCatalogIngredientDetails('example/id', { view: 'profile', silent: true });
+  expect(request).toHaveBeenLastCalledWith('/catalog/ingredients/example%2Fid/details?view=profile', { silent: true });
+  await getCatalogIngredientDetails('example/id');
+  expect(request).toHaveBeenLastCalledWith('/catalog/ingredients/example%2Fid/details', {});
+});
+
+describe('getCatalogIngredientCards', () => {
+  it('bounds requests to50, keeps retained request IDs and excludes empty input without fetching', async () => {
+    const { getCatalogIngredientCards } = await import('./apiCatalog.js');
+    const ids = ['retained-' + 'x'.repeat(70), ...Array.from({ length: 50 }, (_, index) => `example-${index}`)];
+    request.mockImplementation(async path => ({ items: new URLSearchParams(path.split('?')[1]).get('ids').split(',').map(id => ({ id, canonicalId: 'canonical', payload: {} })) }));
+    const rows = await getCatalogIngredientCards(ids, { silent: true });
+    expect(rows.map(row => row.id)).toEqual(ids);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(new URLSearchParams(request.mock.calls[0][0].split('?')[1]).get('ids').split(',')).toHaveLength(50);
+    request.mockClear(); expect(await getCatalogIngredientCards(['', null])).toEqual([]); expect(request).not.toHaveBeenCalled();
+  });
+  it('distinguishes unavailable context from a valid empty collection', async () => {
+    const { getCatalogIngredientCards } = await import('./apiCatalog.js');
+    request.mockResolvedValue({ items: null });
+    await expect(getCatalogIngredientCards(['example'])).rejects.toThrow('unavailable');
+    request.mockResolvedValue({ items: [] });
+    expect(await getCatalogIngredientCards(['missing'])).toEqual([]);
+  });
+});

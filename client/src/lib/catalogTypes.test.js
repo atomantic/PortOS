@@ -32,7 +32,7 @@ describe('catalogTypes — character sheet sections', () => {
         for (const [key, label, kind] of section.fields) {
           expect(typeof key).toBe('string');
           expect(typeof label).toBe('string');
-          expect(['text', 'textarea']).toContain(kind);
+          expect(['text', 'textarea', 'intExt', 'timeOfDay']).toContain(kind);
         }
       }
     }

@@ -1,10 +1,11 @@
+import { isDefaultA2vLoraStages } from './videoLoraStages.js';
 import { composeStyledPrompt, stylePromptAdditions } from './composeStyledPrompt';
 import { universeStylePreset, withUniverseLabel } from './universeStylePreset.js';
 import { isLtx2FamilyRuntime } from './runnerFamilies';
 import { isDefaultI2vReferenceMode } from './videoReferenceModes';
 import { clampImageEdge } from './imageGenResolutions';
 import {
-  VIDEO_EDGE_BOUNDS,
+  isMiniMaxH3SpeedProfile, VIDEO_EDGE_BOUNDS,
   videoEdgeBoundsForModel,
   supportsVideoAudioControls,
   supportsVideoAudioPromptControls,
@@ -14,6 +15,7 @@ import {
   videoChainChunkModes,
   DEFAULT_DRAFT_DECODE_ID,
   resolveDraftDecodeForModel,
+  selectedContextFramesForModel,
 } from './videoGenParams.js';
 import { isDefaultVideoStreamingMode } from './videoStreamingMode.js';
 
@@ -252,11 +254,13 @@ function referenceImageFields({ currentModel, referenceImageFiles = [], referenc
   };
 }
 
-function chunkFields({ chainingActive, chunks, beats, contextFrames }) {
+function chunkFields({ chainingActive, chunks, beats, contextFrames, currentModel }) {
+  const selectedContext = selectedContextFramesForModel(currentModel, contextFrames);
   return {
     chunks: chainingActive ? chunks : '',
     chunkPrompts: beats.some((beat) => beat.trim()) ? JSON.stringify(beats) : '',
-    contextFrames: chainingActive ? String(contextFrames) : '',
+    contextFrames: chainingActive ? String(selectedContext) : '',
+    continuityStrategy: chainingActive ? (selectedContext > 0 ? 'window' : 'frame') : undefined,
   };
 }
 
@@ -269,7 +273,8 @@ function localOptionalFields({
     textEncoderId: normalizeTextEncoderForModel(textEncoderId, currentModel) === STOCK_TEXT_ENCODER_ID
       ? undefined
       : textEncoderId,
-    speedProfileId: selectedSpeedProfile(speedProfileId, currentModel, videoChainChunkModes({
+    speedProfileId: currentModel?.speedProfiles?.some((p) => p.id === speedProfileId && isMiniMaxH3SpeedProfile(p))
+      ? speedProfileId : selectedSpeedProfile(speedProfileId, currentModel, videoChainChunkModes({
       model: currentModel, mode, chaining: chainingActive, contextFrames,
     }))?.id,
     // Preview-fidelity decode (#5423). Sent only when it is a real, still-valid
@@ -316,6 +321,7 @@ function localVideoSubmission(args, { composed, withEnvelope, effectiveDisableAu
     chainingActive, chunks, contextFrames,
   } = args;
   const legacyFflf = mode === 'fflf' && !keyframesActive;
+  const h3SpeedProfile = currentModel?.speedProfiles?.some((p) => p.id === args.speedProfileId && isMiniMaxH3SpeedProfile(p));
   return {
     backend: 'local',
     prompt: withEnvelope(prompt),
@@ -324,8 +330,8 @@ function localVideoSubmission(args, { composed, withEnvelope, effectiveDisableAu
     ...clampedSize(width, height, videoEdgeBoundsForModel(currentModel)),
     numFrames,
     fps,
-    steps: steps || '',
-    guidanceScale: guidanceScale || '',
+    steps: h3SpeedProfile ? '' : (steps || ''),
+    guidanceScale: h3SpeedProfile ? '' : (guidanceScale || ''),
     seed: seed ?? '',
     ...(currentModel?.supportsWarmBatch && !chainingActive && batchSize > 1 ? { batchSize } : {}),
     tiling: currentModel?.supportsTiling === false ? 'auto' : tiling,
@@ -340,7 +346,7 @@ function localVideoSubmission(args, { composed, withEnvelope, effectiveDisableAu
     ...frameSourceFields({ ...args, runtime: currentModel?.runtime, legacyFflf }),
     ...icReferenceFields(args),
     ...referenceImageFields(args),
-    ...chunkFields({ chainingActive, chunks, beats, contextFrames }),
+    ...chunkFields({ chainingActive, chunks, beats, contextFrames, currentModel }),
   };
 }
 
@@ -383,5 +389,10 @@ export function buildVideoGenSubmission(args) {
       effectiveDisableAudio: supportsVideoAudioControls(currentModel) && disableAudio,
       beats: liveBeats(chainingActive, chunkPrompts, chunks, withEnvelope),
     });
+  // Preserve an explicit schedule across backend/model switches: the server
+  // must refuse unsupported execution instead of silently dropping this choice.
+  if (!isDefaultA2vLoraStages(args.a2vLoraStageStrengths)) {
+    payload.a2vLoraStageStrengths = JSON.stringify(args.a2vLoraStageStrengths);
+  }
   return additions.length ? { ...payload, promptAdditions: additions } : payload;
 }

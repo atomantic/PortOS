@@ -6,6 +6,7 @@
  * Also the FTS / vector / hybrid (RRF) search paths over the ingredient corpus.
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import { query, withTransaction, arrayToPgvector } from '../../lib/db.js';
 import { reciprocalRankFusion } from '../../lib/rrfRanking.js';
 import {
@@ -31,8 +32,38 @@ import {
   liveHomingTargetSql,
 } from './shared.js';
 import { normalizeTags } from './tags.js';
-import { assertCatalogIdentityWritable } from './identityAccess.js';
+import { assertCatalogIdentityWritable, getCatalogIdentityAccessForIds } from './identityAccess.js';
 import { toPgJson } from '../../lib/pgJson.js';
+import { ServerError } from '../../lib/errorHandler.js';
+
+// Write ONE payload key under the row lock: a card or a side panel must never
+// write a stale whole payload, sanitize legacy fields away, or spend an
+// embedding call. `guard(current)` may throw to refuse by type; `null` clears
+// the key. Returns null for a missing row.
+export async function setIngredientPayloadKey(id, key, value, { source = 'user', guard } = {}) {
+  return withTransaction(async client => {
+    await assertCatalogIdentityWritable(id, { client });
+    const { rows: [current] } = await client.query(`SELECT * FROM catalog_ingredients
+      WHERE id = catalog_canonical_ingredient_id($1) AND deleted = false FOR UPDATE`, [id]);
+    if (!current) return null;
+    guard?.(current);
+    if (isDeepStrictEqual(current.payload?.[key], value ?? undefined)) return rowToIngredient(current);
+    const { rows: [row] } = value === null
+      ? await client.query('UPDATE catalog_ingredients SET payload = payload - $2::text WHERE id = $1 RETURNING *', [current.id, key])
+      : await client.query(`UPDATE catalog_ingredients
+          SET payload = jsonb_set(COALESCE(payload, '{}'::jsonb), ARRAY[$2::text], $3::jsonb, true)
+          WHERE id = $1 RETURNING *`, [current.id, key, toPgJson(value)]);
+    const updated = rowToIngredient(row);
+    await recordIngredientRevision(updated, { source, client });
+    return updated;
+  });
+}
+
+export const setIngredientLock = (id, locked) => setIngredientPayloadKey(id, 'locked', locked, {
+  guard: (current) => {
+    if (!BIBLE_SANITIZERS[current.type]) throw new ServerError('This ingredient type has no canon lock', { status: 400 });
+  },
+});
 
 // `{ client }` is optional — when supplied, SQL runs on the caller's transaction
 // client (so the write rolls back if a later step in the same `withTransaction`
@@ -369,8 +400,8 @@ const INGREDIENT_LIGHT_COLS = 'id, type, name, payload, tags, embedding_model, o
 //    reference image. Mirrors listMediaForIngredient's `(kind='portrait') DESC,
 //    created_at DESC` ordering so the card shows the detail page's avatar.
 //    Non-image kinds are excluded so a card never points an <img> at an
-//    unrenderable key, and role-filed working images — reference sheets
-//    (`sheet:*`), looks (`look:*`), archives and plates — never become the cover.
+//    unrenderable key, looks, archives and plates are excluded. Reference sheets are a fallback
+//    when no portrait or ordinary reference exists.
 //  - ref_usage: per-kind count of the distinct records the row is linked to
 //    ({ universe: 1, series: 2 }) for the "used in" line; a homing kind counts
 //    only live targets.
@@ -382,23 +413,34 @@ async function decorateIngredientPage(ids) {
        SELECT cid, jsonb_object_agg(ref_kind, n) AS ref_usage FROM (
          SELECT r.cid, r.ref_kind, COUNT(DISTINCT r.ref_id) AS n
            FROM (SELECT catalog_canonical_ingredient_id(ingredient_id) AS cid, ref_kind, ref_id
-                   FROM catalog_identity_read_refs WHERE deleted = false) r
+                   FROM catalog_identity_read_refs WHERE deleted = false AND NOT (ref_kind = 'universe' AND role = 'owner')) r
           WHERE ${inSet('r.cid', 'SELECT id FROM page')}
             AND (r.ref_kind NOT IN (${HOMING_REF_KINDS_SQL}) OR ${liveHomingTargetSql('r')})
           GROUP BY r.cid, r.ref_kind
        ) u GROUP BY cid
      ),
+     owners AS (
+       SELECT ingredient_id AS id, COUNT(DISTINCT ref_id) AS n, MIN(ref_id) AS universe_id
+         FROM catalog_identity_read_refs
+        WHERE ref_kind = 'universe' AND role = 'owner' AND deleted = false
+          AND ingredient_id = catalog_canonical_ingredient_id(ingredient_id)
+          AND ingredient_id = ANY($1)
+        GROUP BY ingredient_id
+     ),
      thumbs AS (
        SELECT DISTINCT ON (m.cid) m.cid, m.media_key
-         FROM (SELECT catalog_canonical_ingredient_id(ingredient_id) AS cid, media_key, kind, created_at
+         FROM (SELECT catalog_canonical_ingredient_id(ingredient_id) AS cid, media_key, kind, role, created_at
                  FROM catalog_identity_read_media
                 WHERE deleted = false AND kind IN ('portrait', 'reference')
-                  AND (role IS NULL OR NOT (role LIKE 'sheet:%' OR role LIKE 'look:%' OR role LIKE 'archive:%' OR role = 'plate'))) m
+                  AND (role IS NULL OR NOT (role LIKE 'look:%' OR role LIKE 'archive:%' OR role = 'plate'))) m
         WHERE ${inSet('m.cid', 'SELECT id FROM page')}
-        ORDER BY m.cid, (m.kind = 'portrait') DESC, m.created_at DESC
+        ORDER BY m.cid, (m.kind = 'portrait') DESC, COALESCE(m.role LIKE 'sheet:%', false), m.created_at DESC
      )
-     SELECT page.id, thumbs.media_key AS thumbnail_key, usage.ref_usage
-       FROM page LEFT JOIN thumbs ON thumbs.cid = page.id LEFT JOIN usage ON usage.cid = page.id`,
+     SELECT page.id, thumbs.media_key AS thumbnail_key, usage.ref_usage,
+       CASE WHEN owners.n = 1 AND u.id IS NOT NULL THEN jsonb_build_object('id', u.id, 'name', u.name) ELSE NULL END AS owning_universe,
+       CASE WHEN owners.n > 1 THEN 'conflict' WHEN owners.n = 1 AND u.id IS NOT NULL THEN 'owned' ELSE 'needs-review' END AS ownership_status
+       FROM page LEFT JOIN thumbs ON thumbs.cid = page.id LEFT JOIN usage ON usage.cid = page.id
+       LEFT JOIN owners ON owners.id = page.id LEFT JOIN universes u ON u.id = owners.universe_id AND u.deleted = false`,
     [ids],
   );
   return new Map(result.rows.map((row) => [row.id, row]));
@@ -505,13 +547,39 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
     params,
   );
   const decorations = includeEmbedding ? new Map() : await decorateIngredientPage(result.rows.map((row) => row.id));
+  const access = includeEmbedding ? new Map() : await getCatalogIdentityAccessForIds(result.rows.map(row => row.id));
   return {
     items: result.rows.map((row) => {
       const decoration = decorations.get(row.id);
-      return { ...rowToIngredient(row), thumbnailKey: decoration?.thumbnail_key ?? null, usage: decoration?.ref_usage ?? {} };
+      return { ...rowToIngredient(row), thumbnailKey: decoration?.thumbnail_key ?? null, usage: decoration?.ref_usage ?? {},
+        owningUniverse: decoration?.owning_universe ?? null, ownershipStatus: decoration?.ownership_status ?? 'needs-review',
+        sharedIdentity: access.get(row.id) || null };
     }),
     nextOffset: offset + result.rows.length,
   };
+}
+
+// Preserve requested IDs (including retained originals) while hydrating an
+// entire visible card collection in bounded queries, without media/history.
+export async function getIngredientCards(ids) {
+  if (!ids.length) return [];
+  const columns = INGREDIENT_LIGHT_COLS.split(', ').map(column => column === 'payload'
+    ? `jsonb_strip_nulls(jsonb_build_object('role', left(i.payload->>'role', 300), 'physicalDescription', left(i.payload->>'physicalDescription', 1000),
+        'description', left(i.payload->>'description', 1000), 'locked', i.payload->'locked', 'primaryImageRef', i.payload->'primaryImageRef',
+        'imageRefs', jsonb_build_array(i.payload->'imageRefs'->0))) AS payload` : `i.${column}`).join(', ');
+  const { rows } = await query(`SELECT requested.id AS requested_key, ${columns}
+    FROM unnest($1::text[]) WITH ORDINALITY requested(id, position)
+    JOIN catalog_ingredients i ON i.id = catalog_canonical_ingredient_id(requested.id) AND i.deleted = false
+    ORDER BY requested.position`, [ids]);
+  const decorations = await decorateIngredientPage([...new Set(rows.map(row => row.id))]);
+  const access = await getCatalogIdentityAccessForIds(ids);
+  return rows.map(row => {
+    const decoration = decorations.get(row.id);
+    return { ...rowToIngredient(row), id: row.requested_key, canonicalId: row.id,
+      thumbnailKey: decoration?.thumbnail_key ?? null, usage: decoration?.ref_usage ?? {},
+      owningUniverse: decoration?.owning_universe ?? null, ownershipStatus: decoration?.ownership_status ?? 'needs-review',
+      sharedIdentity: access.get(row.requested_key) || null };
+  });
 }
 
 /**

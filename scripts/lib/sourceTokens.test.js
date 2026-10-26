@@ -1,0 +1,63 @@
+import { describe, expect, it } from 'vitest';
+import { moduleImports } from './sourceTokens.js';
+
+describe('no-install module import extraction', () => {
+  it('ignores comment prose, quoted fixtures, template text and regex source', () => {
+    const source = [
+      '// import (#2895)',
+      '/* import (#1945); export { value } from "./comment.js"; */',
+      'const quoted = "import(unknown)";',
+      'const fixture = `import value from "./ProbeGood";\nexport * from "./ProbeBarrel"; import(unknown)`;',
+      'const pattern = /import\\s*\\(unknown\\)/g;',
+      'const other = /export .* from "ghost"/;',
+      'if (ready) /import(unknown)/.test(text);',
+      'object.import(unknown); object?.import(unknown);',
+    ].join('\n');
+    expect(moduleImports(source)).toEqual({ statics: [], deferred: [], computed: false });
+  });
+
+  it('finds real declarations, re-exports, deferred literals and template expressions', () => {
+    const source = [
+      'import "./side.js"; import { value } from "./static.js";',
+      'export { value } from "./bridge.js"; export * as all from "./all.js";',
+      'const one = import(/* comment */ "./lazy.js", { with: { type: "json" } });',
+      'const two = import(`./template.js`);',
+      'const text = `fixture import(unknown) ${import("./expression.js")}`;',
+    ].join('\n');
+    expect(moduleImports(source)).toEqual({
+      statics: ['./side.js', './static.js', './bridge.js', './all.js'],
+      deferred: ['./lazy.js', './template.js', './expression.js'], computed: false,
+    });
+  });
+
+  it.each([
+    'import(modulePath)', 'import("./" + modulePath)', 'import(`./${modulePath}`)',
+    '`text ${import(modulePath)}`', 'import(("./wrapped.js"))',
+  ])('retains uncertainty for the executable expression %s', (source) => {
+    expect(moduleImports(source).computed).toBe(true);
+  });
+
+  it('keeps executable JSX expressions outside quoted child prose and attribute strings', () => {
+    const source = `<div // A child's "import(unknown)" prose has { and > here.
+      title="import(unknown)">"{load(import('./child.js'))}"<span>{import('./nested.js')}</span>{
+      <Other value={import('./attribute.js')} />
+    }</div>`;
+    expect(moduleImports(source)).toEqual({ statics: [],
+      deferred: ['./child.js', './nested.js', './attribute.js'], computed: false });
+    expect(moduleImports('const view = <>"{import(modulePath)}"</>').computed).toBe(true);
+    expect(() => moduleImports('const view = <Unknown>')).toThrow(/JSX/);
+  });
+
+  it('distinguishes TypeScript assertions and TSX generic arrows from JSX', () => {
+    const ts = 'const identity = <T>(value: T) => value; const asserted = <Thing>value; import("./typed.js");';
+    expect(moduleImports(ts, { jsx: false })).toEqual({ statics: [], deferred: ['./typed.js'], computed: false });
+    const tsx = 'const identity = <T,>(value: T) => import("./generic.js"); const view = <div>{import("./jsx.js")}</div>;';
+    expect(moduleImports(tsx)).toEqual({ statics: [], deferred: ['./generic.js', './jsx.js'], computed: false });
+  });
+
+  it('does not treat division as a regex and hide an executable import', () => {
+    for (const value of ['value', 'value++', 'value--', 'call()', 'value.catch()', 'value?.catch()', 'value.with()', 'value.if()', 'rates.of', 'rates?.of', 'rates.return', 'rates.await']) {
+      expect(moduleImports(`const ratio = ${value} / import("./real.js") / divisor;`).deferred).toEqual(['./real.js']);
+    }
+  });
+});

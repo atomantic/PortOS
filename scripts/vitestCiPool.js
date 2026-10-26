@@ -40,6 +40,9 @@ export function vitestCiPool({ maxWorkers = 4 } = {}) {
 // Keep these public Chrome/ffmpeg contracts in the full/CI runner, but give
 // their captures a quiet group after parallel unit work (#9394).
 export const EXCLUSIVE_CAPTURE_TESTS = [
+  // Real HiDPI WebGL capture shares the same constrained Chromium/GPU budget.
+  // Parallel hosted runs timed out in both capture and startup (#13748).
+  'routes/catalogGreyboxViewer.browser.test.js',
   // Exact SVG-filter screenshots hit the 30s CI budget alongside parallel tests.
   'lib/filmLook.browser.test.js',
   'lib/filmLookGpu.browser.test.js',

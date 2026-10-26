@@ -119,7 +119,7 @@ export const isMlxVideoLtxLoraCapable = (model) => {
 //   - notapalindrome's `mlx_video` on a non-quantized LTX-2.x model — fused
 //     offline into the transformer weights (see isMlxVideoLtxLoraCapable +
 //     scripts/generate_av_lora.py).
-//   - `minimax_h3`, but ONLY when the installed runner plus PortOS's
+//   - `minimax_h3` / `minimax_h3_cuda`, but ONLY when the installed runner plus PortOS's
 //     activation-space adapter can apply LoRAs to the quantized DiT at runtime.
 //     That is a property of the installed checkout, not of the model entry, so
 //     it can't be derived here: listVideoModels()
@@ -131,7 +131,7 @@ export const isMlxVideoLtxLoraCapable = (model) => {
 // path, so they return null ("no LoRA support") and the VideoGen picker hides.
 export const videoLoraFamily = (model) => {
   if (isLtx2FamilyRuntime(model?.runtime) || isMlxVideoLtxLoraCapable(model)) return VIDEO_LORA_FAMILIES.LTX_VIDEO;
-  if (model?.runtime === 'minimax_h3' && model?.runtimeLoraCapable === true) return VIDEO_LORA_FAMILIES.MINIMAX_H3;
+  if (['minimax_h3', 'minimax_h3_cuda'].includes(model?.runtime) && model?.runtimeLoraCapable === true) return VIDEO_LORA_FAMILIES.MINIMAX_H3;
   return null;
 };
 

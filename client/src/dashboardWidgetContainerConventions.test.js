@@ -57,7 +57,7 @@ export function widgetSources(srcRoot = SRC_ROOT) {
       .map((ext) => `${base}${ext}`)
       .find((candidate) => existsSync(join(srcRoot, candidate)));
     if (!resolved) throw new Error(`widgetRegistry imports an unresolvable module: ${specifier}`);
-    return resolved;
+    return resolved.split('\\').join('/');
   });
 }
 

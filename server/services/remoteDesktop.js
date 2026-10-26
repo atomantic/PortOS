@@ -38,7 +38,7 @@ export const createRemoteDesktopBroker = ({
   const sessions = new Map();
   // Live bridges per token so revokeAll can end connections the session map no longer gates.
   const liveBridges = new Map();
-  const mountedServers = new WeakSet();
+  const mountedServers = new WeakMap();
 
   const deleteExpiredSessions = () => {
     const cutoff = now();
@@ -105,11 +105,11 @@ export const createRemoteDesktopBroker = ({
   };
 
   const mountWebSocket = (httpServer) => {
-    if (!httpServer || mountedServers.has(httpServer)) return;
-    mountedServers.add(httpServer);
+    if (!httpServer) return;
+    if (mountedServers.has(httpServer)) return mountedServers.get(httpServer);
     const wss = new WebSocketServer({ noServer: true });
 
-    httpServer.on('upgrade', (request, socket, head) => {
+    const onUpgrade = (request, socket, head) => {
       if (request.url?.split('?', 1)[0] !== '/remote-desktop/ws') return;
       markUpgradeClaimed(socket);
       let url;
@@ -135,7 +135,8 @@ export const createRemoteDesktopBroker = ({
         releaseSession(token);
         socket.destroy();
       }
-    });
+    };
+    httpServer.on('upgrade', onUpgrade);
 
     wss.on('connection', (webSocket, _request, token, expiresAt) => {
       const vncSocket = connect({ host, port });
@@ -165,6 +166,19 @@ export const createRemoteDesktopBroker = ({
       webSocket.once('close', cleanup);
       webSocketStream.once('error', cleanup);
     });
+
+    const unmount = () => {
+      if (mountedServers.get(httpServer) !== unmount) return;
+      mountedServers.delete(httpServer);
+      httpServer.off('upgrade', onUpgrade);
+      httpServer.off('close', unmount);
+      // Terminate rather than waiting for a remote close handshake during shutdown.
+      for (const webSocket of wss.clients) webSocket.terminate();
+      wss.close();
+    };
+    mountedServers.set(httpServer, unmount);
+    httpServer.once('close', unmount);
+    return unmount;
   };
 
   // Mirrors the auth contract that every PortOS session credential dies on

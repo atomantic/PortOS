@@ -8,13 +8,13 @@ import { PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { probeFrameCount, trimVideoFromFrame } from '../../lib/ffmpeg.js';
 import {
-  resolveContextFrames, resolveContinuityStrategy, extendLatentFrames,
-  contextPrefixFrames, tailWindowStartFrame,
+  resolveContinuityRequest, extendLatentFrames,
+  contextPrefixFrames, tailWindowStartFrame, continuationContract,
 } from '../../lib/videoContinuity.js';
 import { broadcastSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { videoGenEvents } from './events.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
-import { videoChainUnsupportedError } from './modeContract.js';
+import { videoChainUnsupportedError, videoContinuityContractError } from './modeContract.js';
 import { estimateRenderMs } from './eta.js';
 import {
   resolveVideoSpeedProfileForModes, speedProfileDeclineReasonForModes,
@@ -61,26 +61,33 @@ import { generateVideo, resolveVideoModel, defaultVideoModelId } from './generat
 // chunk i's prompt, and a null/blank/missing entry falls back to the main
 // `prompt`. It is destructured out of `rest` on purpose so the per-chunk
 // generateVideo() calls below never receive the whole list.
-export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames, jobId: outerJobId, ...rest }) {
+export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames, continuityStrategy, executionQueueJobId, segmentSeeds, segmentSeedBase, jobId: outerJobId, ...rest }) {
   if (Number(chunks) > 1 && Number(rest.batchSize) > 1) {
     throw new ServerError('A render batch cannot be combined with chained clips.', { status: 400, code: 'VIDEO_BATCH_CONFLICT' });
   }
   const totalChunks = Number(chunks) || 1;
   if (totalChunks === 1) {
-    return generateVideo({ jobId: outerJobId, ...rest });
+    return generateVideo({ jobId: outerJobId, continuityStrategy, contextFrames, ...rest });
   }
   if (!outerJobId) throw new ServerError('generateChainedVideo requires jobId', { status: 500, code: 'INTERNAL' });
+  if (executionQueueJobId != null && executionQueueJobId !== outerJobId) {
+    throw new ServerError('Queued chain execution must belong to its outer job.', { status: 400, code: 'VIDEO_EXECUTION_PARENT_MISMATCH' });
+  }
 
   const chainModel = resolveVideoModel(rest.modelId || defaultVideoModelId());
   const chainError = videoChainUnsupportedError(chainModel);
   if (chainError) throw chainError;
 
-  // How chunk N+1 sees chunk N. 'window' hands LTX-2's extend pipeline the
-  // prior chunk's last `windowFrames` frames (motion + appearance); 'frame'
-  // is the historical single-still i2v hop, and is what every runtime without
-  // an extend pipeline resolves to. See lib/videoContinuity.js.
-  const windowFrames = resolveContextFrames(contextFrames);
-  const continuity = resolveContinuityStrategy({ model: chainModel, contextFrames: windowFrames });
+  // A window uses its runtime's adapter and output layout; explicit requests
+  // must be admitted before selecting either history conditioning or a still.
+  const continuityError = videoContinuityContractError({ model: chainModel, continuityStrategy, contextFrames });
+  if (continuityError) throw continuityError;
+  const continuation = resolveContinuityRequest({ model: chainModel, continuityStrategy, contextFrames });
+  const windowFrames = continuation.contextFrames;
+  const continuity = continuation.effectiveStrategy;
+  const contract = continuationContract(chainModel?.runtime);
+  const echoesHistory = contract.outputLayout === 'echoed-history-prefix';
+  const continuationMode = echoesHistory ? 'extend' : 'text';
   // Mirrors generateVideo's own default — the trim math converts frame indices
   // to audio timestamps, so it can't run on an undefined rate.
   const chainFps = Number(rest.fps) > 0 ? Number(rest.fps) : 24;
@@ -98,11 +105,11 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   // dispatch reaches here as null. Falling back keeps the chain's first chunk
   // the thing that reports it — generateVideo throws a 400 "Unknown video
   // model: X" — instead of a null-deref out of the dispatcher.
-  const chunkExtendLatents = extendLatentFrames(
-    rest.numFrames ?? chainModel?.defaultFrames ?? DEFAULT_NUM_FRAMES,
-  );
+  const chunkExtendLatents = continuity === 'window' && echoesHistory ? extendLatentFrames(
+    rest.numFrames ?? chainModel?.defaultFrames ?? DEFAULT_NUM_FRAMES, chainModel.runtime,
+  ) : null;
 
-  const chainState = { stopped: false };
+  const chainState = { stopped: false, abortController: new AbortController() };
   videoJobState.activeChain = chainState;
 
   // Hold an outer job entry so attachSseClient(outerJobId) wires up against
@@ -134,7 +141,7 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   // agree with this decision instead of each re-deciding.
   const chainChunkModes = [
     inferEffectiveVideoMode(rest),
-    ...(totalChunks > 1 ? [continuity === 'window' ? 'extend' : 'image'] : []),
+    ...(totalChunks > 1 ? [continuity === 'window' ? continuationMode : 'image'] : []),
   ];
   const chainSpeedProfile = resolveVideoSpeedProfileForModes({
     model: chainModel, profileId: rest.speedProfileId, modes: chainChunkModes,
@@ -155,7 +162,11 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   });
   const chainDimensions = resolveVideoDimensions(chainModel, rest.width, rest.height);
   const chainEta = estimateRenderMs({
-    history: await loadHistory(),
+    history: await loadHistory().catch((error) => {
+      if (videoJobState.activeChain === chainState) videoJobState.activeChain = null;
+      videoJobState.jobs.delete(outerJobId);
+      throw error;
+    }),
     modelId: rest.modelId || defaultVideoModelId(),
     width: chainDimensions.width,
     height: chainDimensions.height,
@@ -176,6 +187,7 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   // stitch then repeats that content once per hop) while the conditioning cost
   // grew with the chain. Written under tmpdir and deleted when the chain ends.
   let currentContextClip = null;
+  let currentHistoryContext = null;
   const contextClipPaths = [];
   // Echoed-context cut for each chunk that has one: where the chunk's own new
   // footage starts, and how many frames it therefore contributes. Handed to
@@ -183,6 +195,7 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   // chunk files themselves are never rewritten, so the chain pays exactly one
   // encode (the stitch) instead of one per chunk plus the stitch.
   const chunkTrims = new Map();
+  const continuationHops = [];
   // First chunk always preserves the user's mode (text, image, fflf or extend)
   // and is never trimmed: in an extend chain its output is `source clip +
   // extension`, and the source clip belongs in the result exactly once — here.
@@ -239,14 +252,13 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
     // chunk visually varied while remaining reproducible from the user's
     // chosen seed. When seed is unset, generateVideo picks one randomly
     // per chunk (existing behavior).
-    const chunkSeed = rest.seed != null && rest.seed !== ''
-      ? Number(rest.seed) + i
-      : undefined;
+    const requestedSeed = rest.seed == null || rest.seed === '' ? null : Number(rest.seed);
+    const replaySeed = Array.isArray(segmentSeeds) && segmentSeedBase === requestedSeed ? segmentSeeds[i] : null;
+    const chunkSeed = Number.isSafeInteger(replaySeed) && replaySeed >= 0
+      ? replaySeed : (requestedSeed != null ? requestedSeed + i : undefined);
 
-    // Chunks 1+ on a window-continuity chain re-enter as extend renders
-    // conditioned on the tail clip built after the previous chunk, whatever
-    // mode the chain STARTED in — a text or i2v chain gets the same motion
-    // carry-over an extend chain does, instead of restarting from a still.
+    // LTX consumes a prepared tail clip; new-output-only adapters consume an
+    // interval of the untouched prior chunk and own their video/audio decode.
     const isWindowHop = continuity === 'window' && i > 0;
     // Per-chunk beat (#3695). `chunkPrompts` is already normalized (blank →
     // null) by prepareVideoGenParams, but re-guard on emptiness here too so a
@@ -264,21 +276,31 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
       prompt: chunkPrompt,
       seed: chunkSeed,
       jobId: innerJobId,
+      ...(executionQueueJobId ? { executionParent: {
+        jobId: executionQueueJobId, segmentIndex: i, segmentCount: totalChunks,
+      } } : {}),
       // window hop: condition on the tail clip cut from the prior chunk, so
       // the model reads motion out of it rather than a single static pose.
       // frame hop: condition on the prior chunk's extracted last frame.
       sourceImagePath: isWindowHop ? null : currentSource,
       extendFromVideoPath: isWindowHop ? currentContextClip : (i === 0 ? rest.extendFromVideoPath : null),
+      historyContext: isWindowHop ? currentHistoryContext : undefined,
+      continuityStrategy,
+      contextFrames: windowFrames,
       // Only the first chunk consumes the user's uploadedTempPath (durable
       // copy under data/uploads). Later chunks condition on the prior chunk
       // instead — a tail window (window hop) or an extracted frame (frame hop).
       uploadedTempPath: i === 0 ? rest.uploadedTempPath : null,
       uploadedTempPaths: i === 0 ? (rest.uploadedTempPaths || []) : [],
       hidden: true,
+      continuation: {
+        ...continuation,
+        actualHistoryFrames: isWindowHop ? continuationHops[i - 1]?.actualHistoryFrames : 0,
+      },
       // Chunk 0 of an extend chain consumes the user's own clip, so its render
       // keeps that clip instead of the model's decode of it (#11179).
       keepExtendSource: i === 0 && firstMode === 'extend',
-      mode: isWindowHop ? 'extend' : (i === 0 ? firstMode : 'image'),
+      mode: isWindowHop ? continuationMode : (i === 0 ? firstMode : 'image'),
       // After the first chunk, drop FFLF-style last image — chained
       // continuation conditions on one thing, the tail of the chunk before it,
       // and has no second anchor to pin an end frame to.
@@ -302,24 +324,22 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   });
 
   // The conditioning windows are scratch input to the next chunk, never
-  // output — drop them on every terminal path (both of which always run) so a
-  // long chain doesn't leave a trail of clips in tmpdir. Best-effort and
-  // fire-and-forget: a leftover temp file must never fail a finished render.
-  const cleanupContextClips = () => {
-    for (const p of contextClipPaths) unlinkGuarded(p).catch(() => {});
+  // output. Settle owned scratch cleanup before announcing a terminal result.
+  const cleanupContextClips = async () => {
+    await Promise.all(contextClipPaths.map((path) => unlinkGuarded(path).catch(() => {})));
     contextClipPaths.length = 0;
   };
-  const finishOk = (payload) => {
+  const finishOk = async (payload) => {
     if (videoJobState.activeChain === chainState) videoJobState.activeChain = null;
-    cleanupContextClips();
+    await cleanupContextClips();
     videoGenEvents.emit('completed', { generationId: outerJobId, ...payload });
     broadcastSse(outerJob, { type: 'complete', result: payload });
     closeJobAfterDelay(videoJobState.jobs, outerJobId);
   };
   const failureOptions = { prompts: [rest.prompt, rest.negativePrompt, ...(chunkPrompts || [])] };
-  const finishFail = (error, failure = normalizeVideoFailure(error, failureOptions)) => {
+  const finishFail = async (error, failure = normalizeVideoFailure(error, failureOptions)) => {
     if (videoJobState.activeChain === chainState) videoJobState.activeChain = null;
-    cleanupContextClips();
+    await cleanupContextClips();
     videoGenEvents.emit('failed', { generationId: outerJobId, error, failure });
     broadcastSse(outerJob, { type: 'error', error });
     closeJobAfterDelay(videoJobState.jobs, outerJobId);
@@ -331,14 +351,19 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
     for (let i = 0; i < totalChunks; i++) {
       if (chainState.stopped) {
         await setHistoryItemsHidden(chunkIds, true);
-        finishFail('Canceled mid-chain');
+        await finishFail('Canceled mid-chain');
         return;
       }
       // eslint-disable-next-line no-await-in-loop
       const completed = await runChunk(i).catch((err) => ({ error: err.message, failure: normalizeVideoFailure(err, failureOptions) }));
+      if (chainState.stopped) {
+        await setHistoryItemsHidden(chunkIds, true);
+        await finishFail('Canceled mid-chain');
+        return;
+      }
       if (completed?.error) {
         await setHistoryItemsHidden(chunkIds, true);
-        finishFail(completed.error, completed.failure);
+        await finishFail(completed.error, completed.failure);
         return;
       }
       // The chunk's output file is always <innerJobId>.mp4 under PATHS.videos
@@ -353,8 +378,14 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
         // header carries no nb_frames.
         // eslint-disable-next-line no-await-in-loop
         const frames = await probeFrameCount(chunkPath);
+        if (chainState.stopped) throw new ServerError('Canceled mid-chain', { status: 499, code: 'VIDEO_GEN_CANCELED' });
+        if (!Number.isInteger(frames) || frames <= 0) {
+          await setHistoryItemsHidden(chunkIds, true);
+          await finishFail('Cannot measure the completed chunk; refusing unbounded continuation history');
+          return;
+        }
 
-        // A window hop's render is `context window + new frames`. The window is
+        // An echoed-prefix hop renders `context window + new frames`. The window is
         // the tail of the chunk before it, which the stitched timeline already
         // holds, so record where the new footage starts and let the stitch drop
         // the echo in its filter graph. Measured from the RENDERED length rather
@@ -362,48 +393,62 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
         // to a latent boundary, so the echo is usually a few frames longer than
         // what we handed in.
         let contextPrefix = 0;
-        if (i > 0) {
-          contextPrefix = contextPrefixFrames({ totalFrames: frames, extendLatents: chunkExtendLatents });
+        if (i > 0 && echoesHistory) {
+          contextPrefix = contextPrefixFrames({ runtime: chainModel.runtime, totalFrames: frames, extendLatents: chunkExtendLatents });
           if (contextPrefix <= 0) {
-            console.log(`⚠️ Chunk ${i + 1}/${totalChunks} context prefix unmeasurable (frames=${frames ?? 'unknown'}), leaving it untrimmed`);
+            await setHistoryItemsHidden(chunkIds, true);
+            await finishFail('Cannot verify the continuation output prefix; refusing repeated or missing seam frames');
+            return;
           }
         }
-        // Record the measurement even when there's nothing to cut (chunk 0, or
-        // an unmeasurable prefix). An extend render's file is `source +
-        // extension`, so a chunk's own history `numFrames` — the count it was
-        // REQUESTED at — understates what it contributes to the timeline, and
-        // that's the only other number the stitch could fall back on.
-        if (frames != null) chunkTrims.set(chunkId, { startFrame: contextPrefix, frames: frames - contextPrefix });
+        chunkTrims.set(chunkId, { startFrame: contextPrefix, frames: frames - contextPrefix });
 
-        if (i < totalChunks - 1) {
-          // Cut the next hop's conditioning window off this chunk's tail. Both
-          // the count and the cut clamp: a window longer than the chunk simply
-          // conditions on all of it.
-          //
-          // An unprobeable length clamps the same way, which means the whole
-          // chunk becomes the window — the unbounded conditioning this exists
-          // to avoid, for one hop. It self-corrects (the next chunk's prefix
-          // trim measures the echo off the render, not off the window), but say
-          // so rather than letting the fallback be silent.
-          if (frames == null) {
-            console.log(`⚠️ Chunk ${i + 1}/${totalChunks} length unprobeable — conditioning the next chunk on the whole clip instead of a ${windowFrames}-frame window`);
+        if (i < totalChunks - 1 && !echoesHistory) {
+          const historyFrames = contract.historyFrames;
+          if (!Number.isInteger(historyFrames) || frames < historyFrames) {
+            await setHistoryItemsHidden(chunkIds, true);
+            await finishFail('Completed chunk is too short for the verified history interval');
+            return;
           }
+          const startFrame = frames - historyFrames;
+          currentHistoryContext = { sourceVideoPath: chunkPath, endFrame: frames, frames: historyFrames };
+          continuationHops.push({
+            sourceChunkId: chunkId,
+            startFrame,
+            endFrameExclusive: frames,
+            audioStartSec: startFrame / contract.fps,
+            audioEndSec: frames / contract.fps,
+            actualHistoryFrames: historyFrames,
+          });
+        } else if (i < totalChunks - 1) {
+          // History is measured before cutting; an unknown length must never
+          // turn a bounded request into the whole accumulated clip.
           const contextPath = join(tmpdir(), `chaincontext-${chunkId}.mp4`);
+          const startFrame = Math.max(contextPrefix, tailWindowStartFrame({ totalFrames: frames, frames: windowFrames }));
+          contextClipPaths.push(contextPath);
           // eslint-disable-next-line no-await-in-loop
           const cut = await trimVideoFromFrame(chunkPath, contextPath, {
             // Floored at the echo the stitch is going to drop: the window must
             // come from this chunk's OWN footage, never from the replay of the
             // one before it. (The chunk file still holds that replay now that
             // the cut happens at stitch time.)
-            startFrame: Math.max(contextPrefix, tailWindowStartFrame({ totalFrames: frames, frames: windowFrames })),
+            startFrame,
             fps: chainFps,
           });
           if (!cut.ok) {
             await setHistoryItemsHidden(chunkIds, true);
-            finishFail(`Failed to build the continuation context window between chunks: ${cut.reason}`);
+            await finishFail(`Failed to build the continuation context window between chunks: ${cut.reason}`);
             return;
           }
-          contextClipPaths.push(contextPath);
+          if (chainState.stopped) throw new ServerError('Canceled mid-chain', { status: 499, code: 'VIDEO_GEN_CANCELED' });
+          continuationHops.push({
+            sourceChunkId: chunkId,
+            startFrame,
+            endFrameExclusive: frames,
+            audioStartSec: startFrame / chainFps,
+            audioEndSec: frames / chainFps,
+            actualHistoryFrames: frames - startFrame,
+          });
           currentContextClip = contextPath;
         }
       } else if (i < totalChunks - 1) {
@@ -413,13 +458,15 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
         const frame = await extractLastFrame(chunkId).catch((err) => ({ error: err.message }));
         if (frame?.error) {
           await setHistoryItemsHidden(chunkIds, true);
-          finishFail(`Failed to extract frame between chunks: ${frame.error}`);
+          await finishFail(`Failed to extract frame between chunks: ${frame.error}`);
           return;
         }
+        if (chainState.stopped) throw new ServerError('Canceled mid-chain', { status: 499, code: 'VIDEO_GEN_CANCELED' });
         currentSource = join(PATHS.images, frame.filename);
       }
     }
 
+    if (chainState.stopped) throw new ServerError('Canceled mid-chain', { status: 499, code: 'VIDEO_GEN_CANCELED' });
     const stitched = await stitchVideos(chunkIds, {
       id: outerJobId,
       filenamePrefix: 'chained',
@@ -433,22 +480,26 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
       // Echoed-context prefixes to cut out of each windowed chunk as the
       // timeline is assembled, rather than by pre-encoding the chunk files.
       trims: chunkTrims.size ? chunkTrims : null,
+      requireExactTrims: continuity === 'window',
+      continuation: { ...continuation, actualHistoryFrames: continuationHops.at(-1)?.actualHistoryFrames ?? 0, hops: continuationHops },
+      signal: chainState.abortController.signal,
     }).catch((err) => ({ error: err.message }));
     if (stitched?.error) {
       await setHistoryItemsHidden(chunkIds, true);
-      finishFail(`Stitch failed: ${stitched.error}`);
+      await finishFail(`Stitch failed: ${stitched.error}`);
       return;
     }
     await setHistoryItemsHidden(chunkIds, true);
-    finishOk({
+    await finishOk({
       filename: stitched.filename,
       thumbnail: stitched.thumbnail,
       path: `/data/videos/${stitched.filename}`,
       chainedFrom: chunkIds,
     });
-  })().catch((err) => {
-    console.error(`❌ chain orchestration crashed [${outerJobId.slice(0, 8)}]: ${err.message}`);
-    finishFail(err.message, normalizeVideoFailure(err, failureOptions));
+  })().catch(async (err) => {
+    const log = chainState.stopped ? console.log : console.error;
+    log(`${chainState.stopped ? '🚫' : '❌'} chain orchestration stopped [${outerJobId.slice(0, 8)}]: ${err.message}`);
+    await finishFail(err.message, normalizeVideoFailure(err, failureOptions));
   });
 
   // Match the synchronous shape of generateVideo so the route's response

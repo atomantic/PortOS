@@ -41,6 +41,41 @@ export const REF_TARGET_TABLES = Object.freeze({
 /** The ref kinds this resolver can resolve (those with a known target table). */
 export const RESOLVABLE_REF_KINDS = Object.freeze(Object.keys(REF_TARGET_TABLES));
 
+const REF_TITLE_SQL = Object.freeze({ universe: 'name', series: 'name', work: 'title',
+  issue: "COALESCE(data->>'title', data->>'name', 'Issue ' || number::text)",
+  'creative-director': "COALESCE(data->>'name', data->>'title')",
+  'music-video': "COALESCE(data->>'name', data->>'title')",
+  fableloom: 'name', 'voice-profile': "data->>'name'" });
+
+const DERIVED_TARGETS = Object.freeze({ fableloom: { table: 'fableloom_stories', liveClause: 'deleted = false' },
+  'voice-profile': { table: 'voice_profiles', liveClause: "approval_status <> 'retired'" } });
+
+// Batch labels by kind; missing targets stay visible without dead deep links.
+export async function describeCatalogRefs(refs, exec = query) {
+  const names = new Map();
+  const byKind = new Map();
+  for (const ref of refs) {
+    if (ref.resolved === true && typeof ref.refName === 'string' && ref.refName) {
+      names.set(JSON.stringify([ref.refKind, ref.refId]), ref.refName);
+      continue;
+    }
+    if (!byKind.has(ref.refKind)) byKind.set(ref.refKind, new Set());
+    byKind.get(ref.refKind).add(ref.refId);
+  }
+  for (const [kind, ids] of byKind) {
+    const target = REF_TARGET_TABLES[kind] || DERIVED_TARGETS[kind];
+    if (!target) continue;
+    const { rows } = await exec(`SELECT id, ${REF_TITLE_SQL[kind]} AS name FROM ${target.table}
+      WHERE id = ANY($1) AND ${target.liveClause}`, [[...ids]]);
+    for (const row of rows) names.set(JSON.stringify([kind, row.id]), row.name || row.id);
+  }
+  return refs.map((ref) => {
+    const name = names.get(JSON.stringify([ref.refKind, ref.refId]));
+    return { ...ref, refName: name || null, resolved: name !== undefined,
+      ...(name === undefined ? { reason: REF_TARGET_TABLES[ref.refKind] || DERIVED_TARGETS[ref.refKind] ? 'missing-target' : 'unknown-kind' } : {}) };
+  });
+}
+
 // SELECT 1 … existence probe for one target, honoring its live predicate.
 function targetExistsSql(refKind) {
   const target = REF_TARGET_TABLES[refKind];

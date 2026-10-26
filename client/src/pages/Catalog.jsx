@@ -26,6 +26,7 @@ import toast from '../components/ui/Toast';
 import {
   listCatalogIngredients,
   createCatalogIngredient,
+  setCatalogUniverseOwner,
   deleteCatalogIngredient,
   linkCatalogIngredient,
   getCatalogStats,
@@ -39,7 +40,7 @@ import ListLoadError from '../components/ui/ListLoadError';
 import CatalogCard from '../components/catalog/CatalogCard';
 import CatalogAlbum from '../components/catalog/CatalogAlbum';
 import { CatalogTypesTab } from '../components/settings/CatalogTypesTab';
-import { catalogRefRoleForType } from '../lib/catalogTypes';
+import { catalogReferenceRole } from '../lib/catalogTypes';
 import { CATALOG_NAV_TABS } from '../lib/creativeLibraries';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import useDrawerTab from '../hooks/useDrawerTab';
@@ -126,19 +127,20 @@ export default function Catalog() {
   const [selectedItems, setSelectedItems] = useState(() => new Map());
   const [remixMenuOpen, setRemixMenuOpen] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [addMode, setAddMode] = useState('membership');
+  const [showForm, setShowForm] = useState(false);
   const fetchPlaceUniverses = useCallback(() => listUniverseNames({ silent: true }), []);
-  const placeUniversesResource = useListResource(fetchPlaceUniverses, { enabled: addMenuOpen });
+  const placeUniversesResource = useListResource(fetchPlaceUniverses, { enabled: addMenuOpen || showForm });
   const fetchPlaceSeries = useCallback(() => listPipelineSeriesNames({ silent: true }), []);
-  const placeSeriesResource = useListResource(fetchPlaceSeries, { enabled: addMenuOpen });
+  const placeSeriesResource = useListResource(fetchPlaceSeries, { enabled: addMenuOpen && addMode === 'membership' });
   const placeTargets = useMemo(() => ({
     universes: placeUniversesResource.items.map((u) => ({ refKind: 'universe', refId: u.id, label: u.name || '(untitled universe)' })),
     series: placeSeriesResource.items.map((s) => ({ refKind: 'series', refId: s.id, label: s.name || '(untitled series)' })),
   }), [placeUniversesResource.items, placeSeriesResource.items]);
-  const placeTargetsLoading = addMenuOpen && (placeUniversesResource.state === 'loading' || placeSeriesResource.state === 'loading');
+  const placeTargetsLoading = addMenuOpen && (placeUniversesResource.state === 'loading' || addMode === 'membership' && placeSeriesResource.state === 'loading');
 
   // Inline create form.
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ type: 'character', name: '', content: '' });
+  const [form, setForm] = useState({ type: 'character', name: '', content: '', universeId: '' });
   const [creating, setCreating] = useState(false);
   // Armed-row id for two-click delete (no window.confirm).
   const [armedId, setArmedId] = useState(null);
@@ -300,7 +302,7 @@ export default function Catalog() {
   const handleCreate = async (e) => {
     e.preventDefault();
     const name = form.name.trim();
-    if (!name) return;
+    if (!name || !form.universeId) return;
     const content = form.content.trim();
     const payload = {};
     if (content) {
@@ -312,6 +314,7 @@ export default function Catalog() {
       name,
       payload,
       tags: [],
+      universeId: form.universeId,
     }, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Failed to create ingredient');
       return null;
@@ -441,7 +444,7 @@ export default function Catalog() {
 
   // Single reset path used by Cancel + toolbar toggle + post-submit.
   const closeForm = () => {
-    setForm((f) => ({ type: f.type, name: '', content: '' }));
+    setForm((f) => ({ type: f.type, name: '', content: '', universeId: '' }));
     setShowForm(false);
   };
 
@@ -490,14 +493,15 @@ export default function Catalog() {
     if (list.length === 0) return;
     let ok = 0;
     let fail = 0;
+    let failureReason = '';
     await Promise.all(list.map((ing) =>
-      linkCatalogIngredient(ing.id, { refKind, refId, role: catalogRefRoleForType(ing.type) }, { silent: true })
-        .then(() => { ok += 1; })
-        .catch(() => { fail += 1; }),
+      (addMode === 'owner' ? setCatalogUniverseOwner(ing.id, refId, { silent: true })
+        : linkCatalogIngredient(ing.id, { refKind, refId, role: catalogReferenceRole(ing.type, refKind) }, { silent: true }))
+        .then(() => { ok += 1; dropSelection(ing.id); })
+        .catch((error) => { fail += 1; failureReason ||= error.message; }),
     ));
-    if (ok > 0) toast.success(`Added ${ok} ingredient${ok === 1 ? '' : 's'} to ${label}`);
-    if (fail > 0) toast.error(`Failed to add ${fail} ingredient${fail === 1 ? '' : 's'} to ${label}`);
-    clearSelection();
+    if (ok > 0) toast.success(addMode === 'owner' ? `Set ${label} as owner of ${ok} primitive${ok === 1 ? '' : 's'}` : `Added ${ok} ingredient${ok === 1 ? '' : 's'} to ${label}`);
+    if (fail > 0) toast.error(`Could not update ${fail} primitive${fail === 1 ? '' : 's'}: ${failureReason}`);
     loadFacets();
     setDataVersion((v) => v + 1);
     // Placed items may no longer match a universe/series/unlinked-filtered grid.
@@ -509,11 +513,12 @@ export default function Catalog() {
   // freshly-created (still empty) universe/series must be a valid destination.
   // The resources enable while the menu is open and retain independent retries.
   const openAddMenu = () => {
+    setAddMode('membership');
     setRemixMenuOpen(false);
     setAddMenuOpen((o) => !o);
   };
-  const noPlaceTargets = placeUniversesResource.state === 'ready' && placeSeriesResource.state === 'ready'
-    && placeTargets.universes.length === 0 && placeTargets.series.length === 0;
+  const noPlaceTargets = placeUniversesResource.state === 'ready' && placeTargets.universes.length === 0
+    && (addMode === 'owner' || placeSeriesResource.state === 'ready' && placeTargets.series.length === 0);
 
   // Stable so the grid's per-card render (up to PAGE_SIZE cards) doesn't
   // allocate a fresh arrow per card every render.
@@ -754,6 +759,16 @@ export default function Catalog() {
 
       {showForm && (
         <form onSubmit={handleCreate} className="mb-6 p-4 bg-port-card border border-port-border rounded-lg space-y-3">
+          <div className="max-w-sm">
+            <label htmlFor="catalog-new-universe" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Owning universe &amp; style</label>
+            <select id="catalog-new-universe" required value={form.universeId} onChange={(event) => setForm((previous) => ({ ...previous, universeId: event.target.value }))}
+              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm">
+              <option value="">Choose a universe…</option>
+              {placeTargets.universes.map((target) => <option key={target.refId} value={target.refId}>{target.label}</option>)}
+            </select>
+            {placeUniversesResource.state === 'error' && <ListLoadError what="owning universes" error={placeUniversesResource.error} onRetry={placeUniversesResource.retry} />}
+            {placeUniversesResource.state === 'ready' && placeTargets.universes.length === 0 && <Link to="/universes/new" className="text-xs text-port-accent hover:underline">Create a universe</Link>}
+          </div>
           <button type="button" onClick={() => { cancelQMirror(); navigate('/catalog/ingest?mode=babble'); }}
             className="text-sm text-port-accent hover:underline">
             Babble and Prune — turn a brainstorm into multiple entries
@@ -814,7 +829,7 @@ export default function Catalog() {
             </button>
             <button
               type="submit"
-              disabled={creating || !form.name.trim()}
+              disabled={creating || !form.name.trim() || !form.universeId}
               className="inline-flex items-center justify-center gap-2 px-4 py-2 min-h-[40px] rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
             >
               {creating ? <Loader2 size={14} className="animate-spin" /> : null}
@@ -936,6 +951,8 @@ export default function Catalog() {
                 </ul>
               )}
             </div>
+            <button type="button" onClick={() => { setAddMode('owner'); setAddMenuOpen(true); setRemixMenuOpen(false); }}
+              className="min-h-[40px] px-3 py-2 text-xs rounded border border-port-border text-port-accent hover:bg-port-bg">Set owning universe…</button>
             <div className="flex-1 sm:relative sm:flex-none">
               <button
                 type="button"
@@ -957,7 +974,7 @@ export default function Catalog() {
                 // roving focus is implemented here.
                 <div
                   role="group"
-                  aria-label="Add to universe or series"
+                  aria-label={addMode === 'owner' ? 'Set owning universe' : 'Add to universe or series'}
                   className="absolute bottom-full mb-2 left-0 right-0 sm:left-auto sm:min-w-[220px] max-h-[60vh] sm:max-h-72 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg"
                 >
                   {placeTargetsLoading && placeTargets.universes.length === 0 && placeTargets.series.length === 0 ? (
@@ -996,7 +1013,7 @@ export default function Catalog() {
                           ))}
                         </>
                       )}
-                      {placeTargets.series.length > 0 && (
+                      {addMode === 'membership' && placeTargets.series.length > 0 && (
                         <>
                           <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-gray-500">Series</p>
                           {placeTargets.series.map((t) => (

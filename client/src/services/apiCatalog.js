@@ -107,11 +107,37 @@ export const listCatalogIngredientsByIds = async (ids = [], options) => {
   return list.map((id) => byId.get(id)).filter(Boolean);
 };
 
-// Batched detail hydration — one request for ingredient + refs + sources +
-// relations + revisions + media + missingMedia, used by the detail page's
-// initial load in place of five separate calls.
-export const getCatalogIngredientDetails = (id, options) =>
-  request(`/catalog/ingredients/${enc(id)}/details`, options);
+// Full detail is the compatibility default. Library profiles request the lean
+// profile projection; media is fetched separately on its first visible tab.
+export const getCatalogIngredientDetails = (id, { view, ...options } = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/details${view ? `?view=${enc(view)}` : ''}`, options);
+
+export const getCatalogIngredientCards = async (ids = [], options) => {
+  const list = normalizeIds(ids);
+  const items = [];
+  for (let offset = 0; offset < list.length; offset += 50) {
+    const batch = list.slice(offset, offset + 50);
+    const response = await request(`/catalog/ingredient-cards?${new URLSearchParams({ ids: batch.join(',') })}`, options);
+    if (!Array.isArray(response?.items) || response.items.some(item => !item || !batch.includes(item.id)
+      || !item.payload || typeof item.payload !== 'object' || Array.isArray(item.payload))) {
+      throw new Error('Catalog card context response is unavailable');
+    }
+    items.push(...response.items);
+  }
+  return items;
+};
+
+export const setCatalogIngredientLock = (id, locked, options) =>
+  request(`/catalog/ingredients/${enc(id)}/lock`, { method: 'PATCH', body: JSON.stringify({ locked }), ...options });
+
+export const getCatalogUniverseContext = (id, options) =>
+  request(`/catalog/ingredients/${enc(id)}/universe-context`, options);
+
+export const setCatalogUniverseOwner = (id, universeId, options) =>
+  request(`/catalog/ingredients/${enc(id)}/owner`, { method: 'PUT', body: JSON.stringify({ universeId }), ...options });
+
+export const forkCatalogIngredient = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/fork`, { method: 'POST', body: JSON.stringify(body), ...options });
 
 export const listCatalogRelatedImages = (id, { limit = 24, offset = 0, ...options } = {}) => {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
@@ -173,9 +199,6 @@ export const unlinkCatalogIngredientRelation = (id, body, options) =>
 
 export const listCatalogIngredientMedia = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}/media`, options);
-
-export const listCatalogIngredientMissingMedia = (id, options) =>
-  request(`/catalog/ingredients/${enc(id)}/media/missing`, options);
 
 export const attachCatalogIngredientMedia = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/media`, { method: 'POST', body: JSON.stringify(body), ...options });
@@ -242,3 +265,22 @@ export const updateCatalogIngredientMediaLibrary = (id, body, options) =>
 
 export const attachCatalogIngredientMediaFromMoodBoard = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/media/from-mood-board`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+// Place greybox: AI draft (preview only), save/clear, and shot capture as a
+// tagged reference image. See docs/plans/2026-10-25-place-greybox.md.
+export const draftCatalogGreybox = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/greybox/draft`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+// What a draft would send, composed by the server; calls no provider.
+export const previewCatalogGreyboxPrompt = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/greybox/prompt`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+// `greybox: null` removes the place's greybox.
+export const saveCatalogGreybox = (id, greybox, { source, ...options } = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/greybox`, { method: 'PUT', body: JSON.stringify({ greybox, ...(source ? { source } : {}) }), ...options });
+
+export const captureCatalogGreyboxShot = (id, shotId, dataBase64, options) =>
+  request(`/catalog/ingredients/${enc(id)}/greybox/shots/${enc(shotId)}/capture`, { method: 'POST', body: JSON.stringify({ dataBase64 }), ...options });
+
+export const renderCatalogGreyboxShot = (id, shotId, options) =>
+  request(`/catalog/ingredients/${enc(id)}/greybox/shots/${enc(shotId)}/render`, { method: 'POST', body: JSON.stringify({}), ...options });

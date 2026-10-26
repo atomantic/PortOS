@@ -2785,9 +2785,9 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
     metadata
   );
 
-  // File-issues posture wins over app worktree/PR defaults — the deliverable
-  // is tracker items, so a managed worktree or an implied PR is the wrong shape.
-  if (fileIssues) {
+  // Tracker-only delivery wins over app defaults, including reference-watch
+  // runs that do not use the audit catalog's fileIssues toggle.
+  if (fileIssues || (metadata.workTracker && metadata.worktreeChangesExpected === false)) {
     // The catalog's one delivery posture, stamped rather than restated — the
     // custom-job lane (autonomousJobs/skillTemplates.js) applies this same
     // object, so the two cannot drift into different definitions of the mode.

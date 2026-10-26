@@ -104,7 +104,7 @@ const PROCEDURAL_ROLE_PROMPTS = {
 };
 
 /** The procedural plan: one role-prompted plate per set, no photographic character work. */
-function buildProceduralImagePlan(direction, { revisionNotes = {} } = {}) {
+function buildProceduralImagePlan(direction, { revisionNotes = {}, greyboxes = {} } = {}) {
   const style = withoutPeople(trimTo(direction.look, 500), direction.protagonist?.name);
   const world = direction.world || {};
   const plan = {};
@@ -117,9 +117,11 @@ function buildProceduralImagePlan(direction, { revisionNotes = {} } = {}) {
     plan[key] = {
       key,
       kind: 'plate',
+      ...(set.setReference?.greyboxShotId ? { refImages: [greyboxes[set.id]?.reference.imageId].filter(Boolean) } : {}),
       role,
       label: set.name,
       setId: set.id,
+      ...(set.setReference?.greyboxShotId ? { setReference: set.setReference } : {}),
       deps: [],
       refKeys: [],
       prompt: join(
@@ -143,8 +145,8 @@ function buildProceduralImagePlan(direction, { revisionNotes = {} } = {}) {
  * project's own images, never mood board images. A revision note for a key is
  * appended to its prompt.
  */
-export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = {} } = {}) {
-  if (direction.medium === 'procedural') return buildProceduralImagePlan(direction, { revisionNotes });
+export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = {}, greyboxes = {} } = {}) {
+  if (direction.medium === 'procedural') return buildProceduralImagePlan(direction, { revisionNotes, greyboxes });
   const p = direction.protagonist || {};
   const looks = direction.looks || [];
   const firstLook = looks[0];
@@ -251,12 +253,13 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   for (const set of direction.sets || []) {
     const key = `set:${set.id}`;
     const plateLight = withoutPeople(set.lighting, p.name);
-    const placeImage = fixedImage('place', set.name);
+    const placeImage = greyboxes[set.id]?.reference.imageId || fixedImage('place', set.name);
     plan[key] = {
       key,
       kind: 'plate',
       label: set.name,
       setId: set.id,
+      ...(set.setReference?.greyboxShotId ? { setReference: set.setReference } : {}),
       deps: [],
       refKeys: [],
       ...(placeImage ? { refImages: [placeImage] } : {}),

@@ -10,6 +10,7 @@ router.get('/status', asyncHandler(async (req, res) => {
   const authEnabled = req.portosAuthContext?.enabled === true;
   res.json({
     ...brokerStatus,
+    tailcatIngressSupported: true,
     available: brokerStatus.configured && authEnabled,
     requiresPortOSAuth: !authEnabled,
     setupCommand: 'npm run setup:remote-desktop',

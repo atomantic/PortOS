@@ -296,6 +296,19 @@ describe('resolveSpriteAssetPrompt', () => {
     expectCarriesCorrection(expect, res.prompt, 'the legs barely lift');
   });
 
+  it('reads the exact local animation prompt from the run instead of reconstructing it', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const runDir = join(TEST_ROOT, 'sprites', id, 'runs', 'walk-east-local');
+    await mkdir(join(runDir, 'generated'), { recursive: true });
+    const renderPrompt = 'Original base.\n\nUser correction:\n  lift feet!  ';
+    await writeFile(join(runDir, 'animation-run.json'), JSON.stringify({
+      direction: 'east', track: 'walk', renderPrompt, returnToIdleAnchor: true,
+    }));
+    const result = await resolveSpriteAssetPrompt(id, 'runs/walk-east-local/generated/source-video.mp4');
+    expect(result).toEqual({ prompt: renderPrompt, designPrompt: null, source: 'walk' });
+  });
+
   it('rebuilds a corrected reference candidate with its correction clause (#3134)', async () => {
     const id = newId();
     await createCharacter(id);

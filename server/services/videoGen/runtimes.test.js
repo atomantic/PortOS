@@ -23,7 +23,8 @@ import {
   BYOV_RUNTIME_INFO, BYOV_VIDEO_RUNTIMES, MINIMAX_H3_CUDA_OFFLOAD_PROFILES,
   byovRuntimeLoraCapable, invalidateByovLoraCapabilityCache, invalidateByovReadyCache,
   isByovRuntimeCurrent, isByovRuntimeReady, isPinnedSourceStatusClean, modelAnchorsLastFrame,
-  resolveByovRuntimeLoraCapable, runtimeIsCacheOnly, runtimeNeedsProcessGroupKill, runtimeUsesMlx,
+  resolveA2vLoraStageCapable, a2vLoraStageCapable,
+  resolveByovRuntimeLoraCapable, resolveMiniMaxH3MlxSpeedCapable, runtimeIsCacheOnly, runtimeNeedsProcessGroupKill, runtimeUsesMlx,
   routesToWindowsHelper, warmByovLoraCapabilities, LTX25_EXPECTED_REVISION,
 } from './runtimes.js';
 
@@ -134,6 +135,24 @@ describe('isByovRuntimeReady', () => {
 
     expect(runtimeMocks.spawn).toHaveBeenCalledTimes(1);
     expect(runtimeMocks.spawn.mock.calls[0][0]).toBe('git');
+  });
+});
+
+describe('MLX LightX2V runtime admission', () => {
+  it('requires the actual clean Git pin before the sampler seam probe can admit the profile', async () => {
+    runtimeMocks.spawn.mockImplementationOnce(() => statusChild(`# branch.oid ${'0'.repeat(40)}\n`));
+    await expect(resolveMiniMaxH3MlxSpeedCapable()).resolves.toBe(false);
+    expect(runtimeMocks.spawn).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.spawn.mock.calls[0][0]).toBe('git');
+
+    runtimeMocks.spawn.mockClear();
+    runtimeMocks.spawn.mockImplementationOnce(() => statusChild(`# branch.oid ${REVISION}\n`))
+      .mockImplementationOnce(() => exitChild(0));
+    await expect(resolveMiniMaxH3MlxSpeedCapable()).resolves.toBe(true);
+    expect(runtimeMocks.spawn.mock.calls[1][1]).toEqual([
+      expect.stringContaining('_minimax_h3_mlx_lightx2v.py'), '--probe',
+      BYOV_RUNTIME_INFO.minimax_h3.repoDir, REVISION,
+    ]);
   });
 });
 
@@ -385,20 +404,22 @@ describe('minimax_h3_cuda runtime registration', () => {
     expect(info.importProbe).toContain('torch.cuda.is_available()');
   });
 
-  it('declares no revision pin or LoRA probe — it runs distributions, not a checkout', () => {
-    // `expectedRevision`/`sourcePath` drive the clean-checkout gate, which has
-    // nothing to verify here; `loraProbeArgs` absent is the correct "this
-    // runtime can never take LoRAs", matching wan22 / fastvideo.
+  it('uses a distribution/scheduler/quantized-LoRA probe instead of a checkout revision pin', () => {
     expect(info.expectedRevision).toBeUndefined();
     expect(info.sourcePath).toBeUndefined();
-    expect(info.loraProbeArgs).toBeUndefined();
+    expect(info.loraProbeArgs[0]).toMatch(/minimax_h3_cuda_lora\.py$/);
+    expect(info.loraProbeArgs[1]).toBe('--probe');
   });
 
-  it('never reports LoRA capability, even after a probe attempt', async () => {
+  it('keeps CUDA adapters unavailable until its probe returns a positive verdict', async () => {
+    runtimeMocks.existsSync.mockReturnValue(false);
     expect(byovRuntimeLoraCapable('minimax_h3_cuda')).toBe(false);
     await expect(resolveByovRuntimeLoraCapable('minimax_h3_cuda')).resolves.toBe(false);
-    // No probe child may be spawned for a runtime with no loraProbeArgs.
     expect(runtimeMocks.spawn).not.toHaveBeenCalled();
+    runtimeMocks.existsSync.mockReturnValue(true);
+    runtimeMocks.spawn.mockImplementation(() => exitChild(0));
+    await expect(resolveByovRuntimeLoraCapable('minimax_h3_cuda')).resolves.toBe(true);
+    expect(byovRuntimeLoraCapable('minimax_h3_cuda')).toBe(true);
   });
 });
 
@@ -539,5 +560,25 @@ describe('LTX-2.5 i2v anchor pin verification', () => {
     const claimed = Object.values(BYOV_RUNTIME_INFO)
       .filter((info) => info.i2vAnchorVerifiedRevision).map((info) => info.id);
     expect(claimed).toEqual(['ltx25']);
+  });
+});
+
+
+describe('A2V user-LoRA stage capability', () => {
+  it('keeps unsupported pins fail-closed, re-probes explicit renders and treats refusal as routine', async () => {
+    runtimeMocks.spawn.mockImplementation(() => exitChild(0));
+    await expect(resolveA2vLoraStageCapable('ltx25')).resolves.toBe(true);
+    expect(a2vLoraStageCapable('ltx25')).toBe(true);
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      runtimeMocks.spawn.mockImplementation(() => exitChild(2, 'runtime pin is not inspected'));
+      const denied = await captureProbeLogs(() => resolveA2vLoraStageCapable('ltx25', { fresh: true }));
+      expect(denied).toEqual({ result: false, lines: [] });
+      expect(info).toHaveBeenCalledWith(expect.stringContaining('does not support this capability'));
+      expect(a2vLoraStageCapable('ltx25')).toBe(false);
+      expect(runtimeMocks.spawn).toHaveBeenCalledTimes(2);
+      await expect(resolveA2vLoraStageCapable('ltx25_cuda', { fresh: true })).resolves.toBe(false);
+      expect(runtimeMocks.spawn).toHaveBeenCalledTimes(2);
+    } finally { info.mockRestore(); }
   });
 });

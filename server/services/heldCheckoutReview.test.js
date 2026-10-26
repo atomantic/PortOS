@@ -95,6 +95,25 @@ describe('retirement forge verification', () => {
       : state === 'unreadable' ? 'retirement-forge-unavailable' : 'retirement-remote-head-changed');
   });
 
+  it.each(['valid', 'missing-ref', 'wrong-head', 'foreign', 'ambiguous', 'unknown-merge-state'])('requires exact closed source delivery for preserved supersession: %s', async scenario => {
+    const source = 'e'.repeat(40);
+    const sourceRow = { state: 'closed', merged_at: null, html_url: 'https://github.com/example/repo/pull/41',
+      head: { sha: source, ref: 'original', repo: { full_name: 'example/repo' } }, base: { repo: { full_name: 'example/repo' } } };
+    if (scenario === 'wrong-head') sourceRow.head.sha = 'f'.repeat(40);
+    if (scenario === 'unknown-merge-state') delete sourceRow.merged_at;
+    if (scenario === 'foreign') sourceRow.head.repo.full_name = 'foreign/repo';
+    const read = mock.gh.getMockImplementation();
+    mock.gh.mockImplementation(async args => args.at(-1).includes('pulls?state=closed')
+      ? JSON.stringify(scenario === 'ambiguous' ? [sourceRow, sourceRow] : [sourceRow]) : read(args));
+    mock.git.mockImplementation(async args => ({ stdout: args.at(-1) === 'refs/heads/original' && scenario !== 'missing-ref'
+      ? `${source}\trefs/heads/original\n` : '', exitCode: 0 }));
+    const evidence = readRetirementForgeEvidence('/synthetic/repo', 'original', prUrl,
+      { sourceSupersessionHead: source, requirePublishedSupersession: true });
+    if (scenario === 'valid') expect(await evidence).toMatchObject({ sourcePreservation: { head: source, prUrl: sourceRow.html_url, remoteRef: 'refs/heads/original' } });
+    else await expect(evidence).rejects.toThrow(scenario === 'missing-ref'
+      ? 'retirement-source-not-published' : 'retirement-source-closed-delivery-unverified');
+  });
+
   it.each(['file-count', 'commit-count', 'duplicate', 'missing-previous', 'ambiguous-base', 'wrong-tip', 'cap', 'bad-path', 'unpaginated'])('refuses incomplete or ambiguous original scope: %s', async change => {
     if (change === 'file-count') detail.changed_files = 2;
     if (change === 'commit-count') detail.commits = 2;
@@ -106,6 +125,32 @@ describe('retirement forge verification', () => {
     if (change === 'bad-path') files[0][0].filename = '../escape';
     if (change === 'unpaginated') files = files[0];
     await expect(readRetirementForgeEvidence('/synthetic/repo', 'claim/42', prUrl)).rejects.toThrow('retirement-original-scope-unavailable');
+  });
+
+  it.each(['supported', 'legacy', 'write-tree-only', 'probe-failed'])('checks detached proof Git capability: %s', async scenario => {
+    const source = 'e'.repeat(40);
+    detail.merge_commit_sha = pr.mergeCommit.oid;
+    const tree = 'f'.repeat(40);
+    mock.git.mockImplementation(async args => {
+      if (args.includes('-h')) {
+        if (scenario === 'probe-failed') throw new Error('synthetic spawn failure');
+        return { exitCode: 129, stderr: scenario === 'legacy' ? 'usage: git merge-tree <base> <branch1> <branch2>'
+          : scenario === 'write-tree-only' ? '--write-tree' : '--write-tree --merge-base=<tree-ish>' };
+      }
+      if (args.includes('config')) return { exitCode: 1, stdout: '' };
+      if (args.includes('merge-base')) return { stdout: 'd'.repeat(40) };
+      if (args.includes('rev-list')) return { stdout: `${source} ${'d'.repeat(40)}` };
+      if (args.includes('rev-parse') || args.includes('merge-tree')) return { stdout: tree };
+      return { stdout: '', exitCode: 0 };
+    });
+    const review = readRetirementForgeEvidence('/synthetic/repo', null, prUrl,
+      { exactAliasHead: source, detachedSourceHead: source });
+    if (scenario === 'supported') expect(await review).toMatchObject({ detachedRepresentation: { sourceHead: source, targetTree: tree } });
+    else {
+      await expect(review).rejects.toThrow(scenario === 'probe-failed'
+        ? 'retirement-git-capability-probe-failed' : 'retirement-git-merge-tree-unsupported');
+      expect(mock.git.mock.calls.some(([args]) => args.includes('--write-tree'))).toBe(false);
+    }
   });
 
   it('refuses a different repository before sending a forge request', async () => {

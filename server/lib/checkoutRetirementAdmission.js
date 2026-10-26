@@ -20,7 +20,10 @@ const refused = () => Object.assign(new Error('checkout-retirement-reserved'), {
 });
 
 export async function _checkoutAdmission(repoPath) {
-  const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoPath)).stdout.trim();
+  // A new admission may originate in an expired async context. This read-only
+  // bootstrap needs its own command lifetime before checking the current cut;
+  // it never revives the old publication's authority.
+  const common = (await withGitMutationLifetime(() => execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoPath))).stdout.trim();
   if (!isAbsolute(common)) throw refused();
   const directory = join(realpathSync(common), 'portos-checkout-admission');
   for (const path of [directory, join(directory, 'publications'), join(directory, 'cut')]) {

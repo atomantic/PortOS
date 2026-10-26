@@ -52,7 +52,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'child_process';
+import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -159,11 +159,7 @@ export function findUnvalidatedQueryHandlers(src) {
 // routers and the CoS runner's standalone Express app.
 const SCANNED_PATHS = ['routes', 'lib/aiToolkit/routes', 'cos-runner/index.js'];
 
-const trackedRouteSources = () => execFileSync('git', ['ls-files', ...SCANNED_PATHS], {
-  cwd: SERVER_ROOT,
-  encoding: 'utf8',
-  maxBuffer: 64 * 1024 * 1024,
-}).split('\n').filter((f) => f.endsWith('.js') && !f.includes('.test.'));
+const trackedRouteSources = () => trackedFiles(SERVER_ROOT, SCANNED_PATHS).filter((f) => f.endsWith('.js') && !f.includes('.test.'));
 
 const scanWith = (finder) => trackedRouteSources().flatMap((file) => (
   finder(readFileSync(join(SERVER_ROOT, file), 'utf8')).map((hit) => `${file} ${hit}`)
@@ -213,7 +209,6 @@ const UNVALIDATED_QUERY_BASELINE = [
   'routes/calendar.js GET /review/history',
   'routes/catalog.js DELETE /types/:id',
   'routes/catalog.js GET /ingredients/:id',
-  'routes/catalog.js GET /ingredients/:id/details',
   'routes/catalog.js GET /scraps',
   'routes/catalog.js GET /sync',
   'routes/codeAnimation.js GET /accepted-assets',

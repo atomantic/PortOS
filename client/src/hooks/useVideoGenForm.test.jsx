@@ -550,8 +550,8 @@ describe('useVideoGenForm', () => {
   });
 
   describe('per-chunk prompt beats (#3695)', () => {
-    const chained = async (count = 3) => {
-      const { result } = render();
+    const chained = async (count = 3, options) => {
+      const { result } = render(options);
       await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
       act(() => { result.current.setPrompt('a long shot'); result.current.setChunks(count); });
       return result;
@@ -648,13 +648,41 @@ describe('useVideoGenForm', () => {
       expect(result.current.buildGeneratePayload().chunkPrompts).toBe('');
     });
 
-    it('submits the continuation window only while chaining', async () => {
+    it('preserves the default window after initial catalog load and submits it only while chaining', async () => {
       const result = await chained(3);
-      expect(result.current.buildGeneratePayload().contextFrames).toBe('22');
+      act(() => result.current.handleModelChange(LTX2.id));
+      expect(result.current.buildGeneratePayload()).toMatchObject({ contextFrames: '22', continuityStrategy: 'window' });
       act(() => result.current.setChunks(1));
       // A single-chunk render has nothing to continue from, so the knob must
       // not ride along and be persisted into that job's params.
       expect(result.current.buildGeneratePayload().contextFrames).toBe('');
+    });
+
+    it('clears a temporal request when switching to an unavailable pin and does not revive it', async () => {
+      const result = await chained(2, { models: [...MODELS, H3] });
+      act(() => result.current.handleModelChange(LTX2.id));
+      act(() => result.current.setContextFrames(45));
+      expect(result.current.buildGeneratePayload()).toMatchObject({ continuityStrategy: 'window', contextFrames: '45' });
+      act(() => result.current.handleModelChange(H3.id));
+      expect(result.current.contextFrames).toBe(0);
+      expect(result.current.buildGeneratePayload()).toMatchObject({ continuityStrategy: 'frame', contextFrames: '0' });
+      act(() => result.current.handleModelChange(LTX2.id));
+      expect(result.current.buildGeneratePayload()).toMatchObject({ continuityStrategy: 'frame', contextFrames: '0' });
+    });
+
+    it('makes an unavailable resumed temporal request an inspectable new last-frame choice', async () => {
+      const result = await chained(2, { models: [...MODELS, H3] });
+      act(() => result.current.applyResumedParams({ modelId: H3.id, prompt: 'a long shot', chunks: 2, continuityStrategy: 'window', contextFrames: 17 }));
+      expect(result.current.contextFrames).toBe(0);
+      expect(result.current.buildGeneratePayload()).toMatchObject({ modelId: H3.id, continuityStrategy: 'frame', contextFrames: '0' });
+    });
+
+    it('restores an explicit last-frame choice before an old positive context count', async () => {
+      const result = await chained(2);
+      act(() => result.current.handleModelChange(LTX2.id));
+      act(() => result.current.applyResumedParams({ prompt: 'a long shot', chunks: 2, continuityStrategy: 'frame', contextFrames: 22 }));
+      expect(result.current.contextFrames).toBe(0);
+      expect(result.current.buildGeneratePayload()).toMatchObject({ continuityStrategy: 'frame', contextFrames: '0' });
     });
 
     it('submits a chosen 0 rather than dropping it as falsy', async () => {
@@ -682,6 +710,7 @@ describe('useVideoGenForm', () => {
       // a 22-frame window after the user chose last-frame chaining.
       const { result } = render();
       await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
+      act(() => result.current.handleModelChange(LTX2.id));
       act(() => result.current.applyResumedParams({ prompt: 'p', chunks: 2, contextFrames: '0' }));
       expect(result.current.contextFrames).toBe(0);
 
@@ -694,6 +723,7 @@ describe('useVideoGenForm', () => {
       // test into the numeric check would clear the default to 0 here.
       const { result } = render();
       await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
+      act(() => result.current.handleModelChange(LTX2.id));
       act(() => result.current.applyResumedParams({ prompt: 'p', chunks: 2 }));
       expect(result.current.contextFrames).toBe(22);
       act(() => result.current.applyResumedParams({ prompt: 'p', chunks: 2, contextFrames: '' }));
@@ -775,6 +805,17 @@ describe('useVideoGenForm', () => {
     expect(payload.icReferenceImageFiles).toEqual(['a.png', 'b.png']);
     expect(payload.icReference).toBe('');
     expect(payload.icReferenceVideoIds).toBe('');
+  });
+
+  it.each(['applyRemix', 'applyResumedParams'])('%s preserves stage multipliers and clears them for a legacy record', async (restore) => {
+    const { result } = render();
+    await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
+    act(() => result.current[restore]({ modelId: MLX.id, mode: 'a2v', a2vLoraStageStrengths: [0.2, 0.8] }));
+    expect(result.current.a2vLoraStageStrengths).toEqual([0.2, 0.8]);
+    act(() => result.current.handleModelChange(LTX2.id));
+    expect(result.current.buildGeneratePayload().a2vLoraStageStrengths).toBe('[0.2,0.8]');
+    act(() => result.current[restore]({ modelId: MLX.id }));
+    expect(result.current.a2vLoraStageStrengths).toEqual([1, 1]);
   });
 
   it('only sends LoRAs on a runtime that can fuse them', async () => {

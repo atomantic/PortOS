@@ -8,11 +8,12 @@
  */
 import { Dice5 } from 'lucide-react';
 import { FormField } from '../ui/FormField';
+import ModelDownloadBadge from '../media/ModelDownloadBadge.jsx';
 import {
-  frameOptionsForModel, fpsOptionsForModel, CHUNK_OPTIONS,
+  isMiniMaxH3SpeedProfile, frameOptionsForModel, fpsOptionsForModel, CHUNK_OPTIONS,
   isModelAllowedForMode, supportsVideoAudioControls, supportsVideoAudioPromptControls,
-  CONTEXT_FRAME_OPTIONS, supportsContextWindow,
-  DEFAULT_SPEED_PROFILE_ID, speedProfilesForMode, selectedSpeedProfile,
+  contextFrameOptionsForModel, selectedContextFramesForModel, supportsContextWindow,
+  DEFAULT_SPEED_PROFILE_ID, speedProfilesForMode,
   videoChainChunkModes,
   DEFAULT_DRAFT_DECODE_ID, draftDecodeOptionsForModel,
 } from '../../lib/videoGenParams.js';
@@ -39,6 +40,7 @@ export default function AdvancedParamsPanel({
   steps, onStepsChange,
   guidanceScale, onGuidanceScaleChange,
   speedProfileId = DEFAULT_SPEED_PROFILE_ID, onSpeedProfileChange,
+  speedProfileStatus, onSpeedProfileDownload, onCancelSpeedProfileDownload, speedProfileDownloadError, width, height,
   draftDecode = DEFAULT_DRAFT_DECODE_ID, onDraftDecodeChange, draftDecodeLocked = false,
   streamingMode = DEFAULT_VIDEO_STREAMING_MODE, onStreamingModeChange,
   showStreamingMode = isLtx2FamilyRuntime(currentModel?.runtime),
@@ -95,6 +97,10 @@ export default function AdvancedParamsPanel({
   const displayedImageStrength = hasExplicitStrength
     ? imageStrength
     : (effectiveImageStrength != null ? effectiveImageStrength : 1);
+  const temporalAvailable = supportsContextWindow(currentModel);
+  const continuationCapability = currentModel?.continuationCapability;
+  const contextOptions = contextFrameOptionsForModel(currentModel);
+  const displayedContext = selectedContextFramesForModel(currentModel, contextFrames);
   const frameOptions = frameOptionsForModel(currentModel, numFrames);
   const fpsOptions = fpsOptionsForModel(currentModel);
   const samplerLocked = currentModel?.samplerLocked === true;
@@ -123,26 +129,33 @@ export default function AdvancedParamsPanel({
   const draftDecodeOptions = draftDecodeOptionsForModel(currentModel);
   const effectiveDraftDecode = draftDecodeLocked ? DEFAULT_DRAFT_DECODE_ID : draftDecode;
   const activeDraftDecode = draftDecodeOptions.find((o) => o.id === effectiveDraftDecode) || null;
-  const speedProfiles = speedProfilesForMode(currentModel, speedProfileModes);
-  const showSpeedProfiles = !samplerLocked && speedProfiles.length > 0;
+  const h3Profiles = (currentModel?.speedProfiles || []).filter((p) => isMiniMaxH3SpeedProfile(p));
+  const speedProfiles = speedProfilesForMode(currentModel, speedProfileModes).filter((p) => (
+    !isMiniMaxH3SpeedProfile(p) || (!chainingActive && (width == null || height == null
+      || p.canvases.some(([w, h]) => Number(width) === w && Number(height) === h)))
+  ));
+  const visibleSpeedProfiles = [...speedProfiles, ...h3Profiles.filter((p) => !speedProfiles.includes(p))];
+  const showSpeedProfiles = h3Profiles.length > 0 || (!samplerLocked && speedProfiles.length > 0);
   // Resolved against the SAME set the picker offers, so a model with two
   // profiles can't lock Steps/CFG to one this request declines.
   const activeSpeedProfile = showSpeedProfiles
-    ? selectedSpeedProfile(speedProfileId, currentModel, speedProfileModes)
+    ? speedProfiles.find((p) => p.id === speedProfileId) || null
     : null;
+  const incompatibleH3Profile = currentModel?.speedProfiles?.some((p) => p.id === speedProfileId && isMiniMaxH3SpeedProfile(p)) && !activeSpeedProfile;
   // A profile drives steps AND CFG together, exactly as a samplerLocked model
   // does — leaving either editable would let the user half-override a
   // validated schedule and get neither its speed nor its quality.
   const samplerDriven = samplerLocked || !!activeSpeedProfile;
-  const samplerDrivenTitle = samplerLocked
-    ? 'This validated Lightning profile locks its sampler settings.'
-    : activeSpeedProfile
-      ? `The ${activeSpeedProfile.name} speed profile sets its own validated schedule. Switch to Quality to edit these.`
+  const samplerDrivenTitle = activeSpeedProfile
+    ? `The ${activeSpeedProfile.name} profile sets the complete sampler schedule.`
+    : samplerLocked
+      ? 'This model locks its stock sampler settings.'
       : undefined;
 
   return (
     <div className="border-t border-port-border pt-3 space-y-3">
       <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Advanced</h2>
+      {incompatibleH3Profile && <p role="alert" className="text-xs text-port-warning">The selected LightX2V profile requires a single text/image clip at 1344×768. Change the mode/canvas or select Quality before rendering.</p>}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {showFrames && <FormField label="Frames" labelClassName="block text-xs font-medium text-gray-400 mb-1">
             <select
@@ -185,30 +198,29 @@ export default function AdvancedParamsPanel({
             </div>
           )}
 
-          {/* Continuation context window. Only meaningful once the request
-              really chains AND the runtime has an extend pipeline to feed the
-              window to — everywhere else the server seeds the next chunk from
-              a single last frame regardless, so showing the control would be
-              offering a knob that does nothing. */}
-          {chainingActive && supportsContextWindow(currentModel) && (
-            <div>
-              <label htmlFor={fieldId('context-frames-select')} className="block text-xs font-medium text-gray-400 mb-1" title="How much of the previous chunk each new chunk sees. A window carries the scene's motion across the seam; a single last frame gives the model a pose with no velocity, so movement stalls and restarts at every join.">
+          {chainingActive && (
+            <div className="min-w-0">
+              <label htmlFor={fieldId('context-frames-select')} className="block text-xs font-medium text-gray-400 mb-1">
                 Continuity
               </label>
               <select
                 id={fieldId('context-frames-select')}
-                value={contextFrames}
+                value={displayedContext}
                 onChange={(e) => onContextFramesChange(Number(e.target.value))}
                 className={inputCls}
               >
-                {CONTEXT_FRAME_OPTIONS.map((n) => (
+                {contextOptions.map((n) => (
                   <option key={n} value={n}>
                     {n === 0 ? 'Last frame only' : `${n} frames (~${(n / fps).toFixed(1)}s)`}
                   </option>
                 ))}
+                {!temporalAvailable && <option disabled value="unavailable">Temporal context unavailable</option>}
               </select>
-              <p className="text-[10px] text-gray-500 leading-snug mt-1">
-                Bigger windows hold motion better across joins but add render time per chunk.
+              <p className="text-[10px] text-gray-500 leading-snug mt-1 break-words">
+                {temporalAvailable
+                  ? 'A temporal window carries motion across joins; last frame only uses a still.'
+                  : `Temporal context unavailable: ${continuationCapability?.unavailableReason || 'This runtime has no verified temporal continuation contract.'}`}
+                {continuationCapability?.backendPin && ` Backend: ${continuationCapability.backendPin}.`}
               </p>
             </div>
           )}
@@ -350,17 +362,30 @@ export default function AdvancedParamsPanel({
           {showSpeedProfiles && (
             <FormField label="Speed" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <select
-                value={activeSpeedProfile ? speedProfileId : DEFAULT_SPEED_PROFILE_ID}
+                id="video-speed-profile"
+                value={activeSpeedProfile || incompatibleH3Profile ? speedProfileId : DEFAULT_SPEED_PROFILE_ID}
                 onChange={(e) => onSpeedProfileChange(e.target.value)}
                 className={inputCls}
               >
                 <option value={DEFAULT_SPEED_PROFILE_ID}>Quality · default</option>
-                {speedProfiles.map((p) => (
-                  <option key={p.id} value={p.id}>
+                {visibleSpeedProfiles.map((p) => (
+                  <option key={p.id} value={p.id} disabled={!speedProfiles.includes(p)}>
                     {p.name}{p.speedupLabel ? ` · ${p.speedupLabel}` : ''}
                   </option>
                 ))}
               </select>
+              {isMiniMaxH3SpeedProfile(activeSpeedProfile) && (
+                <>
+                  <p className="mt-1 text-xs text-gray-500">{activeSpeedProfile.description}</p>
+                  <p className="mt-1 text-xs text-gray-500 break-all">{activeSpeedProfile.adapter.file} · alpha {activeSpeedProfile.adapter.alpha}/rank {activeSpeedProfile.adapter.rank} · shifts {activeSpeedProfile.videoShift}/{activeSpeedProfile.audioShift}. No fallback.</p>
+                  {onSpeedProfileDownload
+                    ? <ModelDownloadBadge status={speedProfileStatus} onDownload={onSpeedProfileDownload}
+                        onCancel={onCancelSpeedProfileDownload} estimateLabel="1.38 GB adapter" />
+                    : <p className="text-xs text-gray-500">Manage this adapter download on the Video Gen page.</p>}
+                  {speedProfileStatus?.cached && onSpeedProfileDownload && <button type="button" onClick={onSpeedProfileDownload} className="text-xs text-port-accent">Download adapter again</button>}
+                  {speedProfileDownloadError && <p role="alert" className="text-xs text-port-error">{speedProfileDownloadError}</p>}
+                </>
+              )}
             </FormField>
           )}
 

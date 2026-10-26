@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import { createHash } from 'node:crypto';
 import { join, resolve } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -80,11 +81,19 @@ const runtimeProbes = vi.hoisted(() => ({
 vi.mock('../services/videoGen/runtimes.js', async (importOriginal) => ({
   ...(await importOriginal()),
   ...runtimeProbes,
+  resolveA2vLoraStageCapable: vi.fn(async () => true),
   resolveByovRuntimeLoraCapable: vi.fn(async (runtime) => runtime === 'minimax_h3' && loraCapability.capable),
 }));
 
 vi.mock('../services/videoGen/displayPower.js', () => ({
   isDisplaySleepEnabled: vi.fn(() => false),
+}));
+
+// The HTTP fixture owns synthetic LoRA identities; layout parsing has its
+// own service tests and must not read sidecars for these nonexistent files.
+vi.mock('../services/loras.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getLoraKeyLayout: vi.fn(async () => 'bare'),
 }));
 
 vi.mock('../services/settings.js', () => ({
@@ -269,6 +278,7 @@ const fsMock = vi.hoisted(() => ({
 
 vi.mock('../lib/fileUtils.js', () => ({
   tryReadFile: vi.fn().mockResolvedValue(null),
+  sha256File: vi.fn(async (path) => createHash('sha256').update(path).digest('hex')),
   PATHS: {
     root: '/mock',
     data: '/mock/data',
@@ -1322,6 +1332,7 @@ describe('videoGen routes', () => {
         // prompt-only round-trip would 400 rather than assert anything. Its
         // own case is below.
         'i2vReferenceMode',
+        'a2vLoraStageStrengths',
         'tiling',
         // Not in the it.each table above: the route deliberately DROPS the
         // stock/default value from persisted params, so the generic round-trip
@@ -1334,6 +1345,7 @@ describe('videoGen routes', () => {
         // full-decode default — the generic round-trip can't cover it. Its
         // own case is below.
         'streamingMode',
+        'continuityStrategy',
       ]);
       const { getSettings } = await import('../services/settings.js');
       getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
@@ -1532,6 +1544,47 @@ describe('videoGen routes', () => {
       expect(JSON.stringify(recordUserAction.mock.calls[0][0])).not.toContain('a cat');
     });
 
+    it('carries the requested motion/refine multipliers from HTTP through the queue to helper arguments without changing prompt or audio', async () => {
+      const { buildArgs } = await import('../services/videoGen/renderArgs.js');
+      videoGenService.listVideoModels.mockReturnValueOnce([{ id: 'ltx25', runtime: 'ltx25', supportedModes: ['a2v'] }]);
+      const prompt = '  A paper singer says hello.  ';
+      setPendingUpload({ fieldname: 'audioFile', path: '/tmp/synthetic-voice.wav', originalname: 'voice.wav', mimetype: 'audio/wav', size: 128 });
+      const response = await request(app).post('/api/video-gen/').send({
+        prompt, mode: 'a2v', modelId: 'ltx25', a2vLoraStageStrengths: '[0,1]',
+        loraFilenames: ['style.safetensors'], loraScales: [0.7],
+      });
+      expect(response.status).toBe(200);
+      const { params } = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0];
+      expect(params).toMatchObject({ prompt, a2vLoraStageStrengths: [0, 1], loras: [{ filename: 'style.safetensors', scale: 0.7 }] });
+      const command = buildArgs({ ...params, model: { runtime: 'ltx25' }, ltxModelPath: '/mock/model', outputPath: '/tmp/output.mp4',
+        loras: [{ path: '/mock/style.safetensors', strength: 0.7 }] });
+      expect(command.args[command.args.indexOf('--a2v-lora-stage-strengths') + 1]).toBe('[0,1]');
+      expect(command.args[command.args.indexOf('--prompt') + 1]).toBe(prompt);
+      expect(command.args[command.args.indexOf('--audio') + 1]).toBe(params.audioFilePath);
+      for (const strengths of [undefined, [1, 1]]) {
+        const legacy = buildArgs({ ...params, a2vLoraStageStrengths: strengths, model: { runtime: 'ltx25' },
+          ltxModelPath: '/mock/model', outputPath: '/tmp/output.mp4' });
+        expect(legacy.args).not.toContain('--a2v-lora-stage-strengths');
+      }
+    });
+
+    it.each([[[-0.1, 1]], [[0, 1.1]], [[0]], [[false, 1]], [['0', 1]], ['broken-json']])(
+      'rejects malformed stage strengths %j before queue admission', async (strengths) => {
+        const response = await request(app).post('/api/video-gen/').send({ prompt: 'an invented singer', a2vLoraStageStrengths: strengths });
+        expect(response.status).toBe(400);
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      });
+
+    it.each([
+      { backend: 'grok' }, { mediaProviderPeerId: 'peer-example' }, { mode: 'text' },
+    ])('refuses a non-default stage request on an incompatible lane: %j', async (overrides) => {
+      const response = await request(app).post('/api/video-gen/').send({
+        prompt: 'an invented singer', a2vLoraStageStrengths: [0, 1], ...overrides,
+      });
+      expect(response.status).toBe(400);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
     it('translates the universal loraFilenames/loraScales contract into internal { filename, scale } params', async () => {
       // This is the contract a history requeue (getRenderConfigForItem) emits,
       // so it must round-trip without a bespoke shape.
@@ -1606,7 +1659,7 @@ describe('videoGen routes', () => {
         modelId: 'minimax_h3_8bit',
         loraFilenames: ['a.safetensors'],
       });
-      expect(r.status).toBe(200);
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
     });
 
     it('accepts LoRAs on an H3 model once the runtime probe proved it capable', async () => {
@@ -1619,7 +1672,7 @@ describe('videoGen routes', () => {
         modelId: 'minimax_h3_8bit',
         loraFilenames: ['a.safetensors'],
       });
-      expect(r.status).toBe(200);
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
       expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
         params: expect.objectContaining({ loras: [{ filename: 'a.safetensors', scale: 1.0 }] }),
       }));
@@ -1979,6 +2032,21 @@ describe('videoGen routes', () => {
       });
       expect(r.status).toBe(400);
       expect(r.body.error).toMatch(/chunks/i);
+    });
+
+    it('persists explicit temporal intent and rejects invalid strategies before queueing', async () => {
+      const accepted = await request(app).post('/api/video-gen/').send({
+        prompt: 'a long shot', chunks: 3, continuityStrategy: 'window', contextFrames: 17,
+      });
+      expect(accepted.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({
+        continuityStrategy: 'window', contextFrames: 17,
+        continuation: expect.objectContaining({ requestedStrategy: 'window', effectiveStrategy: 'window', actualHistoryFrames: null }),
+      }) }));
+      mediaJobQueue.enqueueJob.mockClear();
+      const invalid = await request(app).post('/api/video-gen/').send({ prompt: 'a shot', continuityStrategy: 'experimental' });
+      expect(invalid.status).toBe(400);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
     it('defaults the continuation context window on a chained request', async () => {
@@ -2914,6 +2982,8 @@ describe('videoGen routes', () => {
     // (sourceImagePath, audioFilePath, uploadedTempPath(s), extendFromVideoPath)
     // or the resolved pythonPath to the browser.
     it('whitelists params and never leaks server-internal file paths', async () => {
+      const continuation = { requestedStrategy: 'window', effectiveStrategy: 'window', contextFrames: 17,
+        actualHistoryFrames: null, runtime: 'ltx2', capability: true, backendPin: null, unavailableReason: null };
       mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([
         { id: 'running-1', kind: 'video', status: 'running', position: 1, params: {
           prompt: 'safe prompt',
@@ -2922,6 +2992,8 @@ describe('videoGen routes', () => {
           numFrames: 121, fps: 24,
           steps: 25, guidanceScale: 3, seed: 42,
           tiling: 'auto', disableAudio: false, mode: 'text', chunks: 1,
+          continuityStrategy: 'window',
+          continuation: { ...continuation, sourceVideoPath: '/private/original.mp4' },
           // sensitive fields that must NOT round-trip:
           pythonPath: '/Users/secret/venv/bin/python',
           sourceImagePath: '/Users/secret/data/uploads/source.png',
@@ -2937,6 +3009,8 @@ describe('videoGen routes', () => {
       expect(p.prompt).toBe('safe prompt');
       expect(p.modelId).toBe('ltx2_unified');
       expect(p.width).toBe(768);
+      expect(p.continuityStrategy).toBe('window');
+      expect(p.continuation).toEqual(continuation);
       expect(p.pythonPath).toBeUndefined();
       expect(p.sourceImagePath).toBeUndefined();
       expect(p.audioFilePath).toBeUndefined();

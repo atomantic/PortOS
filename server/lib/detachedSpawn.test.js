@@ -676,13 +676,17 @@ describe('spawnDetached', () => {
 
   it.skipIf(IS_POSIX).each([1, 2, 3])('reports a real supervisor bootstrap failure without private paths (launch %i)', async (launch) => {
     const controlDir = await tmpControlDir();
-    // Each independent supervisor pays the cold PowerShell/Start-Process cost.
-    // Use the stream fixture's bounded CI budget so we test the command error,
-    // not host startup speed; a PID timeout still fails the assertions below.
-    const handle = await spawnDetached('portos-nonexistent-example-command', [], {
+    // A rooted, known-missing executable reaches the native launch refusal
+    // without searching the runner's PATH/PATHEXT for a bare command name.
+    // Each supervisor still pays cold startup and must report the actual
+    // failure within the existing budget; a PID timeout is not accepted.
+    const missingExecutable = join(controlDir, 'portos-missing-bootstrap.exe');
+    const handle = await spawnDetached(missingExecutable, [], {
       controlDir, pidTimeoutMs: 30000,
     });
-    await expect(onClose(handle)).rejects.toThrow(/supervisor-stage=failed hresult=-?\d+/);
+    const closed = onClose(handle);
+    await expect(closed).rejects.toThrow(/supervisor-stage=failed hresult=-?\d+/);
+    await expect(closed).rejects.not.toThrow(controlDir);
     const diagnostic = await __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'supervisor-bootstrap.log');
     expect(diagnostic).toMatch(/^failed hresult=-?\d+ elapsed-ms=\d+; timeline=reading-job@\d+ms>starting-job@\d+ms>failed@\d+ms$/);
     process.stdout.write(`🪟 Windows detached expected refusal ${launch}: ${diagnostic}\n`);

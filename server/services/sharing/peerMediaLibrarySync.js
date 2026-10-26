@@ -72,6 +72,7 @@ export function mediaLibraryDirs() {
     { kind: 'video', dir: PATHS.videos },
     { kind: 'audio', dir: PATHS.audio },
     { kind: 'music', dir: PATHS.music },
+    { kind: 'model', dir: PATHS.models },
   ];
 }
 
@@ -79,7 +80,7 @@ export function mediaLibraryDirs() {
 // exclude patterns. Independent of PATHS so a redirected path can't change which
 // exclude pattern applies.
 const MEDIA_LIBRARY_KIND_DIRNAMES = Object.freeze({
-  image: 'images', video: 'videos', audio: 'audio', music: 'music',
+  image: 'images', video: 'videos', audio: 'audio', music: 'music', model: 'models',
 });
 
 // Cap so a pathologically large library can't build an unbounded manifest. 100k
@@ -160,13 +161,15 @@ async function hashCachedLibraryAsset(name, kind, dir) {
  *
  * @returns {Promise<{ schemaVersion:number, manifestHash:string, assets:Array }>}
  */
-export async function buildMediaLibraryManifest() {
+// Older receivers validate a closed asset-kind enum. Models are opt-in so their
+// ordinary image/audio/video sweeps remain valid until they upgrade.
+export async function buildMediaLibraryManifest({ models = false } = {}) {
   const excluded = await excludedLibraryKinds();
   const assets = [];
   let truncated = false;
   for (const { kind, dir } of mediaLibraryDirs()) {
     if (truncated) break;
-    if (excluded.has(kind)) continue;
+    if (excluded.has(kind) || (kind === 'model' && !models)) continue;
     const names = await readdir(dir).catch(() => []); // missing dir → empty (nothing of that kind yet)
     for (const name of names) {
       // Image sidecars are metadata, not standalone assets — they ride the image
@@ -259,7 +262,7 @@ export async function syncMediaLibraryFromPeer(peer) {
   if (librarySweepInFlight.has(peer.instanceId)) return { pulled: 0, skipped: 'in-flight' };
   librarySweepInFlight.add(peer.instanceId);
   try {
-    const url = `${peerBaseUrl(peer)}/api/peer-sync/library-manifest`;
+    const url = `${peerBaseUrl(peer)}/api/peer-sync/library-manifest?models=1`;
     const res = await withAbortTimeout(ASSET_PULL_TIMEOUT_MS, (signal) =>
       peerFetch(url, { signal, maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES }, peer))
       .catch(() => null);

@@ -92,6 +92,7 @@ export const CATEGORIES = {
   'certs': { label: 'TLS Certificates', description: 'HTTPS certificate and private key — purging drops the install back to HTTP', archivable: false, deletable: false },
   'launch-videos': { label: 'Launch Videos', description: 'App launch-video compositions, plans, captions and rendered deliverables', archivable: true, deletable: false },
   'composition-proofs': { label: 'Composition Proofs', description: 'Contact-sheet review stills from HTML-composition proof renders — re-rendered from source, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
+  'greybox-renders': { label: 'Greybox Render Scratch', description: 'Temporary viewer pages for in-flight greybox shot captures — removed when each render ends', archivable: false, deletable: false },
   // Development artifacts ("ingredients") of Music Video projects — every
   // version of a Cast & Sets sheet, animatic, treatment or storyboard, one
   // immutable file each, referenced by the project record. Not deletable from
@@ -166,6 +167,7 @@ export const CATEGORIES = {
   'migrations': { label: 'Legacy Migration Ledger', description: 'Pre-2026-05 location of the migration applied-list — the next migration run moves it to migrations.applied.json, and setup removes the empty folder', archivable: false, deletable: false },
   'model-personality': { label: 'Model Personality', description: 'Model personality probe results and settings', archivable: true, deletable: false },
   'model-tests': { label: 'Model Capability Tests', description: 'Throwaway agent sandboxes from the capability test suite — recreated per run, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
+  'models': { label: '3D Models', description: 'Uploaded GLB layouts referenced by catalog places — retain the authored source files', archivable: true, deletable: false },
   'music': { label: 'Music', description: 'Uploaded and generated background tracks', archivable: true, deletable: false },
   'openclaw': { label: 'OpenClaw', description: 'OpenClaw integration config', archivable: true, deletable: false },
   'peer-execution': { label: 'Peer Execution Recovery', description: 'Machine-local launch evidence and completion receipts required to reconcile authorized peer maintenance — preserve unresolved operations', archivable: false, deletable: false },

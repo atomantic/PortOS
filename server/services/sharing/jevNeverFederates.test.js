@@ -74,8 +74,8 @@ describe('trained jev heads and their corpora never federate (#7689)', () => {
   it('carries no jev directory into the media-library federation walk', async () => {
     const { mediaLibraryDirs } = await import('./peerMediaLibrarySync.js');
     const dirs = mediaLibraryDirs();
-    // Non-vacuity pin: image, video, audio, music.
-    expect(dirs).toHaveLength(4);
+    // Pin every intended public library kind as well as excluding private stores.
+    expect(dirs.map(({ kind }) => kind)).toEqual(['image', 'video', 'audio', 'music', 'model']);
     expect(dirs.filter(namesJevMedia)).toEqual([]);
   }, 30000);
 

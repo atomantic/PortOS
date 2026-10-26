@@ -7,9 +7,9 @@
  * rediscovered at every site. It now lives on the helper's doc comment, and
  * the guard below keeps new sites from routing around it.
  */
+import { trackedFiles } from '../../scripts/lib/trackedFiles.js';
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { execFileSync } from './childProcess.js';
 import { readFileSync } from 'fs';
 import { join, dirname, relative, sep } from 'path';
 import { fileURLToPath } from 'url';
@@ -79,11 +79,7 @@ describe('pinPlatform', () => {
 describe('platform-pin guard', () => {
   // Scope to what the server runner globs (`server/vitest.config.js`); client
   // tests run in jsdom, where `process.platform` isn't a branch worth pinning.
-  const SCOPED_TESTS = execFileSync('git', ['ls-files', '*.test.js'], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-  })
-    .split('\n')
+  const SCOPED_TESTS = trackedFiles(REPO_ROOT, ['*.test.js'])
     .filter((p) => /^(server|scripts|lib|autofixer)\//.test(p))
     .filter((p) => !p.startsWith('lib/slashdo/') && p !== SELF);
 

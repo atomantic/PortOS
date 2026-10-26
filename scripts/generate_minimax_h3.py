@@ -23,8 +23,9 @@ pool. PortOS passes the host floor its declared placement profile needs
 (`--min-system-memory-gb`) and the reserve it holds back for the operating
 system (`--memory-headroom-gb`); `enforce_system_memory` refuses a box below the
 floor before any weight is read (against TOTAL RAM — the reserve is not netted
-off first), and `apply_memory_limit` caps MLX's allocator at the rest so a
-render that overruns fails as a job instead of wedging the machine.
+off first). A required live `--memory-budget-bytes` bounds the allocator before
+weights load; typed samples retain measured allocation/process peaks. This is
+not a whole-host memory guarantee or evidence of why a signal was delivered.
 """
 
 from __future__ import annotations
@@ -36,9 +37,11 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
+import tempfile
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,7 +53,7 @@ from _runner_common import (  # noqa: E402
 )
 from _minimax_h3_common import (  # noqa: E402
     FPS, add_h3_common_args, emit_result, enforce_system_memory, load_keyframes,
-    resolve_cached_snapshot, validate_h3_output_args,
+    resolve_cached_snapshot, validate_h3_output_args, validate_h3_history_args,
 )
 from _minimax_h3_mlx_pins import (  # noqa: E402
     pinned_encoder_hook, verify_pinned_encode_source,
@@ -67,6 +70,8 @@ STEP_RE = re.compile(r"\bstep\s+(\d+)/(\d+)\b", re.IGNORECASE)
 
 def parse_args() -> argparse.Namespace:
     parser = add_h3_common_args(argparse.ArgumentParser(description=__doc__), steps_default=9)
+    parser.add_argument("--speed-profile", choices=["lightx2v-mlx-v1.3-4step"])
+    parser.add_argument("--speed-adapter")
     parser.add_argument("--runtime-dir", required=True)
     parser.add_argument("--runtime-revision", required=True)
     parser.add_argument("--checkpoint-repo", required=True)
@@ -103,57 +108,52 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def report_memory(stage: str, **values) -> None:
+    """Bounded numeric evidence; missing counters remain absent, never zero."""
+    sample = {"stage": stage, **values}
+    try:
+        import mlx.core as mx
+
+        peak = mx.get_peak_memory()
+        if isinstance(peak, (int, float)) and 0 <= peak < 2**53:
+            sample["peakAllocatedBytes"] = int(peak)
+    except (AttributeError, RuntimeError, ImportError):
+        pass
+    try:
+        import resource
+
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        sample["peakRssBytes"] = int(rss if sys.platform == "darwin" else rss * 1024)
+    except (AttributeError, OSError, ImportError):
+        pass
+    print("H3MEMORY:" + json.dumps(sample), file=sys.stderr, flush=True)
+
+
 def apply_memory_limit(args: argparse.Namespace, total_gb: float | None, vision_loaded: bool) -> None:
-    """Cap MLX's allocator at the machine's RAM minus PortOS's reserve.
+    """Require the live allocator envelope before reading any model weights.
 
-    Unified memory means an H3 render and the rest of the machine draw on the
-    same pool, and MLX's default limit is the whole of it. A render that grows
-    into the last gigabyte does not fail on its own — it takes PortOS, Postgres
-    and the desktop down with it, and what the user sees is a hung machine
-    rather than a failed job. An explicit limit converts that into an
-    out-of-memory error the runner reports normally.
-
-    Only the ALLOCATOR limit is set. The wired limit is a different lever with a
-    much lower safe ceiling — MLX raises when it is set above the recommended
-    max working set, which on a 128 GB Mac is well under RAM-minus-reserve — so
-    driving it from this number would kill the runner outright. It stays at the
-    pin's own default until someone measures a value for it.
-
-    Best-effort by design: the setter has moved between `mx` and `mx.metal`
-    across MLX releases and can reject a limit this build dislikes, so both the
-    lookup and the call are guarded. An MLX without it still renders — it just
-    keeps the unbounded behaviour it had before this existed, which is why a
-    failure here is reported rather than raised.
+    MLX's allocator bound is not a whole-process limit. Keep the wired-limit
+    policy unchanged and retain measured peaks rather than claiming OOM from a
+    termination signal alone.
     """
-    profile = args.memory_profile or 'unified'
-    tower = 'loaded' if vision_loaded else 'skipped'
-    headroom_gb = max(0.0, args.memory_headroom_gb or 0.0)
-    if total_gb is None:
-        print(
-            f"STATUS:MiniMax H3 placement: {profile} "
-            f"· host memory unknown, allocator left unbounded · vision tower {tower}",
-            file=sys.stderr, flush=True,
-        )
-        return
-    limit_gb = max(1.0, total_gb - headroom_gb)
-
+    budget = getattr(args, "memory_budget_bytes", None)
+    if total_gb is None or type(budget) is not int or budget <= 0:
+        raise RuntimeError("MiniMax H3 requires measured host memory and a positive admitted --memory-budget-bytes before loading weights.")
+    limit = min(budget, int(max(0, total_gb - max(0, args.memory_headroom_gb or 0)) * 1e9))
+    if limit <= 0:
+        raise RuntimeError("MiniMax H3 has no allocator budget after the host reserve.")
     import mlx.core as mx
 
     setter = getattr(mx, "set_memory_limit", None) or getattr(getattr(mx, "metal", None), "set_memory_limit", None)
     if setter is None:
-        applied = "no allocator limit on this MLX build"
-    else:
-        try:
-            setter(int(limit_gb * 1e9))
-            applied = f"allocator capped at {limit_gb:.0f} GB"
-        except Exception as exc:  # a pin that rejects the limit must not lose the render
-            applied = f"allocator cap rejected by MLX ({type(exc).__name__}: {exc})"
-    print(
-        f"STATUS:MiniMax H3 placement: {profile} "
-        f"· {total_gb:.0f} GB RAM, reserve {headroom_gb:.0f} GB [{applied}] "
-        f"· vision tower {tower}",
-        file=sys.stderr, flush=True,
-    )
+        raise RuntimeError("MiniMax H3 cannot enforce the admitted allocator bound on this MLX build; no model was loaded.")
+    try:
+        setter(limit)
+    except Exception as exc:
+        raise RuntimeError(f"MiniMax H3 allocator bound was rejected ({type(exc).__name__}); no model was loaded.") from None
+    report_memory("allocator", allocatorLimitBytes=limit, allocatorApplied=True)
+    tower = "loaded" if vision_loaded else "skipped"
+    print(f"STATUS:MiniMax H3 placement: {args.memory_profile or 'unified'} · allocator capped at {limit / 1e9:.1f} GB · vision tower {tower}", file=sys.stderr, flush=True)
 
 
 def require_ffmpeg() -> str:
@@ -985,11 +985,15 @@ class ProgressWriter:
             )
             if self._preview is not None:
                 self._preview.publish(int(step), int(total))
+            report_memory("denoise")
             return
         print(clean, file=sys.stderr, flush=True)
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    interval = validate_h3_history_args(args, supported=True)
+    if interval and (args.image or args.anchor or args.draft_decoder_file):
+        raise SystemExit("H3 MLX history cannot be combined with keyframes or a substituted video VAE.")
     # Everything the H3 checkpoint imposes regardless of runtime — fps, the 32px
     # canvas grid, the 17n+5 frame grid, the sigma floor, keyframe anchoring —
     # lives in the shared module so this runner and the CUDA one cannot drift.
@@ -1010,6 +1014,8 @@ def validate_args(args: argparse.Namespace) -> None:
     for path in args.lora:
         if not Path(path).is_file():
             raise SystemExit(f"LoRA file is missing: {path}")
+    from _minimax_h3_mlx_lightx2v import validate_profile_args
+    validate_profile_args(args)
     # The substitution is all-or-nothing: without the id there is nowhere to
     # build the shim, and without the shim root there is nowhere to put it.
     # Accepting a partial set would silently fall back to the stock conditioner
@@ -1057,7 +1063,7 @@ def place_keyframes_on_canvas(images: list, width: int, height: int) -> list:
     return [prepare_keyframe_image(image, height, width, stretch=index == 0) for index, image in enumerate(images)]
 
 
-def render_outputs(pipe, args, images, save_mp4, batch_seeds=None):
+def render_outputs(pipe, args, images, save_mp4, batch_seeds=None, history=None):
     """Render one at a time, retaining weights and only this request's conditioning.
 
     The pipeline already keeps its DiT, VAEs and modulation cache. Cache the
@@ -1084,34 +1090,52 @@ def render_outputs(pipe, args, images, save_mp4, batch_seeds=None):
         base_output = Path(args.output)
         for index, seed in enumerate(batch_seeds or [args.seed]):
             output = base_output if index == 0 else base_output.with_name(f"{base_output.stem}-{index + 1}{base_output.suffix}")
+            if getattr(args, "source_video", None) and output.resolve() == Path(args.source_video).resolve():
+                raise RuntimeError("H3 history source and batch outputs must be different files.")
             if batch_seeds is not None:
                 print(f"STATUS:Rendering video {index + 1}/{len(batch_seeds)} (seed {seed})", file=sys.stderr, flush=True)
             print("STAGE:inference", file=sys.stderr, flush=True)
             progress = ProgressWriter(preview)
+            if getattr(args, "speed_profile", None):
+                import mlx.core as mx
+                mx.reset_peak_memory()
+                inference_start = time.perf_counter()
             with heartbeat("minimax-h3-inference"), redirect_stdout(progress):
-                result = pipe(
-                    args.prompt,
-                    duration_seconds=args.num_frames / FPS,
-                    num_inference_steps=args.steps,
-                    seed=seed,
-                    images=images or None,
-                    keyframe_anchors=tuple(args.anchor),
-                    height=args.height,
-                    width=args.width,
-                    drop_adaln=True,
-                )
+                if history is not None:
+                    from _minimax_h3_mlx_history import render_history
+
+                    result = render_history(pipe, args, history, seed)
+                else:
+                    result = pipe(
+                        args.prompt,
+                        duration_seconds=args.num_frames / FPS,
+                        num_inference_steps=args.steps,
+                        seed=seed,
+                        images=images or None,
+                        keyframe_anchors=tuple(args.anchor),
+                        height=args.height,
+                        width=args.width,
+                        drop_adaln=True,
+                    )
             progress.flush()
+            if getattr(args, "speed_profile", None):
+                from _minimax_h3_mlx_lightx2v import emit_report
+                mx.synchronize()
+                emit_report(args, pipe._portos_speed_schedules, result,
+                            time.perf_counter() - inference_start, mx.get_peak_memory(),
+                            pipe._portos_cold_load_seconds)
 
             output.parent.mkdir(parents=True, exist_ok=True)
-            wav_path = output.with_suffix(".wav")
             print("STAGE:mux", file=sys.stderr, flush=True)
-            try:
-                save_mp4(output, result.video, result.fps, result.audio, result.sample_rate)
-            finally:
-                wav_path.unlink(missing_ok=True)
-
-            if not output.is_file() or output.stat().st_size == 0:
-                raise RuntimeError(f"MiniMax H3 completed but did not write {output}.")
+            # The pinned muxer writes a sibling WAV and can leave a partial MP4.
+            # Both belong in our scratch directory, never beside a source or a
+            # completed output. Commit only a successfully muxed nonempty file.
+            with tempfile.TemporaryDirectory(prefix=".h3-mux-", dir=output.parent) as scratch:
+                temporary_output = Path(scratch) / output.name
+                save_mp4(temporary_output, result.video, result.fps, result.audio, result.sample_rate)
+                if not temporary_output.is_file() or temporary_output.stat().st_size == 0:
+                    raise RuntimeError(f"MiniMax H3 completed but did not write {output}.")
+                os.replace(temporary_output, output)
             print(
                 f"STATUS:MiniMax H3 saved {output.name} ({result.video.shape[0]} frames with stereo audio)",
                 file=sys.stderr,
@@ -1127,7 +1151,16 @@ def render_outputs(pipe, args, images, save_mp4, batch_seeds=None):
             pipe.text_encoder.encode = encode
 
 
+def install_cancellation_handler() -> None:
+    """Unwind owned mux scratch when the render process group is cancelled."""
+    def terminate(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, terminate)
+
+
 def main() -> int:
+    install_cancellation_handler()
     args = parse_args()
     try:
         batch_seeds = json.loads(args.batch_seeds) if args.batch_seeds else None
@@ -1138,6 +1171,7 @@ def main() -> int:
             or any(type(seed) is not int or not 0 <= seed <= 2 ** 32 - 1 for seed in batch_seeds)):
         raise SystemExit("--batch-seeds requires 2 to 20 unsigned 32-bit integers")
     validate_args(args)
+    interval = validate_h3_history_args(args, supported=True)
     # Read the keyframes first: everything below is a git probe, ~35 HF cache
     # lookups and an mlx/transformers import, so an unreadable conditioning
     # image should not cost seconds before it reports.
@@ -1147,7 +1181,17 @@ def main() -> int:
     # the ffmpeg this runner shells out to mux with.
     establish_process_group()
 
-    require_ffmpeg()
+    ffmpeg = require_ffmpeg()
+
+    runtime_dir = Path(args.runtime_dir).resolve()
+    verify_runtime_checkout(runtime_dir, args.runtime_revision)
+    history = None
+    if interval is not None:
+        from _minimax_h3_mlx_history import read_history_media, report_history, verify_history_backend
+
+        verify_history_backend(runtime_dir, args.runtime_revision)
+        history = read_history_media(args, interval, ffmpeg)
+        report_history(interval)
 
     # Capacity before anything is loaded. PortOS gates this at submit time too;
     # this is the runner-side half, which also catches a render that reached the
@@ -1157,9 +1201,6 @@ def main() -> int:
     # placement report can state what is actually resident rather than what the
     # entry could hold in the worst case.
     apply_memory_limit(args, total_memory_gb, vision_loaded=bool(images))
-
-    runtime_dir = Path(args.runtime_dir).resolve()
-    verify_runtime_checkout(runtime_dir, args.runtime_revision)
 
     emit_runtime_fingerprint(
         "minimax_h3",
@@ -1268,6 +1309,7 @@ def main() -> int:
                 load_vision=bool(images),
             )
 
+    cold_load_started = time.perf_counter()
     if decoder_shim is None:
         pipe = load_pipeline(checkpoint_dir)
     else:
@@ -1278,22 +1320,31 @@ def main() -> int:
             fall_back_to_full_decoder(exc)
             pipe = load_pipeline(checkpoint_dir)
 
+    pipe._portos_cold_load_seconds = time.perf_counter() - cold_load_started
+
     # Runtime LoRA application — never a fuse. The DiT is quantized, so the
     # applicator has to take each layer's logical dims from the quantization
     # metadata (packed-uint32 storage shapes match no LoRA) and add the deltas
     # during the forward pass. PortOS only ever passes --lora when its capability
     # probe has already exercised this local applicator, so an import or shape
     # error here is a real contract violation and should surface, not be swallowed.
-    if args.lora:
+    if args.lora or args.speed_profile:
         print("STAGE:apply-loras", file=sys.stderr, flush=True)
         from minimax_h3_lora import apply_loras
 
         apply_loras(
             pipe.dit,
-            [{"path": p, "scale": s} for p, s in zip(args.lora, args.lora_scale)],
+            ([{"path": args.speed_adapter, "scale": 1.0}] if args.speed_profile else [])
+            + [{"path": p, "scale": s} for p, s in zip(args.lora, args.lora_scale)],
         )
 
-    render_outputs(pipe, args, images, save_mp4, batch_seeds)
+    if args.speed_profile:
+        from _minimax_h3_mlx_lightx2v import configure_pipeline
+        pipe._portos_speed_schedules = configure_pipeline(pipe)
+
+    report_memory("loaded")
+    render_outputs(pipe, args, images, save_mp4, batch_seeds, history)
+    report_memory("completed")
     return 0
 
 

@@ -16,6 +16,7 @@ import {
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
+import { sanitizeContinuation } from '../../lib/videoContinuationProvenance.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
 
 // Wall-clock render timing (#5878) for a CHAINED render's stitched entry. A
@@ -102,11 +103,24 @@ export async function stitchVideos(videoIds, opts = {}) {
     // Optional AbortSignal (the stitch media job's cancel): kills the ffmpeg
     // child and removes the partial output so a cancelled encode publishes no row.
     signal = null,
+    requireExactTrims = false,
+    continuation = null,
   } = opts;
   if (!Array.isArray(videoIds) || videoIds.length < 2) {
     throw new ServerError('Need at least 2 videos to stitch', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const ffmpeg = await findFfmpeg();
+
+  const hasTrims = Boolean(trims && (
+    (typeof trims.values === 'function' && Array.from(trims.values()).some((t) => Number(t?.startFrame) > 0)) ||
+    (typeof trims === 'object' && Object.values(trims).some((t) => Number(t?.startFrame) > 0))
+  ));
+
+  let ffmpeg;
+  try {
+    ffmpeg = await findFfmpeg(hasTrims ? { requiredEncoder: 'libx264' } : {});
+  } catch (err) {
+    throw new ServerError(err.message, { status: 500, code: err.code || 'FFMPEG_FAILED' });
+  }
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
   const history = await loadHistory();
@@ -137,6 +151,11 @@ export async function stitchVideos(videoIds, opts = {}) {
       frames: Number.isFinite(frames) && frames >= 0 ? frames : null,
     };
   });
+
+  if (requireExactTrims && trimPlan.some((plan) => !plan || plan.frames == null || plan.frames <= 0)) {
+    throw new ServerError('Exact continuation delivery requires a measured trim plan for every chunk', { status: 400, code: 'VIDEO_CONTINUATION_MEASUREMENT_REQUIRED' });
+  }
+  const cutCount = trimPlan.filter((t) => t?.startFrame > 0).length;
 
   const listFile = join(tmpdir(), `concat-${id}.txt`);
   // Set before the write, not after: `writeFile` creates and truncates the
@@ -185,7 +204,6 @@ export async function stitchVideos(videoIds, opts = {}) {
 
   // Inputs with a real cut, as opposed to the measurement-only entries. Zero
   // means the demuxer can do the job.
-  const cutCount = trimPlan.filter((t) => t?.startFrame > 0).length;
   // Tracks whether the cuts actually made it into the output, so `numFrames`
   // below reports the timeline that exists rather than the one we asked for.
   let trimsApplied = cutCount > 0;
@@ -215,6 +233,7 @@ export async function stitchVideos(videoIds, opts = {}) {
         ? await runFfmpeg(args, { captureStderr: true }).then(() => null, (err) => err)
         : new Error('could not build the concat filter graph');
       if (failure) {
+        if (requireExactTrims || signal?.aborted) throw failure;
         // Degrade rather than throw away a whole chained render: the untrimmed
         // inputs were never re-encoded, so they're still in codec lockstep and
         // the stream-copy concat below can salvage the clip. The cost is the
@@ -232,17 +251,20 @@ export async function stitchVideos(videoIds, opts = {}) {
     await optimizeForStreaming(outPath);
     if (signal?.aborted) throw new ServerError('Stitch canceled', { status: 499, code: 'STITCH_CANCELED' });
   } catch (err) {
-    // A canceled encode leaves a partial file that no history row will ever own.
-    if (signal?.aborted) await unlinkGuarded(outPath).catch(() => {});
+    // Failed exact delivery and canceled encodes own no published output.
+    if (signal?.aborted || requireExactTrims) await unlinkGuarded(outPath).catch(() => {});
     throw err;
   } finally {
     if (listFileWritten) await unlinkGuarded(listFile).catch(() => {});
   }
 
+  const safeContinuation = sanitizeContinuation(continuation);
   return withBackupAssetPublication(async () => {
     let committed = false;
     try {
+      if (signal?.aborted) throw new ServerError('Stitch canceled', { status: 499, code: 'STITCH_CANCELED' });
       const thumb = await generateThumbnail(outPath, id);
+      if (signal?.aborted) throw new ServerError('Stitch canceled', { status: 499, code: 'STITCH_CANCELED' });
       const stitchedMeta = {
         id,
         prompt: promptOverride != null
@@ -270,6 +292,7 @@ export async function stitchVideos(videoIds, opts = {}) {
         ...chainRenderTiming(videos, historyKey),
         [historyKey]: videoIds,
         ...(Array.isArray(chunkPrompts) ? { chunkPrompts } : {}),
+        ...(safeContinuation ? { continuation: safeContinuation } : {}),
         // The stitched clip is the chain's visible history row, so it must carry
         // the same render controls and provenance as the hidden chunks. Preserve
         // meaningful falsey values (guidance 0, audio enabled, empty conditioning)
@@ -331,7 +354,11 @@ export async function stitchVideos(videoIds, opts = {}) {
       // Serialized append against the shared history tail (re-reads the freshest
       // list inside the mutator) so a concurrent download/render write can't drop
       // this stitched entry.
-      await mutateVideoHistory((history) => { history.unshift(stitchedMeta); return history; });
+      await mutateVideoHistory((history) => {
+        if (signal?.aborted) throw new ServerError('Stitch canceled', { status: 499, code: 'STITCH_CANCELED' });
+        history.unshift(stitchedMeta);
+        return history;
+      });
       committed = true;
       console.log(`🎬 Stitched ${videos.length} videos → ${outFilename}`);
       return stitchedMeta;

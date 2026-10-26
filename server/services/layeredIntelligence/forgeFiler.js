@@ -5,7 +5,7 @@
  * forge CLI (injectable `exec`).
  */
 
-import { dispatchLabelSpec, forgeIssueLabels, isDispatchModel, isDispatchEffort } from '../../lib/dispatchLabels.js';
+import { dispatchLabelSpec, forgeIssueLabels, normalizeIssueHardwareRequirements, isDispatchModel, isDispatchEffort } from '../../lib/dispatchLabels.js';
 import { safeJSONParse } from '../../lib/fileUtils.js';
 import { normalizeIssueState } from '../../lib/forgeIssueState.js';
 import { LI_LABEL, LI_BLOCKING_LABEL, LI_LABEL_SPEC, LI_BLOCKING_LABEL_SPEC } from './constants.js';
@@ -247,12 +247,15 @@ export async function ensureForgeLabels({ cli, cwd, env, extraLabels = [], exec 
  * `planner:<model>` (`planner::<model>` on GitLab).
  */
 export async function fileProposalToForge({
-  cli, cwd, env, hostname, title, body, slug, model, effort, goodFirstIssue, helpWanted, planner, exec = runCli
+  cli, cwd, env, hostname, title, body, slug, model, effort, goodFirstIssue, helpWanted, helpWantedReason, hardwareRequirements, planner, exec = runCli
 } = {}) {
   if (!isDispatchModel(model) || !isDispatchEffort(effort)) {
     return { success: false, error: 'Issue filing requires valid model and effort dispatch labels; investigate and supply both before retrying' };
   }
-  const extras = forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner, cli })
+  if (!normalizeIssueHardwareRequirements(hardwareRequirements, { helpWanted, helpWantedReason })) {
+    return { success: false, error: 'Invalid hardwareRequirements; use canonical prerequisites and split independent platform targets' };
+  }
+  const extras = forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, helpWantedReason, hardwareRequirements, planner, cli })
     .map((name) => dispatchLabelSpec(name, { cli }));
   const labels = [LI_LABEL_SPEC, ...extras.filter(Boolean)];
   const result = await fileForgeIssue({ cli, cwd, env, hostname, title, body, trailer: `\n\n${slugMarker(slug)}`, labels, exec });

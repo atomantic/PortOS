@@ -1053,7 +1053,7 @@ const DEFAULT_REGISTRY = {
         steps: 8,
         guidance: 0,
         samplerLocked: true,
-        samplerNote: 'MiniMax H3 is CFG-distilled; this profile locks the validated 8-point sigma schedule and does not use CFG.',
+        samplerNote: 'MiniMax H3 is CFG-distilled. Quality keeps the stock 8-point sigma schedule with no CFG; an explicit LightX2V speed profile owns its complete schedule.',
         supportsNegativePrompt: false,
         supportsTiling: false,
         supportsDisableAudio: false,

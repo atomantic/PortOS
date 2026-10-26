@@ -10,6 +10,7 @@ export const VIDEO_GEN_LOCAL_ONLY_FIELDS = Object.freeze({
   BATCH_SIZE: 'batchSize',
   IMAGE_STRENGTH: 'imageStrength',
   I2V_REFERENCE_MODE: 'i2vReferenceMode',
+  A2V_LORA_STAGE_STRENGTHS: 'a2vLoraStageStrengths',
   TILING: 'tiling',
   TEXT_ENCODER_ID: 'textEncoderId',
   SPEED_PROFILE_ID: 'speedProfileId',
@@ -18,6 +19,7 @@ export const VIDEO_GEN_LOCAL_ONLY_FIELDS = Object.freeze({
   // no sense on a Grok/fal/reactor render and stays local-only for the same
   // reason speedProfileId/draftDecode do.
   STREAMING_MODE: 'streamingMode',
+  CONTINUITY_STRATEGY: 'continuityStrategy',
 });
 
 // Indexed multipart slots for ordered voice references (FastH3 Omni): the

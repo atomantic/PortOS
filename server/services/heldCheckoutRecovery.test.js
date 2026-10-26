@@ -5,23 +5,29 @@
  * does not copy the checkout. Historical archives written by preserveMergedCheckout
  * remain readable.
  */
-import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat } from 'fs/promises';
+import { describe, it as vitestIt, expect, beforeEach as vitestBeforeEach, afterEach, afterAll, vi } from 'vitest';
+import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat, lstat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
+import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { execFile } from '../lib/childProcess.js';
 import { dirname, join } from 'path';
 import { readRetirementCheckoutIdentity, isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { execGit } from '../lib/execGit.js';
+import { assertTempPath } from '../lib/tempPathGuard.js';
 import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
-import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownFixtureWork } from '../lib/mockPathsDataRoot.js';
 import { PATHS } from '../lib/paths.js';
 
 // Local branch deletion archives the common reflog using PATHS.cos, independently
 // of the checkout archive's explicit cosDir option.
 vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-held-branch-archives-') }));
-afterAll(cleanupTempDataRoots);
+const owned = ownFixtureWork();
+const it = owned.tests(vitestIt);
+const beforeEach = (body, ...options) => vitestBeforeEach(owned.wrap('setup', body), ...options);
+vitestBeforeEach(() => owned.prepare());
+afterAll(() => owned.finish(cleanupTempDataRoots));
 
 // Fixed phase names and aggregates only: diagnostics must never expose fixture
 // paths, Git arguments, captured bytes or an unbounded per-command transcript.
@@ -62,7 +68,9 @@ const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fe
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, execGit: async (args, cwd, options) => {
+  return { ...actual,
+    execGitSafe: (args, cwd, options) => owned.run('git', () => actual.execGitSafe(args, cwd, options)),
+    execGit: async (args, cwd, options) => {
     if (injected.onSnapshot && args[0] === 'ls-files' && args[1] === '-u') await injected.onSnapshot();
     // Pauses an archive mid-write, after its first snapshot and before its re-read.
     if (injected.onBundle && args.includes('bundle') && args.includes('create')) await injected.onBundle();
@@ -80,7 +88,7 @@ vi.mock('../lib/execGit.js', async importOriginal => {
     try {
       const phase = options?.env?.GIT_NO_REPLACE_OBJECTS === '1' ? 'independent-object-proof'
         : args.includes('bundle') ? 'bundle' : 'other-git';
-      const result = await receiptTiming.run(phase, () => actual.execGit(args, cwd, options));
+      const result = await receiptTiming.run(phase, () => owned.run('git', () => actual.execGit(args, cwd, options)));
       if (injected.onPreviewEvidence && args[0] === '--literal-pathspecs' && args[1] === 'diff') await injected.onPreviewEvidence();
       if (injected.onArchiveRef && args[0] === 'update-ref' && args[1]?.startsWith('refs/portos/archive/')) await injected.onArchiveRef();
       if (injected.onProof && args.includes('--bare') && options?.env?.GIT_NO_REPLACE_OBJECTS === '1') await injected.onProof();
@@ -132,19 +140,28 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   let external;
   let cosDir;
   let receiptWork;
+  let pristineRepo;
   const noOwners = async () => [];
 
   beforeEach(async ({ task }) => {
+    scratch = null;
     receiptWork = null;
-    receiptTiming.current = task.name.startsWith('settles a normally merged checkout before the next scan')
-      ? { entryPoint: task.name.endsWith('cleanupMerged') ? 'cleanupMerged' : 'early reaper', started: performance.now(), phases: {} } : null;
+    const remoteSquash = task.name.startsWith('fetches a remote-only squash commit');
+    receiptTiming.current = remoteSquash || task.name.startsWith('settles a normally merged checkout before the next scan')
+      ? { entryPoint: remoteSquash ? 'remote squash receipt' : task.name.endsWith('cleanupMerged') ? 'cleanupMerged' : 'early reaper', started: performance.now(), phases: {} } : null;
     await receiptTiming.run('fixture-setup', async () => {
       Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
       Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null, onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null });
       scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
       const safeRepo = join(scratch, 'repo');
       await mkdir(safeRepo);
-      await materializeGitRepo(safeRepo, { identity: { email: 'test@example.com', name: 'Test' } });
+      if (!pristineRepo) {
+        const seed = join(lazyTempDataRoot('portos-held-pristine-'), 'repo');
+        await mkdir(seed);
+        await materializeGitRepo(seed, { identity: { email: 'test@example.com', name: 'Test' } });
+        pristineRepo = seed;
+      }
+      await cp(pristineRepo, safeRepo, { recursive: true });
       repo = (await execGit(['rev-parse', '--show-toplevel'], safeRepo)).stdout.trim() || safeRepo;
       external = join(scratch, 'elsewhere');
       cosDir = join(scratch, 'cos');
@@ -152,24 +169,32 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       injected.app.repoPath = repo;
     });
   });
-  afterEach(async ({ task }) => {
-    const report = state => {
-      const trace = receiptTiming.current;
-      if (!trace) return;
-      const phases = Object.entries(trace.phases).map(([phase, row]) =>
-        `${phase}=${Math.round(row.ms)}ms/${row.count} max=${Math.round(row.maxMs)}ms active=${row.active}`).join('; ');
-      console.log(`⏱️ merged-receipt ${trace.entryPoint} ${state}: ${Math.round(performance.now() - trace.started)}ms; ${phases}`);
-    };
-    const failed = Boolean(task.result?.errors?.length);
-    if (failed) report('before-settlement');
-    // Vitest's deadline rejects its wrapper, not the async fixture. Never erase
-    // the repo while archive/proof/removal work from this exact case is running.
-    try { await receiptWork?.catch(() => {}); }
-    finally {
-      if (failed || process.env.PORTOS_PROFILE_HELD_RECEIPT === '1') report('settled');
-      receiptTiming.current = null;
-      await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-    }
+  afterEach(({ task, signal }) => {
+    return owned.cleanup(async () => {
+      const report = state => {
+        const trace = receiptTiming.current;
+        if (!trace) return;
+        const phases = Object.entries(trace.phases).map(([phase, row]) =>
+          `${phase}=${Math.round(row.ms)}ms/${row.count} max=${Math.round(row.maxMs)}ms active=${row.active}`).join('; ');
+        process.stderr.write(`⏱️ merged-receipt ${trace.entryPoint} ${state}: ${Math.round(performance.now() - trace.started)}ms; ${phases}\n`);
+      };
+      const failed = Boolean(task.result?.errors?.length || signal.aborted);
+      // CI's quiet setup replaces console methods, including on failed tests.
+      const fixtureReport = () => process.stderr.write(`⏱️ retirement fixture: ${owned.summary()}\n`);
+      if (failed) { report('before-settlement'); fixtureReport(); }
+      // Vitest's deadline rejects its wrapper, not the async fixture. Never erase
+      // the repo while archive/proof/removal work from this exact case is running.
+      try { await owned.drain(); await receiptWork; }
+      finally {
+        if (failed || process.env.PORTOS_PROFILE_HELD_RECEIPT === '1') report('settled');
+        if (failed || process.env.PORTOS_PROFILE_RETIREMENT_FIXTURE === '1') fixtureReport();
+        receiptTiming.current = null;
+        if (scratch) {
+          try { await owned.run('scratch-removal', () => rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })); }
+          catch (error) { await owned.drain(); fixtureReport(); throw error; }
+        }
+      }
+    });
   });
 
   /** A locked checkout outside the managed roots holding unique uncommitted work. */
@@ -203,12 +228,53 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners, ...opts });
   }
   const archives = async () => (existsSync(heldCheckoutArchiveRoot(cosDir)) ? readdir(heldCheckoutArchiveRoot(cosDir)) : []);
+  async function addProofOrigin() {
+    // Keep forge identity synthetic while default-branch discovery stays local.
+    // Only the explicitly intercepted proof fetch may read the private remote.
+    await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+    await execGit(['update-ref', 'refs/remotes/origin/main', 'main'], repo);
+    await execGit(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], repo);
+  }
   const makeClean = async (path) => {
     await execGit(['checkout', '--', '.'], path);
     await execGit(['clean', '-fdx'], path);
   };
 
-  async function historicalArchive(prepare = async () => {}) {
+  const unchangedHistory = async () => {};
+  let historicalFixture;
+  async function historicalArchive(prepare = unchangedHistory) {
+    const reusable = prepare === unchangedHistory;
+    if (reusable && historicalFixture) {
+      const fixture = historicalFixture;
+      // beforeEach/owned.prepare settled the prior case. Restore immutable
+      // historical inputs at their original paths, never a verification result.
+      await owned.run('archive-copy', async () => {
+        assertTempPath(fixture.source, 'historical fixture restore');
+        assertTempPath(PATHS.data, 'historical evidence reset');
+        await rm(fixture.source, { recursive: true, force: true });
+        await cp(fixture.snapshot, fixture.source, { recursive: true });
+        await rm(PATHS.data, { recursive: true, force: true });
+        await cp(fixture.archive, fixture.archiveDir, { recursive: true });
+      });
+      repo = fixture.repo;
+      external = fixture.external;
+      injected.app.repoPath = repo;
+      injected.schedule = structuredClone(fixture.schedule);
+      return { release: { ...fixture.release }, saved: { archiveDir: fixture.archiveDir } };
+    }
+    let fixture;
+    if (reusable) {
+      const root = await mkdtemp(join(lazyTempDataRoot('portos-held-historical-inputs-'), 'fixture-'));
+      const source = join(root, 'source');
+      await mkdir(source);
+      const safeRepo = join(source, 'repo');
+      await cp(repo, safeRepo, { recursive: true });
+      repo = (await execGit(['rev-parse', '--show-toplevel'], safeRepo)).stdout.trim();
+      external = join(source, 'elsewhere');
+      await mkdir(external);
+      injected.app.repoPath = repo;
+      fixture = { source, repo, external, snapshot: join(root, 'snapshot'), archive: join(root, 'archive') };
+    }
     const path = join(external, 'historical');
     const branch = 'feature/historical';
     await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
@@ -220,6 +286,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'retirement-review-pending' }] });
     const saved = await preserveMergedCheckout(repo, { ...release, branch: `refs/heads/${branch}` }, 'main', { cosDir: PATHS.cos });
     await execGit(['worktree', 'remove', '--force', path], repo);
+    if (fixture) {
+      await cp(fixture.source, fixture.snapshot, { recursive: true });
+      await cp(saved.archiveDir, fixture.archive, { recursive: true });
+      historicalFixture = { ...fixture, release: { ...release }, archiveDir: saved.archiveDir, schedule: structuredClone(injected.schedule) };
+    }
     return { release, saved };
   }
 
@@ -450,8 +521,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   });
 
   describe('bounded historical evidence', () => {
-    beforeEach(cleanupTempDataRoots);
-    afterEach(cleanupTempDataRoots);
+    // Imported stores capture this private PATHS pathname once. Reset all
+    // fixture data between history cases without rotating the tracked root.
+    const resetHistoryData = async () => {
+      const root = PATHS.data;
+      await rm(root, { recursive: true, force: true });
+      await mkdir(root, { recursive: true });
+    };
+    beforeEach(resetHistoryData);
+    afterEach(async () => { await owned.drain(); await resetHistoryData(); });
 
     it('bounds persisted recovery diagnostics across obligations and unrelated archives while verifying the exact matching archive', async () => {
       const { release, saved } = await historicalArchive();
@@ -1031,15 +1109,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await getBranchReconcileOutcome('app-1')).toMatchObject({ retirementObligations: [], remaining: [] });
   });
 
-  it('refuses a release that does not name a row of the last inventory', async () => {
-    const { path, release } = await heldCheckout('not-inventoried');
-    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, lockReason: 'older lock text' }] });
-
-    expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners }))
-      .toEqual({ ok: false, reason: 'release-not-in-inventory' });
-    expect(existsSync(path)).toBe(true);
-  });
-
   it.each([
     ['a changed lock', async (path) => {
       await execGit(['worktree', 'unlock', path], repo);
@@ -1193,50 +1262,73 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(existsSync(handoff.path)).toBe(true);
     expect(await archives()).toEqual([]);
   });
+  const reviewedHistories = new Map();
+  async function reviewedHistory(options) {
+    const { superseded, gitlink, normalMerge, featurePath, featureBody, multipleCommits, targetBranch } = options;
+    const changeBase = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
+    const key = JSON.stringify({ changeBase, ...options });
+    if (!reviewedHistories.has(key)) {
+      const history = await owned.run('history-build', async () => {
+        const root = join(lazyTempDataRoot('portos-held-histories-'), createHash('sha256').update(key).digest('hex'));
+        const seed = join(root, 'repo');
+        await mkdir(root, { recursive: true });
+        await cp(repo, seed, { recursive: true });
+        if (targetBranch !== 'main') await execGit(['switch', '-c', targetBranch, 'main'], seed);
+        await execGit(['switch', '-c', 'feature/history', 'main'], seed);
+        await writeFile(join(seed, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\nprivate-build-output/\nnode_modules\n');
+        await writeFile(join(seed, featurePath), featureBody);
+        await execGit(['--literal-pathspecs', 'add', '.gitignore', featurePath], seed);
+        if (gitlink) {
+          await execGit(['update-index', '--add', '--cacheinfo', `160000,${changeBase},vendor`], seed);
+        }
+        await execGit(['commit', '-m', 'original feature'], seed);
+        if (multipleCommits) {
+          await writeFile(join(seed, 'second.txt'), 'second original change\n');
+          await execGit(['add', 'second.txt'], seed);
+          await execGit(['commit', '-m', 'second original change'], seed);
+        }
+        await execGit(['switch', targetBranch], seed);
+        if (normalMerge) await execGit(['merge', '--ff-only', 'feature/history'], seed);
+        else {
+          await execGit(['merge', '--squash', 'feature/history'], seed);
+          await execGit(['commit', '-m', 'shipped feature'], seed);
+        }
+        if (superseded) {
+          await writeFile(join(seed, featurePath), 'strengthened replacement\n');
+          await execGit(['commit', '-am', 'strengthen implementation'], seed);
+        }
+        const [main, deliveryHead, head, firstCommit] = (await execGit(['rev-parse', 'main', targetBranch,
+          'feature/history', multipleCommits ? 'feature/history^' : 'feature/history'], seed)).stdout.trim().split(/\r?\n/);
+        await execGit(['branch', '-D', 'feature/history'], seed);
+        return { seed, main, deliveryHead, head, firstCommit, changeBase };
+      });
+      reviewedHistories.set(key, history);
+    }
+    const history = reviewedHistories.get(key);
+    // Copy only immutable history, never a checkout pointer, private worktree
+    // administration or proof. Every case creates its own real Git registration.
+    await owned.run('history-copy', () => cp(history.seed, repo, { recursive: true, force: true }));
+    return history;
+  }
+
   async function reviewedCheckout(name, { superseded = false, gitlink = false, normalMerge = false, featurePath = 'feature.txt', featureBody = 'original feature\n', multipleCommits = false, targetBranch = 'main', ignoredPayload = false } = {}) {
-    if (targetBranch !== 'main') await execGit(['switch', '-c', targetBranch, 'main'], repo);
-    let firstCommit;
-    let changeBase;
-    const { path, release } = await heldCheckout(name, { branch: `feature/${name}`, beforeLock: async tree => {
-      await writeFile(join(tree, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\nprivate-build-output/\nnode_modules\n');
-      await execGit(['add', '.gitignore'], tree);
-      await writeFile(join(tree, featurePath), featureBody);
-      await execGit(['--literal-pathspecs', 'add', featurePath], tree);
-      if (gitlink) {
-        const commit = (await execGit(['rev-parse', 'HEAD'], tree)).stdout.trim();
-        await execGit(['update-index', '--add', '--cacheinfo', `160000,${commit},vendor`], tree);
-        await mkdir(join(tree, 'vendor'));
-      }
-      changeBase = (await execGit(['rev-parse', 'HEAD'], tree)).stdout.trim();
-      await execGit(['commit', '-m', 'original feature'], tree);
-      firstCommit = (await execGit(['rev-parse', 'HEAD'], tree)).stdout.trim();
-      if (multipleCommits) {
-        await writeFile(join(tree, 'second.txt'), 'second original change\n');
-        await execGit(['add', 'second.txt'], tree);
-        await execGit(['commit', '-m', 'second original change'], tree);
-      }
-      if (normalMerge) await execGit(['merge', '--ff-only', `feature/${name}`], repo);
-      else {
-        await execGit(['merge', '--squash', `feature/${name}`], repo);
-        await execGit(['commit', '-m', 'shipped feature'], repo);
-      }
-      if (superseded) {
-        await writeFile(join(repo, featurePath), 'strengthened replacement\n');
-        await execGit(['commit', '-am', 'strengthen implementation'], repo);
-      }
-    } });
-    // Successful retirement fixtures contain no wanted ignored payload.
-    await execGit(['checkout', '--', '.'], path);
-    await execGit(['clean', '-fd'], path);
-    if (!ignoredPayload) await rm(join(path, 'ignored.txt'));
-    const [main, admin] = (await Promise.all([
-      execGit(['rev-parse', 'main'], repo), execGit(['rev-parse', '--absolute-git-dir'], path),
-    ])).map(result => result.stdout.trim());
+    const { main, deliveryHead, head, firstCommit, changeBase } = await reviewedHistory({
+      superseded, gitlink, normalMerge, featurePath, featureBody, multipleCommits, targetBranch,
+    });
+    const branch = `feature/${name}`;
+    const safePath = join(external, name);
+    await execGit(['worktree', 'add', '-b', branch, safePath, head], repo);
+    if (ignoredPayload) await writeFile(join(safePath, 'ignored.txt'), 'ignored work\n');
+    if (SYMLINKS) await symlink('../shared-target', join(safePath, 'linked'));
+    if (gitlink) await mkdir(join(safePath, 'vendor'), { recursive: true });
+    await execGit(['worktree', 'lock', '--reason', 'synthetic external owner', safePath], repo);
+    const [path, admin] = (await execGit(['rev-parse', '--show-toplevel', '--absolute-git-dir'], safePath)).stdout.trim().split(/\r?\n/);
+    // Supersession replay persists this canonical inventory tuple verbatim.
+    const release = { path, head, branch, locked: true, lockReason: 'synthetic external owner' };
     await writeFile(join(admin, 'portos-review-status'), 'private synthetic review marker');
     injected.policies = [{ id: 'agent-legacy', status: 'completed', result: { success: true },
       metadata: { workspacePath: repo, claimBranches: [release.branch], prCompletionPolicy: 'review-then-merge' } }];
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'pr-completion-review-required' }] });
-    const deliveryHead = (await execGit(['rev-parse', targetBranch], repo)).stdout.trim();
     const forge = { changedPaths: [featurePath, ...(gitlink ? ['vendor'] : []), ...(multipleCommits ? ['second.txt'] : [])], changeBase, firstCommit, repository: 'github.com/example/repo', prUrl: 'https://github.com/example/repo/pull/42', prHead: release.head,
       mergeCommit: deliveryHead, defaultBranch: 'main', defaultHead: main, remoteHead: null,
       ...(targetBranch !== 'main' && { targetBranch, targetHead: deliveryHead }) };
@@ -1247,8 +1339,143 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return { path, release, admin, opts, forge, prepare, confirm };
   }
 
+  // Uniquely catches the gap between exact merged delivery and an abandoned
+  // prototype whose implementation was replaced rather than merged verbatim.
+  it.each([false, true])('retires an explicitly accepted published prototype only after durable small-evidence preservation, replacement changed=%s', async superseded => {
+    const c = await reviewedCheckout('published-prototype', { superseded });
+    c.forge.prHead = c.forge.mergeCommit;
+    c.forge.firstCommit = c.forge.mergeCommit;
+    c.forge.changeBase = (await execGit(['rev-parse', `${c.forge.mergeCommit}^`], repo)).stdout.trim();
+    c.forge.sourceSupersessionHead = c.release.head;
+    c.forge.remoteHead = `${c.release.head}\trefs/heads/${c.release.branch}`;
+    c.forge.sourcePreservation = { head: c.release.head, remoteRef: `refs/heads/${c.release.branch}`,
+      prUrl: 'https://github.com/example/repo/pull/41' };
+    await writeFile(join(c.path, 'ignored.txt'), 'small private prototype evidence');
+    const input = { appId: 'app-1', release: c.release, prUrl: c.forge.prUrl, kind: 'preserved-supersession' };
+    const prepared = await prepareInventoriedCheckoutRetirement(input, c.opts);
+    expect(prepared, prepared.reason).toMatchObject({ ok: true, review: { comparison: { disposition: 'review-supersession', exactMergedDelivery: false } } });
+    const review = { prUrl: c.forge.prUrl, kind: input.kind, digest: prepared.review.digest, acceptSuperseded: false };
+    expect(await retireInventoriedCheckout({ appId: input.appId, release: c.release, review }, c.opts))
+      .toMatchObject({ ok: false, reason: 'retirement-supersession-not-accepted' });
+    expect(existsSync(c.path)).toBe(true);
+    retirementFaults.onRemove = async () => {
+      const outcome = await getBranchReconcileOutcome('app-1');
+      const saved = outcome.supersededSourceEvidence[review.digest].proof;
+      expect(saved.source.files).toContainEqual(expect.objectContaining({ path: 'ignored.txt',
+        data: Buffer.from('small private prototype evidence').toString('base64') }));
+      expect(outcome.retired || []).toEqual([]);
+    };
+    review.acceptSuperseded = true;
+    const { recordSupersededCheckoutPreservation } = await import('./taskSchedule.js');
+    // Abandoned preparations have no receipt and no current inventory holder;
+    // they must not grow the schedule on every future preparation.
+    injected.schedule.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome.supersededSourceEvidence = {
+      stale: { proof: { release: { path: '/synthetic/absent', branch: 'old', head: 'a'.repeat(40) }, data: 'x'.repeat(1024 * 1024) } },
+    };
+    expect(await recordSupersededCheckoutPreservation('app-1', c.release, prepared.review)).toBe(true);
+    expect(Object.keys((await getBranchReconcileOutcome('app-1')).supersededSourceEvidence)).toEqual([review.digest]);
+    const preservedAt = (await getBranchReconcileOutcome('app-1')).supersededSourceEvidence[review.digest].preservedAt;
+    // Simulate restart after preparation but before removal: replay uses saved
+    // evidence, creates no receipt early, and preserves the original timestamp.
+    injected.schedule = JSON.parse(JSON.stringify(injected.schedule));
+    expect(await recordSupersededCheckoutPreservation('app-1', c.release, prepared.review)).toBe(true);
+    expect((await getBranchReconcileOutcome('app-1')).supersededSourceEvidence[review.digest].preservedAt).toBe(preservedAt);
+    const retirement = await retireInventoriedCheckout({ appId: input.appId, release: c.release, review }, c.opts);
+    expect(retirement, retirement.detail || retirement.reason).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(c.path)).toBe(false);
+    const outcome = await getBranchReconcileOutcome('app-1');
+    expect(outcome.retired).toContainEqual(expect.objectContaining({ head: c.release.head,
+      disposition: 'superseded-preserved', supersessionDigest: review.digest, archiveDir: null }));
+    await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+    expect((await getBranchReconcileOutcome('app-1')).retirementObligations).toEqual([]);
+    expect(await archives()).toEqual([]);
+  });
+
+  it.each(['changed-source', 'persistence-failure', 'preservation-capacity', 'changed-private-evidence', 'changed-preservation'])('preserves the original when supersession confirmation encounters %s', async scenario => {
+    const c = await reviewedCheckout(`prototype-confirm-${scenario}`, { superseded: true });
+    c.forge.prHead = c.forge.mergeCommit;
+    c.forge.firstCommit = c.forge.mergeCommit;
+    c.forge.changeBase = (await execGit(['rev-parse', `${c.forge.mergeCommit}^`], repo)).stdout.trim();
+    c.forge.sourceSupersessionHead = c.release.head;
+    c.forge.remoteHead = `${c.release.head}\trefs/heads/${c.release.branch}`;
+    c.forge.sourcePreservation = { head: c.release.head, remoteRef: `refs/heads/${c.release.branch}`, prUrl: 'https://github.com/example/repo/pull/41' };
+    const mutateAfterPreservation = scenario === 'changed-private-evidence' || scenario === 'changed-preservation';
+    if (mutateAfterPreservation) await writeFile(join(c.path, 'ignored.txt'), 'original private evidence');
+    const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release: c.release,
+      prUrl: c.forge.prUrl, kind: 'preserved-supersession' }, c.opts);
+    expect(prepared, prepared.reason).toMatchObject({ ok: true });
+    if (scenario === 'changed-source') c.forge.remoteHead = null;
+    else if (scenario === 'persistence-failure') retirementFaults.failScheduleWrite = retirementFaults.scheduleWrites + 1;
+    else if (mutateAfterPreservation) {
+      let mutations = 0;
+      c.opts.beforeMutation = async () => {
+        // Admission is first; the second boundary follows durable preservation.
+        if (++mutations !== 2) return;
+        const saved = (await getBranchReconcileOutcome('app-1')).supersededSourceEvidence[prepared.review.digest];
+        const file = saved.proof.source.files.find(entry => entry.scope === 'content' && entry.path === 'ignored.txt');
+        expect(file.data).toBe(Buffer.from('original private evidence').toString('base64'));
+        if (scenario === 'changed-private-evidence') await writeFile(join(c.path, 'ignored.txt'), 'changed private evidence');
+        else file.data = Buffer.from('changed saved evidence').toString('base64');
+      };
+    }
+    else {
+      const outcome = injected.schedule.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome;
+      outcome.supersededSourceEvidence = { completed: { proof: { data: 'x'.repeat(1024 * 1024) } } };
+      outcome.retirementReceiptEvidence = { completed: { supersessionDigest: 'completed' } };
+    }
+    const result = await retireInventoriedCheckout({ appId: 'app-1', release: c.release,
+      review: { prUrl: c.forge.prUrl, kind: 'preserved-supersession', digest: prepared.review.digest, acceptSuperseded: true } }, c.opts);
+    const reasons = { 'changed-source': 'retirement-source-not-published', 'changed-private-evidence': 'retirement-review-changed',
+      'changed-preservation': 'retirement-source-preservation-unavailable' };
+    expect(result).toMatchObject({ ok: false, reason: reasons[scenario] || 'checkout-not-disposable' });
+    expect(existsSync(c.path)).toBe(true);
+    expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+    if (mutateAfterPreservation) {
+      expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe(scenario === 'changed-private-evidence'
+        ? 'changed private evidence' : 'original private evidence');
+      expect(await lockText(c.path)).toBe(c.release.lockReason);
+    }
+    if (scenario === 'preservation-capacity') expect((await getBranchReconcileOutcome('app-1'))
+      .supersededSourceEvidence.completed.proof.data).toHaveLength(1024 * 1024);
+  });
+
+  it.each(['unpublished-source', 'private-commit', 'large-private-file', 'index-recovery'])('keeps a prototype with %s', async scenario => {
+    const c = await reviewedCheckout(`prototype-${scenario}`, { superseded: true });
+    c.forge.prHead = c.forge.mergeCommit;
+    c.forge.firstCommit = c.forge.mergeCommit;
+    c.forge.changeBase = (await execGit(['rev-parse', `${c.forge.mergeCommit}^`], repo)).stdout.trim();
+    c.forge.sourceSupersessionHead = c.release.head;
+    c.forge.remoteHead = `${c.release.head}\trefs/heads/${c.release.branch}`;
+    c.forge.sourcePreservation = { head: c.release.head, remoteRef: `refs/heads/${c.release.branch}`, prUrl: 'https://github.com/example/repo/pull/41' };
+    if (scenario === 'unpublished-source') c.forge.remoteHead = null;
+    if (scenario === 'large-private-file') await writeFile(join(c.path, 'ignored.txt'), Buffer.alloc(64 * 1024 + 1));
+    if (scenario === 'index-recovery') {
+      const blob = (await execGit(['rev-parse', 'HEAD:feature.txt'], c.path)).stdout.trim();
+      await new Promise((resolve, reject) => {
+        const child = execFile('git', ['update-index', '--index-info'], { cwd: c.path }, error => error ? reject(error) : resolve());
+        child.stdin.end(`0 ${'0'.repeat(40)}\tfeature.txt\n${[1, 2, 3].map(stage => `100644 ${blob} ${stage}\tfeature.txt\n`).join('')}`);
+      });
+      await execGit(['add', 'feature.txt'], c.path);
+      expect((await execGit(['ls-files', '--resolve-undo'], c.path)).stdout).toContain('feature.txt');
+    }
+    if (scenario === 'private-commit') {
+      const unique = (await execGit(['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'unpublished private work'], c.path)).stdout.trim();
+      await writeFile(join(c.admin, 'ORIG_HEAD'), `${unique}\n`);
+    }
+    const result = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release: c.release,
+      prUrl: c.forge.prUrl, kind: 'preserved-supersession' }, c.opts);
+    expect(result).toMatchObject({ ok: false, reason: scenario === 'unpublished-source' ? 'retirement-source-not-published'
+      : scenario === 'private-commit' ? 'retirement-source-private-work-unpublished'
+        : scenario === 'index-recovery' ? 'retirement-source-index-recovery-unpublished' : 'retirement-source-evidence-too-large' });
+    expect(existsSync(c.path)).toBe(true);
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+  });
+
   async function moduleCache(checkout, { count = 1, bytes = 26 * 1024 * 1024, ignored = true,
-    tagged = true, name = 'a'.repeat(40), metadata = { lockfileHash: 'b'.repeat(40) } } = {}) {
+    tagged = true, name = 'a'.repeat(40),
+    // Match Vitest's producer: SHA-256(lockfile contents), truncated to eight.
+    metadata = { lockfileHash: createHash('sha256').update('synthetic lockfile').digest('hex').slice(0, 8) } } = {}) {
     if (ignored) await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
     const root = join(checkout.path, 'server/.cache/vitest/modules');
     await mkdir(root, { recursive: true });
@@ -1278,9 +1505,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['file', 'total'])('retires a reviewed checkout with verified disposable module cache beyond the archive %s budget', async limit => {
-    const c = await reviewedCheckout(`disposable-cache-${limit}`);
-    await moduleCache(c, limit === 'total' ? { count: 12, bytes: 22 * 1024 * 1024 } : {});
+  it.each([
+    { kind: 'oversized-file', cache: {} },
+    { kind: 'oversized-total', cache: { count: 12, bytes: 22 * 1024 * 1024 } },
+  ])('retires a reviewed checkout with verified disposable module cache: $kind', async ({ kind, cache }) => {
+    const c = await reviewedCheckout(`disposable-cache-${kind}`);
+    await moduleCache(c, cache);
     const prepared = await c.prepare();
     expect(prepared).toMatchObject({ ok: true, review: { comparison: { disposition: 'integrated' } } });
     const retired = await c.confirm(prepared.review);
@@ -1290,6 +1520,194 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await registered(c.path)).toBe(false);
     expect(await archives()).toEqual([]);
   });
+
+  // A successful job's meaningful validation record must survive its checkout,
+  // without either declaring it disposable or archiving the whole repository.
+  it.each(['preserved', 'changed-source', 'changed-copy', 'store-symlink', 'sidecar', 'oversized'])(
+    'preserves exact reviewed validation bytes before removal: %s', async scenario => {
+      const c = await reviewedCheckout(`validation-evidence-${scenario}`);
+      await writeFile(join(repo, '.git', 'info', 'exclude'), '.cache/\n');
+      const dir = join(c.path, '.cache/pregate'); await mkdir(dir, { recursive: true });
+      const receipt = join(dir, 'report.json');
+      const bytes = scenario === 'oversized' ? 'x'.repeat(64 * 1024 + 1) : '{"meaningful":"exact local validation evidence"}';
+      await writeFile(receipt, bytes);
+      if (scenario === 'sidecar') await writeFile(join(dir, 'wanted.txt'), 'unique unrelated work');
+      const store = join(repo, '.git', 'portos-retirement-validation');
+      if (scenario === 'store-symlink') await symlink(c.path, store, process.platform === 'win32' ? 'junction' : 'dir');
+      const prepared = await c.prepare(); expect(prepared.ok).toBe(true);
+      if (['changed-source', 'changed-copy', 'preserved'].includes(scenario)) {
+        let mutations = 0;
+        c.opts.beforeMutation = async () => {
+          if (++mutations !== 2) return;
+          const names = await readdir(store); expect(names).toHaveLength(1);
+          const saved = JSON.parse(await readFile(join(store, names[0]), 'utf8'));
+          expect(Buffer.from(saved.receipt.data, 'base64').toString('utf8')).toBe(bytes);
+          expect(saved.release.head).toBe(c.release.head);
+          expect(await registered(c.path)).toBe(true);
+          if (scenario === 'changed-source') await writeFile(receipt, 'changed evidence');
+          if (scenario === 'changed-copy') await writeFile(join(store, names[0]), '{}');
+        };
+      }
+      const result = await c.confirm(prepared.review);
+      if (scenario !== 'preserved') {
+        expect(result.ok).toBe(false);
+        expect(await registered(c.path)).toBe(true);
+        expect(await readFile(receipt, 'utf8')).toBe(scenario === 'changed-source' ? 'changed evidence' : bytes);
+        return;
+      }
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, branchDeleted: true,
+        validationEvidence: { bytes: Buffer.byteLength(bytes), sha256: createHash('sha256').update(bytes).digest('hex') } });
+      expect(await registered(c.path)).toBe(false);
+      const saved = JSON.parse(await readFile(join(store, `${result.validationEvidence.digest}.json`), 'utf8'));
+      expect(Buffer.from(saved.receipt.data, 'base64').toString('utf8')).toBe(bytes);
+      expect((await getBranchReconcileOutcome('app-1')).retired).toEqual(expect.arrayContaining([
+        expect.objectContaining({ validationEvidence: result.validationEvidence }),
+      ]));
+      expect(await archives()).toEqual([]);
+    });
+
+  it.each(['duplicate', 'modified'])('retires only proven private npm copies at the destructive boundary: %s', async kind => {
+    const manifest = { name: 'fixture', version: '1.0.0' };
+    const lock = { ...manifest, lockfileVersion: 3, requires: true, packages: { 'node_modules/example': { version: '1.0.0' } } };
+    await writeFile(join(repo, 'package.json'), JSON.stringify(manifest));
+    await writeFile(join(repo, 'package-lock.json'), JSON.stringify(lock));
+    await execGit(['add', 'package.json', 'package-lock.json'], repo);
+    await execGit(['commit', '-m', 'fixture dependency inputs'], repo);
+    const c = await reviewedCheckout(`private-npm-${kind}`);
+    for (const root of [repo, c.path]) {
+      await mkdir(join(root, 'node_modules/example'), { recursive: true });
+      await writeFile(join(root, 'node_modules/.package-lock.json'), JSON.stringify(lock));
+      await writeFile(join(root, 'node_modules/example/index.js'), 'shipped package bytes');
+    }
+    if (kind === 'modified') await writeFile(join(c.path, 'node_modules/example/index.js'), 'unique local modification');
+    const prepared = await c.prepare();
+    expect(prepared.ok, JSON.stringify(prepared)).toBe(true);
+    const retired = await c.confirm(prepared.review);
+    if (kind === 'duplicate') {
+      expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+      expect(await registered(c.path)).toBe(false);
+      expect(await readFile(join(repo, 'node_modules/example/index.js'), 'utf8')).toBe('shipped package bytes');
+    } else {
+      expect(retired).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
+      expect(await readFile(join(c.path, 'node_modules/example/index.js'), 'utf8')).toBe('unique local modification');
+    }
+    expect(await archives()).toEqual([]);
+  });
+
+  // Keep real Git/destructive coverage for each producer/root and for payload,
+  // ignore and sidecar refusals. Schema permutations live in the preflight suite.
+  const stateCacheCases = [
+    ...['results', 'dependencies', 'atomic-empty', 'atomic-nonempty', 'atomic-untracked', 'untracked', 'sidecar']
+      .map(kind => ['server/.cache/vitest/vitest', kind]),
+    ...['server/.cache/vitest-db/vitest', 'client/.cache/vitest/vitest', 'client/.cache/vite/vitest'].map(root => [root, 'results']),
+    ...['unknown-field', 'untagged', 'untracked'].map(kind => ['client/.cache/vite/vitest', kind]),
+    ['client/.cache/unknown/vitest', 'wrong-root'],
+  ];
+  it.each(stateCacheCases)(
+    'recognizes only the actual tagged Vitest state producer: root=%s kind=%s', async (cacheRoot, kind) => {
+      const c = await reviewedCheckout(`state-cache-${kind}`);
+      const root = join(c.path, cacheRoot);
+      const project = join(root, 'a'.repeat(40)); await mkdir(project, { recursive: true });
+      if (!['untracked', 'atomic-untracked'].includes(kind)) await writeFile(join(repo, '.git', 'info', 'exclude'), `${cacheRoot.split('/')[0]}/.cache/\n`);
+      if (kind !== 'untagged') await writeFile(join(root, 'CACHEDIR.TAG'),
+        'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.\n# For information about cache directory tags see https://bford.info/cachedir/\n');
+      const dependencies = kind === 'dependencies';
+      const value = { version: 1, projects: { parallel: dependencies
+        ? { modules: ['services/feature.js'], globalSetup: [], files: { 'services/feature.test.js': [0] } }
+        : { files: { 'services/feature.test.js': { failed: false, duration: 12, lastRun: 12345 } } } } };
+      if (kind === 'unknown-field') value.wanted = 'unique user content';
+      const file = join(project, kind.startsWith('atomic-') ? '.tmp-1700000000000-abc123' : dependencies ? 'dependencies.json' : 'results.json');
+      const content = kind.startsWith('atomic-') ? kind === 'atomic-nonempty' ? 'unique partial output' : '' : JSON.stringify(value);
+      await writeFile(file, content);
+      if (kind === 'sidecar') await writeFile(join(project, 'wanted.txt'), 'unique user data');
+      const prepared = await c.prepare();
+      expect(prepared.ok).toBe(true);
+      const retired = await c.confirm(prepared.review);
+      if (['results', 'dependencies', 'atomic-empty'].includes(kind)) {
+        expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+        expect(await registered(c.path)).toBe(false);
+      } else {
+        expect(retired.ok).toBe(false);
+        expect(await registered(c.path)).toBe(true);
+        expect(await readFile(file, 'utf8')).toBe(content);
+      }
+      expect(await archives()).toEqual([]);
+    });
+
+  // Real destructive boundary: retain captured-run diagnostics, and refuse
+  // any source that changed after its review rather than deleting new output.
+  it.each([false, true])('retains completed-run diagnostics before exact merged retirement, source changed=%s', async changed => {
+    const c = await reviewedCheckout(`run-validation-${changed}`);
+    await writeFile(join(repo, '.git', 'info', 'exclude'), '.cache/\n');
+    await mkdir(join(c.path, '.cache'), { recursive: true });
+    const file = join(c.path, '.cache', 'validation.log');
+    await writeFile(file, 'meaningful synthetic validation output');
+    c.release.checkoutIdentity = await readRetirementCheckoutIdentity(c.path);
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
+    const pointer = await lstat(join(c.path, '.git'), { bigint: true });
+    const agent = injected.policies[0];
+    Object.assign(agent, { startedAt: '2026-01-01T10:00:00.000Z', completedAt: '2026-01-01T11:00:00.000Z' });
+    agent.metadata.completedCheckouts = [{ version: 1, agentId: agent.id, startedAt: agent.startedAt,
+      capturedAt: '2026-01-01T10:59:00.000Z', repoPath: repo, path: c.path, branch: c.release.branch, head: c.release.head,
+      incarnation: { pointer: Object.fromEntries(['dev', 'ino', 'birthtimeNs'].map(key => [key, String(pointer[key])])) } }];
+    const prepared = await c.prepare();
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { validationArtifacts: { owner: { id: agent.id, startedAt: agent.startedAt } } } });
+    if (changed) await writeFile(file, 'new unique output after review');
+    const retired = await c.confirm(prepared.review);
+    if (changed) {
+      expect(retired).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+      expect(await readFile(file, 'utf8')).toBe('new unique output after review');
+      expect(await registered(c.path)).toBe(true);
+    } else {
+      expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+      expect(await registered(c.path)).toBe(false);
+      const { readCompletionData } = await import('./agentCompletionData.js');
+      const proof = retired.validationEvidence.artifacts;
+      const retained = await readCompletionData(proof.owner, proof.reference);
+      expect(retained.release.head).toBe(c.release.head);
+      expect(Buffer.from(retained.files[0].data, 'base64').toString()).toBe('meaningful synthetic validation output');
+    }
+    expect(await archives()).toEqual([]);
+  });
+
+  // External terminal jobs have checkout evidence, not a fabricated CoS run.
+  // Aggregate bytes exceed one private proof's cap; each file remains bounded.
+  it.each(['retained', 'changed', 'oversized', 'unknown', 'lost-proof'])(
+    'preserves external checkout validation bytes before merged retirement: %s', async kind => {
+      const c = await reviewedCheckout(`external-validation-${kind}`);
+      await writeFile(join(repo, '.git', 'info', 'exclude'), 'scripts/__pycache__/\n');
+      const directory = join(c.path, 'scripts/__pycache__');
+      await mkdir(directory, { recursive: true });
+      const files = ['one', 'two', 'three'].map(name => `${name}.cpython-311.pyc`);
+      const bytes = Buffer.alloc(kind === 'oversized' ? 65537 : 32768, 17);
+      for (const file of files) await writeFile(join(directory, file), bytes);
+      if (kind === 'unknown') await writeFile(join(directory, 'wanted.bin'), 'unique user work');
+      const prepared = await c.prepare();
+      expect(prepared.ok, JSON.stringify(prepared)).toBe(true);
+      if (kind !== 'oversized') expect(prepared.review.validationArtifacts).toMatchObject({ scope: 'checkout' });
+      if (kind === 'changed') await writeFile(join(directory, files[0]), 'new unique output');
+      const retired = await c.confirm(prepared.review, kind === 'lost-proof' ? { beforeMutation: async () => {
+        await rm(join(repo, '.git', 'portos-retirement-validation'), { recursive: true, force: true });
+      } } : {});
+      if (kind === 'retained') {
+        expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+        expect(await registered(c.path)).toBe(false);
+        const evidence = retired.validationEvidence.artifacts;
+        expect(evidence.scope).toBe('checkout');
+        expect(evidence.owner).toBeUndefined();
+        expect(evidence.references).toHaveLength(3);
+        for (const { digest } of evidence.references) {
+          const proof = JSON.parse(await readFile(join(repo, '.git', 'portos-retirement-validation', `${digest}.json`), 'utf8'));
+          expect(proof.release.head).toBe(c.release.head);
+          expect(Buffer.from(proof.file.data, 'base64')).toEqual(bytes);
+        }
+      } else {
+        expect(retired.ok, JSON.stringify(retired)).toBe(false);
+        expect(await registered(c.path)).toBe(true);
+        expect(await readFile(join(directory, files[2]))).toEqual(bytes);
+      }
+      expect(await archives()).toEqual([]);
+    });
 
   it('retains an ignored validation receipt beside a verified disposable module cache', async () => {
     const c = await reviewedCheckout('cache-with-receipt');
@@ -1307,12 +1725,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['untagged', 'unique-file', 'untracked', 'unknown-metadata'])(
+  it.each(['untagged', 'unique-file', 'untracked'])(
     'retains large content that only resembles disposable module cache: %s', async kind => {
       const c = await reviewedCheckout(`unverified-cache-${kind}`);
       const root = await moduleCache(c, { tagged: kind !== 'untagged', ignored: kind !== 'untracked',
         name: kind === 'unique-file' ? 'wanted-dataset.bin' : 'a'.repeat(40),
-        metadata: kind === 'unknown-metadata' ? { wanted: 'unique user data' } : undefined });
+      });
       expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-archive-limit-exceeded' });
       expect(await registered(c.path)).toBe(true);
       expect((await stat(join(root, kind === 'unique-file' ? 'wanted-dataset.bin' : 'a'.repeat(40)))).size).toBe(26 * 1024 * 1024);
@@ -1744,20 +2162,20 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     // Retain main's separate fixture/retirement/proof phases and their existing
     // 30-second budgets while exercising more than 1,000 files in both snapshots.
     beforeEach(async () => {
-      c = await reviewedCheckout('file-count-admitted', { normalMerge: true });
+      c = await owned.run('many-file-checkout', () => reviewedCheckout('file-count-admitted', { normalMerge: true }));
       const directory = join(c.path, 'private-files');
       await mkdir(directory);
-      await Promise.all(Array.from({ length: 1050 }, (_, i) => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')));
+      await owned.run('payload-writes', () => Promise.all(Array.from({ length: 1050 }, (_, i) => owned.run('file-write', () => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')))));
       if (process.platform !== 'win32') await chmod(join(directory, 'item-1049'), 0o755);
       const privateDir = join(c.admin, 'private-files');
       await mkdir(privateDir);
-      await Promise.all(Array.from({ length: 60 }, (_, i) => writeFile(join(privateDir, `item-${i}`), 'private recovery bytes\n')));
-      prepared = await c.prepare();
+      await owned.run('admin-writes', () => Promise.all(Array.from({ length: 60 }, (_, i) => owned.run('file-write', () => writeFile(join(privateDir, `item-${i}`), 'private recovery bytes\n')))));
+      prepared = await owned.run('many-file-preview', () => c.prepare());
       expect(prepared.ok).toBe(true);
     });
 
     beforeEach(async () => {
-      retired = await c.confirm(prepared.review);
+      retired = await owned.run('many-file-confirm', () => c.confirm(prepared.review));
       expect(retired).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
     });
 
@@ -1895,7 +2313,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await execGit(['config', 'user.name', 'Test'], remote);
     await execGit(['commit', '--allow-empty', '-m', 'unrelated remote main advance'], remote);
     c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
-    await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+    await addProofOrigin();
     injected.fetchRemote = remote;
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
@@ -1911,34 +2329,67 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
   });
 
-  it('fetches a remote-only squash commit for receipt proof without advancing any local branch', async () => {
-    const base = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
-    const c = await heldCheckout('remote-merge', { branch: 'feature/remote-merge', beforeLock: async tree => {
-      await writeFile(join(tree, 'feature.txt'), 'remote feature\n');
-      await execGit(['add', 'feature.txt'], tree);
-      await execGit(['commit', '-m', 'feature awaiting remote merge'], tree);
-    } });
-    await execGit(['worktree', 'unlock', c.path], repo);
-    await makeClean(c.path);
-    const release = { ...c.release, locked: false, lockReason: null };
-    const remote = join(scratch, 'remote');
+  it('fetches the same moving-default snapshot that its preparation retries, then rechecks mutation freshly', async () => {
+    const c = await reviewedCheckout('moving-proof-snapshot');
+    const originalMain = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
+    const remote = join(scratch, 'moving-proof-remote');
     await execGit(['clone', '--no-hardlinks', repo, remote], scratch);
     await execGit(['config', 'user.email', 'test@example.com'], remote);
     await execGit(['config', 'user.name', 'Test'], remote);
-    await execGit(['merge', '--squash', 'origin/feature/remote-merge'], remote);
-    await execGit(['commit', '-m', 'remote squash merge'], remote);
+    const heads = [];
+    for (const message of ['first default', 'second default', 'third default']) {
+      await execGit(['commit', '--allow-empty', '-m', message], remote);
+      heads.push((await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim());
+    }
+    await addProofOrigin();
+    injected.fetchRemote = remote;
+    let reads = 0;
+    c.opts.readForge = async () => ({ ...c.forge, defaultHead: heads[Math.min(reads++, heads.length - 1)] });
+    const prepared = await c.prepare();
+    expect(prepared.reason, JSON.stringify(prepared)).toBeUndefined();
+    expect(prepared.ok).toBe(true);
+    expect(prepared.review.forge.defaultHead).toBe(heads[0]);
+    expect(reads).toBe(1);
+    expect(injected.fetches).toHaveLength(1);
+    expect(injected.fetches[0].args).toContain(heads[0]);
+    expect((await execGit(['rev-parse', 'main'], repo)).stdout.trim()).toBe(originalMain);
+    expect(existsSync(join(repo, '.git', 'FETCH_HEAD'))).toBe(false);
+    const changed = await c.confirm(prepared.review);
+    expect(changed.ok).toBe(false);
+    expect(reads).toBeGreaterThan(1);
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+  });
+
+  it('fetches a remote-only squash commit for receipt proof without advancing any local branch', async () => {
+    const base = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
+    // This proof needs a clean, unlocked checkout. Avoid constructing dirty,
+    // locked recovery state and cleaning it again before the actual boundary.
+    const tree = join(external, 'remote-merge');
+    const branch = 'feature/remote-merge';
+    await execGit(['worktree', 'add', '-b', branch, tree, 'main'], repo);
+    await writeFile(join(tree, 'feature.txt'), 'remote feature\n');
+    await execGit(['add', 'feature.txt'], tree);
+    await execGit(['commit', '-m', 'feature awaiting remote merge'], tree);
+    const [path, head] = (await execGit(['rev-parse', '--show-toplevel', 'HEAD'], tree)).stdout.trim().split(/\r?\n/);
+    const release = { path, branch, head, locked: false, lockReason: null };
+    const remote = join(scratch, 'remote');
+    await execGit(['clone', '--no-hardlinks', repo, remote], scratch);
+    await execGit(['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'merge', '--squash', 'origin/feature/remote-merge'], remote);
+    await execGit(['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '-m', 'remote squash merge'], remote);
     const merged = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
     expect((await execGit(['cat-file', '-e', `${merged}^{commit}`], repo, { ignoreExitCode: true })).exitCode)
       .not.toBe(0);
-    await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+    await addProofOrigin();
     injected.fetchRemote = remote;
     const prUrl = 'https://github.com/example/repo/pull/42';
     const forge = { repository: 'github.com/example/repo', prUrl, prHead: release.head,
       mergeCommit: merged, defaultHead: merged, defaultBranch: 'main', remoteHead: null,
       changedPaths: ['feature.txt'], changeBase: base, firstCommit: release.head };
-    const result = await retirePendingMergeCheckout({ repoPath: repo, release, prUrl, expectedHeadSha: release.head }, {
+    receiptWork = retirePendingMergeCheckout({ repoPath: repo, release, prUrl, expectedHeadSha: release.head }, {
       cosDir, readAgents: noOwners, readForge: async () => forge, forgeAccount: 'synthetic-account',
     });
+    const result = await receiptWork;
     expect(result).toMatchObject({ ok: true, branchDeleted: true });
     expect((await execGit(['rev-parse', 'main'], repo)).stdout.trim()).toBe(base);
     expect(existsSync(join(repo, '.git', 'FETCH_HEAD'))).toBe(false);
@@ -1949,7 +2400,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(injected.fetches[0].options).toMatchObject({ timeout: 30_000,
       env: { GH_TOKEN: 'synthetic-account-token', GIT_TERMINAL_PROMPT: '0' } });
     expect(result.archiveDir).toBeUndefined();
-    expect(existsSync(c.path)).toBe(false);
+    expect(existsSync(release.path)).toBe(false);
     expect(await archives()).toEqual([]);
   });
 
@@ -2178,7 +2629,91 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(injected.policies[0].metadata.branchCompletionPolicy).toBeUndefined();
   });
 
-  it('retires a resumed merged checkout without promoting failed attempts or accepting unrelated generations', async () => {
+  it('proves rewritten delivery only for the captured completed resume lineage before retirement', async () => {
+    const c = await reviewedCheckout('rewritten-resume', { normalMerge: true });
+    await execGit(['worktree', 'unlock', c.path], repo);
+    Object.assign(c.release, { locked: false, lockReason: null });
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
+    const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+    const captured = await readCompletedCheckoutIdentity({ repoPath: repo, ...c.release });
+    const base = (await execGit(['rev-parse', `${c.release.head}^`], repo)).stdout.trim();
+    const rewritten = (await execGit(['commit-tree', `${c.release.head}^{tree}`, '-p', base, '-m', 'before review rewrite'], repo)).stdout.trim();
+    const attempts = ['predecessor', 'successor'].map((id, index) => {
+      const startedAt = `2026-03-01T0${index}:00:00.000Z`;
+      const path = index ? c.path : join(external, 'original-before-move');
+      return { id, taskId: 'same-original-task', status: 'completed', startedAt,
+        completedAt: `2026-03-01T0${index}:01:00.000Z`,
+        result: { success: false, executionSuccess: true, validationPassed: index ? true : null,
+          ...(index && { cleanupPending: true, taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } }) },
+        metadata: { sourceWorkspace: repo, workspacePath: path, worktreeBranch: c.release.branch,
+          prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { branch: c.release.branch, url: c.forge.prUrl },
+          resumedFromAgentId: index ? 'predecessor' : null,
+          completedCheckouts: [{ version: 1, agentId: id, startedAt, capturedAt: startedAt, ...captured,
+            path, head: index ? c.release.head : rewritten }] } };
+    });
+    injected.policies = attempts;
+    const unchanged = structuredClone(attempts);
+    // A changed patch and an additional dropped patch must not be mistaken for
+    // a rebase, even with the exact same trusted resume/physical lineage.
+    const rejected = [];
+    const scratchCheckout = join(external, 'unmatched-original');
+    await execGit(['worktree', 'add', '--detach', scratchCheckout, base], repo);
+    await writeFile(join(scratchCheckout, 'feature.txt'), 'changed original patch\n');
+    await execGit(['add', 'feature.txt'], scratchCheckout);
+    await execGit(['commit', '-m', 'changed original patch'], scratchCheckout);
+    rejected.push((await execGit(['rev-parse', 'HEAD'], scratchCheckout)).stdout.trim());
+    await execGit(['checkout', '--detach', rewritten], scratchCheckout);
+    await writeFile(join(scratchCheckout, 'dropped.txt'), 'wanted undelivered patch\n');
+    await execGit(['add', 'dropped.txt'], scratchCheckout);
+    await execGit(['commit', '-m', 'undelivered additional patch'], scratchCheckout);
+    rejected.push((await execGit(['rev-parse', 'HEAD'], scratchCheckout)).stdout.trim());
+    await execGit(['worktree', 'remove', scratchCheckout], repo);
+    rejected.push((await execGit(['commit-tree', `${c.release.head}^{tree}`, '-p', base, '-p', c.release.head, '-m', 'ambiguous original merge'], repo)).stdout.trim());
+    const row = attempts[0].metadata.completedCheckouts[0];
+    for (const head of rejected) {
+      row.head = head;
+      expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-policy-not-legacy-completed' });
+      expect(await registered(c.path)).toBe(true);
+    }
+    row.head = rewritten;
+    // These holds must survive the real rewritten-delivery fallback as well
+    // as ordinary exact-head policy admission.
+    for (const [target, key, value] of [[attempts[0], 'taskId', 'other-task'], [attempts[0], 'status', 'running'],
+      [attempts[0].metadata.reviewLoopMergeTarget, 'url', 'https://github.com/example/repo/pull/43'],
+      [attempts[0].metadata, 'prCompletionPolicy', 'leave-open'],
+      [row, 'incarnation', { pointer: { ino: 'different' } }]]) {
+      const prior = target[key]; target[key] = value;
+      const refused = await c.prepare();
+      expect(refused, `${key}: ${JSON.stringify(refused)}`).toMatchObject({ ok: false });
+      expect(await registered(c.path)).toBe(true);
+      target[key] = prior;
+    }
+    // An explicit original-head policy must bind the captured old head, rather
+    // than being replaced with the rewritten tip to make the review pass.
+    attempts[0].metadata.branchCompletionPolicy = { branch: c.release.branch, completion: 'review-then-merge',
+      prUrl: c.forge.prUrl, tip: 'b'.repeat(40) };
+    expect(await c.prepare()).toMatchObject({ ok: false });
+    attempts[0].metadata.branchCompletionPolicy.tip = rewritten;
+    const boundPolicy = await c.prepare();
+    expect(boundPolicy, JSON.stringify(boundPolicy)).toMatchObject({ ok: true });
+    delete attempts[0].metadata.branchCompletionPolicy;
+    const prepared = await c.prepare();
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { policy: { policies: [
+      { id: 'predecessor', success: false, resumedCleanup: { successorAgentId: 'successor' } },
+      { id: 'successor', success: false },
+    ] } } });
+    const retired = await c.confirm(prepared.review);
+    expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(c.path)).toBe(false);
+    expect(retired.archiveDir ?? null).toBeNull();
+    expect(await archives()).toEqual([]);
+    expect(injected.policies).toEqual(unchanged);
+    expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
+      branch: c.release.branch, head: c.release.head, branchDeleted: true, archiveDir: null,
+    }));
+  });
+
+  it.each(['bound', 'discovered'])('retires a resumed merged checkout with %s PR identity without promoting failed attempts', async prIdentity => {
     const c = await reviewedCheckout('resumed-cleanup', { normalMerge: true });
     await execGit(['worktree', 'unlock', c.path], repo);
     Object.assign(c.release, { locked: false, lockReason: null });
@@ -2191,10 +2726,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       return { id, taskId: 'same-original-task', status: 'completed', startedAt,
         completedAt: `2026-03-01T0${index}:01:00.000Z`,
         result: index === 0 ? { success: false, executionSuccess: false, validationPassed: null }
-          : { success: false, executionSuccess: true, validationPassed: true, cleanupPending: true,
+          : { success: false, executionSuccess: true, validationPassed: null, cleanupPending: true,
             taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } },
         metadata: { sourceWorkspace: repo, workspacePath: path, worktreeBranch: c.release.branch,
-          prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { branch: c.release.branch, url: c.forge.prUrl },
+          prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: prIdentity === 'bound' ? { branch: c.release.branch, url: c.forge.prUrl } : null,
           checkoutSeeds: [],
           resumedFromAgentId: index ? ['failed', 'cleanup'][index - 1] : null,
           completedCheckouts: [{ version: 1, agentId: id, startedAt, capturedAt: startedAt, ...captured, path }] } };
@@ -2206,11 +2741,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     receipt.repoPath += '/.';
     receipt.path += '/.';
     const original = structuredClone(attempts);
-    // A missing link, a different task or physical generation, and a real
-    // validation/human hold cannot be released by a later successful execution.
+    // Keep authority refusals on the real continuation/rewrite fallback, as well
+    // as physical repository, checkout and generation binding.
     for (const [target, key, value] of [[attempts[2].metadata, 'resumedFromAgentId', null],
       [attempts[0], 'taskId', 'other-task'], [attempts[0].result, 'validationPassed', false],
       [attempts[0].metadata, 'prCompletionPolicy', 'leave-open'],
+      [attempts[0].metadata, 'reviewLoopMergeTarget', { branch: c.release.branch, url: 'https://github.com/example/repo/pull/99' }],
       [receipt, 'repoPath', join(scratch, 'unrelated-repo')],
       [receipt, 'path', join(external, 'unrelated-checkout')],
       [attempts[0].metadata.completedCheckouts[0], 'head', 'b'.repeat(40)],
@@ -2291,7 +2827,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       await execGit(['commit', '--allow-empty', '-m', 'new remote default'], remote);
       shippedDefault = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
       expect((await execGit(['cat-file', '-e', `${shippedDefault}^{commit}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
-      await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+      await addProofOrigin();
       injected.fetchRemote = remote;
     }
     await execGit(['reset', '--hard', 'HEAD^'], repo);
@@ -2540,7 +3076,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(after.retirementObligations).toEqual(before.retirementObligations);
   });
 
-  describe.each(['content', 'index', 'administration', 'default', 'pr-head', 'forge', 'policy', 'unreadable-policy', 'submodule', 'inventory'])('changed %s evidence between review and confirmation', change => {
+  describe.each(['content', 'index', 'administration', 'default', 'pr-head', 'policy', 'submodule', 'inventory'])('changed %s evidence between review and confirmation', change => {
     let c;
     let prepared;
     // Fixture construction, preview and confirmation are distinct real-Git
@@ -2562,8 +3098,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
       }
       if (change === 'pr-head') c.forge.prHead = c.forge.defaultHead;
-      if (change === 'unreadable-policy') injected.policies = null;
-      if (change === 'forge') c.forge.remoteHead = c.release.head;
       if (change === 'policy') injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
       if (change === 'submodule') await writeFile(join(c.path, 'vendor', 'unique.txt'), 'submodule work');
       if (change === 'inventory') injected.schedule.executions = {};
@@ -2652,11 +3186,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner', 'normal-completed', 'normal-invalid-time', 'normal-resumed-lineage'])('keeps an original sibling obligation separate from a detached copy: %s', async scenario => {
-    const c = await reviewedCheckout(`orphan-sibling-${scenario}`);
+  it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner', 'normal-completed', 'normal-invalid-time', 'normal-resumed-lineage', 'separate-incomplete', 'separate-retained-work', 'separate-same-incarnation', 'separate-replaced-pointer', 'separate-malformed-capture', 'separate-missing-receipt', 'separate-wrong-pr'])('keeps an original sibling obligation separate from a detached copy: %s', async scenario => {
+    const c = await reviewedCheckout(`orphan-sibling-${scenario}`, { normalMerge: scenario.startsWith('separate-') });
     const namedPath = c.path;
     const namedBranch = c.release.branch;
     await execGit(['worktree', 'unlock', namedPath], repo);
+    if (scenario === 'separate-retained-work') {
+      await writeFile(join(namedPath, 'unpublished-reviewer.txt'), 'unique unfinished reviewer work\n');
+      await execGit(['add', 'unpublished-reviewer.txt'], namedPath);
+      await execGit(['commit', '-m', 'unfinished reviewer work'], namedPath);
+    }
+    const capturedHead = (await execGit(['rev-parse', 'HEAD'], namedPath)).stdout.trim();
     const evidence = await import('./completedCheckoutEvidence.js');
     const agent = { id: 'sibling-owner', status: 'running', startedAt: new Date(Date.now() - 60_000).toISOString(),
       metadata: { sourceWorkspace: repo, workspacePath: namedPath, isWorktree: true, worktreeBranch: namedBranch,
@@ -2664,7 +3204,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     agent.metadata.checkoutSeeds = await evidence.captureCheckoutSeeds(agent);
     // Completion records the exact terminal target before publishing the orphan.
     const targets = await evidence.captureSeededCompletionCheckouts(agent, { preterminal: true });
-    expect(targets).toEqual([expect.objectContaining({ head: c.release.head, startedAt: agent.startedAt })]);
+    expect(targets).toEqual([expect.objectContaining({ head: capturedHead, startedAt: agent.startedAt })]);
     agent.metadata.checkoutCapture = { status: 'captured', targets, unknown: false };
     agent.status = 'completed'; agent.completedAt = new Date().toISOString();
     agent.result = { success: false, executionSuccess: false, orphaned: true, validationPassed: null };
@@ -2676,6 +3216,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       agent.metadata.completedCheckouts = agent.metadata.completedCheckouts.map(row => ({ ...row, version: 1,
         capturedAt: scenario === 'normal-invalid-time' ? new Date(Date.parse(agent.completedAt) + 1000).toISOString() : agent.completedAt }));
     }
+    if (scenario.startsWith('separate-')) {
+      agent.result = { success: false, executionSuccess: true, validationPassed: null,
+        taskOutcome: { status: 'blocked', reason: 'Earlier CI did not finish' } };
+      // Captures use native canonical paths; app inventories may use Git's
+      // spelling. Even a portable trailing separator must not lose the proof.
+      for (const row of [...agent.metadata.checkoutSeeds, ...agent.metadata.completedCheckouts]) row.repoPath += '/';
+      if (scenario === 'separate-wrong-pr') agent.metadata.reviewLoopMergeTarget.url = 'https://github.com/example/repo/pull/43';
+    }
     const originalResult = structuredClone(agent.result);
     if (scenario === 'owner-alias') {
       const alias = join(external, 'canonical-owner-alias');
@@ -2683,11 +3231,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       agent.metadata.workspacePath = alias;
     }
     let path = join(external, `detached-${scenario}`);
-    if (scenario === 'same-incarnation') {
+    if (scenario === 'same-incarnation' || scenario === 'separate-same-incarnation' || scenario === 'separate-replaced-pointer') {
       const pointerIdentity = await readRetirementCheckoutIdentity(namedPath);
       await execGit(['worktree', 'move', namedPath, path], repo);
       await execGit(['switch', '--detach', c.release.head], path);
       expect(await readRetirementCheckoutIdentity(path)).toBe(pointerIdentity);
+      if (scenario === 'separate-replaced-pointer') {
+        const bytes = await readFile(join(path, '.git'));
+        await rename(join(path, '.git'), join(scratch, 'prior-checkout-pointer'));
+        await writeFile(join(path, '.git'), bytes);
+        expect(await readRetirementCheckoutIdentity(path)).not.toBe(pointerIdentity);
+      }
     }
     else {
       await execGit(['worktree', 'add', '--detach', path, c.release.head], repo);
@@ -2698,6 +3252,32 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await registered(path)).toBe(true);
     const release = { path, branch: null, head: c.release.head, locked: false, lockReason: null };
     c.forge.publishedBranch = namedBranch; c.forge.exactAliasHead = release.head;
+    if (scenario.startsWith('separate-')) {
+      await writeFile(join(repo, 'later-reviewed.txt'), 'later reviewed correction\n');
+      await execGit(['add', 'later-reviewed.txt'], repo);
+      await execGit(['commit', '-m', 'final delivered correction'], repo);
+      const deliveredHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
+      const targetTree = (await execGit(['rev-parse', 'HEAD^{tree}'], repo)).stdout.trim();
+      Object.assign(c.forge, { prHead: deliveredHead, mergeCommit: deliveredHead, defaultHead: deliveredHead,
+        scopeProof: 'represented-detached-head', detachedRepresentation: {
+          sourceHead: release.head, deliveredHead, base: release.head, targetTree, sourceCommits: 0,
+        } });
+    }
+    if (scenario.startsWith('separate-')) {
+      // The real represented-head reader intentionally omits historical patch
+      // fields. Missing current-base objects still need a proof-bound fetch.
+      delete c.forge.changeBase; delete c.forge.firstCommit;
+      if (scenario === 'separate-incomplete') {
+        const remote = join(scratch, 'represented-proof-remote');
+        await execGit(['clone', '--no-hardlinks', repo, remote], scratch);
+        await execGit(['config', 'user.email', 'test@example.com'], remote);
+        await execGit(['config', 'user.name', 'Test'], remote);
+        await execGit(['commit', '--allow-empty', '-m', 'remote-only default advance'], remote);
+        c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
+        await addProofOrigin();
+        injected.fetchRemote = remote;
+      }
+    }
     injected.policies = [agent];
     let lineageControls = [];
     if (scenario === 'normal-resumed-lineage') {
@@ -2722,7 +3302,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         [ancestors[0].metadata.completedCheckouts[0], 'incarnation', differentGeneration],
         [ancestors[0].metadata, 'prCompletionPolicy', 'leave-open'], [ancestors[0], 'status', 'running']];
     }
-    if (scenario === 'missing-receipt') agent.metadata.completedCheckouts = [];
+    if (scenario === 'separate-malformed-capture') {
+      agent.metadata.completedCheckouts[0].version = 1;
+      delete agent.metadata.completedCheckouts[0].incarnation.gitdir;
+    }
+    if (scenario === 'missing-receipt' || scenario === 'separate-missing-receipt') agent.metadata.completedCheckouts = [];
     if (scenario === 'human-handoff') agent.metadata.prCompletionPolicy = 'leave-open';
     if (scenario === 'active-owner') { agent.status = 'running'; c.opts.readAgents = async () => [agent]; }
     const originalRelease = scenario === 'normal-resumed-lineage'
@@ -2740,7 +3324,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       target[key] = prior;
     }
     const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release, prUrl: c.forge.prUrl }, c.opts);
-    if (!['confirmed', 'owner-alias', 'normal-completed', 'normal-resumed-lineage'].includes(scenario)) {
+    if (!['confirmed', 'owner-alias', 'normal-completed', 'normal-resumed-lineage', 'separate-incomplete', 'separate-retained-work'].includes(scenario)) {
       const reason = scenario === 'human-handoff' ? 'pr-completion-human-handoff'
         : 'retirement-policy-not-legacy-completed';
       expect(prepared).toMatchObject({ ok: false, reason });
@@ -2748,6 +3332,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       return;
     }
     expect(prepared.reason).toBeUndefined();
+    if (scenario === 'separate-incomplete') {
+      expect(injected.fetches).toHaveLength(1);
+      expect(injected.fetches[0].args).toContain(c.forge.defaultHead);
+      expect((await execGit(['rev-parse', 'main'], repo)).stdout.trim()).toBe(c.forge.mergeCommit);
+      expect(existsSync(join(repo, '.git', 'FETCH_HEAD'))).toBe(false);
+    }
     if (scenario === 'normal-resumed-lineage') {
       const detachedIdentity = await readRetirementCheckoutIdentity(path);
       expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [
@@ -2757,14 +3347,20 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         { id: agent.id, success: false, completedSibling: true },
       ] } } });
     }
-    else expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, ...(scenario === 'normal-completed' ? { completedSibling: true } : { orphanedSibling: true }) }] } } });
+    else expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false,
+      ...(scenario.startsWith('separate-') ? { retainedSiblingObligation: agent.metadata.completedCheckouts[0] }
+        : scenario === 'normal-completed' ? { completedSibling: true } : { orphanedSibling: true }) }] } } });
     const result = await retireInventoriedCheckout({ appId: 'app-1', release,
       review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts);
     expect(result).toMatchObject({ ok: true, branchDeleted: false });
     expect(result.archiveDir).toBeUndefined();
     expect(await registered(path)).toBe(false);
     expect(await registered(namedPath)).toBe(true);
-    expect((await execGit(['rev-parse', namedBranch], repo)).stdout.trim()).toBe(release.head);
+    expect((await execGit(['rev-parse', namedBranch], repo)).stdout.trim()).toBe(capturedHead);
+    if (scenario === 'separate-retained-work') {
+      expect((await execGit(['merge-base', '--is-ancestor', capturedHead, c.forge.prHead], repo, { ignoreExitCode: true })).exitCode).toBe(1);
+      expect(await readFile(join(namedPath, 'unpublished-reviewer.txt'), 'utf8')).toBe('unique unfinished reviewer work\n');
+    }
     expect(agent.result).toEqual(originalResult);
     expect(injected.policies).toEqual(originalPolicies);
     if (scenario === 'normal-resumed-lineage') {

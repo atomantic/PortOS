@@ -423,7 +423,7 @@ describe('validateReasonerResponse', () => {
     expect(junk.proposal.goodFirstIssue).toBe(false);
 
     const contributor = validateReasonerResponse({
-      proposal: { scope: 'app-improvement', slug: 'x', title: 'X', model: 'light', goodFirstIssue: true, helpWanted: true }
+      proposal: { scope: 'app-improvement', slug: 'x', title: 'X', model: 'light', goodFirstIssue: true, helpWanted: true, helpWantedReason: 'user-perspectives' }
     });
     expect(contributor.proposal.goodFirstIssue).toBe(true);
     expect(contributor.proposal.helpWanted).toBe(true);
@@ -2938,7 +2938,7 @@ describe('forge I/O (injected exec)', () => {
     const exec = vi.fn().mockResolvedValue({ code: 0, stdout: 'https://github.com/o/r/issues/9\n' });
     const res = await fileProposalToForge({
       cli: 'gh', cwd: '/x', title: 'T', body: 'B', slug: 's',
-      model: 'light', effort: 'max', goodFirstIssue: true, exec
+      model: 'light', effort: 'max', goodFirstIssue: true, helpWanted: true, hardwareRequirements: ['windows', 'cuda'], exec
     });
     expect(res.success).toBe(true);
     const created = exec.mock.calls.filter((c) => c[1][0] === 'label').map((c) => c[1][2]);
@@ -2946,9 +2946,10 @@ describe('forge I/O (injected exec)', () => {
     expect(created).toContain('model:light');
     expect(created).toContain('effort:max');
     expect(created).toContain('good first issue');
+    expect(created).toEqual(expect.arrayContaining(['help wanted', 'windows', 'cuda']));
     const createCall = exec.mock.calls.find((c) => c[1][0] === 'issue')[1];
     expect(createCall).toEqual(expect.arrayContaining([
-      '--label', LI_LABEL, '--label', 'model:light', '--label', 'effort:max', '--label', 'good first issue'
+      '--label', LI_LABEL, '--label', 'model:light', '--label', 'effort:max', '--label', 'good first issue', '--label', 'help wanted', '--label', 'windows', '--label', 'cuda'
     ]));
   });
 
@@ -3088,10 +3089,10 @@ describe('Jira filer', () => {
     const create = vi.fn().mockResolvedValue({ success: true, ticketId: 'PROJ-11', url: 'https://j/browse/PROJ-11' });
     await fileProposalToJira({
       instanceId: 'i', projectKey: 'PROJ', title: 'T', body: 'B', slug: 'add-x',
-      model: 'heavy', effort: 'low', goodFirstIssue: true, create
+      model: 'heavy', effort: 'low', goodFirstIssue: true, helpWanted: true, hardwareRequirements: ['macos', 'apple-silicon'], create
     });
     expect(create.mock.calls[0][1].labels).toEqual([
-      LI_LABEL, 'model-heavy', 'effort-low', 'good-first-issue'
+      LI_LABEL, 'model-heavy', 'effort-low', 'good-first-issue', 'help-wanted', 'macos', 'apple-silicon'
     ]);
   });
 

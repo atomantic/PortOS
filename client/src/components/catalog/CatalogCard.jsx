@@ -8,13 +8,15 @@
  * bubble to the anchor.
  */
 
+import { useState } from 'react';
 import { Link } from 'react-router';
 import { Sparkles, Trash2 } from 'lucide-react';
 import MediaImage from '../MediaImage';
 import { imageThumbnailSrc } from '../../lib/imageThumbnailSrc';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
+import CatalogImageAction from './CatalogImageAction';
 import { payloadSnippet } from '../../lib/catalogTypes';
-import { ingredientPath, ingredientCoverUrl } from '../../lib/creativeLibraries';
+import { ingredientPath, ingredientCoverUrl, usageSummary } from '../../lib/creativeLibraries';
 
 function TypeBadge({ type, getType }) {
   const meta = getType(type);
@@ -62,6 +64,7 @@ export default function CatalogCard({
   onConfirmDelete,
 }) {
   const name = it.name || '(untitled)';
+  const [generatedCover, setGeneratedCover] = useState(null);
   const snippet = payloadSnippet(it.payload, it.type, 120, getType);
   return (
     <li
@@ -103,9 +106,11 @@ export default function CatalogCard({
         to={ingredientPath(it)}
         className="flex gap-3 p-3 pl-11 pr-11 min-h-[88px]"
       >
-        <CardThumb src={ingredientCoverUrl(it)} alt={name} />
+        <CardThumb src={ingredientCoverUrl(it) || generatedCover} alt={name} />
         <span className="flex flex-col gap-2 min-w-0 flex-1">
           <span className="block text-white font-medium truncate">{name}</span>
+          <span className="text-xs text-gray-400 break-words">{it.owningUniverse ? `Universe: ${it.owningUniverse.name}` : 'Ownership needs review'}</span>
+          {usageSummary(it.usage) && <span className="text-xs text-gray-500">Used in {usageSummary(it.usage)}</span>}
           <span className="flex items-center gap-1.5 flex-wrap">
             <TypeBadge type={it.type} getType={getType} />
             {(it.tags || []).slice(0, 4).map((tag) => (
@@ -119,6 +124,9 @@ export default function CatalogCard({
           ) : null}
         </span>
       </Link>
+      <div className="px-3 pb-3 pl-11">
+        <CatalogImageAction ingredient={it} getType={getType} onCover={setGeneratedCover} />
+      </div>
       {/* The arm button is a sibling of the <Link>, not a descendant, so its
           click never traverses the anchor. It gives way to the confirm band
           above once armed, so the card never shows two delete affordances. */}

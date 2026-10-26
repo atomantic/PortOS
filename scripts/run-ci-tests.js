@@ -12,6 +12,7 @@ import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js
 import { formatErrorAnnotation, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
 import { diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
+import { browserShardSlice } from './lib/browserSuites.js';
 import { browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
   clearVitestDependencies, createToolVersionResolver, currentCommit, fileResultsFromReport, findVitestDependenciesFile,
@@ -492,7 +493,9 @@ async function main() {
   // run already verified, and the list reaches Vitest as a file because a
   // related set can exceed the Windows command-line limit.
   if (memoDir) clearVitestDependencies(repoRoot, scope);
-  const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard, toolVersion: createToolVersionResolver() });
+  const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard,
+    ...(process.env.PORTOS_CI_BROWSER_OWNER === 'browser' ? { shardSlice: browserShardSlice } : {}),
+    toolVersion: createToolVersionResolver() });
   if (memoDir) {
     console.log(memoSummaryLine(plan));
     if (process.env.PORTOS_TEST_MEMO_VERBOSE === '1') {

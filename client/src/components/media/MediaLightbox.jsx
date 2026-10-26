@@ -1,3 +1,4 @@
+import { isMiniMaxH3SpeedProfile } from '../../lib/videoGenParams.js';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -22,6 +23,7 @@ import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { formatDateTime, formatDateNumeric, formatDurationMs, formatBytes } from '../../utils/formatters';
 import AttributionList from './AttributionList';
 import SentPromptPanel from './SentPromptPanel';
+import ContinuationDetails from '../videoGen/ContinuationDetails';
 
 // Intentionally NOT migrated to <ui/Modal> or <components/Drawer>. The
 // prev/next buttons sit as viewport-edge siblings of the card (not children
@@ -255,6 +257,9 @@ export default function MediaLightbox({
     // as a clean full run — the whole point is that an unverified speed-up is
     // never presented as a verified one.
     if (!applied) return `${id} — outcome not reported`;
+    if (isMiniMaxH3SpeedProfile(applied)) {
+      return `${id} · ${applied.denoisingSteps} updates · shifts ${applied.videoShift}/${applied.audioShift} · ${applied.adapter?.file || 'adapter unknown'} · ${applied.applied === true && applied.fallback === false ? 'applied, no fallback' : 'outcome unverified'}`;
+    }
     const degraded = applied.degraded;
     return Array.isArray(degraded) && degraded.length
       ? `${id} — reduced: ${degraded.join(', ')} unavailable`
@@ -310,6 +315,11 @@ export default function MediaLightbox({
     // Image Strength number alone never told anyone.
     ['Reference', item.raw?.i2vReferenceMode ? i2vReferenceModeLabel(item.raw.i2vReferenceMode) : null],
     ['Image strength', item.raw?.imageStrength],
+    ['User LoRA stages requested', item.raw?.a2vLoraStageStrengths
+      ? `motion ×${item.raw.a2vLoraStageStrengths[0]}, detail ×${item.raw.a2vLoraStageStrengths[1]}` : null],
+    ['User LoRA stages applied', item.raw?.a2vLoraStageStrengths && item.raw?.loraStrategyApplied?.adapters
+      ?.filter((adapter) => adapter.role === 'user')
+      .map((adapter) => `${adapter.name}: ${adapter.stages.join(', ')} = ${adapter.strength}`).join('; ')],
     ['Created', item.createdAt && formatDateTime(item.createdAt)],
     // Wall-clock the render itself took, excluding queue wait (see the renderMs
     // contract in normalize.js). Absent drops the row via the null-filter below.
@@ -815,6 +825,8 @@ function SettingsPane({
         )}
 
         <AttributionList record={item} />
+
+        {isVideo && <ContinuationDetails continuation={item.raw?.continuation || item.continuation} />}
 
         {meta.length > 0 && (
           <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1">
