@@ -5,8 +5,9 @@ import toast from '../ui/Toast';
 import FilmLookControls from './FilmLookControls.jsx';
 import FilmLookPreview from './FilmLookPreview.jsx';
 import useFilmLookPresets from '../../hooks/useFilmLookPresets.js';
-import { applyImageFilmLook } from '../../services/apiImageVideo';
+import { applyImageFilmLook, getImageFilmLookSource } from '../../services/apiImageVideo';
 import { filmLookPreset, isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
+import { visualProfileLook } from '../../../../server/lib/universeVisualProfile.js';
 
 /**
  * Tune a film look on one gallery image and keep it: "Save filtered copy"
@@ -19,19 +20,32 @@ import { filmLookPreset, isFilmLookNeutral, normalizeFilmLook } from '../../lib/
  * project: the editor starts from that look and can write back to it.
  */
 export default function FilmLookEditor({ item, open, onClose, onComplete, projectLook = null }) {
-  const start = () => normalizeFilmLook(projectLook?.look) || normalizeFilmLook(item?.filmLook) || filmLookPreset('none');
+  const start = () => normalizeFilmLook(projectLook?.look) || normalizeFilmLook(item?.filmLook) || visualProfileLook(item?.visualProfile) || filmLookPreset('none');
   const [look, setLook] = useState(start);
   const [saving, setSaving] = useState(false);
   const saved = useFilmLookPresets();
   const [savingProject, setSavingProject] = useState(false);
+  const [source, setSource] = useState(null);
+  const [sourceError, setSourceError] = useState('');
+  useEffect(() => {
+    let active = true;
+    setSource(null);
+    setSourceError('');
+    if (open && item?.filename && item.filmLookFrom) {
+      getImageFilmLookSource(item.filename, { silent: true }).then(result => { if (active) setSource(result); })
+        .catch(error => { if (active) setSourceError(error.message || 'Could not load the ungraded source'); });
+    }
+    return () => { active = false; };
+  }, [open, item?.filename, item?.filmLookFrom]);
   // A different image (or a reopen) starts over from the project's look, never from the last session's sliders.
   useEffect(() => { if (open) setLook(start()); }, [open, item?.key]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!item) return null;
   const neutral = isFilmLookNeutral(look);
+  const waitingForSource = !!item.filmLookFrom && !source;
   const saveCopy = async () => {
-    if (saving || neutral) return;
+    if (saving || neutral || waitingForSource) return;
     setSaving(true);
-    const variant = await applyImageFilmLook(item.filename, look, { silent: true }).catch((err) => {
+    const variant = await applyImageFilmLook(source?.filename || item.filename, look, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Could not save the filtered copy');
       return null;
     });
@@ -63,14 +77,15 @@ export default function FilmLookEditor({ item, open, onClose, onComplete, projec
       </header>
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <div className="flex max-h-[42dvh] shrink-0 items-center justify-center bg-black md:max-h-none md:flex-1">
-          <FilmLookPreview src={item.downloadUrl || item.previewUrl} alt={item.prompt} look={look} className="flex max-h-[42dvh] items-center justify-center md:max-h-[80dvh]" />
+          {waitingForSource ? <p className="p-4 text-sm text-port-text-muted" role={sourceError ? 'alert' : 'status'}>{sourceError || 'Loading ungraded source…'}</p>
+            : <FilmLookPreview src={source?.path || item.downloadUrl || item.previewUrl} alt={item.prompt} look={look} className="flex max-h-[42dvh] items-center justify-center md:max-h-[80dvh]" />}
         </div>
         <div className="flex min-h-0 w-full flex-col border-t border-port-border md:w-96 md:border-l md:border-t-0">
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
             <FilmLookControls look={look} onChange={setLook} saved={saved} />
           </div>
           <div className="flex flex-wrap gap-2 border-t border-port-border p-2">
-            <button type="button" onClick={saveCopy} disabled={saving || neutral} title={neutral ? 'Move a control first' : 'Render this look into a new image; the original stays as it is'}
+            <button type="button" onClick={saveCopy} disabled={saving || neutral || waitingForSource} title={neutral ? 'Move a control first' : 'Render this look into a new image; the original stays as it is'}
               className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded bg-port-accent px-3 text-xs text-white disabled:opacity-50">
               <Save className="h-3.5 w-3.5" aria-hidden="true" /> {saving ? 'Saving…' : 'Save filtered copy'}
             </button>

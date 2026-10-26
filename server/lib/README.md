@@ -1028,3 +1028,7 @@ migration with explicit recognition of the outgoing shipped defaults.
 
 | `releasePublication.js` | Validated request for forge-verified release publication milestones. |
 | `releaseSynchronization.js` | Frozen continuation policy fields and mandatory synchronization obligations shared by publication enrollment, verification and task update guards. |
+
+| `realityStarterV2.js` | Frozen original natural-photography starter and optional preview recipe; V1 remains available to migrations. |
+| `universeVisualProfile.js` | Shared profile normalization, original photography default, labeled additions, explicit overrides and separate color/texture strength. |
+| `universeVisualProfileValidation.js` | Strict API validation for optional universe photography and finishing profiles. |

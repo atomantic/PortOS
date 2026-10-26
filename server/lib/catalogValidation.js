@@ -11,6 +11,7 @@
  */
 
 import { z } from 'zod';
+import { universeVisualProfileSchema } from './universeVisualProfileValidation.js';
 import { BIBLE_LIMITS, FORM_ID_PATTERN } from './storyBible.js';
 import { REFERENCE_REVIEW_STATUSES, REFERENCE_FEEDBACK_MAX } from './catalogMediaLibrary.js';
 import {
@@ -456,6 +457,7 @@ export const catalogPortraitSetSchema = z.object({
 // age, era or look/style); absent renders the canonical present-story form.
 export const CATALOG_LOOK_VARIANT_ID = 'look';
 export const catalogSheetRenderSchema = z.object({
+  visualProfileOverride: universeVisualProfileSchema.nullable().optional(),
   variant: z.string().trim().min(1).max(48).optional(),
   wardrobeId: z.string().trim().min(1).max(59).optional(),
   formId: z.string().trim().regex(FORM_ID_PATTERN).optional(),

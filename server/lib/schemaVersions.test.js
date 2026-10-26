@@ -27,7 +27,7 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // These are additive + version-gated so an older peer
     // cannot strip-then-LWW them.
     // v15 adds an optional place `greybox` layout; additive + version-gated.
-    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(15);
+    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(16);
   });
 
   it('declares pipeline collection layout versions', () => {
@@ -121,14 +121,14 @@ describe('buildPortosMeta', () => {
   it('returns { portosVersion, schemaVersions } with the live registry', async () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
-    expect(meta.schemaVersions.universes).toBe(15);
+    expect(meta.schemaVersions.universes).toBe(16);
     expect(meta.schemaVersions.pipelineIssues).toBe(4);
     expect(meta.schemaVersions.pipelineSeries).toBe(14);
   });
 
   it('overrides merge into schemaVersions', async () => {
     const meta = await buildPortosMeta({ schemaVersions: { future: 1 } });
-    expect(meta.schemaVersions.universes).toBe(15);
+    expect(meta.schemaVersions.universes).toBe(16);
     expect(meta.schemaVersions.future).toBe(1);
   });
 });

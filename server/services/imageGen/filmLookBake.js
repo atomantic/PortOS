@@ -13,7 +13,7 @@
  * toggle and the copy files into every collection the source is in.
  */
 
-import { copyFile, mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { extname, join } from 'node:path';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -26,6 +26,29 @@ export const FILM_LOOK_SCRATCH_DIR = 'film-look-bakes';
 // this a 4K-plus still would stall it rather than finish.
 export const FILM_LOOK_BAKE_MAX_SIDE = 4096;
 const SOURCE_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp']);
+
+/** Follow film-only ancestry; cleaning before the first grade stays intact. */
+export async function readFilmLookSource(filename) {
+  const { assertGalleryFilename, readImageSidecar } = await import('./local.js');
+  const seen = new Set();
+  for (let depth = 0; depth < 32; depth++) {
+    assertGalleryFilename(filename);
+    if (seen.has(filename)) throw new ServerError('Film look source lineage contains a cycle', { status: 422, code: 'FILM_LOOK_LINEAGE' });
+    seen.add(filename);
+    const { metadata } = await readImageSidecar(filename);
+    if (typeof metadata.filmLookFrom === 'string' && metadata.filmLookFrom) {
+      if (metadata.regenerated || metadata.watermarkRemoved || metadata.cleanLevel) {
+        throw new ServerError('This image was edited after its film grade. Select the ungraded source to change the finish without discarding those edits.', { status: 422, code: 'FILM_LOOK_INTERVENING_EDIT' });
+      }
+      filename = metadata.filmLookFrom;
+      continue;
+    }
+    const exists = await stat(join(PATHS.images, filename)).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    if (!exists?.isFile()) throw new ServerError('Film look source image not found', { status: 404, code: 'NOT_FOUND' });
+    return { filename, path: `/data/images/${encodeURIComponent(filename)}`, metadata };
+  }
+  throw new ServerError('Film look source lineage is too deep', { status: 422, code: 'FILM_LOOK_LINEAGE' });
+}
 
 /** The one-image page a bake screenshots: the image at its own size, the look on it, frame 0. Pure. */
 function filmLookBakePage(look, { width, height, src }) {
@@ -42,6 +65,11 @@ function filmLookBakePage(look, { width, height, src }) {
 export async function applyFilmLookBake({ filename, sourceMeta, look: input, signal }) {
   const look = normalizeFilmLook(input);
   if (!look || isFilmLookNeutral(look)) throw new ServerError('The film look has no effect; move a control before saving a copy', { status: 422, code: 'FILM_LOOK_NEUTRAL' });
+  if (look.version === 2 && sourceMeta.filmLookFrom) {
+    const source = await readFilmLookSource(filename);
+    filename = source.filename;
+    sourceMeta = source.metadata;
+  }
   const ext = extname(filename).toLowerCase();
   if (!SOURCE_EXT.has(ext)) throw new ServerError('Only PNG, JPEG and WebP images take a film look', { status: 422, code: 'FILM_LOOK_SOURCE_TYPE' });
   const sourcePath = join(PATHS.images, filename);
@@ -99,6 +127,7 @@ export async function applyFilmLookBake({ filename, sourceMeta, look: input, sig
     ...sourceMetaForVariant
   } = sourceMeta;
   const lineage = { createdAt, cleanedFrom: groupRoot, filmLookFrom: filename, filmLook: look, filmLookWords: describeFilmLook(look) };
+  signal?.throwIfAborted();
   return persistVariant({
     sourceFilename: filename,
     outFilename,

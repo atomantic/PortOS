@@ -96,7 +96,10 @@ export { isRemoteMediaJob };
 
 const boundedVideoChunks = value => Math.min(8, Math.max(1, Math.trunc(Number(value) || 1)));
 
-const jobLane = (job) => mediaJobExecutionLane({
+const isLocalFinishReplay = (job) => job.kind === 'image' && job.params?.visualProfile && job.params?.visualProfileSource
+  && !job.params?.remoteMedia?.reconcile && job.params?.remotePeerReservation !== true;
+
+const jobLane = (job) => isLocalFinishReplay(job) ? 'gpu' : mediaJobExecutionLane({
   kind: job.kind,
   mode: job.params?.mode,
   remote: isRemoteMediaJob(job),
@@ -1842,12 +1845,44 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
     },
     completed: (payload) => {
       const { remoteInputsDisposable, remoteRecoverySettlement, ...result } = payload;
+      if (job.kind === 'image' && job.params?.visualProfile) {
+        if (job.visualProfileFinishing || !canRequestCancellation(job)) return;
+        const controller = new AbortController();
+        job.visualProfileFinishing = controller;
+        if (job.cancelRequested) controller.abort(new Error('Canceled during film finishing'));
+        clearInterval(watchdogTimer);
+        handlers.progress({ type: 'progress', progress: 0.95, message: 'Saving universe visual profile and film finish' });
+        trackTerminalOperation((async () => {
+          try {
+            // Retry resumes only the local finish. Persist the completed source
+            // before opening a browser so a failed finish cannot buy another image.
+            job.params = { ...job.params, visualProfileSource: result };
+            await persist();
+            controller.signal.throwIfAborted();
+            const { finishVisualProfileImage } = await import('../imageGen/finishVisualProfile.js');
+            const finished = await finishVisualProfileImage({ result, profile: job.params.visualProfile,
+              revision: job.params.visualProfileRevision, signal: controller.signal });
+            controller.signal.throwIfAborted();
+            await terminate('completed', j => { j.result = finished; }, remoteInputsDisposable === true);
+          } catch (error) {
+            await terminate(job.cancelRequested ? 'canceled' : 'failed', j => {
+              j.result = result;
+              j.error = job.cancelRequested ? 'Canceled during film finishing; original image retained' : `Film finishing failed; original image retained: ${error.message}`;
+            }, remoteInputsDisposable === true);
+          } finally { delete job.visualProfileFinishing; }
+        })().catch(e => console.error(`❌ media-job [${job.id.slice(0, 8)}] film finishing handler failed: ${e.message}`)));
+        return;
+      }
       trackTerminalOperation(
         terminate('completed', (j) => { j.result = result; }, remoteInputsDisposable === true)
           .catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
       );
     },
     failed: (payload) => {
+      if (job.visualProfileFinishing) {
+        job.visualProfileFinishing.abort(new Error(payload.error || 'Image finishing interrupted'));
+        return;
+      }
       // If cancelJob() flagged this job before the underlying gen reported
       // failure, treat the SIGTERM-induced failure as a clean cancel rather
       // than an error so /api/media-jobs?status=canceled works.
@@ -2035,13 +2070,18 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
       // A watchdog can win during the awaited policy/module preparation above.
       // Its terminal outcome must prevent that delayed provider from starting.
       if (!canRequestCancellation(job)) throw new Error('Provider dispatch stopped after the job reached a terminal outcome');
-      // Transient, like terminating: no await between this flag and invocation.
-      job.providerInvoked = true;
-      const request = { ...safeParams, jobId: job.id,
-        ...(job.kind === 'video' && jobLane(job) === 'gpu' && Number(safeParams.chunks) > 1 ? { executionQueueJobId: job.id } : {}) };
-      const kickoff = (runtime?.invoke ?? MEDIA_JOB_RUNTIME.image.invoke)(mod, request, safeParams);
-      markDispatched();
-      await Promise.race([kickoff, abandoned]);
+      if (isLocalFinishReplay(job)) {
+        handlers.completed(safeParams.visualProfileSource);
+        markDispatched();
+      } else {
+        // Transient, like terminating: no await between this flag and invocation.
+        job.providerInvoked = true;
+        const request = { ...safeParams, jobId: job.id,
+          ...(job.kind === 'video' && jobLane(job) === 'gpu' && Number(safeParams.chunks) > 1 ? { executionQueueJobId: job.id } : {}) };
+        const kickoff = (runtime?.invoke ?? MEDIA_JOB_RUNTIME.image.invoke)(mod, request, safeParams);
+        markDispatched();
+        await Promise.race([kickoff, abandoned]);
+      }
       if (resettingForTests) return null;
     } catch (err) {
       // Policy/auth refusal still stands, but it cannot prove a previously
@@ -2289,6 +2329,10 @@ export async function cancelJob(jobId) {
     const previousIntent = snapshotCancellationIntent(runningJob);
     // Set intent before a provider can emit failure synchronously.
     applyCancellationIntent(runningJob);
+    if (runningJob.visualProfileFinishing) {
+      runningJob.visualProfileFinishing.abort(new Error('Canceled during film finishing'));
+      return { ok: true, status: 'canceling' };
+    }
     if (isRemoteMediaJob(runningJob)) {
       // Durable intent precedes the adapter call so boot recovery resumes
       // cancellation rather than silently resurrecting the remote render.

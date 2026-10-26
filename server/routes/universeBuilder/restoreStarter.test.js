@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
-import { REALITY_STARTER_V1 } from '../../lib/realityStarterV1.js';
+import { REALITY_STARTER_V2 } from '../../lib/realityStarterV2.js';
 
 let universe;
 vi.mock('../../services/universeBuilder.js', async original => ({
@@ -26,8 +26,8 @@ beforeEach(() => {
 it('restores shipped text without changing canon, media or settings', async () => {
   const response = await request(app).post('/universes/universe-reality/restore-starter').send({ expectedUpdatedAt: stamp });
   expect(response.status).toBe(200);
-  expect(response.body).toMatchObject({ ...REALITY_STARTER_V1, characters: [{ id: 'local' }], styleImageRefs: ['private.jpg'], factual: true });
-  expect(Object.keys(REALITY_STARTER_V1).sort()).toEqual(['influences', 'logline', 'premise', 'starterPrompt', 'styleNotes']);
+  expect(response.body).toMatchObject({ ...REALITY_STARTER_V2, characters: [{ id: 'local' }], styleImageRefs: ['private.jpg'], factual: true });
+  expect(Object.keys(REALITY_STARTER_V2).sort()).toEqual(['influences', 'logline', 'premise', 'starterPrompt', 'styleNotes', 'visualProfile']);
 });
 it('refuses a stale revision before replacing any text', async () => {
   universe.updatedAt = '2026-01-02T00:00:00.000Z';

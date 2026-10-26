@@ -28,6 +28,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { applyImageVisualProfile } from './visualProfile.js';
 import { musicVideoStyleImages, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { join } from 'node:path';
@@ -134,6 +135,14 @@ export function selectLocalImageModelFromSettings(settings, modelId, allModels =
 export const previewUploadLabel = (index) => `(uploaded image ${index + 1})`;
 
 export async function prepareGenerateParams({ data, files, referenceImageFields, preview = false }) {
+  let profile = data.visualProfileOverride;
+  if (profile === undefined && !data.musicVideo && data.universeRun?.universeId) {
+    const { getUniverseVisualProfile } = await import('../universeBuilder/crud.js');
+    profile = await getUniverseVisualProfile(data.universeRun.universeId);
+  }
+  // FableLoom's canon compiler owns the photography block. Keep authored
+  // intent untouched until that compiler has resolved explicit overrides.
+  if (!data.fableLoom) data = applyImageVisualProfile(data, profile);
   let initImagePath = null;
   const uploadedTempPaths = [];
   const initUpload = files?.initImage;

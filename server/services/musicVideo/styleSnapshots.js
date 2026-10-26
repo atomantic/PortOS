@@ -5,7 +5,10 @@
 // only `concept.universeId` / `visualSpec.moodBoardId`; the create/update
 // dispatcher fills the snapshot text in here.
 
+import { ServerError } from '../../lib/errorHandler.js';
 import { collectBoardStyleContext } from '../../lib/moodBoardStyleContext.js';
+import { universeVisualStyleTokens } from '../../lib/universeVisualStyle.js';
+import { visualProfileLook } from '../../lib/universeVisualProfile.js';
 import {
   getMusicVideoCharacterStyle, musicVideoCharacterStyleReferenceId, musicVideoCharacterStyleSnapshot,
   musicVideoCharacterStyleSubject, musicVideoCharacterStyleSubjectId,
@@ -17,14 +20,15 @@ const STYLE_SNAPSHOT_MAX = 4000;
 
 function universeStyleSnapshot(universe) {
   if (!universe) return '';
-  const embrace = universe.influences?.embrace || [];
-  const avoid = universe.influences?.avoid || [];
-  return [
+  const { embrace, avoid } = universeVisualStyleTokens(universe);
+  const text = [
     universe.name,
     universe.styleNotes,
     embrace.length ? `Embrace: ${embrace.join(', ')}` : '',
     avoid.length ? `Avoid: ${avoid.join(', ')}` : '',
-  ].filter(Boolean).join('\n').slice(0, STYLE_SNAPSHOT_MAX);
+  ].filter(Boolean).join('\n');
+  if (universe.visualProfile && text.length > STYLE_SNAPSHOT_MAX) throw new ServerError(`Universe style has ${text.length} characters; the video concept limit is ${STYLE_SNAPSHOT_MAX}. Shorten the universe style before linking it.`, { status: 422, code: 'MUSIC_VIDEO_STYLE_TOO_LONG' });
+  return text.slice(0, STYLE_SNAPSHOT_MAX);
 }
 
 // Prefer the board's synthesized style (a look description with its own
@@ -48,6 +52,7 @@ async function loadOrEmpty(load, format, label, id) {
   try {
     return format(await load(id));
   } catch (err) {
+    if (err.code === 'MUSIC_VIDEO_STYLE_TOO_LONG') throw err;
     console.warn(`⚠️ Music Video ${label} snapshot skipped for ${id}: ${err.message}`);
     return '';
   }
@@ -69,11 +74,15 @@ export async function withStyleSnapshots(input, existing = null) {
   const concept = input.concept && typeof input.concept === 'object' ? { ...input.concept } : null;
   let visualSpec = input.visualSpec;
   let touched = false;
+  let inheritedLook;
 
   if (concept && has(concept, 'universeId') && !has(concept, 'universeStyle')) {
     const id = concept.universeId || '';
     if (id !== (existing?.concept?.universeId || '') || existing?.concept?.universeStyle == null) {
-      concept.universeStyle = id ? await loadOrEmpty(loadUniverse, universeStyleSnapshot, 'universe', id) : '';
+      concept.universeStyle = id ? await loadOrEmpty(loadUniverse, universe => {
+        inheritedLook = universe?.visualProfile?.finishing?.mode === 'save' ? visualProfileLook(universe.visualProfile) : null;
+        return universeStyleSnapshot(universe);
+      }, 'universe', id) : '';
       touched = true;
     }
   }
@@ -107,7 +116,8 @@ export async function withStyleSnapshots(input, existing = null) {
   }
 
   if (!touched) return input;
-  return { ...input, ...(target ? { concept: target } : {}), ...(visualSpec ? { visualSpec } : {}) };
+  return { ...input, ...(target ? { concept: target } : {}), ...(visualSpec ? { visualSpec } : {}),
+    ...(!has(input, 'filmLook') && !has(existing, 'filmLook') && inheritedLook ? { filmLook: inheritedLook } : {}) };
 }
 
 /**

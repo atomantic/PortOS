@@ -9,6 +9,7 @@
 
 import { basename, join } from 'node:path';
 import { stat } from 'node:fs/promises';
+import { resolveUniverseVisualProfile } from '../../lib/universeVisualProfile.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, resolveImageInputPath, sha256File } from '../../lib/fileUtils.js';
 import { characterIdentityPackReadiness } from '../../lib/storyBible.js';
@@ -24,7 +25,7 @@ import { resolveCharacterLoras } from '../characterLoraResolver.js';
 import { getSeries } from '../pipeline/series.js';
 import { getLoom } from './records.js';
 
-export const FABLELOOM_VISUAL_COMPILER_VERSION = '1.1.0';
+export const FABLELOOM_VISUAL_COMPILER_VERSION = '1.2.0';
 
 const byId = (list) => new Map((Array.isArray(list) ? list : []).filter((item) => item?.id).map((item) => [item.id, item]));
 const text = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -350,7 +351,7 @@ const blockedError = (messages, manifest) => new ServerError(
  * the real public compiler contract without touching the live universe store.
  */
 export async function compileFableLoomVisualRequest({
-  tag, kind, capability, authoredPrompt = '', authoredNegativePrompt = '', sourceImagePath = null,
+  tag, kind, capability, visualProfileOverride, authoredPrompt = '', authoredNegativePrompt = '', sourceImagePath = null,
   loadLoom = getLoom, loadUniverse = getUniverse, loadSeries = getSeries,
   resolveLoras = resolveCharacterLoras,
   hashFile = sha256File, resolveAsset = resolveImageInputPath,
@@ -363,7 +364,8 @@ export async function compileFableLoomVisualRequest({
   if (!loom || !episode || !node) throw new ServerError('FableLoom scene not found', { status: 404, code: 'NOT_FOUND' });
   const series = loom.seriesId ? await loadSeries(loom.seriesId).catch(() => null) : null;
   const universeId = loom.universeId || series?.universeId || null;
-  const universe = universeId ? await loadUniverse(universeId) : null;
+  const loadedUniverse = universeId ? await loadUniverse(universeId) : null;
+  const universe = loadedUniverse ? { ...loadedUniverse, visualProfile: resolveUniverseVisualProfile(loadedUniverse, visualProfileOverride, series) } : null;
   // Legacy/unlinked scenes keep their pre-compiler prompt-only behavior. A
   // scene carrying explicit canon bindings must resolve the canon it names.
   if (!universe && !node.visualCanon) return null;
@@ -397,6 +399,7 @@ export async function compileFableLoomVisualRequest({
   const manifest = {
     version: 1,
     compilerVersion: FABLELOOM_VISUAL_COMPILER_VERSION,
+    visualProfile: resolveUniverseVisualProfile(universe, undefined, series),
     status: manifestStatus({ locked, omitted, warnings }),
     universeId: universe.id,
     capability,
@@ -423,6 +426,7 @@ export async function compileFableLoomVisualRequest({
     prompt: positive,
     negativePrompt,
     promptAdditions,
+    visualProfile: resolveUniverseVisualProfile(universe, undefined, series),
     referenceImagePaths: allocation.accepted.map((asset) => asset.path),
     referenceImageStrengths: referenceStrengths(allocation.accepted),
     loraFilenames: adapters.map((adapter) => adapter.filename),

@@ -247,6 +247,7 @@ export function universeToMarkdown(record) {
     })
     .filter(Boolean);
   if (prose.length) sections.push(prose.join('\n\n'));
+  if (source.visualProfile) sections.push(`## Visual Profile\n\n\`\`\`json\n${JSON.stringify(source.visualProfile, null, 2)}\n\`\`\``);
 
   for (const [key, title] of CANON_SECTIONS) {
     const section = renderCanonSection(key, title, source);
@@ -299,6 +300,7 @@ const SECTION_NAMES = new Map([
   ['objects', 'objects'],
   ['categories', 'categories'],
   ['influences', 'influences'],
+  ['visual profile', 'visualProfile'],
 ]);
 
 const unescapeMarkdownLine = (line) => line.replace(
@@ -494,6 +496,9 @@ export function parseUniverseMarkdown(markdown) {
       patch.categories = parseCategories(section.lines);
     } else if (key === 'influences') {
       patch.influences = parseInfluences(section.lines);
+    } else if (key === 'visualProfile') {
+      const json = section.lines.join('\n').trim().replace(/^```json\s*\n/u, '').replace(/\n```$/u, '');
+      patch.visualProfile = JSON.parse(json);
     }
   }
   return patch;

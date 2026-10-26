@@ -10,6 +10,7 @@
  * re-exports this module so existing import paths keep working.
  */
 
+import { normalizeUniverseVisualProfile } from '../../lib/universeVisualProfile.js';
 import { randomUUID } from 'crypto';
 import { basename } from 'path';
 import { sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS, BIBLE_SOURCE, normalizeBibleName } from '../../lib/storyBible.js';
@@ -742,6 +743,7 @@ export const sanitizeTemplate = (raw) => {
     categories,
     compositeSheets,
     influences,
+    ...(normalizeUniverseVisualProfile(raw.visualProfile) ? { visualProfile: normalizeUniverseVisualProfile(raw.visualProfile) } : {}),
     // Shared, user-selected visual references. Their nested imageRefs are
     // discovered by federation/export asset collection so the image bytes
     // travel with the universe.

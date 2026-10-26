@@ -7,6 +7,7 @@
  */
 
 import { Router } from 'express';
+import { universeVisualProfileSchema } from '../../lib/universeVisualProfileValidation.js';
 import { z } from 'zod';
 import { asyncHandler, failValidation, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validation.js';
@@ -27,6 +28,7 @@ const markdownUniversePatchSchema = z.object({
   styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional(),
   categories: categoriesSchema.optional(),
   influences: influencesSchema.optional(),
+  visualProfile: universeVisualProfileSchema.nullable().optional(),
   characters: canonArrayField,
   places: canonArrayField,
   objects: canonArrayField,

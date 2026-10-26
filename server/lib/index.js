@@ -1005,3 +1005,7 @@ export * from './videoLoraStageValidation.js';
 
 export * from './musicVideoGreybox.js';
 export * from './catalogRedesign.js';
+
+export * from './realityStarterV2.js';
+export * from './universeVisualProfile.js';
+export * from './universeVisualProfileValidation.js';
