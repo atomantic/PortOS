@@ -1189,6 +1189,32 @@ describe('claim-swarm completion', () => {
 
 
 describe('durable completion replay', () => {
+  it.each(['absent', 'present', 'registered', 'ref-present', 'unreadable', 'human-hold'])('repairs only proven absent released-selection ledger rows after restart: %s', async scenario => {
+    const branch = 'claim/issue-10';
+    const path = '/repo/wt/released-selection';
+    const state = { ...agentState({ isWorktree: false, sourceWorkspace: '/repo', claimBranches: ['claim/issue-11'],
+      claimReleasedBranches: [branch], repoStateVerification: { status: 'completed' },
+      completionCleanup: { status: 'completed', replayAttempts: 5 }, cleanupOutcomes: {
+        released: { branch, status: 'verified', reason: 'released-selection-no-local-artifacts' },
+        old: { branch, path, status: 'blocked', reason: scenario === 'human-hold' ? 'operator-hold' : 'absent-checkout-integration-unverified' },
+      } }), id: 'agent-1', taskId: 'task-1', status: 'completed' };
+    readBranchCompletionPolicies.mockResolvedValue([state]);
+    if (scenario === 'present') readCheckoutPathPresence.mockResolvedValue(true);
+    if (scenario === 'registered') listWorktrees.mockResolvedValue([{ path, branch: 'some-other-branch' }]);
+    if (scenario === 'ref-present') readLocalBranchPresence.mockResolvedValue(true);
+    if (scenario === 'unreadable') readCheckoutPathPresence.mockResolvedValue(null);
+    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 0 });
+    if (scenario === 'absent') expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', {
+      branch, path, status: 'verified', reason: 'released-selection-no-local-artifacts',
+    });
+    else expect(recordCleanupOutcome).not.toHaveBeenCalled();
+    expect(recordRepoStateVerification).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(replayAgentCompletionCleanup).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+  });
+
   const archived = () => ({ ...agentState(), id: 'agent-1', taskId: 'task-1', status: 'completed', result: { success: true },
     metadata: { ...agentState().metadata, repoStateVerification: { status: 'pending' } } });
   it('resumes a persisted pending audit after restart and settles clean completion', async () => {

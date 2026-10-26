@@ -545,11 +545,52 @@ export function resumeDeferredRepoStateVerifications(blocked) {
   return completionWake;
 }
 
+// Repair only the obsolete path-specific hold behind an already verified
+// released selection. This does not reopen tasks, retry delivery or remove data.
+async function settleReleasedSelectionHistory(agentId, metadata, branch, trees) {
+  const held = Object.values(metadata.cleanupOutcomes || {}).filter(row => row.branch === branch && row.status !== 'verified');
+  for (const row of held) {
+    if (row.reason !== 'absent-checkout-integration-unverified' || typeof row.path !== 'string'
+      || trees.some(tree => resolve(tree.path) === resolve(row.path))
+      || await readCheckoutPathPresence(row.path).catch(() => null) !== false) return false;
+  }
+  for (const row of held) await branchLedger(agentId, { branch, path: row.path })
+    .record('verified', 'released-selection-no-local-artifacts');
+  return true;
+}
+
+async function reconcileReleasedSelectionHistory(agents) {
+  const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
+  const { claimCheckoutOwner } = await import('../lib/claimContinuation.js');
+  for (const agent of agents) {
+    const meta = agent.metadata || {};
+    if (agent.status !== 'completed' || meta.repoStateVerification?.status !== 'completed') continue;
+    const branches = Object.values(meta.cleanupOutcomes || {}).filter(row => row.status === 'verified'
+      && row.reason === 'released-selection-no-local-artifacts' && meta.claimReleasedBranches?.includes(row.branch)
+      && !meta.claimBranches?.includes(row.branch)
+      && Object.values(meta.cleanupOutcomes || {}).some(held => held.branch === row.branch && held.status !== 'verified'))
+      .map(row => row.branch);
+    if (!branches.length) continue;
+    const sourceWorkspace = meta.sourceWorkspace || meta.workspacePath;
+    if (typeof sourceWorkspace !== 'string') continue;
+    const trees = await listWorktrees(sourceWorkspace).catch(() => null);
+    const owners = await readClaimOwnershipAgents().catch(() => null);
+    if (!trees || !owners) continue;
+    for (const branch of new Set(branches)) {
+      if (claimCheckoutOwner({ branchName: branch, sourceWorkspace, agents: owners })
+        || trees.some(tree => tree.branch?.replace(/^refs\/heads\//, '') === branch)
+        || await readLocalBranchPresence(sourceWorkspace, branch).catch(() => null) !== false) continue;
+      await settleReleasedSelectionHistory(agent.id || agent.agentId, meta, branch, trees);
+    }
+  }
+}
+
 async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false } = {}) {
   const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
   const { getTaskById } = await import('./cosTaskStore.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
   if (!skipPrelude) {
+    await reconcileReleasedSelectionHistory(agents);
     const { reconcileCleanupThreads } = await import('./brainTaskThreads.js');
     await reconcileCleanupThreads({ dryRun: false }).catch(error => emitLog('warn', `Cleanup thread reconciliation deferred: ${error.message}`));
     const { recoverLegacyDeliveryBlocks } = await import('./deliveryRecovery.js');
@@ -669,7 +710,7 @@ async function verifyRunBranches(input) {
         && typeof row.repoPath === 'string' && resolve(row.repoPath) === resolve(sourceWorkspace)
         && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(row.head || '')
         && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer));
-    if (releasedSelection) {
+    if (releasedSelection && await settleReleasedSelectionHistory(input.agentId, meta, branch, trees)) {
       await branchLedger(input.agentId, { branch }).record('verified', 'released-selection-no-local-artifacts');
       results.push({ branch, verified: true, issues: [], skipReason: null });
       continue;
