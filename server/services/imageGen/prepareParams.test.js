@@ -319,7 +319,7 @@ describe('prepared image cleaner policy', () => {
 it('sends the live greybox capture before set plates, retains the edited frame first, and refuses a removed capture', async () => {
   const { PATHS } = await import('../../lib/paths.js');
   mkdirSync(PATHS.images, { recursive: true });
-  for (const file of ['layout.png', 'plate.png', 'edit.png']) writeFileSync(join(PATHS.images, file), 'fixture');
+  for (const file of ['layout.png', 'old-layout.png', 'plate.png', 'edit.png']) writeFileSync(join(PATHS.images, file), 'fixture');
   const setReference = { subjectId: 'rink', greyboxShotId: 'wide' };
   getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
   getProject.mockResolvedValue({ concept: { subjects: [{ id: 'rink', kind: 'place', ingredientId: 'cat-rink', name: 'Example Rink' }] }, scenes: [{ sceneId: 's1', setReference }] });
@@ -332,6 +332,10 @@ it('sends the live greybox capture before set plates, retains the edited frame f
   const refined = await run({ prompt: 'Raise the hand', referenceImageFiles: ['edit.png', 'plate.png'], musicVideo: { ...tag, refine: true } });
   expect(refined.data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['edit.png', 'layout.png', 'plate.png']);
   expect(refined.data.prompt).toContain('Singer stands at the "rail" mark, waving');
+  const refreshed = await run({ prompt: 'A wide shot', referenceImageFiles: ['old-layout.png', 'plate.png'], musicVideo: { ...tag, greyboxImageId: 'old-layout.png' } });
+  expect(refreshed.data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['layout.png', 'plate.png']);
+  const editedOldCapture = await run({ prompt: 'Raise the hand', referenceImageFiles: ['old-layout.png', 'plate.png'], musicVideo: { ...tag, greyboxImageId: 'old-layout.png', refine: true } });
+  expect(editedOldCapture.data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['old-layout.png', 'layout.png', 'plate.png']);
   greyboxCatalog.listMediaForIngredient.mockResolvedValue([]);
   await expect(run({ prompt: 'A wide shot', musicVideo: tag })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_GREYBOX_UNAVAILABLE' });
 });

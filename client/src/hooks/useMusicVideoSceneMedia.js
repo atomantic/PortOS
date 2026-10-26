@@ -241,6 +241,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ...(references.length ? { referenceImageFiles: references } : {}),
       musicVideo: {
         projectId, sceneId: scene.sceneId, compose: true, ...(revisionId ? { revisionId } : {}),
+        ...(greybox?.reference ? { greyboxImageId: greybox.reference.imageId } : {}),
         ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
       },
     }, { silent: true })
@@ -291,9 +292,11 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const endPrompt = scene.endFramePrompt?.trim();
     if (!endPrompt && !refining) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
     if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
+    const greybox = musicVideoGreyboxReference(project, scene, greyboxPlaces);
+    if (greybox?.error) { toast.error(greybox.error); return Promise.resolve({ ok: false }); }
     const projectId = project.id;
     // The frame it renders from leads, then the shot's references (the card's References row).
-    const references = frameReferenceFiles(referenceImageId, conditioningReferences(project, scene, castMedia, musicVideoGreyboxReference(project, scene, greyboxPlaces)));
+    const references = frameReferenceFiles(referenceImageId, conditioningReferences(project, scene, castMedia, greybox));
     endFrameLane.startScene(scene.sceneId);
     return generateImage({
       // From a frame the server keeps its shot and changes what the prompt asks; with no frame it renders like a start frame.
@@ -302,6 +305,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ...(references.length ? { referenceImageFiles: references } : {}),
       musicVideo: {
         projectId, sceneId: scene.sceneId, slot: 'end', compose: true,
+        ...(greybox?.reference ? { greyboxImageId: greybox.reference.imageId } : {}),
         ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
       },
     }, { silent: true })

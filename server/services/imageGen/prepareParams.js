@@ -238,6 +238,12 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
     const greybox = await loadMusicVideoGreybox(musicVideoProject, scene);
     if (greybox) {
       const fromFrame = data.musicVideo.fromFrame || data.musicVideo.refine;
+      const cachedCapture = data.musicVideo.greyboxImageId;
+      if (cachedCapture && cachedCapture !== greybox.reference.imageId) {
+        for (let i = namedReferenceFiles.length - 1; i >= 0; i--) {
+          if (namedReferenceFiles[i] === cachedCapture && !(fromFrame && i === 0)) namedReferenceFiles.splice(i, 1);
+        }
+      }
       const existing = namedReferenceFiles.indexOf(greybox.reference.imageId);
       if (!(fromFrame && existing === 0)) {
         if (existing >= 0) namedReferenceFiles.splice(existing, 1);
