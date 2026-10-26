@@ -77,8 +77,9 @@ const tags = z.array(tag).max(BIBLE_LIMITS.TAGS_PER_ENTRY_MAX).optional();
 // size at the JSON.stringify length to keep a single user accident from
 // landing a 50-MB blob in the catalog. The extraction service is responsible
 // for shape correctness; the schema only enforces the boundary.
+export const CATALOG_PAYLOAD_MAX_CHARS = 200_000;
 const payload = z.record(z.string(), z.unknown())
-  .refine((p) => JSON.stringify(p).length <= 200_000, {
+  .refine((p) => JSON.stringify(p).length <= CATALOG_PAYLOAD_MAX_CHARS, {
     message: 'payload exceeds 200KB JSON size cap',
   })
   .optional();
@@ -913,6 +914,8 @@ export const catalogIngredientLockSchema = z.object({ locked: z.boolean() }).str
 // Place greybox (docs/plans/2026-10-25-place-greybox.md). The draft body is the
 // provider › model › effort pick plus the user's own instruction; the picker's
 // "Default effort" submits '' which clears to undefined.
+// Also the body of the prompt preview, which sends nothing to a provider: the
+// pick fields are accepted and ignored there.
 export const catalogGreyboxDraftSchema = z.object({
   instruction: z.string().trim().min(1).max(GREYBOX_INSTRUCTION_MAX),
   providerId: z.string().trim().max(128).optional().default(''),
@@ -921,8 +924,9 @@ export const catalogGreyboxDraftSchema = z.object({
   useCurrent: z.boolean().optional().default(true),
 }).strict();
 
+// `greybox: null` removes the place's greybox.
 export const catalogGreyboxSaveSchema = z.object({
-  greybox: greyboxSceneSchema,
+  greybox: greyboxSceneSchema.nullable(),
   source: revisionSource,
 }).strict();
 

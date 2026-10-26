@@ -271,6 +271,11 @@ export const attachCatalogIngredientMediaFromMoodBoard = (id, body, options) =>
 export const draftCatalogGreybox = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/greybox/draft`, { method: 'POST', body: JSON.stringify(body), ...options });
 
+// What a draft would send, composed by the server; calls no provider.
+export const previewCatalogGreyboxPrompt = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/greybox/prompt`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+// `greybox: null` removes the place's greybox.
 export const saveCatalogGreybox = (id, greybox, { source, ...options } = {}) =>
   request(`/catalog/ingredients/${enc(id)}/greybox`, { method: 'PUT', body: JSON.stringify({ greybox, ...(source ? { source } : {}) }), ...options });
 

@@ -32,11 +32,19 @@ describe.skipIf(!ready)('setIngredientPayloadKey', () => {
 
     // The profile form saves the whole payload through the sanitizer.
     const saved = await updateIngredient(created.id, { payload: { ...set.payload, notes: 'edited' } });
-    expect(saved.payload.greybox).toEqual(set.payload.greybox);
+    expect(saved.payload.greybox).toMatchObject({ source: "spec", parts: [{ id: "floor" }] });
 
     const cleared = await setIngredientPayloadKey(created.id, 'greybox', null);
     expect(cleared.payload).not.toHaveProperty('greybox');
     expect(cleared.payload.notes).toBe('edited');
+  });
+
+  it('normalizes a valid greybox and drops a malformed one on ordinary writes', async () => {
+    const place = await createIngredient({ id: `${P}-ord`, type: 'place', name: 'Ordinary', payload: { description: 'd' } });
+    const normalized = await updateIngredient(place.id, { payload: { description: 'd', greybox: { parts: [{ id: 'f', type: 'box', size: [1, 1, 1] }] } } });
+    expect(normalized.payload.greybox).toMatchObject({ version: 1, source: 'spec', zones: [], parts: [{ id: 'f', position: [0, 0, 0] }] });
+    const dropped = await updateIngredient(place.id, { payload: { description: 'd', greybox: { parts: 'bad' } } });
+    expect(dropped.payload).not.toHaveProperty('greybox');
   });
 
   it('keeps the lock behavior: type guard and idempotent write', async () => {

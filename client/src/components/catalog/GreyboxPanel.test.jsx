@@ -3,11 +3,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import GreyboxPanel from './GreyboxPanel';
-import { captureCatalogGreyboxShot, draftCatalogGreybox, saveCatalogGreybox } from '../../services/apiCatalog';
+import { captureCatalogGreyboxShot, draftCatalogGreybox, previewCatalogGreyboxPrompt, saveCatalogGreybox } from '../../services/apiCatalog';
 import { blankGreybox } from '../../lib/greybox';
 
 vi.mock('../../services/apiCatalog', () => ({
-  captureCatalogGreyboxShot: vi.fn(), draftCatalogGreybox: vi.fn(), saveCatalogGreybox: vi.fn(),
+  captureCatalogGreyboxShot: vi.fn(), draftCatalogGreybox: vi.fn(), previewCatalogGreyboxPrompt: vi.fn(), saveCatalogGreybox: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('../musicVideo/MusicVideoLlmPicker', () => ({
@@ -34,6 +34,7 @@ const show = (props = {}) => render(
 beforeEach(() => {
   vi.resetAllMocks();
   captureCatalogGreyboxShot.mockResolvedValue({ mediaKey: 'cap.png' });
+  previewCatalogGreyboxPrompt.mockResolvedValue({ sentPrompt: 'PREVIEW PROMPT', promptAdditions: [{ id: 'greybox-place', label: 'Place', text: 'Rink' }] });
   saveCatalogGreybox.mockImplementation(async (id, greybox) => ({ id, payload: { greybox } }));
 });
 
@@ -62,6 +63,17 @@ describe('GreyboxPanel', () => {
     expect(saved.shots[0]).toMatchObject({ id: 'wide', position: [1, 2, 3], target: [0, 1, 0] });
     expect(saveCatalogGreybox.mock.invocationCallOrder[0]).toBeLessThan(captureCatalogGreyboxShot.mock.invocationCallOrder[0]);
     expect(onCaptured).toHaveBeenCalled();
+  });
+
+  it('shows the server-composed prompt before any provider call, and removes the greybox after confirming', async () => {
+    show();
+    fireEvent.change(await screen.findByLabelText('What should change?'), { target: { value: 'add a booth' } });
+    expect(await screen.findByRole('button', { name: /Place/ })).toBeInTheDocument();
+    expect(previewCatalogGreyboxPrompt).toHaveBeenCalledWith('plc-1', expect.objectContaining({ instruction: 'add a booth', useCurrent: true }), { silent: true });
+    expect(draftCatalogGreybox).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove greybox' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Remove$/ }));
+    await waitFor(() => expect(saveCatalogGreybox).toHaveBeenCalledWith('plc-1', null, { source: undefined, silent: true }));
   });
 
   it('offers a blank room when the place has no greybox', async () => {

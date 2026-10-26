@@ -203,6 +203,9 @@ function IngredientEditor() {
   const [tags, setTags] = useState([]);
   const [payload, setPayload] = useState({});
   const [saving, setSaving] = useState(false);
+  // A Greybox-tab write in flight; the profile Save waits so its whole-payload
+  // PATCH cannot replace the layout being saved.
+  const [greyboxBusy, setGreyboxBusy] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [characterActionBusy, setCharacterActionBusy] = useState(false);
   // A Looks-tab wardrobe save in flight; the profile Save waits for it so its
@@ -729,7 +732,8 @@ function IngredientEditor() {
     : [];
   const protectMedia = (item) => ({ ...item, readOnly: identityReadOnly || item.retained === true || !!record.sharedIdentity && (item.ingredientId === record.sharedIdentity.sourceId || item.role?.startsWith('archive:identity')) });
   const liveLookIds = new Set(wardrobes.map((w) => w?.id).filter(Boolean));
-  const isReferenceTabRow = (m) => isReferenceTabMedia(m, liveLookIds);
+  const liveShotIds = new Set((ingredientPayload(record.payload).greybox?.shots || []).map((s) => s.id));
+  const isReferenceTabRow = (m) => isReferenceTabMedia(m, liveLookIds, liveShotIds);
   const coverUrl = ingredientCoverUrl({
     ...record,
     thumbnailKey: media.find((m) => m.kind === 'portrait')?.mediaKey || (!mediaReady && record.coverMedia?.portraitKey) || record.thumbnailKey,
@@ -779,7 +783,7 @@ function IngredientEditor() {
             {FORM_TYPES.has(record.type) && <CatalogLockButton key={record.id} record={record}
               disabled={saving || lookSaving || unlocking || characterActionBusy || mergeBusy} onPendingChange={setUnlocking} onChanged={applyLock} />}
             {isDirty && <span className="text-xs text-port-warning" role="status">Unsaved changes</span>}
-            <button type="button" onClick={handleSave} disabled={saving || lookSaving || unlocking || characterActionBusy || mergeBusy || identityReadOnly || !!externalDetails}
+            <button type="button" onClick={handleSave} disabled={saving || lookSaving || greyboxBusy || unlocking || characterActionBusy || mergeBusy || identityReadOnly || !!externalDetails}
               className="inline-flex items-center gap-1.5 min-h-[40px] px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white text-sm font-medium">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
             </button>
@@ -1014,6 +1018,8 @@ function IngredientEditor() {
             record={record}
             media={media}
             readOnly={identityReadOnly}
+            disabled={saving}
+            onBusyChange={setGreyboxBusy}
             onSaved={handleGreyboxSaved}
             onCaptured={refreshMedia}
           />

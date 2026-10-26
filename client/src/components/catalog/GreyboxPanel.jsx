@@ -4,7 +4,8 @@ import { Camera, Check, Loader2, Plus, Sparkles, Trash2, X } from 'lucide-react'
 import toast from '../ui/Toast';
 import MusicVideoLlmPicker from '../musicVideo/MusicVideoLlmPicker';
 import SentPromptPanel from '../media/SentPromptPanel';
-import { captureCatalogGreyboxShot, draftCatalogGreybox, saveCatalogGreybox } from '../../services/apiCatalog';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import { captureCatalogGreyboxShot, draftCatalogGreybox, previewCatalogGreyboxPrompt, saveCatalogGreybox } from '../../services/apiCatalog';
 import {
   GREYBOX_ASPECTS,
   DEFAULT_FOCAL_LENGTH_MM,
@@ -30,7 +31,7 @@ const AUTO = 'Default — the active provider';
  * The selected shot lives in the URL (`?shot=`). An AI draft is only a preview
  * until applied; every save goes through the server's scene validation.
  */
-export default function GreyboxPanel({ record, media, readOnly = false, onSaved, onCaptured }) {
+export default function GreyboxPanel({ record, media, readOnly = false, disabled = false, onBusyChange, onSaved, onCaptured }) {
   const [params, setParams] = useSearchParams();
   const viewerRef = useRef(null);
   const saved = record.payload?.greybox ?? null;
@@ -42,11 +43,29 @@ export default function GreyboxPanel({ record, media, readOnly = false, onSaved,
   const [lens, setLens] = useState(DEFAULT_FOCAL_LENGTH_MM);
   const [aspect, setAspect] = useState('16:9');
   const [newShotName, setNewShotName] = useState('');
+  const [preview, setPreview] = useState(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   const scene = draft?.greybox || saved;
   const shotId = params.get('shot') || '';
   const shot = scene?.shots?.find((s) => s.id === shotId) || null;
   const locked = readOnly || record.payload?.locked === true;
+  const blocked = !!busy || disabled;
+
+  useEffect(() => { onBusyChange?.(Boolean(busy)); }, [busy, onBusyChange]);
+
+  // The prompt a draft would send, composed by the server, shown before the
+  // button is pressed. Debounced; a superseded response is dropped.
+  useEffect(() => {
+    if (!instruction.trim()) { setPreview(null); return undefined; }
+    let active = true;
+    const timer = setTimeout(() => {
+      previewCatalogGreyboxPrompt(record.id, { instruction, useCurrent: Boolean(saved) && !fromScratch }, { silent: true })
+        .then((res) => { if (active) setPreview(res); })
+        .catch(() => { if (active) setPreview(null); });
+    }, 400);
+    return () => { active = false; clearTimeout(timer); };
+  }, [record.id, record.updatedAt, instruction, fromScratch, saved]);
 
   // Selecting a shot moves the camera to it and adopts its lens and aspect. A
   // save re-creates the shot object, so only a change of shot re-snaps the view.
@@ -110,11 +129,13 @@ export default function GreyboxPanel({ record, media, readOnly = false, onSaved,
 
   const captureShot = () => run('capture', async () => {
     if (!shot || !saved) return;
+    // Snapshot the pixels and the framing together, before any await, so a camera
+    // move or shot change while saving cannot change what is uploaded.
     const next = framedShot();
-    // Save the camera first when it moved, so the capture matches the saved shot.
-    if (next && JSON.stringify(next) !== JSON.stringify(shot) && !(await persist(withShot(saved, next)))) return;
     const dataUrl = viewerRef.current?.capture();
     if (!dataUrl) return;
+    // Save the camera first when it moved, so the capture matches the saved shot.
+    if (next && JSON.stringify(next) !== JSON.stringify(shot) && !(await persist(withShot(saved, next)))) return;
     const row = await captureCatalogGreyboxShot(record.id, shot.id, dataUrl.split(',')[1], { silent: true })
       .catch((err) => { toast.error(err?.message || 'Failed to save the reference'); return null; });
     if (row) {
@@ -126,6 +147,15 @@ export default function GreyboxPanel({ record, media, readOnly = false, onSaved,
   const removeShot = () => run('shot', async () => {
     if (!shot || !saved) return;
     if (await persist(withoutShot(saved, shot.id))) selectShot('');
+  });
+
+  const removeGreybox = () => run('remove', async () => {
+    if (await persist(null)) {
+      setConfirmRemove(false);
+      setDraft(null);
+      selectShot('');
+      toast.success('Greybox removed');
+    }
   });
 
   const startBlank = () => run('blank', () => persist(blankGreybox()));
@@ -156,13 +186,18 @@ export default function GreyboxPanel({ record, media, readOnly = false, onSaved,
           <h2 className="text-base font-semibold text-white">Greybox layout</h2>
           <p className="text-xs text-gray-400">A coarse 3D layout of this place. Save camera angles as shots and capture them as reference images for shot generation.</p>
         </div>
-        {counts && <span className="text-xs text-gray-400">{counts}</span>}
+        <div className="flex flex-wrap items-center gap-3">
+          {counts && <span className="text-xs text-gray-400">{counts}</span>}
+          {saved && !locked && (confirmRemove
+            ? <ConfirmButtonPair prompt="Remove the greybox?" confirmText="Remove" onConfirm={removeGreybox} onCancel={() => setConfirmRemove(false)} busy={busy === 'remove'} busyText="Removing…" />
+            : <button type="button" className="text-xs text-gray-400 hover:text-white underline min-h-[32px]" onClick={() => setConfirmRemove(true)} disabled={blocked}>Remove greybox</button>)}
+        </div>
       </div>
 
       {!scene && (
         <div className="rounded-lg border border-dashed border-port-border p-4 text-sm text-gray-300 space-y-3">
           <p>No greybox yet. Build one by hand from a blank room, or describe it below and let a model draft it.</p>
-          <button type="button" className={actionButton} onClick={startBlank} disabled={locked || !!busy}>
+          <button type="button" className={actionButton} onClick={startBlank} disabled={locked || blocked}>
             {busy === 'blank' ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Plus size={14} aria-hidden="true" />} Start from a blank room
           </button>
         </div>
@@ -175,10 +210,10 @@ export default function GreyboxPanel({ record, media, readOnly = false, onSaved,
           </p>
           <SentPromptPanel prompt={instruction} sentPrompt={draft.sentPrompt} additions={draft.promptAdditions} />
           <div className="flex flex-wrap gap-2">
-            <button type="button" className={actionButton} onClick={applyDraft} disabled={locked || !!busy}>
+            <button type="button" className={actionButton} onClick={applyDraft} disabled={locked || blocked}>
               {busy === 'apply' ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Check size={14} aria-hidden="true" />} Apply draft
             </button>
-            <button type="button" className={actionButton} onClick={() => setDraft(null)} disabled={!!busy}>
+            <button type="button" className={actionButton} onClick={() => setDraft(null)} disabled={blocked}>
               <X size={14} aria-hidden="true" /> Discard
             </button>
           </div>
@@ -237,18 +272,18 @@ export default function GreyboxPanel({ record, media, readOnly = false, onSaved,
                 <div className="flex gap-2">
                   <input id="greybox-new-shot" value={newShotName} onChange={(e) => setNewShotName(e.target.value)} maxLength={120} placeholder="e.g. DJ booth, low angle"
                     className="min-w-0 flex-1 min-h-[40px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white" />
-                  <button type="button" className={actionButton} onClick={saveNewShot} disabled={!!busy}>
+                  <button type="button" className={actionButton} onClick={saveNewShot} disabled={blocked}>
                     {busy === 'shot' ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Plus size={14} aria-hidden="true" />} Save view
                   </button>
                 </div>
                 {shot && (
                   <div className="flex flex-wrap gap-2">
-                    <button type="button" className={actionButton} onClick={updateShotView} disabled={!!busy}>Update “{shot.label}” to this view</button>
-                    <button type="button" className={actionButton} onClick={captureShot} disabled={!!busy}>
+                    <button type="button" className={actionButton} onClick={updateShotView} disabled={blocked}>Update “{shot.label}” to this view</button>
+                    <button type="button" className={actionButton} onClick={captureShot} disabled={blocked}>
                       {busy === 'capture' ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Camera size={14} aria-hidden="true" />}
                       {selectedCapture ? 'Replace reference image' : 'Capture reference image'}
                     </button>
-                    <button type="button" className={actionButton} onClick={removeShot} disabled={!!busy} aria-label={`Delete shot ${shot.label}`}>
+                    <button type="button" className={actionButton} onClick={removeShot} disabled={blocked} aria-label={`Delete shot ${shot.label}`}>
                       <Trash2 size={14} aria-hidden="true" />
                     </button>
                   </div>
@@ -292,7 +327,8 @@ export default function GreyboxPanel({ record, media, readOnly = false, onSaved,
               Start over instead of editing the current layout
             </label>
           )}
-          <button type="button" className={actionButton} onClick={generate} disabled={!!busy || !instruction.trim()}>
+          {preview && <SentPromptPanel prompt={instruction} sentPrompt={preview.sentPrompt} additions={preview.promptAdditions} />}
+          <button type="button" className={actionButton} onClick={generate} disabled={blocked || !instruction.trim()}>
             {busy === 'draft' ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Sparkles size={14} aria-hidden="true" />}
             {busy === 'draft' ? 'Drafting…' : saved && !fromScratch ? 'Draft the edit' : 'Draft a greybox'}
           </button>
