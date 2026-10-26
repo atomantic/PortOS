@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Hoisted mock state so the factory closures below can reach it.
 const h = vi.hoisted(() => ({
+  memoryThrows: false,
+  platform: null,
   providers: [],
   providersThrows: false,
   cuda: { status: 'available' },
@@ -9,6 +11,14 @@ const h = vi.hoisted(() => ({
   ollamaUnload: vi.fn(),
   lmUnload: vi.fn(),
 }));
+
+vi.mock('os', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, platform: () => h.platform || actual.platform(), freemem: () => {
+    if (h.memoryThrows) throw new Error('memory probe unavailable');
+    return actual.freemem();
+  } };
+});
 
 vi.mock('./ollamaManager.js', () => ({
   getLoadedModels: vi.fn(async () => [{ name: 'llama3' }]),
@@ -48,6 +58,8 @@ const serving = { reachable: true, models: ['qwen3.8-27b'], error: null };
 const notServing = { reachable: false, models: null, error: 'ECONNREFUSED' };
 
 beforeEach(() => {
+  h.memoryThrows = false;
+  h.platform = null;
   h.providers = [];
   h.providersThrows = false;
   h.cuda = { status: 'available' };
@@ -216,6 +228,14 @@ describe('gpuBlockersMessage', () => {
 });
 
 describe('prepareLocalMemory', () => {
+  it('preserves an unavailable memory probe as unknown rather than measured zero', async () => {
+    h.platform = 'linux';
+    h.memoryThrows = true;
+    const report = await prepareLocalMemory();
+    expect(report.availableGb).toBeNull();
+    expect(report.budgetGb).toBeNull();
+  });
+
   it('reports no blockers and still unloads on a clean host', async () => {
     const report = await prepareLocalMemory();
     expect(report.blockers).toEqual([]);

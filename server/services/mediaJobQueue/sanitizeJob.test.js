@@ -2,6 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { sanitizeJob } from './sanitizeJob.js';
 
 describe('sanitizeJob', () => {
+  it('projects bounded video execution evidence without raw subprocess data or classifying a signal as OOM', () => {
+    const receipt = { version: 1, preparedAt: '2026-10-26T00:00:00.000Z', seed: 7, batchSeeds: [7, 8],
+      parameters: { modelId: 'example-h3', width: 768, height: 768, numFrames: 141, fps: 24, steps: 9, sourceImagePath: '/private/example.png' },
+      diagnostics: { memory: { peakAllocatedBytes: 8192, raw: '/private/log' }, termination: {
+        exitCode: null, signal: 'SIGKILL', reason: 'failed', observedAt: '2026-10-26T00:01:00.000Z', stderr: 'private prompt',
+      } },
+    };
+    const safe = sanitizeJob({ kind: 'video', videoExecution: receipt }).videoExecution;
+    expect(safe).toMatchObject({ seed: 7, batchSeeds: [7, 8], diagnostics: { memory: { peakAllocatedBytes: 8192 }, termination: { signal: 'SIGKILL', reason: 'failed' } } });
+    expect(JSON.stringify(safe)).not.toMatch(/private|stderr|raw/);
+    expect(sanitizeJob({ kind: 'video', videoExecution: { ...receipt, seed: -1 } })).not.toHaveProperty('videoExecution');
+    expect(sanitizeJob({ kind: 'video' })).not.toHaveProperty('videoExecution');
+  });
+
   it('exposes requested reference filenames without leaking local paths or inferring missing history', () => {
     const params = { initImagePath: '/private/gallery/source.png', referenceImagePaths: [
       'C:\\private\\refs\\character.png', '/private/refs/character.png', null, '/private/secret.txt',

@@ -45,6 +45,7 @@ import {
   SSE_CLEANUP_DELAY_MS,
 } from '../../lib/sseUtils.js';
 import { videoGenEvents } from '../videoGen/events.js';
+import { setVideoExecutionRecorder } from '../videoGen/executionRecorder.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { trainingEvents } from '../loraTraining/events.js';
 import { audioGenEvents } from '../audioGen/events.js';
@@ -64,6 +65,7 @@ import {
   decideOwnershipRelease, OWNERSHIP_RELEASE,
 } from './recoverySettlement.js';
 import { routedJobParams } from '../federatedMedia/routedJobParams.js';
+import { videoExecutionSchema, mergeVideoExecutionDiagnostics } from './videoExecution.js';
 import {
   MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError,
 } from './admission.js';
@@ -444,6 +446,43 @@ export async function updateJobResult(jobId, patch) {
   return true;
 }
 
+// Await this receipt before spawning a local video child. A rejected snapshot
+// must leave the generator unstarted, rather than lose its random seed on exit.
+// Cancellation may settle while metadata resolves; retain that late receipt
+// without changing the terminal state or making the job dispatchable again.
+export async function recordVideoExecution(jobId, meta) {
+  const job = findJob(jobId);
+  if (!job || job.kind !== 'video' || isRemoteMediaJob(job) || !['running', 'failed', 'canceled'].includes(job.status)) return false;
+  const receipt = videoExecutionSchema.parse({
+    version: 1,
+    preparedAt: job.videoExecution?.preparedAt || new Date().toISOString(),
+    seed: meta.seed,
+    ...(meta.batchSeeds ? { batchSeeds: meta.batchSeeds } : {}),
+    parameters: meta,
+  });
+  if (job.videoExecution && job.videoExecution.seed !== receipt.seed) {
+    throw new Error('Video execution receipt already belongs to a different seed');
+  }
+  job.videoExecution = { ...receipt, ...(job.videoExecution?.diagnostics ? { diagnostics: job.videoExecution.diagnostics } : {}) };
+  job.params = { ...job.params, seed: receipt.seed };
+  await persist();
+  return true;
+}
+
+// Call once at admission and once on termination, after accumulating numeric
+// maxima in memory; never persist a snapshot for every subprocess output line.
+export async function recordVideoExecutionDiagnostics(jobId, diagnostics) {
+  const job = findJob(jobId);
+  if (!job || job.kind !== 'video' || isRemoteMediaJob(job) || !job.videoExecution) return false;
+  job.videoExecution = mergeVideoExecutionDiagnostics(job.videoExecution, diagnostics);
+  await persist();
+  return true;
+}
+
+const installVideoExecutionRecorder = () => setVideoExecutionRecorder({
+  recordExecution: recordVideoExecution, recordDiagnostics: recordVideoExecutionDiagnostics,
+});
+
 export function getRunningJob() {
   return running;
 }
@@ -774,9 +813,10 @@ function captureQueueSnapshot() {
   const canWriteOutcome = (job) => completionAdmitted || job.durabilityPending?.status !== 'completed';
   const hasDeferredCompletion = [...pendingTransitions.keys()].some((job) => !canWriteOutcome(job));
   // Strip non-serializable bits.
-  const serializable = live.map((job) => (canWriteOutcome(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs, durabilityPending, imported }) =>
+  const serializable = live.map((job) => (canWriteOutcome(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs, durabilityPending, imported, videoExecution }) =>
     ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs,
       ...(imported === true ? { imported } : {}),
+      ...(videoExecution ? { videoExecution } : {}),
       ...(status !== 'completed' && durabilityPending?.status === 'completed' ? { durabilityPending } : {}) }),
   );
   const transitions = [...pendingTransitions].filter(([job]) => canWriteOutcome(job));
@@ -849,6 +889,7 @@ async function announceTerminalTransition(job, onDurable = () => {}) {
 }
 
 export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}) {
+  installVideoExecutionRecorder();
   if (initPromise) return initPromise;
   completionRecoveryDeferred = deferCompletionRecovery;
   initPromise = (async () => {
@@ -2048,6 +2089,7 @@ async function assertMusicVideoJobPolicy(kind, params) {
 }
 
 export async function enqueueJob({ kind, params, owner = null }) {
+  installVideoExecutionRecorder();
   if (kind === 'training') refuseRetiredTraining();
   await assertMusicVideoJobPolicy(kind, params);
   if (params?.musicVideo?.sceneId) {
