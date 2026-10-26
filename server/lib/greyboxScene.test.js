@@ -32,6 +32,15 @@ describe('greyboxSceneSchema', () => {
     expect(messages).toMatch(/sits on its target/);
   });
 
+  it('keeps a shot id short enough for its capture role', () => {
+    const ok = rink();
+    ok.shots[0].id = `s${'a'.repeat(50)}`;
+    expect(greyboxSceneSchema.safeParse(ok).success).toBe(true);
+    const tooLong = rink();
+    tooLong.shots[0].id = `s${'a'.repeat(51)}`;
+    expect(greyboxSceneSchema.safeParse(tooLong).success).toBe(false);
+  });
+
   it('requires parts for a spec source but not for a glb source', () => {
     expect(greyboxSceneSchema.safeParse({ source: 'spec' }).success).toBe(false);
     expect(greyboxSceneSchema.safeParse({ source: 'glb', shots: [] }).success).toBe(true);

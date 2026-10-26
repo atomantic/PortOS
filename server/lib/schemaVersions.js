@@ -85,7 +85,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v14 = canon entries gained optional `forms[]` (alternate ages, eras and
   // looks/styles beside the canonical present-story form). A <=v13 peer would
   // sanitize them away and LWW the loss back.
-  universes: 14,
+  // v15 = canon places may carry a `greybox` layout (the catalog payload is
+  // mirrored into the embedded entry). A <=v14 peer's `sanitizePlace` would strip
+  // it on an unrelated Universe edit and LWW the loss back. The catalog gate stays
+  // put: catalog peer-receive stores the payload verbatim.
+  universes: 15,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode

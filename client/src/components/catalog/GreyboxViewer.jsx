@@ -78,8 +78,11 @@ function ViewApi({ apiRef, layout, shotView, focalLengthMm, aspect, helpersRef }
       appliedViewId.current = null;
       return;
     }
-    if (!controls || appliedViewId.current === shotView.id) return;
-    appliedViewId.current = shotView.id;
+    // Keyed on the camera itself, not just the id: a draft that re-frames the
+    // selected shot must move the view, while an ordinary save leaves it where it is.
+    const viewKey = `${shotView.id}:${shotView.position}:${shotView.target}`;
+    if (!controls || appliedViewId.current === viewKey) return;
+    appliedViewId.current = viewKey;
     camera.position.set(...shotView.position);
     controls.target.set(...shotView.target);
     controls.update();
@@ -126,7 +129,7 @@ function ViewApi({ apiRef, layout, shotView, focalLengthMm, aspect, helpersRef }
 /**
  * Orbit viewer for a place's greybox. The frame has the selected shot's aspect
  * so what you see is what a capture saves. `shotView` (`{ id, position, target }`)
- * moves the camera when its id changes. `ref` exposes `getView()` and
+ * moves the camera when its id or framing changes. `ref` exposes `getView()` and
  * `capture()` (PNG data URL).
  */
 const GreyboxViewer = forwardRef(function GreyboxViewer({ scene, aspect = '16:9', focalLengthMm = 35, shotView = null }, ref) {

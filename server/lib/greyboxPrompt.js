@@ -33,7 +33,7 @@ export function greyboxContractInstructions() {
     '- landmarks: {"id","label","position":[x,y,z],"note"?}: named things worth pointing at in a shot description (DJ booth, north rail, exit door).',
     '- anchors: {"id","label","kind":"figure"|"prop","position":[x,y,z],"facingDegrees":n,"heightMeters":n}: floor marks for people and props, so each stays in the same spot from shot to shot. position.y is 0 for a figure on the floor.',
     `- shots: {"id","label","position":[x,y,z],"target":[x,y,z],"focalLengthMm":n,"aspect":${GREYBOX_ASPECTS.map((a) => `"${a}"`).join('|')},"figures":[{"anchorId","pose"?}],"note"?}: saved cameras. The camera looks from position at target. Include a wide establishing shot and a few angles that show the landmarks. A shot may only name anchors you defined.`,
-    'Every id is unique within its list, starts with a letter, and uses only letters, digits, "_" and "-". Every zone a part names and every anchor a shot names must exist.',
+    'Every id is unique within its list, starts with a letter, and uses only letters, digits, "_" and "-" (shot ids at most 51 characters). Every zone a part names and every anchor a shot names must exist.',
     `Limits: at most ${GREYBOX_LIMITS.PARTS} parts, ${GREYBOX_LIMITS.ZONES} zones, ${GREYBOX_LIMITS.LANDMARKS} landmarks, ${GREYBOX_LIMITS.ANCHORS} anchors, ${GREYBOX_LIMITS.SHOTS} shots.`,
     'Stay faithful to the place description and the user\'s request. Do not invent features they contradict. When editing, return the COMPLETE updated scene (not a patch), keeping the ids of everything you did not change.',
   ].join('\n');
