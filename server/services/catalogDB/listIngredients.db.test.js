@@ -195,6 +195,19 @@ describe.skipIf(!ready)('listIngredients identity read views (#12989)', () => {
     expect(byId.get(id('op-survivor'))).toEqual({ id: id('op-survivor'), thumbnailKey: `${P}-op-portrait`, usage: { universe: 1, series: 1 } });
   });
 
+  it('uses a sheet-only character cover on lists and hydrated cards, preferring ordinary references', async () => {
+    await insertIngredient('sheet-only', 0);
+    await insertMedia('sheet-only', 'sheet-only-image', 'reference', { role: 'sheet:standard' });
+    const cover = async () => {
+      const list = await listIngredients({ tag: TAG, limit: 200 });
+      const cards = await getIngredientCards([id('sheet-only')]);
+      return [list.items.find(row => row.id === id('sheet-only')).thumbnailKey, cards[0].thumbnailKey];
+    };
+    expect(await cover()).toEqual([`${P}-sheet-only-image`, `${P}-sheet-only-image`]);
+    await insertMedia('sheet-only', 'ordinary-image', 'reference', { secondsAgo: 30 });
+    expect(await cover()).toEqual([`${P}-ordinary-image`, `${P}-ordinary-image`]);
+  });
+
   it('separates explicit ownership from usage without assigning legacy refs', async () => {
     await insertIngredient('owned', 0);
     try {

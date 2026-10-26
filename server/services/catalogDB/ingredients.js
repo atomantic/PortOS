@@ -400,8 +400,8 @@ const INGREDIENT_LIGHT_COLS = 'id, type, name, payload, tags, embedding_model, o
 //    reference image. Mirrors listMediaForIngredient's `(kind='portrait') DESC,
 //    created_at DESC` ordering so the card shows the detail page's avatar.
 //    Non-image kinds are excluded so a card never points an <img> at an
-//    unrenderable key, and role-filed working images — reference sheets
-//    (`sheet:*`), looks (`look:*`), archives and plates — never become the cover.
+//    unrenderable key, looks, archives and plates are excluded. Reference sheets are a fallback
+//    when no portrait or ordinary reference exists.
 //  - ref_usage: per-kind count of the distinct records the row is linked to
 //    ({ universe: 1, series: 2 }) for the "used in" line; a homing kind counts
 //    only live targets.
@@ -429,12 +429,12 @@ async function decorateIngredientPage(ids) {
      ),
      thumbs AS (
        SELECT DISTINCT ON (m.cid) m.cid, m.media_key
-         FROM (SELECT catalog_canonical_ingredient_id(ingredient_id) AS cid, media_key, kind, created_at
+         FROM (SELECT catalog_canonical_ingredient_id(ingredient_id) AS cid, media_key, kind, role, created_at
                  FROM catalog_identity_read_media
                 WHERE deleted = false AND kind IN ('portrait', 'reference')
-                  AND (role IS NULL OR NOT (role LIKE 'sheet:%' OR role LIKE 'look:%' OR role LIKE 'archive:%' OR role = 'plate'))) m
+                  AND (role IS NULL OR NOT (role LIKE 'look:%' OR role LIKE 'archive:%' OR role = 'plate'))) m
         WHERE ${inSet('m.cid', 'SELECT id FROM page')}
-        ORDER BY m.cid, (m.kind = 'portrait') DESC, m.created_at DESC
+        ORDER BY m.cid, (m.kind = 'portrait') DESC, COALESCE(m.role LIKE 'sheet:%', false), m.created_at DESC
      )
      SELECT page.id, thumbs.media_key AS thumbnail_key, usage.ref_usage,
        CASE WHEN owners.n = 1 AND u.id IS NOT NULL THEN jsonb_build_object('id', u.id, 'name', u.name) ELSE NULL END AS owning_universe,

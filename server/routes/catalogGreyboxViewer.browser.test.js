@@ -24,17 +24,21 @@ const scene = {
 };
 
 async function openEnvironment(fixture, { warmup = false } = {}) {
-  const page = await fixture.browser.newPage({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 2 });
+  const page = await fixture.browser.newPage({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 2, reducedMotion: 'no-preference' });
   page.setDefaultTimeout(10000);
   await page.addInitScript(() => {
     // Only timing/method names from this synthetic fixture, capped per page.
     window.greyboxGpuCalls = [];
+    window.greyboxDrawCalls = 0;
+    window.greyboxCallCounts = {};
     for (const type of [window.WebGLRenderingContext, window.WebGL2RenderingContext]) {
-      for (const method of ['compileShader', 'linkProgram', 'getProgramParameter', 'getShaderParameter', 'drawElements', 'drawArrays']) {
+      for (const method of ['compileShader', 'linkProgram', 'getProgramParameter', 'getShaderParameter', 'getParameter', 'getExtension', 'drawElements', 'drawArrays', 'readPixels', 'finish', 'flush', 'clientWaitSync', 'texImage2D', 'bufferData']) {
         const original = type?.prototype[method];
         if (!original) continue;
         type.prototype[method] = function (...args) {
           const start = performance.now();
+          window.greyboxCallCounts[method] = (window.greyboxCallCounts[method] || 0) + 1;
+          if (method === 'drawElements' || method === 'drawArrays') window.greyboxDrawCalls++;
           try { return original.apply(this, args); }
           finally {
             const elapsed = Math.round(performance.now() - start);
@@ -44,7 +48,21 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
       }
     }
   });
-  const state = { captures: [], errors: [], viewerRequests: 0, phase: 'navigation' };
+  const session = await page.context().newCDPSession(page);
+  await session.send('Performance.enable');
+  const metrics = async () => {
+    const { metrics } = await session.send('Performance.getMetrics');
+    return Object.fromEntries(metrics.filter(({ name }) => ['Timestamp', 'TaskDuration', 'ScriptDuration', 'LayoutDuration', 'RecalcStyleDuration', 'JSHeapUsedSize'].includes(name)).map(({ name, value }) => [name, value]));
+  };
+  const initialMetrics = await metrics();
+  const state = { captures: [], errors: [], viewerRequests: 0, phase: 'navigation', progress: [] };
+  const started = Date.now();
+  const mark = phase => { if (state.progress.length < 32) state.progress.push({ phase, elapsedMs: Date.now() - started }); };
+  page.on('response', response => {
+    const path = new URL(response.url()).pathname;
+    if (path === '/api/catalog/ingredients/example-place/details') mark(`details:${response.status()}`);
+    if (path.endsWith('/shots/overhead/capture')) mark(`capture-response:${response.status()}`);
+  });
   const ingredient = { id: 'example-place', type: 'place', name: 'Example environment', tags: [], payload: { description: 'Synthetic browser fixture', greybox: structuredClone(scene) } };
   const media = [];
   page.on('pageerror', error => state.errors.push(error.message));
@@ -59,10 +77,12 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     if (url.pathname === '/api/providers') return route.fulfill({ json: [] });
     if (url.pathname === '/api/catalog/ingredients/example-place/details') return route.fulfill({ json: { ingredient, media, relations: { outbound: [], inbound: [] }, refs: [], sources: [], missingMedia: [] } });
     if (url.pathname === '/api/catalog/ingredients/example-place/greybox' && route.request().method() === 'PUT') {
+      mark('save-request');
       ingredient.payload.greybox = route.request().postDataJSON().greybox;
       return route.fulfill({ json: ingredient });
     }
     if (url.pathname === '/api/catalog/ingredients/example-place/greybox/shots/overhead/capture') {
+      mark('capture-request');
       state.captures.push(route.request().postDataJSON());
       const row = { id: 'capture', kind: 'reference', role: 'greybox-shot:overhead', mediaKey: 'example-capture.png' };
       media.splice(0, media.length, row);
@@ -82,26 +102,25 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     if (warmup) {
       state.phase = 'lazy chunk compilation';
       await page.evaluate("import('/src/components/catalog/GreyboxViewer.jsx').then(() => true)");
+      await session.detach();
       return { page, state, ingredient };
     }
     expect(state.viewerRequests).toBe(0);
+    expect(await page.evaluate(() => getComputedStyle(document.body, '::after').animationPlayState)).toBe('running');
     // Keep bounded, synthetic-only evidence when Chromium's actionability
-    // check stalls. Timer samples distinguish moving layout from a renderer
-    // that stopped producing animation frames; neither retries the action.
+    // check stalls. Observe actual draw calls without scheduling a continuous
+    // animation-frame probe in a demand-rendered scene.
     await page.evaluate(() => {
-      const evidence = { frames: 0, samples: [], started: performance.now() };
-      let frame;
-      const tick = () => { evidence.frames++; frame = requestAnimationFrame(tick); };
-      frame = requestAnimationFrame(tick);
+      const evidence = { samples: [], started: performance.now() };
       const timer = setInterval(() => {
         const button = [...document.querySelectorAll('button')].find(el => el.textContent.includes('Overhead'));
-        evidence.samples.push({ elapsed: Math.round(performance.now() - evidence.started), frames: evidence.frames,
+        evidence.samples.push({ elapsed: Math.round(performance.now() - evidence.started), drawCalls: window.greyboxDrawCalls,
           rect: button?.getBoundingClientRect().toJSON(), disabled: button?.disabled,
           visibility: document.visibilityState, fonts: document.fonts.status });
-        if (evidence.samples.length === 44) { clearInterval(timer); cancelAnimationFrame(frame); }
+        if (evidence.samples.length === 44) clearInterval(timer);
       }, 250);
       window.greyboxReadinessEvidence = () => {
-        clearInterval(timer); cancelAnimationFrame(frame);
+        clearInterval(timer);
         delete window.greyboxReadinessEvidence;
         return evidence;
       };
@@ -109,25 +128,37 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     state.phase = 'viewer attachment';
     await page.getByRole('tab', { name: 'Greybox', exact: true }).click();
     await page.locator('[data-testid="greybox-viewer"] canvas').waitFor({ state: 'attached' });
+    expect(await page.evaluate(() => ({
+      reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+      base: getComputedStyle(document.body, '::before').animationPlayState,
+      glow: getComputedStyle(document.body, '::after').animationPlayState,
+    }))).toEqual({ reducedMotion: false, base: 'running', glow: 'paused' });
     state.phase = 'shot selection';
     await page.getByRole('button', { name: /Overhead/, pressed: false }).click();
     await page.waitForFunction(() => document.querySelector('#greybox-lens')?.value === '28');
     // Demand rendering and Html placement finish after React commits.
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     expect(await page.locator('[data-testid="greybox-viewer"] canvas').isVisible()).toBe(true);
-    await page.evaluate(() => window.greyboxReadinessEvidence?.());
+    const readiness = await page.evaluate(() => ({ ...window.greyboxReadinessEvidence?.(), callCounts: window.greyboxCallCounts, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, ambientAnimations: ['::before', '::after'].map(pseudo => getComputedStyle(document.body, pseudo).animationName) }));
+    console.info(`Greybox passive startup samples: ${JSON.stringify(readiness)}`);
+    const finalMetrics = await metrics();
+    console.info(`Greybox startup durations: ${JSON.stringify(Object.fromEntries(Object.entries(finalMetrics).map(([name, value]) => [name, value - initialMetrics[name]])))}`);
+    await session.detach();
     const slowGpuCalls = await page.evaluate(() => window.greyboxGpuCalls);
     if (slowGpuCalls.length) console.info(`Greybox startup GPU calls: ${JSON.stringify(slowGpuCalls)}`);
     return { page, state, ingredient };
   } catch (error) {
-    const readiness = await page.evaluate(() => ({ ...window.greyboxReadinessEvidence?.(), gpuCalls: window.greyboxGpuCalls }));
+    const finalMetrics = await metrics();
+    const durations = Object.fromEntries(Object.entries(finalMetrics).map(([name, value]) => [name, value - initialMetrics[name]]));
+    await session.detach();
+    const readiness = await page.evaluate(() => ({ ...window.greyboxReadinessEvidence?.(), gpuCalls: window.greyboxGpuCalls, callCounts: window.greyboxCallCounts, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, ambientAnimations: ['::before', '::after'].map(pseudo => getComputedStyle(document.body, pseudo).animationName) }));
     const viewers = await page.getByTestId('greybox-viewer').evaluateAll(elements => elements.map(el => ({
       rect: el.getBoundingClientRect().toJSON(), canvases: [...el.querySelectorAll('canvas')].map(c => ({
         rect: c.getBoundingClientRect().toJSON(), width: c.width, height: c.height, visibility: getComputedStyle(c).visibility, display: getComputedStyle(c).display,
       })),
     })));
     await page.close();
-    throw new Error(`${state.phase}: ${error.message}; viewers: ${JSON.stringify(viewers)}; readiness: ${JSON.stringify(readiness)}; browser errors: ${state.errors.join('; ')}`, { cause: error });
+    throw new Error(`${state.phase}: ${error.message}; viewers: ${JSON.stringify(viewers)}; durations: ${JSON.stringify(durations)}; readiness: ${JSON.stringify(readiness)}; progress: ${JSON.stringify(state.progress)}; browser errors: ${state.errors.join('; ')}`, { cause: error });
   }
 }
 
@@ -239,6 +270,7 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
         await page.waitForFunction(ratio => { const c = document.querySelector('[data-testid="greybox-viewer"] canvas'); return Math.abs(c.width / c.height - ratio) < 0.01; }, width / height);
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         const before = await canvasState(page);
+        state.phase = `capture ${aspect}`;
         await Promise.all([
           page.waitForResponse(response => response.url().endsWith('/details?view=media')),
           page.getByRole('button', { name: /(?:Capture|Replace) reference image/ }).click(),
@@ -254,7 +286,13 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
         expect(afterSize).toEqual(beforeSize);
         expect(ingredient.payload.greybox.shots[0].aspect).toBe(aspect);
       }
+      await page.getByRole('tab', { name: 'Plates', exact: true }).click();
+      await page.getByTestId('greybox-viewer').waitFor({ state: 'detached' });
+      expect(await page.evaluate(() => getComputedStyle(document.body, '::after').animationPlayState)).toBe('running');
       expect(state.errors).toEqual([]);
+    } catch (error) {
+      const gpuCalls = await page.evaluate(() => window.greyboxGpuCalls);
+      throw new Error(`${state.phase}: ${error.message}; captures: ${state.captures.length}; progress: ${JSON.stringify(state.progress)}; gpu calls: ${JSON.stringify(gpuCalls)}; browser errors: ${state.errors.join('; ')}`, { cause: error });
     } finally { await page.close(); }
   }, 60000);
 
