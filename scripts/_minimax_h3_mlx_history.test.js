@@ -84,7 +84,7 @@ print('OK')`)).toBe('OK');
 
   it.each(['failure', 'cancel'])('preserves source, completed outputs and sibling WAVs on mux %s', (mode) => {
     expect(run(`
-import contextlib, io, os, signal, tempfile
+import contextlib, io, os, signal, sys, tempfile
 from pathlib import Path
 from types import SimpleNamespace as NS
 import generate_minimax_h3 as runner
