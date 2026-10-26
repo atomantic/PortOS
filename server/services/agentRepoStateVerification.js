@@ -657,6 +657,23 @@ async function verifyRunBranches(input) {
     // only the delivery evidence remains to settle.
     const absent = !original?.path && !trees.some(tree => tree.branch?.replace(/^refs\/heads\//, '') === branch)
       && await readLocalBranchPresence(sourceWorkspace, branch).catch(() => null) === false;
+    // A selection explicitly handed back before another claim was captured
+    // owns no delivery obligation when no local artifact ever remains. Keep
+    // captured/seeded checkouts and current bindings on the full proof path;
+    // release alone must not erase evidence of actual work.
+    const releasedSelection = absent && meta.claimReleasedBranches?.includes(branch)
+      && !meta.claimBranches?.includes(branch) && meta.checkoutCapture?.status === 'captured'
+      && !meta.checkoutSeeds?.some(row => row.branch === branch)
+      && meta.completedCheckouts?.some(row => row.branch !== branch
+        && completedCheckoutReceiptValid(input.agentState, row)
+        && typeof row.repoPath === 'string' && resolve(row.repoPath) === resolve(sourceWorkspace)
+        && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(row.head || '')
+        && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer));
+    if (releasedSelection) {
+      await branchLedger(input.agentId, { branch }).record('verified', 'released-selection-no-local-artifacts');
+      results.push({ branch, verified: true, issues: [], skipReason: null });
+      continue;
+    }
     if (!original?.path && !absent) {
       results.push(await holdBranch(branch, 'claim-checkout-identity-unverified'));
       continue;
