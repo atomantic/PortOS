@@ -268,8 +268,11 @@ async function commitAdmitted(dir, message, { paths = [] } = {}) {
 /**
  * Check if directory is a git repo
  */
-export async function isRepo(dir) {
+export async function isRepo(dir, { unknownOnError = false } = {}) {
   const result = await execGit(['rev-parse', '--is-inside-work-tree'], dir, { ignoreExitCode: true }).catch(() => null);
+  // Capability displays must distinguish an unavailable probe from a confirmed
+  // non-repository. Execution guards retain the default fail-closed boolean.
+  if (!result && unknownOnError) return undefined;
   return result?.stdout.trim() === 'true';
 }
 

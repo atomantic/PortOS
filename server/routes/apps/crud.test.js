@@ -8,7 +8,7 @@ const { gitProbes, gitProbeDirs } = vi.hoisted(() => ({ gitProbes: [], gitProbeD
 vi.mock('../../lib/execGit.js', async (importOriginal) => {
   const actual = await importOriginal();
   const bounded = value => gitProbeDirs.reduce((text, directory) => text.replaceAll(directory, '<fixture>'), String(value ?? '')).slice(0, 1000);
-  return { ...actual, execGit: (...args) => {
+  return { ...actual, execGit: vi.fn((...args) => {
     const operation = actual.execGit(...args);
     if (args[0]?.join(' ') === 'rev-parse --is-inside-work-tree') {
       // Observe the existing operation without adding a probe, awaiting it, or
@@ -20,8 +20,10 @@ vi.mock('../../lib/execGit.js', async (importOriginal) => {
       });
     }
     return operation;
-  } };
+  }) };
 });
+import { execGit } from '../../lib/execGit.js';
+import { isRepo } from '../../services/git.js';
 import express from 'express';
 import { execFileSync } from 'child_process';
 import { mkdtempSync, rmSync } from 'fs';
@@ -188,6 +190,28 @@ describe('Apps CRUD Routes', () => {
         expect(flags).toEqual({ plain: false, repo: true, gone: undefined });
       } finally {
         rmSync(plainDir, { recursive: true, force: true });
+        rmSync(gitDir, { recursive: true, force: true });
+      }
+    });
+
+    it('leaves Git capability unknown when the probe is unavailable without relaxing worktree guards', async () => {
+      const gitDir = mkdtempSync(join(tmpdir(), 'portos-unavailable-git-'));
+      try {
+        execFileSync('git', ['init', '-q'], { cwd: gitDir });
+        appsService.getAllApps.mockResolvedValue([{ id: 'repo', name: 'Repo', repoPath: gitDir, pm2ProcessNames: [], isGitRepo: false }]);
+        pm2Service.listProcessesStrict.mockResolvedValue([]);
+        streamingDetect.parseEcosystemFromPath.mockResolvedValue([]);
+        const unavailable = () => Object.assign(new Error('Windows Git containment unavailable'), { code: 'GIT_CONTAINMENT_UNAVAILABLE' });
+        execGit.mockRejectedValueOnce(unavailable());
+
+        const response = await request(app).get('/api/apps');
+
+        expect(response.status).toBe(200);
+        expect(response.body[0]).toMatchObject({ id: 'repo' });
+        expect(response.body[0]).not.toHaveProperty('isGitRepo');
+        execGit.mockRejectedValueOnce(unavailable());
+        expect(await isRepo(gitDir)).toBe(false);
+      } finally {
         rmSync(gitDir, { recursive: true, force: true });
       }
     });
