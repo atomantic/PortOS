@@ -1,6 +1,7 @@
 import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { WORKSPACE_TEST_CACHE_ROOTS } from '../lib/workspaceTestCacheRoots.js';
+import { compactModuleCacheProof, VITEST_CACHE_TAG, VITEST_MODULE_CACHE_ROOTS, moduleCacheName, moduleCacheMetadata } from '../lib/testCacheRetirementProof.js';
 import { isAgentScratchPath, matchesScratchRoot } from '../lib/agentScratchPaths.js';
 import { WORKTREE_NODE_MODULES_MARKER } from '../lib/worktreeNodeModules.js';
 import { createNpmRetirementVerifier } from '../lib/npmRetirementPayload.js';
@@ -103,7 +104,7 @@ function checkArchiveBudget(content, administration, allowDisposableCache = fals
 // encoded bytes as it is collected, including zero-byte files and links.
 const ARCHIVE_WORK_MS = 10 * 60 * 1000;
 function archiveWork(signal, started = performance.now()) {
-  const usage = { metadata: 0, directory: 0 };
+  const usage = { metadata: 0, directory: 0, cacheRoots: 0, cacheEntries: 0, cacheBytes: 0, cacheReadBytes: 0, cacheReadHashMs: 0, cacheProofPeakBytes: 0 };
   const check = () => {
     if (signal?.aborted) throw new Error('retirement-archive-cancelled');
     const elapsed = Math.ceil(performance.now() - started);
@@ -111,7 +112,14 @@ function archiveWork(signal, started = performance.now()) {
       archiveLimit: { scope: 'verification', kind: 'time', limitMs: ARCHIVE_WORK_MS, observedMs: elapsed },
     });
   };
-  return { check, renew: () => archiveWork(signal), metadataScope: () => archiveWork(signal, started), add(value, scope = 'metadata') {
+  return { check, renew: () => archiveWork(signal), metadataScope: () => archiveWork(signal, started),
+    cacheAttempt: () => { usage.cacheRoots++; },
+    evidence: () => usage.cacheRoots ? { archiveUsage: { ...usage, cacheReadHashMs: Math.ceil(usage.cacheReadHashMs) } } : {},
+    cacheProofPeak: bytes => { usage.cacheProofPeakBytes = Math.max(usage.cacheProofPeakBytes, bytes); },
+    cacheRead: bytes => { usage.cacheReadBytes += bytes; },
+    cacheHashTime: ms => { usage.cacheReadHashMs += ms; },
+    cacheEntry: bytes => { usage.cacheEntries++; usage.cacheBytes += bytes; },
+    add(value, scope = 'metadata') {
     check();
     usage[scope] += Buffer.byteLength(JSON.stringify(value));
     if (usage[scope] > MAX_MANIFEST_BYTES) throw Object.assign(new Error('archive-manifest-budget-exceeded'), {
@@ -836,7 +844,8 @@ async function preservePublishedSourceReview(repoPath, tree, forge, content, adm
 
 async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { tree, forge, policy }, opts, captureContent) {
   const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
-  return archiveSnapshots(tree, repoPath, null, archiveWork(opts.signal), true)
+  const work = archiveWork(opts.signal);
+  return archiveSnapshots(tree, repoPath, null, work, true, !kind)
     .then(async ([content, administration]) => {
       const preservedSource = kind === 'preserved-supersession'
         ? await preservePublishedSourceReview(repoPath, tree, forge, content, administration, opts.signal) : null;
@@ -851,13 +860,13 @@ async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { 
       const { captureRunValidationArtifacts } = await import('./retirementRunValidation.js');
       const validationArtifacts = !kind && forge.prHead === tree.head
         ? await captureRunValidationArtifacts(repoPath, release, content, opts) : null;
-      const review = await buildCheckoutRetirementReview({ repoPath, release, prUrl, kind, preservedSource, validationReceipt, validationArtifacts,
+      const review = await buildCheckoutRetirementReview({ repoPath, release, prUrl, kind, preservedSource, validationReceipt, validationArtifacts, disposableCacheProofs: content.cacheProofs,
         contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge });
       captureContent?.(content);
       return review;
     })
-    .then(review => ({ ok: true, review }), error => archiveLimitRefusal(error) || ({ ok: false,
-      reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-local-evidence-unavailable' }));
+    .then(review => ({ ok: true, review, ...work.evidence() }), error => ({ ...(archiveLimitRefusal(error) || { ok: false,
+      reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-local-evidence-unavailable' }), ...work.evidence() }));
 }
 
 /** Keep a small validation record in the repository's persistent common Git
@@ -1074,8 +1083,6 @@ async function rawBlobId(source, size, format, work) {
  * on anything that cannot be archived faithfully, before any copy is made.
  * The fingerprint is compared again immediately before removal.
  */
-const VITEST_CACHE_TAG = 'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.';
-const VITEST_MODULE_CACHE_ROOTS = Object.values(WORKSPACE_TEST_CACHE_ROOTS).map(cache => `${cache.workspace}/${cache.cacheDir}/modules`);
 // Running Vitest through the client's declared Vite config uses its cacheDir.
 // Keep that producer root compatible without accepting arbitrary ignored roots.
 const VITEST_STATE_CACHE_ROOTS = [
@@ -1128,17 +1135,14 @@ async function disposableTestCache(path, rel, ignored, verified, work) {
   if (!ignored.has(rel)) return false;
   if (await disposableStateCache(path, rel, ignored, verified, work).catch(cacheInspectionFailure)) return true;
   const root = VITEST_MODULE_CACHE_ROOTS.find(cache => rel.startsWith(`${cache}/`)
-    && /^(?:[a-f0-9]{40}|[a-f0-9]{64}|CACHEDIR\.TAG|_metadata\.json)$/.test(rel.slice(cache.length + 1)));
+    && moduleCacheName(rel.slice(cache.length + 1)));
   if (!root || !ignored.has(`${root}/CACHEDIR.TAG`) || !ignored.has(`${root}/_metadata.json`)) return false;
   if (!verified.has(root)) verified.set(root, (async () => {
     const tag = await archiveBytes(await archiveFile(path, join(path, root, 'CACHEDIR.TAG')), work, 2048);
     const metadata = JSON.parse((await archiveBytes(await archiveFile(path, join(path, root, '_metadata.json')), work, 4096)).toString('utf8'));
-    const lockfileHash = metadata.lockfileHash;
     // Vitest's getLockfileHash writes the first eight hex characters of a
     // SHA-256 digest. Keep previously accepted long hashes compatible too.
-    return tag.toString('utf8').startsWith(VITEST_CACHE_TAG) && Object.keys(metadata).length === 1
-      && typeof lockfileHash === 'string' && [8, 40, 64].includes(lockfileHash.length)
-      && !/[^a-f0-9]/.test(lockfileHash);
+    return tag.toString('utf8').startsWith(VITEST_CACHE_TAG) && moduleCacheMetadata(metadata);
   })().catch(cacheInspectionFailure));
   if (!await verified.get(root)) return false;
   // Check every directory component; a cache-shaped symlink is not cache evidence.
@@ -1158,7 +1162,7 @@ async function listedContentEntry(path, listed, work) {
   }
 }
 
-async function snapshotContent(path, work = archiveWork(), allowDisposableCache = false) {
+async function snapshotContent(path, work = archiveWork(), allowDisposableCache = false, compactCaches = false) {
   work.check();
   // These reads are independent and each Git spawn is mostly launch latency, so
   // they run together; every destructive boundary re-reads this snapshot anyway.
@@ -1196,6 +1200,11 @@ async function snapshotContent(path, work = archiveWork(), allowDisposableCache 
   const files = [];
   const ignored = new Set(zLines(ignoredFiles));
   const verifiedCaches = new Map();
+  const cacheProofs = [];
+  if (compactCaches) for (const root of VITEST_MODULE_CACHE_ROOTS) {
+    const proof = await compactModuleCacheProof(path, root, ignored, work);
+    if (proof) cacheProofs.push(proof);
+  }
   let total = 0;
   const addFile = async (rel, info, extra = {}) => {
     if (!extra.disposableCache) {
@@ -1223,7 +1232,8 @@ async function snapshotContent(path, work = archiveWork(), allowDisposableCache 
   }
   const symlinks = [];
   const links = new Set();
-  for (const listed of zLines(others)) {
+  for (const listed of zLines(others).sort()) {
+    if (cacheProofs.some(proof => listed.startsWith(`${proof.root}/`))) continue;
     const { rel, info } = await listedContentEntry(path, listed, work);
     if (links.has(rel)) continue;
     // `ls-files --others` names a nested repository as `dir/` without its files.
@@ -1242,8 +1252,8 @@ async function snapshotContent(path, work = archiveWork(), allowDisposableCache 
     else throw new Error(`${rel} is not a regular file`);
   }
   const fingerprint = createHash('sha256').update(indexDiff).update('\0').update(worktreeDiff).update('\0')
-    .update(JSON.stringify({ files, symlinks, gitlinks })).digest('hex');
-  return { indexDiff, worktreeDiff, files, symlinks, gitlinks, fingerprint };
+    .update(JSON.stringify({ files, symlinks, gitlinks, ...(cacheProofs.length && { cacheProofs }) })).digest('hex');
+  return { indexDiff, worktreeDiff, files, symlinks, gitlinks, ...(cacheProofs.length && { cacheProofs }), fingerprint };
 }
 
 /**
@@ -1305,10 +1315,10 @@ async function missingCheckoutAdministration(repoPath, path) {
   return roots[0];
 }
 
-async function archiveSnapshots(tree, repoPath, missingRoot, work = archiveWork(), allowDisposableCache = false) {
-  work = work.metadataScope();
+async function archiveSnapshots(tree, repoPath, missingRoot, work = archiveWork(), allowDisposableCache = false, compactCaches = false) {
+  if (!allowDisposableCache) work = work.metadataScope();
   if (!missingRoot) {
-    const snapshots = await Promise.all([snapshotContent(tree.path, work, allowDisposableCache), snapshotAdministration(tree.path, null, work)]);
+    const snapshots = await Promise.all([snapshotContent(tree.path, work, allowDisposableCache, compactCaches), snapshotAdministration(tree.path, null, work)]);
     work.check();
     // Capture already charged metadata; apply the reader's layout checks too.
     for (const snapshot of snapshots) validateArchiveEntries(snapshot, work, false);
@@ -1680,7 +1690,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
 
   // Every ownership check queues behind the claim-ownership lock with a short
   // budget, so the archive runs between two critical sections (#12682).
-  const refuse = (reason, archiveLimit, nextAction) => ({ result: { ok: false, reason, ...(archiveLimit && { archiveLimit }), ...(nextAction && { nextAction }) } });
+  const refuse = (reason, archiveLimit, nextAction, archiveUsage) => ({ result: { ok: false, reason, ...(archiveLimit && { archiveLimit }), ...(nextAction && { nextAction }), ...(archiveUsage && { archiveUsage }) } });
   let validationEvidence = null;
   let retainedArtifacts = null;
   return retireWithUnlockedArchive({
@@ -1705,7 +1715,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
       if (porcelain === null) return refuse('worktree-status-unavailable');
       if (!classifyWorktreeDirt(porcelain).clean) return refuse('worktree-dirty');
       const reviewed = review ? await reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind }, opts) : null;
-      if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed', reviewed.archiveLimit, reviewed.nextAction);
+      if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed', reviewed.archiveLimit, reviewed.nextAction, reviewed.archiveUsage);
       const disposition = reviewed?.review.comparison.disposition;
       if (disposition === 'review-supersession' && !acceptedPreservedSupersession(review, reviewed?.review)
         && (!locallyMerged || review.acceptSuperseded !== true)) return refuse('retirement-supersession-not-accepted');
