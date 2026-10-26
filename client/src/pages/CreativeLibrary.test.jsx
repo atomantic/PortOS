@@ -80,6 +80,18 @@ describe('CreativeLibrary', () => {
     expect(screen.getByRole('link', { name: 'Open Example 0' })).toHaveAttribute('href', '/casting/example-0?returnTo=%2Fcasting%3Fscope%3Dexample-world');
   });
 
+  it('accepts newer overlapping page rows when the visible character IDs stay the same', async () => {
+    const items = Array.from({ length: 48 }, (_, index) => ({ id: `example-${index}`, type: 'character', name: `Example ${index}`, payload: {}, updatedAt: '2026-10-20T00:00:00Z' }));
+    listCatalogIngredients.mockResolvedValueOnce({ items }).mockResolvedValueOnce({ items: [{ ...items[0], name: 'Fresh name', thumbnailKey: 'fresh.png', owningUniverse: { name: 'Fresh universe' }, updatedAt: '2026-10-21T00:00:00Z' }] });
+    renderLibrary('casting', '/casting');
+    await screen.findByRole('link', { name: 'Open Example 0' });
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await screen.findByRole('link', { name: 'Open Fresh name' });
+    expect(screen.getByRole('img', { name: 'Fresh name' })).toHaveAttribute('src', '/data/images/fresh.png');
+    expect(screen.getByText('Universe: Fresh universe')).toBeInTheDocument();
+    expect(getCatalogIngredientCards).not.toHaveBeenCalled();
+  });
+
   it('keeps a concurrently selected cover when an older lock closure confirms, then refreshes bounded card context', async () => {
     const item = { id: 'example', type: 'character', name: 'Example', payload: { locked: false }, thumbnailKey: 'old.png' };
     listCatalogIngredients.mockResolvedValue({ items: [item] });

@@ -30,13 +30,7 @@ export default function useCatalogCards(ids, { initial = null } = {}) {
       });
     };
     refreshRef.current = refresh;
-    if (initialRef.current && retryVersion === 0) setState(previous => ({ key, error: null, missing: [],
-      cards: Object.fromEntries(initialRef.current.map(item => {
-        const latest = previous.cards[item.id];
-        return [item.id, latest && !(Date.parse(item.updatedAt) > Date.parse(latest.updatedAt)) ? latest : item];
-      })),
-    }));
-    else refresh();
+    if (!initialRef.current || retryVersion !== 0) refresh();
     const changed = event => {
       if ([event?.ingredientId, event?.sourceId, event?.survivorId].some(id => requested.includes(id) || Object.values(cardsRef.current).some(card => card.canonicalId === id))) refresh();
     };
@@ -51,6 +45,22 @@ export default function useCatalogCards(ids, { initial = null } = {}) {
       socket.off('connect', refresh);
     };
   }, [key, retryVersion]);
+  // Pagination/refresh can replace a row without changing the visible IDs.
+  // Reconcile those responses independently of subscription lifetime, while
+  // retaining newer socket reads and confirmed local mutations.
+  useEffect(() => {
+    if (!initial) return;
+    const requested = new Set(JSON.parse(key));
+    setState(previous => {
+      const cards = Object.fromEntries(initial.filter(item => requested.has(item.id)).map(item => {
+        const latest = previous.cards[item.id];
+        return [item.id, latest && !(Date.parse(item.updatedAt) > Date.parse(latest.updatedAt)) ? latest : item];
+      }));
+      if (previous.key === key && Object.keys(cards).length === Object.keys(previous.cards).length
+        && Object.entries(cards).every(([id, card]) => previous.cards[id] === card)) return previous;
+      return { key, cards, error: null, missing: [] };
+    });
+  }, [initial, key]);
   return { cards: Object.fromEntries(JSON.parse(key).filter(id => state.cards[id]).map(id => [id, state.cards[id]])), error: state.key === key ? state.error : null, missing: state.key === key ? state.missing : [],
     retry: () => setRetryVersion(previous => previous + 1),
     update: item => {
