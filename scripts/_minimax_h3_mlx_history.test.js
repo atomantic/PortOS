@@ -39,9 +39,9 @@ with tempfile.TemporaryDirectory() as tmp:
         assert 'cannot be combined' in str(exc)
     try:
         cuda.validate_args(args)
-        raise AssertionError('CUDA claimed MLX support')
+        raise AssertionError('CUDA accepted keyframes with history')
     except SystemExit as exc:
-        assert 'unavailable on this backend' in str(exc)
+        assert 'without keyframes' in str(exc)
 print('OK')`)).toBe('OK');
   });
 
