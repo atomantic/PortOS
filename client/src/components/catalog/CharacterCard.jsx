@@ -10,7 +10,7 @@ export default function CharacterCard({ ingredient, to = null, onUpdated, action
   const [locking, setLocking] = useState(false);
   const [generatedCover, setGeneratedCover] = useState(null);
   const name = ingredient.name || '(untitled)';
-  const cover = ingredientCoverUrl(ingredient) || generatedCover;
+  const cover = generatedCover || ingredientCoverUrl(ingredient);
   const href = to || (ingredient.id ? ingredientPath(ingredient) : null);
   const role = typeof ingredient.payload?.role === 'string' ? ingredient.payload.role : '';
   const description = [ingredient.payload?.physicalDescription, ingredient.payload?.description].find(value => typeof value === 'string' && value) || 'No description yet.';

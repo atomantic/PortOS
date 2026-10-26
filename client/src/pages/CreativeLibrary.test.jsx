@@ -124,12 +124,12 @@ describe('CreativeLibrary', () => {
     ));
   });
 
-  it('shows the confirmed generated portrait instead of the previous reference cover', async () => {
-    const item = { id: 'example-place', type: 'place', name: 'Example Place', thumbnailKey: 'previous-reference.png', payload: {} };
+  it.each([['environments', 'place'], ['casting', 'character']])('shows the confirmed generated portrait instead of the previous reference cover in %s', async (library, type) => {
+    const item = { id: 'example-record', type, name: 'Example Record', thumbnailKey: 'previous-reference.png', payload: {} };
     listCatalogIngredients.mockResolvedValue({ items: [item] });
     getCatalogIngredientDetails.mockResolvedValue({ ingredient: item, media: [{ kind: 'reference', mediaKey: 'previous-reference.png' }] });
     setCatalogIngredientPortrait.mockResolvedValue({ mediaKey: 'new-cover.png', kind: 'portrait' });
-    renderLibrary('environments', '/environments');
+    renderLibrary(library, `/${library}`);
     expect(await screen.findByRole('img', { name: item.name })).toHaveAttribute('src', '/data/images/previous-reference.png');
 
     fireEvent.click(screen.getByRole('button', { name: `Generate image for ${item.name}` }));
