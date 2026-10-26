@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { rm } from 'node:fs/promises';
+import { access, rm } from 'node:fs/promises';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./childProcess.js', () => ({ spawn: vi.fn() }));
@@ -99,7 +99,12 @@ describe.skipIf(process.platform !== 'win32')('Windows Git broker failure contai
     expect(await failure).toMatchObject({ code: 'GIT_CONTAINMENT_UNAVAILABLE', startupPhase: phase });
     expect(requests).toEqual([]);
     expect((phase === 'compiler-timeout' ? compiler : broker).kill).toHaveBeenCalledOnce();
-    await globalThis.__portosGitSupervisorCleanup();
+    if (phase === 'compiler-timeout') {
+      await expect(globalThis.__portosGitSupervisorCleanup()).rejects.toMatchObject({
+        code: 'GIT_SETTLEMENT_HELD', settlementReasons: ['compiler-unconfirmed'],
+      });
+      await expect(access(process[key].directory)).resolves.toBeUndefined();
+    } else await globalThis.__portosGitSupervisorCleanup();
   });
 
   it('distinguishes a settled native launch refusal from startup loss without retaining an obligation', async () => {

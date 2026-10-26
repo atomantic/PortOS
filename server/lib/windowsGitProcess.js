@@ -51,6 +51,10 @@ function supervisor() {
             ['-NoProfile', '-NonInteractive', '-Command', script], { cwd: directory, stdio: 'ignore' });
         } catch (error) { reject(unavailable('compiler-spawn', { spawnErrorCode: error.code })); return; }
         const timer = setTimeout(() => {
+          // Killing PowerShell is not proof its compiler descendants released
+          // the private inputs. Keep that resource obligation through teardown.
+          state.held = true;
+          state.holdReasons.add('compiler-unconfirmed');
           try { compiler.kill(); } catch { /* report unavailable without launching Git */ }
           reject(unavailable('compiler-timeout'));
         }, 15000);
