@@ -1058,6 +1058,37 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
 
   if (!held) return await recordTaskResumePointer({ task, agentId, agentMetadata: metadata });
 
+  // Cleanup may already have handed this exact deliverable to a durable
+  // review/merge coordinator. Releasing a second implementation retry races
+  // that coordinator for the same branch and spends another task budget.
+  const { getAllTasks } = await import('./cosTaskStore.js');
+  const queues = await getAllTasks();
+  const followUps = (queues.cos?.tasks || []).filter(candidate => candidate.id !== persisted.id
+    && isTruthyMeta(candidate.metadata?.reviewLoopFollowUp)
+    && candidate.metadata.sourceTaskId === persisted.id && candidate.metadata.sourceAgentId === agentId
+    && typeof metadata?.worktreeBranch === 'string' && !!git.parsePullRequestUrl(candidate.metadata.reviewLoopPRUrl)
+    && candidate.metadata.reviewLoopPRBranch === metadata.worktreeBranch
+    && candidate.metadata.app === persisted.metadata?.app && !leavesPrForHuman(candidate)
+    && ['pending', 'approved', 'in_progress', 'blocked', 'completed'].includes(candidate.status));
+  if (followUps.length > 1) throw new Error('Multiple delivery follow-up owners require reconciliation');
+  if (followUps.length === 1) {
+    const current = await getAgentRecord(agentId);
+    if (current?.status !== 'completed' || current.taskId !== persisted.id
+      || current.result?.executionSuccess !== true || current.result?.validationPassed === false) return {};
+    const { recordRepoStateVerification, updateAgent } = await import('./cosAgentLifecycle.js');
+    const recorded = await recordRepoStateVerification(agentId, { status: 'pending', reason: 'existing-delivery-follow-up',
+      followUpTaskId: followUps[0].id, checkedAt: new Date().toISOString() });
+    if (recorded !== true) throw new Error('Delivery follow-up receipt could not be recorded');
+    await updateAgent(agentId, { result: { ...current.result, cleanupPending: true } });
+    const result = await updateTask(persisted.id, { status: 'in_progress', metadata: {
+      ...clearedRetryHoldMetadata(), deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agentId,
+      deliveryFollowUpTaskId: followUps[0].id,
+    } }, task.taskType || persisted.taskType || 'user', { expectedStatus: 'in_progress',
+      expectedTask: { description: persisted.description, priority: persisted.priority, metadata: persisted.metadata } });
+    if (result?.error) throw new Error(result.error);
+    return {};
+  }
+
   // Fails open to "start clean" for the same reason `handleOrphanedTask` does:
   // requeueing the task matters far more than resuming it, and a throw here would
   // leave it held until the orphan sweep.
