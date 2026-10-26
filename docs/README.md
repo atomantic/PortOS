@@ -15,6 +15,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [SUPERCOLLIDER.md](./SUPERCOLLIDER.md) | Managed SuperCollider Docker runtime: `setup:supercollider`, readiness states, containment policy and platform evidence |
 | [CODE_ANIMATION_PACKAGES.md](./CODE_ANIMATION_PACKAGES.md) | Versioned portable Code Animation source/brief packages, non-executing validation, and contained production execution |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System design: React client, Express server, PM2 satellites, PostgreSQL + `data/` files |
+| [GREYBOX.md](./GREYBOX.md) | Environment starter layouts, camera shots, reference captures and AI editing |
 | [features/catalog-ingest.md](./features/catalog-ingest.md) | Catalog extraction graph, context budgets, coverage, and review draft contract |
 | [CATALOG_LOCAL_MERGE.md](./CATALOG_LOCAL_MERGE.md) | Local catalog consolidation, preserved identities and assets, conflict review, and guarded recovery |
 | [CATALOG_SHARED_IDENTITY.md](./CATALOG_SHARED_IDENTITY.md) | Two-owner canonical identity agreements, preparation, adoption, owner refresh, and coordinated recovery |

@@ -1,10 +1,12 @@
-import { forwardRef, useImperativeHandle } from 'react';
+import { forwardRef, useImperativeHandle, useState } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import GreyboxPanel from './GreyboxPanel';
 import { captureCatalogGreyboxShot, draftCatalogGreybox, previewCatalogGreyboxPrompt, saveCatalogGreybox } from '../../services/apiCatalog';
 import { blankGreybox } from '../../lib/greybox';
+import { GREYBOX_STARTERS } from '../../lib/greyboxStarters';
+import toast from '../ui/Toast';
 
 vi.mock('../../services/apiCatalog', () => ({
   captureCatalogGreyboxShot: vi.fn(), draftCatalogGreybox: vi.fn(), previewCatalogGreyboxPrompt: vi.fn(), saveCatalogGreybox: vi.fn(),
@@ -81,4 +83,46 @@ describe('GreyboxPanel', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Start from a blank room/ }));
     await waitFor(() => expect(saveCatalogGreybox).toHaveBeenCalledWith('plc-1', expect.objectContaining({ source: 'spec' }), expect.anything()));
   });
+
+  it('starts the rink in one click, blocks overlapping starts, and displays its saved shots', async () => {
+    let finishSave;
+    saveCatalogGreybox.mockImplementation(() => new Promise((resolve) => { finishSave = resolve; }));
+    const busyChanged = vi.fn();
+    function SavedPlace() {
+      const [place, setPlace] = useState({ ...record, payload: {} });
+      return <GreyboxPanel record={place} media={[]} onSaved={setPlace} onBusyChange={busyChanged} />;
+    }
+    render(<MemoryRouter initialEntries={['/?shot=stale']}><SavedPlace /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: /Roller rink/ }));
+    expect(screen.getByRole('button', { name: /Outdoor plaza/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Start from a blank room/ })).toBeDisabled();
+    const starter = GREYBOX_STARTERS[0].scene;
+    expect(saveCatalogGreybox).toHaveBeenCalledWith('plc-1', starter, { source: undefined, silent: true });
+    finishSave({ ...record, payload: { greybox: starter } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /Rink wide/, pressed: true })).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Rail level/ })).toBeInTheDocument();
+    expect(screen.getByTestId('viewer')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Start from a starter' })).not.toBeInTheDocument();
+    expect(busyChanged.mock.calls).toEqual([[true], [false]]);
+    expect(draftCatalogGreybox).not.toHaveBeenCalled();
+  });
+
+  it('keeps the starter picker available after a rejected save', async () => {
+    saveCatalogGreybox.mockRejectedValue(new Error('Scene could not be saved'));
+    show({ record: { ...record, payload: {} } });
+    fireEvent.click(screen.getByRole('button', { name: /Outdoor plaza/ }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Scene could not be saved'));
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Outdoor plaza/ })).toBeEnabled();
+  });
+
+  it.each([{ readOnly: true }, { disabled: true }, { record: { ...record, payload: { locked: true } } }])(
+    'does not start scenes when the place cannot be changed: %j', (props) => {
+      show({ record: { ...record, payload: {} }, ...props });
+      const start = screen.getByRole('button', { name: /Plain room/ });
+      expect(start).toBeDisabled();
+      fireEvent.click(start);
+      expect(saveCatalogGreybox).not.toHaveBeenCalled();
+    },
+  );
 });

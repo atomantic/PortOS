@@ -43,6 +43,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | `canonPrompt.js` | Re-export of `server/lib/canonPrompt.js`. SHORT/RICH/PREVIEW spec + `flattenCanonDescriptorFragments` / `mapCanonDescriptorFragments` / `descriptorForCanonEntry`. Named exports only, so the server-only `flatten*` helpers stay out of the client barrel. |
 | `scenePrompt.js` | Re-export of `server/lib/scenePrompt.js`. Scene-prompt composer + bible matchers. |
 | `composeStyledPrompt.js` | `composeStyledPrompt` re-exported from `server/lib/composeStyledPrompt.js` (accepts a single preset or an array). `composeCanonStyledPrompt` (client-only) builds the `"<name>: <description>"` + universe-preset render the canon section and characters step share. |
+| `greyboxStarters.js` | Re-export of `server/lib/greyboxStarters.js` — hand-authored roller rink, plain room and outdoor plaza scenes for the Greybox empty-state picker. |
 | `cleanPlatePrompt.js` | Clean-plate prompt builder for setting canon entries (Cluster A — A4). |
 | `personaTraitBlend.js` | Re-export of `server/lib/personaTraitBlend.js`. Digital-twin persona trait-blending (M34 P7) — `describeTraitAdjustments` / `renderTraitBlendDirective` / `BIG_FIVE_LEAN` for the Personas UI preview. |
 | `seasonStructure.js` | Re-export of `server/lib/seasonStructure.js`. |
