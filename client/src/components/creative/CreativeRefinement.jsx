@@ -12,7 +12,8 @@ export default function CreativeRefinement({ initialDraft, fieldLimits = {}, con
   const selection = useProviderModels({ withEffort: true });
   const [effort, setEffort] = useState('');
   const [messages, setMessages] = useState([]);
-  const [draft, setDraft] = useState(initialDraft);
+  const [draft, setDraft] = useState(null);
+  const proposalBase = useRef(null);
   const [feedback, setFeedback] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -22,7 +23,9 @@ export default function CreativeRefinement({ initialDraft, fieldLimits = {}, con
     if (flight.current || !feedback.trim() || !selection.selectedProviderId) return;
     flight.current = true; setBusy(true); setError('');
     const turns = [...messages, { role: 'user', content: feedback }];
-    const result = await converse({ draft, messages: turns, providerId: selection.selectedProviderId,
+    const currentDraft = hasProposal ? draft : initialDraft;
+    if (!preview && !hasProposal) proposalBase.current = currentDraft;
+    const result = await converse({ draft: currentDraft, messages: turns, providerId: selection.selectedProviderId,
       model: selection.selectedModel || undefined, effort: effort || undefined }, { preview, silent: true })
       .catch(err => { if (mounted.current) setError(err.message); return null; });
     flight.current = false;
@@ -57,7 +60,10 @@ export default function CreativeRefinement({ initialDraft, fieldLimits = {}, con
     {hasProposal && <div className="space-y-2">
       {Object.entries(draft).map(([key, value]) => <div key={key}><label htmlFor={`${id}-${key}`} className="block text-xs">{key.replace(/([A-Z])/g, ' $1')}</label>
         <textarea id={`${id}-${key}`} value={value} maxLength={fieldLimits[key] ?? 12000} disabled={busy} onChange={event => setDraft(previous => ({ ...previous, [key]: event.target.value }))} rows={3} className="w-full bg-port-bg border border-port-border rounded p-2 text-sm" /></div>)}
-      <button type="button" disabled={disabled || busy} onClick={() => onApply(draft)} className="text-sm text-port-accent disabled:opacity-40">Apply proposal to editor</button>
+      <button type="button" disabled={disabled || busy} onClick={() => {
+        const patch = Object.fromEntries(Object.entries(draft).filter(([key, value]) => value !== proposalBase.current?.[key]));
+        onApply(patch); setHasProposal(false);
+      }} className="text-sm text-port-accent disabled:opacity-40">Apply proposal to editor</button>
     </div>}
   </section>;
 }
