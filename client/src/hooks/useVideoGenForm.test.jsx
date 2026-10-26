@@ -648,10 +648,9 @@ describe('useVideoGenForm', () => {
       expect(result.current.buildGeneratePayload().chunkPrompts).toBe('');
     });
 
-    it('submits the continuation window only while chaining', async () => {
+    it('preserves the default window after initial catalog load and submits it only while chaining', async () => {
       const result = await chained(3);
       act(() => result.current.handleModelChange(LTX2.id));
-      act(() => result.current.setContextFrames(22));
       expect(result.current.buildGeneratePayload()).toMatchObject({ contextFrames: '22', continuityStrategy: 'window' });
       act(() => result.current.setChunks(1));
       // A single-chunk render has nothing to continue from, so the knob must
@@ -712,7 +711,6 @@ describe('useVideoGenForm', () => {
       const { result } = render();
       await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
       act(() => result.current.handleModelChange(LTX2.id));
-      act(() => result.current.setContextFrames(22));
       act(() => result.current.applyResumedParams({ prompt: 'p', chunks: 2, contextFrames: '0' }));
       expect(result.current.contextFrames).toBe(0);
 
@@ -726,7 +724,6 @@ describe('useVideoGenForm', () => {
       const { result } = render();
       await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
       act(() => result.current.handleModelChange(LTX2.id));
-      act(() => result.current.setContextFrames(22));
       act(() => result.current.applyResumedParams({ prompt: 'p', chunks: 2 }));
       expect(result.current.contextFrames).toBe(22);
       act(() => result.current.applyResumedParams({ prompt: 'p', chunks: 2, contextFrames: '' }));

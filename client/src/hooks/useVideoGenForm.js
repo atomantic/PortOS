@@ -471,10 +471,6 @@ export function useVideoGenForm({
 
   const currentModel = models.find((m) => m.id === modelId);
 
-  useEffect(() => {
-    if (currentModel && !supportsContextWindow(currentModel) && contextFrames !== 0) setContextFrames(0);
-  }, [currentModel, contextFrames]);
-
   // LTX-2.5's A2V runner needs an explicit frame canvas even though the user
   // thinks in audio duration. Snap the browser-probed duration UP to the
   // model's causal-VAE grid for an honest preview. The server repeats this from
@@ -1324,7 +1320,8 @@ export function useVideoGenForm({
     // raw value rejects that string while `Number(null)`/`Number('')` are both
     // a finite 0 that would wrongly clear the default. Same shape the
     // `guidanceScale` restore above uses, for the same round-tripping reason.
-    if (p.continuityStrategy === 'frame') {
+    const resumedModel = models.find((model) => model.id === (p.modelId || modelId));
+    if (p.continuityStrategy === 'frame' || (resumedModel && !supportsContextWindow(resumedModel))) {
       setContextFrames(0);
     } else if (p.contextFrames != null && p.contextFrames !== '' && Number.isFinite(Number(p.contextFrames))) {
       setContextFrames(Number(p.contextFrames));
