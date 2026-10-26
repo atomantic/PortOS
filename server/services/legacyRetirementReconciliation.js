@@ -1,7 +1,7 @@
-/** Upgrade bookkeeping only: this module never removes a checkout/ref or asserts
+/** Retirement bookkeeping only: this module never removes a checkout/ref or asserts
  * an unrecorded deletion succeeded. Fresh local work always stays actionable. */
 import { devNull } from 'node:os';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { spawn } from '../lib/childProcess.js';
 import { execGit } from '../lib/execGit.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
@@ -91,6 +91,78 @@ function targetFor(outcome, row, repoPath, agents) {
       && (!row.path || samePath(row.path, capture.path)) && (!oid(row.head) || row.head === capture.head)
       && !row.checkoutIdentity && completedCheckoutReceiptValid(agent, capture)));
   return captures.length === 1 ? { target: { ...row, ...captures[0] } } : null;
+}
+
+// Bind a stale observation only to an existing service receipt: an unscoped
+// placeholder needs a unique receipt, while a moved observation needs the same
+// captured physical generation. Neither path infers deletion from absence.
+const receiptIdentity = row => JSON.stringify([row.branch, row.path, row.head, row.checkoutIdentity, row.retiredAt, row.archiveDir ?? null]);
+const staleObservation = row => ['retirement-receipt-unverified', 'retirement-provenance-unverified'].includes(row?.reason)
+  && typeof row.branch === 'string' && row.branch && row.locked !== true && Number.isFinite(Date.parse(row.createdAt))
+  && ((row.path == null && row.head == null && row.checkoutIdentity == null)
+    || (typeof row.path === 'string' && isAbsolute(row.path) && oid(row.head) && /^[a-f0-9]{64}$/.test(row.checkoutIdentity || '')));
+
+/** Metadata repair only. Complete receipts and their original timestamps remain
+ * immutable; optional receipt-local observations retain what was reconciled. */
+export async function reconcileRecordedReceiptObservations(appId, outcome) {
+  const rows = [...new Map([...(outcome?.retirementObligations || []), ...(outcome?.remaining || [])]
+    .filter(staleObservation).map(row => [legacyRetirementKey(row), row])).values()];
+  if (!rows.length) return outcome;
+  const receipts = [...(outcome.retired || []), ...Object.values(outcome.retirementReceiptEvidence || {})];
+  const bindings = rows.flatMap(observation => {
+    const observed = Math.max(Date.parse(observation.createdAt), Date.parse(observation.observedAt || observation.createdAt));
+    const candidates = [...new Map(receipts.filter(row => row.branch === observation.branch && row.branchDeleted === true
+      && (row.archiveDir == null || (typeof row.archiveDir === 'string' && row.archiveDir.length > 0))
+      && (!observation.checkoutIdentity || observation.checkoutIdentity === row.checkoutIdentity)
+      && typeof row.path === 'string' && isAbsolute(row.path) && oid(row.head) && /^[a-f0-9]{64}$/.test(row.checkoutIdentity || '')
+      && Number.isFinite(Date.parse(row.retiredAt)) && Date.parse(row.retiredAt) >= observed && Date.parse(row.retiredAt) <= Date.now())
+      .map(row => [receiptIdentity(row), row])).values()];
+    if (candidates.length !== 1) return [];
+    const receipt = candidates[0];
+    if ((receipt.settledObservations || []).length >= 1000
+      && !receipt.settledObservations.some(row => legacyRetirementKey(row.observation) === legacyRetirementKey(observation))) return [];
+    return [{ observation, receipt }];
+  });
+  if (!bindings.length) return outcome;
+  const [{ getAppById }, { readClaimOwnershipAgents }, { listWorktrees }] = await Promise.all([
+    import('./apps.js'), import('./cosClaimOwnership.js'), import('./worktreeManager.js'),
+  ]);
+  const app = await getAppById(appId);
+  if (!app?.repoPath) return outcome;
+  const [agents, trees] = await Promise.all([readClaimOwnershipAgents(), listWorktrees(app.repoPath)]);
+  if (!Array.isArray(agents) || !Array.isArray(trees)) return outcome;
+  const accepted = [];
+  const auditAdditions = new Map();
+  const identities = new Map();
+  for (const binding of bindings) {
+    if (!await absent(app.repoPath, binding.receipt, trees, agents, identities)
+      || !await absent(app.repoPath, binding.observation, trees, agents, identities)) continue;
+    if (binding.observation.head && binding.observation.head !== binding.receipt.head
+      && !await ancestor(app.repoPath, binding.observation.head, binding.receipt.head)) continue;
+    const key = receiptIdentity(binding.receipt);
+    const history = binding.receipt.settledObservations || [];
+    const addsAudit = !history.some(row => legacyRetirementKey(row.observation) === legacyRetirementKey(binding.observation));
+    if (addsAudit && history.length + (auditAdditions.get(key) || 0) >= 1000) continue;
+    accepted.push(binding);
+    if (addsAudit) auditAdditions.set(key, (auditAdditions.get(key) || 0) + 1);
+  }
+  if (!accepted.length) return outcome;
+  const settledAt = new Date().toISOString();
+  const keys = new Set(accepted.map(row => legacyRetirementKey(row.observation)));
+  const annotate = receipt => {
+    const matches = accepted.filter(row => receiptIdentity(row.receipt) === receiptIdentity(receipt));
+    if (!matches.length) return receipt;
+    const settledObservations = [...(receipt.settledObservations || [])];
+    for (const { observation } of matches) if (!settledObservations.some(row => legacyRetirementKey(row.observation) === legacyRetirementKey(observation))) {
+      settledObservations.push({ observation, settledAt });
+    }
+    return { ...receipt, settledObservations };
+  };
+  return { ...outcome, updatedAt: settledAt,
+    remaining: outcome.remaining?.filter(row => !keys.has(legacyRetirementKey(row))),
+    retirementObligations: outcome.retirementObligations?.filter(row => !keys.has(legacyRetirementKey(row))),
+    retired: outcome.retired?.map(annotate),
+    retirementReceiptEvidence: Object.fromEntries(Object.entries(outcome.retirementReceiptEvidence || {}).map(([key, receipt]) => [key, annotate(receipt)])) };
 }
 
 export async function _planLegacyRetirementReconciliation({ repoPath, outcome, agents, trees, defaultHead }, options = {}) {
