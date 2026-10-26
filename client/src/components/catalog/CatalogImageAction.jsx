@@ -29,6 +29,6 @@ export default function CatalogImageAction({ ingredient, getType = getCatalogTyp
     }).catch(error => toast.error(error.message || 'Could not attach the generated image'));
   }, [ingredient.id, onCover]);
 
-  return <GenerateImageControl key={ingredient.id} ingredientId={ingredient.id} name={ingredient.name} quick
+  return <GenerateImageControl key={ingredient.id} ingredientId={ingredient.id} name={ingredient.name || '(untitled)'} quick
     loadSource={loadSource} onComplete={complete} disabled={disabled || ingredient.sharedIdentity?.writable === false} />;
 }
