@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from './childProcess.js';
 
@@ -19,7 +19,7 @@ function supervisor() {
       state.directory = directory;
       const executable = join(directory, 'supervisor.exe');
       const source = fileURLToPath(new URL('./windowsGitSupervisor.cs', import.meta.url));
-      const { windowsPowerShell51Path } = await import('./processEnv.js');
+      const { windowsPowerShell51Path, findCommandOnPath } = await import('./processEnv.js');
       const quote = value => `'${value.replaceAll("'", "''")}'`;
       const script = `$ErrorActionPreference='Stop'; Add-Type -Path ${quote(source)} -ReferencedAssemblies System.Web.Extensions -OutputAssembly ${quote(executable)} -OutputType ConsoleApplication`;
       await new Promise((resolve, reject) => {
@@ -29,7 +29,7 @@ function supervisor() {
         compiler.once('error', () => { clearTimeout(timer); reject(unavailable()); });
         compiler.once('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(unavailable()); });
       });
-      return { directory, executable, state };
+      return { directory, executable, state, findCommandOnPath };
     })();
   }
   const exitKey = Symbol.for('portos.windowsGitSupervisorExit');
@@ -60,10 +60,21 @@ const unavailable = () => Object.assign(new Error('Windows Git containment unava
 /** Wire terminal listeners in the spawn tick, before sending the launch request. */
 export function startGit(args, options, wire) {
   if (process.platform !== 'win32') { wire(spawn('git', args, options)); return; }
-  return supervisor().then(async ({ directory, executable, state }) => {
+  const commandArgs = [...args];
+  const childOptions = { ...options, cwd: resolvePath(options.cwd), env: { ...(options.env ?? process.env) } };
+  const inheritedPath = process.env.PATH || '';
+  return supervisor().then(async ({ directory, executable, state, findCommandOnPath }) => {
+    const env = childOptions.env;
+    const pathKey = Object.keys(env).sort().find(key => key.toUpperCase() === 'PATH');
+    // Match Node's Windows lookup fallback without adding ambient credentials
+    // or PATH to the environment the caller explicitly selected for Git.
+    const searchPath = pathKey === undefined || env[pathKey] === undefined
+      ? inheritedPath : String(env[pathKey]);
+    const gitExecutable = findCommandOnPath('git.exe', { env: { PATH: `${childOptions.cwd};${searchPath}` }, cwd: childOptions.cwd });
+    if (!gitExecutable) throw unavailable();
     const commandDirectory = await mkdtemp(join(directory, 'command-'));
     const receipt = join(commandDirectory, 'settlement.json');
-    const child = spawn(executable, [receipt], options);
+    const child = spawn(executable, [receipt], childOptions);
     child.gitSupervisor = true;
     state.active.add(child);
     child.cancelOwnedGit = () => child.stdin.end('cancel\n');
@@ -87,6 +98,6 @@ export function startGit(args, options, wire) {
     });
     child.stdin.on('error', () => {}); // A racing supervisor exit is handled by its receipt.
     wire(child);
-    child.stdin.write(`${JSON.stringify(args)}\n`);
+    child.stdin.write(`${JSON.stringify([gitExecutable, ...commandArgs])}\n`);
   }).catch(() => { throw unavailable(); });
 }

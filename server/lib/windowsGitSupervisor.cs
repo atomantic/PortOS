@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -100,9 +99,9 @@ public static class WindowsGitSupervisor
             var startup = new StartupEx();
             startup.Startup.Size = Marshal.SizeOf(startup); startup.Attributes = attributes;
             startup.Startup.Flags = 0x100; startup.Startup.Input = input; startup.Startup.Output = output; startup.Startup.Error = error;
-            var command = new StringBuilder(Quote("git.exe"));
-            foreach (string arg in args) command.Append(' ').Append(Quote(arg));
-            Require(CreateProcess(null, command, IntPtr.Zero, IntPtr.Zero, true, 0x08080000, IntPtr.Zero, null, ref startup, out process));
+            var command = new StringBuilder(Quote(args[0]));
+            for (int index = 1; index < args.Length; index++) command.Append(' ').Append(Quote(args[index]));
+            Require(CreateProcess(args[0], command, IntPtr.Zero, IntPtr.Zero, true, 0x08080000, IntPtr.Zero, null, ref startup, out process));
             launched = true;
             long created, exited, kernel, user;
             Require(GetProcessTimes(process.Process, out created, out exited, out kernel, out user));

@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { spawn } from './childProcess.js';
 import { assertGitWorkSettled, execGit } from './execGit.js';
 import { reserveCheckoutRetirement, releaseCheckoutReservation, withCheckoutPublication } from './checkoutRetirementAdmission.js';
@@ -96,11 +96,16 @@ if (mode !== 'child') {
       expect(result.stdout.toString().trim()).toBe('Example 界 "quoted" \\ commit\\');
       expect((await execGit(['show', 'HEAD:example.bin'], root, { bufferOutput: true })).stdout).toEqual(bytes);
       const script = join(root, 'env.cjs');
-      await writeFile(script, 'process.stdout.write(process.env.EXAMPLE_GIT_ENV);');
+      await writeFile(script, 'if (process.env.EXAMPLE_AMBIENT_SECRET) throw new Error("Unexpected ambient environment"); process.stdout.write(process.env.EXAMPLE_GIT_ENV);');
       await chmod(script, 0o755);
-      const env = { ...process.env, EXAMPLE_GIT_ENV: 'selected 界' };
-      expect((await execGit(['-c', `alias.env=!${quote(process.execPath)} ${quote(script)}`, 'env'], root, { env })).stdout).toBe('selected 界');
+      vi.stubEnv('EXAMPLE_AMBIENT_SECRET', 'synthetic-private-value');
+      const env = { EXAMPLE_GIT_ENV: 'selected 界' };
+      const args = ['-c', `alias.env=!${quote(process.execPath)} ${quote(script)}`, 'env'];
+      const pending = execGit(args, root, { env });
+      args[1] = 'alias.env=!false';
+      env.EXAMPLE_GIT_ENV = 'changed after dispatch';
+      expect((await pending).stdout).toBe('selected 界');
       expect(await readFile(join(root, 'example.txt'), 'utf8')).toBe('example\n');
-    } finally { await destroyGitSandbox(root); }
+    } finally { vi.unstubAllEnvs(); await destroyGitSandbox(root); }
   });
 });
