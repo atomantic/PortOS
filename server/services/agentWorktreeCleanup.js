@@ -213,6 +213,8 @@ async function worktreeCleanupContext(agentId, options) {
     worktreePath: metadata.workspacePath || join(PATHS.worktrees, agentId),
     publicationValidation: publicationHolds.get(agentId) || metadata.publicationValidation,
     runtimeVerificationRequested: agentState?.result?.taskOutcome?.recovery?.mode === 'runtime',
+    dependencyWaitRequested: agentState?.result?.taskOutcome?.recovery?.mode === 'dependency-wait',
+    startedAt: agentState?.startedAt, instanceId: metadata.instanceId,
     taskId: agentState?.taskId || normalized.originalTask?.id,
     securityScan: metadata.securityScan,
     securityScanControl: metadata.securityScanControl,
@@ -250,6 +252,19 @@ async function probeWorktreePr(context, success) {
 
 async function runCleanupAgentWorktree(agentId, success, options = {}) {
   const context = await worktreeCleanupContext(agentId, options);
+  if (context.dependencyWaitRequested) {
+    const { getTaskById } = await import('./cosTaskStore.js');
+    // Completion callers still hold the pre-finalize task snapshot. Only the
+    // fresh accepted wait can retain this exact investigator generation,
+    // including the interval between ready dispatch and successor claiming.
+    const held = context.taskId ? await getTaskById(context.taskId) : null;
+    const wait = held?.metadata?.investigationDependencyWait;
+    if (held?.taskType === 'internal' && isTruthyMeta(held.metadata?.blockedSystemRecovery)
+      && isTruthyMeta(held.metadata?.preserveOriginalBudget) && wait?.version === 1
+      && ['waiting', 'ready'].includes(wait.phase) && ['blocked', 'pending', 'in_progress'].includes(held.status)
+      && wait.sourceAgentId === agentId && wait.sourceStartedAt === context.startedAt
+      && wait.instanceId === context.instanceId) return [];
+  }
   if (context.runtimeVerificationRequested) {
     const { getTaskById } = await import('./cosTaskStore.js');
     const held = context.taskId ? await getTaskById(context.taskId) : null;
