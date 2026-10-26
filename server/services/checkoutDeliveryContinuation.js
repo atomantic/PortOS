@@ -39,30 +39,61 @@ export async function readCheckoutDeliveryContinuations(input, agents, opts = {}
     && (agent.result?.success === true || agent.result?.executionSuccess === true)
     && agent.result.executionSuccess !== false && agent.result.validationPassed !== false
     && Array.isArray(agent.metadata?.completedCheckouts)
-    && agent.metadata.completedCheckouts.some(row => samePath(row?.repoPath, repoPath) && samePath(row.path, checkoutPath) && row.branch === branch));
+    && agent.metadata.completedCheckouts.some(row => samePath(row?.repoPath, repoPath) && row.branch === branch
+      && isDeepStrictEqual(row.incarnation, checkoutIncarnation)));
   if (candidates.length > 25) return [];
   const proofEnv = { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_GRAFT_FILE: devNull };
   const ancestor = (older, newer) => oid(older) && oid(newer)
     ? execGit(['--no-replace-objects', '-c', 'core.commitGraph=false', 'merge-base', '--is-ancestor', older, newer],
       repoPath, { env: proofEnv }).then(() => true, () => false) : false;
   if (!await ancestor(retirementForge.mergeCommit, targetHead)) return [];
+  const captured = agent => {
+    const rows = agent.metadata.completedCheckouts.filter(row => samePath(row?.repoPath, repoPath)
+      && row.branch === branch
+      && completedCheckoutReceiptValid(agent, row) && isDeepStrictEqual(row.incarnation, checkoutIncarnation));
+    const current = rows.filter(row => samePath(row.path, checkoutPath));
+    return current.length === 1 ? current[0] : rows.length === 1 ? rows[0] : null;
+  };
+  const byId = new Map(candidates.map(agent => [agent.id, agent]));
+  if (byId.size !== candidates.length) return [];
+  const current = candidates.filter(agent => samePath(captured(agent)?.path, checkoutPath));
+  const resumeChain = original => {
+    if (current.length !== 1 || !original.taskId || !original.metadata.instanceId
+      || original.metadata.instanceId === 'unknown') return null;
+    const chain = [], seen = new Set();
+    let child = current[0];
+    while (child && chain.length < 25 && !seen.has(child.id)) {
+      if (child.taskId !== original.taskId || child.metadata.instanceId !== original.metadata.instanceId
+        || child.result?.taskOutcome?.recovery?.mode === 'approval' || child.metadata?.blocker
+        || !samePath(captured(child)?.path, child.metadata.workspacePath)) return null;
+      seen.add(child.id); chain.push(child.id);
+      if (child.id === original.id) return chain;
+      const parent = byId.get(child.metadata.resumedFromAgentId);
+      if (!parent || !(Date.parse(parent.completedAt) <= Date.parse(child.startedAt))) return null;
+      child = parent;
+    }
+    return null;
+  };
   const evidence = [];
   const historical = new Map();
   // Bounded sequential forge reads, only for a matching completed execution
   // whose known PR differs. The aggregate task outcome is never promoted.
   for (const agent of candidates) {
+    const capturedRow = captured(agent);
+    const moved = capturedRow && !samePath(capturedRow.path, checkoutPath) ? resumeChain(agent) : null;
+    if (!capturedRow || (!samePath(capturedRow.path, checkoutPath) && !moved)) continue;
     const policyUrl = agent.metadata.branchCompletionPolicy?.prUrl;
     const target = agent.metadata.reviewLoopMergeTarget;
     if ((policyUrl != null && !parsePullRequestUrl(policyUrl))
       || (target != null && (!parsePullRequestUrl(target.url) || target.branch !== branch))) continue;
     const originalPrUrl = policyUrl ?? target?.url ?? null;
-    const rows = agent.metadata.completedCheckouts.filter(row => samePath(row?.repoPath, repoPath) && samePath(row.path, checkoutPath)
-      && row.branch === branch && completedCheckoutReceiptValid(agent, row) && isDeepStrictEqual(row.incarnation, checkoutIncarnation));
+    const rows = [capturedRow];
     if (rows.length !== 1 || !await ancestor(rows[0].head, tip)) continue;
     if (!originalPrUrl || originalPrUrl === prUrl) {
       evidence.push({ kind: 'captured-merged-delivery', agentId: agent.id, originalPrUrl,
         originalPrHead: originalPrUrl ? retirementForge.prHead : null, originalMergeCommit: originalPrUrl ? retirementForge.mergeCommit : null,
-        capturedHead: rows[0].head, capturedAt: rows[0].capturedAt, prUrl, tip, checkoutIncarnation });
+        capturedHead: rows[0].head, capturedAt: rows[0].capturedAt, prUrl, tip, checkoutIncarnation,
+        ...(moved && { resumeChain: moved }) });
       continue;
     }
     if (!historical.has(originalPrUrl)) historical.set(originalPrUrl,

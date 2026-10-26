@@ -135,6 +135,33 @@ function completionDecision({ repoPath, branch, prUrl, tip, agents }) {
 const reviewTarget = policy => policy.agent.metadata?.reviewLoopMergeTarget;
 const retirementPr = policy => policy.prUrl || reviewTarget(policy)?.url;
 
+/** A moved pathname is not a new generation when exact captured administration
+ * and an explicit completed same-task, same-instance resume chain agree. */
+function resumedDeliveryPath(policy, input, proof) {
+  const chain = proof.resumeChain;
+  if (!Array.isArray(chain) || chain.length < 2 || chain.length > 25
+    || new Set(chain).size !== chain.length || chain.at(-1) !== policy.agent.id || !Array.isArray(input.agents)) return false;
+  const byId = new Map(input.agents.map(agent => [agent?.id, agent]));
+  if (byId.size !== input.agents.length) return false;
+  const records = chain.map(id => byId.get(id));
+  const instance = policy.agent.metadata?.instanceId;
+  if (!instance || instance === 'unknown' || !policy.agent.taskId) return false;
+  for (let index = 0; index < records.length; index++) {
+    const agent = records[index];
+    if (!agent || agent.status !== 'completed' || agent.taskId !== policy.agent.taskId
+      || agent.metadata?.instanceId !== instance || agent.result?.validationPassed === false
+      || agent.result?.executionSuccess === false || (agent.result?.success !== true && agent.result?.executionSuccess !== true)
+      || agent.result?.taskOutcome?.recovery?.mode === 'approval' || agent.metadata?.blocker) return false;
+    const captures = agent.metadata.completedCheckouts?.filter(row => completedCheckoutReceiptValid(agent, row)
+      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch
+      && samePath(row.path, agent.metadata.workspacePath) && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation));
+    if (captures?.length !== 1 || (index === 0 && !samePath(captures[0].path, input.checkoutPath))) return false;
+    if (index > 0 && (records[index - 1].metadata.resumedFromAgentId !== agent.id
+      || !(Date.parse(agent.completedAt) <= Date.parse(records[index - 1].startedAt)))) return false;
+  }
+  return true;
+}
+
 function continuedDelivery(policy, input) {
   if (policy.agent.status !== 'completed'
     || (policy.agent.result?.success !== true && policy.agent.result?.executionSuccess !== true)
@@ -146,7 +173,8 @@ function continuedDelivery(policy, input) {
     && proof.prUrl === input.prUrl && proof.tip === input.tip
     && (!policy.tip || [proof.originalPrHead, proof.capturedHead].includes(policy.tip))
     && policy.agent.metadata?.completedCheckouts?.some(row => completedCheckoutReceiptValid(policy.agent, row)
-      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && samePath(row.path, input.checkoutPath)
+      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch
+      && (samePath(row.path, input.checkoutPath) || resumedDeliveryPath(policy, input, proof))
       && row.head === proof.capturedHead && row.capturedAt === proof.capturedAt
       && isDeepStrictEqual(row.incarnation, proof.checkoutIncarnation)
       && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation))) || null;
