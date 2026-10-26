@@ -548,7 +548,7 @@ export function resumeDeferredRepoStateVerifications(blocked) {
 // Repair only the obsolete path-specific hold behind an already verified
 // released selection. This does not reopen tasks, retry delivery or remove data.
 async function settleReleasedSelectionHistory(agentId, metadata, branch, trees) {
-  const held = Object.values(metadata.cleanupOutcomes || {}).filter(row => row.branch === branch && row.status !== 'verified');
+  const held = Object.values(metadata.cleanupOutcomes || {}).filter(row => row.branch === branch && row.status !== 'verified' && row.path != null);
   for (const row of held) {
     if (row.reason !== 'absent-checkout-integration-unverified' || typeof row.path !== 'string'
       || trees.some(tree => resolve(tree.path) === resolve(row.path))
@@ -580,7 +580,8 @@ async function reconcileReleasedSelectionHistory(agents) {
       if (claimCheckoutOwner({ branchName: branch, sourceWorkspace, agents: owners })
         || trees.some(tree => tree.branch?.replace(/^refs\/heads\//, '') === branch)
         || await readLocalBranchPresence(sourceWorkspace, branch).catch(() => null) !== false) continue;
-      await settleReleasedSelectionHistory(agent.id || agent.agentId, meta, branch, trees);
+      await settleReleasedSelectionHistory(agent.id || agent.agentId, meta, branch, trees)
+        .catch(error => emitLog('warn', `Released-selection ledger repair deferred for ${agent.id || agent.agentId}: ${error.message}`));
     }
   }
 }

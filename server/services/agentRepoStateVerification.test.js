@@ -1127,7 +1127,7 @@ it.each(['draft', 'leave-open'])('reports divergence without cleanup or recovery
 });
 
 describe('claim-swarm completion', () => {
-  it.each(['released', 'still-bound', 'seeded', 'ref-present', 'foreign-capture'])('settles only artifact-free released selections: %s', async scenario => {
+  it.each(['released', 'pathless-hold', 'still-bound', 'seeded', 'ref-present', 'foreign-capture'])('settles only artifact-free released selections: %s', async scenario => {
     const selected = 'claim/issue-10';
     const delivered = 'claim/issue-11';
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
@@ -1136,17 +1136,18 @@ describe('claim-swarm completion', () => {
     const state = { ...agentState({ isWorktree: false, worktreeBranch: null, workspacePath: '/repo',
       claimBranches: scenario === 'still-bound' ? [selected, delivered] : [delivered],
       claimReleasedBranches: [selected], checkoutCapture: { status: 'captured' }, completedCheckouts: [captured],
-      checkoutSeeds: scenario === 'seeded' ? [{ branch: selected }] : [] }),
+      checkoutSeeds: scenario === 'seeded' ? [{ branch: selected }] : [],
+      cleanupOutcomes: scenario === 'pathless-hold' ? { old: { branch: selected, status: 'blocked', reason: 'claim-owner-active' } } : {} }),
       id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT };
     if (scenario === 'ref-present') readLocalBranchPresence.mockResolvedValue(true);
     findPullRequestForBranch.mockImplementation(async branch => branch === delivered
       ? { status: 'found', url: 'https://github.com/example/repo/pull/11', detail: 'MERGED' }
       : { status: 'none', url: null, detail: null });
     const result = await run({ agentState: state });
-    expect(result.verified).toBe(scenario === 'released');
+    expect(result.verified).toBe(['released', 'pathless-hold'].includes(scenario));
     const released = recordCleanupOutcome.mock.calls.some(([, row]) => row.branch === selected
       && row.reason === 'released-selection-no-local-artifacts');
-    expect(released).toBe(scenario === 'released');
+    expect(released).toBe(['released', 'pathless-hold'].includes(scenario));
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();
   });
@@ -1213,6 +1214,23 @@ describe('durable completion replay', () => {
     expect(replayAgentCompletionCleanup).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+  });
+
+  it('continues pending completion audits when an obsolete ledger write fails', async () => {
+    const branch = 'claim/issue-10';
+    const legacy = { ...agentState({ isWorktree: false, claimBranches: [], claimReleasedBranches: [branch],
+      repoStateVerification: { status: 'completed' }, cleanupOutcomes: {
+        released: { branch, status: 'verified', reason: 'released-selection-no-local-artifacts' },
+        old: { branch, path: '/repo/wt/released', status: 'blocked', reason: 'absent-checkout-integration-unverified' },
+      } }), id: 'agent-legacy', status: 'completed' };
+    readBranchCompletionPolicies.mockResolvedValue([legacy, archived()]);
+    recordCleanupOutcome.mockRejectedValueOnce(new Error('fixture ledger write failed'));
+    getTaskById.mockResolvedValue(task());
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'MERGED', url: 'https://github.com/example/repo/pull/7' });
+    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 1 });
+    expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'completed' }));
+    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('Released-selection ledger repair deferred'));
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   const archived = () => ({ ...agentState(), id: 'agent-1', taskId: 'task-1', status: 'completed', result: { success: true },
