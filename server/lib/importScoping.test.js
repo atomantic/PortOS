@@ -46,6 +46,22 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 
 // Each row: the entry that was narrowed, the module it must no longer
 const NARROWED = [
+  ['services/videoGen/renderArgs.js', 'services/videoGen/loraStages.js',
+    'checks the shared request contract without runtime capability validation'],
+  ['services/videoGen/prepareParams.js', 'services/videoGen/loraStages.js',
+    'loads runtime LoRA validation only when preparing a render'],
+  ['services/videoGen/generateVideo.js', 'services/videoGen/loraStages.js',
+    'loads runtime LoRA validation only when executing a render'],
+  ['lib/catalogValidation.js', 'lib/greyboxScene.js',
+    'leaves greybox scene validation to its endpoint-specific schemas'],
+  ['lib/catalogValidation.js', 'lib/greyboxPrompt.js',
+    'leaves greybox prompt validation to its endpoint-specific schemas'],
+  ['services/videoGen/spawnWatch.js', 'services/videoGen/metalBufferProfiles.js',
+    'loads learned Metal buffer policies only when executing a render'],
+  ['services/videoGen/loraStages.js', 'services/videoGen/runtimes.js',
+    'probes runtime capability only for a non-default per-stage request'],
+  ['routes/mediaJobs.js', 'services/videoGen/prepareParams.js',
+    'loads local render preparation only when retrying a local video'],
   ['services/cosLocalEndpointSlots.js', 'services/promptRunner.js',
     'reads the local-LLM concurrency cap from its leaf without loading the prompt runner'],
   ['services/cos.js', 'services/promptRunner.js',

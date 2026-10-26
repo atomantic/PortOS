@@ -4,6 +4,9 @@
  * client CI job does not install).
  */
 
+/** Maximum authored instruction length, shared with request validation. */
+export const GREYBOX_INSTRUCTION_MAX = 4000;
+
 export const GREYBOX_ASPECTS = Object.freeze(['16:9', '9:16', '1:1', '4:3', '21:9']);
 
 /** Media role on a place's reference image that a saved shot's capture carries. */
