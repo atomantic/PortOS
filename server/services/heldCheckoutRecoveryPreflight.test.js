@@ -19,7 +19,7 @@ vi.mock('../lib/execGit.js', async importOriginal => ({
   },
 }));
 
-const { prepareInventoriedCheckoutRetirement, retireInventoriedCheckout, releaseCheckoutWithoutArchive } = await import('./heldCheckoutRecovery.js');
+const { prepareInventoriedCheckoutRetirement, retireInventoriedCheckout, releaseCheckoutWithoutArchive, inspectCheckoutRetirementOwnership } = await import('./heldCheckoutRecovery.js');
 const owned = ownFixtureWork();
 const it = owned.tests(vitestIt);
 let scratch;
@@ -41,17 +41,79 @@ describe('held checkout retirement preflight', () => {
   it.each([
     ['path', 'other-checkout'], ['branch', 'feature/other'], ['head', 'b'.repeat(40)],
     ['locked', false], ['lockReason', 'older lock text'], ['checkoutIdentity', 'b'.repeat(64)],
+    ['absent inventory', null],
   ])('rejects a persisted inventory mismatch in %s at both service entry points', async (field, value) => {
     const release = { path: join(scratch, 'checkout'), branch: 'feature/held', head: 'a'.repeat(40),
       locked: true, lockReason: 'synthetic owner', checkoutIdentity: 'a'.repeat(64) };
-    injected.outcome.remaining = [{ ...release, [field]: field === 'path' ? join(scratch, value) : value }];
+    injected.outcome.remaining = field === 'absent inventory' ? []
+      : [{ ...release, [field]: field === 'path' ? join(scratch, value) : value }];
     const before = structuredClone(injected.outcome);
-    const input = { appId: 'app-1', release, prUrl: 'https://github.com/example/repo/pull/42' };
+    const input = { appId: 'app-1', release, prUrl: 'https://github.com/example/repo/pull/42',
+      review: { prUrl: 'https://github.com/example/repo/pull/42', digest: 'c'.repeat(64), acceptSuperseded: false } };
     const opts = { readForge: async () => { throw new Error('Forge must not grant an uninventoried release'); } };
     for (const boundary of [prepareInventoriedCheckoutRetirement, retireInventoriedCheckout]) {
       expect(await boundary(input, opts)).toEqual({ ok: false, reason: 'release-not-in-inventory' });
     }
     expect(injected.outcome).toEqual(before);
+  });
+
+  it('refuses freshly unreadable completion policies after admitting a legacy completed owner', async () => {
+    const repoPath = injected.app.repoPath;
+    const branch = 'feature/legacy';
+    let policies = [{ id: 'completed', status: 'completed', result: { success: true },
+      metadata: { sourceWorkspace: repoPath, claimBranches: [branch], prCompletionPolicy: 'review-then-merge' } }];
+    const inspect = () => inspectCheckoutRetirementOwnership({ repoPath, registration: false,
+      release: { path: join(scratch, 'checkout'), branch, head: 'a'.repeat(40) } },
+    { readAgents: async () => [], readPolicies: async () => policies });
+    expect(await inspect()).toMatchObject({ ok: true });
+    policies = null;
+    expect(await inspect()).toEqual({ ok: false, reason: 'pr-completion-policy-unavailable' });
+  });
+
+  it.each(['bound', 'discovered'])('revalidates persisted resume authority with %s PR identity', async prIdentity => {
+    const repoPath = injected.app.repoPath;
+    const checkoutPath = join(scratch, 'checkout');
+    await mkdir(repoPath); await mkdir(checkoutPath);
+    const branch = 'feature/resumed';
+    const head = 'a'.repeat(40);
+    const prUrl = 'https://github.com/example/repo/pull/42';
+    const fact = { dev: '1', ino: '2', birthtimeNs: '3' };
+    const incarnation = { pointer: { ...fact }, gitdir: { ...fact } };
+    const agents = ['failed', 'cleanup', 'resumed'].map((id, index) => {
+      const startedAt = `2026-03-01T0${index}:00:00.000Z`;
+      const path = index === 2 ? checkoutPath : join(scratch, id);
+      return { id, taskId: 'same-task', status: 'completed', startedAt,
+        completedAt: `2026-03-01T0${index}:01:00.000Z`,
+        result: index === 0 ? { success: false, executionSuccess: false, validationPassed: null }
+          : { success: false, executionSuccess: true, validationPassed: null, cleanupPending: true,
+            taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } },
+        metadata: { sourceWorkspace: repoPath, workspacePath: path, worktreeBranch: branch,
+          prCompletionPolicy: 'review-then-merge', resumedFromAgentId: index ? ['failed', 'cleanup'][index - 1] : null,
+          reviewLoopMergeTarget: prIdentity === 'bound' ? { branch, url: prUrl } : null,
+          completedCheckouts: [{ version: 1, agentId: id, startedAt, capturedAt: startedAt,
+            repoPath, path, branch, head, incarnation: structuredClone(incarnation) }] } };
+    });
+    const input = { repoPath, release: { path: checkoutPath, branch, head }, registration: false,
+      reviewIdentity: { checkoutPath, tip: head, verifiedPrHead: head, prUrl, checkoutIncarnation: incarnation } };
+    const inspect = () => inspectCheckoutRetirementOwnership(input, { readAgents: async () => [], readPolicies: async () => agents });
+    const original = structuredClone(agents);
+    expect(await inspect()).toMatchObject({ ok: true, policy: { policies: [
+      { id: 'cleanup', resumedCleanup: { successorAgentId: 'resumed' } },
+      { id: 'failed', resumedCleanup: { successorAgentId: 'resumed' } }, { id: 'resumed' },
+    ] } });
+    // Public admission re-reads these independent persisted authority fields;
+    // no checkout bytes or Git reconstruction are needed to reject them.
+    for (const [target, key, value] of [[agents[2].metadata, 'resumedFromAgentId', null],
+      [agents[0], 'taskId', 'other-task'], [agents[0], 'status', 'running'],
+      [agents[0].result, 'validationPassed', false], [agents[0].metadata, 'prCompletionPolicy', 'leave-open'],
+      [agents[0].metadata, 'reviewLoopMergeTarget', { branch, url: 'https://github.com/example/repo/pull/99' }],
+      [agents[0].metadata.completedCheckouts[0], 'head', 'b'.repeat(40)]]) {
+      const prior = target[key]; target[key] = value;
+      expect(await inspect(), key).toMatchObject({ ok: false });
+      target[key] = prior;
+    }
+    expect(await inspect()).toMatchObject({ ok: true });
+    expect(agents).toEqual(original);
   });
 });
 
