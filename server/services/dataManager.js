@@ -166,6 +166,7 @@ export const CATEGORIES = {
   'migrations': { label: 'Legacy Migration Ledger', description: 'Pre-2026-05 location of the migration applied-list — the next migration run moves it to migrations.applied.json, and setup removes the empty folder', archivable: false, deletable: false },
   'model-personality': { label: 'Model Personality', description: 'Model personality probe results and settings', archivable: true, deletable: false },
   'model-tests': { label: 'Model Capability Tests', description: 'Throwaway agent sandboxes from the capability test suite — recreated per run, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
+  'models': { label: '3D Models', description: 'Uploaded GLB layouts referenced by catalog places — retain the authored source files', archivable: true, deletable: false },
   'music': { label: 'Music', description: 'Uploaded and generated background tracks', archivable: true, deletable: false },
   'openclaw': { label: 'OpenClaw', description: 'OpenClaw integration config', archivable: true, deletable: false },
   'peer-execution': { label: 'Peer Execution Recovery', description: 'Machine-local launch evidence and completion receipts required to reconcile authorized peer maintenance — preserve unresolved operations', archivable: false, deletable: false },
