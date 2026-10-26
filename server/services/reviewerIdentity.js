@@ -123,3 +123,17 @@ export async function preflightReviewerIdentities({ usernames = [], optionalRevi
     optionalMissing: missing.filter((entry) => !entry.required),
   };
 }
+
+// PR eligibility is deliberately uncached: authorship belongs to a particular PR,
+// not to the forge identity, and must be read again for each dispatch.
+export async function preflightReviewerPrAuthor({ usernames = [], optionalReviewers = [], pr, ghApi = execGh } = {}) {
+  if (!pr?.owner || !pr?.repo || !pr?.number || !usernames.length) return { required: [], optional: [] };
+  const args = ['api', ...(pr.host && pr.host !== 'github.com' ? ['--hostname', pr.host] : []), `repos/${pr.owner}/${pr.repo}/pulls/${pr.number}`, '--jq', '.user.login'];
+  const author = await ghApi(args, LOOKUP_TIMEOUT_MS).catch(() => '');
+  const login = String(author || '').trim().toLowerCase();
+  if (!login) return { required: [], optional: [] };
+  const optional = new Set(optionalReviewers.map((r) => r.replace(/^@/, '').toLowerCase()));
+  const matches = usernames.filter((u) => !u.includes('/') && u.toLowerCase() === login)
+    .map((token) => ({ token, reason: 'The configured reviewer is the PR author and cannot review their own PR' }));
+  return { required: matches.filter((e) => !optional.has(e.token.toLowerCase())), optional: matches.filter((e) => optional.has(e.token.toLowerCase())) };
+}

@@ -173,7 +173,7 @@ function resolveReviewForge(reviewForgeCli, { prUrl = '', prNumber = '', prOwner
     // `gh pr edit --add-reviewer` wants the bare login, so the `@` is dropped.
     requestReviewersText: (usernames) => (glab
       ? `request ${usernames.map(u => `\`@${u}\``).join(', ')} as MR reviewer${usernames.length > 1 ? 's' : ''} using the GitLab project UI or API, then inspect \`glab mr view ${mrRef}\` for their review and address any findings; their approval gates the merge.`
-      : `request ${usernames.map(u => `\`@${u}\``).join(', ')} as PR reviewer${usernames.length > 1 ? 's' : ''} (\`gh pr edit ${prRef} --add-reviewer <user>\`, drop the \`@\`), then wait for their review (poll every 5–15s) and address any findings; their approval gates the merge.`),
+      : `Before requesting ${usernames.map(u => `\`@${u}\``).join(', ')}, read the live PR author and compare logins case-insensitively. An author match is a reviewer configuration fault: record an optional reviewer as unavailable, or leave the PR blocked for a required reviewer; never wait for that reviewer or substitute another. For each eligible reviewer request a review (\`gh pr edit ${prRef} --add-reviewer <user>\`, drop the \`@\`), then read back pending requested reviewers and completed reviews from GitHub. If neither contains that reviewer, treat the request as failed, not as a pending review; apply optional/required semantics and do not wait for an impossible approval. Only after verified request or completed review, wait for the review (poll every 5–15s) and address findings; required approval gates the merge.`),
   };
 }
 
