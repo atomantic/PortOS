@@ -94,13 +94,16 @@ for (const removalFailure of [false, true]) {
       const output = result.stdout + result.stderr;
       expect(result.error, output).toBeUndefined();
       expect(result.status, output).toBe(1);
-      expect(output).toContain('controlled sibling failure');
+      expect(output).toContain('Error: controlled sibling failure');
       expect(existsSync(resultPath), output).toBe(true);
       expect(JSON.parse(readFileSync(resultPath, 'utf8'))).toEqual({
         activeAtEntry: 1, activeAtCleanup: 0, activeGit: 0, templateExists: removalFailure,
         ...(removalFailure ? { error: 'controlled template removal failure' } : {}),
       });
-      if (removalFailure) expect(output).toContain('Git template teardown failed');
+      if (removalFailure) {
+        expect(output).toContain('Error: controlled template removal failure');
+        expect(output).toContain('(suite: lifecycle.test.js)');
+      }
       else expect(output).not.toContain('test temp leak');
       expect(readFileSync(join(host, 'keep'), 'utf8')).toBe('unrelated');
       expect(readdirSync(host).filter(name => name.startsWith('pvt-'))).toEqual([]);
