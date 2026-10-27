@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { outsideGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
@@ -454,7 +455,9 @@ export function resumeAgentCompletionRetirement(agentId, seedContext) {
 async function verifyReleasedSynchronization(agent) {
   if (agent?.status === 'completed' && agent.metadata?.taskAnalysisType === 'release-sync') {
     const { verifyReleaseSynchronizationTask } = await import('./releaseSynchronization.js');
-    await verifyReleaseSynchronizationTask(agent.taskId);
+    // This post-exit callback outlives spawn's Git operation, just like cleanup.
+    // Keep caller authorization; the verifier retains its own exact task/repo checks.
+    await outsideGitMutationLifetime(() => verifyReleaseSynchronizationTask(agent.taskId));
   }
 }
 
