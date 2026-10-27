@@ -724,3 +724,12 @@ describe('catalog card query boundary', () => {
     expect(catalogIngredientCardsQuerySchema.safeParse({ ids: Array.from({ length: 51 }, (_, i) => `example-${i}`) }).success).toBe(false);
   });
 });
+
+describe('catalogMediaLibraryPatchSchema review', () => {
+  it('accepts good/bad/unreviewed and refuses "rejected", which only music video takes use', async () => {
+    const { catalogMediaLibraryPatchSchema } = await import('./catalogValidation.js');
+    const patch = (status) => catalogMediaLibraryPatchSchema.safeParse({ mediaKey: 'a.png', kind: 'reference', review: { status } }).success;
+    expect(['unreviewed', 'good', 'bad'].map(patch)).toEqual([true, true, true]);
+    expect(patch('rejected')).toBe(false);
+  });
+});

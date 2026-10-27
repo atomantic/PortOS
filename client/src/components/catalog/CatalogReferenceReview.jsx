@@ -4,8 +4,7 @@ import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import useMounted from '../../hooks/useMounted';
 import ModelInputPreview from '../media/ModelInputPreview';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
-
-const STATUSES = ['unreviewed', 'good', 'bad', 'rejected'];
+import { REFERENCE_REVIEW_WRITE_STATUSES, referenceReviewStatus } from '../../../../server/lib/catalogMediaLibrary.js';
 
 export default function CatalogReferenceReview({ ingredientId, media, readOnly, saving, onSave, onChanged, revision, blockedReason }) {
   const id = useId();
@@ -17,9 +16,10 @@ export default function CatalogReferenceReview({ ingredientId, media, readOnly, 
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
   const review = media.library?.review || {};
-  const status = draft?.status ?? review.status ?? 'unreviewed';
+  const savedStatus = referenceReviewStatus(media);
+  const status = draft?.status ?? savedStatus;
   const feedback = draft?.feedback ?? review.feedback ?? '';
-  const dirty = status !== (review.status || 'unreviewed') || feedback !== (review.feedback || '');
+  const dirty = status !== savedStatus || feedback !== (review.feedback || '');
   const body = { mediaKey: media.mediaKey, kind: media.kind, feedback };
   const fetchPreview = useCallback((input, options) => refineCatalogMedia(ingredientId, input, { ...options, preview: true }), [ingredientId]);
   const preview = useModelInputPreview(fetchPreview, body, { enabled: open && !readOnly && !blockedReason && feedback.trim().length > 0, revision });
@@ -46,18 +46,18 @@ export default function CatalogReferenceReview({ ingredientId, media, readOnly, 
     }
   };
   return <details onToggle={event => setOpen(event.currentTarget.open)} className="min-w-0 text-xs">
-    <summary className="min-h-11 cursor-pointer content-center text-port-accent">Review &amp; refine · {review.status || 'unreviewed'}</summary>
+    <summary className="min-h-11 cursor-pointer content-center text-port-accent">Review &amp; refine · {savedStatus}</summary>
     {readOnly ? <p className="whitespace-pre-wrap text-gray-400">{review.feedback || 'No editing guidance saved.'}</p> : <div className="space-y-2">
       <label htmlFor={`${id}-status`} className="block text-gray-400">Reference rating</label>
       <select id={`${id}-status`} value={status} onChange={event => setDraft({ status: event.target.value, feedback })} disabled={saving || starting || !!jobId}
         className="min-h-11 w-full rounded border border-port-border bg-port-bg px-2">
-        {STATUSES.map(value => <option key={value} value={value}>{value}</option>)}
+        {REFERENCE_REVIEW_WRITE_STATUSES.map(value => <option key={value} value={value}>{value}</option>)}
       </select>
       <label htmlFor={`${id}-feedback`} className="block text-gray-400">Editing guidance</label>
       <textarea id={`${id}-feedback`} value={feedback} maxLength={2000} rows={3} disabled={saving || starting || !!jobId}
         onChange={event => setDraft({ status, feedback: event.target.value })} placeholder="Describe what to correct and what to preserve…"
         className="w-full rounded border border-port-border bg-port-bg p-2" />
-      <p className="text-gray-500">Bad and rejected images are retained for comparison and excluded from render guides. Refining creates a new, unreviewed reference.</p>
+      <p className="text-gray-500">Bad images stay here for comparison and out of render guides. Refining creates a new, unreviewed reference.</p>
       <button type="button" disabled={!dirty || saving || starting || !!jobId} onClick={async () => {
         if (await onSave({ review: { status, feedback } })) setDraft(null);
       }}

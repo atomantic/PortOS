@@ -62,7 +62,8 @@ describe('catalogMediaLibrary', () => {
       row('other-look.png', 'reference', { variant: { age: 27, formId: 'costume' } }),
     ];
     expect(pickGuideMedia(media, { age: 27, formId: 'adult' }).map(m => m.mediaKey)).toEqual(['adult.png']);
-    expect(filterLibraryMedia(media, { review: 'bad' }).map(m => m.mediaKey)).toEqual(['bad.png']);
+    // A legacy or older-peer 'rejected' reads as bad.
+    expect(filterLibraryMedia(media, { review: 'bad' }).map(m => m.mediaKey)).toEqual(['bad.png', 'rejected.png']);
     const derivedFrom = { mediaKey: 'bad.png', kind: 'portrait' };
     expect(normalizeLibrary({ derivedFrom })).toEqual({ derivedFrom });
   });

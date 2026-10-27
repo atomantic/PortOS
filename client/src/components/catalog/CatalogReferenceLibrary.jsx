@@ -1,26 +1,27 @@
 import { useId, useMemo, useState } from 'react';
 import { useCatalogPreviewSequence } from './CatalogImagePreviewProvider';
-import { Ban, Compass, Star, ThumbsDown, ThumbsUp, Trash2 } from 'lucide-react';
+import { Compass, Star, ThumbsDown, ThumbsUp, Trash2 } from 'lucide-react';
 import CatalogMediaTile from './CatalogMediaTile';
 import CatalogReferenceReview from './CatalogReferenceReview';
-import { rejectedReferenceKeys } from '../../../../server/lib/catalogMediaLibrary.js';
+import { REFERENCE_REVIEW_WRITE_STATUSES, referenceReviewStatus, rejectedReferenceKeys } from '../../../../server/lib/catalogMediaLibrary.js';
 import { formatCount } from '../../utils/formatters';
 import { updateCatalogIngredientMediaLibrary, attachCatalogIngredientMediaFromMoodBoard } from '../../services/apiCatalog';
 
 export const MAX_CAST_GUIDES = 4;
 const RATINGS = [
   { status: 'good', label: 'Good', Icon: ThumbsUp, on: 'border-port-success bg-port-success/20 text-port-success', hover: 'hover:border-port-success hover:text-port-success' },
-  { status: 'bad', label: 'Bad', Icon: ThumbsDown, on: 'border-port-warning bg-port-warning/20 text-port-warning', hover: 'hover:border-port-warning hover:text-port-warning' },
-  { status: 'rejected', label: 'Rejected', Icon: Ban, on: 'border-port-error bg-port-error/20 text-port-error', hover: 'hover:border-port-error hover:text-port-error' },
+  { status: 'bad', label: 'Bad', Icon: ThumbsDown, on: 'border-port-error bg-port-error/20 text-port-error', hover: 'hover:border-port-error hover:text-port-error' },
 ];
-// Clicking the active rating clears it back to unreviewed.
+// Clicking the active rating clears it back to unreviewed. A wrong reference
+// is removed from the record rather than rated "rejected" (that state is for
+// music video takes); a legacy 'rejected' reads as bad.
 const rateReview = (m, status) => {
   const review = m.library?.review || {};
-  return { review: { status: (review.status || 'unreviewed') === status ? 'unreviewed' : status, ...(review.feedback ? { feedback: review.feedback } : {}) } };
+  return { review: { status: referenceReviewStatus(m) === status ? 'unreviewed' : status, ...(review.feedback ? { feedback: review.feedback } : {}) } };
 };
 
-function RatingButtons({ media, busy, onRate, className = 'grid grid-cols-3 gap-1.5' }) {
-  const current = media.library?.review?.status || 'unreviewed';
+function RatingButtons({ media, busy, onRate, className = 'grid grid-cols-2 gap-1.5' }) {
+  const current = referenceReviewStatus(media);
   return (
     <div role="group" aria-label={`Rating for ${media.mediaKey}`} className={className}>
       {RATINGS.map(({ status, label, Icon, on, hover }) => (
@@ -95,7 +96,7 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
     && (filter.age === '' || m.library?.variant?.age === Number(filter.age))
     && (!filter.era || eraFor(m) === filter.era)
     && (!filter.tag || (m.library?.tags || []).includes(filter.tag))
-    && (!filter.review || (filter.review === 'active' ? !['bad', 'rejected'].includes(m.library?.review?.status) : (m.library?.review?.status || 'unreviewed') === filter.review))
+    && (!filter.review || (filter.review === 'active' ? referenceReviewStatus(m) !== 'bad' : referenceReviewStatus(m) === filter.review))
     && (!filter.guides || (m.library?.guide === true && !rejected.has(m.mediaKey))));
 
   // One visual can have both portrait and reference attachments with independent metadata.
@@ -132,7 +133,7 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
     rating: (key, { nextKey, prevKey, goTo }) => {
       const m = tilesByKey.get(key);
       if (!m || readOnly || m.readOnly) return null;
-      const status = m.library?.review?.status;
+      const status = referenceReviewStatus(m);
       return {
         value: ['good', 'bad'].includes(status) ? status : null,
         busy: !!busyKey,
@@ -228,7 +229,7 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
           <select id={`${id}-review`} value={filter.review} onChange={event => setFilter({ ...filter, review: event.target.value })} className={fieldClass}>
             <option value="active">Good &amp; unreviewed</option>
             <option value="">All ratings</option>
-            {['unreviewed', 'good', 'bad', 'rejected'].map(value => <option key={value} value={value}>{value}</option>)}
+            {REFERENCE_REVIEW_WRITE_STATUSES.map(value => <option key={value} value={value}>{value}</option>)}
           </select>
         </label>
       </div>
@@ -251,8 +252,7 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
                   const title = lib.variant?.label || m.caption || m.mediaKey;
                   const summary = [forms.find((f) => f.id === lib.variant?.formId)?.label || 'Canonical',
                     Number.isInteger(lib.variant?.age) ? `Age ${lib.variant.age}` : '', eraFor(m), ...(lib.tags || [])].filter(Boolean).join(' · ');
-                  const review = lib.review || {};
-                  const currentStatus = review.status || 'unreviewed';
+                  const currentStatus = referenceReviewStatus(m);
                   return (
                     <div key={key} role="group" aria-label={`${m.kind} details for ${m.mediaKey}`} className="min-w-0 space-y-2 border-t border-port-border p-3">
                       <div className="flex min-w-0 items-start gap-2">
@@ -263,11 +263,8 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
                       <p className="text-xs text-gray-400 [overflow-wrap:anywhere]">{summary}</p>
                       {m.kind !== 'video' && (editable ? (
                         <RatingButtons media={m} busy={!!busyKey} onRate={(status) => save(m, rateReview(m, status))} />
-                        
                       ) : currentStatus !== 'unreviewed' && (
-                        <p className={`text-xs font-medium capitalize ${
-                          currentStatus === 'good' ? 'text-port-success' : currentStatus === 'bad' ? 'text-port-warning' : 'text-port-error'
-                        }`}>Rating: {currentStatus}</p>
+                        <p className={`text-xs font-medium capitalize ${currentStatus === 'good' ? 'text-port-success' : 'text-port-error'}`}>Rating: {currentStatus}</p>
                       ))}
                       {m.kind !== 'video' && (editable ? (
                         <button type="button" disabled={!!busyKey || rejected.has(m.mediaKey) || (!isGuide && guideCount >= MAX_CAST_GUIDES)} aria-pressed={isGuide}
