@@ -1,6 +1,6 @@
 import { once } from 'node:events';
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -91,6 +91,14 @@ if (mode !== 'child') {
     const root = await mkdtemp(join(tmpdir(), 'portos-git-ordinary-'));
     try {
       await execGit(['init', '-b', 'main'], root);
+      // Verify the real PowerShell publisher, not only synthetic receipt reads.
+      let receipt;
+      try { receipt = JSON.parse(readFileSync(join(process[Symbol.for('portos.windowsGitSupervisor')].directory, 'compiler-progress.json'), 'utf8')); }
+      catch { /* assertion below reports only the bounded missing-stage result */ }
+      expect(receipt?.stage).toBe('add-type-complete');
+      expect(Number.isSafeInteger(receipt?.startedAt)).toBe(true);
+      expect(Number.isInteger(receipt?.elapsedMs) && receipt.elapsedMs >= 0 && receipt.elapsedMs <= 120000).toBe(true);
+      process.stdout.write(`🪟 Compiler receipt stage=${receipt.stage} scriptMs=${receipt.elapsedMs}\n`);
       await writeFile(join(root, 'example.txt'), 'example\n');
       const bytes = Buffer.from([0xff, 0, 10]);
       await writeFile(join(root, 'example.bin'), bytes);

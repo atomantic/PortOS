@@ -340,6 +340,125 @@ describe('Image Gen Routes', () => {
     });
   });
 
+  describe('FableLoom preview/send parity with the real compiler', () => {
+    const defaultCompile = compileFableLoomVisualRequest.getMockImplementation();
+    const defaultCapabilities = fableLoomImageCapabilities.getMockImplementation();
+    let canonLoom, canonUniverse, canonSeries;
+    beforeEach(async () => {
+      const { naturalUniverseVisualProfile } = await import('../lib/universeVisualProfile.js');
+      canonUniverse = {
+        id: 'example-universe', visualProfile: naturalUniverseVisualProfile(),
+        characters: [{
+          id: 'example-character', name: 'Example Scout', physicalDescription: 'a red coat',
+          identityPack: { assets: ['neutral', 'profile', 'full-body'].map(role => ({
+            role, imageRef: `example-${role}.png`, approved: true,
+          })), avoid: ['wrong face'] },
+        }],
+        places: [{ id: 'example-place', name: 'Example Hall', primaryImageRef: 'example-hall.png' }],
+        objects: [],
+      };
+      canonLoom = {
+        id: 'example-loom', universeId: canonUniverse.id, seriesId: 'example-series',
+        episodes: [{ id: 'ep-1', number: 1, startNodeId: 'node-1', nodes: [{
+          id: 'node-1', imagePrompt: 'The scout arrives', transitions: [],
+          visualCanon: { mode: 'locked', characterAppearances: [{ characterId: 'example-character' }], placeId: 'example-place' },
+        }] }],
+      };
+      canonSeries = null;
+      getLoom.mockImplementation(async () => canonLoom);
+      const real = await vi.importActual('../services/fableLoom/visualConditioning.js');
+      fableLoomImageCapabilities.mockImplementation(real.fableLoomImageCapabilities);
+      compileFableLoomVisualRequest.mockImplementation(args => real.compileFableLoomVisualRequest({
+        ...args, loadLoom: async () => canonLoom, loadUniverse: async () => canonUniverse,
+        loadSeries: async () => canonSeries, resolveLoras: async () => [],
+      }));
+      await fileUtils.ensureDir(fileUtils.PATHS.images);
+      for (const name of ['neutral', 'profile', 'full-body', 'hall']) {
+        await writeFile(pathJoin(fileUtils.PATHS.images, `example-${name}.png`), 'synthetic image fixture');
+      }
+    });
+    afterEach(() => {
+      compileFableLoomVisualRequest.mockImplementation(defaultCompile);
+      fableLoomImageCapabilities.mockImplementation(defaultCapabilities);
+      getLoom.mockImplementation(async () => null);
+    });
+
+    // Catches drift in text, profile ownership, and ordered canon attachments at the HTTP boundary.
+    it.each([
+      ['local', 'inherited'], ['codex', 'inherited-init'], ['codex', 'custom'], ['local', 'disabled'],
+      ['codex', 'series-override'], ['local', 'series-append'],
+    ])('previews exactly the %s render with %s photography', async (mode, profileCase) => {
+      const { codexSentPrompt } = await import('../services/imageGen/codex.js');
+      const { localSentPrompt } = await import('../services/imageGen/local.js');
+      const { resolveInputImages } = await import('../services/imageGen/inputImages.js');
+      const { naturalUniverseVisualProfile } = await import('../lib/universeVisualProfile.js');
+      const { getImageModels } = await import('../lib/mediaModels.js');
+      const body = {
+        prompt: 'The scout arrives', negativePrompt: 'blur', mode,
+        ...(mode === 'local' ? { modelId: 'flux2-klein-9b' } : {}),
+        fableLoom: { loomId: canonLoom.id, episodeId: 'ep-1', nodeId: 'node-1' },
+      };
+      if (profileCase === 'inherited-init') body.initImageFile = 'example-hall.png';
+      let expectedProfile = canonUniverse.visualProfile;
+      if (profileCase === 'custom') {
+        body.visualProfileOverride = naturalUniverseVisualProfile();
+        body.visualProfileOverride.generation.lighting = 'Custom amber lantern light';
+        expectedProfile = body.visualProfileOverride;
+      }
+      if (profileCase === 'disabled') expectedProfile = body.visualProfileOverride = null;
+      if (profileCase.startsWith('series-')) {
+        canonSeries = { stylePromptOverride: 'woodcut lines', stylePromptOverrideMode: profileCase.slice(7) };
+        if (profileCase === 'series-override') expectedProfile = null;
+      }
+      getSettings.mockResolvedValueOnce({ imageGen: { mode, local: { modelId: 'flux2-klein-9b' }, codex: { enabled: true } } });
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      expect(preview.status).toBe(200);
+      expect(preview.body.authoredPrompt).toBe(body.prompt);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(mediaJobQueue.assertMediaQueueRoom).not.toHaveBeenCalled();
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+
+      getSettings.mockResolvedValueOnce({ imageGen: { mode, local: { modelId: 'flux2-klein-9b' }, codex: { enabled: true } } });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'example-job', status: 'queued' });
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+      expect(submit.status).toBe(200);
+      const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
+      const sent = mode === 'local'
+        ? await localSentPrompt({ ...params, model: getImageModels().find(model => model.id === params.modelId) })
+        : codexSentPrompt({ ...params, inputImages: resolveInputImages({ mode, ...params }) }).record;
+      expect(preview.body.sentPrompt).toBe(sent.sentPrompt);
+      expect(preview.body.sentNegativePrompt).toBe(sent.sentNegativePrompt);
+      expect(preview.body.promptAdditions).toEqual(sent.promptAdditions);
+      expect(preview.body.referenceImages.map(item => item.filename)).toEqual([...(params.initImagePath ? [params.initImagePath] : []), ...params.referenceImagePaths].map(path => path.split('/').at(-1)));
+      expect(params.authoredPrompt).toBe(body.prompt);
+      expect(params.visualProfile ?? null).toEqual(expectedProfile);
+      for (const field of ['lighting', 'optics', 'materials']) {
+        const text = expectedProfile?.generation[field];
+        if (text) expect(params.prompt.split(text)).toHaveLength(2);
+      }
+      if (!expectedProfile) expect(params.prompt).not.toContain(canonUniverse.visualProfile.generation.lighting);
+    });
+
+    it.each(['missing-universe', 'missing-binding', 'unsupported-backend', 'disabled-provider'])('matches the %s refusal without provider work', async failure => {
+      if (failure === 'missing-universe') canonUniverse = null;
+      if (failure === 'missing-binding') canonLoom.episodes[0].nodes[0].visualCanon.placeId = 'missing-place';
+      const body = {
+        mode: failure === 'unsupported-backend' ? 'external' : 'codex',
+        prompt: 'The scout arrives',
+        fableLoom: { loomId: canonLoom.id, episodeId: 'ep-1', nodeId: 'node-1' },
+      };
+      const settings = { imageGen: { mode: body.mode, codex: { enabled: failure !== 'disabled-provider' } } };
+      getSettings.mockResolvedValueOnce(settings);
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      getSettings.mockResolvedValueOnce(settings);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+      expect(preview.status).toBeGreaterThanOrEqual(400);
+      expect([preview.status, preview.body.code, preview.body.error]).toEqual([submit.status, submit.body.code, submit.body.error]);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+  });
+
   describe('POST /api/image-gen/generate', () => {
     it('should generate an image', async () => {
       imageGen.generateImage.mockResolvedValue({
@@ -397,6 +516,23 @@ describe('Image Gen Routes', () => {
       expect(compileFableLoomVisualRequest).toHaveBeenCalledWith(expect.objectContaining({
         tag: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' }, kind: 'image',
       }));
+    });
+
+    it('preserves an explicit profile for an unlinked legacy FableLoom scene', async () => {
+      const { naturalUniverseVisualProfile } = await import('../lib/universeVisualProfile.js');
+      const profile = naturalUniverseVisualProfile();
+      profile.finishing.mode = 'save';
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { modelId: 'flux2-klein-9b' } } });
+      compileFableLoomVisualRequest.mockResolvedValueOnce(null);
+      const response = await request(app).post('/api/image-gen/generate').send({
+        prompt: 'An authored scene', visualProfileOverride: profile,
+        fableLoom: { loomId: 'loom-legacy', episodeId: 'ep-1', nodeId: 'node-1' },
+      });
+      expect(response.status).toBe(200);
+      const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
+      expect(params.visualProfile).toEqual(profile);
+      expect(params.prompt.split(profile.generation.lighting)).toHaveLength(2);
+      expect(params.prompt.startsWith('An authored scene')).toBe(true);
     });
 
     // The install pin used to be read only inside resolveLocalImageModel, so a

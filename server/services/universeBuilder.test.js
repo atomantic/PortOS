@@ -106,6 +106,7 @@ vi.mock("crypto", async () => {
 });
 
 const svc = await import("./universeBuilder.js");
+const { naturalUniverseVisualProfile } = await import("../lib/universeVisualProfile.js");
 const cj = await import("../lib/conflictJournal.js");
 const { recordEvents, registerSubscriptionAdapter, __resetSubscriptionAdapter } = await import("./sharing/recordEvents.js");
 
@@ -191,6 +192,19 @@ describe("universeBuilder service", () => {
     expect(summaries[0].styleImageRef).toBe('latest.png');
     expect(summaries[0].starterPrompt).toHaveLength(svc.LOGLINE_MAX - 1);
     expect(full[0].starterPrompt.length).toBeGreaterThan(svc.LOGLINE_MAX);
+  });
+
+  it("persists and projects photography, composes it for canon, and honors explicit off and clear", async () => {
+    const profile = naturalUniverseVisualProfile();
+    const world = await seedWorld({ visualProfile: profile });
+    expect((await svc.getUniverse(world.id)).visualProfile).toEqual(profile);
+    expect((await svc.listUniverseStyles()).find(w => w.id === world.id).visualProfile).toEqual(profile);
+    expect(svc.compilePrompts(world)[0].prompt).toContain(profile.generation.lighting);
+    expect(svc.compilePrompts(world, { visualProfileOverride: null })[0].prompt).not.toContain(profile.generation.lighting);
+    await svc.updateUniverse(world.id, { logline: "An unrelated edit" });
+    expect((await svc.getUniverse(world.id)).visualProfile).toEqual(profile);
+    await svc.updateUniverse(world.id, { visualProfile: null });
+    expect(await svc.getUniverse(world.id)).not.toHaveProperty("visualProfile");
   });
 
   describe("listUniverseStyles", () => {
@@ -1390,6 +1404,13 @@ describe("universeBuilder service", () => {
       };
       const withoutField = (list, field) => list.map(({ [field]: _omit, ...rest }) => rest);
       const legacyFieldCases = [
+        {
+          field: 'visualProfile', since: 16,
+          patch: { visualProfile: naturalUniverseVisualProfile() },
+          strip: ({ visualProfile: _omit, ...rest }) => rest,
+          read: u => u.visualProfile,
+          kept: naturalUniverseVisualProfile(), cleared: undefined,
+        },
         {
           field: 'factual', since: 12,
           patch: { factual: true },

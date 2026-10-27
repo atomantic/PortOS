@@ -126,7 +126,7 @@ describe('FableLoom visual conditioning compiler', () => {
     expect(result.visualConditioning.compiledPrompt).toBe(result.prompt);
     expect(result.visualConditioning.compiledNegativePrompt).toBe(result.negativePrompt);
     expect(result.visualConditioning).toMatchObject({
-      status: 'locked', compilerVersion: '1.1.0', universeId: universe.id,
+      status: 'locked', compilerVersion: '1.2.0', universeId: universe.id,
       temporalSourceNodeId: 'opening',
       bindings: { inferred: false, placeId: 'place-1', objectIds: ['object-1'] },
       adapters: [{ filename: 'aria-v2.safetensors', scale: 0.75, sha256: 'a'.repeat(64) }],
@@ -507,4 +507,19 @@ describe('FableLoom visual conditioning compiler', () => {
       ...injected,
     })).resolves.toBeNull();
   });
+});
+
+it('resolves a manual photography override once, preserves its finishing snapshot and honors Off', async () => {
+  const { naturalUniverseVisualProfile } = await import('../../lib/universeVisualProfile.js');
+  const { applyImageVisualProfile } = await import('../imageGen/visualProfile.js');
+  const profile = naturalUniverseVisualProfile();
+  const loom = loomWith(lockedBinding);
+  const args = { tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' }, kind: 'image', capability: fableLoomImageCapabilities({ mode: 'codex', inputBudget: 8 }), authoredPrompt: 'A cautious arrival', ...deps(loom), loadUniverse: async () => ({ ...universe, visualProfile: profile }) };
+  const compiled = await compileFableLoomVisualRequest({ ...args, visualProfileOverride: profile });
+  const params = applyImageVisualProfile(compiled, compiled.visualProfile);
+  for (const key of ['lighting', 'optics', 'materials']) expect(params.prompt.split(profile.generation[key])).toHaveLength(2);
+  expect(params.visualProfile).toEqual(profile);
+  const off = await compileFableLoomVisualRequest({ ...args, visualProfileOverride: null });
+  expect(off.prompt).not.toContain(profile.generation.lighting);
+  expect(off.visualProfile).toBeNull();
 });

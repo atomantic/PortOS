@@ -54,5 +54,10 @@
   },
   "backup": {
     "retentionCount": 30
+  },
+  "imageGen": {
+    "agy": { "enabled": true },
+    "grok": { "enabled": true },
+    "codex": { "enabled": true }
   }
 }

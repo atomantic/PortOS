@@ -10,7 +10,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { PR_COMPLETIONS, explicitPrCompletion } from '../lib/prDisposition.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
-import { checkoutSeedSchema, completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
+import { checkoutSeedSchema, completedCheckoutReceiptValid, sameTaskRetirementBinding } from './completedCheckoutEvidence.js';
 import { isDeepStrictEqual } from 'node:util';
 
 const samePath = (a, b) => typeof a === 'string' && typeof b === 'string'
@@ -279,6 +279,26 @@ function distinctCapturedAdministration(incarnation, current) {
 
 function separatelyDeliveredCheckout(policy, input) {
   const forge = input.retirementForge;
+  if (!input.detachedCheckoutIdentity && forge?.scopeProof === 'exact-delivered-head'
+    && forge.prHead === input.tip && input.verifiedPrHead === input.tip
+    && policy.agent.status === 'completed' && policy.completion === PR_COMPLETIONS.REVIEW_THEN_MERGE
+    && policy.agent.result?.executionSuccess === true && policy.agent.result.validationPassed !== false
+    && policy.agent.result.taskOutcome?.recovery?.mode !== 'approval' && !policy.agent.metadata?.blocker
+    && retirementPr(policy) === input.prUrl) {
+    const rows = policy.agent.metadata?.completedCheckouts?.filter(row => completedCheckoutReceiptValid(policy.agent, row)
+      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch
+      && samePath(row.path, policy.agent.metadata.workspacePath) && !sameReviewedPath(row.path, input.checkoutPath, input)
+      && (!policy.tip || [row.head, input.tip].includes(policy.tip))
+      && (!reviewTarget(policy) || reviewTarget(policy).branch === input.branch)
+      && distinctCapturedAdministration(row.incarnation, input.checkoutIncarnation?.gitdir)
+      && !isDeepStrictEqual(row.incarnation.pointer, input.checkoutIncarnation?.pointer)
+      && input.namedSiblingCaptures?.some(proof => proof.agentId === policy.agent.id
+        && proof.capturedHead === row.head && proof.capturedAt === row.capturedAt && proof.path === row.path
+        && isDeepStrictEqual(proof.incarnation, row.incarnation)
+        && isDeepStrictEqual(proof.checkoutIncarnation, input.checkoutIncarnation)));
+    return rows?.length === 1 ? { ...rows[0], releasedCopyIncarnation: input.checkoutIncarnation } : null;
+  }
+
   if (forge?.scopeProof !== 'represented-detached-head' || forge.detachedRepresentation?.sourceHead !== input.tip
     || forge.detachedRepresentation.deliveredHead !== input.verifiedPrHead
     || completedDetachedSibling(policy, input) || policy.resumedCleanup
@@ -406,6 +426,22 @@ function resumedCleanupPolicies(policies, input) {
         ...(sibling && { detachedCheckoutIdentity: input.detachedCheckoutIdentity }) });
       child = parent;
     }
+  }
+  for (const proof of input.resumedDeliveries || []) {
+    if (proof.kind !== 'same-task-generation' || proof.prUrl !== input.prUrl || proof.tip !== input.tip
+      || !isDeepStrictEqual(proof.checkoutIncarnation, input.checkoutIncarnation)) continue;
+    const parent = byId.get(proof.agentId), successor = byId.get(proof.successorAgentId);
+    if (!parent || !successor || parent.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
+      || successor.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE || proof.taskId !== parent.agent.taskId
+      || proof.originalPolicyTip !== (parent.tip ?? null)) continue;
+    const binding = sameTaskRetirementBinding(parent.agent, successor.agent, input);
+    if (!binding || proof.capturedHead !== (binding.sourceCapture?.head ?? null)
+      || proof.capturedAt !== (binding.sourceCapture?.capturedAt ?? null)
+      || proof.sourceSeededAt !== (binding.sourceSeed?.seededAt ?? null)
+      || proof.successorCapturedAt !== binding.successorCapture.capturedAt) continue;
+    proofs.set(parent.agent.id, { successorAgentId: successor.agent.id, taskId: parent.agent.taskId,
+      checkoutIncarnation: input.checkoutIncarnation, evidence: 'server-seeded-task-generation',
+      ...(binding.sourceSeed && { sourceCaptureUnknown: true }) });
   }
   return policies.map(policy => proofs.has(policy.agent.id) ? { ...policy, resumedCleanup: proofs.get(policy.agent.id) } : policy);
 }

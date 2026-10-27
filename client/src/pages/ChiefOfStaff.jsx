@@ -43,6 +43,25 @@ import ActionableInsightsBanner from '../components/cos/ActionableInsightsBanner
 const COS_PAGE_SUBSCRIBE = { taskLists: 'invalidate' };
 const COS_PAGE_RELEASE = { taskLists: 'full' };
 
+function mergeAgentRecords(base, update) {
+  if (!base) return update;
+  if (!update) return base;
+  return {
+    ...base,
+    ...update,
+    metadata: {
+      ...base.metadata,
+      ...update.metadata,
+      ...(base.metadata?.releasePublication && !update.metadata?.releasePublication
+        ? { releasePublication: base.metadata.releasePublication }
+        : {}),
+      ...(base.metadata?.releaseSynchronization && !update.metadata?.releaseSynchronization
+        ? { releaseSynchronization: base.metadata.releaseSynchronization }
+        : {}),
+    },
+  };
+}
+
 const AgentsTab = lazy(() => import('../components/cos/tabs/AgentsTab'));
 
 // Task editing is not needed to view agents, so keep its forms and drag/drop
@@ -350,7 +369,7 @@ export default function ChiefOfStaff() {
     agentReadRef.current = null;
     if (Array.isArray(data)) {
       const merged = new Map(data.map(agent => [agent.id, agent]));
-      for (const [id, agent] of request.updates) merged.set(id, { ...merged.get(id), ...agent });
+      for (const [id, agent] of request.updates) merged.set(id, mergeAgentRecords(merged.get(id), agent));
       const snapshot = [...merged.values()].filter(agent => agent.status !== 'completed' || agent.deliveryPending);
       setAgents(snapshot);
       setAgentsLoaded(true);
@@ -570,6 +589,20 @@ export default function ChiefOfStaff() {
       if (data?.completedChanged || data?.task?.status === 'completed' || data?.previousStatus === 'completed' || ['deleted', 'peer-merged'].includes(data?.action)) {
         setTaskHistoryRevision(value => value + 1);
       }
+      if (data?.task?.id) {
+        setTasks(prev => {
+          const updated = { ...prev };
+          for (const key of ['user', 'cos']) {
+            if (updated[key]?.tasks) {
+              updated[key] = {
+                ...updated[key],
+                tasks: updated[key].tasks.map(t => t.id === data.task.id ? { ...t, ...data.task } : t),
+              };
+            }
+          }
+          return updated;
+        });
+      }
       refreshQueue();
     };
     socket.on('cos:tasks:changed', handleTaskMutation);
@@ -598,11 +631,14 @@ export default function ChiefOfStaff() {
     const handleAgentUpdated = (updatedAgent) => {
       if (!needsAgents) return;
       const updates = agentReadRef.current?.updates;
-      updates?.set(updatedAgent.id, { ...updates.get(updatedAgent.id), ...updatedAgent });
+      updates?.set(updatedAgent.id, mergeAgentRecords(updates.get(updatedAgent.id), updatedAgent));
       // Update the specific agent in the agents list without fetching all data
       setAgents(prev => prev.map(agent =>
-        agent.id === updatedAgent.id ? { ...agent, ...updatedAgent } : agent
+        agent.id === updatedAgent.id ? mergeAgentRecords(agent, updatedAgent) : agent
       ).filter(agent => agent.status !== 'completed' || agent.deliveryPending));
+      if (updatedAgent.status === 'completed' || updatedAgent.metadata?.releaseSynchronization) {
+        setCompletedRevision(value => value + 1);
+      }
     };
     socket.on('cos:agent:updated', handleAgentUpdated);
 

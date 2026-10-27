@@ -46,7 +46,7 @@ export function hasStyleForProbe(universe) {
 // probe is queued lets the completion handler skip persisting if the live style
 // has since drifted, so a stale image can't be pinned to a record built from
 // different influences.
-export const probeStyleKey = (universe) => JSON.stringify(buildStyleProbePrompt(universe));
+export const probeStyleKey = (universe) => JSON.stringify({ ...buildStyleProbePrompt(universe), visualProfile: universe?.visualProfile || null });
 
 // Decide whether a completed probe may be persisted onto the saved record. The
 // render-time gate ensures a probe only STARTS while the style is clean, but the
@@ -129,7 +129,7 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
     if (!styleReady) { toast.error('Add embrace influences before probing the base style'); return; }
     // Capture the style key the moment the job is queued so the async completion
     // can detect mid-render style drift.
-    const probe = buildStyleProbePrompt(universe);
+    const capturedStyleKey = probeStyleKey(universe);
     // Tag the render with the universe's collection target so the SERVER files
     // the finished image into the "Universe: <name>" collection (the same
     // auto-filing path batch renders use), alongside persisting the ref onto
@@ -139,7 +139,7 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
       ? { universeId: universe.id, universeName: universe.name, label: 'Base style', category: 'style' }
       : undefined;
     const queuedJobId = await queueRender(imageCfg, undefined, universeRun && { universeRun });
-    if (queuedJobId) probeStyleKeysRef.current.set(probeScope, JSON.stringify(probe));
+    if (queuedJobId) probeStyleKeysRef.current.set(probeScope, capturedStyleKey);
   };
 
   const hasExistingImage = Array.isArray(universe?.styleImageRefs) && universe.styleImageRefs.length > 0;

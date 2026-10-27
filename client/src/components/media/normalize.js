@@ -114,6 +114,8 @@ export function normalizeImage(i) {
     filmLookFrom: i.filmLookFrom || null,
     filmLook: i.filmLook && typeof i.filmLook === 'object' ? i.filmLook : null,
     filmLookWords: i.filmLookWords || null,
+    visualProfile: i.visualProfile || null,
+    visualProfileRevision: i.visualProfileRevision || null,
     provenance: i.provenance || null,
     // A compact gallery row (#8292) holds only a prompt preview; see
     // mediaDetail.js for the hydration every prompt consumer goes through.

@@ -144,6 +144,7 @@ export async function listStyles() {
   const { rows } = await query(
     `SELECT id, name,
             data->'influences' AS influences,
+            data->'visualProfile' AS "visualProfile",
             data->>'stylePrompt' AS "stylePrompt",
             data->>'negativePrompt' AS "negativePrompt",
             data->>'createdAt' AS "createdAt"

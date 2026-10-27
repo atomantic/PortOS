@@ -49,6 +49,7 @@ export * as catalogIdentityValidation from './catalogIdentityValidation.js';
 export * as catalogValidation from './catalogValidation.js';
 export * as catalogGreyboxValidation from './catalogGreyboxValidation.js';
 export * as catalogMediaLibrary from './catalogMediaLibrary.js';
+export * from './catalogAppearance.js';
 export * from './characterSheetReferences.js';
 export * as characterAugmentValidation from './characterAugmentValidation.js';
 export * as characterEvolutionValidation from './characterEvolutionValidation.js';
@@ -1006,3 +1007,6 @@ export * from './musicVideoGreybox.js';
 export * from './catalogRedesign.js';
 
 export * from './testCacheRetirementProof.js';
+export * from './realityStarterV2.js';
+export * from './universeVisualProfile.js';
+export * from './universeVisualProfileValidation.js';

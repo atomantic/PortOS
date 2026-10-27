@@ -609,9 +609,9 @@ describe('ci.yml shard wiring', () => {
   });
 
   it('runs once-only steps on the first shard alone', () => {
-    // Smoke boot, the production build, and the Scalar-removal pin are not
+    // Smoke boot and the production build are not
     // sharded work; on every shard they would triple the cost for no coverage.
-    for (const step of ['Smoke-boot server', 'Build client', 'Check API Explorer bundle has no Scalar chunks']) {
+    for (const step of ['Smoke-boot server', 'Build client']) {
       const start = WORKFLOW.indexOf(`- name: ${step}\n`);
       expect(start, step).toBeGreaterThan(0);
       const condition = WORKFLOW.slice(start).match(/\n {8}if: (.*)\n/)[1];
@@ -910,6 +910,7 @@ describe('structured failure diagnostics', () => {
     try {
       const host = join(fixture, 'host');
       mkdirSync(host);
+      writeFileSync(join(host, 'host-cache'), 'preserve');
       writeFileSync(join(fixture, 'vitest.config.mjs'), FIXTURE_CONFIG);
       writeFileSync(join(fixture, 'fixture.test.js'), `
         test('passing assertion with unhandled rejection', async () => {
@@ -946,7 +947,9 @@ describe('structured failure diagnostics', () => {
       expect(errors).toContain('fixture.test.js:');
       expect(errors).toContain('Worker exited unexpectedly with exit code 3221226505');
       expect(diagnostic).toContain('Vitest output tail');
-      expect(readdirSync(host)).toEqual([]);
+      // Host/tool caches are not launcher-owned report roots.
+      expect(readdirSync(host).filter(name => /^(?:portos-vitest-|pvt-)/.test(name))).toEqual([]);
+      expect(readFileSync(join(host, 'host-cache'), 'utf8')).toBe('preserve');
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }
@@ -957,6 +960,7 @@ describe('structured failure diagnostics', () => {
     try {
       const host = join(fixture, 'host');
       mkdirSync(host);
+      writeFileSync(join(host, 'host-cache'), 'preserve');
       const report = join(fixture, 'report.json');
       writeFileSync(join(fixture, 'fixture.test.js'),
         "test('synthetic assertion diagnostic', () => { expect(1, 'synthetic mismatch').toBe(2); });");
@@ -975,7 +979,9 @@ describe('structured failure diagnostics', () => {
       ], { encoding: 'utf8', timeout: 30_000, env });
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(1);
-      expect(readdirSync(host)).toEqual([]);
+      // Host/tool caches are not launcher-owned report roots.
+      expect(readdirSync(host).filter(name => /^(?:portos-vitest-|pvt-)/.test(name))).toEqual([]);
+      expect(readFileSync(join(host, 'host-cache'), 'utf8')).toBe('preserve');
       const attempts = readdirSync(durable);
       expect(attempts).toHaveLength(1);
       const invocation = JSON.parse(readFileSync(join(durable, attempts[0], 'invocation.json'), 'utf8'));

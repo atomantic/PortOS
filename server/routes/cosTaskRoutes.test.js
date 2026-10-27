@@ -698,6 +698,37 @@ describe('GET /api/cos/tasks — bounded view routing (#9677)', () => {
     expect((await request(buildApp()).get('/api/cos/tasks?view=completed&limit=101')).status).toBe(400);
   });
 
+  it('completed view projects release milestones onto completed history items', async () => {
+    const { saveReleaseSynchronization } = await import('../services/releaseSynchronizationStore.js');
+    const identity = 'e'.repeat(64);
+    await saveReleaseSynchronization({
+      version: 1,
+      identity,
+      owner: { taskId: 'task-sync-1', agentId: 'agent-sync-1' },
+      publication: { identity, status: 'verified', tag: 'v1.0.0' },
+      task: { id: 'task-sync-1' },
+      obligations: {
+        synchronizationPr: {
+          status: 'verified',
+          evidence: { prUrl: 'https://github.com/example/repo/pull/99', headSha: 'a'.repeat(40) },
+        },
+      },
+      synchronization: { status: 'verified' },
+    });
+    getTaskView.mockResolvedValue({
+      items: [{ id: 'task-sync-1', metadata: {} }],
+      total: 1,
+      nextCursor: null,
+    });
+    const res = await request(buildApp()).get('/api/cos/tasks?view=completed&source=user');
+    expect(res.status).toBe(200);
+    expect(res.body.items[0].metadata.releaseSynchronization).toMatchObject({
+      status: 'verified',
+      identity,
+      prUrl: 'https://github.com/example/repo/pull/99',
+    });
+  });
+
   it('limit/offset keeps the legacy shape with true totals and settles the window', async () => {
     getTaskView.mockResolvedValue({ user: { file: 'TASKS.md', exists: true, type: 'user', tasks: [{ id: 'user/1', status: 'pending' }] },
       cos: { file: 'COS.md', exists: true, type: 'internal', tasks: [] }, totals: { user: 7, cos: 3 } });

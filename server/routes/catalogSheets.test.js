@@ -141,6 +141,31 @@ describe('catalog sheet routes', () => {
     expect(queuedParams().prompt).toBe(body.overridePrompt);
   });
 
+  it('keeps same-age alternate costumes and rejected canon images out of canonical sheets', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...character, payload: { age: '27', primaryImageRef: 'rejected.png', imageRefs: ['costume.png'] } });
+    mocks.listMediaForIngredient.mockResolvedValue([
+      { kind: 'portrait', mediaKey: 'canonical.png', library: { variant: { age: 27, formId: 'adult' } } },
+      { kind: 'reference', mediaKey: 'costume.png', library: { variant: { age: 27, formId: 'costume' }, guide: true } },
+      { kind: 'reference', mediaKey: 'rejected.png', library: { review: { status: 'rejected' } } },
+    ]);
+    ['canonical.png', 'costume.png', 'rejected.png'].forEach(name => mocks.imageFiles.add(name));
+    const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
+    expect(preview.status).toBe(200);
+    expect(preview.body.preview.referenceImages.map(ref => ref.filename)).toEqual(['canonical.png']);
+  });
+
+  it('includes shared facial identity on delegated canonical blueprints as well as alternate-form sheets', async () => {
+    mocks.getIngredient.mockResolvedValue(character);
+    mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
+    mocks.getUniverse.mockResolvedValue({ id: 'universe-1', name: 'Example World', characters: [
+      { id: 'entry-1', ingredientId: character.id, name: character.name, visualIdentity: 'green eyes and a distinctive nose' },
+    ] });
+    const result = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({ variant: 'blueprint' });
+    expect(result.status).toBe(200);
+    expect(result.body.preview.sentPrompt).toContain('green eyes and a distinctive nose');
+    expect(result.body.preview.promptAdditions).toContainEqual(expect.objectContaining({ id: 'shared-character-identity' }));
+  });
+
   it('shows a missing guide and refuses to silently render without it', async () => {
     mocks.getIngredient.mockResolvedValue(character);
     mocks.listMediaForIngredient.mockResolvedValue([{ kind: 'reference', mediaKey: 'missing.png', library: { guide: true } }]);
@@ -389,9 +414,10 @@ describe('catalog sheet routes', () => {
     const aged = {
       ...character,
       payload: {
-        ...character.payload, age: '34',
+        ...character.payload, age: '34', visualIdentity: 'green eyes and a distinctive nose',
+        wardrobes: [{ id: 'adult-coat', name: 'Adult outfit', description: 'adult silver coat and short bob' }],
         forms: [
-          { id: 'form-kid', label: 'Age 7', age: '7', description: 'gap-toothed, oversized yellow raincoat' },
+          { id: 'form-kid', label: 'Age 7', age: '7', description: 'gap-toothed, long waves, oversized yellow raincoat' },
           { id: 'form-empty', label: 'Someday', age: '', description: '' },
         ],
       },
@@ -416,6 +442,9 @@ describe('catalog sheet routes', () => {
       expect(params.catalogAttach).toEqual({ ingredientId: 'cat-chr-1', kind: 'reference', role: 'sheet:blueprint@form-kid' });
       expect(params.prompt).toContain('oversized yellow raincoat');
       expect(params.prompt).not.toContain('silver coat');
+      expect(params.prompt).not.toContain('short bob');
+      expect(params.prompt).toContain('long waves');
+      expect(params.prompt).toContain('green eyes and a distinctive nose');
       expect(preview.body.preview.sentPrompt).toBe(params.prompt);
       expect(mocks.updateUniverse).not.toHaveBeenCalled();
     });

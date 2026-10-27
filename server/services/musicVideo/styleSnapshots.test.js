@@ -1,3 +1,4 @@
+import { naturalUniverseVisualProfile } from '../../lib/universeVisualProfile.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const getUniverse = vi.fn();
@@ -101,4 +102,27 @@ describe('withStyleSnapshots (#9105)', () => {
     expect(out.concept.subjects).toHaveLength(1);
     expect(out.visualSpec).toBeUndefined();
   });
+});
+
+it('adopts an enabled universe film recipe once while preserving explicit project overrides', async () => {
+  const { naturalUniverseVisualProfile } = await import('../../lib/universeVisualProfile.js');
+  const profile = naturalUniverseVisualProfile();
+  profile.finishing.mode = 'save';
+  getUniverse.mockResolvedValue({ ...UNIVERSE, visualProfile: profile });
+  const out = await withStyleSnapshots({ concept: { universeId: 'example-new-universe' } });
+  expect(out.filmLook).toMatchObject({ version: 2, preset: 'natural-35mm' });
+  expect(out.concept.universeStyle).toContain(profile.generation.lighting);
+  getUniverse.mockResolvedValueOnce({ ...UNIVERSE, visualProfile: naturalUniverseVisualProfile() });
+  expect((await withStyleSnapshots({ concept: { universeId: 'preview-universe' } })).filmLook).toBeUndefined();
+  const off = await withStyleSnapshots({ concept: { universeId: 'example-new-universe' }, filmLook: null });
+  expect(off.filmLook).toBeNull();
+  const explicitOff = { concept: { universeId: 'old' }, filmLook: null };
+  expect((await withStyleSnapshots({ concept: { universeId: 'example-new-universe' } }, explicitOff)).filmLook).toBeUndefined();
+  const existing = { concept: { universeId: 'old' }, filmLook: { version: 1, grain: 0.3 } };
+  expect((await withStyleSnapshots({ concept: { universeId: 'example-new-universe' } }, existing)).filmLook).toBeUndefined();
+});
+
+it('refuses over-limit photography snapshots without silently truncating direction', async () => {
+  getUniverse.mockResolvedValue({ ...UNIVERSE, styleNotes: 'x'.repeat(4000), visualProfile: naturalUniverseVisualProfile() });
+  await expect(withStyleSnapshots({ concept: { universeId: 'u1' } })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_STYLE_TOO_LONG' });
 });

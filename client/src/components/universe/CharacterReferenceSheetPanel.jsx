@@ -165,7 +165,7 @@ function VariantRow({
           )}
         </div>
       </div>
-      <ModelInputPreview preview={preview} prompt="" />
+      <ModelInputPreview preview={preview} prompt="" onOpenPreview={onOpenLightbox ? (_url, image) => onOpenLightbox(image.filename) : undefined} />
       {existing ? (
         <button
           type="button"

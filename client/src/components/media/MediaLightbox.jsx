@@ -499,7 +499,7 @@ export default function MediaLightbox({
             videoRef={videoRef}
             variantGroup={variantGroup}
             onSelectVariant={onSelectVariant}
-            onFilmLook={!isVideo && item.filename ? () => setFilmLookOpen(true) : undefined}
+            onFilmLook={!isVideo && item.filename && !item.compact ? () => setFilmLookOpen(true) : undefined}
           />
         )}
       </div>

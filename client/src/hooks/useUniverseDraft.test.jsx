@@ -1348,6 +1348,7 @@ describe('useUniverseDraft', () => {
         compositeSheets: [],
         influences: { embrace: [], avoid: [] },
         styleReferences: [],
+        visualProfile: null,
         locked: {},
         llm: { provider: null, model: null },
       }, { silent: true });

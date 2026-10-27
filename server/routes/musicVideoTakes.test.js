@@ -547,7 +547,7 @@ describe('a shot\'s frame references', () => {
   });
 
   // Uniquely catches a shot's Casting variant failing to save, or the server-side load not feeding conditioning.
-  it('saves a shot\'s cast variant and conditions its frames on the matching Casting guides first', async () => {
+  it('saves a shot\'s cast variant and conditions its frames only on age-compatible Casting guides', async () => {
     const { musicVideoConditioningReferences } = await import('../lib/musicVideoConditioning.js');
     const { loadSceneCastMedia } = await import('../services/musicVideo/castGuideMedia.js');
     await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, visualSpec: { ...(current.visualSpec || {}), references: [
@@ -564,7 +564,7 @@ describe('a shot\'s frame references', () => {
       { mediaKey: 'child.png', kind: 'reference', library: { variant: { age: 7 }, guide: true } },
     ] : []);
     const castMedia = await loadSceneCastMedia(scene, { listMedia });
-    expect(musicVideoConditioningReferences(await reload(), scene, castMedia).map((ref) => ref.imageId)).toEqual(['child.png', 'adult.png', 'lead.png']);
+    expect(musicVideoConditioningReferences(await reload(), scene, castMedia).map((ref) => ref.imageId)).toEqual(['child.png', 'lead.png']);
     // A failed catalog read conditions on the project's references, as before.
     expect(await loadSceneCastMedia(scene, { listMedia: async () => { throw new Error('db down'); } })).toBeNull();
     await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ characterVariant: null });

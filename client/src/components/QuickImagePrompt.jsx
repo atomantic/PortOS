@@ -78,6 +78,7 @@ export default function QuickImagePrompt() {
     // on its own).
     const styled = composeForSubmit(text);
     const result = await generateImage({
+      ...(stylePreset?.visualProfile ? { visualProfileOverride: stylePreset.visualProfile } : {}),
       prompt: styled.prompt,
       negativePrompt: styled.negativePrompt,
       width,
@@ -107,17 +108,15 @@ export default function QuickImagePrompt() {
     // ImageGen page's remix-param effect reads ?prompt=…&width=…&height=… on
     // mount and strips them from the URL, so the widget can hand off the
     // current prompt + size + negative prompt without coupling to the form's
-    // internal state. Hand off the STYLED prompt so the editor opens with what
-    // Generate would have submitted — the Image Gen page has no universe picker
-    // of its own, so an un-styled handoff would silently drop the selection.
-    const styled = composeForSubmit(text);
+    // internal state. The style snapshot travels separately so inherited text
+    // stays visible as a chip and the optional finish survives the handoff.
     const params = new URLSearchParams();
-    if (styled.prompt) params.set('prompt', styled.prompt);
-    if (styled.negativePrompt) params.set('negativePrompt', styled.negativePrompt);
+    if (text) params.set('prompt', text);
+    if (negativePrompt) params.set('negativePrompt', negativePrompt);
     params.set('width', String(width));
     params.set('height', String(height));
     const qs = params.toString();
-    navigate(`/media/image${qs ? `?${qs}` : ''}`);
+    navigate(`/media/image${qs ? `?${qs}` : ''}`, { state: { imageStylePreset: stylePreset ? { ...stylePreset, additionLabel: 'Universe style' } : null } });
   };
 
   const inputCls = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent';

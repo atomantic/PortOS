@@ -933,3 +933,32 @@ describe('TaskItem editing a pin whose instance has left the registry (#4520)', 
     expect(api.updateCosTask.mock.calls[0][1].targetInstanceId).toBe('peer-instance-id');
   });
 });
+
+describe('TaskItem release milestones', () => {
+  it('renders publication and synchronization milestones on the task', () => {
+    const identity = 'c'.repeat(64);
+    const releaseTask = {
+      ...task,
+      id: 'task-release-sync-1',
+      metadata: {
+        releasePublication: {
+          status: 'verified',
+          tag: 'v1.5.0',
+          releaseUrl: 'https://github.com/example/repo/releases/tag/v1.5.0',
+          publishedAt: '2026-01-01T12:00:00Z',
+        },
+        releaseSynchronization: {
+          status: 'verified',
+          identity,
+          prUrl: 'https://github.com/example/repo/pull/55',
+          headSha: 'b'.repeat(40),
+        },
+      },
+    };
+    render(<TaskItem task={releaseTask} providers={providers} onRefresh={vi.fn()} />);
+    expect(screen.getByText('Published — synchronization verified')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'v1.5.0' })).toHaveAttribute('href', 'https://github.com/example/repo/releases/tag/v1.5.0');
+    expect(screen.getByText(`Release sync: ${identity}`)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sync PR (bbbbbbb)' })).toHaveAttribute('href', 'https://github.com/example/repo/pull/55');
+  });
+});

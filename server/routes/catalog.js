@@ -602,6 +602,7 @@ router.patch('/ingredients/:id/media/library', asyncHandler(async (req, res) => 
     throw err;
   });
   res.json(media);
+  catalogEvents.emit('primitive-changed', { ingredientId: ing.id });
 }));
 
 // Attach mood-board items (image:/video: keys) as references in one call,

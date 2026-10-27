@@ -10,6 +10,7 @@
  * working.
  */
 
+import { normalizeUniverseVisualProfile } from '../../lib/universeVisualProfile.js';
 import { randomUUID } from 'crypto';
 import { PATHS, ensureDir, resolveImageRef } from '../../lib/fileUtils.js';
 import { BIBLE_KEYS, pruneStaleReferenceSheets, mergePreservedSheetPointers } from '../../lib/storyBible.js';
@@ -155,11 +156,12 @@ export async function listUniverseStyles() {
       const name = trimTo(r?.name, NAME_MAX_LENGTH);
       if (!isStr(r?.id) || !r.id || !name) return [];
       const influences = resolveInfluences(r);
-      if (!influences.embrace.length && !influences.avoid.length) return [];
-      return [{ id: r.id, name, influences, createdAt: r.createdAt || '' }];
+      const visualProfile = normalizeUniverseVisualProfile(r.visualProfile);
+      if (!influences.embrace.length && !influences.avoid.length && !visualProfile) return [];
+      return [{ id: r.id, name, influences, ...(visualProfile ? { visualProfile } : {}), createdAt: r.createdAt || '' }];
     })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
-    .map((r) => ({ id: r.id, name: r.name, influences: r.influences }));
+    .map(({ createdAt: _createdAt, ...record }) => record);
 }
 
 /**
@@ -210,6 +212,12 @@ export async function getUniverse(id, { includeDeleted = false } = {}) {
  * deleted universe resolves to `null` (the caller falls through the ladder)
  * rather than throwing, since a render must not fail over a stale tag.
  */
+/** Photography-only raw read; stale render tags retain legacy fallthrough. */
+export async function getUniverseVisualProfile(id) {
+  const raw = await store().loadOneRaw(id);
+  return raw && !raw.deleted ? normalizeUniverseVisualProfile(raw.visualProfile) : null;
+}
+
 export async function getUniverseRenderPin(id) {
   const raw = await store().loadOneRaw(id);
   if (!raw || raw.deleted) return null;
@@ -264,6 +272,7 @@ export async function createUniverse(input = {}) {
       compositeSheets: input.compositeSheets || [],
       influences: input.influences || {},
       styleReferences: input.styleReferences || [],
+      visualProfile: input.visualProfile,
       styleImageRefs: input.styleImageRefs || [],
       // Per-record render pin (#3231 Phase 3) — sanitizeTemplate persists the
       // pair only when actually set.
@@ -509,7 +518,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
       // (sanitizeTemplate drops the field); key-absent preserves.
       'moodBoardId',
       // Uploaded, analyzed bible references — patched wholesale.
-      'styleReferences',
+      'styleReferences', 'visualProfile',
       // Base style-probe render refs — patched wholesale (sanitizer re-caps).
       'styleImageRefs',
       // Per-record render pin (#3231 Phase 3). Key-present with 'auto'/null

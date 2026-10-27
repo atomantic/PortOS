@@ -64,7 +64,7 @@ async function readGhLines({ origin, repoSpec, forgeExec, path, jq }) {
 }
 
 /** The checks of `headSha` as they stood at `mergedAt` (`foldHeadChecks`), or null when any read failed. */
-async function readHeadCheckRuns({ origin, repoSpec, forgeExec, headSha, mergedAt }) {
+export async function readHeadCheckRuns({ origin, repoSpec, forgeExec, headSha, mergedAt }) {
   const base = `repos/${origin.fullName}/commits/${headSha}`;
   const [runs, suites, statuses] = await Promise.all([
     readGhLines({ origin, repoSpec, forgeExec, path: `${base}/check-runs?filter=all&per_page=100`, jq: CHECK_RUN_JQ }),

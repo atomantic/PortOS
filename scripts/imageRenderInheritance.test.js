@@ -12,7 +12,8 @@ import { getSettings } from '../server/services/settings.js';
 import imageGenRoutes from '../server/routes/imageGen.js';
 
 const getUniverseRenderPin = vi.hoisted(() => vi.fn(async () => null));
-vi.mock('../server/services/universeBuilder/crud.js', () => ({ getUniverseRenderPin }));
+const getUniverseVisualProfile = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('../server/services/universeBuilder/crud.js', () => ({ getUniverseRenderPin, getUniverseVisualProfile }));
 vi.mock('../server/services/fableLoom/records.js', () => ({ getLoom: vi.fn(), attachNodeImage: vi.fn() }));
 vi.mock('../server/services/fableLoom/visualConditioning.js', () => ({
   compileFableLoomVisualRequest: vi.fn(), fableLoomImageCapabilities: vi.fn(),
@@ -60,6 +61,7 @@ describe('inherited browser render preferences', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     getUniverseRenderPin.mockResolvedValue(null);
+    getUniverseVisualProfile.mockResolvedValue(null);
     getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
   });
   const submit = async (settings, record, overrides = {}) => {
@@ -74,6 +76,21 @@ describe('inherited browser render preferences', () => {
       ...opts, ...tag, prompt: 'A synthetic landscape', ...overrides,
     });
   };
+
+  it('carries universe photography and finishing through inherited browser preferences', async () => {
+    const { naturalUniverseVisualProfile } = await import('../server/lib/universeVisualProfile.js');
+    const profile = naturalUniverseVisualProfile();
+    profile.finishing.mode = 'save';
+    getUniverseVisualProfile.mockResolvedValue(profile);
+    vi.spyOn(mediaModels, 'getImageModels').mockReturnValue([model('example-compatible')]);
+    const response = await submit({ imageGen: { mode: 'local', local: { pythonPath: '/example/python' } } }, { imageMode: 'local', imageModelId: 'example-compatible' });
+    expect(response.status).toBe(200);
+    const { params } = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0];
+    expect(params.visualProfile).toEqual(profile);
+    expect(params.visualProfileRevision).toMatch(/^[a-f0-9]{64}$/);
+    expect(params.prompt.split(profile.generation.lighting)).toHaveLength(2);
+    expect(params.promptAdditions).toContainEqual(expect.objectContaining({ id: 'universe-photography-lighting', text: profile.generation.lighting }));
+  });
 
   it.each(['example-retired', 'example-incompatible'])('falls back from inherited %s but rejects an explicit request', async (pin) => {
     vi.spyOn(mediaModels, 'getImageModels').mockReturnValue([

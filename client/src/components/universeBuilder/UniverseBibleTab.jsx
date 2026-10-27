@@ -16,6 +16,7 @@ import VisionProviderPicker from '../universe/VisionProviderPicker';
 import InfluenceChipsInput from './InfluenceChipsInput';
 import MoodBoardStyleSynthesis from './MoodBoardStyleSynthesis';
 import UniverseStyleReferences from './UniverseStyleReferences';
+import UniverseVisualProfile from './UniverseVisualProfile.jsx';
 
 function LockButton({ field, locked, onToggle, label }) {
   const isLocked = !!locked?.[field];
@@ -405,6 +406,7 @@ export default function BibleTab({
           locked={draft.locked}
           onToggleLock={toggleLock}
         />
+        <UniverseVisualProfile value={draft.visualProfile} onChange={visualProfile => updateDraft({ visualProfile })} />
         <UniverseStyleReferences
           universe={draft}
           saved={saved}

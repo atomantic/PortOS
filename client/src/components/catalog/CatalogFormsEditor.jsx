@@ -71,10 +71,11 @@ export default function CatalogFormsEditor({ type, payload, onChange }) {
                 </div>
                 {!form.label?.trim() && <p className="text-xs text-port-warning">Name it, or Save drops it.</p>}
                 <div>
-                  <label htmlFor={`${base}-description`} className={labelClass}>How it looks</label>
+                  <label htmlFor={`${base}-description`} className={labelClass}>{type === 'character' ? 'Hair, clothing & appearance' : 'How it looks'}</label>
                   <textarea id={`${base}-description`} value={form.description || ''} maxLength={DESCRIPTION_MAX} rows={2}
                     onChange={(e) => update(form.id, { description: e.target.value })} placeholder={placeholder.description}
                     className={`${inputClass} resize-y`} />
+                  {type === 'character' && <p className="mt-1 text-xs text-gray-500">Describe this age’s haircut, clothing and proportions. This replaces the canonical appearance and outfits for its renders; shared facial identity stays consistent.</p>}
                 </div>
               </li>
             );

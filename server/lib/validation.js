@@ -56,6 +56,9 @@ export const gitRefNameSchema = z.string().min(1).max(255).refine(isSafeGitRef, 
 const gitPathField = z.string().min(1);
 
 export const gitPathBodySchema = z.object({ path: gitPathField });
+export const gitCleanupMergedBodySchema = gitPathBodySchema.extend({
+  branches: z.array(gitRefNameSchema).min(1).max(100).optional(),
+}).strict();
 export const gitStageBodySchema = z.object({
   path: gitPathField,
   files: z.array(z.string().min(1)).min(1).max(500),

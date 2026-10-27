@@ -11,7 +11,7 @@ import { cosToolCallSchema } from './cosToolContracts.js';
 import { agentContextMcpInboundSchema } from './agentContextValidation.js';
 import {
   settingsSlicePatchSchema, gitBranchBodySchema, gitBranchComparisonBodySchema, gitCommitBodySchema, gitCommitsBodySchema, gitDeleteBranchBodySchema,
-  logsQuerySchema, pm2ProcessNameSchema, gitDiffBodySchema, gitOptionalBranchBodySchema, gitPathBodySchema, gitRemoteBranchesBodySchema, gitStageBodySchema,
+  logsQuerySchema, pm2ProcessNameSchema, gitDiffBodySchema, gitOptionalBranchBodySchema, gitPathBodySchema, gitCleanupMergedBodySchema, gitRemoteBranchesBodySchema, gitStageBodySchema,
 } from './validation.js';
 
 const jsonBody = (schema, required = true) => ({
@@ -93,7 +93,7 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
   '/api/git/merge': gitWriteOperation('Merge a branch into the current branch', gitBranchBodySchema),
   '/api/git/checkout-remote': gitWriteOperation('Check out a remote branch locally', gitBranchBodySchema),
   '/api/git/reset-to-default': gitWriteOperation("Discard local changes and match origin's default branch", gitPathBodySchema),
-  '/api/git/cleanup-merged': gitWriteOperation('Delete merged branches and their worktrees', gitPathBodySchema),
+  '/api/git/cleanup-merged': gitWriteOperation('Delete merged branches and their worktrees', gitCleanupMergedBodySchema),
   '/api/git/delete-branch': {
     post: {
       summary: 'Delete a Git branch locally, remotely, or both',

@@ -89,7 +89,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // mirrored into the embedded entry). A <=v14 peer's `sanitizePlace` would strip
   // it on an unrelated Universe edit and LWW the loss back. The catalog gate stays
   // put: catalog peer-receive stores the payload verbatim.
-  universes: 15,
+  // v16 = optional generation/finishing visual profile. Older sanitizers strip it.
+  universes: 16,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -460,7 +461,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v13 = bible payloads gained optional `forms[]` (alternate ages/looks) and
   // media `library.variant.formId`. A <=v12 peer's sanitizer and library
   // normalizer would strip both and whole-row LWW the loss back.
-  catalog: 13,
+  // v14 = per-reference review/feedback and refinement lineage. Older peers
+  // strip these fields and could restore rejected conditioning references.
+  catalog: 14,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions
   // ride the `storyBuilder` snapshot category. This is a brand-NEW synced
@@ -766,7 +769,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Optional, no migration or backfill; absent retains legacy rendering.
   // v26 = explicit per-shot greybox set references. Older generators ignore the layout
   // and its missing-capture refusal. Optional on existing records; no backfill.
-  musicVideoProjects: 26,
+  // v27 = original version-2 film response controls and recipes. Older
+  // renderers discard these controls and cannot reproduce the chosen finish.
+  musicVideoProjects: 27,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
