@@ -239,7 +239,7 @@ describe('pregate hidden-content invocation', () => {
     git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
     git('config', 'core.excludesFile', join(scratch, 'empty-excludes'));
     // Copy the real builtin-only entrypoints so REPO_ROOT targets this fixture.
-    // No runners or test files: docs-only changes produce an empty test plan.
+    // Docs-only changes select no test owners; full plans still have a native inventory.
     for (const path of [
       'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
@@ -262,6 +262,7 @@ describe('pregate hidden-content invocation', () => {
       mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
       write(join(workspace, 'package-lock.json'), JSON.stringify({ packages: { '': {} } }));
     }
+    write('server/lib/bufferedSpawn.test.js', '// Native inventory fixture\n');
     mkdirSync(join(root, 'docs'));
     write(trackedPath, clean);
     git('add', '--all');

@@ -63,7 +63,7 @@ export const sourceReferencePattern = (sourcePath) => (
 // ci.yml because a job-level `if` cannot read the matrix context, so the
 // planner emits the matrix for scoped plans too. Sizing rationale:
 // docs/GITHUB_ACTIONS.md "Full-suite sharding".
-export const FULL_SUITE_SHARDS = { server: 2, client: 3, windows: 4 };
+export const FULL_SUITE_SHARDS = { server: 2, client: 3, windows: 1 };
 
 /** Matrix values for one runner: every shard on a full run, one otherwise. */
 export const shardIndexes = (mode, count) => (
@@ -77,7 +77,7 @@ export const shardIndexes = (mode, count) => (
  * - Server `related` mode: always. Its import-graph fan-out is unbounded by the
  *   explicit count (#9999: 57 selectors became ~941 files), and scoped server
  *   runs took 6.1 min median / 9.4 p90 on one runner. Each shard repeats
- *   Vitest's related-graph pass, which is the Windows job's existing trade.
+ *   Vitest's related-graph pass on the primary runner.
  *   Client related plans stay on one runner unless over the cap.
  * - Exact-file plans under the cap stay on one runner: they run in seconds.
  *
@@ -180,7 +180,7 @@ function classifyManifest(base, head) {
 }
 
 /**
- * Should a change to one dependency manifest run the complete Windows suite?
+ * Does this manifest change require the Windows native contract job?
  *
  * `baseText`/`headText` are the file's contents at the diff base and in the
  * tree under test; null means unavailable (new, deleted, or unreadable). Any
@@ -211,64 +211,50 @@ const describeDependencyVerdict = (path, { escalate, reason, packages }) => {
   const named = packages.length > MAX_NAMED_PACKAGES
     ? `${packages.slice(0, MAX_NAMED_PACKAGES).join(', ')} and ${packages.length - MAX_NAMED_PACKAGES} more`
     : packages.join(', ');
-  return `${path} ${escalate ? 'escalates Windows' : 'keeps the Windows baseline'}: ${reason}${named ? ` (${named})` : ''}`;
+  return `${path} ${escalate ? 'selects Windows native contracts' : 'does not select Windows native contracts'}: ${reason}${named ? ` (${named})` : ''}`;
 };
 
-// `windowsEscalates` decides whether a trigger widens the WINDOWS job too, not
-// only the Linux ones. Three windows-server shards are 3 of a full run's 12
-// jobs and 41% of its runner-minutes (58% at GitHub's 2x windows-latest
-// multiplier, which this public repo does not pay but a privately-billed fork
-// does), so a trigger that widens CI for a reason windows-server cannot
-// observe — a client build/lint/test-setup file it never loads — spends that
-// on coverage which does not exist. Those run the WINDOWS_CONTRACT_TESTS
-// baseline instead, the depth a Windows-risk scoped PR already gets. `true` is
-// the fail-closed default for anything unlisted, and a diff touching
-// WINDOWS_RISK_RULES escalates regardless of this flag (issue #7440).
-//
-// `windowsEscalates: 'dependencies'` defers the decision to the diff of the
-// manifest itself (classifyDependencyChange): a pure-JS version bump installs
-// the same files on every platform, so the full Linux matrix covers it and
-// Windows runs the baseline. A native, install-script, os/cpu-gated or optional
-// package, an `engines`/`overrides`/non-dependency field change, or a manifest
-// the planner could not read and compare escalates Windows.
+// A full primary plan selects the Windows native job only when its execution
+// inputs are relevant. Dependency verdicts distinguish the workspace Windows
+// actually installs; primary-only configuration/schema changes do not need it.
 const FULL_TRIGGER_RULES = [
   // ci.yml defines the windows-server job itself. The other workflows (release,
   // acceptance, cancel recovery) never run on windows-latest.
-  { re: /^\.github\/workflows\/ci\.yml$/, reason: 'workflow definition changed', windowsEscalates: true },
-  { re: /^\.github\/workflows\//, reason: 'workflow definition changed', windowsEscalates: false },
-  { re: DEPENDENCY_MANIFEST_RE, reason: 'dependency manifest changed', windowsEscalates: 'dependencies' },
+  { re: /^\.github\/workflows\/ci\.yml$/, reason: 'workflow definition changed', windowsRelevant: true },
+  { re: /^\.github\/workflows\//, reason: 'workflow definition changed', windowsRelevant: false },
+  { re: DEPENDENCY_MANIFEST_RE, reason: 'dependency manifest changed', windowsRelevant: 'dependencies' },
   // Every workspace's .npmrc pins ignore-scripts and install behavior; npm reads
   // it on the Windows install too.
-  { re: /(?:^|\/)\.npmrc$/, reason: 'npm configuration changed', windowsEscalates: true },
-  { re: /^server\/vitest\.config(?:\.db)?\.js$/, reason: 'test runner configuration changed', windowsEscalates: true },
+  { re: /(?:^|\/)\.npmrc$/, reason: 'npm configuration changed', windowsRelevant: true },
+  { re: /^server\/vitest\.config(?:\.db)?\.js$/, reason: 'test runner configuration changed', windowsRelevant: true },
   // windows-server uses the server runner; client configuration still gets the
-  // complete Linux plan and the native Windows contract baseline.
-  { re: /^client\/vitest\.config\.js$/, reason: 'client test runner configuration changed', windowsEscalates: false },
-  { re: /^scripts\/vitestCiPool(?:\.test)?\.js$/, reason: 'test runner pool configuration changed', windowsEscalates: true },
-  { re: /^server\/vitest\.setup\.js$/, reason: 'server test setup changed', windowsEscalates: true },
+  // complete primary plan; native inputs in the same diff still select Windows.
+  { re: /^client\/vitest\.config\.js$/, reason: 'client test runner configuration changed', windowsRelevant: false },
+  { re: /^scripts\/vitestCiPool(?:\.test)?\.js$/, reason: 'test runner pool configuration changed', windowsRelevant: true },
+  { re: /^server\/vitest\.setup\.js$/, reason: 'server test setup changed', windowsRelevant: true },
   // Client-only: windows-server never loads the client setup file.
-  { re: /^client\/src\/test\/setup\.js$/, reason: 'client test setup changed', windowsEscalates: false },
+  { re: /^client\/src\/test\/setup\.js$/, reason: 'client test setup changed', windowsRelevant: false },
   // Biome config + its GritQL plugins (the former client/eslint.config.js). The
   // .grit files carry real enforced rules — notably the crypto.randomUUID ban —
   // so a change there is as load-bearing as a change to the config itself. It
   // is still a client-lint surface, and the Windows job runs no lint.
-  { re: /^client\/(?:biome\.jsonc|[^/]+\.grit)$/, reason: 'lint configuration changed', windowsEscalates: false },
+  { re: /^client\/(?:biome\.jsonc|[^/]+\.grit)$/, reason: 'lint configuration changed', windowsRelevant: false },
   // Client-only: the Windows job builds no client bundle.
-  { re: /^client\/vite\.config\.js$/, reason: 'client build configuration changed', windowsEscalates: false },
-  { re: /^server\/index\.js$/, reason: 'server composition root changed', windowsEscalates: true },
+  { re: /^client\/vite\.config\.js$/, reason: 'client build configuration changed', windowsRelevant: false },
+  { re: /^server\/index\.js$/, reason: 'server composition root changed', windowsRelevant: true },
   // Widely imported, but pure cross-platform schema logic: no spawn, path or
   // filesystem semantics that pinPlatform() stubs cannot cover on Linux.
-  { re: /^server\/lib\/(?:schemaVersions|validation)\.js$/, reason: 'shared server contract changed', windowsEscalates: false },
+  { re: /^server\/lib\/(?:schemaVersions|validation)\.js$/, reason: 'shared server contract changed', windowsRelevant: false },
   // Measured hotspot (#9999): a two-file worktreeManager change expanded through
   // import consumers to 57 selectors and a ~941-file local run, yet counted as
   // a "scoped" plan because MAX_TARGETED_TEST_FILES only sees explicit selectors.
   // Own the cost honestly: a full plan, sharded in CI. It also owns cross-platform
   // worktree lifecycle, so Windows escalates (matches WINDOWS_RISK_RULES).
-  { re: /^server\/services\/worktreeManager\.js$/, reason: 'worktree manager source changed (broad import fanout)', windowsEscalates: true },
+  { re: /^server\/services\/worktreeManager\.js$/, reason: 'worktree manager source changed (broad import fanout)', windowsRelevant: true },
   // Measured log socket hotspot (#10030): changing this source fans out through
   // nearly the full server suite, so make the cost explicit in CI. The socket
-  // starts and supervises a real PM2 child process; keep Windows at full depth.
-  { re: /^server\/sockets\/logs\.js$/, reason: 'log socket source changed (broad import fanout)', windowsEscalates: true },
+  // starts and supervises a real child process; retain the native Windows job.
+  { re: /^server\/sockets\/logs\.js$/, reason: 'log socket source changed (broad import fanout)', windowsRelevant: true },
   // The scripts that decide what CI runs, run it, and gate the release on it.
   // A bug in any of them can make a scoped plan silently test nothing, so they
   // prove themselves against the complete suite rather than their own scope.
@@ -276,122 +262,58 @@ const FULL_TRIGGER_RULES = [
   // run-ci-tests and the githubOutput helper it imports) escalate Windows; the
   // planner, lint runner, hidden-content scan and status verifier run on Linux
   // jobs only, so a Windows run would observe nothing they change.
-  { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|run-ci-tests)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsEscalates: true },
-  { re: /^scripts\/(?:ci-test-plan|run-ci-lint|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsEscalates: false },
+  { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|run-ci-tests)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
+  { re: /^scripts\/ci-test-plan(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
+  { re: /^scripts\/(?:run-ci-lint|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: false },
 ];
 
-// Files whose Windows behavior is not faithfully exercised by pinPlatform()
-// stubs on Linux: real .cmd spawn, PowerShell BOM, PTY wrap, path.basename
-// on backslashes. A PR that does not touch these still gets a full Windows
-// run nightly, on the main -> release PR, and on release.
+// Native Windows coverage is intentionally limited to CLI/TUI execution,
+// cmd/PowerShell behavior, process settlement and filesystem/path contracts.
+// Platform-neutral application suites stay on the primary server/client jobs.
 export const WINDOWS_RISK_RULES = [
   /\.(?:ps1|cmd|bat)$/i,
   /^scripts\/fix-windows-console(?:\.test)?\.js$/,
-  /^scripts\/ps1-bom\.test\.js$/,
-  // Shell32 recycling and its opt-in real-bin smoke require an actual Windows runner.
-  /^server\/lib\/nativeTrash(?:\.(?:smoke\.)?test)?\.js$/,
-  /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok|execGit|windowsGitProcess|windowsGitSupervisor)\b/,
-  // The cmd.exe wrap and npm-shim bypass every Windows CLI launch goes through.
+  /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok|execGit|windowsGitProcess|windowsGitSupervisor|nativeTrash|pathSafety|worktreeOwnership|staticImportGraph)\b/,
   /^server\/lib\/aiToolkit\/internal\/windowsSafeSpawn\.js$/,
-  // Path SEMANTICS differ per platform in ways pinPlatform() cannot fake: NTFS
-  // and APFS are case-insensitive while ext4 is not, and git reports paths its
-  // own way (drive-letter case, 8.3 short names like C:\Users\RUNNER~1). A
-  // case-sensitive containment check therefore passed on Linux while reporting a
-  // managed worktree as unmanaged on Windows, and the reaper silently skipped it
-  // — green everywhere CI looked. These modules decide containment and worktree
-  // identity, so they need a real Windows run.
-  /^server\/lib\/(?:pathSafety|worktreeOwnership)(?:\.test)?\.js$/,
-  // Fail-fast fixture removal raced continuing writes on Windows (#11641).
-  // Exercise the ownership helper and affected fixture on the real filesystem.
-  /^server\/lib\/mockPathsDataRoot(?:\.test)?\.js$/,
-  /^server\/services\/cosAgentIndex\.completionOrder\.test\.js$/,
-  // Same class, different mechanism: staticImportGraph keys its module map by
-  // string-concatenating entry names with "/" but resolves edge targets with
-  // path.relative, which answers with "\\" on Windows. Every edge into a
-  // subdirectory module then missed the lookup and vanished — reddening the
-  // cluster guards' positive assertions while their acyclicity assertions
-  // passed VACUOUSLY. Nothing here was Windows-risk-tagged, so the Windows job
-  // skipped the PR that introduced it and main went red for every later PR
-  // (#5909). The graph's consumers ride along: their expectations are spelled
-  // in "/" and only a real Windows run can tell.
-  /^server\/lib\/staticImportGraph(?:\.test)?\.js$/,
-  /^server\/services\/(?:agent|twin)ImportCycles\.test\.js$/,
-  /^server\/services\/worktree(?:Manager|Reap)\b/,
-  // Git enumerates NTFS junctions differently from Node lstat (#13562).
-  /^server\/services\/heldCheckoutRecovery(?:\.test)?\.js$/,
-  // Scratch locks and cancellation settlement require a real Windows runner;
-  // test-only diffs have no source edge for related-test selection (#13651).
-  /^server\/services\/(?:heldCheckoutExactDelivery\.integration|retirementFixture\.lifecycle)\.test\.js$/,
   /^server\/lib\/shell(?:Cd|Exit|LivenessProbe|ReadinessProbe)(?:\.test)?\.js$/,
   /^server\/lib\/agentGuard\//,
+  /^server\/lib\/(?:gitRepositoryIdentity|checkoutRetirementAdmission)(?:\.test)?\.js$/,
   /^server\/cos-runner\//,
-  /^server\/services\/(?:shell|pm2|appBuilder)\b/,
-  // Prompt delivery moved into this subtree; keep its Windows launch coverage.
+  /^server\/services\/shell\b/,
   /^server\/services\/agentTuiSpawning(?:\/|(?:\.test)?\.js$)/,
   /^server\/services\/tuiPromptRunner(?:\.test)?\.js$/,
-  /^server\/services\/htmlComposition\/ownedBrowser(?:\.test)?\.js$/,
-  /^server\/services\/autonomousJobs\/execution\.shellSpawn/,
-  // The voice fine-tuning service spawns a real Python trainer and settles the
-  // job from its `close`/`error` events, so its assertions are the child-process
-  // contract, not platform-independent logic. Nothing here was Windows-tagged,
-  // so the shard only saw it on a full-matrix run — which is where it failed,
-  // with an interpreter-startup budget mistaken for a state-machine defect
-  // (#6268).
-  /^server\/services\/voice\/fineTuning(?:\.test)?\.js$/,
-  /^server\/services\/imageGen\/codex(?:\.test)?\.js$/,
-  /^server\/routes\/apps\//,
-  /^server\/routes\/scaffoldVite\.js$/,
 ];
 
-// These are the cross-platform contracts that cannot be faithfully simulated
-// by pinning process.platform on Linux. For a Windows-risk PR, Vitest also
-// adds import-graph-related tests for native-risk sources in the diff. This
-// baseline catches spawn, shell, PowerShell, PTY, and path regressions without rerunning every
-// platform-independent server assertion. Full CI still runs the entire suite.
+// Each entry protects the supported native boundary. No import-graph expansion:
+// one shared process helper must not pull all its application consumers onto
+// Windows. Full, scheduled and release plans retain this same native set.
 export const WINDOWS_CONTRACT_TESTS = [
-  'server/services/htmlComposition/ownedBrowser.test.js',
-  'scripts/ps1-bom.test.js',
-  'server/cos-runner/allowedCommands.parity.test.js',
+  // Launch, prompt transport, executable discovery and environment/cwd safety.
   'server/cos-runner/allowedCommands.test.js',
-  'server/cos-runner/index.test.js',
-  'server/cos-runner/processStats.test.js',
-  'server/cos-runner/runnerState.test.js',
-  'server/lib/streamJsonParser.test.js',
   'server/lib/agentGuard/index.test.js',
   'server/lib/bashResolver.test.js',
   'server/lib/bufferedSpawn.test.js',
-  'server/lib/childProcess.guards.test.js',
-  'server/lib/childProcess.promisify.test.js',
-  'server/lib/childProcess.test.js',
   'server/lib/cliProviderRun.test.js',
   'server/lib/detachedSpawn.test.js',
-  'server/lib/grok.test.js',
-  'server/lib/grokVideoClip.test.js',
-  'server/lib/platform.test.js',
   'server/lib/processEnv.spawnOptions.test.js',
   'server/lib/processEnv.test.js',
   'server/lib/spawnCwd.test.js',
-  'server/lib/staticImportGraph.test.js',
+  // Shell dialects and the two TUI paths, including real ConPTY submission.
   'server/lib/shellCd.test.js',
-  'server/routes/apps/crud.test.js',
-  'server/routes/apps/icons.test.js',
-  'server/routes/apps/issues.test.js',
-  'server/routes/apps/launch.test.js',
-  'server/routes/apps/lifecycle.test.js',
-  'server/routes/apps/taskTypes.test.js',
-  'server/routes/apps/viteTls.test.js',
-  'server/routes/apps/xcode.test.js',
-  'server/services/appBuilder.test.js',
-  'server/services/autonomousJobs/execution.shellSpawn.test.js',
-  'server/services/pm2.launch.test.js',
-  'server/services/pm2.parseJlist.test.js',
-  'server/services/pm2Standardizer.test.js',
-  'server/services/shell.test.js',
-  'server/services/shellImageDrop.test.js',
-  'server/services/agentTuiSpawning.test.js',
-  'server/services/agentImportCycles.test.js',
-  'server/services/twinImportCycles.test.js',
-  'server/services/voice/fineTuning.test.js',
+  'server/lib/shellExit.test.js',
+  'server/lib/shellLivenessProbe.test.js',
+  'server/lib/shellReadinessProbe.test.js',
+  'server/services/shell.windows.test.js',
+  'server/services/tuiPromptRunner.test.js',
+  // Real native ownership/cancellation and safe filesystem semantics.
+  'server/lib/windowsGitProcess.test.js',
+  'server/lib/windowsGitProcess.protocol.test.js',
+  'server/lib/gitRepositoryIdentity.test.js',
+  'server/lib/checkoutRetirementAdmission.test.js',
+  'server/lib/worktreeOwnership.test.js',
+  'server/lib/staticImportGraph.test.js',
+  'server/lib/nativeTrash.test.js',
+  'server/lib/nativeTrash.smoke.test.js',
 ];
 
 // Contract guards that run on EVERY plan, whatever the impact scope selects.
@@ -955,7 +877,9 @@ export const splitByRunner = (paths) => ({
   server: paths.filter((path) => runnerForTest(path) === 'server'),
   client: paths.filter((path) => runnerForTest(path) === 'client'),
 });
-const windowsContractTests = (trackedSet) => WINDOWS_CONTRACT_TESTS.filter((path) => trackedSet.has(path));
+const windowsContractTests = (trackedSet) => {
+  return WINDOWS_CONTRACT_TESTS.filter(path => trackedSet.has(path)).sort();
+};
 
 /**
  * Does this diff touch a surface only a real Windows runner can prove?
@@ -963,7 +887,7 @@ const windowsContractTests = (trackedSet) => WINDOWS_CONTRACT_TESTS.filter((path
  * Deliberately NOT restricted to isExecutable() paths: .ps1/.cmd/.bat are not
  * in EXECUTABLE_RE, so a PowerShell change used to reach the Windows job only
  * as a side effect of being an "unclassified changed file". This answers the
- * question directly, and is what overrides a trigger's windowsEscalates:false.
+ * question directly, and is what selects the native job alongside a primary-only trigger.
  */
 const hasWindowsRiskFile = (paths) => paths.some((path) => (
   !isDocumentationOnly(path) && WINDOWS_RISK_RULES.some((rule) => rule.test(path))
@@ -1032,17 +956,9 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
   lint: plan.lint.mode === 'skip' ? 'skipped: no changed source needs linting' : plan.full ? `full matrix: ${plan.reason}` : 'changed lintable source',
   build: plan.build ? (plan.full ? `full matrix: ${plan.reason}` : 'client-impacting source changed') : 'skipped: no client-impacting source changed',
   smoke: plan.smoke ? (plan.full ? `full matrix: ${plan.reason}` : 'server-impacting source changed') : 'skipped: no server-impacting source changed',
-  // A full plan whose Windows job stayed at the contract baseline says so
-  // explicitly, so the CI summary never reads "full matrix" beside a one-shard
-  // Windows run (issue #7440).
-  // A dependency-manifest plan names the packages behind its Windows decision.
   windows: !plan.windows
-    ? 'skipped: no Windows-sensitive surface changed'
-    : plan.full
-      ? `${plan.windowsMode === 'full'
-        ? `full matrix: ${plan.reason}`
-        : `Windows contract baseline (full matrix elsewhere): ${plan.reason}`}${plan.windowsNote ? `; ${plan.windowsNote}` : ''}`
-      : 'Windows-sensitive surface changed',
+    ? `skipped: no Windows native contract changed${plan.windowsNote ? `; ${plan.windowsNote}` : ''}`
+    : `Windows native CLI/TUI and filesystem contracts${plan.full ? ` (full primary plan: ${plan.reason})` : ''}${plan.windowsNote ? `; ${plan.windowsNote}` : ''}`,
 });
 
 /**
@@ -1109,14 +1025,10 @@ function buildSuitePlan(changedFiles, {
   const changed = uniqueSorted(changedFiles.filter(Boolean));
   const trackedSet = new Set(trackedFiles);
 
-  // Nightly, the main -> release PR, release, and an explicit "full CI"
-  // request keep the complete Windows matrix. ci.yml has no push trigger, so
-  // these ARE the discovery net for a Windows regression on a surface nobody
-  // has tagged — the same net every PR that touches no WINDOWS_RISK_RULES file
-  // already relies on. A downgrade below widens that existing population; it
-  // does not invent a new risk class.
+  // Full validation widens the primary jobs; Windows still proves only its
+  // supported native boundary, including scheduled and release validation.
   if (forceFull) {
-    return fullPlan(changed, forceFullReason, { appRouteOnly, trackedSet, windowsEscalates: true });
+    return fullPlan(changed, forceFullReason, { appRouteOnly, trackedSet, windowsRelevant: true });
   }
 
   // EVERY matching trigger, not just the reported one, and computed BEFORE the
@@ -1131,20 +1043,20 @@ function buildSuitePlan(changedFiles, {
   const fullTriggers = changed
     .flatMap((path) => FULL_TRIGGER_RULES
       .filter(({ re }) => re.test(path))
-      .map(({ reason, windowsEscalates }) => {
-        const scopedToWindows = windowsEscalates === 'dependencies' || (windowsEscalates === true && /(?:^|\/)\.npmrc$/.test(path));
-        if (!scopedToWindows) return { path, reason, windowsEscalates };
+      .map(({ reason, windowsRelevant }) => {
+        const scopedToWindows = windowsRelevant === 'dependencies' || (windowsRelevant === true && /(?:^|\/)\.npmrc$/.test(path));
+        if (!scopedToWindows) return { path, reason, windowsRelevant };
         if (!windowsInstalls(path)) {
-          dependencyVerdicts.push(`${path} keeps the Windows baseline: the Windows job does not install that workspace`);
-          return { path, reason, windowsEscalates: false };
+          dependencyVerdicts.push(`${path} does not select Windows native contracts: the Windows job does not install that workspace`);
+          return { path, reason, windowsRelevant: false };
         }
-        if (windowsEscalates === true) return { path, reason, windowsEscalates };
+        if (windowsRelevant === true) return { path, reason, windowsRelevant };
         const verdict = dependencyChanges[path] ?? escalated('no manifest comparison available');
         dependencyVerdicts.push(describeDependencyVerdict(path, verdict));
-        return { path, reason, windowsEscalates: verdict.escalate };
+        return { path, reason, windowsRelevant: verdict.escalate };
       }));
   const fullTrigger = fullTriggers.at(0);
-  const triggersEscalateWindows = fullTriggers.some((trigger) => trigger.windowsEscalates);
+  const triggersEscalateWindows = fullTriggers.some((trigger) => trigger.windowsRelevant);
   const windowsNote = dependencyVerdicts.join('; ');
 
   const appCompositionChanged = changed.includes('client/src/App.jsx');
@@ -1154,7 +1066,7 @@ function buildSuitePlan(changedFiles, {
     return fullPlan(changed, 'client composition root changed: client/src/App.jsx', {
       appRouteOnly,
       trackedSet,
-      windowsEscalates: triggersEscalateWindows,
+      windowsRelevant: triggersEscalateWindows,
       windowsNote,
     });
   }
@@ -1163,7 +1075,7 @@ function buildSuitePlan(changedFiles, {
     return fullPlan(changed, `${fullTrigger.reason}: ${fullTrigger.path}`, {
       appRouteOnly,
       trackedSet,
-      windowsEscalates: triggersEscalateWindows,
+      windowsRelevant: triggersEscalateWindows,
       windowsNote,
     });
   }
@@ -1219,7 +1131,7 @@ function buildSuitePlan(changedFiles, {
     return fullPlan(changed, `fixture owner not tracked: ${missingFixtureOwners[0]}`, { appRouteOnly, trackedSet });
   }
   if (executable.length > MAX_CHANGED_CODE_FILES) {
-    return fullPlan(changed, `wide change (${executable.length} executable files)`, { appRouteOnly, trackedSet, windowsEscalates: false });
+    return fullPlan(changed, `wide change (${executable.length} executable files)`, { appRouteOnly, trackedSet, windowsRelevant: false });
   }
 
   // `changed` includes deleted paths (diff-filter ACMRD), but a deleted test
@@ -1327,12 +1239,7 @@ function buildSuitePlan(changedFiles, {
     || serverSources.some((path) => dbDependencies === null || dbDependencies.includes(path));
 
   const windows = hasWindowsRiskFile(changed);
-  // Linux owns the complete server diff. Native selection follows only its
-  // existing risk inputs, so an unrelated edit cannot widen a test-only plan.
-  const windowsSources = serverSources.filter(path => hasWindowsRiskFile([path]));
-  const windowsMode = windows
-    ? (windowsSources.length > 0 ? 'related' : 'files')
-    : 'skip';
+  const windowsMode = windows ? 'files' : 'skip';
 
   let reason = 'Vitest related-test fallback';
   if (features.length) reason = `targeted features: ${features.join(', ')}`;
@@ -1362,13 +1269,8 @@ function buildSuitePlan(changedFiles, {
     smoke: hasServerSource,
     windows,
     windowsMode,
-    windowsFiles: windows ? uniqueSorted([
-      ...windowsContractTests(trackedSet),
-      // Test-only changes have no source path for `vitest related` to follow.
-      // A risk tag must select the changed contract itself as well as baseline.
-      ...directTests.filter(path => isServerRunnerFile(path) && hasWindowsRiskFile([path])),
-    ]) : [],
-    windowsSources: windowsMode === 'related' ? windowsSources : [],
+    windowsFiles: windows ? windowsContractTests(trackedSet) : [],
+    windowsSources: [],
   }, { appRouteOnly, linuxRunnerExcludes: new Set([...dbTests, ...BROWSER_SUITES]) });
 }
 
@@ -1387,12 +1289,9 @@ const finishPlan = (plan, { linuxRunnerExcludes = new Set(), ...options } = {}) 
   const shards = {
     server: linuxShards('server'),
     client: linuxShards('client'),
-    // Related mode can reach most of the server graph through one shared
-    // source. The explicit selector count does not bound that work: one Windows
-    // runner exceeded the unchanged 15-minute step budget on a TUI handshake
-    // edit. Split execution across the existing matrix without widening or
-    // reducing related-test selection; exact-file plans stay on one runner.
-    windows: shardIndexes(plan.windowsMode === 'related' ? 'full' : plan.windowsMode, FULL_SUITE_SHARDS.windows),
+    // The native contract set stays on one runner and never follows the
+    // application import graph, even when the primary jobs run full suites.
+    windows: [1],
   };
   return {
     ...plan,
@@ -1402,33 +1301,10 @@ const finishPlan = (plan, { linuxRunnerExcludes = new Set(), ...options } = {}) 
   };
 };
 
-/**
- * A full plan for every Linux suite — with the Windows job at the depth the
- * diff actually justifies.
- *
- * `windowsEscalates` (default true, so an unlisted caller fails closed) is
- * false only for a trigger windows-server cannot observe: a client-only
- * surface, pure cross-platform schema logic, a dependency-manifest change
- * classifyDependencyChange() proved platform-neutral, or a CAPACITY escalation
- * (a wide diff) that says the planner ran out of scoping headroom, not that
- * anything risky changed. A touched WINDOWS_RISK_RULES path overrides it back to full.
- *
- * Downgraded does not mean skipped: the job still runs WINDOWS_CONTRACT_TESTS,
- * the curated cross-platform baseline a Windows-risk scoped PR already gets.
- * The complete Windows matrix stays the discovery net for surfaces nobody has
- * tagged yet — it just runs nightly, on the main -> release PR, and on
- * release, instead of on every capacity-widened PR (issue #7440).
- *
- * `options` is also forwarded to finishPlan(), which reads only appRouteOnly.
- */
+/** Full primary coverage, with native Windows contracts only when relevant. */
 function fullPlan(changedFiles, reason, options = {}) {
-  const { trackedSet = new Set(), windowsEscalates = true, windowsNote = '' } = options;
-  // An empty `files` list makes run-ci-tests.js print "No server tests
-  // selected" and exit 0 — a green Windows job that ran nothing. So the
-  // baseline is only a downgrade while it actually resolves to tracked tests;
-  // otherwise this falls back to the complete suite rather than to silence.
-  const baseline = windowsContractTests(trackedSet);
-  const windowsFull = windowsEscalates || hasWindowsRiskFile(changedFiles) || baseline.length === 0;
+  const { trackedSet = new Set(), windowsRelevant = true, windowsNote = '' } = options;
+  const windows = windowsRelevant || hasWindowsRiskFile(changedFiles);
   return finishPlan({
     full: true,
     reason,
@@ -1440,9 +1316,9 @@ function fullPlan(changedFiles, reason, options = {}) {
     lint: { mode: 'full', files: [] },
     build: true,
     smoke: true,
-    windows: true,
-    windowsMode: windowsFull ? 'full' : 'files',
-    windowsFiles: windowsFull ? [] : baseline,
+    windows,
+    windowsMode: windows ? 'files' : 'skip',
+    windowsFiles: windows ? windowsContractTests(trackedSet) : [],
     windowsSources: [],
     windowsNote,
   }, options);
@@ -1500,6 +1376,7 @@ const narrowSharedBasenameHits = (source, hits, cwd) => {
 };
 
 export function emitGitHubPlan(plan) {
+  if (plan.windows && plan.windowsFiles.length === 0) throw new Error('Windows native contract inventory is empty');
   const outputs = {
     full: plan.full,
     reason: plan.reason.replace(/[`<>\r\n]+/g, ' '),

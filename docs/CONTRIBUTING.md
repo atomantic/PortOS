@@ -27,6 +27,21 @@ macOS is the primary target for the interactive app and browser experience;
 Windows is secondary. Linux interactive browser compatibility is not a support
 target. Linux server support is unchanged.
 
+Run functional coverage once on the primary environment. Secondary operating
+systems and browsers use small smoke checks for basic app/runner failure plus
+focused compatibility regressions. For a Safari-specific failure, first express
+the generic compatibility contract at the narrowest useful boundary; retain a
+small WebKit check when the engine itself is necessary. Do not multiply the full
+application suite across browsers or operating systems. Distinct assertions
+remain covered even when redundant environment executions are removed.
+
+Native Windows CI targets CLI/TUI launch and prompt submission, cmd/PowerShell
+execution and quoting, process cancellation/settlement, and filesystem/path
+semantics. Platform-neutral application, media and Git-history workflows run in
+the primary server/client jobs. Full, scheduled and release validation retain
+the same Windows native contract set; they do not duplicate the application
+suite on Windows. Keep native data-ownership and safe-deletion checks intact.
+
 For browser reports, record OS/version, browser/version, rendering engine, and
 whether the failure occurs interactively or in a headed/headless test. Include
 redacted reproduction evidence and the affected code or check. Before claiming
