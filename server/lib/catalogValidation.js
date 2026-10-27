@@ -447,6 +447,12 @@ export const catalogPortraitSetSchema = z.object({
   caption: z.string().trim().max(2_000).optional().nullable(),
 }).strict();
 
+// Generated-image attach body: the server chooses portrait vs reference under
+// the ingredient lock and leaves an already-attached render untouched.
+export const catalogGeneratedImageAttachSchema = z.object({
+  mediaKey: z.string().trim().min(1).max(512),
+}).strict();
+
 // Reference-sheet render/preview body. The prompt overrides are the user's own
 // words and are sent exactly as typed — no trim (#11317).
 // `wardrobeId` picks the outfit a `look` render dresses the character in: it

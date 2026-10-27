@@ -1,7 +1,9 @@
 /**
- * Real Postgres regression tests for overlapping local portrait replacements.
- * Query barriers hold one replacement after demotion while another writer
- * reaches the row lock; no sleeps or simulated SQL locking semantics.
+ * Real Postgres regression tests for overlapping local image writes: portrait
+ * replacements and the generated-image attach shared by the completion hook and
+ * the mounted client (#13833). Query barriers hold one writer inside its
+ * transaction while another reaches the row lock; no sleeps or simulated SQL
+ * locking semantics.
  */
 import { describe, it, expect, afterAll, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
@@ -22,6 +24,7 @@ vi.mock('../lib/db.js', async (importOriginal) => {
   };
 });
 vi.mock('./mediaJobQueue/index.js', () => ({ mediaJobEvents: new EventEmitter() }));
+vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-local-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./catalogMedia.js', () => ({
   readImageGenerationMetadata: async () => ({ prompt: 'Example portrait', seed: 42 }),
 }));
@@ -31,6 +34,7 @@ const { requireDbOrSkip } = await import('../lib/dbTestGate.js');
 const catalogDB = await import('./catalogDB.js');
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
 const hook = await import('./catalogImageAttachHook.js');
+const { mergeIngredients } = await import('./catalogDB/merge.js');
 
 const health = await checkHealth();
 if (health.connected) await ensureSchema();
@@ -42,8 +46,41 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-async function ingredient() {
-  const row = await catalogDB.createIngredient({ type: 'character', name: 'Example portrait subject' });
+const liveRows = (id) => query(
+  `SELECT media_key, kind, role, caption, metadata, library FROM catalog_ingredient_media
+    WHERE ingredient_id = $1 AND deleted = false ORDER BY media_key, kind`, [id]).then((r) => r.rows);
+const emitCompletion = (catalogAttach, filename) => mediaJobEvents.emit('completed', {
+  kind: 'image', params: { catalogAttach }, result: { filename },
+});
+
+// Hold the first writer just after its in-transaction media read (the moment
+// the pre-#13833 hook decided outside any lock), let the second writer reach
+// the ingredient lock, then release.
+async function holdFirstGeneratedReadThen(first, second) {
+  const release = deferred();
+  let held = false;
+  let locks = 0;
+  intercept = async (sql) => {
+    if (sql.includes('FOR UPDATE')) locks += 1;
+    if (!held && sql.includes('catalog_identity_read_media')) {
+      held = true;
+      return () => release.promise;
+    }
+  };
+  const firstDone = first();
+  await vi.waitFor(() => expect(held).toBe(true));
+  const lockedBefore = locks;
+  const secondDone = second();
+  try {
+    await vi.waitFor(() => expect(locks).toBeGreaterThan(lockedBefore));
+  } finally {
+    release.resolve();
+  }
+  return Promise.all([firstDone, secondDone]);
+}
+
+async function ingredient(payload) {
+  const row = await catalogDB.createIngredient({ type: 'character', name: 'Example portrait subject', ...(payload ? { payload } : {}) });
   ids.push(row.id);
   return row.id;
 }
@@ -57,7 +94,7 @@ afterAll(async () => {
   await close();
 });
 
-describe.skipIf(!runDb)('atomic local portrait replacement', () => {
+describe.skipIf(!runDb)('atomic local image writes', () => {
   it('attaches refinement metadata atomically and retains exact feedback when rejecting a guide', async () => {
     const id = await ingredient();
     const feedback = '  Keep identity; shorten hair.\nPreserve the coat.  ';
@@ -159,5 +196,129 @@ describe.skipIf(!runDb)('atomic local portrait replacement', () => {
     for (const kind of ['reference', 'audio', 'video', 'document']) {
       expect(live.filter((row) => row.kind === kind)).toHaveLength(2);
     }
+  });
+
+  // Each ordering of the completion hook and the client's optimistic attach,
+  // with the writers asking for different kinds: exactly one row survives.
+  it.each([
+    ['hook first', 'hook'],
+    ['client first', 'client'],
+  ])('leaves one generated attachment when the %s holds the lock', async (_label, leader) => {
+    const id = await ingredient();
+    await catalogDB.attachMedia(id, 'existing.png', 'reference');
+    hook.initCatalogImageAttachHook();
+    // The hook was told portrait; the client's auto request sees no portrait
+    // either — without the lock both decide before either writes.
+    const runHook = async () => {
+      emitCompletion({ ingredientId: id, kind: 'portrait' }, 'render.png');
+      await hook.__testing.settled();
+    };
+    const runClient = () => catalogDB.attachGeneratedMedia(id, 'render.png', { kind: 'reference' });
+    const [a, b] = leader === 'hook' ? [runHook, runClient] : [runClient, runHook];
+    const results = await holdFirstGeneratedReadThen(a, b);
+    await hook.__testing.settled();
+    const client = leader === 'hook' ? results[1] : results[0];
+    expect(client.attached).toBe(leader === 'client');
+    const renders = (await liveRows(id)).filter((row) => row.media_key === 'render.png');
+    expect(renders).toHaveLength(1);
+    expect(renders[0].kind).toBe(leader === 'hook' ? 'portrait' : 'reference');
+  });
+
+  it('keeps an explicit choice and its fields, and still allows a deliberate second kind', async () => {
+    const id = await ingredient();
+    const library = { tags: ['chosen'], review: { status: 'good', feedback: 'Keep' },
+      derivedFrom: { mediaKey: 'source.png', kind: 'reference' } };
+    await catalogDB.attachMedia(id, 'render.png', 'reference', {
+      role: 'plate', caption: 'User caption', metadata: { prompt: 'User prompt' }, library,
+    });
+    hook.initCatalogImageAttachHook();
+    // The explicit attach committed first, so the completion is a duplicate.
+    emitCompletion({ ingredientId: id, kind: 'portrait', library: { tags: ['generated'],
+      derivedFrom: { mediaKey: 'other.png', kind: 'reference' } } }, 'render.png');
+    await hook.__testing.settled();
+    expect(await liveRows(id)).toEqual([expect.objectContaining({
+      media_key: 'render.png', kind: 'reference', role: 'plate', caption: 'User caption',
+      metadata: { prompt: 'User prompt' }, library,
+    })]);
+    // A later explicit portrait choice of the same image is intentional.
+    await catalogDB.setPortraitMedia(id, 'render.png');
+    expect((await liveRows(id)).map((row) => row.kind)).toEqual(['portrait', 'reference']);
+  });
+
+  it('serializes an explicit reference attach behind the generated decision', async () => {
+    const id = await ingredient();
+    hook.initCatalogImageAttachHook();
+    await holdFirstGeneratedReadThen(
+      async () => {
+        emitCompletion({ ingredientId: id }, 'render.png');
+        await hook.__testing.settled();
+      },
+      () => catalogDB.attachMedia(id, 'render.png', 'reference', { role: 'plate', caption: 'Chosen later' }),
+    );
+    // The automatic attach landed once (portrait); the user's later explicit
+    // reference choice is a deliberate second association with its own fields.
+    expect(await liveRows(id)).toEqual([
+      expect.objectContaining({ media_key: 'render.png', kind: 'portrait', role: null, caption: null,
+        metadata: { prompt: 'Example portrait', seed: 42 } }),
+      expect.objectContaining({ media_key: 'render.png', kind: 'reference', role: 'plate', caption: 'Chosen later' }),
+    ]);
+  });
+
+  it('reports the portrait when a render is deliberately held as both kinds', async () => {
+    const id = await ingredient();
+    await catalogDB.attachMedia(id, 'both.png', 'reference');
+    await catalogDB.setPortraitMedia(id, 'both.png');
+    await catalogDB.attachMedia(id, 'both.png', 'reference', { caption: 'Touched later' });
+    const result = await catalogDB.attachGeneratedMedia(id, 'both.png');
+    expect(result).toMatchObject({ kind: 'portrait', attached: false, media: { kind: 'portrait' } });
+  });
+
+  // Merge takes the media table lock, then ingredient rows. An attach holding
+  // the ingredient row before touching media would deadlock with it.
+  it('orders an attach and an overlapping merge instead of deadlocking', async () => {
+    const id = await ingredient({ locked: false });
+    const sourceId = await ingredient({ locked: false });
+    // The preview row-locks too, so take it before the attach holds the row.
+    const preview = await mergeIngredients({ sourceId, survivorId: id });
+    const release = deferred();
+    let held = false;
+    intercept = async (sql) => {
+      if (!held && sql.includes('catalog_identity_read_media')) {
+        held = true;
+        return () => release.promise;
+      }
+    };
+    const attach = catalogDB.attachGeneratedMedia(id, 'merge-race.png');
+    await vi.waitFor(() => expect(held).toBe(true));
+    const merge = mergeIngredients({ sourceId, survivorId: id, fieldChoices: preview.fieldChoices || {},
+      dryRun: false, previewToken: preview.previewToken }).then(() => 'merged', (err) => err);
+    try {
+      await vi.waitFor(async () => {
+        const waiting = await query('SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted');
+        expect(waiting.rows[0].n).toBeGreaterThan(0);
+      });
+    } finally {
+      release.resolve();
+    }
+    await expect(attach).resolves.toMatchObject({ attached: true });
+    // The merge may still refuse its now-stale preview; it must not be the
+    // deadlock victim (40P01) of the attach.
+    const outcome = await merge;
+    expect(outcome?.code === '40P01' ? outcome.message : null).toBeNull();
+  });
+
+  // The client files the newer render first; an explicit-portrait completion
+  // queued before that choice must not replace it, whatever the hook guard saw.
+  it.each([
+    ['queued before', -60_000, { 'newer.png': 'portrait', 'older.png': 'reference' }],
+    ['queued after', 60_000, { 'older.png': 'portrait' }],
+  ])('files an explicit portrait %s a newer live portrait accordingly', async (_label, offset, expected) => {
+    const id = await ingredient();
+    await catalogDB.attachGeneratedMedia(id, 'newer.png');
+    hook.initCatalogImageAttachHook();
+    mediaJobEvents.emit('completed', { kind: 'image', params: { catalogAttach: { ingredientId: id, kind: 'portrait' } },
+      result: { filename: 'older.png' }, queuedAt: new Date(Date.now() + offset).toISOString() });
+    await hook.__testing.settled();
+    expect(Object.fromEntries((await liveRows(id)).map((row) => [row.media_key, row.kind]))).toEqual(expected);
   });
 });

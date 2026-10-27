@@ -255,6 +255,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['DELETE /api/catalog/ingredients/:id/media', REMOVES_RECORD],
   ['POST /api/catalog/ingredients/:id/media', RECORDS],
   ['POST /api/catalog/ingredients/:id/media/from-mood-board', RECORDS],
+  ['POST /api/catalog/ingredients/:id/media/generated', RECORDS],
   ['PATCH /api/catalog/ingredients/:id/media/library', RECORDS],
   ['POST /api/catalog/ingredients/:id/media/portrait', RECORDS],
   ['POST /api/catalog/ingredients/:id/media/upload', RECORDS],

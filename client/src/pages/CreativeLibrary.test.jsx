@@ -17,7 +17,7 @@ vi.mock('../services/apiCatalog', () => ({
   createCatalogIngredient: vi.fn(),
   getCatalogFacets: vi.fn(),
   getCatalogIngredientDetails: vi.fn(),
-  setCatalogIngredientPortrait: vi.fn(),
+  attachCatalogIngredientGeneratedImage: vi.fn(),
 }));
 vi.mock('../components/catalog/GenerateImageControl', () => ({
   default: ({ name, onComplete }) => <button type="button" onClick={() => onComplete('new-cover.png')}>Generate image for {name}</button>,
@@ -30,7 +30,7 @@ vi.mock('../components/MediaImage', () => ({
 }));
 
 import CreativeLibrary from './CreativeLibrary';
-import { listCatalogIngredients, createCatalogIngredient, getCatalogFacets, setCatalogIngredientLock, getCatalogIngredientCards, getCatalogIngredientDetails, setCatalogIngredientPortrait } from '../services/apiCatalog';
+import { listCatalogIngredients, createCatalogIngredient, getCatalogFacets, setCatalogIngredientLock, getCatalogIngredientCards, getCatalogIngredientDetails, attachCatalogIngredientGeneratedImage } from '../services/apiCatalog';
 import { listCatalogTypes } from '../services/apiCatalogTypes';
 
 const renderLibrary = (libraryId, entry) => render(
@@ -128,21 +128,37 @@ describe('CreativeLibrary', () => {
     const item = { id: 'example-record', type, name: 'Example Record', thumbnailKey: 'previous-reference.png', payload: {} };
     listCatalogIngredients.mockResolvedValue({ items: [item] });
     getCatalogIngredientDetails.mockResolvedValue({ ingredient: item, media: [{ kind: 'reference', mediaKey: 'previous-reference.png' }] });
-    setCatalogIngredientPortrait.mockResolvedValue({ mediaKey: 'new-cover.png', kind: 'portrait' });
+    attachCatalogIngredientGeneratedImage.mockResolvedValue({ media: { mediaKey: 'new-cover.png', kind: 'portrait' }, kind: 'portrait', attached: true });
     renderLibrary(library, `/${library}`);
     expect(await screen.findByRole('img', { name: item.name })).toHaveAttribute('src', '/data/images/previous-reference.png');
 
     fireEvent.click(screen.getByRole('button', { name: `Generate image for ${item.name}` }));
 
     await waitFor(() => expect(screen.getByRole('img', { name: item.name })).toHaveAttribute('src', '/data/images/new-cover.png'));
-    expect(setCatalogIngredientPortrait).toHaveBeenCalledWith(item.id, { mediaKey: 'new-cover.png' }, { silent: true });
+    expect(attachCatalogIngredientGeneratedImage).toHaveBeenCalledWith(item.id, { mediaKey: 'new-cover.png' }, { silent: true });
+  });
+
+  // Uniquely catches a render the server filed as a reference (another writer
+  // set the portrait meanwhile) being shown as the card cover.
+  it('keeps the current cover when the server files the render as a reference', async () => {
+    const item = { id: 'example-record', type: 'place', name: 'Example Record', thumbnailKey: 'previous-reference.png', payload: {} };
+    listCatalogIngredients.mockResolvedValue({ items: [item] });
+    getCatalogIngredientDetails.mockResolvedValue({ ingredient: item, media: [{ kind: 'reference', mediaKey: 'previous-reference.png' }] });
+    attachCatalogIngredientGeneratedImage.mockResolvedValue({ media: { mediaKey: 'new-cover.png', kind: 'reference' }, kind: 'reference', attached: true });
+    renderLibrary('environments', '/environments');
+    expect(await screen.findByRole('img', { name: item.name })).toHaveAttribute('src', '/data/images/previous-reference.png');
+
+    fireEvent.click(screen.getByRole('button', { name: `Generate image for ${item.name}` }));
+
+    await waitFor(() => expect(attachCatalogIngredientGeneratedImage).toHaveBeenCalledWith(item.id, { mediaKey: 'new-cover.png' }, { silent: true }));
+    expect(screen.getByRole('img', { name: item.name })).toHaveAttribute('src', '/data/images/previous-reference.png');
   });
 
   it.each([['environments', 'place'], ['casting', 'character']])('yields a generated cover to a newer authoritative portrait in %s', async (library, type) => {
     const items = Array.from({ length: 48 }, (_, index) => ({ id: `example-${index}`, type, name: `Example ${index}`, payload: {}, thumbnailKey: 'previous-reference.png', updatedAt: '2026-10-20T00:00:00Z' }));
     listCatalogIngredients.mockResolvedValueOnce({ items }).mockResolvedValueOnce({ items: [{ ...items[0], thumbnailKey: 'chosen-portrait.png', updatedAt: '2026-10-21T00:00:00Z' }] });
     getCatalogIngredientDetails.mockResolvedValue({ ingredient: items[0], media: [{ kind: 'reference', mediaKey: 'previous-reference.png' }] });
-    setCatalogIngredientPortrait.mockResolvedValue({ mediaKey: 'new-cover.png', kind: 'portrait' });
+    attachCatalogIngredientGeneratedImage.mockResolvedValue({ media: { mediaKey: 'new-cover.png', kind: 'portrait' }, kind: 'portrait', attached: true });
     renderLibrary(library, `/${library}`);
     await screen.findByRole('img', { name: 'Example 0' });
     fireEvent.click(screen.getByRole('button', { name: 'Generate image for Example 0' }));

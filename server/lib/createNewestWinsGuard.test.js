@@ -11,6 +11,15 @@ describe('createNewestWinsGuard', () => {
     expect(guard.isStale('scene', '2026-06-29T00:00:02.000Z')).toBe(false);
   });
 
+  // Uniquely catches a duplicate older render rewinding the slot and
+  // re-admitting renders older than the newest already applied.
+  it('never rewinds when an older render is marked after a newer one', () => {
+    const guard = createNewestWinsGuard();
+    guard.mark('scene', '2026-06-29T00:00:03.000Z');
+    guard.mark('scene', '2026-06-29T00:00:01.000Z');
+    expect(guard.isStale('scene', '2026-06-29T00:00:02.000Z')).toBe(true);
+  });
+
   it('treats an empty slot (nothing marked) as not stale', () => {
     const guard = createNewestWinsGuard();
     expect(guard.isStale('scene', '2026-06-29T00:00:01.000Z')).toBe(false);

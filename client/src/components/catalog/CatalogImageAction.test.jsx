@@ -3,12 +3,12 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter } from 'react-router';
 import CatalogCard from './CatalogCard';
 import { getCatalogType } from '../../lib/catalogTypes';
-import { getCatalogIngredientDetails, setCatalogIngredientPortrait } from '../../services/apiCatalog';
+import { getCatalogIngredientDetails, attachCatalogIngredientGeneratedImage } from '../../services/apiCatalog';
 import { getUniverse } from '../../services/apiUniverseBuilder';
 import { generateImage } from '../../services/apiSystem';
 
 vi.mock('../../services/apiCatalog', () => ({ getCatalogIngredientDetails: vi.fn(),
-  setCatalogIngredientPortrait: vi.fn(async () => ({})), attachCatalogIngredientMedia: vi.fn(async () => ({})) }));
+  attachCatalogIngredientGeneratedImage: vi.fn(async () => ({ kind: 'portrait', attached: true })) }));
 vi.mock('../../services/apiUniverseBuilder', () => ({ getUniverse: vi.fn() }));
 vi.mock('../../services/apiSystem', () => ({ generateImage: vi.fn() }));
 vi.mock('../../services/apiImageVideo', () => ({ previewImagePrompt: vi.fn(async body => ({
@@ -56,7 +56,7 @@ describe('catalog card image actions', () => {
     expect(body.promptAdditions.map(item => item.label)).toEqual(['Universe style', 'Style negatives']);
     expect(body.catalogIngredientId).toBe(record.id);
     expect(body.universeRun).toEqual({ universeId: 'example-world', universeName: 'Example world' });
-    await waitFor(() => expect(setCatalogIngredientPortrait).toHaveBeenCalledWith(record.id, { mediaKey: 'example-render.png' }, { silent: true }));
+    await waitFor(() => expect(attachCatalogIngredientGeneratedImage).toHaveBeenCalledWith(record.id, { mediaKey: 'example-render.png' }, { silent: true }));
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 

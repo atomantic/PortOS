@@ -34,6 +34,14 @@ vi.mock('../services/embeddings.js', () => ({
   embedIngredient: vi.fn(async () => ({})),
 }));
 
+// Only keys under this test's prefix resolve as library images; everything
+// else keeps the real resolver.
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, resolveImageInputPath: (key, ...rest) => (String(key).startsWith('generated-route-')
+    ? `/example/images/${key}` : actual.resolveImageInputPath(key, ...rest)) };
+});
+
 const catalogDB = await import('../services/catalogDB.js');
 const router = (await import('./catalog.js')).default;
 
@@ -1029,5 +1037,27 @@ describe.skipIf(!runDb)('shared card and lock HTTP boundaries', () => {
     expect(response.body.items[0].payload).not.toHaveProperty('voiceCanon');
     expect((await request(makeApp()).get('/api/catalog/ingredient-cards')).status).toBe(400);
     expect((await request(makeApp()).get(`/api/catalog/ingredient-cards?ids=${Array.from({ length: 51 }, (_, i) => `id-${i}`).join(',')}`)).status).toBe(400);
+  });
+});
+
+describe.skipIf(!runDb)('POST /api/catalog/ingredients/:id/media/generated (#13833)', () => {
+  it('files a render once under a server-chosen kind and reports a repeat as already attached', async () => {
+    const ing = await catalogDB.createIngredient({ type: 'character', name: 'Example generated subject' });
+    createdIngredientIds.add(ing.id);
+    const url = `/api/catalog/ingredients/${ing.id}/media/generated`;
+    const first = await request(makeApp()).post(url).send({ mediaKey: `generated-route-${NONCE}-a.png` });
+    expect(first.status).toBe(201);
+    expect(first.body).toMatchObject({ kind: 'portrait', attached: true, media: { kind: 'portrait' } });
+    const second = await request(makeApp()).post(url).send({ mediaKey: `generated-route-${NONCE}-b.png` });
+    expect(second.body).toMatchObject({ kind: 'reference', attached: true });
+    const repeat = await request(makeApp()).post(url).send({ mediaKey: `generated-route-${NONCE}-a.png` });
+    expect(repeat.status).toBe(200);
+    expect(repeat.body).toMatchObject({ kind: 'portrait', attached: false });
+    expect((await catalogDB.listMediaForIngredient(ing.id)).map((m) => [m.mediaKey, m.kind])).toEqual([
+      [`generated-route-${NONCE}-a.png`, 'portrait'], [`generated-route-${NONCE}-b.png`, 'reference'],
+    ]);
+    expect((await request(makeApp()).post(url).send({ mediaKey: `missing-${NONCE}.png` })).status).toBe(422);
+    expect((await request(makeApp()).post('/api/catalog/ingredients/nonexistent/media/generated')
+      .send({ mediaKey: `generated-route-${NONCE}-c.png` })).status).toBe(404);
   });
 });

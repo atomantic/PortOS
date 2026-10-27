@@ -75,6 +75,7 @@ vi.mock('../services/apiCatalog', () => ({
   listCatalogIngredientMedia: vi.fn(async () => []),
   attachCatalogIngredientMedia: vi.fn(),
   setCatalogIngredientPortrait: vi.fn(),
+  attachCatalogIngredientGeneratedImage: vi.fn(),
   detachCatalogIngredientMedia: vi.fn(),
   listCatalogSheetVariants: vi.fn(async () => ({ variants: [] })),
   previewCatalogSheet: vi.fn(async () => ({ preview: null })),
@@ -770,9 +771,9 @@ describe('CatalogIngredient — character sheet', () => {
 
   it('composes the prompt from name + visual fields + tags, then renders and sets the portrait', async () => {
     const { generateImage } = await import('../services/apiSystem');
-    const { setCatalogIngredientPortrait } = await import('../services/apiCatalog');
+    const { attachCatalogIngredientGeneratedImage } = await import('../services/apiCatalog');
     generateImage.mockResolvedValue({ jobId: 'job-1' });
-    setCatalogIngredientPortrait.mockResolvedValue({});
+    attachCatalogIngredientGeneratedImage.mockResolvedValue({ kind: 'portrait', attached: true });
     await renderPage();
     await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
 
@@ -793,18 +794,18 @@ describe('CatalogIngredient — character sheet', () => {
     expect(genPayload.prompt).toMatch(/Ada Lovelace/);
     expect(genPayload.prompt).toMatch(/Sharp eyes/);
     expect(genPayload.catalogIngredientId).toBe('cat-chr-1');
-    // The MediaJobThumb stub fires onFilename → with no existing portrait the
-    // render is attached as THE portrait.
-    await waitFor(() => expect(setCatalogIngredientPortrait).toHaveBeenCalledWith(
+    // The MediaJobThumb stub fires onFilename → the server-decided generated
+    // attach files the render (portrait when none exists).
+    await waitFor(() => expect(attachCatalogIngredientGeneratedImage).toHaveBeenCalledWith(
       'cat-chr-1', { mediaKey: 'job-1.png' }, { silent: true },
     ));
   });
 
   it('attaches a synchronously-returned image (external mode, no jobId)', async () => {
     const { generateImage } = await import('../services/apiSystem');
-    const { setCatalogIngredientPortrait } = await import('../services/apiCatalog');
+    const { attachCatalogIngredientGeneratedImage } = await import('../services/apiCatalog');
     generateImage.mockResolvedValue({ filename: 'ext.png' }); // external SD-API: no jobId
-    setCatalogIngredientPortrait.mockResolvedValue({});
+    attachCatalogIngredientGeneratedImage.mockResolvedValue({ kind: 'portrait', attached: true });
     await renderPage();
     await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
 
@@ -814,7 +815,7 @@ describe('CatalogIngredient — character sheet', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /^Render$/i })).toHaveProperty('disabled', false));
     fireEvent.click(screen.getByRole('button', { name: /^Render$/i }));
 
-    await waitFor(() => expect(setCatalogIngredientPortrait).toHaveBeenCalledWith(
+    await waitFor(() => expect(attachCatalogIngredientGeneratedImage).toHaveBeenCalledWith(
       'cat-chr-1', { mediaKey: 'ext.png' }, { silent: true },
     ));
   });

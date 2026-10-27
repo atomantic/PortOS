@@ -28,6 +28,7 @@ import {
   catalogMediaFileUploadSchema,
   catalogMediaVoiceMemoSchema,
   catalogPortraitSetSchema,
+  catalogGeneratedImageAttachSchema,
   catalogIngredientQuerySchema,
   catalogIngredientDetailQuerySchema,
   catalogIngredientCardsQuerySchema,
@@ -678,6 +679,22 @@ router.post('/ingredients/:id/media/portrait', asyncHandler(async (req, res) => 
     ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   });
   res.status(201).json(media);
+}));
+
+// The mounted page's optimistic attach for a render it just watched complete.
+// It shares attachGeneratedMedia with the completion hook, so whichever lands
+// second sees the first under the ingredient lock and leaves one row (#13833).
+router.post('/ingredients/:id/media/generated', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogGeneratedImageAttachSchema, req.body);
+  const ing = await catalogDB.getIngredient(req.params.id);
+  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  if (!resolveImageInputPath(body.mediaKey)) {
+    throw new ServerError(`Media key "${body.mediaKey}" not found in the media library`, { status: 422 });
+  }
+  const metadata = await readImageGenerationMetadata(body.mediaKey);
+  const result = await catalogDB.attachGeneratedMedia(req.params.id, body.mediaKey,
+    Object.keys(metadata).length > 0 ? { metadata } : {});
+  res.status(result.attached ? 201 : 200).json(result);
 }));
 
 router.delete('/ingredients/:id/media', asyncHandler(async (req, res) => {
