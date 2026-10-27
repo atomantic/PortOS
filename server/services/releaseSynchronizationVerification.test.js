@@ -40,7 +40,6 @@ vi.mock('./taskSchedule.js', () => ({ getBranchReconcileOutcome: async () => {
 vi.mock('./shell.js', () => ({ listAllSessions: () => [] }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: async () => [{ path: '/example/repo', branch: 'refs/heads/main' }] }));
 vi.mock('./branchReconcile.js', () => ({ listRemoteHeads: async () => new Map() }));
-vi.mock('./mergeGateAudit.js', () => ({ readHeadCheckRuns: async () => f.checks }));
 vi.mock('./appQualityFederation.js', () => ({ buildQualitySnapshot: async () => f.quality }));
 vi.mock('./github.js', () => ({ execGh: async args => {
   if (f.unavailable) throw new Error('synthetic forge transport failure');
@@ -139,16 +138,18 @@ it('persists independent revision proofs before retirement and rejoins the same 
   } finally { cosEvents.off('tasks:changed', listener); }
 });
 
-it('refuses successful terminal prose, stale hosted reviews and CI completed after the merge', async () => {
+it('accepts provider-confirmed merge without a second review, CI or admission certificate', async () => {
   finishExecution();
-  f.reviews[0].commit_id = '0'.repeat(40);
-  f.checks[0].completed_at = '2026-01-01T01:11:00Z';
+  f.review = null;
+  f.reviews = [];
+  f.checks = [{ conclusion: 'failure' }];
+  f.agents[1].metadata.mergeAdmissionHistory = [];
   await verifyReleaseSynchronizationTask(taskId);
   const saved = await getReleaseSynchronization(identity);
-  expect(saved.synchronization.status).toBe('blocked');
-  expect(saved.obligations.hostedReview.blocker).toBe('required-hosted-review-unverified');
-  expect(saved.obligations.requiredCi.blocker).toBe('head-ci-not-green-at-merge');
-  expect(saved.obligations.localReview.blocker).toBe('local-review-lifecycle-unverified');
+  expect(saved.synchronization.status).toBe('verified');
+  for (const name of ['localReview', 'hostedReview', 'requiredCi', 'mergeAdmission']) {
+    expect(saved.obligations[name]).toMatchObject({ status: 'verified', evidence: { authority: 'hosting-provider', headSha: f.pr.head.sha } });
+  }
   expect(saved.publication).toEqual(publication);
 });
 
@@ -169,7 +170,7 @@ it('retains successful proof and backoff on transport failure, then completes on
   expect((await getReleaseSynchronization(identity)).obligations.requiredCi).toMatchObject({ status: 'verified', verifiedAt: ciVerifiedAt });
   f.checks = [{ ...green[0], conclusion: 'failure' }];
   await verifyReleaseSynchronizationTask(taskId);
-  expect((await getReleaseSynchronization(identity)).obligations.requiredCi.status).toBe('blocked');
+  expect((await getReleaseSynchronization(identity)).obligations.requiredCi.status).toBe('verified');
   f.checks = green;
   finishExecution();
   f.receipts[0].checkoutIdentity = '0'.repeat(64);
@@ -183,13 +184,13 @@ it('retains successful proof and backoff on transport failure, then completes on
   expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
 });
 
-it('keeps an approval through a comment-only review, but honors a subsequent change request on that head', async () => {
+it('does not reopen confirmed delivery when review history changes after merge', async () => {
   f.reviews.push({ ...f.reviews[0], id: 2, state: 'COMMENTED', submitted_at: '2026-01-01T01:08:30Z' });
   await verifyReleaseSynchronizationTask(taskId);
   expect((await getReleaseSynchronization(identity)).obligations.hostedReview.status).toBe('verified');
   f.reviews.push({ ...f.reviews[0], id: 3, state: 'CHANGES_REQUESTED', submitted_at: '2026-01-01T01:09:00Z' });
   await verifyReleaseSynchronizationTask(taskId);
-  expect((await getReleaseSynchronization(identity)).obligations.hostedReview.status).toBe('blocked');
+  expect((await getReleaseSynchronization(identity)).obligations.hostedReview.status).toBe('verified');
 });
 
 it('rejects a conflicting live checkout owner without modifying the dispatch, and never waives missing candidate ancestry', async () => {
@@ -230,7 +231,7 @@ it('leaves an unstarted continuation pending and respects durable retry times du
   expect((await getReleaseSynchronization(identity)).synchronization.attempts).toBe(saved.synchronization.attempts);
 });
 
-it('withholds retirement without local proof, then retains the completed PR delivery phase across later hosted-review heads', async () => {
+it('withholds retirement until provider-confirmed merge and retains each checkout generation', async () => {
   f.pr.merged = false;
   const seed = f.agents[1].metadata.checkoutSeeds[0];
   const release = { branch: seed.branch, path: seed.path, head: f.pr.head.sha,
@@ -238,15 +239,14 @@ it('withholds retirement without local proof, then retains the completed PR deli
   f.review = null;
   expect(await retainReleaseSynchronizationReview(release)).toBe(false);
   f.review = { reusable: true, receipt: { status: 'clean', reviewedHead: f.pr.head.sha } };
-  expect(await retainReleaseSynchronizationReview(release)).toBe(true);
+  expect(await retainReleaseSynchronizationReview(release)).toBe(false);
   f.pr.head.sha = '8'.repeat(40);
   f.pr.merged = true;
   f.review = null;
   expect(await retainReleaseSynchronizationReview({ ...release, head: f.pr.head.sha })).toBe(true);
   const saved = await getReleaseSynchronization(identity);
-  expect(saved.obligations.localReview).toMatchObject({ status: 'verified', evidence: { headSha: release.head,
-    receipt: { reviewedHead: release.head } } });
-  expect(saved.obligations.hostedReview.status).toBe('blocked');
+  expect(saved.obligations.localReview).toMatchObject({ status: 'verified', evidence: { headSha: f.pr.head.sha, authority: 'hosting-provider' } });
+  expect(saved.obligations.hostedReview.status).toBe('verified');
   const owner = f.agents[1];
   owner.status = 'completed';
   owner.completedAt = '2026-01-01T01:12:00Z';

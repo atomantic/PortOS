@@ -5,17 +5,14 @@ import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { execGit } from '../lib/execGit.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
-import { localReviewLifecycle } from '../lib/localReviewLifecycle.js';
 import { claimCheckoutOwner } from '../lib/claimContinuation.js';
 import { hasProcessCwdInside } from '../lib/processCwdProbe.js';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
-import { assessMergeGate, classifyHeadChecks } from '../lib/mergeGateAudit.js';
 import { RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
 import { completedCheckoutReceiptValid, readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { execGh } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
-import { readHeadCheckRuns } from './mergeGateAudit.js';
 import { getTaskById } from './cosTaskStore.js';
 import { getAppById } from './apps.js';
 import { getBranchReconcileOutcome } from './taskSchedule.js';
@@ -181,57 +178,15 @@ export async function inspectReleaseSynchronization(entry, agents) {
     }
     return { promotionMerge: entry.publication.promotionMerge, developmentHead: target.developmentHead };
   });
-  await check('localReview', async () => {
-    // The completed pre-PR phase belongs to this delivery. Hosted feedback can
-    // move its head; retain the actual historical reviewed head and generation.
-    if (obligations.localReview.status === 'verified' && sameDelivery) return obligations.localReview.evidence;
-    for (const row of checkouts.filter(value => value.branch === target.branch && value.head === target.headSha)) {
-      const current = await readCompletedCheckoutIdentity(row).catch(() => null);
-      if (!current || retirementCheckoutIdentityFromPointer(current.incarnation?.pointer) !== row.checkoutIdentity) continue;
-      const delivery = await localReviewLifecycle(row.path, { base: target.base, prUrl: target.prUrl });
-      if (delivery.reusable && ['clean', 'partial'].includes(delivery.receipt?.status)) {
-        return { receipt: delivery.receipt, checkoutIdentity: row.checkoutIdentity, base: target.base };
-      }
-    }
-    if (ownersOf(entry, agents).some(agent => agent.status !== 'completed')) wait('local-review-lifecycle-pending');
-    hold('local-review-lifecycle-unverified');
-  });
-  await check('hostedReview', async () => {
-    if (!pr.merged) wait('hosted-review-awaits-merge');
-    const reviews = await ctx.pages(`pulls/${target.number}/reviews?per_page=100`);
-    const latest = new Map();
-    for (const review of reviews.sort((left, right) => (left.submitted_at || '').localeCompare(right.submitted_at || '') || left.id - right.id)) {
-      if (review.commit_id !== target.headSha || !time(review.submitted_at) || !time(pr.merged_at)
-        || Date.parse(review.submitted_at) > Date.parse(pr.merged_at) || ['PENDING', 'COMMENTED'].includes(review.state)) continue;
-      const login = review.user?.login?.toLowerCase();
-      if (!login) hold('hosted-review-unreadable');
-      latest.set(login, review);
-    }
-    const optional = new Set((entry.task.metadata.optionalReviewers || []).map(value => value.replace(/^@/, '').toLowerCase()));
-    const required = (entry.task.metadata.usernames || []).map(value => value.replace(/^@/, '').toLowerCase()).filter(login => !optional.has(login));
-    if (required.some(login => latest.get(login)?.state !== 'APPROVED')
-      || [...latest.values()].some(review => review.state === 'CHANGES_REQUESTED')) hold('required-hosted-review-unverified');
-    return { reviews: [...latest.values()].map(review => ({ id: review.id, login: review.user.login, state: review.state, headSha: review.commit_id })) };
-  });
-  await check('requiredCi', async () => {
-    if (!pr.merged) wait('head-ci-awaits-merge');
-    const checks = await readHeadCheckRuns({ origin: ctx.origin, repoSpec: ctx.origin.fullName,
-      forgeExec: ctx.forgeExec, headSha: target.headSha, mergedAt: pr.merged_at });
-    if (!Array.isArray(checks)) throw new Error('head-ci-evidence-unavailable');
-    const classified = classifyHeadChecks(checks, pr.merged_at);
-    if (!classified.readable || !checks.length || classified.notGreenAtMerge.length) hold('head-ci-not-green-at-merge');
-    return { checks, mergedAt: pr.merged_at };
-  });
-  await check('mergeAdmission', async () => {
-    if (!pr.merged) wait('merge-admission-awaits-merge');
-    const owners = ownersOf(entry, agents);
-    const verdict = assessMergeGate({ repository: `github.com/${ctx.origin.fullName}`.toLowerCase(),
-      prUrl: target.prUrl, headSha: target.headSha, mergedAt: pr.merged_at, checks: [],
-      history: owners.flatMap(agent => agent.metadata?.mergeAdmissionHistory || []),
-      receipts: owners.flatMap(agent => agent.metadata?.mergeHandoffReceipts || []) });
-    if (!time(pr.merged_at) || verdict.violations.length) hold('synchronization-merge-admission-unverified');
-    return { mergedAt: pr.merged_at, coordinator: verdict.exempt };
-  });
+  // These legacy obligation names remain readable across upgrades. A confirmed
+  // provider merge already applied repository review/CI rules; no local replay
+  // of review marks, check timestamps or admission leases can overturn it.
+  for (const name of ['localReview', 'hostedReview', 'requiredCi', 'mergeAdmission']) {
+    await check(name, async () => {
+      if (pr?.merged !== true) wait('hosting-provider-merge-pending');
+      return { authority: 'hosting-provider', prUrl: target.prUrl, headSha: target.headSha, mergedAt: pr.merged_at };
+    });
+  }
   await check('qualitySnapshot', async () => {
     if (obligations.synchronizationPr.status !== 'verified') wait('quality-awaits-development-sync');
     const snapshot = await buildQualitySnapshot(ctx.app);
