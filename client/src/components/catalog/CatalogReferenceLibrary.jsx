@@ -1,8 +1,9 @@
 import { useId, useMemo, useState } from 'react';
 import { useCatalogPreviewSequence } from './CatalogImagePreviewProvider';
-import { Compass, Star, ThumbsDown, ThumbsUp, Trash2 } from 'lucide-react';
+import { Compass, Loader2, Star, ThumbsDown, ThumbsUp, Trash2 } from 'lucide-react';
 import CatalogMediaTile from './CatalogMediaTile';
 import CatalogReferenceReview from './CatalogReferenceReview';
+import MediaJobThumb from '../pipeline/MediaJobThumb';
 import { REFERENCE_REVIEW_WRITE_STATUSES, referenceReviewStatus, rejectedReferenceKeys } from '../../../../server/lib/catalogMediaLibrary.js';
 import { formatCount } from '../../utils/formatters';
 import { updateCatalogIngredientMediaLibrary, attachCatalogIngredientMediaFromMoodBoard } from '../../services/apiCatalog';
@@ -72,7 +73,23 @@ const LIBRARY_KINDS = new Set(['portrait', 'reference', 'video']);
 const eraFor = (m) => m.library?.variant?.era
   || (Number.isInteger(m.library?.variant?.age) ? (m.library.variant.age < 13 ? 'child' : m.library.variant.age < 20 ? 'teen' : m.library.variant.age < 65 ? 'adult' : 'elder') : '');
 
-export default function CatalogReferenceLibrary({ ingredientId, media = [], forms = [], readOnly = false, onChanged, onMediaUpdated, referenceMedia = media, missingMedia = new Set(), onSetPortrait, onDetach, revision, blockedReason }) {
+export default function CatalogReferenceLibrary({
+  ingredientId,
+  media = [],
+  forms = [],
+  readOnly = false,
+  onChanged,
+  onMediaUpdated,
+  referenceMedia = media,
+  missingMedia = new Set(),
+  onSetPortrait,
+  onDetach,
+  revision,
+  blockedReason,
+  pendingRenders = [],
+  onPendingRenderComplete,
+  onPendingRenderFailed,
+}) {
   const id = useId();
   const [armedDetach, setArmedDetach] = useState(null);
   const [filter, setFilter] = useState({ form: '', age: '', era: '', tag: '', review: 'active', guides: false, allMedia: false });
@@ -99,6 +116,15 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
     && (!filter.review || (filter.review === 'active' ? referenceReviewStatus(m) !== 'bad' : referenceReviewStatus(m) === filter.review))
     && (!filter.guides || (m.library?.guide === true && !rejected.has(m.mediaKey))));
 
+  const activePendingRenders = useMemo(() => {
+    const existingKeys = new Set(media.map((m) => m.mediaKey));
+    return (pendingRenders || []).filter(
+      (p) => !existingKeys.has(`${p.jobId}.png`) && (!p.filename || !existingKeys.has(p.filename))
+    );
+  }, [pendingRenders, media]);
+  const showPending = !filter.guides && (!filter.review || filter.review === 'active' || filter.review === 'unreviewed');
+  const visiblePending = showPending ? activePendingRenders : [];
+
   // One visual can have both portrait and reference attachments with independent metadata.
   const groups = new Map();
   for (const m of visible) {
@@ -116,6 +142,7 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
   const sequenceKeys = [...tilesByKey.keys()];
   const sequence = useMemo(() => ({
     keys: sequenceKeys,
+    ingredientId,
     render: (key, { nextKey, prevKey, goTo }) => {
       const m = tilesByKey.get(key);
       if (!m || readOnly || m.readOnly) return null;
@@ -234,8 +261,52 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
         </label>
       </div>
       {error && <p role="alert" className="text-sm text-port-error">{error}</p>}
-      {visible.length === 0 ? <p className="text-sm text-gray-400">{rows.length ? 'No references match. Change the filters to see more.' : 'No references yet. Add an image or video to start your library.'}</p> : (
+      {visible.length === 0 && visiblePending.length === 0 ? <p className="text-sm text-gray-400">{rows.length ? 'No references match. Change the filters to see more.' : 'No references yet. Add an image or video to start your library.'}</p> : (
         <ul className="grid items-start grid-cols-[repeat(auto-fill,minmax(min(100%,16rem),1fr))] gap-3">
+          {visiblePending.map((pending) => (
+            <li
+              key={pending.jobId}
+              data-testid="library-row-pending"
+              className="min-w-0 rounded-lg border border-port-accent/40 bg-port-bg shadow-sm overflow-hidden flex flex-col"
+            >
+              <div className="relative aspect-square w-full bg-port-card/40 flex items-center justify-center overflow-hidden">
+                <MediaJobThumb
+                  jobId={pending.jobId}
+                  label={pending.instruction ? `Edit: ${pending.instruction}` : 'Refined reference'}
+                  size="fill"
+                  onFilename={(filename) => {
+                    onPendingRenderComplete?.(pending.jobId, filename);
+                  }}
+                  onStatus={(status, err) => {
+                    if (status === 'failed' || status === 'canceled') {
+                      onPendingRenderFailed?.(pending.jobId, status, err);
+                    }
+                  }}
+                />
+              </div>
+              <div role="group" aria-label={`Pending reference ${pending.jobId}`} className="min-w-0 space-y-2 border-t border-port-border p-3 flex-1 flex flex-col justify-between">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-start gap-2">
+                    <h4 className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">
+                      {pending.instruction ? `Edit: ${pending.instruction}` : 'Edited reference'}
+                    </h4>
+                    <span className="shrink-0 text-[10px] uppercase font-semibold text-port-accent bg-port-accent/10 px-1.5 py-0.5 rounded animate-pulse">
+                      Rendering
+                    </span>
+                  </div>
+                  {pending.sourceFilename && (
+                    <p className="mt-1 text-xs text-gray-400 truncate" title={`From ${pending.sourceFilename}`}>
+                      From {pending.sourceFilename}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <Loader2 size={12} className="animate-spin text-port-accent" />
+                  <span>Live updating…</span>
+                </div>
+              </div>
+            </li>
+          ))}
           {[...groups].map(([groupKey, attachments]) => {
             const tile = attachments.find((m) => m.kind === 'portrait') || attachments[0];
             const tileEditable = !readOnly && !tile.readOnly;

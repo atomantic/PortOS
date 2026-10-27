@@ -26,7 +26,7 @@ export function useCatalogPreviewSequence(sequence) {
   }, [setSequence, sequence]);
 }
 
-export function CatalogImagePreviewProvider({ children }) {
+export function CatalogImagePreviewProvider({ children, ingredientId, onQuickEditQueued }) {
   const [sequence, setSequence] = useState(null);
   const items = useMemo(() => (sequence?.keys || []).map((key) => catalogImageItem('images', key)).filter(Boolean), [sequence]);
   const galleryResolver = useGalleryPreviewResolver();
@@ -50,6 +50,8 @@ export function CatalogImagePreviewProvider({ children }) {
   const nav = { nextKey, prevKey, goTo };
   const pageActions = index >= 0 ? sequence.render?.(preview.filename, nav) : null;
   const ratingControl = index >= 0 ? sequence.rating?.(preview.filename, nav) ?? null : null;
+  const activeIngredientId = sequence?.ingredientId || ingredientId;
+  const activeOnQuickEditQueued = sequence?.onQuickEditQueued || onQuickEditQueued;
   return (
     <PreviewContext.Provider value={setPreview}>
       <SequenceContext.Provider value={setSequence}>
@@ -70,6 +72,8 @@ export function CatalogImagePreviewProvider({ children }) {
           onSendTo3d: actions.handleSendTo3d,
         } : {})}
         onFilmLookComplete={actions.handleFilmLookComplete}
+        quickEditParams={activeIngredientId ? { catalogIngredientId: activeIngredientId, catalogMediaKind: 'reference' } : undefined}
+        onQuickEditQueued={activeOnQuickEditQueued}
       />
     </PreviewContext.Provider>
   );

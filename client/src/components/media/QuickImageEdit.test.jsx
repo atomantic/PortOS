@@ -36,4 +36,29 @@ describe('QuickImageEdit', () => {
     await waitFor(() => expect(generateImage).toHaveBeenCalled());
     expect(onDone).not.toHaveBeenCalled();
   });
+
+  it('forwards generateParams and calls onDone with result and edit metadata', async () => {
+    const result = { jobId: 'job-edit-1', status: 'queued', position: 1 };
+    generateImage.mockResolvedValue(result);
+    const onDone = vi.fn();
+    const item = { filename: 'a.png' };
+    render(
+      <QuickImageEdit
+        item={item}
+        onDone={onDone}
+        generateParams={{ catalogIngredientId: 'cat-chr-1', catalogMediaKind: 'reference' }}
+      />
+    );
+    fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: 'make the jacket red' } });
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(result, { instruction: 'make the jacket red', item }));
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        catalogIngredientId: 'cat-chr-1',
+        catalogMediaKind: 'reference',
+        referenceImageFiles: ['a.png'],
+      }),
+      { silent: true }
+    );
+  });
 });

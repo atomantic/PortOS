@@ -697,6 +697,14 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       },
     );
   }
+  if (params.catalogAttach && result?.filename) {
+    const { attachGeneratedMedia } = await import('../services/catalogDB.js');
+    const { catalogEvents } = await import('../services/catalogEvents.js');
+    await attachGeneratedMedia(params.catalogAttach.ingredientId, result.filename, {
+      kind: params.catalogAttach.kind || 'reference',
+    }).catch(() => {});
+    catalogEvents.emit('primitive-changed', { ingredientId: params.catalogAttach.ingredientId });
+  }
   res.json(result);
 }));
 
