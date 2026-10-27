@@ -384,8 +384,12 @@ async function updateCompletionReceipt(agentId, update) {
     const metadata = agent.metadata || {};
     const nextMetadata = await update(metadata, agent);
     const result = resultAfterCompletionReceipt(agent, nextMetadata);
-    if (nextMetadata === metadata && result === agent.result) return true;
     const updated = { ...agent, result, metadata: nextMetadata };
+    if (result?.deferredDeliveryOutcome?.recovery?.mode === 'cleanup') {
+      const { reconcileAgentRunDelivery } = await import('./agentRunTracking.js');
+      await reconcileAgentRunDelivery(updated);
+    }
+    if (nextMetadata === metadata && result === agent.result) return true;
     // Never synthesize a bucket before archiveCompletedAgent moved the flat
     // directory: its retry treats an existing bucket as the completed move.
     if (date && (!state.agents[agentId] || await tryReadFile(join(getAgentDir(agentId, date), 'metadata.json')))) {

@@ -130,6 +130,9 @@ describe('deferred delivery receipt result', () => {
 
   it('persists settled delivery in live and archived records without re-emitting completion', async () => {
     const agent = fixture();
+    agent.metadata.runId = 'receipt-run';
+    const tracking = await import('./agentRunTracking.js');
+    const reconcileRun = vi.spyOn(tracking, 'reconcileAgentRunDelivery').mockResolvedValue(true);
     mockCosState.state = { agents: { [agent.id]: agent } };
     const directory = join(mockCosState.agentsDir, agent.completedAt.slice(0, 10), agent.id);
     await mkdir(directory, { recursive: true });
@@ -144,8 +147,10 @@ describe('deferred delivery receipt result', () => {
       delete mockCosState.state.agents[agent.id];
       await recordRepoStateVerification(agent.id, { status: 'completed' });
       expect(JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8')).result).toEqual(saved.result);
+      expect(reconcileRun).toHaveBeenCalledWith(expect.objectContaining({ result: expect.objectContaining({ success: true }),
+        metadata: expect.objectContaining({ runId: 'receipt-run' }) }));
       expect(completed).not.toHaveBeenCalled();
-    } finally { cosEvents.off('agent:completed', completed); }
+    } finally { cosEvents.off('agent:completed', completed); reconcileRun.mockRestore(); }
   });
 
   it.each(['execution', 'validation', 'unknown-capture', 'pending-stage', 'unresolved-payload', 'unverified-integration', 'original-failure'])(
