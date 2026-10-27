@@ -17,6 +17,7 @@ export const MAX_LIBRARY_TAGS = 20;
 export const REFERENCE_REVIEW_STATUSES = Object.freeze(['unreviewed', 'good', 'bad', 'rejected']);
 export const REFERENCE_FEEDBACK_MAX = 2000;
 export const isUsableReference = (m) => !['bad', 'rejected'].includes(m?.library?.review?.status);
+export const isGoodReference = (m) => (m?.library?.review?.status === 'good' || m?.review?.status === 'good');
 export const rejectedReferenceKeys = (media) => new Set((Array.isArray(media) ? media : [])
   .filter(m => m && !m.deleted && ['portrait', 'reference'].includes(m.kind) && !isUsableReference(m)).map(m => m.mediaKey));
 
