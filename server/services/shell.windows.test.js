@@ -60,7 +60,7 @@ describe.skipIf(process.platform !== 'win32')('native Windows shell and filesyst
       await vi.waitFor(async () => { received = JSON.parse(await readFile(reply, 'utf8')); }, { timeout: 5000, interval: 20 });
       expect(received.prompt).toBe(prompt);
       expect(received.env).toBe('exact-child-env');
-      expect((await realpath(received.cwd)).toLowerCase() === (await realpath(workspace)).toLowerCase()).toBe(true);
+      expect((await realpath(received.cwd)).toLowerCase()).toBe((await realpath(workspace)).toLowerCase());
       expect(submitToSession(sessionId, 'exit')).toBe(true);
       await vi.waitFor(() => expect(exited?.exitCode).toBe(0), { timeout: 5000, interval: 20 });
     } finally {
