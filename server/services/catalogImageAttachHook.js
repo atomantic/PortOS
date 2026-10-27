@@ -85,16 +85,20 @@ async function attachGeneratedImage({ ingredientId, kind, role, library, filenam
   }
   const metadata = await readImageGenerationMetadata(filename);
   const metadataOptions = Object.keys(metadata).length > 0 ? { metadata } : null;
-  const libraryOptions = library ? { library } : {};
+  // The client can attach or edit the same image after our list read. Keep a
+  // conflicting row intact, then fill safe defaults under the database lock.
+  const libraryOptions = library ? { library, preserveExistingOnConflict: true } : {};
+  let attached;
   if (target === 'portrait') {
-    if (metadataOptions || library) await setPortraitMedia(ingredientId, filename, { ...metadataOptions, ...libraryOptions });
-    else await setPortraitMedia(ingredientId, filename);
+    if (metadataOptions || library) attached = await setPortraitMedia(ingredientId, filename, { ...metadataOptions, ...libraryOptions });
+    else attached = await setPortraitMedia(ingredientId, filename);
     portraitGuard.mark(ingredientId, queuedAt);
   } else {
     const referenceOptions = { ...(mediaRole ? { role: mediaRole } : {}), ...(metadataOptions || {}), ...libraryOptions };
-    if (Object.keys(referenceOptions).length > 0) await attachMedia(ingredientId, filename, 'reference', referenceOptions);
-    else await attachMedia(ingredientId, filename, 'reference');
+    if (Object.keys(referenceOptions).length > 0) attached = await attachMedia(ingredientId, filename, 'reference', referenceOptions);
+    else attached = await attachMedia(ingredientId, filename, 'reference');
   }
+  if (library && !attached?.library?.derivedFrom) await updateMediaLibrary(ingredientId, filename, target, library, { preserveExisting: true });
   return target;
 }
 

@@ -35,17 +35,18 @@ async function insertMedia(runQuery, ingredientId, mediaKey, kind, options) {
   const hasMetadata = hasOwn(options, 'metadata') && hasMeaningfulMetadata(options.metadata);
   const metadataColumn = hasMetadata ? ', metadata' : '';
   const metadataPlaceholder = hasMetadata ? ', $6' : '';
-  const metadataUpdate = hasMetadata ? ', metadata = EXCLUDED.metadata' : '';
+  const preserveOnConflict = options.preserveExistingOnConflict === true;
+  const metadataUpdate = hasMetadata && !preserveOnConflict ? ', metadata = EXCLUDED.metadata' : '';
   const hasLibrary = hasOwn(options, 'library');
   const libraryColumn = hasLibrary ? ', library' : '';
   const libraryPlaceholder = hasLibrary ? `, $${hasMetadata ? 7 : 6}` : '';
-  const libraryUpdate = hasLibrary ? ', library = EXCLUDED.library' : '';
+  const libraryUpdate = hasLibrary && !preserveOnConflict ? ', library = EXCLUDED.library' : '';
+  const fieldsUpdate = preserveOnConflict ? '' : ', role = EXCLUDED.role, caption = EXCLUDED.caption';
   const result = await runQuery(
     `INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption${metadataColumn}${libraryColumn})
      VALUES (catalog_resolve_ingredient_id($1), $2, $3, $4, $5${metadataPlaceholder}${libraryPlaceholder})
      ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
-       SET deleted = false, deleted_at = NULL,
-           role = EXCLUDED.role, caption = EXCLUDED.caption${metadataUpdate}${libraryUpdate}
+       SET deleted = false, deleted_at = NULL${fieldsUpdate}${metadataUpdate}${libraryUpdate}
      RETURNING *`,
     [
       ingredientId, mediaKey, kind, role, caption,
@@ -161,7 +162,8 @@ export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {
   return withTransaction(async (client) => {
     await client.query('SELECT id FROM catalog_ingredients WHERE id = catalog_resolve_ingredient_id($1) FOR UPDATE', [ingredientId]);
     const cur = await client.query(
-      `SELECT * FROM catalog_ingredient_media
+      `SELECT *, (updated_at IS DISTINCT FROM created_at OR updated_at IS NULL OR created_at IS NULL) AS changed_since_creation
+         FROM catalog_ingredient_media
         WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind = $3 AND deleted = false`,
       [ingredientId, mediaKey, kind],
     );
@@ -173,9 +175,13 @@ export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {
     }
     const prev = normalizeLibrary(row.library);
     // A completion hook may race a user's edits after an optimistic attach.
-    // Merge its defaults under the freshly locked row, not a stale read from
-    // the hook; a present field (including a complete review or variant) wins.
-    const effective = preserveExisting ? { ...patch, ...prev } : patch;
+    // Edited rows keep their whole library, including fields cleared to an
+    // absent key by normalization; only the missing lineage can be filled.
+    // Compare timestamps in Postgres, which keeps their sub-millisecond
+    // precision. The media update trigger advances this clock monotonically.
+    const generated = preserveExisting && row.changed_since_creation !== false
+      ? (hasOwn(patch, 'derivedFrom') ? { derivedFrom: patch.derivedFrom } : {}) : patch;
+    const effective = preserveExisting ? { ...generated, ...prev } : generated;
     const next = normalizeLibrary({
       ...prev,
       ...(hasOwn(effective, 'variant') ? { variant: effective.variant } : {}),
