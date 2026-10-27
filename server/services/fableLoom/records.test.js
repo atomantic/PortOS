@@ -334,8 +334,9 @@ describe('loom CRUD', () => {
   });
 
   it.each(['unchanged', 'image-changed', 'job-changed', 'manifest-changed', 'video-changed', 'current-version',
-    'v1-unchanged', 'v2-unchanged', 'v1-image-changed', 'v1-video-changed', 'v2-manifest-changed'])(
-    'preserves v12 replay evidence only for an unchanged peer render: %s', async scenario => {
+    'v1-unchanged', 'v2-unchanged', 'v1-image-changed', 'v1-video-changed', 'v2-manifest-changed',
+    'v12-unchanged', 'v12-image-changed', 'v12-manifest-changed'])(
+    'preserves v12 replay evidence and v13 canon fingerprints only for an unchanged peer render: %s', async scenario => {
       let loom = await makeLoom();
       loom = await addEpisode(loom.id, { title: 'Pilot' });
       const episodeId = loom.episodes[0].id;
@@ -346,7 +347,10 @@ describe('loom CRUD', () => {
       const manifest = (kind, assetId) => ({
         version: 1, compilerVersion: 'visual-v1', status: 'locked', assetId,
         capability: { kind, backend: 'local' },
-        assets: [{ role: 'request-init', bindingId: null, required: true, filename: ' 風.png', inputRoot: 'imageRefs', sha256: 'a'.repeat(64), strength: 0.4 }],
+        assets: [
+          { role: 'character-neutral', bindingId: 'hero', required: true, filename: 'hero.png', inputRoot: 'images', sha256: 'd'.repeat(64) },
+          { role: 'request-init', bindingId: null, required: true, filename: ' 風.png', inputRoot: 'imageRefs', sha256: 'a'.repeat(64), strength: 0.4 },
+        ],
         adapters: [
           { characterId: 'hero', filename: 'canon.safetensors', source: 'Canon adapter', sha256: 'c'.repeat(64), scale: 1 },
           { characterId: null, filename: ' 角色.safetensors', relativePath: 'style/ 角色.safetensors', source: 'Request adapter', sha256: 'b'.repeat(64), scale: 0.75 },
@@ -361,7 +365,10 @@ describe('loom CRUD', () => {
       loom = await getLoom(loom.id);
       const [localImage, localVideo] = loom.episodes[0].nodes;
       expect(localImage.visualConditioning).toMatchObject({ authoredPrompt: '  authored\n', compiledPrompt: '  composed\n', renderedPrompt: '  triggers and prompt\n',
-        assets: [{ filename: ' 風.png', inputRoot: 'imageRefs', sha256: 'a'.repeat(64), strength: 0.4 }],
+        assets: [
+          { filename: 'hero.png', inputRoot: 'images', sha256: 'd'.repeat(64) },
+          { filename: ' 風.png', inputRoot: 'imageRefs', sha256: 'a'.repeat(64), strength: 0.4 },
+        ],
         adapters: [
           { filename: 'canon.safetensors', source: 'Canon adapter', sha256: 'c'.repeat(64), scale: 1 },
           { filename: ' 角色.safetensors', relativePath: 'style/ 角色.safetensors', source: 'Request adapter' },
@@ -379,27 +386,32 @@ describe('loom CRUD', () => {
         old.adapters = old.adapters.map(({ source: _source, relativePath: _path, ...adapter }) => ({ ...adapter, filename: adapter.filename.trim() }));
         return old;
       };
+      // A v12 sanitizer keeps request evidence but has no canon image fingerprints.
+      const v12 = value => ({ ...structuredClone(value), assets: value.assets.map(({ inputRoot, sha256, ...asset }) => (
+        asset.role.startsWith('request-') ? { ...asset, inputRoot, sha256 } : asset)) });
+      const version = scenario.startsWith('v1-') ? 1 : scenario.startsWith('v2-') ? 2 : scenario.startsWith('v12-') ? 12
+        : scenario === 'current-version' ? 13 : 11;
+      const project = version === 12 ? v12 : v11;
       for (const node of [peerImage, peerVideo]) {
-        node.visualConditioning = v11(node.visualConditioning);
-        node.playbackAssets.visualConditioningByAsset = Object.fromEntries(Object.entries(node.playbackAssets.visualConditioningByAsset).map(([key, value]) => [key, v11(value)]));
+        node.visualConditioning = project(node.visualConditioning);
+        node.playbackAssets.visualConditioningByAsset = Object.fromEntries(Object.entries(node.playbackAssets.visualConditioningByAsset).map(([key, value]) => [key, project(value)]));
       }
-      const version = scenario.startsWith('v1-') ? 1 : scenario.startsWith('v2-') ? 2 : scenario === 'current-version' ? 12 : 11;
       if (version < 3) {
         for (const node of [peerImage, peerVideo]) {
           if (version < 2) node.visualConditioning = null;
           delete node.playbackAssets.visualConditioningByAsset;
         }
       }
-      if (['image-changed', 'v1-image-changed'].includes(scenario)) peerImage.image = 'replacement.png';
+      if (['image-changed', 'v1-image-changed', 'v12-image-changed'].includes(scenario)) peerImage.image = 'replacement.png';
       if (scenario === 'job-changed') peerImage.imageJobId = 'replacement-job';
-      if (['manifest-changed', 'v2-manifest-changed'].includes(scenario)) {
+      if (['manifest-changed', 'v2-manifest-changed', 'v12-manifest-changed'].includes(scenario)) {
         peerImage.visualConditioning.compiledPrompt = 'new direction';
         if (version >= 3) peerImage.playbackAssets.visualConditioningByAsset['still-asset'].compiledPrompt = 'new direction';
       }
       if (['video-changed', 'v1-video-changed'].includes(scenario)) { peerVideo.videoHistoryId = 'clip-2'; peerVideo.playbackAssets.entryVideoHistoryId = 'clip-2'; }
       expect(await mergeLoomsFromSync([remote], { senderSchemaVersions: { fableLoom: version } })).toEqual({ applied: true, count: 1 });
       const [image, video] = (await getLoom(loom.id)).episodes[0].nodes;
-      const keepImage = ['unchanged', 'video-changed', 'v1-unchanged', 'v2-unchanged', 'v1-video-changed'].includes(scenario);
+      const keepImage = ['unchanged', 'video-changed', 'v1-unchanged', 'v2-unchanged', 'v1-video-changed', 'v12-unchanged'].includes(scenario);
       const keepVideo = !['video-changed', 'current-version', 'v1-video-changed'].includes(scenario);
       expect(image.visualConditioning).toEqual(keepImage ? localImage.visualConditioning : peerImage.visualConditioning);
       expect(image.playbackAssets?.visualConditioningByAsset?.['still-asset']).toEqual(keepImage ? localImage.playbackAssets.visualConditioningByAsset['still-asset'] : peerImage.playbackAssets.visualConditioningByAsset?.['still-asset']);
@@ -408,14 +420,22 @@ describe('loom CRUD', () => {
     },
   );
 
-  it('rejects malformed replay identity rather than normalizing it into different input evidence', async () => {
+  it.each([
+    ['adapter path', {}, { relativePath: '../ok.safetensors' }],
+    ['canon image root', { inputRoot: 'sprites', sha256: 'c'.repeat(64) }, {}],
+    ['canon image digest', { inputRoot: 'images', sha256: 'not-a-digest' }, {}],
+    ['canon image strength', { inputRoot: 'images', sha256: 'c'.repeat(64), strength: 0.5 }, {}],
+  ])('rejects malformed replay identity rather than normalizing it into different input evidence: %s', async (_name, canonEvidence, adapterEvidence) => {
     let loom = await makeLoom();
     loom = await addEpisode(loom.id, {});
     const episodeId = loom.episodes[0].id;
     loom = await addNode(loom.id, episodeId, {});
     const nodeId = loom.episodes[0].nodes[0].id;
-    const visualConditioning = { version: 1, assets: [{ role: 'request-reference', filename: 'ok.png', inputRoot: 'images', sha256: 'a'.repeat(64) }],
-      adapters: [{ filename: 'ok.safetensors', source: 'Request adapter', relativePath: '../ok.safetensors', sha256: 'b'.repeat(64), scale: 1 }],
+    const visualConditioning = { version: 1, assets: [
+      { role: 'character-neutral', filename: 'hero.png', ...canonEvidence },
+      { role: 'request-reference', filename: 'ok.png', inputRoot: 'images', sha256: 'a'.repeat(64) },
+    ],
+      adapters: [{ filename: 'ok.safetensors', source: 'Request adapter', relativePath: 'ok.safetensors', sha256: 'b'.repeat(64), scale: 1, ...adapterEvidence }],
       authoredPrompt: '  do not trim  ' };
     const node = await attachNodeImage(loom.id, episodeId, nodeId, { filename: 'still.png', jobId: 'still-job', visualConditioning });
     expect(node.image).toBe('still.png');

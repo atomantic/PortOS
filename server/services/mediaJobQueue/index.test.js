@@ -389,25 +389,38 @@ describe('mediaJobQueue', () => {
     }
   });
 
-  it.each(['unchanged', 'unchanged-named', 'reference', 'adapter', 'canon-adapter', 'trigger'])('checks FableLoom %s inputs after queue delay and before provider dispatch', async (changed) => {
+  it.each([
+    'unchanged', 'unchanged-named', 'unchanged-legacy-canon', 'reference', 'adapter', 'canon-adapter', 'canon-image',
+    'canon-source', 'trigger',
+  ])('checks FableLoom %s inputs after queue delay and before provider dispatch', async (changed) => {
     const images = join(tempDataDir, 'images');
     const loras = join(tempDataDir, 'loras');
+    const elsewhere = join(tempDataDir, 'elsewhere');
     mkdirSync(images, { recursive: true });
     mkdirSync(loras, { recursive: true });
+    mkdirSync(elsewhere, { recursive: true });
     const reference = join(images, 'reference.png');
     const canonReference = join(images, 'canon.png');
+    // Same basename and bytes as the recorded canon image, but not its recorded source.
+    const substitutedCanon = join(elsewhere, 'canon.png');
     const adapter = join(loras, 'example.safetensors');
     const canonAdapter = join(loras, 'canon.safetensors');
     writeFileSync(reference, 'original-reference');
     writeFileSync(canonReference, 'canon-reference');
+    writeFileSync(substitutedCanon, 'canon-reference');
     writeFileSync(adapter, 'original-adapter');
     writeFileSync(canonAdapter, 'canon-adapter');
     const namedAdapter = changed === 'unchanged-named';
     const hash = value => createHash('sha256').update(value).digest('hex');
+    // A job queued before canon fingerprints existed keeps its basename check.
+    const canonAsset = changed === 'unchanged-legacy-canon'
+      ? { role: 'character-neutral', filename: 'canon.png' }
+      : { role: 'character-neutral', filename: 'canon.png', inputRoot: 'images', sha256: hash('canon-reference') };
+    const sentCanon = changed === 'canon-source' ? substitutedCanon : canonReference;
     const params = {
       mode: 'local', prompt: 'An authored view', negativePrompt: '',
       fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
-      referenceImagePaths: [canonReference, reference], referenceImageStrengths: [1, 0.4],
+      referenceImagePaths: [sentCanon, reference], referenceImageStrengths: [1, 0.4],
       loraFilenames: namedAdapter ? ['canon.safetensors', 'example.safetensors'] : ['canon.safetensors'],
       loraPaths: namedAdapter ? [] : [adapter], loraScales: [0.8, 0.7],
       visualConditioning: {
@@ -415,7 +428,7 @@ describe('mediaJobQueue', () => {
         authoredPrompt: 'An authored view', authoredNegativePrompt: '',
         compiledPrompt: 'An authored view', compiledNegativePrompt: '', renderedPrompt: 'An authored view',
         assets: [
-          { role: 'character-neutral', filename: 'canon.png' },
+          canonAsset,
           { role: 'request-reference', filename: 'reference.png', inputRoot: 'images', sha256: hash('original-reference') },
         ],
         referenceImageStrengths: [1, 0.4],
@@ -433,6 +446,7 @@ describe('mediaJobQueue', () => {
     if (changed === 'reference') writeFileSync(reference, 'changed-reference');
     if (changed === 'adapter') writeFileSync(adapter, 'changed-adapter');
     if (changed === 'canon-adapter') writeFileSync(canonAdapter, 'changed-canon-adapter');
+    if (changed === 'canon-image') writeFileSync(canonReference, 'changed-canon-reference');
     if (changed === 'trigger') writeFileSync(`${adapter}.metadata.json`, JSON.stringify({ triggerWords: ['new-token'] }));
     videoGenEvents.emit('completed', { generationId: first.jobId, filename: 'example.mp4' });
     if (changed.startsWith('unchanged')) {

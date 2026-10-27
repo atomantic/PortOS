@@ -64,12 +64,12 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // adds the shared finite/renewable series-design brief.
     // Older peers stay behind the full render contract until they advertise
     // support for the additive fields.
-    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(12);
-    const olderPeer = { ...PORTOS_SCHEMA_VERSIONS, fableLoom: 11 };
+    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(13);
+    const olderPeer = { ...PORTOS_SCHEMA_VERSIONS, fableLoom: 12 };
     const diff = compareSchemaVersions(PORTOS_SCHEMA_VERSIONS, olderPeer);
     expect(scopeVersionDiff(diff, RECORD_KIND_SCHEMA_CATEGORIES.fableLoom)).toEqual({
       compatible: false,
-      ahead: [{ category: 'fableLoom', senderV: 12, receiverV: 11 }],
+      ahead: [{ category: 'fableLoom', senderV: 13, receiverV: 12 }],
       behind: [],
     });
     expect(scopeVersionDiff(diff, RECORD_KIND_SCHEMA_CATEGORIES.artist).compatible).toBe(true);
@@ -92,7 +92,7 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
       image: ['external', 'local', 'codex', 'grok', 'agy', 'fal', 'runway'],
       video: ['local', 'grok', 'fal', 'reactor', 'runway'],
       creativeCommissions: 6,
-      fableLoom: 12,
+      fableLoom: 13,
     });
   });
 });
