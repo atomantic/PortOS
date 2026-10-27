@@ -24,6 +24,7 @@ import { timeAgo, formatCount } from '../../../utils/formatters';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import AddToThreadButton from '../../threads/AddToThreadButton';
 import RunActionButton from './RunActionButton';
+import { ISSUE_BODY_PREVIEW_MAX_CHARS, isCompleteIssueContext } from '../../../../../lib/issueContext.js';
 
 function ClaimReviewOverride({ defaults, overrides, onChange, modelOptions }) {
   return (
@@ -494,14 +495,19 @@ export default function IssuesTab({ appId, appName }) {
     const key = runKey(action, issue.number);
     replaceRuns(prev => ({ ...prev, [key]: { status: 'queuing', taskId: null } }));
     const trimmedOverrideContext = overrideContext.trim();
+    const issueContext = {
+      number: issue.number,
+      title: issue.title,
+      body: issue.body,
+      ...(issue.url ? { url: issue.url } : {})
+    };
+    // Older servers lack the completeness flag but their clipped previews are
+    // longer than the preview limit because they append a truncation notice.
+    const completePreview = issue.bodyTruncated === false
+      || (issue.bodyTruncated == null && typeof issue.body === 'string' && issue.body.length <= ISSUE_BODY_PREVIEW_MAX_CHARS);
     const result = await api.createSlashdoTask(spec.command, appId, {
       target: String(issue.number),
-      issueContext: {
-        number: issue.number,
-        title: issue.title || '',
-        body: issue.body || '',
-        ...(issue.url ? { url: issue.url } : {})
-      },
+      ...(completePreview && isCompleteIssueContext(issueContext) ? { issueContext } : {}),
       ...picker.pin,
       ...(action === 'claim' ? {
         ...(prCompletionTouched ? { prCompletion } : {}),

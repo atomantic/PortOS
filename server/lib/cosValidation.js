@@ -1,5 +1,7 @@
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { auditWorkflow } from './auditWorkflow.js';
+import { PREFETCHED_ISSUE_CONTEXT_MAX_CHARS } from '../../lib/issueContext.js';
+export { PREFETCHED_ISSUE_CONTEXT_MAX_CHARS } from '../../lib/issueContext.js';
 /**
  * Chief-of-Staff (CoS) Zod schemas (split out of validation.js, issue #1831).
  *
@@ -123,7 +125,6 @@ const slashdoCommandSchema = z.string().refine(isValidSlashdoCommand, {
 // page. Keep that payload bounded when it is carried into a manual claim so the
 // prompt cannot be inflated by a hand-crafted request. Oversized requests are
 // rejected at the route boundary instead of silently truncating issue content.
-export const PREFETCHED_ISSUE_CONTEXT_MAX_CHARS = Object.freeze({ title: 1000, body: 12_000, url: 2048 });
 const prefetchedIssueContextSchema = z.object({
   number: z.number().int().positive(),
   title: z.string().max(PREFETCHED_ISSUE_CONTEXT_MAX_CHARS.title).optional(),

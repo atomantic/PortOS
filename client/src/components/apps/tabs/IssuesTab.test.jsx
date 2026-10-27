@@ -227,6 +227,26 @@ describe('IssuesTab', () => {
     expect(await screen.findByRole('link', { name: /Queued/ })).toBeInTheDocument();
   });
 
+  it.each([
+    ['Claim', 'next', { body: `${'x'.repeat(12_001)}ACCEPTANCE_CRITERION_AT_TAIL`, bodyTruncated: false }],
+    ['Replan', 'replan', { body: `${'x'.repeat(12_001)}ACCEPTANCE_CRITERION_AT_TAIL`, bodyTruncated: false }],
+    ['Claim', 'next', { body: `${'x'.repeat(8_000)}\n\n…(truncated)`, bodyTruncated: true }],
+    ['Replan', 'replan', { body: `${'x'.repeat(8_000)}\n\n…(truncated)`, bodyTruncated: true }],
+    ['Claim', 'next', { body: `${'x'.repeat(8_000)}\n\n…(truncated)` }],
+    ['Replan', 'replan', { body: `${'x'.repeat(8_000)}\n\n…(truncated)` }],
+    ['Claim', 'next', { title: 'x'.repeat(1_001) }],
+    ['Replan', 'replan', { url: `https://example.com/${'x'.repeat(2_048)}` }],
+  ])('queues %s without a partial issue snapshot', async (action, command, fields) => {
+    api.getAppIssues.mockResolvedValue(okPayload([{ ...ISSUE, ...fields }]));
+    await renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: new RegExp(action) }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    const [sentCommand, , payload] = api.createSlashdoTask.mock.calls.at(-1);
+    expect(sentCommand).toBe(command);
+    expect(payload.target).toBe('42');
+    expect(payload).not.toHaveProperty('issueContext');
+  });
+
   it('tracks the claimed task from queued through active and completed over the CoS socket', async () => {
     await renderTab();
 

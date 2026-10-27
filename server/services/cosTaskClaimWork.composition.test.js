@@ -147,9 +147,15 @@ describe('assembled forge claim prompts', () => {
     expect(renderAgent(claim)).toContain('If this workflow actually runs local pre-PR reviewers');
   });
 
-  it('rejects oversized direct claim inputs before constructing a partial prompt', async () => {
-    await expect(buildClaimWorkTask(app, { target: '42', issueContext: { ...issueContext, body: 'x'.repeat(12_001) } }))
-      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+  it('fetches the full issue when a direct claim snapshot is oversized', async () => {
+    const body = `${'x'.repeat(12_001)}ACCEPTANCE_CRITERION_AT_TAIL`;
+    const claim = await buildClaimWorkTask(app, { target: '42', issueContext: { ...issueContext, body } });
+    expect(claim.prompt).toContain('Fetch the full live title and body of issue #42');
+    expect(claim.prompt).not.toContain('## Prefetched Issue Context');
+    expect(claim.prompt).not.toContain('ACCEPTANCE_CRITERION_AT_TAIL');
+  });
+
+  it('rejects oversized direct claim guidance instead of constructing a partial prompt', async () => {
     await expect(buildClaimWorkTask(app, { target: '42', overrideContext: 'x'.repeat(4_001) }))
       .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
   });

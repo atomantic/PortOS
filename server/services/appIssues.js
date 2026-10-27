@@ -36,6 +36,7 @@ import { forgeIssueCreateArgs, forgeLabelCreateArgs, parseCreatedForgeIssue } fr
 import { scrubHomePath } from '../lib/homePath.js';
 import { scrubSecretTokens } from '../lib/secretText.js';
 import { redactPii } from '../lib/piiRedactionPatterns.js';
+import { ISSUE_BODY_PREVIEW_MAX_CHARS } from '../../lib/issueContext.js';
 
 // Single-user repos never realistically exceed this; `glab` caps a page at 100.
 const GH_LIST_LIMIT = 200;
@@ -43,11 +44,9 @@ const GL_PER_PAGE = 100;
 
 // Issue bodies are rendered in an expandable panel, not a full markdown reader —
 // cap what we ship so a novel-length issue can't bloat the payload.
-const BODY_MAX_CHARS = 8000;
-
 const truncateBody = (body) => {
   const text = typeof body === 'string' ? body : '';
-  return text.length > BODY_MAX_CHARS ? `${text.slice(0, BODY_MAX_CHARS)}\n\n…(truncated)` : text;
+  return text.length > ISSUE_BODY_PREVIEW_MAX_CHARS ? `${text.slice(0, ISSUE_BODY_PREVIEW_MAX_CHARS)}\n\n…(truncated)` : text;
 };
 
 /**
@@ -71,6 +70,7 @@ function normalizeGithubIssue(issue) {
     number: issue.number,
     title: issue.title || '',
     body: truncateBody(issue.body),
+    bodyTruncated: typeof issue.body === 'string' && issue.body.length > ISSUE_BODY_PREVIEW_MAX_CHARS,
     url: issue.url || '',
     labels: Array.isArray(issue.labels)
       ? issue.labels.filter(Boolean).map((l) => ({
@@ -107,6 +107,7 @@ function normalizeGitlabIssue(issue, labelMap = null) {
     number: issue.iid,
     title: issue.title || '',
     body: truncateBody(issue.description),
+    bodyTruncated: typeof issue.description === 'string' && issue.description.length > ISSUE_BODY_PREVIEW_MAX_CHARS,
     url: issue.web_url || '',
     labels: Array.isArray(issue.labels)
       ? issue.labels
@@ -160,7 +161,7 @@ function toIssueResult(rows, normalize, pageLimit) {
     // rows existed, so only a page shorter than the cap proves exhaustion.
     enumeration: {
       capped: rows.length >= pageLimit,
-      bodiesClipped: issues.some((issue) => issue.body.length > BODY_MAX_CHARS),
+      bodiesClipped: issues.some((issue) => issue.bodyTruncated),
     },
   };
 }
