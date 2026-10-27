@@ -99,7 +99,7 @@ export function resolveClaimAuthorFilter(explicit, metadata) {
  * UI shows and the run it previews at the same time — the two drifting apart is
  * the whole defect that lookup exists to close.
  */
-function claimReviewersFrom(metadata, codeReviewDefaults, explicit = {}) {
+function claimReviewersFrom(metadata, codeReviewDefaults, explicit = {}, providers = []) {
   const { reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, prCompletion } = explicit;
   return resolveClaimReviewerConfig({
     ...metadata,
@@ -110,7 +110,7 @@ function claimReviewersFrom(metadata, codeReviewDefaults, explicit = {}) {
     reviewerMaxRounds: reviewerMaxRounds ?? metadata?.reviewerMaxRounds,
     reviewerModels: reviewerModels ?? metadata?.reviewerModels,
     reviewerEfforts: reviewerEfforts ?? metadata?.reviewerEfforts
-  }, codeReviewDefaults, codeReviewDefaults?.reviewers);
+  }, codeReviewDefaults, codeReviewDefaults?.reviewers, providers);
 }
 
 /**
@@ -124,15 +124,16 @@ function claimReviewersFrom(metadata, codeReviewDefaults, explicit = {}) {
  */
 export async function resolveAppClaimReviewers(app) {
   // Independent reads — the resolver needs both, but neither depends on the other.
-  const [{ metadata }, codeReviewDefaults] = await Promise.all([
+  const [{ metadata }, codeReviewDefaults, providers] = await Promise.all([
     resolveClaimWorkMetadata(app),
     // A settings read failure means "no configured defaults", never a failed
     // lookup: the task metadata layer wins over them anyway.
-    getCodeReviewDefaults().catch(() => null)
+    getCodeReviewDefaults().catch(() => null),
+    import('./providers.js').then(m => m.listProviders()).catch(() => [])
   ]);
   const prCompletion = metadata?.prCompletion ?? resolveAppPrCompletion(app, metadata);
   return {
-    ...claimReviewersFrom(metadata, codeReviewDefaults, { prCompletion }),
+    ...claimReviewersFrom(metadata, codeReviewDefaults, { prCompletion }, providers),
     prCompletion,
     overridden: hasReviewerOverride(metadata) || !!metadata?.prCompletion
   };
@@ -187,10 +188,11 @@ export async function buildClaimWorkTask(app, {
   // The tracker probe (a `git` shell-out), the configured claim-work metadata,
   // and the Code Review Defaults are mutually independent — only the prompt-body
   // read below depends on them, so overlap the three.
-  const [wt, { metadata, interval, appOverrideMetadata }, codeReviewDefaults] = await Promise.all([
+  const [wt, { metadata, interval, appOverrideMetadata }, codeReviewDefaults, providers] = await Promise.all([
     resolveAppWorkTracker(app),
     resolveClaimWorkMetadata(app),
-    getCodeReviewDefaults().catch(() => null)
+    getCodeReviewDefaults().catch(() => null),
+    import('./providers.js').then(m => m.listProviders()).catch(() => [])
   ]);
   const promptTaskType = trackerToClaimTaskType(wt.resolved) || 'plan-task';
   const targetRef = normalizeWorkItemRef(target);
@@ -214,7 +216,7 @@ export async function buildClaimWorkTask(app, {
   const claimReviewers = claimReviewersFrom(metadata, codeReviewDefaults, {
     reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts,
     prCompletion: effectivePrCompletion
-  });
+  }, providers);
   const reviewerIdentityNotice = await preflightClaimReviewers(app, claimReviewers, {
     metadata, appOverrideMetadata, explicit: { usernames, optionalReviewers }, taskType: 'claim-work',
   });

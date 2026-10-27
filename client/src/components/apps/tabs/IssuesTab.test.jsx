@@ -354,6 +354,36 @@ describe('IssuesTab', () => {
     expect(screen.getByRole('link', { name: 'claim-work override' })).toHaveAttribute('href', '/cos/schedule');
   });
 
+  it('formats provider tokens into human-friendly reviewer format with model and effort', async () => {
+    api.getProviders.mockResolvedValue({
+      activeProvider: 'selection-e0a2d22261158b86fe9783e1',
+      providers: [{
+        id: 'selection-e0a2d22261158b86fe9783e1',
+        name: 'Codex CLI',
+        type: 'cli',
+        command: 'codex',
+        harnessId: 'codex',
+        enabled: true,
+        defaultModel: 'gpt-6.1-terra',
+        effort: 'max'
+      }],
+    });
+    api.getAppClaimReviewers.mockResolvedValue({
+      source: 'defaults',
+      reviewers: ['provider:selection-e0a2d22261158b86fe9783e1'],
+      usernames: [],
+      optionalReviewers: [],
+      reviewerMaxRounds: { 'provider:selection-e0a2d22261158b86fe9783e1': 2 },
+      reviewerModels: { 'provider:selection-e0a2d22261158b86fe9783e1': 'gpt-6.1-terra' },
+      reviewerEfforts: { 'provider:selection-e0a2d22261158b86fe9783e1': 'medium' },
+      csv: 'provider:selection-e0a2d22261158b86fe9783e1~max=2~effort=medium',
+    });
+
+    await renderTab({ open: true });
+
+    expect(await screen.findByText('codex[gpt-6.1-terra]~max=2~effort=medium')).toBeInTheDocument();
+  });
+
   it('points at the Code Reviewers panel when no override is in play', async () => {
     await renderTab({ open: true });
 

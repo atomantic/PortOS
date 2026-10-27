@@ -1074,8 +1074,11 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
   // keyed pins). Local-LLM reviewers stay in the operative list; their service
   // invocation contract is appended after rendering so customized legacy prompts
   // receive it without needing a new placeholder.
-  const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
-  const claimReviewers = resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers);
+  const [codeReviewDefaults, providers] = await Promise.all([
+    getCodeReviewDefaults().catch(() => null),
+    import('./providers.js').then(m => m.listProviders()).catch(() => [])
+  ]);
+  const claimReviewers = resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers);
   const rendersReviewers = /\{reviewers\}/.test(promptTemplate);
   const reviewerIdentityNotice = rendersReviewers
     ? await preflightClaimReviewers(app, claimReviewers, { metadata, appOverrideMetadata: reviewerOverrideMetadata, taskType: reviewerTaskType })
