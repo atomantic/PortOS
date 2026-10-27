@@ -833,13 +833,13 @@ speculative cross-browser matrix.
 
 ### Windows native contract coverage
 
-The canonical registry is `scripts/ci-test-plan.js` (23 files):
+The canonical registry is `scripts/ci-test-plan.js` (25 files):
 
 | Boundary | Retained suites |
 | --- | --- |
 | CLI launch, lookup, environment and cwd | `allowedCommands`, `agentGuard/index`, `bashResolver`, `bufferedSpawn`, `cliProviderRun`, `detachedSpawn`, `processEnv`, `processEnv.spawnOptions`, `spawnCwd` |
 | Shell dialects and TUI submission | `shellCd`, `shellExit`, `shellLivenessProbe`, `shellReadinessProbe`, `tuiPromptRunner`, `shell.windows` |
-| Native cancellation, ownership and filesystem safety | `windowsGitProcess`, `windowsGitProcess.protocol`, `gitRepositoryIdentity`, `checkoutRetirementAdmission`, `worktreeOwnership`, `staticImportGraph`, `nativeTrash`, `nativeTrash.smoke` |
+| Native cancellation, ownership and filesystem safety | `execGit`, `windowsAgentProcess`, `windowsGitProcess`, `windowsGitProcess.protocol`, `gitRepositoryIdentity`, `checkoutRetirementAdmission`, `worktreeOwnership`, `staticImportGraph`, `nativeTrash`, `nativeTrash.smoke` |
 
 `server/services/shell.windows.test.js` uses real ConPTY with cmd and PowerShell,
 a tiny local CLI stand-in and synthetic prompt/reply files. It verifies exact
