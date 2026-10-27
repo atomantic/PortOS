@@ -116,8 +116,8 @@ export const PROMPT_VERSIONS = {
 // Epic decomposition reads only the owner's own comments, never the public
 // thread, resolving the account itself so a pinned epic still finds them.
 // A forge reviewer (`@login`) may be a person: wait up to 4 hours per round and iterate with them.
-PROMPT_VERSIONS['claim-issue'] = 50; // v50: hardware-bound help wanted requires explicit prerequisite labels and independent platform slices. v49: a merged clean checkout is removed in place; do not copy it into an archive. v48: fresh claims reject same-login assignment and PR body/commit evidence.
-PROMPT_VERSIONS['claim-issue-gitlab'] = 44; // v44: hardware-bound help wanted requires explicit prerequisite labels and independent platform slices. v43: a merged clean checkout is removed in place; do not copy it into an archive. v42: same-login assignment is not run ownership; inspect MR closing trailers.
+PROMPT_VERSIONS['claim-issue'] = 51; // Hosting-provider merge authority; no second local certificate. Prior: v50: hardware-bound help wanted requires explicit prerequisite labels and independent platform slices. v49: a merged clean checkout is removed in place; do not copy it into an archive. v48: fresh claims reject same-login assignment and PR body/commit evidence.
+PROMPT_VERSIONS['claim-issue-gitlab'] = 45; // Hosting-provider merge authority; no second local certificate. Prior: v44: hardware-bound help wanted requires explicit prerequisite labels and independent platform slices. v43: a merged clean checkout is removed in place; do not copy it into an archive. v42: same-login assignment is not run ownership; inspect MR closing trailers.
 // Accepted review findings require resolution regardless of severity.
 PROMPT_VERSIONS['claim-issue-jira'] = 27; // v25: API calls target {portosApiUrl}, expanded at spawn to the loopback origin (#12405).
 
@@ -137,8 +137,8 @@ PROMPT_VERSIONS['claim-issue-jira'] = 27; // v25: API calls target {portosApiUrl
 export const REFERENCE_WATCH_AUDITED_VERSION = 5;
 
 // Guard generated GitHub merges with fresh state/head/admission and confirmed readback (#12273).
-PROMPT_VERSIONS['plan-task'] = 26; // v26: a merged clean checkout is removed in place; do not copy it into an archive.
+PROMPT_VERSIONS['plan-task'] = 27; // Hosting-provider merge authority; no second local certificate. Prior: v26: a merged clean checkout is removed in place; do not copy it into an archive.
 
 // A still-owned checkout hands off to exact, durable completion recovery.
-PROMPT_VERSIONS['plan-task-claim'] = 2; // v2: a merged clean checkout is removed in place; do not copy it into an archive.
-PROMPT_VERSIONS['branch-cleanup'] = 2; // v2: a merged clean checkout is removed in place; do not copy it into an archive.
+PROMPT_VERSIONS['plan-task-claim'] = 3; // Hosting-provider merge authority; no second local certificate. Prior: v2: a merged clean checkout is removed in place; do not copy it into an archive.
+PROMPT_VERSIONS['branch-cleanup'] = 3; // Hosting-provider merge authority; no second local certificate. Prior: v2: a merged clean checkout is removed in place; do not copy it into an archive.

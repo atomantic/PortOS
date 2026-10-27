@@ -2,6 +2,7 @@
 
 import { MANDATORY_DISPATCH_HINT_GUIDANCE } from '../lib/dispatchLabels.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
+import { buildMergeAdmissionSection } from './promptSections/completion.js';
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { join } from 'path';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
@@ -237,16 +238,16 @@ describe('composable skill template routing', () => {
     }
   });
 
-  it('scopes merge guards to PortOS in both prompt paths and carries recovery evidence', async () => {
+  it('uses provider merge authority in both prompt paths and carries recovery evidence', async () => {
     for (const app of ['portos-default', 'example-app']) {
       const task = makeTask({ description: 'Finish the selected issue', metadata: { app, claimFlow: true,
         failureCount: 1, taskOutcome: { status: 'incomplete', reason: 'Existing PR needs its remaining check.' } } });
       const prompts = [buildLightContextPrompt(task, '/workspace/app', null, { agentId: 'parent-example', providerId: 'codex-tui', providerCommand: 'codex' }),
         await buildAgentPrompt(task, {}, '/workspace/app', null, { agentId: 'parent-example', providerType: 'api' })];
       for (const prompt of prompts) {
-        expect(prompt.includes('node scripts/pregate.js --guards-only')).toBe(app === 'portos-default');
+        expect(prompt).not.toContain('node scripts/pregate.js --guards-only');
         expect(prompt).toContain('Existing PR needs its remaining check.');
-        expect(prompt).toContain('"action":"acquire"');
+        expect(prompt).toContain('GitHub/GitLab repository rules decide merge eligibility');
       }
     }
   });
@@ -484,21 +485,21 @@ describe('draft review delivery', () => {
   });
 });
 
-describe('generic own-PR delivery merges inside repository admission (#11435)', () => {
+describe('generic own-PR delivery retains assigned scope under provider merge authority', () => {
   const worktree = { worktreePath: '/worktree', branchName: 'cos/task-1/agent-1', baseBranch: 'main' };
-  const ADMISSION = '## Repository merge admission';
+  const ADMISSION = '## Hosting-provider merge authority';
 
   it.each([
     ['slashdo TUI', { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude' }, true],
     ['slashdo CLI', { isTui: false, providerId: 'claude-code', providerCommand: 'claude' }, true],
     ['inline harness', { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' }, false],
-  ])('a %s run that merges its own PR gets admission and reports the binding decision', (_label, provider, slashdo) => {
+  ])('a %s run that merges its own PR gets provider policy and reports the binding decision', (_label, provider, slashdo) => {
     const promptTrace = {};
     const prompt = buildLightContextPrompt(makeTask({ metadata: { openPR: true } }), '/repo', worktree,
       { ...provider, agentId: 'agent-1', promptTrace });
     expect(promptTrace.mergesOwnPr).toBe(true);
     expect(prompt).toContain(ADMISSION);
-    expect(prompt).toContain('/api/cos/merge-admission');
+    expect(prompt).not.toContain('/api/cos/merge-admission');
     expect(prompt).toContain('agent-1');
     expect(prompt).toContain('--match-head-commit <sha>');
     expect(prompt).not.toContain('--delete-branch');
@@ -511,7 +512,7 @@ describe('generic own-PR delivery merges inside repository admission (#11435)', 
     expect(prompt).toMatch(/gh pr merge "[^"]+" --merge --match-head-commit <verified-head>/);
     // Read before the workflow whose TUI form ends on the sentinel write.
     expect(prompt.indexOf(ADMISSION)).toBeLessThan(prompt.search(/^## Completion/m));
-    // A saved slashdo merge default must not land the PR outside the lease.
+    // Keep one explicit, head-pinned merge path after delegated publication.
     if (slashdo) expect(prompt).toContain('/do:pr --review-with none --no-merge');
   });
 
@@ -690,8 +691,8 @@ describe('claim-flow completion handoff', () => {
     expect(apiPrompt).not.toContain('## Reviewer pin');
     expect(apiPrompt).not.toContain('Required-review publication rule');
     for (const prompt of [lightPrompt, apiPrompt]) {
-      expect(prompt).toContain('"agentId":"parent-example","action":"acquire"');
-      expect(prompt).toContain('never a fan-out child');
+      expect(prompt).toContain('This run is parent-example');
+      expect(prompt).toContain('never invent a parent');
     }
   });
 
@@ -1271,7 +1272,7 @@ describe('buildLightContextPrompt', () => {
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/## Review-Loop Follow-up/);
-      expect(prompt).not.toContain('## Repository merge admission');
+      expect(prompt).not.toContain('## Hosting-provider merge authority');
       // The review still runs — only the merge is withheld.
       expect(prompt).toMatch(/codex/);
       expect(prompt).toMatch(/leave the PR open/i);
@@ -1796,8 +1797,11 @@ describe('buildLightContextPrompt', () => {
       // embedded in doc pointers, whose independently tested required prose and
       // worktree path length are not recipe content; retain the original ceiling.
       expect(prompt).toContain(MANAGED_WORKTREE_CLEANUP_CONTRACT);
+      const mergeGuidance = buildMergeAdmissionSection();
+      expect(prompt).toContain(mergeGuidance);
       const withoutFixedGuidance = prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '')
         .replace(MANAGED_WORKTREE_CLEANUP_CONTRACT, '')
+        .replace(mergeGuidance, '')
         .replaceAll(PATHS.root, '');
       expect(withoutFixedGuidance.length).toBeLessThan(33_000);
     });
@@ -2139,9 +2143,9 @@ describe('buildLightContextPrompt', () => {
         { branchName: 'b', worktreePath: '/tmp/wt' },
         { defaultReviewers: ['copilot'], agentId: 'registered-coordinator' });
       expect(prompt).toMatch(/## Review-Loop Follow-up/);
-      expect(prompt).toContain('## Repository merge admission');
+      expect(prompt).toContain('## Hosting-provider merge authority');
       expect(prompt).toContain('--match-head-commit <sha>');
-      expect(prompt).toContain('/api/cos/merge-admission');
+      expect(prompt).not.toContain('/api/cos/merge-admission');
       expect(prompt).toMatch(/task-src-1/);
       expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --match-head-commit <verified-head>/);
       // Pending CI retains ownership unless a measured durable successor accepts the exact head.

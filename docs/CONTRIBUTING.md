@@ -152,7 +152,7 @@ cleanup as well as later sweeps.
 
 `npm run pregate -- --full` explicitly runs the broad CI plan locally, including selected browser/DB/build/smoke stages when prerequisites are present. Missing prerequisites and `--skip-*` options remain explicit in the receipt. DB stages run last against `portos_test` only. Required hosted checks and configured reviews remain mandatory.
 
-The receipt at `.cache/pregate/report.json` records `validationMode` (`focused` or `ci`), exact tree/base/head, stage outcomes/durations and omitted suites. Focused mode marks server/client results as reduced coverage and cannot attest CI suites. Structural guard reuse remains confined to an unchanged snapshot within one invocation. `--guards-only --merged-with origin/<base>` retains the required current-base merge check, outside merge admission.
+The receipt at `.cache/pregate/report.json` records `validationMode` (`focused` or `ci`), exact tree/base/head, stage outcomes/durations and omitted suites. Focused mode marks server/client results as reduced coverage and cannot attest CI suites. Structural guard reuse remains confined to an unchanged snapshot within one invocation. `--guards-only --merged-with origin/<base>` is available for focused integration diagnosis; hosting-provider repository rules remain the merge authority.
 
 Interrupting pregate (Ctrl-C or SIGTERM) does not leave tests running behind
 it: the running stage — including the test runner's npm and Vitest

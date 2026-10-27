@@ -8,7 +8,6 @@ import { auditWorkflow, EXTENDED_AUDIT_INSTRUCTIONS } from '../lib/auditWorkflow
  */
 
 import { join } from 'path';
-import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { stat } from 'fs/promises';
 import { getMemorySection } from './memoryRetriever.js';
 import { getToolsSummaryForPrompt } from './tools.js';
@@ -164,8 +163,6 @@ export function isClaimFlowTask(task) {
   return isTruthyMeta(task?.metadata?.claimFlow)
     || isClaimFlowDispatch(task);
 }
-
-const mergeAdmissionOptions = task => ({ portosMergedTreeGuards: !task.metadata?.app || task.metadata.app === PORTOS_APP_ID });
 
 /**
  * Absolute path of the completion sentinel this run must write. The spawners'
@@ -624,7 +621,6 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
       prStaysOpen: prStaysOpen(task),
       rawPrCompletion: task.metadata?.prCompletion || null,
       claimResume: claimResumeContext(task, worktreeInfo),
-      ...mergeAdmissionOptions(task),
       agentId,
     }),
     [COMPLETION_MODES.AUDIT_FLOW]: () => buildAuditFlowCompletionSection({ isTui, sentinelPath }),
@@ -830,7 +826,7 @@ After your task completes, the system will spawn a follow-up agent that runs the
     // top of buildAgentPrompt under the same reviewLoopFollowUp guard — reuse it
     // rather than re-reading the lib a second time.
     reviewLoopFollowUpSection = buildReviewLoopFollowUpSection(reviewLoopPromptMetadata(task, worktreeInfo), { verbose: true, rprBody, localAgentLoopBody });
-    if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) reviewLoopFollowUpSection += '\n\n' + buildMergeAdmissionSection(agentId, mergeAdmissionOptions(task));
+    if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) reviewLoopFollowUpSection += '\n\n' + buildMergeAdmissionSection(agentId);
     if (isTui) {
       const sentinelPath = resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;
@@ -844,7 +840,7 @@ After your task completes, the system will spawn a follow-up agent that runs the
     }
   } else if (repositoryCleanupMergeTarget(task)) {
     // A repository-cleanup recovery lands its parent PR under the same lease (#12251).
-    reviewLoopFollowUpSection = buildMergeAdmissionSection(agentId, mergeAdmissionOptions(task));
+    reviewLoopFollowUpSection = buildMergeAdmissionSection(agentId);
   }
 
   // Build JIRA context section if applicable
@@ -1190,7 +1186,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle, simplifyEnabled, noChangeSuccess, humanLandsPr: leavesPrForHuman(task), reviewPolicy, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null, mergeAdmission: mergesOwnPr }));
   // Ahead of the completion workflow, whose TUI form ends on the sentinel write.
   // A repository-cleanup recovery lands its parent PR under the same lease (#12251).
-  if (mergesOwnPr || repositoryCleanupMergeTarget(task)) contractSections.push(buildMergeAdmissionSection(agentId, mergeAdmissionOptions(task)));
+  if (mergesOwnPr || repositoryCleanupMergeTarget(task)) contractSections.push(buildMergeAdmissionSection(agentId));
 
   ({
     [COMPLETION_MODES.TOOL_FREE]: () => contractSections.push(buildToolFreeReasoningCompletionSection()),
@@ -1207,13 +1203,12 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
       prStaysOpen: prStaysOpen(task),
       rawPrCompletion: task.metadata?.prCompletion || null,
       claimResume: claimResumeContext(task, worktreeInfo),
-      ...mergeAdmissionOptions(task),
       agentId,
     })),
     [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {
       contractSections.push(buildReviewLoopFollowUpSection(reviewLoopPromptMetadata(task, worktreeInfo), { verbose: false, localAgentLoopBody, forgeCli: resolvedForgeCli }));
-      if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) contractSections.push(buildMergeAdmissionSection(agentId, mergeAdmissionOptions(task)));
+      if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) contractSections.push(buildMergeAdmissionSection(agentId));
       if (!isTui) return;
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;
       const sentinelTail = branchName ? `   ## Branch\n   ${branchName}` : '   ## Branch\n   <branch name>';

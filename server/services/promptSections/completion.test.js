@@ -52,10 +52,10 @@ describe('review-enabled completion merge gate', () => {
     expect(claim).toContain('Keep each successful reviewer');
   });
 
-  it('retains immediate merging for a registered claim requiring local admission', () => {
+  it('allows provider auto-merge while retaining responsibility until confirmed delivery', () => {
     const section = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
-    expect(section).toContain('Local admission forbids GitHub deferred auto-merge');
-    expect(section).toContain('confirm MERGED, then release');
+    expect(section).toContain('Native provider auto-merge is allowed when the API accepts it');
+    expect(section).toContain('Enabled/queued is pending, not MERGED');
   });
 
   it('uses GitLab CI and merge commands when the completion forge is GitLab', () => {
@@ -90,48 +90,18 @@ describe('claim ownership binding instructions (#10089)', () => {
   });
 });
 
-describe('claim parent merge admission instructions', () => {
-  it('does not impose PortOS scripts on a different managed repository', () => {
-    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example', portosMergedTreeGuards: false });
-    expect(prompt).not.toContain('scripts/pregate.js');
-    expect(prompt).toContain('target repository’s documented validation and merge gates');
-    expect(prompt).toContain('"action":"acquire"');
-    expect(prompt).toContain('--match-head-commit');
-  });
-
-  it('acquires only after green CI, merges a CLEAN head pinned and resyncs outside the lease', () => {
+describe('hosting-provider merge instructions', () => {
+  it('keeps assigned scope and provider authority without a second admission ceremony', () => {
     const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
-    expect(prompt).toContain('"agentId":"parent-example","action":"acquire"');
-    expect(prompt).toContain('action:"check"');
-    expect(prompt).toContain('"action":"release"');
-    expect(prompt).toContain('Authorization: Bearer');
-    expect(prompt).toContain('never a fan-out child');
-    // Ordering: CI-verified head → acquire → final PR re-read → pinned merge.
-    const order = ['WITHOUT admission', 'Once required CI is green', '"action":"acquire"', 'Inside the lease, re-read the PR', 'then merge pinned to the CI-verified head'];
-    const positions = order.map((marker) => prompt.indexOf(marker));
-    expect(positions.every((at) => at >= 0)).toBe(true);
-    expect(positions).toEqual([...positions].sort((x, y) => x - y));
-    expect(prompt).toContain('does NOT require a resync or fresh CI');
-    expect(prompt).toContain('node scripts/pregate.js --guards-only --merged-with origin/<default>');
-    expect(prompt).toContain('A missing PortOS guard is a validation defect to repair');
-    expect(prompt).toContain('single-issue claims and each swarm Phase C merge');
-    expect(prompt).toContain('if either differs from the guard inputs');
-    expect(prompt).toContain('release with outcome resync');
-    expect(prompt).toContain('OUTSIDE the lease');
-    expect(prompt).toContain('at most 10 minutes');
-    expect(prompt).toContain('Base-only movement is a guard refresh, never a substantive resync round');
-    expect(prompt.indexOf('action\":\"prepare')).toBeLessThan(prompt.indexOf('action\":\"acquire'));
-    expect(prompt).toContain('never restart the budget');
-    expect(prompt).toContain('\"action\":\"yield\"');
-    expect(prompt).toContain('lease-expired');
-    expect(prompt).toContain('overrides mandatory base-sync instructions in delegated slashdo workflows');
-    expect(prompt).toContain('outcome leave-open');
-    expect(prompt).toContain('never permission to proceed');
-    expect(prompt).not.toMatch(/BEFORE the final base sync/i);
-    expect(prompt).not.toMatch(/Keep admission through[^.]*CI/i);
-    expect(prompt).not.toContain('if it moved, sync again');
-    expect(buildClaimFlowCompletionSection()).toContain('do not merge');
-    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', prStaysOpen: true })).not.toContain('/merge-admission');
+    expect(prompt).toContain('This run is parent-example');
+    expect(prompt).toContain('exact repository/PR assigned to this task');
+    expect(prompt).toContain('--match-head-commit');
+    expect(prompt).toContain('API errors or unreadable state never establish success');
+    expect(prompt).toContain('Do not rebase, push, repeat CI or restart review merely because the base advanced');
+    expect(prompt).not.toContain('/api/cos/merge-admission');
+    expect(prompt).not.toContain('portos_check_merge_admission');
+    expect(prompt).not.toContain('--guards-only --merged-with');
+    expect(buildClaimFlowCompletionSection({ prStaysOpen: true })).not.toContain('## Hosting-provider merge authority');
   });
 });
 
@@ -140,9 +110,9 @@ describe('pending-merge handoff instructions (#12247)', () => {
     const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
     expect(prompt).toContain('/api/cos/merge-handoff');
     expect(prompt).toContain('"agentId":"parent-example","prUrl":"PR_URL","headSha":"HEAD_SHA","worktreePath":"WORKTREE_PATH"');
-    expect(prompt.indexOf('/api/cos/merge-handoff')).toBeLessThan(prompt.indexOf('Once required CI is green'));
+    expect(prompt.indexOf('/api/cos/merge-handoff')).toBeLessThan(prompt.indexOf('## Hosting-provider merge authority'));
     expect(prompt).toContain('NOT yet merged');
-    expect(prompt).toContain('A refusal never permits merging without admission');
+    expect(prompt).toContain('A refused optional handoff does not create an additional merge requirement');
     expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', prStaysOpen: true })).not.toContain('/merge-handoff');
   });
 
