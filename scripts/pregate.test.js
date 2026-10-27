@@ -263,10 +263,7 @@ describe('pregate hidden-content invocation', () => {
       mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
       write(join(workspace, 'package-lock.json'), JSON.stringify({ packages: { '': {} } }));
     }
-    for (const path of WINDOWS_CONTRACT_TESTS) {
-      mkdirSync(dirname(join(root, path)), { recursive: true });
-      write(path, '// Native inventory fixture\n');
-    }
+    write('server/lib/bufferedSpawn.test.js', '// Native inventory fixture\n');
     mkdirSync(join(root, 'docs'));
     write(trackedPath, clean);
     git('add', '--all');
@@ -561,6 +558,16 @@ describe('pregate hidden-content invocation', () => {
   // can produce a misleading product failure or repair the shared source tree.
   it.each(['matching', 'stale', 'missing-package', 'unreadable-package', 'dangling', 'missing-link', 'unlinked'])(
     'checks %s linked dependencies read-only before executing stages', (state) => {
+      // This fixture changes the server lockfile and so selects the native
+      // Windows job. Keep its full tracked inventory local to these cases;
+      // adding it to the common template also selects unrelated guards.
+      for (const path of WINDOWS_CONTRACT_TESTS) {
+        mkdirSync(dirname(join(root, path)), { recursive: true });
+        write(path, '// Native inventory fixture\n');
+      }
+      git('add', '--all');
+      git('commit', '-qm', 'native contract inventory fixture');
+      base = git('rev-parse', 'HEAD');
       const worktree = join(scratch, 'linked-worktree');
       git('worktree', 'add', '--detach', worktree, base);
       root = worktree;
