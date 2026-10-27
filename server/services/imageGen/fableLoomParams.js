@@ -7,6 +7,7 @@ import { isFlux2, loraCompatKey, usesDiffusersRunner } from '../../lib/runners.j
 import { usesMossSwift } from '../../lib/imageRuntimeRemedies.js';
 import { PATHS, sha256File } from '../../lib/fileUtils.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../../lib/imageGenCapabilities.js';
+import { sanitizeVisualConditioning } from '../../lib/fableLoomPlayback.js';
 import { getLoom } from '../fableLoom/records.js';
 import { compileFableLoomVisualRequest, fableLoomImageCapabilities } from '../fableLoom/visualConditioning.js';
 import { maxInputImages, resolveCloudProviderConfig } from './cloudProviderConfig.js';
@@ -161,6 +162,11 @@ export async function prepareFableLoomImageParams({ params, mode, settings }) {
         },
       },
     } : null;
+    if (params.visualConditioning && !sanitizeVisualConditioning(params.visualConditioning)) {
+      throw new ServerError('These FableLoom inputs cannot be preserved for exact replay. Check image filenames and adapter paths and scales.', {
+        status: 400, code: 'FABLELOOM_PROVENANCE_UNAVAILABLE',
+      });
+    }
   } else {
     // Legacy unlinked scenes have no canon compilation, but an explicit
     // request profile still owns its photography and optional finish.

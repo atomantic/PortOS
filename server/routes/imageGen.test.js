@@ -546,6 +546,25 @@ describe('Image Gen Routes', () => {
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
+    it('refuses unrecordable canon adapter evidence in preview and submission', async () => {
+      canonLoom.episodes[0].nodes[0].visualCanon.placeId = null;
+      await fileUtils.ensureDir(fileUtils.PATHS.loras);
+      await writeFile(pathJoin(fileUtils.PATHS.loras, 'example-canon.safetensors'), 'synthetic canon adapter');
+      canonLoras = [{ filename: 'example-canon.safetensors', scale: 3, character: { entryId: 'example-character' } }];
+      const body = {
+        mode: 'local', modelId: 'flux2-klein-9b-bf16', prompt: 'The scout arrives',
+        fableLoom: { loomId: canonLoom.id, episodeId: 'ep-1', nodeId: 'node-1' },
+      };
+      const localSettings = { imageGen: { mode: 'local', local: { modelId: body.modelId } } };
+      getSettings.mockResolvedValueOnce(localSettings);
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      getSettings.mockResolvedValueOnce(localSettings);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+      expect([preview.status, preview.body.code]).toEqual([400, 'FABLELOOM_PROVENANCE_UNAVAILABLE']);
+      expect([submit.status, submit.body.code, submit.body.error]).toEqual([preview.status, preview.body.code, preview.body.error]);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
     it.each([
       ['Windows mflux', 'win32', 'dev'], ['MOSS', 'darwin', 'moss-image-sft-bf16'],
     ])('refuses an init image on %s in preview and submission before queueing', async (_label, platform, modelId) => {
