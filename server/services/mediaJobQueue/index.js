@@ -2084,6 +2084,14 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
         const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
         await assertMusicVideoSceneReview(job.params.musicVideo, job.kind);
       }
+      // The user may edit a referenced file while this job waits in the queue.
+      // Recheck the captured bytes and request at the last provider boundary;
+      // recovery/finish replays must not start another render.
+      if (job.kind === 'image' && safeParams.fableLoom && !isLocalFinishReplay(job)
+        && !(isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true)) {
+        const { assertFableLoomDispatchInputs } = await import('../fableLoom/requestInputs.js');
+        await assertFableLoomDispatchInputs(safeParams);
+      }
       // Remote recovery must still reach its adapter to cancel an existing render.
       // Local cancellation before dispatch owns no provider process to stop.
       if (job.cancelRequested && !isRemoteMediaJob(job)) {

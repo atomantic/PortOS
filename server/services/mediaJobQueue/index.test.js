@@ -3,7 +3,8 @@ vi.mock('../musicVideo/productionReviewService.js', () => ({ assertMusicVideoSce
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { createHash } from 'node:crypto';
+import { join, sep } from 'path';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 
 // The queue persists to data/media-jobs.json. Steer it at a temp dir so each
@@ -28,11 +29,12 @@ vi.mock('../../lib/fileUtils.js', async () => {
     PATHS: new Proxy({}, {
       get(_, key) {
         if (key === 'data') return tempDataDir;
-        if (key === 'uploads' || key === 'videos') return join(tempDataDir, key);
+        if (['uploads', 'videos', 'images', 'loras'].includes(key)) return join(tempDataDir, key);
         return actual.PATHS[key];
       },
     }),
     atomicWrite: (...args) => atomicWriteSpy(...args),
+    resolveImageInputPath: (path) => typeof path === 'string' && path.startsWith(`${join(tempDataDir, 'images')}${sep}`) && existsSync(path) ? path : actual.resolveImageInputPath(path),
   };
 });
 
@@ -385,6 +387,75 @@ describe('mediaJobQueue', () => {
       await flush();
       maintenance.resume({ id: hold.id, revision: hold.revision });
     }
+  });
+
+  it.each(['unchanged', 'unchanged-named', 'reference', 'adapter', 'canon-adapter', 'trigger'])('checks FableLoom %s inputs after queue delay and before provider dispatch', async (changed) => {
+    const images = join(tempDataDir, 'images');
+    const loras = join(tempDataDir, 'loras');
+    mkdirSync(images, { recursive: true });
+    mkdirSync(loras, { recursive: true });
+    const reference = join(images, 'reference.png');
+    const canonReference = join(images, 'canon.png');
+    const adapter = join(loras, 'example.safetensors');
+    const canonAdapter = join(loras, 'canon.safetensors');
+    writeFileSync(reference, 'original-reference');
+    writeFileSync(canonReference, 'canon-reference');
+    writeFileSync(adapter, 'original-adapter');
+    writeFileSync(canonAdapter, 'canon-adapter');
+    const namedAdapter = changed === 'unchanged-named';
+    const hash = value => createHash('sha256').update(value).digest('hex');
+    const params = {
+      mode: 'local', prompt: 'An authored view', negativePrompt: '',
+      fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
+      referenceImagePaths: [canonReference, reference], referenceImageStrengths: [1, 0.4],
+      loraFilenames: namedAdapter ? ['canon.safetensors', 'example.safetensors'] : ['canon.safetensors'],
+      loraPaths: namedAdapter ? [] : [adapter], loraScales: [0.8, 0.7],
+      visualConditioning: {
+        version: 1, capability: { kind: 'image', backend: 'local' },
+        authoredPrompt: 'An authored view', authoredNegativePrompt: '',
+        compiledPrompt: 'An authored view', compiledNegativePrompt: '', renderedPrompt: 'An authored view',
+        assets: [
+          { role: 'character-neutral', filename: 'canon.png' },
+          { role: 'request-reference', filename: 'reference.png', inputRoot: 'images', sha256: hash('original-reference') },
+        ],
+        referenceImageStrengths: [1, 0.4],
+        adapters: [
+          { source: 'Canon adapter', filename: 'canon.safetensors', sha256: hash('canon-adapter'), scale: 0.8 },
+          { source: 'Request adapter', relativePath: 'example.safetensors', filename: 'example.safetensors',
+            sha256: hash('original-adapter'), scale: 0.7 },
+        ],
+      },
+    };
+    const first = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'busy' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    const second = await mediaJobQueue.enqueueJob({ kind: 'image', params });
+    expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
+    if (changed === 'reference') writeFileSync(reference, 'changed-reference');
+    if (changed === 'adapter') writeFileSync(adapter, 'changed-adapter');
+    if (changed === 'canon-adapter') writeFileSync(canonAdapter, 'changed-canon-adapter');
+    if (changed === 'trigger') writeFileSync(`${adapter}.metadata.json`, JSON.stringify({ triggerWords: ['new-token'] }));
+    videoGenEvents.emit('completed', { generationId: first.jobId, filename: 'example.mp4' });
+    if (changed.startsWith('unchanged')) {
+      await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+      expect(stubs.generateImage).toHaveBeenCalledWith(expect.objectContaining({
+        referenceImagePaths: [canonReference, reference], referenceImageStrengths: [1, 0.4],
+        loraFilenames: params.loraFilenames, loraPaths: params.loraPaths, loraScales: [0.8, 0.7],
+      }));
+      imageGenEvents.emit('completed', { generationId: second.jobId, filename: 'example.png' });
+    } else {
+      await waitFor(() => mediaJobQueue.getJob(second.jobId)?.status === 'failed');
+      expect(mediaJobQueue.getJob(second.jobId).error).toContain('changed while queued');
+      expect(stubs.generateImage).not.toHaveBeenCalled();
+    }
+  });
+
+  it('continues to dispatch legacy FableLoom jobs without replay evidence', async () => {
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: {
+      mode: 'local', prompt: 'Legacy scene', fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
+    } });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    expect(stubs.generateImage).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Legacy scene' }));
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'legacy.png' });
   });
 
   it('enqueueJob returns jobId + queued status + position', async () => {

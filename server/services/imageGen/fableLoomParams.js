@@ -8,6 +8,8 @@ import { usesMossSwift } from '../../lib/imageRuntimeRemedies.js';
 import { PATHS, sha256File } from '../../lib/fileUtils.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../../lib/imageGenCapabilities.js';
 import { sanitizeVisualConditioning } from '../../lib/fableLoomPlayback.js';
+import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
+import { readTriggerWordsByFilename } from '../loras.js';
 import { getLoom } from '../fableLoom/records.js';
 import { compileFableLoomVisualRequest, fableLoomImageCapabilities } from '../fableLoom/visualConditioning.js';
 import { maxInputImages, resolveCloudProviderConfig } from './cloudProviderConfig.js';
@@ -127,6 +129,10 @@ export async function prepareFableLoomImageParams({ params, mode, settings }) {
     const allScales = [...canonAdapters.map((_, index) => compiled.loraScales[index] ?? 1), ...requestAdapters.map((_, index) => requestScales[index] ?? 1)];
     const requestAssets = await Promise.all(requestReferences.map(path => captureRequestImage(path, 'request-reference')));
     if (params.initImagePath) requestAssets.push(await captureRequestImage(params.initImagePath, 'request-init', params.initImageStrength));
+    const adapterNames = [...canonAdapters, ...requestFilenames, ...requestPaths];
+    const triggerWords = mode === IMAGE_GEN_MODE.LOCAL ? await readTriggerWordsByFilename(adapterNames) : null;
+    const renderedPrompt = triggerWords
+      ? weaveLoraTriggers(compiled.prompt, adapterNames.map(name => triggerWords[basename(name)])).prompt : null;
     // The compiler owns photography composition; snapshot its profile without
     // appending a second copy of the same clauses or additions.
     params.visualProfile = compiled.visualProfile;
@@ -144,6 +150,7 @@ export async function prepareFableLoomImageParams({ params, mode, settings }) {
       ...compiled.visualConditioning,
       authoredPrompt: params.authoredPrompt,
       authoredNegativePrompt: params.authoredNegativePrompt,
+      ...(renderedPrompt !== null ? { renderedPrompt } : {}),
       ...(params.visualProfileOverride !== undefined ? { visualProfileOverride: params.visualProfileOverride } : {}),
       assets: [...compiled.visualConditioning.assets, ...requestAssets],
       adapters: [

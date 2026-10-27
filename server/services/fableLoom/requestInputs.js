@@ -1,4 +1,4 @@
-import { basename, dirname, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { PATHS, resolveImageInputPath, sha256File } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
@@ -80,4 +80,46 @@ export async function recordedAdapterFiles(episode) {
     const sha256 = path ? await sha256File(path).catch(() => null) : null;
     return { filename: adapter.filename, ...(adapter.relativePath ? { relativePath: adapter.relativePath } : {}), sha256 };
   }));
+}
+
+/** Verify captured evidence against the actual queue request just before dispatch. */
+export async function assertFableLoomDispatchInputs(params) {
+  const manifest = params?.visualConditioning;
+  if (!params?.fableLoom || typeof manifest?.authoredPrompt !== 'string') return;
+  const fail = message => { throw new ServerError(`FableLoom input changed while queued: ${message}`, { status: 409, code: 'FABLELOOM_INPUT_CHANGED' }); };
+  const recorded = await restoreRequestInputs(manifest);
+  if (recorded.error) fail(recorded.error);
+  const assets = (manifest.assets || []).filter(asset => asset.role !== 'request-init');
+  const refs = Array.isArray(params.referenceImagePaths) ? params.referenceImagePaths : [];
+  const strengths = Array.isArray(params.referenceImageStrengths) ? params.referenceImageStrengths : [];
+  if (refs.length !== assets.length || strengths.length !== refs.length
+    || strengths.some((strength, index) => strength !== manifest.referenceImageStrengths?.[index])) fail('reference image order or strength differs from the recorded request.');
+  let explicitIndex = 0;
+  for (const [index, asset] of assets.entries()) {
+    if (typeof refs[index] !== 'string' || basename(refs[index]) !== asset.filename) fail('reference image order differs from the recorded request.');
+    if (asset.role === 'request-reference' && resolve(refs[index]) !== recorded.refs[explicitIndex++]) fail('an authored reference path differs from its recorded source.');
+  }
+  if ((params.initImagePath ? resolve(params.initImagePath) : null) !== recorded.init
+    || (params.initImageStrength ?? null) !== (recorded.initStrength ?? null)) fail('init image or strength differs from the recorded request.');
+  const paths = [
+    ...(params.loraFilenames || []).map(name => join(PATHS.loras, basename(name))),
+    ...(params.loraPaths || []),
+  ];
+  const adapters = manifest.adapters || [];
+  const scales = params.loraScales || [];
+  if (paths.length !== adapters.length || scales.length !== adapters.length) fail('adapter order or scale differs from the recorded request.');
+  for (const [index, adapter] of adapters.entries()) {
+    const expected = adapterPath(adapter);
+    if (!expected || typeof paths[index] !== 'string' || resolve(paths[index]) !== expected
+      || scales[index] !== adapter.scale || !await checkedDigest(expected, adapter.sha256)) fail(`adapter "${adapter.filename || 'unknown'}" is unavailable or changed.`);
+  }
+  if (params.prompt !== manifest.compiledPrompt || (params.negativePrompt || '') !== manifest.compiledNegativePrompt) fail('prompt differs from the recorded request.');
+  if (manifest.capability?.backend === 'local') {
+    if (typeof manifest.renderedPrompt !== 'string') fail('the actual adapter activation prompt was not recorded.');
+    const [{ readTriggerWordsByFilename }, { weaveLoraTriggers }] = await Promise.all([
+      import('../loras.js'), import('../../lib/loraTriggers.js'),
+    ]);
+    const words = await readTriggerWordsByFilename(paths);
+    if (weaveLoraTriggers(params.prompt, paths.map(path => words[basename(path)])).prompt !== manifest.renderedPrompt) fail('adapter activation words changed.');
+  }
 }
