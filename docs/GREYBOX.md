@@ -12,17 +12,18 @@ Open an Environment and select its **Greybox** tab. When there is no saved layou
 choose a card under **Start from a starter**. One click saves the scene and opens
 its first camera shot:
 
-- **Roller rink**: a 50 × 30 m hall modelled on the plan of Southgate Roller Rink in
-  Seattle, with north at −Z and east at +X. Skaters enter through doors on the
-  north-west, pass the admissions window and file east along a concourse with
-  lacing benches, a snack bar, tables and arcade cabinets. The 36 × 19 m rink sits
-  against the south and west walls; the sound booth looks onto it through a window
-  in the west wall. A knee-high rink wall on the north and east sides has two
-  entrances: one by the door and one at the far end beside skate rental, with the
-  restrooms in the south-east corner. Eight figure anchors and seven shots cover the
-  wide view, entrance, rail level, booth window, view from the booth, skate rental
-  and a high angle. Skate floor, concourse, service areas and walls have different
-  colours.
+- **Roller rink**: a hall modelled on the plan of Southgate Roller Rink in Seattle,
+  with north at −Z and east at +X. Skaters enter through doors on the north-west
+  into a small lobby with check-in and video games. From there a 1.7 m walkway,
+  room for two people to pass, runs east between the north wall and the rink. The
+  36 × 19 m rink sits against the south and west walls, with a painted center oval;
+  the sound booth looks onto it through a window in the west wall. A knee-high rink
+  wall on the north and east sides has two entrances: one by the door and one at
+  the far end beside skate rental. The east side runs, north to south, restrooms,
+  skate rental, food and tables. Ten figure anchors and eight shots cover the wide
+  view, entrance, walkway, rail level, booth window, view from the booth, skate
+  rental and a high angle. Skate floor, center, lobby, service areas and walls have
+  different colours.
 - **Plain room**: a floor and three walls, open at the front for the camera, with
   a subject anchor and wide and medium shots.
 - **Outdoor plaza**: paving, a fountain, benches, planters and two visitor anchors,
