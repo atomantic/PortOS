@@ -110,6 +110,33 @@ describe('goal-fidelity task screenshots', () => {
     expect(lmStudioImage.image_url.url).toMatch(/^data:image\/jpeg;base64,/)
   })
 
+  it('retries text-only when the local model rejects image input, so a text-only reviewer still returns a verdict', async () => {
+    const sharpModule = await import('sharp')
+    const sharp = sharpModule.default || sharpModule
+    const png = await sharp({ create: { width: 64, height: 64, channels: 3, background: '#ffffff' } }).png().toBuffer()
+    writeFileSync(join(fixturePaths.screenshots, 'text-only-model.png'), png)
+    const fetch = vi.fn(async (_url, init) => {
+      const content = JSON.parse(init.body).messages[1].content
+      if (Array.isArray(content)) {
+        return mockJsonResponse({ error: { message: 'Multimodal data provided, but model does not support multimodal requests.' } }, { ok: false, status: 400 })
+      }
+      return mockJsonResponse({ choices: [{ message: { content: JSON.stringify({ verdict: 'ship', missing: [], unrequested: [], evidence: 'ok' }) } }] })
+    })
+    vi.stubGlobal('fetch', fetch)
+
+    const result = await runLocalGoalFidelityReview({
+      backend: 'ollama', model: 'example-model',
+      objective: taskObjective({ description: 'Fix the error shown', metadata: { screenshots: ['/api/screenshots/text-only-model.png'] } }),
+      diff: chunkRecoveryDiff,
+      objectiveScreenshots: ['/api/screenshots/text-only-model.png'],
+      baseUrl: 'http://127.0.0.1:11434/v1',
+    })
+
+    expect(result).toMatchObject({ ok: true, verdict: 'ship' })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(fetch.mock.calls[1][1].body).messages[1].content).toContain('Task screenshots omitted')
+  })
+
   it('declines a screenshot objective rather than judging it when its image reference escapes the screenshot store', async () => {
     const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)
