@@ -6,7 +6,9 @@ import { isAgentHandoff, agentHandoffReason, normalizeTaskOutcome, isTaskDeliver
 
 /** Shared delivery and execution verdict for cards and the Resume dialog. */
 export default function AgentResultLine({ agent, className = '' }) {
-  if (!agent?.result) return <ReleasePublicationLine publication={agent?.metadata?.releasePublication} className={className} />;
+  const publication = agent?.metadata?.releasePublication;
+  const synchronization = agent?.metadata?.releaseSynchronization || publication?.synchronization;
+  if (!agent?.result) return <ReleasePublicationLine publication={publication} synchronization={synchronization} className={className} />;
   const handoff = isAgentHandoff(agent);
   const outcome = normalizeTaskOutcome(agent.result.taskOutcome);
   const executionSuccess = agent.result.executionSuccess ?? agent.result.success;
@@ -14,8 +16,9 @@ export default function AgentResultLine({ agent, className = '' }) {
     .find(value => value?.status === 'recorded') || agent.metadata?.auditAssessment || agent.result.auditAssessment;
   const assessmentUnverified = assessment && assessment.status !== 'recorded';
   const validationFailed = agent.result.validationPassed === false;
-  const publication = agent.metadata?.publicationValidation;
-  const publicationIncomplete = ['running', 'blocked'].includes(publication?.status);
+  const publicationValidation = agent.metadata?.publicationValidation;
+  const publicationIncomplete = ['running', 'blocked'].includes(publicationValidation?.status);
+  const syncIncomplete = synchronization && synchronization.status !== 'verified';
   const interruption = agent.metadata?.executionInterruption || agent.result.executionInterruption;
   const scanner = agent.metadata?.securityScan;
   const scanIncomplete = scanner && scanner.status !== 'completed';
@@ -31,13 +34,13 @@ export default function AgentResultLine({ agent, className = '' }) {
     || (executionSuccess && agent.metadata?.repoStateVerification?.deliveryVerified === true));
   const deliveryHeld = ['blocked', 'incomplete'].includes(outcome?.status) && !cleanupResolved;
   const deliveryComplete = isTaskDeliveryComplete(agent) || cleanupResolved;
-  const incomplete = cleanupPending || interruption || scanIncomplete || assessmentUnverified || validationFailed || publicationIncomplete;
+  const incomplete = cleanupPending || interruption || scanIncomplete || assessmentUnverified || validationFailed || publicationIncomplete || syncIncomplete;
   const tone = handoff ? 'text-port-accent' : !executionSuccess ? 'text-port-error' : incomplete || deliveryHeld ? 'text-port-warning'
     : deliveryComplete ? 'text-port-success' : executionSuccess ? 'text-port-text-muted' : 'text-port-error';
 
   return (
     <div className={`text-sm ${tone} ${className}`.trim()}>
-      <ReleasePublicationLine publication={agent.metadata?.releasePublication} />
+      <ReleasePublicationLine publication={publication} synchronization={synchronization} />
       <span className="flex items-center gap-2">
       {handoff ? (
         <><RotateCcw size={14} aria-hidden="true" /> {agentHandoffReason(agent)}</>
@@ -56,7 +59,7 @@ export default function AgentResultLine({ agent, className = '' }) {
       <SecurityScanEvidence scanner={scanner} control={agent.metadata?.securityScanControl} />
       {!handoff && assessment && <div>{assessment.status === 'recorded' ? 'Assessment saved' : assessment.status === 'persistence-failed' ? 'Assessment could not be saved' : assessment.status === 'not-attempted' ? 'Assessment not attempted' : 'Assessment not verified as saved'}</div>}
       {!handoff && validationFailed && <div>Delivery validation failed</div>}
-      {!handoff && publicationIncomplete && <div>{publication.status === 'running' ? 'Publication checks running' : 'Publication blocked; worktree preserved'}</div>}
+      {!handoff && publicationIncomplete && <div>{publicationValidation.status === 'running' ? 'Publication checks running' : 'Publication blocked; worktree preserved'}</div>}
     </div>
   );
 }
@@ -126,13 +129,69 @@ export function SecurityScanEvidence({ scanner, control }) {
 }
 
 /** Publication is independent of the agent's eventual execution result. */
-export function ReleasePublicationLine({ publication, className = '' }) {
-  if (publication?.status !== 'verified') return null;
+export function ReleasePublicationLine({ publication, synchronization, className = '' }) {
+  const pub = publication || synchronization?.publication;
+  const sync = synchronization || pub?.synchronization;
+  if (!pub && !sync) return null;
+  if (pub && pub.status !== 'verified' && !sync) return null;
+
+  const tag = pub?.tag || sync?.tag;
+  const releaseUrl = pub?.releaseUrl || sync?.releaseUrl;
+  const publishedAt = pub?.publishedAt || sync?.publishedAt;
+
+  const syncStatus = sync?.status;
+  const syncLabel = () => {
+    if (!syncStatus || syncStatus === 'pending') {
+      return sync ? 'Published — synchronization pending' : 'Published — synchronization not yet verified';
+    }
+    if (syncStatus === 'running') return 'Published — synchronization running';
+    if (syncStatus === 'blocked') return 'Published — synchronization blocked';
+    if (syncStatus === 'verified') return 'Published — synchronization verified';
+    return 'Published — synchronization not yet verified';
+  };
+
+  const syncTone = () => {
+    if (syncStatus === 'verified') return 'text-port-success';
+    if (syncStatus === 'blocked') return 'text-port-error';
+    if (syncStatus === 'running') return 'text-port-warning';
+    return 'text-port-text-muted';
+  };
+
   return (
-    <div className={`text-sm text-port-success break-words ${className}`.trim()}>
-      <div>Published — synchronization not yet verified</div>
-      <a href={publication.releaseUrl} target="_blank" rel="noopener noreferrer" className="underline">{publication.tag}</a>
-      {' · '}<time dateTime={publication.publishedAt}>{formatDateTime(publication.publishedAt)}</time>
+    <div className={`text-sm break-words ${className}`.trim()}>
+      <div className={syncStatus === 'verified' || !syncStatus ? 'text-port-success' : syncTone()}>
+        {syncLabel()}
+      </div>
+      {tag && releaseUrl && (
+        <a href={releaseUrl} target="_blank" rel="noopener noreferrer" className="underline text-port-success">
+          {tag}
+        </a>
+      )}
+      {publishedAt && (
+        <>
+          {' · '}
+          <time dateTime={publishedAt} className="text-port-success">
+            {formatDateTime(publishedAt)}
+          </time>
+        </>
+      )}
+      {sync?.identity && (
+        <div className="text-xs text-port-text-muted font-mono truncate" title={sync.identity}>
+          Release sync: {sync.identity}
+        </div>
+      )}
+      {sync?.prUrl && (
+        <div className="text-xs">
+          <a href={sync.prUrl} target="_blank" rel="noopener noreferrer" className="underline text-port-accent">
+            Sync PR{sync.headSha ? ` (${sync.headSha.slice(0, 7)})` : ''}
+          </a>
+        </div>
+      )}
+      {syncStatus === 'blocked' && sync?.blocker && (
+        <div className="text-xs text-port-error">
+          Blocker: {sync.blocker}
+        </div>
+      )}
     </div>
   );
 }

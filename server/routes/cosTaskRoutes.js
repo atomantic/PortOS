@@ -188,21 +188,25 @@ router.get('/tasks', asyncHandler(async (req, res) => {
     selected: z.string().max(512).optional(),
     cursor: z.string().max(512).optional(),
   }), req.query);
-  const settleView = (view, runningAgents) => ({
+  const { readReleaseSynchronizationOutbox } = await import('../services/releaseSynchronizationStore.js');
+  const { projectTaskSourceReleaseMilestones } = await import('../services/releaseSynchronizationProjection.js');
+  const outboxPromise = readReleaseSynchronizationOutbox().catch(() => null);
+  const settleView = (view, runningAgents, outbox) => ({
     ...view,
-    user: settleTaskSourceSpawnWindow(view?.user, runningAgents),
-    cos: settleTaskSourceSpawnWindow(view?.cos, runningAgents),
+    user: projectTaskSourceReleaseMilestones(settleTaskSourceSpawnWindow(view?.user, runningAgents), outbox),
+    cos: projectTaskSourceReleaseMilestones(settleTaskSourceSpawnWindow(view?.cos, runningAgents), outbox),
   });
   // The bounded views select inside the store BEFORE cloning, so a queue refresh
   // never copies archived prompt bodies (#9677). Settlement runs on the selection.
   const agentsPromise = getAgents().catch(() => []);
   if (query.view === 'completed') {
     const { limit } = validateRequest(z.object({ limit: z.coerce.number().int().min(1).max(100).default(25) }), req.query);
-    return res.json(await getTaskView({ kind: 'completed', source: query.source, cursor: query.cursor, limit }));
+    const [completedView, outbox] = await Promise.all([getTaskView({ kind: 'completed', source: query.source, cursor: query.cursor, limit }), outboxPromise]);
+    return res.json(projectTaskSourceReleaseMilestones(completedView, outbox));
   }
   if (query.view === 'queue') {
-    const [view, agents] = await Promise.all([getTaskView({ kind: 'queue', selected: query.selected }), agentsPromise]);
-    const tasks = settleView(view, runningAgentsByTaskId(agents));
+    const [view, agents, outbox] = await Promise.all([getTaskView({ kind: 'queue', selected: query.selected }), agentsPromise, outboxPromise]);
+    const tasks = settleView(view, runningAgentsByTaskId(agents), outbox);
     // `tasks` stays whole (open queue + the selected historical task); the derived
     // lists shrink to id/status summaries.
     const queueSource = source => {
@@ -215,23 +219,23 @@ router.get('/tasks', asyncHandler(async (req, res) => {
   }
   if (!isPaginationRequested(req.query)) {
     if (query.view === 'full') {
-      const [allTasks, agents] = await Promise.all([getAllTasks(), agentsPromise]);
-      return res.json(settleView(allTasks, runningAgentsByTaskId(agents)));
+      const [allTasks, agents, outbox] = await Promise.all([getAllTasks(), agentsPromise, outboxPromise]);
+      return res.json(settleView(allTasks, runningAgentsByTaskId(agents), outbox));
     }
     // Bare form: bounded projection. Every non-completed task stays whole; the
     // completed history (96% of the bytes on a long-lived install, and once
     // more inside `grouped`) shrinks to the first `view=completed` page plus
     // `completedCount`. `view=full` is the raw-store escape hatch.
-    const [view, agents] = await Promise.all([getTaskView({ kind: 'bare' }), agentsPromise]);
-    return res.json(settleView(view, runningAgentsByTaskId(agents)));
+    const [view, agents, outbox] = await Promise.all([getTaskView({ kind: 'bare' }), agentsPromise, outboxPromise]);
+    return res.json(settleView(view, runningAgentsByTaskId(agents), outbox));
   }
   const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 500 });
-  const [view, agents] = await Promise.all([getTaskView({ kind: 'window', offset, limit }), agentsPromise]);
+  const [view, agents, outbox] = await Promise.all([getTaskView({ kind: 'window', offset, limit }), agentsPromise, outboxPromise]);
   const runningAgents = runningAgentsByTaskId(agents);
   const { totals } = view;
   res.json({
-    user: settleTaskSourceSpawnWindow(view.user, runningAgents),
-    cos: settleTaskSourceSpawnWindow(view.cos, runningAgents),
+    user: projectTaskSourceReleaseMilestones(settleTaskSourceSpawnWindow(view.user, runningAgents), outbox),
+    cos: projectTaskSourceReleaseMilestones(settleTaskSourceSpawnWindow(view.cos, runningAgents), outbox),
     pagination: { limit, offset, userTotal: totals.user, cosTotal: totals.cos, total: totals.user + totals.cos }
   });
 }));
@@ -239,12 +243,18 @@ router.get('/tasks', asyncHandler(async (req, res) => {
 // Source-specific bounded views: open tasks plus the first completed page.
 // Further history is available through /tasks?view=completed; raw data through /tasks?view=full.
 router.get('/tasks/user', asyncHandler(async (req, res) => {
-  res.json((await getTaskView({ kind: 'bare' })).user);
+  const { readReleaseSynchronizationOutbox } = await import('../services/releaseSynchronizationStore.js');
+  const { projectTaskSourceReleaseMilestones } = await import('../services/releaseSynchronizationProjection.js');
+  const [view, outbox] = await Promise.all([getTaskView({ kind: 'bare' }), readReleaseSynchronizationOutbox().catch(() => null)]);
+  res.json(projectTaskSourceReleaseMilestones(view.user, outbox));
 }));
 
 // GET /api/cos/tasks/internal - Get CoS internal tasks
 router.get('/tasks/internal', asyncHandler(async (req, res) => {
-  res.json((await getTaskView({ kind: 'bare' })).cos);
+  const { readReleaseSynchronizationOutbox } = await import('../services/releaseSynchronizationStore.js');
+  const { projectTaskSourceReleaseMilestones } = await import('../services/releaseSynchronizationProjection.js');
+  const [view, outbox] = await Promise.all([getTaskView({ kind: 'bare' }), readReleaseSynchronizationOutbox().catch(() => null)]);
+  res.json(projectTaskSourceReleaseMilestones(view.cos, outbox));
 }));
 
 // GET /api/cos/tasks/:id - One task with the queue it lives in. The Chief of
@@ -254,7 +264,9 @@ router.get('/tasks/internal', asyncHandler(async (req, res) => {
 router.get('/tasks/:id', asyncHandler(async (req, res) => {
   const found = await findTaskWithSource(req.params.id);
   if (!found) throw new ServerError('Task not found', { status: 404, code: 'NOT_FOUND' });
-  res.json(found);
+  const { getProjectedTask } = await import('../services/releaseSynchronizationProjection.js');
+  const task = await getProjectedTask(found.task);
+  res.json({ ...found, task });
 }));
 
 // POST /api/cos/tasks/reorder - Reorder tasks

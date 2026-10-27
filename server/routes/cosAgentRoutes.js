@@ -244,7 +244,8 @@ router.get('/agents/:id', asyncHandler(async (req, res) => {
   if (!agent) {
     throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
   }
-  res.json(agent);
+  const { getProjectedAgent } = await import('../services/releaseSynchronizationProjection.js');
+  res.json(await getProjectedAgent(agent));
 }));
 
 // GET /api/cos/agents/:id/prompt - Read the prompt.txt saved at spawn time

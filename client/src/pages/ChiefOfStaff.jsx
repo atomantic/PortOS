@@ -570,6 +570,20 @@ export default function ChiefOfStaff() {
       if (data?.completedChanged || data?.task?.status === 'completed' || data?.previousStatus === 'completed' || ['deleted', 'peer-merged'].includes(data?.action)) {
         setTaskHistoryRevision(value => value + 1);
       }
+      if (data?.task?.id) {
+        setTasks(prev => {
+          const updated = { ...prev };
+          for (const key of ['user', 'cos']) {
+            if (updated[key]?.tasks) {
+              updated[key] = {
+                ...updated[key],
+                tasks: updated[key].tasks.map(t => t.id === data.task.id ? { ...t, ...data.task } : t),
+              };
+            }
+          }
+          return updated;
+        });
+      }
       refreshQueue();
     };
     socket.on('cos:tasks:changed', handleTaskMutation);
