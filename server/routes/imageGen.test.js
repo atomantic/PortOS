@@ -448,6 +448,7 @@ describe('Image Gen Routes', () => {
       await fileUtils.ensureDir(fileUtils.PATHS.loras);
       await writeFile(pathJoin(fileUtils.PATHS.images, 'example-request.png'), 'synthetic image fixture');
       await writeFile(pathJoin(fileUtils.PATHS.loras, 'example-one.safetensors'), 'synthetic adapter');
+      await writeFile(pathJoin(fileUtils.PATHS.loras, 'example-one.safetensors.metadata.json'), JSON.stringify({ triggerWords: ['LOOM_TOKEN'] }));
       await writeFile(pathJoin(fileUtils.PATHS.loras, 'example-two.safetensors'), 'synthetic adapter');
       await writeFile(pathJoin(fileUtils.PATHS.loras, 'example-canon.safetensors'), 'synthetic canon adapter');
       canonLoras = [{ filename: 'example-canon.safetensors', scale: 0.75, character: { entryId: 'example-character' } }];
@@ -472,6 +473,8 @@ describe('Image Gen Routes', () => {
       expect(params.loraFilenames).toEqual(['example-canon.safetensors', ...body.loraFilenames]);
       expect(params.loraPaths).toEqual(body.loraPaths);
       expect(params.loraScales).toEqual([0.75, ...body.loraScales]);
+      expect(preview.body.sentPrompt).toContain('LOOM_TOKEN');
+      expect(params.visualConditioning.renderedPrompt).toBe(preview.body.sentPrompt);
       expect(params.visualConditioning.adapters.map(adapter => adapter.sha256)).toEqual([
         'synthetic canon adapter', 'synthetic adapter', 'synthetic adapter',
       ].map(contents => createHash('sha256').update(contents).digest('hex')));
