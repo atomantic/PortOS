@@ -14,7 +14,7 @@ import { basename } from 'node:path';
 import { sanitizeVisualConditioning } from '../../lib/fableLoomPlayback.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { prepareFableLoomImageParams } from '../imageGen/fableLoomParams.js';
-import { recordedAdapterFiles, restoreRequestInputs } from './requestInputs.js';
+import { recordedAdapterFiles, restoreRequestInputs, unfingerprintedCanonImages } from './requestInputs.js';
 import { applyImageVisualProfile } from '../imageGen/visualProfile.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
@@ -339,8 +339,18 @@ async function loadRecordedConditioning(run, asset) {
   return matched || node?.visualConditioning || null;
 }
 
+// Never treat a matching canon filename as proof of the bytes an older render sent.
+function unverifiableCanonMessage(manifest) {
+  const missing = unfingerprintedCanonImages(manifest);
+  return missing.length
+    ? `Recorded canon ${missing.length === 1 ? 'image' : 'images'} ${missing.map((name) => `"${name}"`).join(', ')} ${missing.length === 1 ? 'has no content fingerprint' : 'have no content fingerprints'}; this render predates canon image verification, so use "Regenerate with current canon" instead.`
+    : null;
+}
+
 function exactConditioningMismatches(recorded, current) {
   if (!recorded || !current) return ['The recorded visual conditioning could not be reconstructed.'];
+  const unverifiable = unverifiableCanonMessage(recorded);
+  if (unverifiable) return [unverifiable];
   recorded = sanitizeVisualConditioning(recorded);
   current = sanitizeVisualConditioning(current);
   const mismatches = [];
@@ -1029,6 +1039,8 @@ export async function planEpisodeProduction(loomId, episodeId, options = {}) {
         ...Object.values(node.playbackAssets?.visualConditioningByAsset || {}),
       ].filter((manifest) => manifest && typeof manifest === 'object');
       for (const manifest of manifests) {
+        const unverifiable = unverifiableCanonMessage(manifest);
+        if (unverifiable) plan.exactInputIssues.push({ nodeId: node.id, errors: [unverifiable], warnings: [] });
         if (typeof manifest.authoredPrompt === 'string') {
           if (typeof manifest.authoredNegativePrompt !== 'string') {
             plan.exactInputIssues.push({ nodeId: node.id, errors: ['Recorded authored negative prompt is unavailable.'], warnings: [] });

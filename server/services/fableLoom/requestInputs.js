@@ -7,12 +7,34 @@ const SHA256 = /^[a-f0-9]{64}$/i;
 const safeFilename = value => typeof value === 'string' && value !== '.' && value !== '..'
   && value.length > 0 && value.length <= 256 && basename(value) === value && !value.includes('\\');
 
-export async function captureRequestImage(path, role, strength) {
+const REQUEST_ROLES = ['request-reference', 'request-init'];
+const isCanonImage = asset => !REQUEST_ROLES.includes(asset?.role);
+const hasFingerprint = asset => Boolean(asset) && (Object.hasOwn(asset, 'inputRoot') || Object.hasOwn(asset, 'sha256'));
+
+async function fingerprintImage(path, subject) {
   const inputRoot = IMAGE_ROOTS.find(key => resolve(PATHS[key]) === resolve(dirname(path)));
   const sha256 = inputRoot ? await sha256File(path).catch(() => null) : null;
-  if (!sha256 || !safeFilename(basename(path))) throw new ServerError('A requested image could not be fingerprinted for FableLoom provenance.', { status: 400, code: 'FABLELOOM_IMAGE_UNREADABLE' });
-  return { role, bindingId: null, required: true, filename: basename(path), inputRoot, sha256,
+  if (!sha256 || !safeFilename(basename(path))) throw new ServerError(`${subject} could not be fingerprinted for FableLoom provenance.`, { status: 400, code: 'FABLELOOM_IMAGE_UNREADABLE' });
+  return { filename: basename(path), inputRoot, sha256 };
+}
+
+export async function captureRequestImage(path, role, strength) {
+  return { role, bindingId: null, required: true, ...await fingerprintImage(path, 'A requested image'),
     ...(strength != null ? { strength } : {}) };
+}
+
+/** Record which file and bytes each compiled canon image resolved to; `paths` is aligned with `assets`. */
+export async function captureCanonImages(assets, paths) {
+  return Promise.all(assets.map(async (asset, index) => ({
+    ...asset, ...await fingerprintImage(paths[index], `Canon image "${asset.filename}"`),
+  })));
+}
+
+/** Image canon assets recorded before canon fingerprints existed cannot prove what was sent. */
+export function unfingerprintedCanonImages(manifest) {
+  if (manifest?.capability?.kind === 'video') return [];
+  return (manifest?.assets || []).filter(asset => isCanonImage(asset) && !hasFingerprint(asset))
+    .map(asset => asset.filename || 'unknown');
 }
 
 function adapterPath(adapter) {
@@ -34,13 +56,24 @@ async function checkedDigest(path, expected) {
 export async function restoreRequestInputs(manifest) {
   const refs = [];
   const strengths = [];
+  const canon = [];
   let init = null;
   let initStrength;
   for (const [index, asset] of (manifest.assets || []).entries()) {
-    if (!['request-reference', 'request-init'].includes(asset.role)) continue;
-    if (!IMAGE_ROOTS.includes(asset.inputRoot) || !safeFilename(asset.filename)) return { error: 'An authored image has no verifiable source.' };
+    const canonImage = isCanonImage(asset);
+    // A canon image without a fingerprint predates this evidence; the caller decides how to treat it.
+    if (canonImage && !hasFingerprint(asset)) {
+      canon.push(null);
+      continue;
+    }
+    const label = canonImage ? 'Canon image' : 'Authored image';
+    if (!IMAGE_ROOTS.includes(asset.inputRoot) || !safeFilename(asset.filename)) return { error: `${canonImage ? 'A canon' : 'An authored'} image has no verifiable source.` };
     const path = resolve(PATHS[asset.inputRoot], asset.filename);
-    if (resolveImageInputPath(path) !== path || !await checkedDigest(path, asset.sha256)) return { error: `Authored image "${asset.filename}" is unavailable or changed.` };
+    if (resolveImageInputPath(path) !== path || !await checkedDigest(path, asset.sha256)) return { error: `${label} "${asset.filename}" is unavailable or changed.` };
+    if (canonImage) {
+      canon.push(path);
+      continue;
+    }
     if (asset.role === 'request-init') {
       if (init) return { error: 'More than one authored init image was recorded.' };
       init = path;
@@ -61,7 +94,7 @@ export async function restoreRequestInputs(manifest) {
     adapters.push(path);
     scales.push(adapter.scale);
   }
-  return { refs, strengths, init, initStrength, adapters, scales };
+  return { refs, strengths, init, initStrength, adapters, scales, canon };
 }
 
 /** Hash only the adapters named by a recorded manifest, never the entire library. */
@@ -95,9 +128,15 @@ export async function assertFableLoomDispatchInputs(params) {
   if (refs.length !== assets.length || strengths.length !== refs.length
     || strengths.some((strength, index) => strength !== manifest.referenceImageStrengths?.[index])) fail('reference image order or strength differs from the recorded request.');
   let explicitIndex = 0;
+  let canonIndex = 0;
   for (const [index, asset] of assets.entries()) {
     if (typeof refs[index] !== 'string' || basename(refs[index]) !== asset.filename) fail('reference image order differs from the recorded request.');
     if (asset.role === 'request-reference' && resolve(refs[index]) !== recorded.refs[explicitIndex++]) fail('an authored reference path differs from its recorded source.');
+    if (isCanonImage(asset)) {
+      // Jobs queued before canon fingerprints keep the basename check they were queued under.
+      const canonPath = recorded.canon[canonIndex++];
+      if (canonPath && resolve(refs[index]) !== canonPath) fail(`canon image "${asset.filename}" differs from its recorded source.`);
+    }
   }
   if ((params.initImagePath ? resolve(params.initImagePath) : null) !== recorded.init
     || (params.initImageStrength ?? null) !== (recorded.initStrength ?? null)) fail('init image or strength differs from the recorded request.');

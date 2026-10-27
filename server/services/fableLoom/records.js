@@ -782,7 +782,8 @@ const preserveLegacySeriesPlan = (remote, local, senderVersion) => {
   };
 };
 
-const v11VisualProjection = manifest => sanitizeVisualConditioning(manifest, { legacyV11: true });
+// What a `fableLoom` sync peer at `senderVersion` can represent of a manifest.
+const peerVisualProjection = (manifest, senderVersion) => sanitizeVisualConditioning(manifest, { asSchemaVersion: senderVersion });
 
 // An older peer cannot represent newer scene production fields. When that
 // peer wins whole-record LWW after an unrelated edit, retain the local fields
@@ -857,9 +858,11 @@ const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
   };
 };
 
-// An older peer can edit the story but cannot represent v12 replay evidence.
-// Reuse that evidence only for the same render and an unchanged v11 manifest.
-const sameV11Manifest = (local, remote) => Boolean(local && remote && isDeepStrictEqual(v11VisualProjection(local), remote));
+// An older peer can edit the story but cannot represent v12 request replay
+// evidence or v13 canon image fingerprints. Reuse that evidence only for the
+// same render and a manifest unchanged in everything the sender represents.
+const samePeerManifest = (local, remote, senderVersion) => Boolean(local && remote
+  && isDeepStrictEqual(peerVisualProjection(local, senderVersion), remote));
 const sameImage = (local, remote) => Boolean(local.image && local.image === remote.image
   && local.imageJobId && local.imageJobId === remote.imageJobId);
 const referencesVideo = (node, key) => node.videoHistoryId === key || node.playbackAssets?.entryVideoHistoryId === key
@@ -868,14 +871,14 @@ const sameNodeRender = (local, remote, senderVersion) => {
   if (local.visualConditioning?.capability?.kind !== 'video') return sameImage(local, remote);
   const localMap = local.playbackAssets?.visualConditioningByAsset || {};
   const remoteMap = remote.playbackAssets?.visualConditioningByAsset || {};
-  const matchingKeys = Object.keys(localMap).filter(key => sameV11Manifest(local.visualConditioning, v11VisualProjection(localMap[key])));
+  const matchingKeys = Object.keys(localMap).filter(key => samePeerManifest(local.visualConditioning, peerVisualProjection(localMap[key], senderVersion), senderVersion));
   if (matchingKeys.length) return matchingKeys.some(key => referencesVideo(local, key) && referencesVideo(remote, key)
-    && (senderVersion < 3 || sameV11Manifest(localMap[key], remoteMap[key])));
+    && (senderVersion < 3 || samePeerManifest(localMap[key], remoteMap[key], senderVersion)));
   return Boolean(local.videoHistoryId && local.videoHistoryId === remote.videoHistoryId);
 };
 
 const preserveLegacyReplayEvidence = (merged, local, senderVersion, incoming) => {
-  if (!local || local.deleted || incoming.deleted || senderVersion >= 12) return merged;
+  if (!local || local.deleted || incoming.deleted || senderVersion >= 13) return merged;
   const localEpisodes = new Map(local.episodes.map(episode => [episode.id, episode]));
   const incomingEpisodes = new Map(incoming.episodes.map(episode => [episode.id, episode]));
   return { ...merged, episodes: merged.episodes.map(episode => {
@@ -891,12 +894,12 @@ const preserveLegacyReplayEvidence = (merged, local, senderVersion, incoming) =>
       // Before v3 peers could not send a per-asset map. An unchanged image
       // generation or video history id is the evidence for retaining it.
       const peerMap = senderVersion < 3 ? priorMap : receivedMap;
-      const sameLatestManifest = senderVersion < 2 || sameV11Manifest(prior.visualConditioning, received.visualConditioning);
+      const sameLatestManifest = senderVersion < 2 || samePeerManifest(prior.visualConditioning, received.visualConditioning, senderVersion);
       const preserved = Object.fromEntries(Object.entries(peerMap).flatMap(([key, manifest]) => {
         const old = priorMap[key];
         const sameRender = old?.capability?.kind === 'image' ? sameImage(prior, received) : referencesVideo(prior, key) && referencesVideo(received, key);
-        const isLatest = sameV11Manifest(prior.visualConditioning, v11VisualProjection(old));
-        const sameManifest = senderVersion < 3 ? (!isLatest || sameLatestManifest) : sameV11Manifest(old, manifest);
+        const isLatest = samePeerManifest(prior.visualConditioning, peerVisualProjection(old, senderVersion), senderVersion);
+        const sameManifest = senderVersion < 3 ? (!isLatest || sameLatestManifest) : samePeerManifest(old, manifest, senderVersion);
         return sameRender && sameManifest ? [[key, old]] : [];
       }));
       return {

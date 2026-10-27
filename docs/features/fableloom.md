@@ -324,6 +324,13 @@ canon bindings, references, adapters, omissions, warnings, and temporal source
 alongside the scene asset. **Repeat exact inputs** checks those recorded
 manifests and refuses missing assets, local model revisions, or changed
 compiled conditioning instead of falling back to a newer local default.
+Every image input, both the authored references and the canon character,
+place, and object images, is recorded by its image root and SHA-256 digest
+(never a local path). The queue re-verifies those bytes and sources just before
+provider dispatch, so a canon image edited or swapped for a same-named file
+while the job waited fails instead of rendering. An image render recorded
+before canon digests existed cannot prove its canon bytes, so exact replay
+refuses it; use **Regenerate with current canon** instead.
 
 **Run Continuity Review** is also explicit and deterministic. It reports
 wrong or missing character/wardrobe/place/object bindings, ambiguous graph
