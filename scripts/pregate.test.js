@@ -14,6 +14,7 @@ import {
   buildCiTestPlan,
   collectPlanInputs,
   ALWAYS_RUN_TESTS,
+  WINDOWS_CONTRACT_TESTS,
 } from './ci-test-plan.js';
 import {
   collectPregateChangedFiles,
@@ -262,7 +263,10 @@ describe('pregate hidden-content invocation', () => {
       mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
       write(join(workspace, 'package-lock.json'), JSON.stringify({ packages: { '': {} } }));
     }
-    write('server/lib/bufferedSpawn.test.js', '// Native inventory fixture\n');
+    for (const path of WINDOWS_CONTRACT_TESTS) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      write(path, '// Native inventory fixture\n');
+    }
     mkdirSync(join(root, 'docs'));
     write(trackedPath, clean);
     git('add', '--all');
