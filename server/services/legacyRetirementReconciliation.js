@@ -1,10 +1,8 @@
 /** Retirement bookkeeping only: this module never removes a checkout/ref or asserts
  * an unrecorded deletion succeeded. Fresh local work always stays actionable. */
-import { devNull } from 'node:os';
 import { isAbsolute, resolve } from 'node:path';
-import { spawn } from '../lib/childProcess.js';
+import { devNull } from 'node:os';
 import { execGit } from '../lib/execGit.js';
-import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
 import { explicitPrCompletion, PR_COMPLETIONS } from '../lib/prDisposition.js';
 import { legacyRetirementKey } from '../lib/legacyRetirementTransition.js';
@@ -47,27 +45,11 @@ const git = (repo, args) => execGit(['--no-replace-objects', '-c', 'core.commitG
 const ancestor = (repo, a, b) => oid(a) && oid(b)
   ? git(repo, ['merge-base', '--is-ancestor', a, b]).then(() => true, () => false) : false;
 
-/** Stable patch identity handles a reviewed squash without requiring its old SHAs on main. */
-async function patchId(repo, from, to) {
-  const patch = (await git(repo, ['diff', '--binary', '--no-ext-diff', '--no-textconv', from, to])).stdout;
-  if (!patch) return null;
-  return new Promise((done, reject) => {
-    const child = spawn('git', ['patch-id', '--stable'], { cwd: repo, env: withSpawnCwdEnv(proofEnv(), repo), shell: false });
-    let output = '';
-    const timer = setTimeout(() => child.kill('SIGTERM'), 5000);
-    child.stdout.on('data', chunk => { output += chunk; if (output.length > 4096) child.kill('SIGTERM'); });
-    child.stdin.on('error', () => {});
-    child.on('error', error => { clearTimeout(timer); reject(error); });
-    child.on('close', code => { clearTimeout(timer); done(code === 0 && /^[a-f0-9]{40,64} /.test(output) ? output.split(' ')[0] : null); });
-    child.stdin.end(patch);
-  });
-}
-
 async function absent(repoPath, row, trees, agents, identities = new Map()) {
-  if (!row.branch || await protectedOwner(agents, row, repoPath, identities)
+  if ((!row.branch && !row.path) || await protectedOwner(agents, row, repoPath, identities)
     || trees.some(tree => tree.branch === `refs/heads/${row.branch}` || samePath(tree.path, row.path))) return false;
   if (row.path && await readCheckoutPathPresence(row.path) !== false) return false;
-  return await readLocalBranchPresence(repoPath, row.branch) === false;
+  return !row.branch || await readLocalBranchPresence(repoPath, row.branch) === false;
 }
 
 function targetFor(outcome, row, repoPath, agents) {
@@ -178,60 +160,40 @@ export async function reconcileRecordedReceiptObservations(appId, outcome) {
     retirementReceiptEvidence: Object.fromEntries(Object.entries(outcome.retirementReceiptEvidence || {}).map(([key, receipt]) => [key, annotate(receipt)])) };
 }
 
-export async function _planLegacyRetirementReconciliation({ repoPath, outcome, agents, trees, defaultHead }, options = {}) {
+export async function _planLegacyRetirementReconciliation({ repoPath, outcome, agents, trees }) {
   const transition = outcome?.legacyRetirementTransition;
-  if (transition?.version !== 1 || !Array.isArray(agents) || !Array.isArray(trees) || !oid(defaultHead)) return [];
+  if (transition?.version !== 1 || !Array.isArray(agents) || !Array.isArray(trees)) return [];
   const rows = [...new Map([...(outcome.retirementObligations || []), ...(outcome.remaining || [])]
-    .filter(row => transition.observations.includes(legacyRetirementKey(row)))
+    .filter(row => transition.observations.includes(legacyRetirementKey(row))
+      || row.reason === 'retirement-provenance-unverified')
     .map(row => [legacyRetirementKey(row), row])).values()];
   const resolutions = [];
   const identities = new Map();
-  let forgeReads = 0;
   for (const observation of rows) {
-    const bound = targetFor(outcome, observation, repoPath, agents);
-    if (!bound || !await absent(repoPath, bound.target, trees, agents, identities)) continue;
-    const { target, receipt } = bound;
-    let evidence = receipt ? { kind: 'existing-service-receipt', receipt } : null;
-    if (!evidence && await ancestor(repoPath, target.head, defaultHead)) evidence = { kind: 'merged-ancestry', head: target.head, defaultHead };
-    if (!evidence && forgeReads < 8 && options.readMergedDelivery) {
-      forgeReads++;
-      const forge = await options.readMergedDelivery(target).catch(() => null);
-      if (forge?.prHead && forge.publishedBranch === target.branch && await ancestor(repoPath, forge.mergeCommit, defaultHead)) {
-        if (await ancestor(repoPath, target.head, forge.prHead)) evidence = { kind: 'reviewed-merged-continuation', head: target.head, prHead: forge.prHead, mergeCommit: forge.mergeCommit, prUrl: forge.prUrl };
-        else {
-          const base = await git(repoPath, ['merge-base', target.head, `${forge.mergeCommit}^`]).then(r => r.stdout.trim(), () => null);
-          if (oid(base)) {
-            const [source, delivered] = await Promise.all([patchId(repoPath, base, target.head), patchId(repoPath, `${forge.mergeCommit}^`, forge.mergeCommit)]).catch(() => []);
-            if (source && source === delivered) evidence = { kind: 'merged-patch-equivalence', head: target.head, mergeCommit: forge.mergeCommit, prUrl: forge.prUrl, patchId: source };
-          }
-        }
-      }
-    }
-    if (evidence) resolutions.push({ key: legacyRetirementKey(observation), observation, target, evidence,
-      disposition: 'legacy-bookkeeping-resolved', removalVerified: Boolean(receipt) });
+    // Local absence settles local cleanup only. It says nothing about whether
+    // deleted source was delivered or preserved; retain that uncertainty in the
+    // existing history instead of demanding another remote merge certificate.
+    if (!await absent(repoPath, observation, trees, agents, identities)) continue;
+    const receipt = targetFor(outcome, observation, repoPath, agents)?.receipt;
+    resolutions.push({ key: legacyRetirementKey(observation), observation,
+      target: observation, evidence: receipt ? { kind: 'existing-service-receipt', receipt }
+        : { kind: 'current-local-absence', deliveryVerified: false, preservationVerified: false },
+      disposition: 'local-cleanup-not-required', removalVerified: Boolean(receipt) });
   }
   return resolutions;
 }
 
 export async function reconcileLegacyRetirementRecords(appId, outcome) {
-  if (outcome?.legacyRetirementTransition?.version !== 1 || !outcome.legacyRetirementTransition.observations?.length) return outcome;
+  if (outcome?.legacyRetirementTransition?.version !== 1) return outcome;
   const [{ getAppById }, { readClaimOwnershipAgents, withClaimOwnershipLock }, { listWorktrees },
-    { getDefaultBranch }, { findMergedPullRequest, readRetirementForgeEvidence }, store] = await Promise.all([
-    import('./apps.js'), import('./cosClaimOwnership.js'), import('./worktreeManager.js'), import('./git.js'),
-    import('./heldCheckoutReview.js'), import('./taskSchedule.js'),
+    store] = await Promise.all([
+    import('./apps.js'), import('./cosClaimOwnership.js'), import('./worktreeManager.js'), import('./taskSchedule.js'),
   ]);
   const app = await getAppById(appId);
   if (!app?.repoPath) return outcome;
   const repoPath = app.repoPath;
-  const [agents, trees, branch] = await Promise.all([readClaimOwnershipAgents(), listWorktrees(repoPath), getDefaultBranch(repoPath, { allowRemote: false, strict: true })]);
-  const defaultHead = (await git(repoPath, ['rev-parse', `refs/remotes/origin/${branch}^{commit}`])).stdout.trim();
-  const resolutions = await _planLegacyRetirementReconciliation({ repoPath, outcome, agents, trees, defaultHead }, {
-    readMergedDelivery: async target => {
-      const selected = await findMergedPullRequest(repoPath, target.branch, target.head, { forgeAccount: app.forgeAccount });
-      const facts = await readRetirementForgeEvidence(repoPath, target.branch, selected.url, { forgeAccount: app.forgeAccount });
-      return { ...facts, publishedBranch: facts.publishedBranch ?? target.branch };
-    },
-  });
+  const [agents, trees] = await Promise.all([readClaimOwnershipAgents(), listWorktrees(repoPath)]);
+  const resolutions = await _planLegacyRetirementReconciliation({ repoPath, outcome, agents, trees });
   if (!resolutions.length) return outcome;
   return withClaimOwnershipLock(async () => {
     const [currentAgents, currentTrees] = await Promise.all([readClaimOwnershipAgents(), listWorktrees(repoPath)]);

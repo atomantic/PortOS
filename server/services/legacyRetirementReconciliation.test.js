@@ -49,7 +49,7 @@ async function delivered({ rebased = false, changed = false } = {}) {
 }
 
 describe('legacy retirement transition at the persisted reconciliation boundary', () => {
-  it.each(['squash', 'rebased', 'changed-patch', 'active-owner', 'human-handoff', 'foreign-owner', 'live-checkout', 'new-incident'])(
+  it.each(['squash', 'rebased', 'changed-patch', 'active-owner', 'human-handoff', 'foreign-owner', 'live-checkout', 'unknown-ref', 'new-incident'])(
     'reconciles historical delivery without asserting unrecorded removal: %s', async scenario => {
       const { row, forge } = await delivered({ rebased: ['rebased', 'changed-patch'].includes(scenario), changed: scenario === 'changed-patch' });
       const outcome = { status: 'incomplete', retirementObligations: [row], remaining: [row], retired: [] };
@@ -63,14 +63,15 @@ describe('legacy retirement transition at the persisted reconciliation boundary'
         await mkdir(other); await execGit(['init'], other);
         owners.push({ id: 'foreign-owner', status: 'running', metadata: { sourceWorkspace: other, claimBranches: [row.branch] } });
       }
+      if (scenario === 'unknown-ref') row.branch = '../invalid-ref';
       if (scenario === 'live-checkout') { await mkdir(row.path); await writeFile(join(row.path, 'unfinished.txt'), 'new owner work\n'); }
       const input = { repoPath: repo, outcome, agents: owners, trees: [], defaultHead: forge.mergeCommit };
       const plans = await _planLegacyRetirementReconciliation(input, { readMergedDelivery: async () => forge });
-      const expected = ['squash', 'rebased', 'foreign-owner'].includes(scenario);
+      const expected = ['squash', 'rebased', 'changed-patch', 'foreign-owner'].includes(scenario);
       expect(plans).toHaveLength(expected ? 1 : 0);
       if (!expected) return;
       expect(plans[0].removalVerified).toBe(false);
-      expect(plans[0].evidence.kind).toBe(scenario === 'rebased' ? 'merged-patch-equivalence' : 'reviewed-merged-continuation');
+      expect(plans[0].evidence).toEqual({ kind: 'current-local-absence', deliveryVerified: false, preservationVerified: false });
       const path = join(root, 'outcome.json');
       await save(path, applyLegacyRetirementResolutions(outcome, plans, '2026-01-03T00:00:00.000Z'));
       const restarted = JSON.parse(await readFile(path, 'utf8'));
@@ -98,11 +99,37 @@ describe('legacy retirement transition at the persisted reconciliation boundary'
     const progressed = { retirementObligations: [intermediate], remaining: [intermediate], retired: [receipt] };
     markLegacyRetirements(progressed);
     expect(await _planLegacyRetirementReconciliation({ repoPath: repo, outcome: progressed, agents: [], trees: [], defaultHead: forge.mergeCommit }))
-      .toMatchObject([{ removalVerified: true, target: { head: receipt.head }, observation: intermediate }]);
+      .toMatchObject([{ removalVerified: true, observation: intermediate }]);
     const changed = { ...malformed, checkoutIdentity: 'b'.repeat(64) };
     const different = { retirementObligations: [changed], remaining: [changed], retired: [receipt] };
     markLegacyRetirements(different);
-    expect(await _planLegacyRetirementReconciliation({ repoPath: repo, outcome: different, agents: [], trees: [], defaultHead: forge.mergeCommit })).toEqual([]);
+    expect(await _planLegacyRetirementReconciliation({ repoPath: repo, outcome: different, agents: [], trees: [], defaultHead: forge.mergeCommit }))
+      .toMatchObject([{ removalVerified: false, evidence: { kind: 'current-local-absence', preservationVerified: false } }]);
+  });
+
+  it('settles an absent ref after the migration but preserves recreated refs and unique checkout files', async () => {
+    const branch = 'feature/released';
+    const row = { branch, reason: 'retirement-provenance-unverified', createdAt: '2026-01-03T00:00:00.000Z' };
+    const outcome = { remaining: [row], retirementObligations: [row],
+      legacyRetirementTransition: { version: 1, observations: [], resolutions: [] } };
+    const input = { repoPath: repo, outcome, agents: [], trees: [] };
+    const plan = await _planLegacyRetirementReconciliation(input);
+    const saved = applyLegacyRetirementResolutions(outcome, plan, '2026-01-04T00:00:00.000Z');
+    expect(saved.remaining).toEqual([]);
+    expect(saved.retirementObligations).toEqual([]);
+    expect(saved.retired).toBeUndefined();
+    expect(saved.legacyRetirementTransition.resolutions).toMatchObject([
+      { observation: row, removalVerified: false, evidence: { deliveryVerified: false, preservationVerified: false } },
+    ]);
+    expect(await _planLegacyRetirementReconciliation({ ...input, outcome: JSON.parse(JSON.stringify(saved)) })).toEqual([]);
+    await git('branch', branch);
+    expect(await _planLegacyRetirementReconciliation(input)).toEqual([]);
+    await git('branch', '-d', branch);
+    const path = join(root, 'unique-work');
+    await mkdir(path); await writeFile(join(path, 'unique.txt'), 'keep me');
+    const held = { ...row, path };
+    expect(await _planLegacyRetirementReconciliation({ ...input, outcome: { ...outcome, remaining: [held], retirementObligations: [held] } })).toEqual([]);
+    expect(await readFile(join(path, 'unique.txt'), 'utf8')).toBe('keep me');
   });
 
   it('migration freezes only existing records, survives replay, and changes no task policy or worktree', async () => {
