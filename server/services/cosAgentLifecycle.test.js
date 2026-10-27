@@ -102,7 +102,7 @@ vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await import
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, recordInheritedCheckoutRetirement, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -760,7 +760,7 @@ describe('completeAgent idempotence (#3384)', () => {
       } finally { cosEvents.off('agent:completed', completion); }
     });
 
-  it('settles an own-seed retirement receipt without inventing a captured head or successful result', async () => {
+  it.each(['own-seed', 'inherited'])('settles a %s retirement receipt without inventing a captured head or successful result', async scenario => {
     const id = 'seeded-retired', startedAt = '2026-01-01T00:00:00Z', completedAt = '2026-01-01T00:01:00Z';
     const stages = Object.fromEntries(['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].map(key => [key, { status: 'done' }]));
     stages.worktree = { status: 'held', reason: 'checkout-capture-pending' };
@@ -772,16 +772,26 @@ describe('completeAgent idempotence (#3384)', () => {
     const directory = join(mockCosState.agentsDir, completedAt.slice(0, 10), id);
     await mkdir(directory, { recursive: true }); await writeFile(join(directory, 'metadata.json'), JSON.stringify(record));
     const proof = { retiredHead: 'a'.repeat(40), checkoutIdentity: 'b'.repeat(64), receiptDigest: 'c'.repeat(64) };
-    expect(await recordSeededCheckoutRetirement(id, { ...record, metadata: { ...record.metadata, changed: true } }, proof)).toBe(false);
-    expect(await recordSeededCheckoutRetirement(id, structuredClone(record), proof)).toBe(true);
+    const inherited = scenario === 'inherited';
+    if (inherited) {
+      record.metadata.isWorktree = false; record.metadata.resumedFromAgentId = 'original-parent';
+      proof.inheritedFromAgentId = 'original-parent';
+    }
+    const write = inherited ? recordInheritedCheckoutRetirement : recordSeededCheckoutRetirement;
+    expect(await write(id, { ...record, metadata: { ...record.metadata, changed: true } }, proof)).toBe(false);
+    expect(await write(id, structuredClone(record), proof)).toBe(true);
     const saved = JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8'));
-    expect(saved.metadata.checkoutCapture).toMatchObject({ status: 'retired', unknown: true, reason: 'retired-by-service-receipt', ...proof });
+    expect(saved.metadata.checkoutCapture).toMatchObject({ status: 'retired', unknown: true, reason: inherited ? 'inherited-scope-already-retired' : 'retired-by-service-receipt', ...proof });
     expect(saved.metadata.completedCheckouts).toEqual([]);
-    expect(saved.metadata.completionCleanup).toMatchObject({ status: 'completed', stages: { worktree: { status: 'done', verifiedBy: 'service-retirement-receipt' } } });
+    expect(saved.metadata.completionCleanup).toMatchObject({ status: 'completed', stages: { worktree: { status: 'done', verifiedBy: inherited ? 'inherited-service-retirement-receipt' : 'service-retirement-receipt' } } });
     expect(saved.metadata.completionCleanup).not.toHaveProperty('replay');
     expect(saved.metadata.repoStateVerification).toMatchObject({ status: 'completed', physicalRetirementVerified: true });
     expect(saved.result).toEqual(record.result);
-    expect(await recordSeededCheckoutRetirement(id, record, proof)).toBe(false);
+    await recordRepoStateVerification(id, { status: 'pending', checkedAt: '2026-01-01T00:03:00Z', reasons: ['task-unavailable'] });
+    const replayed = JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8'));
+    expect(replayed.metadata.repoStateVerification).toMatchObject({ status: 'completed', reasons: [], physicalRetirementVerified: true });
+    expect(replayed.result).toEqual(record.result);
+    expect(await write(id, record, proof)).toBe(false);
   });
 
   it('settles only the unchanged predecessor cleanup ledger, preserving unknown capture and failed execution', async () => {
