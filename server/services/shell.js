@@ -271,17 +271,17 @@ export function createShellSession(socket, options = {}) {
   try {
     // Pin PWD to the spawn cwd; a non-login shell may not rewrite it.
     const childEnv = withSpawnCwdEnv({
-        // `options.env` is a DELTA here — this base is always unioned underneath
-        // it. A caller that has already narrowed its environment to a strict
-        // allowlist must use `spawnCommandSession` instead, which unions nothing
-        // (and gets no rc file either — see its docstring).
-        ...buildSafeEnv(), // filters process.env to prevent leaking inherited secrets (e.g. shell-inherited API keys)
-        // options.env is the caller's explicit opt-in env (e.g. TUI provider API keys for codex/claude).
-        // Callers are responsible for not passing vars they don't want visible inside attachable shells.
-        // Single-user/single-instance deployment (Tailscale-only) makes this acceptable.
-        ...(options.env || {}),
-        ...TERM_ENV
-      }, cwd);
+      // `options.env` is a DELTA here — this base is always unioned underneath
+      // it. A caller that has already narrowed its environment to a strict
+      // allowlist must use `spawnCommandSession` instead, which unions nothing
+      // (and gets no rc file either — see its docstring).
+      ...buildSafeEnv(), // filters process.env to prevent leaking inherited secrets (e.g. shell-inherited API keys)
+      // options.env is the caller's explicit opt-in env (e.g. TUI provider API keys for codex/claude).
+      // Callers are responsible for not passing vars they don't want visible inside attachable shells.
+      // Single-user/single-instance deployment (Tailscale-only) makes this acceptable.
+      ...(options.env || {}),
+      ...TERM_ENV
+    }, cwd);
     const launch = prepareWindowsAgentLaunch(options.agentId, shell, shellArgs, { cwd, env: childEnv, pty: true });
     ptyProcess = pty.spawn(launch.command, launch.args, {
       ...ptyTerminalOptions({ cwd, cols: options.cols, rows: options.rows }),
