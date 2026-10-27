@@ -1,19 +1,19 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { existsSync } from 'node:fs';
-import { basename, join, resolve, sep } from 'node:path';
+import { basename, join, relative, resolve, sep } from 'node:path';
 import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { asFableLoomRenderSettings, inspectEpisodeProductionOrder } from '../../lib/fableLoomProduction.js';
 import { loraCompatKey } from '../../lib/runners.js';
-import { PATHS } from '../../lib/fileUtils.js';
+import { PATHS, sha256File } from '../../lib/fileUtils.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../../lib/imageGenCapabilities.js';
 import { getLoom } from '../fableLoom/records.js';
-import { compileFableLoomVisualRequest, fableLoomAdapterDigest, fableLoomImageCapabilities } from '../fableLoom/visualConditioning.js';
+import { compileFableLoomVisualRequest, fableLoomImageCapabilities } from '../fableLoom/visualConditioning.js';
 import { maxInputImages, resolveCloudProviderConfig } from './cloudProviderConfig.js';
 import { selectLocalImageModelFromSettings } from './prepareParams.js';
 import { applyImageVisualProfile, imageVisualProfileRevision } from './visualProfile.js';
+import { captureRequestImage } from '../fableLoom/requestInputs.js';
 
 const MAX_REFERENCE_IMAGES = 4;
-
 export const fableLoomMultipartUnsupported = () => new ServerError(
   'FableLoom scene renders accept gallery images, not file uploads. Upload the image to the gallery first.',
   { status: 400, code: 'FABLELOOM_MULTIPART_UNSUPPORTED' },
@@ -108,13 +108,15 @@ export async function prepareFableLoomImageParams({ params, mode, settings }) {
     if (requestAdapters.some(path => canonPaths.has(resolve(path)))) {
       throw new ServerError('A requested LoRA is already selected by scene canon. Remove the duplicate request adapter.', { status: 400, code: 'FABLELOOM_LORA_DUPLICATE' });
     }
-    const requestDigests = await Promise.all(requestAdapters.map(path => fableLoomAdapterDigest(resolve(path)).catch(() => null)));
+    const requestDigests = await Promise.all(requestAdapters.map(path => sha256File(resolve(path)).catch(() => null)));
     if (requestDigests.some(digest => !digest)) {
       throw new ServerError('A requested LoRA could not be fingerprinted for FableLoom provenance.', { status: 400, code: 'FABLELOOM_LORA_UNREADABLE' });
     }
     const allReferences = [...compiled.referenceImagePaths, ...requestReferences];
     const allStrengths = [...compiled.referenceImageStrengths, ...requestReferences.map((_, index) => requestStrengths[index] ?? 1)];
     const allScales = [...canonAdapters.map((_, index) => compiled.loraScales[index] ?? 1), ...requestAdapters.map((_, index) => requestScales[index] ?? 1)];
+    const requestAssets = await Promise.all(requestReferences.map(path => captureRequestImage(path, 'request-reference')));
+    if (params.initImagePath) requestAssets.push(await captureRequestImage(params.initImagePath, 'request-init', params.initImageStrength));
     // The compiler owns photography composition; snapshot its profile without
     // appending a second copy of the same clauses or additions.
     params.visualProfile = compiled.visualProfile;
@@ -130,10 +132,13 @@ export async function prepareFableLoomImageParams({ params, mode, settings }) {
     params.loraScales = allScales;
     params.visualConditioning = compiled.visualConditioning ? {
       ...compiled.visualConditioning,
-      assets: [...compiled.visualConditioning.assets, ...requestReferences.map(path => ({ role: 'request-reference', bindingId: null, required: true, filename: basename(path) }))],
+      authoredPrompt: params.authoredPrompt,
+      authoredNegativePrompt: params.authoredNegativePrompt,
+      ...(params.visualProfileOverride !== undefined ? { visualProfileOverride: params.visualProfileOverride } : {}),
+      assets: [...compiled.visualConditioning.assets, ...requestAssets],
       adapters: [
         ...compiled.visualConditioning.adapters.map(adapter => ({ ...adapter, source: 'Canon adapter' })),
-        ...requestAdapters.map((path, index) => ({ filename: basename(path), scale: requestScales[index] ?? 1, characterId: null, sha256: requestDigests[index], source: 'Request adapter' })),
+        ...requestAdapters.map((path, index) => ({ filename: basename(path), scale: requestScales[index] ?? 1, characterId: null, sha256: requestDigests[index], source: 'Request adapter', relativePath: relative(PATHS.loras, resolve(path)).split(sep).join('/') })),
       ],
       referenceImageStrengths: allStrengths,
       render: {

@@ -19,6 +19,35 @@
 
 import { createMediaJobImageHook, deriveRenderJobId } from './mediaJobImageHook.js';
 import { attachNodeImage } from './fableLoom/records.js';
+import { readImageSidecar } from './imageGen/local.js';
+
+/** Preserve the tuple actually executed, not the defaults that happened to be queued. */
+export async function conditioningForCompletedImage(job, filename) {
+  const conditioning = job.params?.visualConditioning;
+  if (!conditioning) return null;
+  const backend = conditioning.capability?.backend;
+  const parameters = { ...(conditioning.render?.parameters || {}) };
+  let renderedPrompt;
+  if (backend === 'local') {
+    const { metadata } = await readImageSidecar(filename).catch(() => ({ metadata: null }));
+    if (metadata?.filename === filename && metadata.modelId === conditioning.capability?.modelId) {
+      for (const key of ['width', 'height', 'steps', 'guidance', 'quantize', 'seed']) {
+        if (metadata[key] != null) parameters[key] = metadata[key];
+      }
+      renderedPrompt = metadata.renderPrompt ?? metadata.prompt;
+      if (metadata.omittedInputImages?.length) {
+        return { ...conditioning, status: 'degraded', render: { ...conditioning.render, parameters } };
+      }
+    }
+  } else if (typeof job.params?.mode === 'string') {
+    parameters.mode = job.params.mode;
+  }
+  return {
+    ...conditioning,
+    ...(typeof renderedPrompt === 'string' ? { renderedPrompt } : {}),
+    render: { ...conditioning.render, parameters },
+  };
+}
 
 const hook = createMediaJobImageHook({
   label: 'fableloom scene-image',
@@ -34,12 +63,14 @@ const hook = createMediaJobImageHook({
   // regenerate can't overwrite the newer scene image.
   sceneKey: ({ loomId, episodeId, nodeId }) => `${loomId}:${episodeId}:${nodeId}`,
   describe: ({ loomId, nodeId }) => `${loomId.slice(0, 13)}/${nodeId.slice(0, 13)}`,
-  attach: ({ loomId, episodeId, nodeId, filename, job }) =>
-    attachNodeImage(loomId, episodeId, nodeId, {
+  attach: async ({ loomId, episodeId, nodeId, filename, job }) => {
+    const visualConditioning = await conditioningForCompletedImage(job, filename);
+    return attachNodeImage(loomId, episodeId, nodeId, {
       filename,
       jobId: deriveRenderJobId(job, filename),
-      ...(job.params?.visualConditioning ? { visualConditioning: job.params.visualConditioning } : {}),
-    }),
+      ...(visualConditioning ? { visualConditioning } : {}),
+    });
+  },
   onAttached: ({ loomId, nodeId, filename }, result) => {
     if (!result) return;
     console.log(`🧶 fableloom scene image ${loomId.slice(0, 13)}/${nodeId.slice(0, 13)} ← ${filename}`);

@@ -1,3 +1,10 @@
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PATHS } from '../../lib/fileUtils.js';
+import { sanitizeVisualConditioning } from '../../lib/fableLoomPlayback.js';
+import { prepareFableLoomImageParams } from '../imageGen/fableLoomParams.js';
+import { conditioningForCompletedImage } from '../fableLoomSceneImageHook.js';
 import { fableLoomRunEvents } from './runEvents.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -458,6 +465,109 @@ describe('fableLoom production service', () => {
         seed: 987654,
       }),
     }));
+  });
+
+  it('replays the same authored conditioning after persistence and refuses changed input bytes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fableloom-replay-'));
+    const originalImages = PATHS.images;
+    const originalLoras = PATHS.loras;
+    PATHS.images = join(dir, 'images');
+    PATHS.loras = join(dir, 'loras');
+    try {
+      await mkdir(PATHS.images, { recursive: true });
+      await mkdir(join(PATHS.loras, 'nested'), { recursive: true });
+      const reference = join(PATHS.images, 'reference.png');
+      const init = join(PATHS.images, 'init.png');
+      const adapter = join(PATHS.loras, 'nested', 'adapter.safetensors');
+      const canonAdapter = join(PATHS.loras, 'canon.safetensors');
+      const canonImages = ['neutral', 'profile', 'full-body'].map(role => join(PATHS.images, `${role}.png`));
+      await Promise.all([
+        writeFile(reference, 'reference-original'), writeFile(init, 'init-original'),
+        writeFile(adapter, 'adapter-original'), writeFile(canonAdapter, 'canon-original'),
+        ...canonImages.map((path, index) => writeFile(path, `canon-image-${index}`)),
+      ]);
+      const universe = structuredClone(sampleUniverse);
+      universe.characters[0].identityPack = { assets: ['neutral', 'profile', 'full-body'].map(role => ({
+        role, imageRef: `${role}.png`, approved: true,
+      })) };
+      universeBuilder.getUniverse.mockResolvedValue(universe);
+      loras.listLoras.mockResolvedValue([{ filename: 'canon.safetensors', source: 'trained',
+        character: { entryId: 'char-1' }, loraCompatKey: 'flux2', recommendedScale: 0.8 }]);
+      const exactLoom = structuredClone(sampleLoom);
+      for (const node of exactLoom.episodes[0].nodes) {
+        node.image = `${node.id}.png`;
+        node.visualCanon = { mode: 'locked', characterAppearances: [{ characterId: 'char-1' }], placeId: null, objectIds: [] };
+      }
+      records.getLoom.mockImplementation(async () => exactLoom);
+      const imageModel = {
+        id: 'image-model', revision: 'image-revision-1', runner: 'flux2', quantization: 'none',
+        hardwareCompatibility: { state: 'ready', reasons: [] },
+      };
+      mediaModelMocks.getImageModels.mockReturnValue([imageModel]);
+      imagePrepareMocks.selectLocalImageModelFromSettings.mockReturnValue(imageModel);
+      imagePrepareMocks.resolveLocalImageModel.mockReturnValue({ pythonPath: null, selectedModel: imageModel });
+      const realCompiler = await vi.importActual('./visualConditioning.js');
+      visualConditioningMocks.compileFableLoomVisualRequest.mockImplementation(realCompiler.compileFableLoomVisualRequest);
+      visualConditioningMocks.fableLoomImageCapabilities.mockImplementation(realCompiler.fableLoomImageCapabilities);
+      loras.readTriggerWordsByFilename.mockResolvedValue({});
+      const settings = await settingsMocks.getSettings();
+      const prepared = await prepareFableLoomImageParams({ settings, mode: 'local', params: {
+        fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
+        prompt: 'An authored view', negativePrompt: 'fog', modelId: 'image-model',
+        referenceImagePaths: [reference], referenceImageStrengths: [0.4],
+        initImagePath: init, initImageStrength: 0.3,
+        loraPaths: [adapter], loraScales: [0.7],
+      } });
+      expect(prepared.visualConditioning.adapters).toEqual([
+        expect.objectContaining({ source: 'Canon adapter', filename: 'canon.safetensors' }),
+        expect.objectContaining({ source: 'Request adapter', relativePath: 'nested/adapter.safetensors' }),
+      ]);
+      imageSidecarMocks.readImageSidecar.mockResolvedValue({ metadata: {
+        filename: 'node-1.png', modelId: 'image-model', prompt: prepared.prompt,
+        width: 1024, height: 576, steps: 20, guidance: 1, quantize: '8', seed: 123,
+      } });
+      const attached = await conditioningForCompletedImage({ params: { visualConditioning: prepared.visualConditioning } }, 'node-1.png');
+      const savedManifest = join(dir, 'manifest.json');
+      await writeFile(savedManifest, JSON.stringify(sanitizeVisualConditioning(attached)));
+      const reloaded = JSON.parse(await readFile(savedManifest, 'utf8'));
+      expect(reloaded.assets).toEqual(expect.arrayContaining([
+        expect.objectContaining({ role: 'request-reference', inputRoot: 'images', filename: 'reference.png' }),
+        expect.objectContaining({ role: 'request-init', inputRoot: 'images', strength: 0.3 }),
+      ]));
+      expect(reloaded.adapters).toEqual([
+        expect.objectContaining({ source: 'Canon adapter', filename: 'canon.safetensors' }),
+        expect.objectContaining({ source: 'Request adapter', relativePath: 'nested/adapter.safetensors' }),
+      ]);
+      for (const node of exactLoom.episodes[0].nodes) node.visualConditioning = reloaded;
+      await startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'exact_inputs', assetTypes: ['image'], nodeIds: ['node-1'] });
+      await vi.waitFor(() => expect(queueMocks.enqueueJob).toHaveBeenCalled());
+      expect(queueMocks.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({
+        prompt: prepared.prompt, negativePrompt: prepared.negativePrompt, seed: 123,
+        initImagePath: init, initImageStrength: 0.3,
+        referenceImagePaths: [...canonImages, reference], referenceImageStrengths: [1, 1, 1, 0.4],
+        loraFilenames: ['canon.safetensors'], loraPaths: [adapter], loraScales: [0.8, 0.7],
+      }) }));
+      exactLoom.episodes[0].nodes[0].visualCanon.placeId = 'place-that-no-longer-exists';
+      await expect(startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'exact_inputs', assetTypes: ['image'], nodeIds: ['node-1'] }))
+        .rejects.toMatchObject({ code: 'EXACT_INPUTS_REFUSED', status: 409 });
+      exactLoom.episodes[0].nodes[0].visualCanon.placeId = null;
+      await writeFile(reference, 'reference-changed');
+      await expect(startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'exact_inputs', assetTypes: ['image'], nodeIds: ['node-1'] }))
+        .rejects.toMatchObject({ code: 'EXACT_INPUTS_REFUSED', status: 409 });
+      await writeFile(reference, 'reference-original');
+      await writeFile(adapter, 'adapter-changed');
+      await expect(startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'exact_inputs', assetTypes: ['image'], nodeIds: ['node-1'] }))
+        .rejects.toMatchObject({ code: 'EXACT_INPUTS_REFUSED', status: 409 });
+      await writeFile(adapter, 'adapter-original');
+      await writeFile(canonAdapter, 'canon-changed');
+      await expect(startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'exact_inputs', assetTypes: ['image'], nodeIds: ['node-1'] }))
+        .rejects.toMatchObject({ code: 'EXACT_INPUTS_REFUSED', status: 409 });
+      expect(queueMocks.enqueueJob).toHaveBeenCalledTimes(1);
+    } finally {
+      PATHS.images = originalImages;
+      PATHS.loras = originalLoras;
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('cancels an in-progress batch run', async () => {
