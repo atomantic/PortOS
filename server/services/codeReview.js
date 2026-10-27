@@ -1349,6 +1349,7 @@ const GOAL_FIDELITY_MAX_SCREENSHOTS = 4
 const GOAL_FIDELITY_MAX_SCREENSHOT_PIXELS = 24_000_000
 const GOAL_FIDELITY_MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
 const GOAL_FIDELITY_MAX_SCREENSHOT_TOTAL_BYTES = 4 * 1024 * 1024
+const MULTIMODAL_UNSUPPORTED_RE = /does not support multimodal|multimodal.*not supported|does not support image/i
 const GOAL_FIDELITY_SCREENSHOT_ERROR = 'Task screenshots could not be loaded safely for goal-fidelity review.'
 
 /**
@@ -1569,7 +1570,7 @@ export async function runLocalGoalFidelityReview({ backend, model, objective, di
     `${diffFence}diff\n${trimmedDiff}\n${diffFence}`,
   ].join('\n')
   const coverageNote = 'REVIEW INPUT LIMIT: this request supplies source changes and optional screenshots, not test-run output. Any added tests are regression coverage only; test execution is not established.'
-  const userContent = screenshotContext.images.length
+  let userContent = screenshotContext.images.length
     ? [
       { type: 'text', text: objectiveBlock },
       ...screenshotContext.images.map(url => ({
@@ -1587,7 +1588,7 @@ export async function runLocalGoalFidelityReview({ backend, model, objective, di
   const summaryDisclosureObjective = objectiveClass.kind === 'disclosure'
   const systemPrompt = GOAL_FIDELITY_PRIMARY_PROMPTS[objectiveClass.kind]
   const startedAt = Date.now()
-  const result = await runReviewerCompletion({
+  const complete = () => runReviewerCompletion({
     backend,
     model,
     effort,
@@ -1601,6 +1602,15 @@ export async function runLocalGoalFidelityReview({ backend, model, objective, di
       },
     ],
   })
+  let result = await complete()
+  // A text-only local model rejects image parts outright. Screenshots are
+  // supplementary evidence, so judge the diff without them rather than lose
+  // the verdict; later evidence passes reuse the text-only content.
+  if (!result.ok && screenshotContext.images.length && MULTIMODAL_UNSUPPORTED_RE.test(result.error || '')) {
+    console.log(`⏭️ ${backend} model does not support images — retrying goal-fidelity review without task screenshots`)
+    userContent = `${objectiveBlock}\n\n(Task screenshots omitted: the reviewer model does not support images.)\n\n${diffBlock}\n\n${coverageNote}`
+    result = await complete()
+  }
   if (!result.ok) return result
 
   const { value: parsed } = extractJson(result.content, {
