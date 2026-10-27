@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it as vitestIt } from 'vitest';
+import { parse } from '@babel/parser';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -47,6 +48,20 @@ function observedSuite(root, mode, tracked) {
     });
   `);
   let source = readFileSync(url, 'utf8').replace(', vi } from', ' } from');
+  // A second hoisted mock for the same filesystem replaces the observer rather
+  // than composing with it. Retain the real suite's fault hooks inside our one
+  // observer factory, so removal counts and cancellation probes remain real.
+  const mocks = parse(source, { sourceType: 'module' }).program.body.filter(node =>
+    node.type === 'ExpressionStatement' && node.expression.type === 'CallExpression'
+    && node.expression.callee.type === 'MemberExpression'
+    && node.expression.callee.object.name === 'vi' && node.expression.callee.property.name === 'mock'
+    && ['fs/promises', 'node:fs/promises'].includes(node.expression.arguments[0]?.value));
+  if (mocks.length > 1) throw new Error('Retirement fixture filesystem mock is ambiguous');
+  const mock = mocks[0];
+  const factory = mock?.expression.arguments[1];
+  const filesystemFactory = factory ? source.slice(factory.start, factory.end) : null;
+  if (mock) source = source.slice(0, mock.start) + source.slice(mock.end);
+
   if (!tracked) {
     source = source.replace('await owned.drain();', '');
     // The negative control observes early teardown, then settles its remaining
@@ -55,14 +70,15 @@ function observedSuite(root, mode, tracked) {
     if (mode === 'git') source += '\n' + settle;
     else source = source.replace('  let receiptWork;', '  let receiptWork;\n' + settle);
   }
-  return source.replace(/(from\s+|import\(|vi\.mock\()(['"])([^'"]+)\2/g, (statement, prefix, quote, specifier) => {
+  return { filesystemFactory, source: source.replace(/(from\s+|import\(|vi\.mock\()(['"])([^'"]+)\2/g, (statement, prefix, quote, specifier) => {
     if (specifier === 'vitest') return `${prefix}${JSON.stringify(shim)}`;
     if (specifier === 'fs/promises') return `${prefix}'node:fs/promises'`;
     return specifier.startsWith('.') ? `${prefix}${JSON.stringify(new URL(specifier, url).href)}` : statement;
-  });
+  }) };
 }
 
 function lifecycleSource(root, mode, tracked) {
+  const observed = observedSuite(root, mode, tracked);
   // Instrument the real fixture boundaries, leaving its retirement assertions
   // and 30-second budgets intact. The injected Git hook is a real child process.
   return `
@@ -71,7 +87,7 @@ function lifecycleSource(root, mode, tracked) {
     const state = vi.hoisted(() => ({ scratch: '', active: 0, held: false, earlyRemoval: false, rootIdentity: null, removals: 0, work: new Set() }));
     globalThis.__retirementFixture = state;
     vi.mock('node:fs/promises', async original => {
-      const fs = await original();
+      const fs = ${observed.filesystemFactory ? `await (${observed.filesystemFactory})(original)` : 'await original()'};
       const { existsSync, statSync, writeFileSync } = await import('node:fs');
       return { ...fs,
         mkdtemp: async (...args) => {
@@ -142,7 +158,7 @@ function lifecycleSource(root, mode, tracked) {
         });
       } };
     });
-    ${observedSuite(root, mode, tracked)}
+    ${observed.source}
   `;
 }
 
