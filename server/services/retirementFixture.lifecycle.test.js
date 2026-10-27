@@ -47,6 +47,7 @@ function observedSuite(root, mode, tracked) {
     });
   `);
   let source = readFileSync(url, 'utf8').replace(', vi } from', ' } from');
+  source = source.replace(/vi\.mock\('node:fs\/promises'[\s\S]*?\n\}\);\n/, '// duplicate node:fs/promises mock stripped\n');
   if (!tracked) {
     source = source.replace('await owned.drain();', '');
     // The negative control observes early teardown, then settles its remaining
