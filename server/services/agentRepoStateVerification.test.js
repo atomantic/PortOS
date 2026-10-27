@@ -38,7 +38,7 @@ vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original
 vi.mock('./cos.js', () => ({}));
 vi.mock('./agentCompletionData.js', () => ({ readCompletionData: vi.fn() }));
 vi.mock('./agentCompletionCleanup.js', () => ({ replayAgentCompletionCleanup: vi.fn(async () => {}) }));
-vi.mock('./cosAgentLifecycle.js', () => ({ recordSuccessorCheckoutRetirement: vi.fn(async () => true), settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
+vi.mock('./cosAgentLifecycle.js', async original => ({ isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, recordSuccessorCheckoutRetirement: vi.fn(async () => true), settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]), withClaimOwnershipLock: fn => fn() }));
 vi.mock('./taskSchedule.js', () => ({ recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
 vi.mock('./heldCheckoutRecovery.js', () => ({
@@ -1333,6 +1333,31 @@ describe('claim-swarm completion', () => {
 
 
 describe('durable completion replay', () => {
+  it('filters ineligible receipts before the replay bound and continues after a receipt write fails', async () => {
+    const receipt = id => ({ id, status: 'completed', result: { success: false, executionSuccess: true,
+      cleanupPending: true, deliveryRecoveryOwned: true,
+      taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } },
+    metadata: { checkoutCapture: { status: 'captured' }, repoStateVerification: { status: 'completed' },
+      cleanupOutcome: { status: 'verified', unresolved: 0, committedIntegrationVerified: true },
+      completionCleanup: { version: 1, status: 'completed', stages: Object.fromEntries(
+        ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report', 'worktree'].map(key => [key, { status: 'done' }])) } } });
+    const ineligible = Array.from({ length: 12 }, (_, index) => {
+      const row = receipt(`ineligible-${index}`);
+      if (index % 3 === 0) row.result.executionSuccess = false;
+      if (index % 3 === 1) row.metadata.cleanupOutcome.unresolved = 1;
+      if (index % 3 === 2) row.metadata.completionCleanup.stages.worktree.status = 'held';
+      return row;
+    });
+    readBranchCompletionPolicies.mockResolvedValue([...ineligible, receipt('write-failed'), receipt('settle-next')]);
+    recordRepoStateVerification.mockRejectedValueOnce(new Error('fixture receipt write failed'));
+    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 0 });
+    expect(recordRepoStateVerification.mock.calls).toEqual([
+      ['write-failed', { status: 'completed' }], ['settle-next', { status: 'completed' }],
+    ]);
+    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('Deferred delivery settlement retained'));
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it.each(['absent', 'present', 'registered', 'ref-present', 'unreadable', 'human-hold'])('repairs only proven absent released-selection ledger rows after restart: %s', async scenario => {
     const branch = 'claim/issue-10';
     const path = '/repo/wt/released-selection';

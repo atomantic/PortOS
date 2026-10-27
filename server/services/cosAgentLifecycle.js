@@ -328,7 +328,7 @@ export function recordRepoStateRecovery(agentId, link, { claimRun = false } = {}
 
 // Deferred delivery is a domain outcome, not a failed provider execution.
 // Only the server's complete verification and retirement ledgers can settle it.
-function resultAfterCompletionReceipt(agent, metadata) {
+export function isSettleableCompletionReceipt(agent, metadata) {
   const result = agent.result;
   const cleanup = metadata.completionCleanup;
   const outcome = metadata.cleanupOutcome;
@@ -343,7 +343,13 @@ function resultAfterCompletionReceipt(agent, metadata) {
       .some(key => cleanup.stages?.[key]?.status !== 'done')
     || Object.values(cleanup.stages).some(stage => stage.status !== 'done')
     || outcome?.status !== 'verified' || outcome.unresolved !== 0
-    || outcome.committedIntegrationVerified !== true) return result;
+    || outcome.committedIntegrationVerified !== true) return false;
+  return true;
+}
+
+function resultAfterCompletionReceipt(agent, metadata) {
+  if (!isSettleableCompletionReceipt(agent, metadata)) return agent.result;
+  const result = agent.result;
   return { ...result, success: true, cleanupPending: false,
     deferredDeliveryOutcome: result.taskOutcome,
     taskOutcome: { status: 'completed', reason: 'Delivery and repository cleanup verified by server completion receipts.' } };

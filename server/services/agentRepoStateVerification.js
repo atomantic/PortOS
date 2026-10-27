@@ -719,12 +719,12 @@ async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false } = {}
     // Older receipts already proved delivery and cleanup, but left the deferred
     // domain verdict pending. Replay the existing writer, without another probe,
     // task, completion event or provider budget expenditure.
-    const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+    const { recordRepoStateVerification, isSettleableCompletionReceipt } = await import('./cosAgentLifecycle.js');
     for (const agent of agents.filter(row => row.status === 'completed'
-      && row.result?.cleanupPending === true
-      && row.metadata?.repoStateVerification?.status === 'completed'
-      && row.metadata?.completionCleanup?.status === 'completed').slice(0, COMPLETION_RECOVERY_BATCH_SIZE)) {
-      await recordRepoStateVerification(agent.id || agent.agentId, agent.metadata.repoStateVerification);
+      && isSettleableCompletionReceipt(row, row.metadata || {})).slice(0, COMPLETION_RECOVERY_BATCH_SIZE)) {
+      await recordRepoStateVerification(agent.id || agent.agentId, agent.metadata.repoStateVerification).catch(error => {
+        emitLog('warn', `Deferred delivery settlement retained: ${error.code || 'receipt-unavailable'}`);
+      });
     }
     // Replay completed handoffs after restart as well as at their event. Only
     // terminal parents with unfinished delivery qualify; ordinary completed
