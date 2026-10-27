@@ -137,6 +137,32 @@ describe('goal-fidelity task screenshots', () => {
     expect(JSON.parse(fetch.mock.calls[1][1].body).messages[1].content).toContain('Task screenshots omitted')
   })
 
+  it('declines the text-only retry when the image attempt already spent the review budget', async () => {
+    const sharpModule = await import('sharp')
+    const sharp = sharpModule.default || sharpModule
+    const png = await sharp({ create: { width: 64, height: 64, channels: 3, background: '#ffffff' } }).png().toBuffer()
+    writeFileSync(join(fixturePaths.screenshots, 'budget-spent.png'), png)
+    let now = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const fetch = vi.fn(async () => {
+      now += 5_000
+      return mockJsonResponse({ error: { message: 'model does not support multimodal requests' } }, { ok: false, status: 400 })
+    })
+    vi.stubGlobal('fetch', fetch)
+
+    const result = await runLocalGoalFidelityReview({
+      backend: 'ollama', model: 'example-model', timeoutMs: 1_000,
+      objective: taskObjective({ description: 'Fix the error shown', metadata: { screenshots: ['/api/screenshots/budget-spent.png'] } }),
+      diff: chunkRecoveryDiff,
+      objectiveScreenshots: ['/api/screenshots/budget-spent.png'],
+      baseUrl: 'http://127.0.0.1:11434/v1',
+    })
+    vi.mocked(Date.now).mockRestore()
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('text-only retry') })
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
   it('declines a screenshot objective rather than judging it when its image reference escapes the screenshot store', async () => {
     const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)
