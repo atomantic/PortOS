@@ -1,3 +1,9 @@
+// Native Job/receipt behavior is exercised by windowsAgentProcess.test.js;
+// these transport fixtures own no real agent reservation or process tree.
+vi.mock('../lib/windowsAgentProcess.js', () => ({
+  prepareWindowsAgentLaunch: (_agentId, command, args) => ({ command, args }),
+  watchWindowsAgentProcess: child => child,
+}));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { basename, dirname } from 'path';
 

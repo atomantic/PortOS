@@ -273,7 +273,7 @@ const FULL_TRIGGER_RULES = [
 export const WINDOWS_RISK_RULES = [
   /\.(?:ps1|cmd|bat)$/i,
   /^scripts\/fix-windows-console(?:\.test)?\.js$/,
-  /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok|execGit|windowsGitProcess|windowsGitSupervisor|nativeTrash|pathSafety|worktreeOwnership|staticImportGraph)\b/,
+  /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok|execGit|windowsGitProcess|windowsGitSupervisor|windowsAgentProcess|windowsAgentSupervisor|nativeTrash|pathSafety|worktreeOwnership|staticImportGraph)\b/,
   /^server\/lib\/aiToolkit\/internal\/windowsSafeSpawn\.js$/,
   /^server\/lib\/shell(?:Cd|Exit|LivenessProbe|ReadinessProbe)(?:\.test)?\.js$/,
   /^server\/lib\/agentGuard\//,
@@ -306,6 +306,7 @@ export const WINDOWS_CONTRACT_TESTS = [
   'server/services/shell.windows.test.js',
   'server/services/tuiPromptRunner.test.js',
   // Real native ownership/cancellation and safe filesystem semantics.
+  'server/lib/windowsAgentProcess.test.js',
   'server/lib/windowsGitProcess.test.js',
   'server/lib/windowsGitProcess.protocol.test.js',
   'server/lib/gitRepositoryIdentity.test.js',

@@ -1729,6 +1729,8 @@ describe('Windows native support boundary', () => {
     'scripts/deploy.ps1',
     'server/lib/bufferedSpawn.js',
     'server/lib/windowsGitSupervisor.cs',
+    'server/lib/windowsAgentSupervisor.cs',
+    'server/lib/windowsAgentProcess.js',
     'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
     'server/lib/gitRepositoryIdentity.js',
     'server/lib/checkoutRetirementAdmission.js',
@@ -1783,6 +1785,7 @@ describe('Windows native support boundary', () => {
       'server/lib/cliProviderRun.test.js', 'server/lib/detachedSpawn.test.js',
       'server/services/shell.windows.test.js', 'server/services/tuiPromptRunner.test.js',
       'server/lib/windowsGitProcess.test.js', 'server/lib/windowsGitProcess.protocol.test.js',
+      'server/lib/windowsAgentProcess.test.js',
       'server/lib/gitRepositoryIdentity.test.js', 'server/lib/checkoutRetirementAdmission.test.js',
       'server/lib/nativeTrash.smoke.test.js',
     ]));

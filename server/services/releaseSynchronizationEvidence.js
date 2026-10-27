@@ -268,6 +268,21 @@ export async function inspectReleaseSynchronization(entry, agents) {
       if (!Array.isArray(running) || running.some(row => !row || typeof row.id !== 'string')) hold('release-runner-unreadable');
       if (running.some(row => owners.some(agent => agent.id === row.id))) hold('release-runtime-still-active');
     }
+    if (process.platform === 'win32') {
+      const { readWindowsAgentSettlement } = await import('../lib/windowsAgentProcess.js');
+      const receipts = [];
+      for (const agent of owners) {
+        const receipt = await readWindowsAgentSettlement(agent);
+        receipts.push(receipt);
+      }
+      // checkoutTargets already validated the exact server-captured generations.
+      // Every retained generation must belong to one of these supervised runs.
+      if (checkouts.some(row => !owners.some(agent => agent.id === row.agentId
+        && agent.metadata?.checkoutSeeds?.some(seed => seed.path === row.path
+          && seed.startedAt === agent.startedAt
+          && retirementCheckoutIdentityFromPointer(seed.incarnation?.pointer) === row.checkoutIdentity)))) hold('checkout-process-owner-unverified');
+      return { owners: owners.map(agent => ({ id: agent.id, startedAt: agent.startedAt, completedAt: agent.completedAt })), checkouts, receipts };
+    }
     for (const agent of owners.filter(value => Number.isSafeInteger(value.pid) && value.pid > 0)) {
       const gone = (() => { try { process.kill(agent.pid, 0); return false; } catch (error) { return error.code === 'ESRCH'; } })();
       if (!gone) hold('release-process-exit-unverified');

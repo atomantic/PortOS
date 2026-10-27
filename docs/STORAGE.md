@@ -1310,3 +1310,14 @@ No migration or seed is required: this is a new optional ledger, absent until a
 live completion or an explicit import publishes its first receipt.
 
 LoRA training is retired; its existing datasets, run artifacts, configuration and PostgreSQL history remain intact. See [Data Maintenance](DATA_MAINTENANCE.md) for inventory and explicit removal. Installed adapters and shared inference runtimes remain supported.
+
+### Windows release-agent process settlement
+
+`data/cos/process-settlement/<agent-id>/` retains a server-created agent/start
+reservation, a single-use launch specification, native root identity and immutable
+settlement receipt. This machine-local execution evidence is not federated and is
+kept independently of completed-agent history. Launch specifications can contain
+private command arguments; they are never included in status projections or forge
+artifacts. `data/cos/process-supervisors/` holds freshly compiled native helpers;
+only the current server process's compiler result is reused. Neither directory is
+a database record store or a new retirement owner.

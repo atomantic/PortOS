@@ -1,3 +1,4 @@
+import { prepareWindowsAgentLaunch, watchWindowsAgentProcess } from '../lib/windowsAgentProcess.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { persistRunnerCompletion } from './completion.js';
 import { createSecurityScanManager } from './securityScan.js';
@@ -312,6 +313,7 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
   // Use the same safe wrapper for the actual PTY launch. In particular, this
   // preserves the shared escaping contract for paths/args passed to cmd.exe.
   const { command: ptyCommand, args: ptyArgs } = prepareCliSpawn(executable, args, childEnv);
+  const tuiLaunch = prepareWindowsAgentLaunch(agentId, ptyCommand, ptyArgs, { cwd, env: childEnv, pty: true });
   await securityScans.register(agentId, body.data.securityScanGrant);
   // Read BEFORE pty.spawn so onData/onExit subscribe with no await after the
   // spawn: a PTY that exits during the read would otherwise lose its exit (#11761).
@@ -324,13 +326,14 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
   let tuiProcess;
   assertDatabaseAdmission();
   try {
-    tuiProcess = pty.spawn(ptyCommand, ptyArgs, {
+    tuiProcess = pty.spawn(tuiLaunch.command, tuiLaunch.args, {
       name: 'xterm-256color',
       cols,
       rows,
       cwd,
       env: childEnv,
     });
+    watchWindowsAgentProcess(tuiProcess, tuiLaunch);
   } catch (err) {
     const { diagnosed, message } = diagnosePtySpawnFailure(err, {
       cwd,
@@ -579,16 +582,18 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
 
   // Spawn the CLI process
   await securityScans.register(agentId, body.data.securityScanGrant);
-  // Read BEFORE spawn: Node reports a failed spawn (ENOENT/EACCES/EMFILE) via
-  // process.nextTick, so no await may sit between spawn() and the 'error'
+  // Read BEFORE spawn: Node reports child-launch failures (ENOENT/EACCES/EMFILE) via
+  // process.nextTick, so no await may sit between creating the child and attaching its 'error'
   // listener or the unhandled event kills the runner (#11761).
   const securityScan = await securityScans.read(agentId);
-  const claudeProcess = spawn(spawnCommand, finalSpawnArgs, {
+  const launch = prepareWindowsAgentLaunch(agentId, spawnCommand, finalSpawnArgs, { cwd, env: childEnv });
+  const claudeProcess = spawn(launch.command, launch.args, {
     cwd,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
     env: childEnv
   });
+  watchWindowsAgentProcess(claudeProcess, launch);
 
   // Detect if stream-json format is active (Claude CLI with streaming)
   const isStreamJson = spawnArgs.includes('stream-json');
