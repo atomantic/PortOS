@@ -3655,6 +3655,29 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await retireInventoriedCheckout(c.request, c.opts)).toMatchObject({ ok: false, reason: 'branch-ref-changed-or-recreated' });
   });
 
+  it.each(['dangling symbolic', 'resolved symbolic', 'malformed loose'])(
+    'holds ref-only finalization when a %s ref cannot establish absence', async kind => {
+      const c = await removedCheckoutWithSurvivingRef(`ref-only-unreadable-${kind.replaceAll(' ', '-')}`);
+      const ref = `refs/heads/${c.release.branch}`;
+      const refPath = join(repo, '.git', ref);
+      await execGit(['update-ref', '-d', ref], repo);
+      if (kind === 'resolved symbolic') await execGit(['branch', 'symbolic-target', c.release.head], repo);
+      if (kind.endsWith('symbolic')) await execGit(['symbolic-ref', ref,
+        kind === 'resolved symbolic' ? 'refs/heads/symbolic-target' : 'refs/heads/missing-target'], repo);
+      else {
+        await mkdir(dirname(refPath), { recursive: true });
+        await writeFile(refPath, 'not a valid ref\n');
+      }
+      const before = await readFile(refPath, 'utf8');
+      expect((await execGit(['show-ref', '--verify', '--quiet', ref], repo, { ignoreExitCode: true })).exitCode)
+        .toBe(kind === 'resolved symbolic' ? 0 : 1);
+      expect(await retireInventoriedCheckout(c.request, c.opts))
+        .toMatchObject({ ok: false, reason: 'branch-ref-presence-unverified' });
+      expect(await readFile(refPath, 'utf8')).toBe(before);
+      expect((await getBranchReconcileOutcome('app-1')).retired[0]).toEqual(c.receipt);
+      if (kind === 'resolved symbolic') expect((await execGit(['rev-parse', 'refs/heads/symbolic-target'], repo)).stdout.trim()).toBe(c.release.head);
+    });
+
   it.each(['tip', 'holder', 'receipt', 'forge', 'path', 'policy', 'owner', 'repository'])(
     'refuses ref-only finalization when reviewed %s changes before mutation', async change => {
       const c = await removedCheckoutWithSurvivingRef(`ref-only-${change}`);
