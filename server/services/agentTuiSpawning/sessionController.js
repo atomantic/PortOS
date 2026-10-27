@@ -73,6 +73,8 @@ import {
   createMcpBootTracker,
   MCP_BOOT_PASTE_DEADLINE_MS,
   MCP_BOOT_PASTE_RETRY_DELAY_MS,
+  PASTE_RETRY_MIN_WINDOW_MS,
+  PASTE_RETRY_WINDOW_DELAY_MS,
   createInputReadyTracker,
   shapeHasLoginShell,
   createStartupDialogAnswers,
@@ -328,7 +330,7 @@ function createPasteRetryController({
     armAttempt();
     pasteState.lastOutputAt = Date.now();
     write(`\x1b[200~${prompt}\x1b[201~`);
-    const attemptSuffix = attemptNum > 1 ? ` [attempt ${attemptNum}/${PASTE_RETRY_MAX_ATTEMPTS}]` : '';
+    const attemptSuffix = attemptNum > 1 ? ` [attempt ${attemptNum}]` : '';
     appendLine(LIFECYCLE_LINES.promptPasted({ session: sessionLabel, reason, attemptSuffix }));
 
     // Confirms the TUI actually received the paste before we submit. The
@@ -353,11 +355,14 @@ function createPasteRetryController({
       const bootActive = mcpBoot.active;
       const withinBudget = bootActive
         ? (Date.now() - firstPasteStartedAt) < MCP_BOOT_PASTE_DEADLINE_MS
-        : attemptNum < PASTE_RETRY_MAX_ATTEMPTS;
+        : attemptNum < PASTE_RETRY_MAX_ATTEMPTS
+          || (Date.now() - firstPasteStartedAt) < PASTE_RETRY_MIN_WINDOW_MS;
       if (withinBudget) {
         const retryDelayMs = bootActive
           ? MCP_BOOT_PASTE_RETRY_DELAY_MS
-          : PASTE_RETRY_BASE_DELAY_MS * Math.pow(2, attemptNum - 1);
+          : attemptNum < PASTE_RETRY_MAX_ATTEMPTS
+            ? PASTE_RETRY_BASE_DELAY_MS * Math.pow(2, attemptNum - 1)
+            : PASTE_RETRY_WINDOW_DELAY_MS;
         const bootNote = bootActive
           ? ` (waiting for ${tuiConfig.command} MCP servers to finish booting)`
           : '';
@@ -384,10 +389,10 @@ function createPasteRetryController({
       const bootSecs = Math.round(MCP_BOOT_PASTE_DEADLINE_MS / 1000);
       const summary = bootActive
         ? `${tuiConfig.command} did not finish booting its MCP servers within ${bootSecs}s, so the prompt was never delivered. A slow or hung MCP server in your ~/.codex config (e.g. playwright via npx, or a node_repl) blocks codex from accepting input — disable or fix it, or remove it for headless runs.`
-        : `${tuiConfig.command} was still initializing and the paste was silently swallowed. The prompt never appeared in the TUI buffer after ${PASTE_RETRY_MAX_ATTEMPTS} attempts.`;
+        : `${tuiConfig.command} was still initializing and the paste was silently swallowed. The prompt never appeared in the TUI buffer after ${attemptNum} attempts.`;
       appendLine(bootActive
         ? LIFECYCLE_LINES.pasteNeverLandedMcpBoot({ seconds: bootSecs })
-        : LIFECYCLE_LINES.pasteNeverRendered({ attempts: PASTE_RETRY_MAX_ATTEMPTS }));
+        : LIFECYCLE_LINES.pasteNeverRendered({ attempts: attemptNum }));
       finishStartupFailure('paste-not-rendered', summary)
         .catch(err => emitLog('error', `TUI agent ${agentId} finishStartupFailure(paste-not-rendered) failed: ${err?.message || err}`, { agentId }));
     };
