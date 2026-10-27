@@ -236,20 +236,19 @@ physical checkout seeds. It never transfers checkout authority. The continuation
 uses the procedure below and ordinary delivery, admission and retirement recovery.
 Completed task history still owns its publication identity and cannot be deleted
 through task CRUD. Execution success does **not** mark synchronization verified:
-individual obligations remain pending until independently verified. A bounded recovery
+the delivery and other obligations remain pending until their evidence is observed. A bounded recovery
 sweep checks the same outbox after restart, including completed task/agent history.
 It records pending, running, blocked or verified synchronization separately from the
 original publication timestamp and link. Transport failures retain successful
 revision-bound proof and durable retry times; conflicting owners remain blocked.
 
-Verification inspects the exact same-repository synchronization PR/head, its merged
-development ancestry (including the candidate head and published promotion),
-completed pre-PR local-review lifecycle, exact-head hosted approvals and checks
-green at merge, and server admission history or a coordinator merge receipt. The
-retirement service retains the continuation's private local-review receipt before
-removing its checkout; retirement refuses an uncollected receipt. Legacy or missing
-review evidence is a blocker, never a synthesized clean review. The historical
-reviewed head stays historical when later hosted feedback changes the PR.
+Verification inspects the exact same-repository synchronization PR/head and its
+merged development ancestry (including the candidate head and published promotion).
+A provider-confirmed merge establishes delivery under the repository's merge
+policy. The legacy local-review, hosted-review, CI and admission obligation names
+record that provider authority; they do not claim that PortOS independently
+re-inspected each review, check or lease after the merge. Run the requested reviews
+and validation during delivery without treating an unavailable review as clean.
 
 The development quality snapshot must include the available local numeric
 measurements; an independently observed lack of local measurements is recorded
