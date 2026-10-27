@@ -23,7 +23,6 @@ import useFocusTrap from '../../hooks/useFocusTrap.js';
 import { copyToClipboard } from '../../lib/clipboard';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { formatDateTime, formatDateNumeric, formatDurationMs, formatBytes } from '../../utils/formatters';
-import AttributionList from './AttributionList';
 import SentPromptPanel from './SentPromptPanel';
 import ContinuationDetails from '../videoGen/ContinuationDetails';
 
@@ -875,8 +874,6 @@ function SettingsPane({
             </div>
           </div>
         )}
-
-        <AttributionList record={item} />
 
         {isVideo && <ContinuationDetails continuation={item.raw?.continuation || item.continuation} />}
 
