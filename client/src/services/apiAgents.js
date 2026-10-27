@@ -386,11 +386,16 @@ export const startMaintenanceRun = ({ appId, providerId, model, effort = null, m
 });
 export const stopMaintenanceRun = (id, options = {}) => request(`/cos/schedule/maintenance-runs/${id}/stop`, { method: 'POST', ...options });
 
-export const triggerCosOnDemandTask = (taskType, appId = null, options = {}) => request('/cos/schedule/trigger', {
-  method: 'POST',
-  body: JSON.stringify({ taskType, appId }),
-  ...options
-});
+export const triggerCosOnDemandTask = (taskType, appId = null, options = {}) => {
+  const { silent, headers, signal, ...bodyOverrides } = options;
+  return request('/cos/schedule/trigger', {
+    method: 'POST',
+    body: JSON.stringify({ taskType, appId, ...bodyOverrides }),
+    ...(silent !== undefined ? { silent } : {}),
+    ...(headers ? { headers } : {}),
+    ...(signal ? { signal } : {}),
+  });
+};
 export const refreshBranchReconcileInventory = (appId, options = {}) => request('/cos/schedule/branch-reconcile/refresh', {
   method: 'POST', body: JSON.stringify({ appId }), ...options
 });

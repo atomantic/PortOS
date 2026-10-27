@@ -10,7 +10,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, initializedCheckoutRetireBodySchema, initializedCheckoutTransactionSchema, initializedCheckoutRestoreSchema, initializedCheckoutBranchRetireSchema, initializedCheckoutMetadataRestoreSchema, initializedCheckoutFinalizationSchema, initializedCheckoutQuarantineResumptionSchema } from '../lib/validation.js';
+import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, initializedCheckoutRetireBodySchema, initializedCheckoutTransactionSchema, initializedCheckoutRestoreSchema, initializedCheckoutBranchRetireSchema, initializedCheckoutMetadataRestoreSchema, initializedCheckoutFinalizationSchema, initializedCheckoutQuarantineResumptionSchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
@@ -283,9 +283,18 @@ router.get('/schedule/due/:appId', asyncHandler(async (req, res) => {
 
 // POST /api/cos/schedule/trigger - Trigger an on-demand task
 router.post('/schedule/trigger', asyncHandler(async (req, res) => {
-  const { taskType, appId } = validateRequest(cosScheduleTargetBodySchema, req.body);
+  const {
+    taskType, appId, provider, model, effort, executionOptions, targetModels, targetPullRequest,
+  } = validateRequest(cosScheduleTriggerBodySchema, req.body);
 
-  const request = await taskSchedule.triggerOnDemandTask(taskType, appId);
+  const request = await taskSchedule.triggerOnDemandTask(taskType, appId, {
+    provider,
+    model,
+    effort,
+    executionOptions,
+    targetModels: targetModels ?? null,
+    targetPullRequest,
+  });
   if (request?.error) {
     throw new ServerError(request.error, { status: 409, code: 'TRIGGER_REJECTED' });
   }

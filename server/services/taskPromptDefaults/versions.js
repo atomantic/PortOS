@@ -8,7 +8,7 @@
 // Only non-customized prompts (promptCustomized !== true) are upgraded.
 export const PROMPT_VERSIONS = {
   'app-launch-video': 8, // v8: options.formats renders one timeline in several aspect ratios — declare portosComposition.formats, implement layout({width,height}) to recompose per frame, proof each format (#8960). v7: measured composition/beats.json (bpm/beats/downbeats/hits from a real analysis of the chosen library track, #8958) is named next to the motion kit — place state changes on beats, big moments on downbeats, UI sounds on hits, instead of guessing a tempo. v6: showreel and ui-morph runs set motionBlur:4 on portosComposition so fast cuts and morphs render with blended motion blur (#8959)
-  'model-comparison-refresh': 4, // v4: installed inventory, sourced composite estimates and authenticated import
+  'model-comparison-refresh': 5, // v5: target models focus, instance import, and PortOS PR to include data in shipped app
   // Current claim-flow bumps retire the Copilot fallback, drive local reviewers
   // fail closed, verify the remote merge state, and clean up without force-delete.
   'do-replan': 2,       // v2: scheduled issue-quality gate rejects speculative/future-only work and keeps valid current refactors claimable

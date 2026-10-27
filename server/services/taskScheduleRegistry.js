@@ -192,7 +192,7 @@ const fileIssuesAuditInterval = () => ({
 
 const TASK_INTERVAL_DEFAULTS = {
   [PRIVATE_SECURITY_TASK_TYPE]: { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...PRIVATE_SECURITY_DELIVERY } },
-  'model-comparison-refresh': { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA } },
+  'model-comparison-refresh': { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, worktreeChangesExpected: true } },
   'security':            { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   'code-quality':        { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   'test-coverage':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true } },
@@ -546,7 +546,7 @@ export const MANAGED_AGENT_OPTIONS = {
   // fields, so an unmanaged `worktreeChangesExpected` would silently go absent and the
   // task bookkeeping would otherwise treat the clean worktree as missing code work.
   ...Object.fromEntries(
-    ['branch-reconcile', 'branch-cleanup', 'issue-reconcile', 'jira-status-report', 'stash-cleanup', 'repo-sync', 'model-comparison-refresh']
+    ['branch-reconcile', 'branch-cleanup', 'issue-reconcile', 'jira-status-report', 'stash-cleanup', 'repo-sync']
       .map((t) => [t, ['useWorktree', 'openPR', 'worktreeChangesExpected']])
   ),
   // claim-issue's prompt creates its own claim/issue-<num> worktree (same

@@ -1666,7 +1666,7 @@ export async function getNextTaskType(appId = null, { perpetualOnly = false, con
  */
 export async function triggerOnDemandTask(taskType, appId = null, {
   emit = true, origin = ON_DEMAND_ORIGINS.USER, targetPullRequest = null, burn = null,
-  provider = null, model = null, effort = null, executionOptions,
+  provider = null, model = null, effort = null, executionOptions, targetModels = null,
 } = {}) {
   // A targeted run names ONE open PR/MR instead of letting the task pick from
   // the app's whole open set (the PR/MR row's "Review this PR" button). Coerced
@@ -1742,7 +1742,8 @@ export async function triggerOnDemandTask(taskType, appId = null, {
       requestedAt: new Date().toISOString(),
       ...(scopedPullRequest ? { targetPullRequest: scopedPullRequest } : {}),
       ...(burnProvenance ? { burn: burnProvenance } : {}),
-      ...(providerOverride ? { providerOverride } : {})
+      ...(providerOverride ? { providerOverride } : {}),
+      ...(Array.isArray(targetModels) && targetModels.length > 0 ? { targetModels } : {})
     };
 
     schedule.onDemandRequests.push(request);
