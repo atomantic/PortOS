@@ -298,6 +298,22 @@ describe('git routes — active agent branch exclusion', () => {
       );
     });
 
+    it('passes an exact local ref pin and refuses malformed or remote pins', async () => {
+      const expectedHead = 'a'.repeat(40);
+      const response = await request(makeApp()).post('/api/git/delete-branch')
+        .send({ path: WORKSPACE, branch: 'finished', local: true, expectedHead });
+      expect(response.status).toBe(200);
+      expect(gitService.deleteBranch).toHaveBeenCalledWith(WORKSPACE, 'finished',
+        expect.objectContaining({ local: true, remote: false, expectedHead }));
+      gitService.deleteBranch.mockClear();
+      for (const flags of [{ local: true, expectedHead: 'short' }, { remote: true, expectedHead }]) {
+        const rejected = await request(makeApp()).post('/api/git/delete-branch')
+          .send({ path: WORKSPACE, branch: 'finished', ...flags });
+        expect(rejected.status).toBe(400);
+      }
+      expect(gitService.deleteBranch).not.toHaveBeenCalled();
+    });
+
     it('passes the active agent branches as excludeBranches to deleteBranch', async () => {
       cosAgentLifecycleService.getAgents.mockResolvedValue([
         { status: 'running', metadata: { worktreeBranch: 'feature/agent-active' } },

@@ -86,10 +86,13 @@ export const gitRemoteBranchesBodySchema = z.object({ path: gitPathField, force:
 export const gitDeleteBranchBodySchema = z.object({
   path: gitPathField,
   branch: gitRefNameSchema,
+  expectedHead: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/).optional(),
   local: z.boolean().default(false),
   remote: z.boolean().default(false),
 }).refine(({ local, remote }) => local || remote, {
   message: 'at least one of local or remote must be true',
+}).refine(({ expectedHead, local, remote }) => !expectedHead || (local && !remote), {
+  message: 'expectedHead requires local-only deletion',
 });
 
 

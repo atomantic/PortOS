@@ -1558,13 +1558,17 @@ export async function getWorktreeBranches(dir) {
  * @param {object} options
  * @param {boolean} options.local - Delete local branch
  * @param {boolean} options.remote - Delete remote branch
+ * @param {string} [options.expectedHead] - Exact caller-observed local ref (local-only operation)
  * @param {Set<string>} options.excludeBranches - Additional branches to protect (e.g., active agent branches)
  */
 export async function deleteBranch(dir, branchName, options = {}) {
   return withCheckoutMutation(dir, () => deleteBranchAdmitted(dir, branchName, options));
 }
 
-async function deleteBranchAdmitted(dir, branchName, { local = false, remote = false, excludeBranches } = {}) {
+async function deleteBranchAdmitted(dir, branchName, { local = false, remote = false, excludeBranches, expectedHead = null } = {}) {
+  if (expectedHead && (!local || remote || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead))) {
+    throw new ServerError('Expected head requires a valid local-only deletion', { status: 400, code: 'INVALID_BRANCH_DELETION' });
+  }
   const { baseBranch } = await getRepoBranches(dir);
   const protectedSet = new Set(PROTECTED_BRANCHES);
   if (baseBranch) protectedSet.add(baseBranch);
@@ -1593,7 +1597,7 @@ async function deleteBranchAdmitted(dir, branchName, { local = false, remote = f
 
   const opts = { ignoreExitCode: true };
   const [localResult, remoteResult] = await Promise.all([
-    local ? execGitSafe(['branch', '-D', branchName], dir, opts) : null,
+    local ? deletePinnedLocalBranch(dir, branchName, expectedHead) : null,
     remote ? execGitSafe(['push', 'origin', '--delete', branchName], dir, opts) : null
   ]);
 
@@ -1612,6 +1616,34 @@ async function deleteBranchAdmitted(dir, branchName, { local = false, remote = f
   }
 
   return { branch: branchName, results };
+}
+
+/** Operator-selected ref removal shares the existing receiver's holder check and
+ * exact-head transaction. It never certifies a merge or removes a checkout. */
+async function deletePinnedLocalBranch(dir, branch, expectedHead) {
+  const ref = `refs/heads/${branch}`;
+  const observed = await execGitSafe(['rev-parse', '--verify', `${ref}^{commit}`], dir, { ignoreExitCode: true });
+  if (observed.exitCode !== 0) return { exitCode: 1, stderr: 'branch not found' };
+  const head = observed.stdout.trim();
+  if (expectedHead && expectedHead !== head) throw new ServerError('Branch head changed', { status: 409, code: 'BRANCH_HEAD_CHANGED' });
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
+  const { deleteCompletedLocalBranch } = await import('./worktreeManager.js');
+  return withClaimOwnershipLock(async () => {
+    const beforeMutation = async () => {
+      const agents = await readClaimOwnershipAgents();
+      const hold = claimCheckoutOwnerReason({ branchName: branch, holderPath: null, sourceWorkspace: dir, agents });
+      if (hold) throw new ServerError(`Branch retained: ${hold}`, { status: 409, code: 'BRANCH_OWNER_HELD' });
+      // Preserve squash-only or explicitly discarded source using the existing
+      // private completed-ref namespace, never a repository archive.
+      const backup = `refs/portos/completed/${head}`;
+      const existing = await execGitSafe(['show-ref', '--verify', '--hash', backup], dir, { ignoreExitCode: true });
+      if (existing.exitCode === 0 && existing.stdout.trim() !== head) throw new Error('Branch source preservation changed');
+      if (existing.exitCode !== 0) await execGit(['update-ref', backup, head, '0'.repeat(head.length)], dir);
+    };
+    const deleted = await deleteCompletedLocalBranch(dir, branch, head, { beforeMutation });
+    return { exitCode: deleted ? 0 : 1, stderr: deleted ? '' : 'branch head or holder changed' };
+  });
 }
 
 /**
