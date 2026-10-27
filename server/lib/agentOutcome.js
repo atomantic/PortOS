@@ -125,6 +125,8 @@ export function normalizeTaskOutcome(value) {
 /** Only evidenced delivery may resolve external work; legacy exits are unknown. */
 export function isTaskDeliveryComplete(agent) {
   const outcome = normalizeTaskOutcome(agent?.result?.taskOutcome);
+  const sync = agent?.metadata?.releaseSynchronization;
+  if (sync && sync.status !== 'verified') return false;
   return !isAgentHandoff(agent) && agent?.result?.success === true
     && agent.result.validationPassed !== false
     && ['completed', 'no-action-needed'].includes(outcome?.status);

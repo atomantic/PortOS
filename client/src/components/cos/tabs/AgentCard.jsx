@@ -1138,7 +1138,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         <AuditSourceEvidence evidence={agent.metadata?.auditSourceEvidence} />
         {agent.deliveryPending && <DeliveryStatus agent={agent} />}
 
-        {!agent.result && <ReleasePublicationLine publication={agent.metadata?.releasePublication} />}
+        {!agent.result && <ReleasePublicationLine publication={agent.metadata?.releasePublication} synchronization={agent.metadata?.releaseSynchronization} />}
         {!agent.result && <SecurityScanEvidence scanner={agent.metadata?.securityScan} control={agent.metadata?.securityScanControl} />}
 
         {agent.result && (

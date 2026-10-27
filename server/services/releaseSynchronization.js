@@ -193,7 +193,28 @@ async function verifyEntry(entry, agents) {
     retryAt: result.status === 'verified' ? null : new Date(Date.now() + Math.min(30 * 60_000, 60_000 * 2 ** Math.min(attempts - 1, 5))).toISOString() };
   // Receipt persistence precedes change events and checkout retirement.
   await saveReleaseSynchronization(entry);
-  cosEvents.emit('tasks:changed', { action: 'release-synchronization', taskId: entry.task.id });
+  const { projectTaskReleaseMilestones, projectAgentReleaseMilestones } = await import('./releaseSynchronizationProjection.js');
+  const { getTaskById } = await import('./cosTaskStore.js');
+
+  const continuationTask = await getTaskById(entry.task.id).catch(() => null);
+  const projectedContinuation = continuationTask ? projectTaskReleaseMilestones(continuationTask, entry) : null;
+  cosEvents.emit('tasks:changed', { action: 'release-synchronization', taskId: entry.task.id, task: projectedContinuation });
+
+  if (entry.owner.taskId && entry.owner.taskId !== entry.task.id) {
+    const publisherTask = await getTaskById(entry.owner.taskId).catch(() => null);
+    if (publisherTask) {
+      cosEvents.emit('tasks:changed', { action: 'release-synchronization-parent', taskId: entry.owner.taskId, task: projectTaskReleaseMilestones(publisherTask, entry) });
+    }
+  }
+
+  const publisherAgent = agents.find(a => a.id === entry.owner.agentId);
+  if (publisherAgent) {
+    cosEvents.emit('agent:updated', projectAgentReleaseMilestones(publisherAgent, entry));
+  }
+  for (const agent of agents.filter(a => a.taskId === entry.task.id)) {
+    cosEvents.emit('agent:updated', projectAgentReleaseMilestones(agent, entry));
+  }
+  cosEvents.emit('agents:changed');
   return entry.synchronization;
 }
 

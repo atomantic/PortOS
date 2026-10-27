@@ -242,3 +242,85 @@ it('shows verified publication before any terminal result and retains it after s
   expect(screen.getByText('Published — synchronization not yet verified')).toBeInTheDocument();
   expect(screen.getByText('Synchronization failed')).toBeInTheDocument();
 });
+
+it('keeps publication unchanged while synchronization moves through pending, running, blocked, and verified', () => {
+  const identity = 'e'.repeat(64);
+  const publication = { status: 'verified', tag: 'v2.0.0', releaseUrl: 'https://github.com/example/repo/releases/tag/v2.0.0', publishedAt: '2026-01-01T15:00:00Z' };
+  const prUrl = 'https://github.com/example/repo/pull/100';
+  const headSha = 'f'.repeat(40);
+
+  // 1. Pending
+  const agent = {
+    status: 'running',
+    metadata: {
+      releasePublication: publication,
+      releaseSynchronization: { status: 'pending', identity, prUrl, headSha },
+    },
+  };
+  const view = render(<AgentResultLine agent={agent} />);
+  expect(screen.getByText('Published — synchronization pending')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'v2.0.0' })).toHaveAttribute('href', publication.releaseUrl);
+  expect(view.container.querySelector('time')).toHaveAttribute('datetime', publication.publishedAt);
+  expect(screen.getByText(`Release sync: ${identity}`)).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Sync PR (fffffff)' })).toHaveAttribute('href', prUrl);
+
+  // 2. Running
+  view.rerender(<AgentResultLine agent={{
+    ...agent,
+    metadata: {
+      ...agent.metadata,
+      releaseSynchronization: { status: 'running', identity, prUrl, headSha },
+    },
+  }} />);
+  expect(screen.getByText('Published — synchronization running')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'v2.0.0' })).toHaveAttribute('href', publication.releaseUrl);
+  expect(view.container.querySelector('time')).toHaveAttribute('datetime', publication.publishedAt);
+  expect(screen.getByText(`Release sync: ${identity}`)).toBeInTheDocument();
+
+  // 3. Blocked
+  view.rerender(<AgentResultLine agent={{
+    ...agent,
+    metadata: {
+      ...agent.metadata,
+      releaseSynchronization: { status: 'blocked', identity, prUrl, headSha, blocker: 'head-ci-not-green-at-merge' },
+    },
+  }} />);
+  expect(screen.getByText('Published — synchronization blocked')).toBeInTheDocument();
+  expect(screen.getByText('Blocker: head-ci-not-green-at-merge')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'v2.0.0' })).toHaveAttribute('href', publication.releaseUrl);
+  expect(view.container.querySelector('time')).toHaveAttribute('datetime', publication.publishedAt);
+  expect(screen.getByText(`Release sync: ${identity}`)).toBeInTheDocument();
+
+  // 4. Verified
+  view.rerender(<AgentResultLine agent={{
+    ...agent,
+    result: { success: true, validationPassed: true, taskOutcome: { status: 'completed', reason: 'Done' } },
+    metadata: {
+      ...agent.metadata,
+      releaseSynchronization: { status: 'verified', identity, prUrl, headSha },
+    },
+  }} />);
+  expect(screen.getByText('Published — synchronization verified')).toBeInTheDocument();
+  expect(screen.getByText('Completed successfully')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'v2.0.0' })).toHaveAttribute('href', publication.releaseUrl);
+  expect(view.container.querySelector('time')).toHaveAttribute('datetime', publication.publishedAt);
+  expect(screen.getByText(`Release sync: ${identity}`)).toBeInTheDocument();
+});
+
+it('does not synthesize verified synchronization from task execution success or terminal prose', () => {
+  const identity = 'a'.repeat(64);
+  const publication = { status: 'verified', tag: 'v1.0.0', releaseUrl: 'https://github.com/example/repo/releases/tag/v1.0.0', publishedAt: '2026-01-01T10:00:00Z' };
+  const agent = {
+    result: { success: true, validationPassed: true, taskOutcome: { status: 'completed', reason: 'Synchronization completed in PR 42' } },
+    metadata: {
+      releasePublication: publication,
+      releaseSynchronization: { status: 'running', identity },
+      taskSummary: 'Completed synchronization of release v1.0.0',
+    },
+  };
+  render(<AgentResultLine agent={agent} />);
+  expect(screen.getByText('Published — synchronization running')).toBeInTheDocument();
+  expect(screen.queryByText('Published — synchronization verified')).not.toBeInTheDocument();
+  expect(screen.getByText('Execution completed')).toBeInTheDocument();
+  expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+});
