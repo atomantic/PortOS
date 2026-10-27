@@ -158,8 +158,8 @@ export async function resolveAppClaimReviewers(app) {
  * options still win when a caller passes them.
  *
  * `target` pins the run to ONE work item (the drawer's "pick a specific item"
- * mode) by appending the tracker-appropriate constraint block, overriding the
- * prompt's own Phase 1 pick while keeping every claim safety check. A matching
+ * mode). Shipped forge workflows are composed for that target and completion
+ * policy; custom prompts retain their text and receive a constraint header. A matching
  * `issueContext` from the managed-app Issues tab is appended for forge targets
  * so the agent can use the already-fetched title/body without retrieving it a
  * second time.
@@ -192,18 +192,23 @@ export async function buildClaimWorkTask(app, {
     getCodeReviewDefaults().catch(() => null)
   ]);
   const promptTaskType = trackerToClaimTaskType(wt.resolved) || 'plan-task';
+  const targetRef = normalizeWorkItemRef(target);
+  const effectivePrCompletion = prCompletion ?? metadata?.prCompletion ?? resolveAppPrCompletion(app, metadata);
 
   // Honor a direct claim-work prompt customization if the user set one;
   // otherwise delegate to the resolved tracker's prompt body. Mirrors the
   // scheduled router's `promptKeyForBody` selection — a custom claim-work prompt
   // overrides the tracker-specific body for both paths.
-  const template = await getTaskPrompt(
+  const promptResult = await getTaskPrompt(
     interval.prompt ? 'claim-work' : promptTaskType,
-    { claimFlow: true }
+    { claimFlow: true, withSource: true, claimIssueOptions: { target: targetRef, prCompletion: effectivePrCompletion } }
   );
+  // The string case keeps callers that replace the prompt getter (including
+  // integrations/tests) on the conservative, customized-prompt path.
+  const template = typeof promptResult === 'string' ? promptResult : promptResult.prompt;
+  const composed = typeof promptResult === 'object' && promptResult.composed;
 
   const resolvedAuthorFilter = resolveClaimAuthorFilter(issueAuthorFilter, metadata);
-  const effectivePrCompletion = prCompletion ?? metadata?.prCompletion ?? resolveAppPrCompletion(app, metadata);
 
   const claimReviewers = claimReviewersFrom(metadata, codeReviewDefaults, {
     reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts,
@@ -226,17 +231,18 @@ export async function buildClaimWorkTask(app, {
   // isn't a forge issue tracker. {reviewers} inside the block is substituted by
   // the same replacer below. A pinned target claims exactly one item, so the
   // swarm wrapper (claim N in parallel) is suppressed — the two are exclusive.
-  const targetRef = normalizeWorkItemRef(target);
   const swarmBlock = targetRef ? '' : resolveSwarmBlock(promptTaskType, metadata.swarmCount);
 
-  const prompt = reviewerIdentityNotice + applyAppPlaceholders(`${swarmBlock}${template}`, app)
+  const policyHeader = composed ? '' : `## Claim target and completion policy\n\nTarget: ${targetRef || 'selected from the configured tracker'}. Effective PR completion policy: ${effectivePrCompletion}. Follow the runtime safety and completion contracts for this run.\n\n`;
+  const prompt = policyHeader + applyAppPlaceholders(`${swarmBlock}${template}`, app)
     // Function-form replacers so literal `$`/`$1` in the substituted text isn't
     // interpreted as a backreference (see the scheduler's same-pattern note).
     .replace(/\{reviewers\}/g, () => reviewersCsv || 'none')
     .replace(/\{issueAuthorFilter\}/g, () => issueAuthorFilterBlock)
     .replace(/\{issueCandidateList\}/g, () => resolveIssueCandidateListBlock(promptTaskType, resolvedAuthorFilter))
     .replace(/\{issueExcludeLabels\}/g, () => issueExcludeLabelsBlock)
-    + appendTargetWorkItemBlock(promptTaskType, targetRef, issueExcludeLabelsBlock)
+    + reviewerIdentityNotice
+    + (composed ? '' : appendTargetWorkItemBlock(promptTaskType, targetRef, issueExcludeLabelsBlock))
     + appendPrefetchedIssueContext(promptTaskType, targetRef, issueContext)
     + appendClaimOverrideContext(overrideContext)
     + appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels)

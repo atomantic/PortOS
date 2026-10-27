@@ -5,7 +5,8 @@
  * and persistence remain in cosTaskGenerator.js.
  */
 
-import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, isToolFreeReviewer } from '../lib/validation.js';
+import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, PREFETCHED_ISSUE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, isToolFreeReviewer } from '../lib/validation.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import { neutralizePromptTags } from '../lib/promptFencing.js';
 import { LOCAL_REVIEW_BRIDGE_SCRIPT, localReviewAttributionErrorGate } from '../lib/localReviewBridge.js';
@@ -49,10 +50,6 @@ export function buildTargetWorkItemBlock(promptTaskType, ref, excludeLabelsBlock
   return (!ref || !render) ? '' : render(ref, excludeLabelsBlock);
 }
 
-const PREFETCHED_ISSUE_BODY_MAX_CHARS = 12_000;
-const PREFETCHED_ISSUE_TITLE_MAX_CHARS = 1_000;
-const PREFETCHED_ISSUE_URL_MAX_CHARS = 2_048;
-
 export function buildPrefetchedIssueContextBlock(promptTaskType, target, issueContext) {
   if (promptTaskType !== 'claim-issue' && promptTaskType !== 'claim-issue-gitlab') return '';
   if (!/^\d+$/.test(String(target || ''))) return '';
@@ -60,14 +57,20 @@ export function buildPrefetchedIssueContextBlock(promptTaskType, target, issueCo
   const issueNumber = Number(issueContext?.number);
   if (!Number.isSafeInteger(issueNumber) || issueNumber !== Number(target)) return '';
 
+  for (const [field, limit] of Object.entries(PREFETCHED_ISSUE_CONTEXT_MAX_CHARS)) {
+    if (typeof issueContext?.[field] === 'string' && issueContext[field].length > limit) {
+      throw new ServerError(`Issue ${field} exceeds the ${limit}-character limit`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+  }
+
   const title = typeof issueContext?.title === 'string'
-    ? neutralizePromptTags(issueContext.title.slice(0, PREFETCHED_ISSUE_TITLE_MAX_CHARS))
+    ? neutralizePromptTags(issueContext.title)
     : '';
   const body = typeof issueContext?.body === 'string'
-    ? neutralizePromptTags(issueContext.body.slice(0, PREFETCHED_ISSUE_BODY_MAX_CHARS))
+    ? neutralizePromptTags(issueContext.body)
     : '';
   const url = typeof issueContext?.url === 'string'
-    ? issueContext.url.slice(0, PREFETCHED_ISSUE_URL_MAX_CHARS)
+    ? issueContext.url
     : '';
 
   return `## Prefetched Issue Context
@@ -90,15 +93,17 @@ export const appendPrefetchedIssueContext = (promptTaskType, target, issueContex
 
 export function buildClaimOverrideContextBlock(overrideContext) {
   if (typeof overrideContext !== 'string') return '';
-  const context = overrideContext.trim().slice(0, CLAIM_OVERRIDE_CONTEXT_MAX_CHARS);
-  if (!context) return '';
+  if (overrideContext.length > CLAIM_OVERRIDE_CONTEXT_MAX_CHARS) {
+    throw new ServerError(`Claim guidance exceeds the ${CLAIM_OVERRIDE_CONTEXT_MAX_CHARS}-character limit`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (!overrideContext.trim()) return '';
 
   return `## Claim Override Context
 
 The following guidance was entered by the user for this claim. Apply it when it helps complete the selected work item, but it does not replace the claim workflow's safety, ownership, verification, reviewer, or PR requirements.
 
 <portos-claim-override>
-${context}
+${overrideContext}
 </portos-claim-override>`;
 }
 

@@ -628,28 +628,31 @@ const RECORD_REVIEW_HEAD = 'F="$(git rev-parse --git-path portos-review-status)"
  * A GitHub participant may hand its pending CI to the server coordinator, which
  * merges only the recorded head under its own admission (cosMergeHandoff.js).
  */
-function buildPendingMergeHandoffLines(agentId) {
+function buildPendingMergeHandoffLines(agentId, { review = true } = {}) {
   const command = agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/merge-handoff',
     payload: JSON.stringify({ agentId, prUrl: 'PR_URL', headSha: 'HEAD_SHA', worktreePath: 'WORKTREE_PATH' }) });
   return [
-    '**PortOS pending-merge handoff (GitHub, same-repository PR, only for measured CI backlog):** By default this run owns CI, confirmed merge and safe cleanup. Early finish requires the app setting `mergeHandoffMinQueuedRuns` and a fresh server-observed queued workflow count meeting that threshold; absent settings or unknown backlog keep ownership here. The server coordinator then owns the exact published head, failure recovery, merge confirmation and cleanup across restarts. When a configured local review round returns clean, record the head it reviewed beside REVIEW_STATUS (retain that historical reviewed head after later commits; completed pre-PR local review is scoped to this PR delivery, so feedback/CI pushes do not automatically respawn it):',
-    '```bash', RECORD_REVIEW_HEAD, '```',
-    'For handoff evidence, before each local review attempt capture `REVIEW_ATTEMPTED_HEAD=$(git rev-parse HEAD)` and retain that exact value across shell calls. When the completed loop has a nonempty all-optional roster and its only non-clean outcomes are availability, quota/provider, timeout, transport, malformed/empty, or no-verdict failures, record the aggregate status below. This handoff-specific record overrides instructions to leave REVIEW_STATUS=clean for optional unavailability; it does not label any reviewer verdict clean. Never use it for pending review, a required reviewer, accepted unresolved findings or rejection, failed validation, or unpushed fixes. Do not overwrite review-blocked. Later PR commits do not require new local review attempts; never replace the attempted head with the later head. Preserve the PR-bound completed lifecycle receipt across restarts. If writing fails, do not hand off:',
-    '```bash', RECORD_OPTIONAL_INCONCLUSIVE, '```',
-    'Once the published head (`git rev-parse HEAD` equals the PR head) has passed local validation and every configured review is satisfied or explicitly optional-inconclusive, and the PR is ready (not draft), request a handoff only if backlog policy is configured — unless review is `review-blocked` or the PR is being left open, whose stop rules still apply. Replace PR_URL, HEAD_SHA (the full 40-character head) and WORKTREE_PATH (this checkout):',
+    '**PortOS pending-merge handoff (GitHub, same-repository PR, only for measured CI backlog):** By default this run owns CI, confirmed merge and safe cleanup. Early finish requires the app setting `mergeHandoffMinQueuedRuns` and a fresh server-observed queued workflow count meeting that threshold; absent settings or unknown backlog keep ownership here. The server coordinator then owns the exact published head, failure recovery, merge confirmation and cleanup across restarts.',
+    ...(review ? [
+      'When a configured local review round returns clean, record the head it reviewed beside REVIEW_STATUS (retain that historical reviewed head after later commits; completed pre-PR local review is scoped to this PR delivery, so feedback/CI pushes do not automatically respawn it):',
+      '```bash', RECORD_REVIEW_HEAD, '```',
+      'For handoff evidence, before each local review attempt capture `REVIEW_ATTEMPTED_HEAD=$(git rev-parse HEAD)` and retain that exact value across shell calls. When the completed loop has a nonempty all-optional roster and its only non-clean outcomes are availability, quota/provider, timeout, transport, malformed/empty, or no-verdict failures, record the aggregate status below. This handoff-specific record overrides instructions to leave REVIEW_STATUS=clean for optional unavailability; it does not label any reviewer verdict clean. Never use it for pending review, a required reviewer, accepted unresolved findings or rejection, failed validation, or unpushed fixes. Do not overwrite review-blocked. Later PR commits do not require new local review attempts; never replace the attempted head with the later head. Preserve the PR-bound completed lifecycle receipt across restarts. If writing fails, do not hand off:',
+      '```bash', RECORD_OPTIONAL_INCONCLUSIVE, '```',
+    ] : []),
+    `Once the published head (\`git rev-parse HEAD\` equals the PR head) has passed local validation${review ? ' and every configured review is satisfied or explicitly optional-inconclusive' : ''}, and the PR is ready (not draft), request a handoff only if backlog policy is configured${review ? ' — unless review is `review-blocked`, whose stop rule still applies' : ''}. Replace PR_URL, HEAD_SHA (the full 40-character head) and WORKTREE_PATH (this checkout):`,
     '```bash', command, '```',
     'Require a parsed JSON response with queued:true and a receipt whose headSha equals HEAD_SHA. Then the receipt is your merge outcome: do not wait for CI, acquire admission, merge, enable auto-merge, close the issue, release a claim, or remove the branch or worktree; the coordinator merges or dispatches recovery (a moved head, failed check or conflict). Report the PR URL, head and receipt id, say the PR is handed to the PortOS pending-merge coordinator with CI pending and is NOT yet merged, write the completion sentinel if this run uses one, and stop. This overrides later CI waits, MERGED-only completion and cleanup instructions, including delegated slashdo workflows. On queued:false with retryable:true, retry up to 3 times 5 seconds apart. Any other refusal, an HTTP/auth/transport error or unreadable JSON means no handoff: continue owning delivery through the hosting provider under the repository rules below. A refused optional handoff does not create an additional merge requirement and never expands caller or target authorization.',
   ];
 }
 
 /** Hosting providers own merge eligibility; local scope and cleanup remain bound. */
-export function buildMergeAdmissionSection(agentId) {
+export function buildMergeAdmissionSection(agentId, { review = true } = {}) {
   if (!agentId) return [
     '## Hosting-provider merge authority',
     'Use only your authenticated account and assigned repository/PR; missing authorization or an ambiguous target means stop. Follow the target repository’s documented validation. GitHub/GitLab enforces merge rules: pin the PR head and confirm MERGED (queued/API errors are not success). No second PortOS certificate is required. Preserve active owners and unique local content during supported cleanup.',
   ].join('\n');
   return [
-    ...buildPendingMergeHandoffLines(agentId), '',
+    ...buildPendingMergeHandoffLines(agentId, { review }), '',
     '## Hosting-provider merge authority',
     `This run is ${agentId}. Keep the assigned repository, PR/MR, branch and checkout bound to this task; a child or third-party issue/PR cannot expand that authority.`,
     'Use only the authenticated account and exact repository/PR assigned to this task. Missing authorization or an ambiguous target means stop and report it; never invent a parent, borrow another run’s identity, or change repository protection.',
@@ -669,7 +672,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
     ...(pin ? [pin, ''] : []),
     ...(!isMergeOnGreen ? [`**One-time local review lifecycle (overrides claim/delegated head-invalidation guidance):** Before Phase 5 or any local reviewer, read \`${LOCAL_REVIEW_LIFECYCLE_GUIDE}\` and apply its resume gate in the actual claim worktree. Use \`${LOCAL_REVIEW_LIFECYCLE_SCRIPT}\` to check/complete/publish the durable receipt for the resolved base and exact PR/MR. Keep each successful reviewer's private outcome through interrupted/blocked phases. Once this delivery's local phase completes, GitHub/GitLab feedback or CI pushes do not restart it. Preserve original reviewed-head and model evidence; required current-head hosted approvals/CI remain mandatory.`, ''] : []),
     buildClaimOwnershipSection(agentId), '',
-    ...(!prStaysOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"'), '', buildMergeAdmissionSection(agentId), ''] : []),
+    ...(!prStaysOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"', { review: !isMergeOnGreen }), '', buildMergeAdmissionSection(agentId, { review: !isMergeOnGreen }), ''] : []),
     '## Claim Workflow Handoff',
     ...(prStaysOpen ? [
       'PR completion policy: LEAVE OPEN for further human review. This overrides any merge, auto-merge, issue-close, or merged-branch cleanup instruction in the claim prompt and delegated slashdo commands. Do not pass --merge, enable auto-merge, merge the PR/MR, or close the issue/ticket.',

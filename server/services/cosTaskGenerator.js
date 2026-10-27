@@ -2717,11 +2717,19 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // template path — the hook owns its prompt (LI has no DEFAULT_TASK_PROMPTS
   // entry). The token-replacement chain below is a no-op on it (no {tokens}).
   const currentStageIndex = metadata.pipeline?.currentStage ?? 0;
-  const promptTemplate = hookPrompt
+  const forgeClaim = promptTaskType === 'claim-issue' || promptTaskType === 'claim-issue-gitlab';
+  const scheduledClaimPolicy = metadata.prCompletion ?? resolveAppPrCompletion(app, metadata);
+  const promptResult = hookPrompt
     ? hookPrompt
     : (metadata.pipeline?.stages
       ? await getStagePrompt(taskType, currentStageIndex)
-      : await getTaskPrompt(promptKeyForBody));
+      : await getTaskPrompt(promptKeyForBody, forgeClaim ? {
+        claimFlow: true,
+        withSource: true,
+        claimIssueOptions: { prCompletion: scheduledClaimPolicy },
+      } : {}));
+  const promptTemplate = typeof promptResult === 'string' ? promptResult
+    : `${promptResult.composed ? '' : `## Claim target and completion policy\n\nTarget: selected from the configured tracker. Effective PR completion policy: ${scheduledClaimPolicy}. Follow the runtime safety and completion contracts for this run.\n\n`}${promptResult.prompt}`;
 
   // reference-watch: dynamically inject {referenceData} — a Markdown chunk
   // describing each ref configured on the app + commits since lastReviewedSha.

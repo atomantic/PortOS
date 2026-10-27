@@ -12,8 +12,8 @@
     "better-test-quality": "8e305f986e9c9066da5db2aee76fc024",
     "branch-cleanup": "ce9e19587783d1e649d75580f18b42b2",
     "branch-reconcile": "fe0a7f976e7ffb8d70dac58233b9b093",
-    "claim-issue": "44cb9e39713d6f7f3f6514a46a69e51f",
-    "claim-issue-gitlab": "b0a73a9d9522e94603551452a325158c",
+    "claim-issue": "5ff3cacaed7480aabe9115332fd72820",
+    "claim-issue-gitlab": "5da7822b2f1974da093dad2cf97f996b",
     "claim-issue-jira": "b793412731c754db0b88b4d84d7e454f",
     "code-quality": "175fab48fc713b71b4f0574b7cc5fe0b",
     "code-reviewer-implement": "f8cb11be6796874018d0a4d776c8931d",
@@ -79,8 +79,8 @@
     "better-test-quality": 2,
     "branch-cleanup": 3,
     "branch-reconcile": 12,
-    "claim-issue": 51,
-    "claim-issue-gitlab": 45,
+    "claim-issue": 52,
+    "claim-issue-gitlab": 46,
     "claim-issue-jira": 27,
     "code-quality": 6,
     "code-reviewer-a": 1,
@@ -242,7 +242,8 @@
       "b2e7d4a99ee4ab2f6781aacfdef4b9f8",
       "aedd28c470a4813b57be3e8b4dd45f4b",
       "cf6ac149baa6a8b1d80d57b01343225b",
-      "450ba70c12711782e83ed3b862156ca6"
+      "450ba70c12711782e83ed3b862156ca6",
+      "44cb9e39713d6f7f3f6514a46a69e51f"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",
@@ -288,7 +289,8 @@
       "ccf8e2a828dd5cb407d80252e974731f",
       "a16b0f1eea87c4b4421411e24fe4edf8",
       "3709d6ba65d4d71b7ab9d403d5bf8c8c",
-      "f9e28cb8509d8031809ebdd992a1a96c"
+      "f9e28cb8509d8031809ebdd992a1a96c",
+      "b0a73a9d9522e94603551452a325158c"
     ],
     "claim-issue-jira": [
       "496638ec099de9d57686a61a015a3c03",
