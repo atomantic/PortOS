@@ -22,6 +22,7 @@ describe('scheduled audit measurement workflow', () => {
       expect(auditQualityInstructions(category)).toContain(`"category":"${category}"`);
     }
     expect(auditQualityInstructions('claim-issue')).toBe('');
+    expect(auditQualityInstructions('code-quality')).toContain('Proportionality check');
     expect(auditQualityInstructions('react-lifecycle')).toContain('"category":"ui-lifecycle"');
   });
 
