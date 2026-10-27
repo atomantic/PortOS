@@ -46,7 +46,8 @@ import MediaImage from '../components/MediaImage';
 import GenerateImageControl from '../components/catalog/GenerateImageControl';
 import { buildGenerationPromptSeed } from '../lib/catalogImagePrompt';
 import CatalogMediaTile from '../components/catalog/CatalogMediaTile';
-import CatalogImagePreview, { CatalogImagePreviewProvider } from '../components/catalog/CatalogImagePreview';
+import CatalogImagePreview from '../components/catalog/CatalogImagePreview';
+import { CatalogImagePreviewProvider } from '../components/catalog/CatalogImagePreviewProvider';
 import CatalogRelatedImages from '../components/catalog/CatalogRelatedImages';
 import CatalogSheetsPanel, { ReferenceSheetPanel } from '../components/catalog/CatalogSheetsPanel';
 import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
@@ -702,7 +703,7 @@ function IngredientEditor() {
     : isDirty ? `Save your profile edits first — the ${subject} renders from the saved record.` : null);
 
   return (
-    <CatalogImagePreviewProvider key={record.id} name={record.name}>
+    <CatalogImagePreviewProvider key={record.id}>
     <fieldset disabled={mergeBusy} className="flex h-full min-h-0 min-w-0 flex-col">
       <UnsavedChangesConfirm
         guard={routeGuard}

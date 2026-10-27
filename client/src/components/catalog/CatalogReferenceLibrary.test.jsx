@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router';
 
@@ -11,10 +11,20 @@ vi.mock('../../services/apiCatalog', () => ({
 vi.mock('../../hooks/useModelInputPreview', () => ({
   useModelInputPreview: (_fn, _body, options) => options.enabled ? { preview: { sentPrompt: 'Exact sent prompt' }, error: null } : {},
 }));
+vi.mock('../../hooks/useMediaAnnotations', () => ({ useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: vi.fn() }) }));
+vi.mock('../../services/apiImageVideo', () => ({
+  listImageVariants: vi.fn(async () => ({ items: [] })),
+  getGalleryImages: vi.fn(async () => []),
+  listMediaGalleryPage: vi.fn(async () => ({ items: [] })),
+}));
+vi.mock('../media/AddToCollectionMenu', () => ({ default: () => null }));
+vi.mock('../media/PinToMoodBoardMenu', () => ({ default: () => null }));
+vi.mock('../media/PromptRefineModal', () => ({ default: () => null }));
+vi.mock('../media/PromptFromMedia', () => ({ PromptFromMediaModal: () => null }));
 vi.mock('../pipeline/MediaJobThumb', () => ({ default: ({ onFilename }) => <button onClick={() => onFilename('refined.png')}>Complete refinement</button> }));
 const api = await import('../../services/apiCatalog');
 const { default: CatalogReferenceLibrary } = await import('./CatalogReferenceLibrary.jsx');
-const { CatalogImagePreviewProvider } = await import('./CatalogImagePreview.jsx');
+const { CatalogImagePreviewProvider } = await import('./CatalogImagePreviewProvider.jsx');
 
 const media = [
   { mediaKey: 'seven.png', kind: 'reference', library: { variant: { age: 7 }, guide: true, tags: ['vhs'] } },
@@ -209,23 +219,46 @@ describe('CatalogReferenceLibrary', () => {
     expect(screen.queryByTestId('library-row')).toBeNull();
   });
 
-  it('steps through previews with prev/next and rates then advances from the enlarged modal', async () => {
+  it('opens references in the standard media viewer, steps with prev/next and rates then advances', async () => {
     function Gallery() {
       const [rows, setRows] = useState(['a.png', 'b.png', 'c.png'].map(mediaKey => ({ mediaKey, kind: 'reference' })));
       return <CatalogReferenceLibrary ingredientId="cat-chr-1" media={rows}
         onMediaUpdated={updated => setRows(prev => prev.map(r => r.mediaKey === updated.mediaKey ? updated : r))} />;
     }
     api.updateCatalogIngredientMediaLibrary.mockImplementation(async (_id, body) => ({ mediaKey: body.mediaKey, kind: body.kind, library: { review: body.review } }));
-    render(<MemoryRouter initialEntries={['/?preview=catalog-image%3Aimages%3Ab.png']}><CatalogImagePreviewProvider name="Cat"><Gallery /></CatalogImagePreviewProvider></MemoryRouter>);
-    const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('2 / 3')).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Previous image' }));
-    expect(await within(await screen.findByRole('dialog')).findByText('1 / 3')).toBeInTheDocument();
+    // A link written before the standard viewer still opens.
+    render(<MemoryRouter initialEntries={['/?preview=catalog-image%3Aimages%3Ab.png']}><CatalogImagePreviewProvider><Gallery /></CatalogImagePreviewProvider></MemoryRouter>);
+    expect(await screen.findByRole('dialog', { name: 'Media viewer — b.png' })).toBeInTheDocument();
+    await act(async () => {});
+    fireEvent.click(screen.getAllByRole('button', { name: 'Previous media' })[0]);
+    const dialog = await screen.findByRole('dialog', { name: 'Media viewer — a.png' });
+    await act(async () => {});
+    // The page's own controls sit in the viewer beside the standard actions.
+    expect(within(dialog).getByRole('button', { name: 'Film look' })).toBeInTheDocument();
     // Rating bad drops a.png from the default view and moves on to b.png.
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /bad/i }));
+    fireEvent.click(within(within(dialog).getByTestId('page-actions')).getByRole('button', { name: /bad/i }));
     await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
       'cat-chr-1', { mediaKey: 'a.png', kind: 'reference', review: { status: 'bad' } }, { silent: true }));
-    expect(await screen.findByText('1 / 2')).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Media viewer — b.png' })).toBeInTheDocument();
+    await act(async () => {});
+  });
+
+  it('removes a reference from the record (every attachment of the image) from the viewer with a second tap', async () => {
+    const onDetach = vi.fn(async () => {});
+    render(<MemoryRouter initialEntries={['/?preview=image%3Aa.png']}><CatalogImagePreviewProvider>
+      <CatalogReferenceLibrary ingredientId="cat-chr-1" onDetach={onDetach} onSetPortrait={vi.fn()}
+        media={[{ mediaKey: 'a.png', kind: 'portrait' }, { mediaKey: 'a.png', kind: 'reference' }, { mediaKey: 'b.png', kind: 'reference' }]} />
+    </CatalogImagePreviewProvider></MemoryRouter>);
+    const actions = within(await screen.findByTestId('page-actions'));
+    await act(async () => {});
+    expect(actions.getByText('Primary')).toBeInTheDocument();
+    fireEvent.click(actions.getByRole('button', { name: 'Remove' }));
+    expect(onDetach).not.toHaveBeenCalled();
+    fireEvent.click(actions.getByRole('button', { name: 'Tap to remove' }));
+    await waitFor(() => expect(onDetach).toHaveBeenCalledTimes(2));
+    expect(onDetach).toHaveBeenCalledWith('a.png', 'portrait');
+    expect(onDetach).toHaveBeenCalledWith('a.png', 'reference');
+    await act(async () => {});
   });
 
   it('defaults to good and unreviewed references, hiding bad and rejected until the filter changes', () => {

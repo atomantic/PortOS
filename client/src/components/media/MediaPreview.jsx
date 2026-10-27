@@ -2,6 +2,7 @@ import { useMemo, useCallback, useEffect, useState } from 'react';
 import MediaLightbox from './MediaLightbox';
 import { getMediaNavProps } from '../../lib/mediaNavigation';
 import { computeImageVariantGroup } from './variants';
+import { mediaRecordRef } from './mediaDetail';
 import useImageVariants from '../../hooks/useImageVariants';
 import { trimVideoStart, updateImagePrompt, updateVideoPrompt, updateVideoPoster } from '../../services/apiImageVideo';
 
@@ -141,7 +142,9 @@ export default function MediaPreview({
       onClose={() => setPreview(null)}
       annotation={annotations?.[preview?.key] ?? null}
       onAnnotationChange={preview && updateAnnotation ? (patch) => updateAnnotation(preview.key, patch) : undefined}
-      onPromptChange={savePrompt}
+      // A viewer item with no gallery record (an upload-only reference) has no
+      // prompt to save.
+      onPromptChange={mediaRecordRef(displayedPreview) ? savePrompt : undefined}
       onPosterChange={savePoster}
       onTrimStart={onTrimmed ? trimStart : undefined}
       variantGroup={variantGroup}
