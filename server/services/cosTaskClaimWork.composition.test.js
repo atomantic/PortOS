@@ -71,6 +71,8 @@ describe('assembled forge claim prompts', () => {
       expect(prompt).toContain('--match-head-commit');
     } else {
       expect(prompt).toContain('If no claimant exists, set `NUM="$CANDIDATE"`');
+      expect(prompt).toContain('ME="$(glab api user | jq -er .username)"');
+      expect(prompt.indexOf('ME="$(glab api user | jq -er .username)"')).toBeLessThan(prompt.indexOf('CLAIMANT=$(jq'));
     }
   });
 
@@ -114,6 +116,7 @@ describe('assembled forge claim prompts', () => {
     expect(prompt).toContain('Effective PR completion policy: merge-on-green');
     expect(prompt).not.toContain('Run each LOCAL reviewer');
     expect(prompt).toContain('Before assigning a contributor or decomposing an epic');
+    if (tracker === 'github') expect(prompt).toContain('5. Before assigning a contributor');
   });
 
   it('keeps a customized workflow intact while providing the resolved target and policy', async () => {
