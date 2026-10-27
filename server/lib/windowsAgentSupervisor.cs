@@ -46,6 +46,10 @@ public static class WindowsAgentSupervisor
 
     static void Require(bool success) { if (!success) throw new InvalidOperationException(); }
     static string Quote(string argument) {
+        // Match Node's non-verbatim argv construction. The shared shim adapter
+        // deliberately leaves caret-escaped cmd arguments unquoted, and bypasses
+        // cmd entirely for arguments its parser cannot carry (including quotes).
+        if (argument.Length > 0 && argument.IndexOfAny(new[] { ' ', '\t', '"' }) < 0) return argument;
         var result = new StringBuilder("\"");
         int slashes = 0;
         foreach (char c in argument) {
@@ -113,8 +117,24 @@ public static class WindowsAgentSupervisor
             startup.Startup.Flags = 0x100;
             startup.Startup.Input = inherited[0]; startup.Startup.Output = inherited[1]; startup.Startup.Error = inherited[2];
             string executable = (string)request["command"];
+            var arguments = new List<string>();
+            foreach (object argument in (IEnumerable)request["args"]) arguments.Add((string)argument);
             var command = new StringBuilder(Quote(executable));
-            foreach (object argument in (IEnumerable)request["args"]) command.Append(' ').Append(Quote((string)argument));
+            if (Path.GetFileName(executable).Equals("cmd.exe", StringComparison.OrdinalIgnoreCase)
+                && arguments.Count >= 2 && arguments[0].Equals("/c", StringComparison.OrdinalIgnoreCase)) {
+                // The shared shim adapter already escaped these tokens for cmd.
+                // /s consumes ONE outer quote pair; preserve the inner path/argv
+                // quotes verbatim instead of applying CRT escaping to the body.
+                command.Append(" /d /s /c \"");
+                for (int i = 1; i < arguments.Count; i++) {
+                    if (i > 1) command.Append(' ');
+                    Require(arguments[i].IndexOf('"') < 0);
+                    command.Append(Quote(arguments[i]));
+                }
+                command.Append('"');
+            } else {
+                foreach (string argument in arguments) command.Append(' ').Append(Quote(argument));
+            }
             // Inherit the caller's already composed environment and console/PTY.
             Require(CreateProcess(executable, command, IntPtr.Zero, IntPtr.Zero, true, (bool)request["pty"] ? 0x00080000u : 0x08080000u, IntPtr.Zero, (string)request["cwd"], ref startup, out process));
             long created, exited, kernel, user;

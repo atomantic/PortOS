@@ -74,7 +74,7 @@ export function watchWindowsAgentProcess(child, launch) {
   if (!launch.settlementDirectory) return child;
   const cancel = () => {
     writeFileSync(join(launch.settlementDirectory, 'cancel'), '', { mode: 0o600 });
-    child.killed = true;
+    if (Object.hasOwn(child, 'killed')) child.killed = true;
     return true;
   };
   const originalKill = child.kill.bind(child);

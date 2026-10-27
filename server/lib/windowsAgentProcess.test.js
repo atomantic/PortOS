@@ -14,7 +14,7 @@ vi.mock('./fileUtils.js', async original => {
 });
 import { PATHS } from './fileUtils.js';
 import { spawn, execFile } from './childProcess.js';
-import { killProcessTree } from './bufferedSpawn.js';
+import { killProcessTree, prepareCliSpawn } from './bufferedSpawn.js';
 import { readWindowsAgentSettlement, reserveWindowsAgentProcess, prepareWindowsAgentLaunch, watchWindowsAgentProcess } from './windowsAgentProcess.js';
 
 const { it, drain } = ownTestBodies(vitestIt);
@@ -153,6 +153,38 @@ setTimeout(() => process.exit(3), 20000).unref();`);
       await closed;
       await expect(readWindowsAgentSettlement(agent)).rejects.toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED' });
     } finally { nativeKill('SIGKILL'); await closed; }
+  }, 30000);
+
+  it('preserves the shared cmd-shim escaping and quote-bearing argv bypass inside the native Job', async () => {
+    const shimDir = join(root, 'CLI shim with spaces');
+    await mkdir(shimDir, { recursive: true });
+    const shim = join(shimDir, 'example-cli.cmd');
+    await writeFile(join(shimDir, 'args.cjs'), 'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
+    await writeFile(shim, [
+      '@IF EXIST "%~dp0\\node.exe" (',
+      '  "%~dp0\\node.exe" "%~dp0\\args.cjs" %*',
+      ') ELSE (',
+      '  node "%~dp0\\args.cjs" %*',
+      ')', '',
+    ].join('\r\n'));
+    const cases = [['with space', 'a&b', 'c^d'], ['with space', 'say "hello"', 'line\nbreak', '%EXAMPLE_UNSET% & literal']];
+    for (const [index, args] of cases.entries()) {
+      const run = { ...agent, id: `${agent.id}-${index}` };
+      await reserveWindowsAgentProcess(run);
+      const prepared = prepareCliSpawn(shim, args, process.env);
+      if (index === 0) expect(prepared.command).toBe('cmd.exe');
+      else expect(prepared.command).not.toBe('cmd.exe');
+      const launch = prepareWindowsAgentLaunch(run.id, prepared.command, prepared.args, { cwd: root, env: process.env });
+      const child = watchWindowsAgentProcess(spawn(launch.command, launch.args, { cwd: root, stdio: 'pipe' }), launch);
+      const closed = once(child, 'close');
+      let output = '';
+      child.stdout.on('data', chunk => { output += chunk; });
+      try {
+        expect((await closed)[0]).toBe(0);
+        expect(JSON.parse(output)).toEqual(args);
+        expect(await readWindowsAgentSettlement(run)).toMatchObject({ active: 0, exitCode: 0 });
+      } finally { killProcessTree(child); await closed; }
+    }
   }, 30000);
 
 });
