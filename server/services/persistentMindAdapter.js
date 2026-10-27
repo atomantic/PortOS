@@ -34,6 +34,8 @@ import {
   readPersistentMindMemories,
   readPersistentMindName,
 } from './persistentMindContext.js';
+import { persistentMindToolFreeRefusal } from '../lib/persistentMindProfile.js';
+import { fenceBlock, UNTRUSTED_CONTENT_NOTICE } from '../lib/promptFencing.js';
 import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
 import { composePersistentMindInstructions, normalizePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
 import { resolvePersistentMindPlaybookPhase } from './persistentMindPlaybookSignals.js';
@@ -294,21 +296,18 @@ export function persistentMindHarnessInfo(provider) {
       detail: 'Best fit for a persistent service: structured HTTP, clean cancellation, streaming, and no terminal state. Ollama, llama.cpp, LM Studio, vLLM, and compatible cloud endpoints use this lane.',
     };
   }
+  const refusal = persistentMindToolFreeRefusal(provider);
   if (type === 'cli') {
+    if (refusal) return { type, label: 'Headless CLI', recommendation: 'unavailable', detail: refusal };
     return {
       type,
       label: 'Headless CLI',
       recommendation: 'supported',
-      detail: 'Reliable when the vendor CLI owns authentication or model access, with more process startup overhead than a direct API.',
+      detail: 'Runs tool-free (vendor shell and file tools disabled). Reliable when the vendor CLI owns authentication or model access, with more process startup overhead than a direct API.',
     };
   }
   if (type === 'tui') {
-    return {
-      type,
-      label: 'Interactive TUI',
-      recommendation: 'not-recommended',
-      detail: 'Compatibility lane only. Startup selectors, terminal redraws, response-file handoff, and screen scraping make it fragile for an unattended long-lived mind.',
-    };
+    return { type, label: 'Interactive TUI', recommendation: 'unavailable', detail: refusal };
   }
   return {
     type,
@@ -384,6 +383,10 @@ export function buildPersistentMindSummaryPrompt({ events, previousSummary, jour
 const passthroughCallBoundary = (_descriptor, run) => run({ reportRunId: () => {} });
 
 async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = [], signal, responseSchema, heartbeat, reportRunId }) {
+  // Defense in depth behind the route resolver: no provider spawn for a route
+  // that cannot run without host tools, and no fallback to one that can.
+  const toolFreeRefusal = persistentMindToolFreeRefusal(provider);
+  if (toolFreeRefusal) throw new Error(toolFreeRefusal);
   if (signal?.aborted) throw new Error(String(signal.reason || 'Persistent mind turn interrupted'));
   if (typeof heartbeat === 'function') await heartbeat();
   let activeRunId = null;
@@ -414,6 +417,9 @@ async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = 
     absoluteTimeoutMs: 0,
     outputReserveTokens: PERSISTENT_MIND_OUTPUT_RESERVE_TOKENS,
     allowFallback: false,
+    // The prompt carries feed, calendar, issue and peer-chat text; the mind's
+    // authority is its semantic tool catalog, never the vendor's shell.
+    toolFree: true,
     screenshots,
     responseSchema,
     beforeExecute: () => {
@@ -590,7 +596,7 @@ export function createPersistentMindTurnAdapter() {
           }
         };
         const assemble = (toolPrompt, toolResults) => `${buildPersistentMindTurnPrompt({ ...turnPromptSections, toolCapabilityPrompt: toolPrompt })}${continuation
-          ? `\n\n# Completed tool results\n${JSON.stringify(toolResults)}\n\n${continuation.suffix}`
+          ? `\n\n# Completed tool results\n${UNTRUSTED_CONTENT_NOTICE}\n${fenceBlock('Tool results (JSON)', JSON.stringify(toolResults), Number.MAX_SAFE_INTEGER)}\n\n${continuation.suffix}`
           : ''}${namePrompt}`;
         // Prioritize explicitly requested next actions, then completed actions,
         // within the existing cap; keep other granted actions discoverable.

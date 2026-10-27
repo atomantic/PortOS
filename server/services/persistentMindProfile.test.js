@@ -47,6 +47,19 @@ describe('resolvePersistentMindProfile', () => {
       .toMatchObject({ ok: false, error: /not available/ });
   });
 
+  it('refuses a saved route whose provider cannot run tool-free, and admits a tool-free CLI (#13840)', async () => {
+    for (const provider of [
+      { id: 'local', type: 'cli', command: 'codex', models: ['reasoner'] },
+      { id: 'local', type: 'tui', command: 'claude', models: ['reasoner'] },
+    ]) {
+      mocks.provider = provider;
+      await expect(resolvePersistentMindProfile(profile)).resolves
+        .toMatchObject({ ok: false, error: /cannot run without host shell and file tools/ });
+    }
+    mocks.provider = { id: 'local', type: 'cli', command: 'claude', models: ['reasoner'] };
+    await expect(resolvePersistentMindProfile(profile)).resolves.toMatchObject({ ok: true });
+  });
+
   it('requires a complete enabled pin and rejects effort a provider cannot accept', async () => {
     await expect(resolvePersistentMindProfile({ ...profile, model: '' })).resolves
       .toEqual({ ok: false, error: 'Persistent mind profile requires a provider and model' });

@@ -1,5 +1,7 @@
 vi.mock('../services/appIssues.js', () => ({ prepareAppIssueClaim: vi.fn() }));
 import { prepareAppIssueClaim } from '../services/appIssues.js';
+vi.mock('../services/providers.js', () => ({ getProviderById: vi.fn() }));
+import { getProviderById } from '../services/providers.js';
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
 import { rmSync } from 'node:fs';
@@ -310,6 +312,32 @@ describe('CoS Routes', () => {
       expect(updateConfig).toHaveBeenCalledWith(updates);
       expect((await request(app).put('/api/cos/config').send({ persistentMindMaintainer: { intervalMinutes: 0 } })).status).toBe(400);
       expect((await request(app).put('/api/cos/config').send({ persistentMindMaintainer: { createTasks: true } })).status).toBe(400);
+    });
+
+    it('refuses a Persistent Mind provider that cannot run tool-free, for the home profile and presets', async () => {
+      const providers = {
+        'tui-example': { id: 'tui-example', type: 'tui', command: 'claude' },
+        'codex-example': { id: 'codex-example', type: 'cli', command: 'codex' },
+        'claude-example': { id: 'claude-example', type: 'cli', command: 'claude' },
+        'api-example': { id: 'api-example', type: 'api' },
+      };
+      getProviderById.mockImplementation(async (id) => providers[id] ?? null);
+      updateConfig.mockResolvedValue({});
+      for (const providerId of ['tui-example', 'codex-example']) {
+        const profileResponse = await request(app).put('/api/cos/config').send({ persistentMindProfile: { providerId, model: 'example-model' } });
+        expect(profileResponse.status).toBe(400);
+        expect(profileResponse.body.code).toBe('PROVIDER_NOT_TOOL_FREE');
+        expect(profileResponse.body.error).toContain(providerId);
+        const presetResponse = await request(app).put('/api/cos/config').send({
+          persistentMindThinkingPresets: { presets: [{ id: 'deep', providerId, model: 'example-model' }] },
+        });
+        expect(presetResponse.status).toBe(400);
+      }
+      expect(updateConfig).not.toHaveBeenCalled();
+      for (const providerId of ['claude-example', 'api-example']) {
+        const accepted = await request(app).put('/api/cos/config').send({ persistentMindProfile: { providerId, model: 'example-model' } });
+        expect(accepted.status).toBe(200);
+      }
     });
 
     it('validates the persistent mind wake cadence', async () => {
