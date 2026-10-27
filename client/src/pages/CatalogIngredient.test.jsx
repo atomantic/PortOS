@@ -1461,6 +1461,24 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       await waitFor(() => expect(screen.getAllByRole('img').map((img) => img.getAttribute('src')))
         .toContain('/data/image-thumbnails/look-1.webp'));
     });
+
+    it('filters candidate reference images in the attach menu to only those marked good', async () => {
+      getCatalogIngredientDetails.mockResolvedValue({
+        ...detailsOf(HERO),
+        media: [
+          ...MEDIA,
+          { mediaKey: 'good-ref.png', kind: 'reference', role: null, library: { review: { status: 'good' } } },
+          { mediaKey: 'bad-ref.png', kind: 'reference', role: null, library: { review: { status: 'bad' } } },
+        ],
+      });
+      await renderPage('/casting/cat-chr-hero/looks');
+      fireEvent.click(await screen.findByRole('button', { name: 'Attach image' }));
+      expect(screen.getByRole('button', { name: 'Use for Red scarf' })).toBeInTheDocument();
+      const sources = screen.getAllByRole('img').map((img) => img.getAttribute('src') || '');
+      expect(sources.some((s) => s.includes('good-ref'))).toBe(true);
+      expect(sources.some((s) => s.includes('bad-ref'))).toBe(false);
+      expect(sources.some((s) => s.includes('mood.png'))).toBe(false);
+    });
   });
 
   it('marks a reference image as a plate on the environment Plates tab', async () => {

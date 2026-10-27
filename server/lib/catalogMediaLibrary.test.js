@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   MAX_CAST_GUIDES, normalizeLibrary, filterLibraryMedia, pickGuideMedia,
-  parseLibraryMediaKey, inferAgeFromText,
+  parseLibraryMediaKey, inferAgeFromText, isGoodReference,
 } from './catalogMediaLibrary.js';
 
 const row = (mediaKey, kind, library = {}, createdAt = '2026-01-01T00:00:00.000Z') => ({ mediaKey, kind, library, createdAt });
@@ -87,5 +87,15 @@ describe('catalogMediaLibrary', () => {
     expect(inferAgeFromText('Experiment ages: Nora at 17, VHS')).toBe(17);
     expect(inferAgeFromText('reference sheet, age 7')).toBe(7);
     expect(inferAgeFromText('no age here')).toBeUndefined();
+  });
+
+  it('recognizes reference items marked good', () => {
+    expect(isGoodReference({ library: { review: { status: 'good' } } })).toBe(true);
+    expect(isGoodReference({ review: { status: 'good' } })).toBe(true);
+    expect(isGoodReference({ library: { review: { status: 'bad' } } })).toBe(false);
+    expect(isGoodReference({ library: { review: { status: 'rejected' } } })).toBe(false);
+    expect(isGoodReference({ library: { review: { status: 'unreviewed' } } })).toBe(false);
+    expect(isGoodReference({})).toBe(false);
+    expect(isGoodReference(null)).toBe(false);
   });
 });
