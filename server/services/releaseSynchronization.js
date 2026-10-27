@@ -43,6 +43,18 @@ async function readOutbox() {
   return parsed.data;
 }
 
+/** Agent archives remain verifier input until the corresponding durable outbox
+ * has verified every obligation. This is retention evidence, not cleanup or
+ * merge authority. Read without the task-publication queue: callers hold the
+ * agent-state lock, which task registration may itself need. */
+export async function readReleaseSynchronizationRetention() {
+  const outbox = await readOutbox();
+  return Object.values(outbox.publications).map(entry => ({
+    identity: entry.identity, owner: entry.owner, taskId: entry.task.id,
+    verified: entry.synchronization?.status === 'verified',
+  }));
+}
+
 // Never copy arbitrary agent/task metadata (credentials, old prompts, claims or
 // retry budgets). Review settings are the original delivery obligations.
 function synchronizationPrompt(publication) {

@@ -56,10 +56,36 @@ export async function readProtectedCleanupOwners({ state = null, index = null, t
     });
   }
   const protectedOwners = collectProtectedCleanupOwners([...view.user.tasks, ...view.cos.tasks]);
+  let synchronizations;
+  try {
+    const { readReleaseSynchronizationRetention } = await import('./releaseSynchronization.js');
+    synchronizations = await readReleaseSynchronizationRetention();
+  } catch (err) {
+    throw new ServerError(`Cannot verify release synchronization ownership: ${err.message}`, {
+      status: 503, code: 'CLEANUP_OWNERSHIP_UNAVAILABLE',
+    });
+  }
+  const pending = synchronizations.filter(entry => !entry.verified);
+  const continuationTasks = new Set(pending.map(entry => entry.taskId));
+  for (const entry of pending) protectedOwners.ownerIds.add(entry.owner.agentId);
+  const protectSynchronizationEvidence = (id, agent) => {
+    if (continuationTasks.size && (!agent || typeof agent !== 'object' || Array.isArray(agent)
+      || (agent.id || agent.agentId) !== id || typeof agent.taskId !== 'string' || !agent.taskId)) protectedOwners.ownerIds.add(id);
+    if (continuationTasks.has(agent?.taskId)) protectedOwners.ownerIds.add(id);
+    const publication = agent?.metadata?.releasePublication;
+    // A verified receipt precedes its outbox registration. Retain that owner
+    // even if registration failed before the outbox entry could be written.
+    if (publication?.status === 'verified' && publication.synchronizationHandoffVersion === 1
+      && !synchronizations.some(entry => entry.verified && entry.identity === publication.identity
+        && entry.owner.agentId === id && entry.owner.taskId === agent.taskId && entry.owner.startedAt === agent.startedAt)) {
+      protectedOwners.ownerIds.add(id);
+    }
+  };
   // Completion is persisted before its task hold; pending repo-state verification
   // on a resident or archived completion record also protects restart evidence.
   for (const [id, agent] of Object.entries(state?.agents || {})) {
     if (hasPendingRepoStateVerification(agent)) protectedOwners.ownerIds.add(id);
+    protectSynchronizationEvidence(id, agent);
   }
   if (index instanceof Map) {
     const candidates = targetAgentId
@@ -68,9 +94,13 @@ export async function readProtectedCleanupOwners({ state = null, index = null, t
     for (const [id, date] of candidates) {
       if (protectedOwners.ownerIds.has(id) || state?.agents?.[id] || !date) continue;
       const content = await tryReadFile(join(AGENTS_DIR, date, id, 'metadata.json'));
-      if (!content) continue;
+      if (!content) {
+        if (continuationTasks.size) protectedOwners.ownerIds.add(id);
+        continue;
+      }
       const parsed = safeJSONParse(content, null, { logError: false });
       if (hasPendingRepoStateVerification(parsed)) protectedOwners.ownerIds.add(id);
+      protectSynchronizationEvidence(id, parsed);
     }
   }
   return protectedOwners;
@@ -1368,7 +1398,7 @@ export async function deleteAgent(agentId) {
     const protectedOwners = await readProtectedCleanupOwners({ state, index: idx, targetAgentId: agentId });
     if (protectedOwners.isProtected(agentId)) {
       throw new ServerError(
-        `Agent ${agentId} is still owned by an active task delivery or retry cleanup hold and cannot be deleted until cleanup finishes`,
+        `Agent ${agentId} is still needed for task cleanup or release synchronization and cannot be deleted until that work is verified`,
         { status: 409, code: 'AGENT_CLEANUP_OWNED' },
       );
     }

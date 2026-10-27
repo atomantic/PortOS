@@ -30,7 +30,8 @@ vi.mock('./cosState.js', () => ({
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: vi.fn(async () => Object.values(mockCosState.state?.agents || {})) }));
 const recoveryTasks = vi.hoisted(() => new Map());
 const releaseHandoff = vi.hoisted(() => ({ ensure: vi.fn(async () => ({ taskId: 'task-release-sync-example' })) }));
-vi.mock('./releaseSynchronization.js', () => ({ ensureReleaseSynchronization: releaseHandoff.ensure }));
+vi.mock('./releaseSynchronization.js', () => ({ ensureReleaseSynchronization: releaseHandoff.ensure,
+  readReleaseSynchronizationRetention: vi.fn(async () => []) }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./cosTaskStore.js', () => ({
   getTaskById: vi.fn(async id => recoveryTasks.get(id) || null),
