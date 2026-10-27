@@ -1143,6 +1143,32 @@ describe('the gate end to end', () => {
     expect(result.stdout).toBe('');
   });
 
+  it('refuses unsupported Git before planning or writing a receipt', () => {
+    const receipt = join(REPO_ROOT, PREGATE_REPORT_PATH);
+    const before = existsSync(receipt) ? readFileSync(receipt) : null;
+    const preload = `
+      import childProcess from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      childProcess.spawnSync = (command, args) => {
+        if (command === 'git' && args.join(' ') === 'merge-tree -h') {
+          return { status: 129, stdout: '--write-tree', stderr: 'private subprocess output' };
+        }
+        throw new Error('Unexpected subprocess after capability refusal');
+      };
+      syncBuiltinESMExports();
+    `;
+    const result = spawnSync(process.execPath, [
+      '--import', `data:text/javascript,${encodeURIComponent(preload)}`,
+      join(REPO_ROOT, 'scripts', 'pregate.js'),
+    ], { cwd: REPO_ROOT, encoding: 'utf8' });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Install Git 2.40 or newer');
+    expect(result.stderr).not.toContain('private subprocess output');
+    expect(result.stderr).not.toContain('Unexpected subprocess');
+    expect(result.stdout).not.toContain('Planning against');
+    expect(existsSync(receipt) ? readFileSync(receipt) : null).toEqual(before);
+  });
+
   it('passes an uncommitted new test through the planner override', () => {
     const root = mkdtempSync(join(tmpdir(), 'portos-pregate-'));
     const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
