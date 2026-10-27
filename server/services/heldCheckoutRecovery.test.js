@@ -1543,15 +1543,21 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   // This lifecycle uniquely exercises the old 16 MiB per-module proof failure,
   // including persisted settlement, without relaxing any production budget.
-  it('retires a cache whose former per-file metadata exceeds 16 MiB with bounded streaming proof', async () => {
+  it('retires a cache whose former per-file metadata exceeds 16 MiB with bounded streaming proof', async ({ signal }) => {
     const c = await reviewedCheckout('compact-cache-cardinality');
+    c.opts.signal = signal;
+    if (signal.aborted) return;
     const root = await moduleCache(c, { count: 0, bytes: 1 });
     const count = 80000;
     const fixtureStarted = performance.now();
     const payloads = Array.from({ length: 256 }, (_, index) => join(scratch, `cache-fixture-payload-${index}`));
-    for (let offset = 0; offset < payloads.length; offset += 32) await Promise.all(payloads.slice(offset, offset + 32).map(path => writeFile(path, 'x')));
+    for (let offset = 0; offset < payloads.length; offset += 32) {
+      if (signal.aborted) return;
+      await Promise.all(payloads.slice(offset, offset + 32).map(path => writeFile(path, 'x')));
+    }
     let oldMetadataBytes = 0;
     for (let offset = 0; offset < count; offset += 32) {
+      if (signal.aborted) return;
       await Promise.all(Array.from({ length: Math.min(32, count - offset) }, async (_, index) => {
         const name = (offset + index).toString(16).padStart(64, '0');
         oldMetadataBytes += Buffer.byteLength(JSON.stringify({ path: `server/.cache/vitest/modules/${name}`,
@@ -1561,6 +1567,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         await link(payloads[(offset + index) % payloads.length], join(root, name));
       }));
     }
+    if (signal.aborted) return;
     console.log(`📏 Cache fixture: ${JSON.stringify({ entries: count, creationMs: Math.ceil(performance.now() - fixtureStarted) })}`);
     expect(oldMetadataBytes).toBeGreaterThan(16 * 1024 * 1024);
     const initialHeap = process.memoryUsage().heapUsed;
@@ -1569,6 +1576,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     cacheFaults.onOpen = () => { if (++opened % 1024 === 0) peakHeap = Math.max(peakHeap, process.memoryUsage().heapUsed); };
     const started = performance.now();
     const prepared = await c.prepare();
+    if (signal.aborted) return;
     expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, archiveUsage: {
       cacheRoots: 1, cacheEntries: count + 2, cacheBytes: expect.any(Number), cacheReadBytes: expect.any(Number),
     } });
@@ -1582,6 +1590,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     console.log(`📏 Compact cache proof: ${JSON.stringify({ oldMetadataBytes, ...prepared.archiveUsage,
       previewMs: Math.ceil(performance.now() - started), sampledPeakHeapDeltaBytes: peakHeap - initialHeap })}`);
     const retired = await c.confirm(prepared.review);
+    if (signal.aborted) return;
     expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
     expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
       branch: c.release.branch, path: c.path, head: c.release.head, branchDeleted: true,
