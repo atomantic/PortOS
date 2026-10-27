@@ -593,6 +593,46 @@ describe('AgentCard responsive header', () => {
     }
   });
 
+  it.each([
+    ['active', { ...agent, status: 'running', completedAt: null }],
+    ['completed', agent],
+  ])('shows requested fast as a compact attribute on the %s card', (_label, cardAgent) => {
+    render(
+      <MemoryRouter>
+        <AgentCard
+          agent={{ ...cardAgent, metadata: { ...cardAgent.metadata, model: 'example-model', executionOptions: {
+            requested: { serviceTier: 'fast' }, effective: {}, provenance: { serviceTier: 'provider' },
+          } } }}
+          completed={cardAgent.status === 'completed'}
+        />
+      </MemoryRouter>
+    );
+
+    const tag = screen.getByText('fast').parentElement;
+    expect(tag.parentElement).toContainElement(screen.getByText('example-model'));
+    expect(tag).toHaveAttribute('title', expect.stringContaining('requested fast; effective unconfirmed'));
+    expect(tag).toHaveTextContent('Source: provider');
+    expect(screen.queryByLabelText('Execution options used')).not.toBeInTheDocument();
+  });
+
+  it('reports confirmed speed without mistaking it for the requested speed', () => {
+    render(<MemoryRouter><AgentCard agent={{ ...agent, metadata: { ...agent.metadata, executionOptions: {
+      requested: { serviceTier: 'fast' }, effective: { serviceTier: 'standard' },
+    } } }} completed /></MemoryRouter>);
+
+    expect(screen.getByText('fast').parentElement).toHaveAttribute('title', expect.stringContaining('requested fast; effective standard'));
+  });
+
+  it.each([
+    ['standard requested', { requested: { serviceTier: 'standard' } }],
+    ['only effective fast', { effective: { serviceTier: 'fast' } }],
+    ['no options', undefined],
+  ])('does not show the fast tag for %s', (_label, executionOptions) => {
+    render(<MemoryRouter><AgentCard agent={{ ...agent, metadata: { ...agent.metadata, executionOptions } }} completed /></MemoryRouter>);
+    expect(screen.queryByText('fast')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Execution options used')).not.toBeInTheDocument();
+  });
+
   it('shows provider route provenance on active and completed cards', () => {
     const routeMetadata = {
       providerId: 'claude-ollama',
