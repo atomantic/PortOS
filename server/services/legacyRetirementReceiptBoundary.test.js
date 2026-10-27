@@ -53,8 +53,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retirement receipt reconciliation throu
     const observation = { branch, path, head: branch, reason: 'retirement-provenance-unverified',
       createdAt: '2026-01-02T00:00:00.000Z', observedAt: '2026-01-03T00:00:00.000Z' };
     const receipt = { branch, path, head, checkoutIdentity: oldIdentity, branchDeleted: true, archiveDir: null, retiredAt: '2026-01-01T00:00:00.000Z' };
-    const seed = async (appId, serviceReceipt) => {
-      const outcome = { status: 'incomplete', remaining: [observation], retirementObligations: [observation], retired: [serviceReceipt] };
+    const seed = async (appId, serviceReceipt, row = observation) => {
+      const outcome = { status: 'incomplete', remaining: [row], retirementObligations: [row], retired: [serviceReceipt] };
       markLegacyRetirements(outcome);
       await recordBranchReconcileOutcome(appId, { status: 'incomplete', remaining: [] });
       await updateSchedule(schedule => {
@@ -80,5 +80,25 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retirement receipt reconciliation throu
     expect(bound.retired).toEqual([{ ...laterReceipt, settledObservations: [{ observation, settledAt: expect.any(String) }] }]);
     expect(bound.retirementObligations).toEqual([]);
     expect(bound.legacyRetirementTransition.resolutions).toEqual([]);
+
+    // A branch-only observation also cannot identify the generation whose ref
+    // was finalized before it was seen, even when the old receipt is unique.
+    const refObservation = { branch, reason: 'retirement-provenance-unverified',
+      createdAt: '2026-01-02T00:00:00.000Z', observedAt: '2026-01-03T00:00:00.000Z' };
+    const finalized = { ...receipt, branchFinalization: { kind: 'deleted' }, branchFinalizedAt: '2026-01-01T01:00:00.000Z' };
+    await seed('old-finalization-app', finalized, refObservation);
+    const refResult = await getBranchReconcileInventory('old-finalization-app');
+    expect(refResult.retired).toEqual([finalized]);
+    expect(refResult.legacyRetirementTransition.resolutions).toMatchObject([{
+      observation: refObservation, disposition: 'local-cleanup-not-required', removalVerified: false,
+      evidence: { kind: 'current-local-absence', deliveryVerified: false, preservationVerified: false },
+    }]);
+
+    // A finalization after the observation may settle the branch-only record.
+    const laterFinalized = { ...finalized, branchFinalizedAt: '2026-01-04T00:00:00.000Z' };
+    await seed('later-finalization-app', laterFinalized, refObservation);
+    const finalizedResult = await getBranchReconcileInventory('later-finalization-app');
+    expect(finalizedResult.retired).toEqual([{ ...laterFinalized, settledObservations: [{ observation: refObservation, settledAt: expect.any(String) }] }]);
+    expect(finalizedResult.legacyRetirementTransition.resolutions).toEqual([]);
   });
 });
