@@ -8,7 +8,7 @@ import { withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SIZE } from './agentDel
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
 import { completionSentinelPresent } from './agentCompletionSentinel.js';
-import { hasClaimCheckoutBindings, completedCheckoutReceiptValid, sameTaskRetirementBinding } from './completedCheckoutEvidence.js';
+import { hasClaimCheckoutBindings, completedCheckoutReceiptValid, sameTaskRetirementBinding, checkoutSeedSchema } from './completedCheckoutEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { sameRetirementObservation } from '../lib/reconcileRetirementEvidence.js';
 import { resolveRetirementApp } from './retirementAppScope.js';
@@ -458,6 +458,62 @@ async function verifyReleasedSynchronization(agent) {
   }
 }
 
+/** A terminal capture can be unavailable even after the service safely retired
+ * its original seeded generation. Settle physical cleanup only; receipt heads
+ * remain retirement observations and never become original captured heads. */
+async function settleOwnSeedRetirement(agent) {
+  const meta = agent.metadata;
+  if (agent.status !== 'completed' || meta?.checkoutCapture?.status !== 'pending'
+    || meta.checkoutCapture.unknown !== true || meta.completionCleanup?.status !== 'pending'
+    || meta.checkoutSeeds?.length !== 1) return false;
+  const seed = meta.checkoutSeeds[0];
+  if (!checkoutSeedSchema.safeParse(seed).success || seed.agentId !== agent.id || seed.startedAt !== agent.startedAt
+    || seed.repoPath !== meta.sourceWorkspace || seed.path !== meta.workspacePath || seed.branch !== meta.worktreeBranch
+    || !(Date.parse(agent.startedAt) <= Date.parse(seed.seededAt) && Date.parse(seed.seededAt) <= Date.parse(agent.completedAt))) return false;
+  const [{ getInstanceId, UNKNOWN_INSTANCE_ID }, { loadSchedule }, { lstat }] = await Promise.all([
+    import('./instanceIdentity.js'), import('./taskScheduleStore.js'), import('node:fs/promises'),
+  ]);
+  const instance = await getInstanceId();
+  if (!instance || instance === UNKNOWN_INSTANCE_ID || meta.instanceId !== instance) return false;
+  const repositoryCurrent = async () => {
+    const info = await lstat(seed.repoPath, { bigint: true }).catch(() => null);
+    return info?.isDirectory() && ['dev', 'ino', 'birthtimeNs'].every(key => String(info[key]) === seed.repository[key]);
+  };
+  if (!await repositoryCurrent()) return false;
+  const checkoutIdentity = retirementCheckoutIdentityFromPointer(seed.incarnation.pointer);
+  const schedule = await loadSchedule();
+  const receipts = new Map();
+  for (const record of Object.values(schedule.executions?.['task:branch-reconcile']?.perApp || {})) {
+    const outcome = record.branchReconcileOutcome;
+    for (const row of [...(outcome?.retired || []), ...Object.values(outcome?.retirementReceiptEvidence || {})]) {
+      if (row.path !== seed.path || row.branch !== seed.branch || row.checkoutIdentity !== checkoutIdentity
+        || row.branchDeleted !== true || row.archiveDir != null || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(row.head || '')
+        || !(Date.parse(row.retiredAt) >= Date.parse(agent.completedAt))) continue;
+      receipts.set(JSON.stringify([row.path, row.branch, row.head, row.checkoutIdentity, row.retiredAt]), row);
+    }
+  }
+  if (receipts.size !== 1) return false;
+  const receipt = [...receipts.values()][0];
+  const { findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
+  const preservation = await findMissingCheckoutPreservation({ repoPath: seed.repoPath,
+    release: { path: seed.path, branch: seed.branch, head: receipt.head, createdAt: seed.seededAt, checkoutIdentity } }).catch(() => null);
+  if (!preservation || preservation.kind !== 'service-retirement-receipt') return false;
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
+  return withClaimOwnershipLock(async () => {
+    const owners = await readClaimOwnershipAgents().catch(() => null);
+    if (!owners || owners.some(owner => ['running', 'paused'].includes(owner.status)
+      && resolve(owner.metadata?.sourceWorkspace || owner.metadata?.workspacePath || '') === resolve(seed.repoPath)
+      && (resolveTaskTargetBranch(owner.metadata) === seed.branch || owner.metadata?.worktreeBranch === seed.branch
+        || owner.metadata?.claimBranches?.includes(seed.branch)))) return false;
+    if (!await repositoryCurrent() || !await preservation.recheck()
+      || await readCheckoutPathPresence(seed.path) !== false || await readLocalBranchPresence(seed.repoPath, seed.branch) !== false
+      || (await listWorktrees(seed.repoPath)).some(row => row.path === seed.path || row.branch?.replace(/^refs\/heads\//, '') === seed.branch)) return false;
+    const { recordSeededCheckoutRetirement } = await import('./cosAgentLifecycle.js');
+    return recordSeededCheckoutRetirement(agent.id, agent, { checkoutIdentity, retiredHead: receipt.head,
+      receiptDigest: preservation.evidenceDigest });
+  });
+}
+
 /** A missing original capture stays unknown. A separately captured, delivered
  * successor can nevertheless prove that this exact generation was retired. */
 async function settleSeededPredecessor(agent) {
@@ -509,6 +565,7 @@ async function resumeReleasedCompletion(agentId) {
   const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const agent = await getAgentRecord(agentId);
   if (agent?.status !== 'completed') return;
+  if (await settleOwnSeedRetirement(agent)) return { verified: false, physicalRetirementVerified: true, skipReason: 'original-result-preserved' };
   if (await settleSeededPredecessor(agent)) return { verified: true, retiredBySuccessor: true };
   const deliveryPending = agent.metadata?.repoStateVerification?.status === 'pending'
     && (agent.result?.cleanupPending === true || agent.result?.success === true);
@@ -716,6 +773,10 @@ async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false } = {}
       emitLog('warn', `Release synchronization handoffs retained: ${error.code || 'outbox-unavailable'}`);
     });
     await reconcileReleasedSelectionHistory(agents);
+    for (const agent of agents.filter(row => row.status === 'completed' && row.metadata?.checkoutCapture?.unknown === true
+      && row.metadata?.completionCleanup?.status === 'pending').slice(0, COMPLETION_RECOVERY_BATCH_SIZE)) {
+      await settleOwnSeedRetirement(agent).catch(error => emitLog('warn', `Seeded retirement settlement deferred for ${agent.id}: ${error.message}`));
+    }
     // Older receipts already proved delivery and cleanup, but left the deferred
     // domain verdict pending. Replay the existing writer, without another probe,
     // task, completion event or provider budget expenditure.

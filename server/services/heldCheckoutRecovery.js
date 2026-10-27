@@ -17,8 +17,8 @@ import { createNpmRetirementVerifier } from '../lib/npmRetirementPayload.js';
  * release: a changed lock, HEAD or branch is an ownership change and refuses.
  *
  * A merged, clean checkout is removed in place. Explicit preserved-supersession
- * review also admits a closed, published prototype after durable small-evidence
- * preservation. Dirty, otherwise unmerged, protected, and live-owner checkouts stay. Retirement does not copy the
+ * review also admits a released published or private prototype after durable
+ * bounded source and small-evidence preservation. Dirty, otherwise unmerged, protected, and live-owner checkouts stay. Retirement does not copy the
  * checkout, its ignored files, or its commit history.
  */
 
@@ -758,7 +758,8 @@ async function retirementPolicy(repoPath, branch, opts, reviewIdentity = {}) {
   const continued = reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...identity, checkoutIdentities, deliveryContinuations });
   if (!continued.reason) return continued;
   const { readResumedCheckoutDeliveries } = await import('./resumedCheckoutDelivery.js');
-  const resumedDeliveries = await readResumedCheckoutDeliveries({ repoPath, branch, ...identity }, policies);
+  const resumedDeliveries = await readResumedCheckoutDeliveries({ repoPath, branch, ...identity }, policies,
+    { retainMissingSource: opts.retainMissingSource === true });
   return reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...identity, checkoutIdentities, deliveryContinuations, resumedDeliveries });
 }
 
@@ -786,7 +787,7 @@ const reviewForgeOptions = (release, kind, opts) => ({ forgeAccount: opts.forgeA
   ...(!kind && { exactDeliveredHead: release.head }),
   ...(!release.branch && { exactAliasHead: release.head, detachedSourceHead: release.head }),
   ...(kind && { sourceSupersessionHead: release.head }),
-  ...(kind === 'preserved-supersession' && { requirePublishedSupersession: true }) });
+  ...(kind === 'preserved-supersession' && { requirePublishedSupersession: true, allowPrivateSupersession: true }) });
 
 async function matchReviewTarget({ repoPath, release, kind, unlocked = false }, opts) {
   if (kind && !['source-supersession', 'preserved-supersession'].includes(kind)) return { ok: false, reason: 'retirement-review-kind-unavailable' };
@@ -827,14 +828,31 @@ async function readCheckoutReviewPrerequisites(input, opts) {
   return { ok: true, tree: matched.tree, forge, policy };
 }
 
-/** A closed prototype is not merged. Keep its exact published history plus a
+/** A superseded prototype is not merged. Keep exact published/private source plus a
  * small, bounded copy of checkout-only evidence in the durable schedule record.
  * This never creates a repository archive or treats arbitrary ignored data as
  * cache. Oversized/unknown recovery objects retain the original checkout. */
-async function preservePublishedSourceReview(repoPath, tree, forge, content, administration, signal) {
+async function preservePublishedSourceReview(repoPath, tree, forge, content, administration, signal, retainMissingSource = false) {
   const source = forge.sourcePreservation;
+  const privateSource = source?.kind === 'private-retained-source';
   if (!source || source.head !== tree.head || source.remoteRef !== tree.branch
-    || forge.remoteHead !== `${tree.head}\t${tree.branch}`) throw new Error('retirement-source-not-published');
+    || (privateSource ? forge.remoteHead !== null : forge.remoteHead !== `${tree.head}\t${tree.branch}`)) throw new Error('retirement-source-not-published');
+  let privateProof, retainPrivateRoot;
+  const privateRecoveryProofs = [];
+  let privateDeltaBytes = 0;
+  const privateDeadline = performance.now() + 10000;
+  if (privateSource) {
+    if ((await git(['show-ref', '--verify', '--hash', tree.branch], repoPath)).trim() !== tree.head) throw new Error('retirement-local-source-head-changed');
+    const target = forge.targetHead ?? forge.defaultHead;
+    await git(['merge-base', '--is-ancestor', forge.mergeCommit, target], repoPath);
+    const { retainCheckoutSourceProof } = await import('./resumedCheckoutDelivery.js');
+    retainPrivateRoot = (head, allowIntegratedSource = false) => retainCheckoutSourceProof({ repoPath,
+      sourceHead: head, comparisonHead: target, targetHead: target, retainMissingSource, allowIntegratedSource,
+      maxDeltaBytes: 64 * 1024 - privateDeltaBytes, deadline: privateDeadline }).catch(() => null);
+    privateProof = await retainPrivateRoot(tree.head);
+    if (!privateProof) throw new Error('retirement-source-preservation-unavailable');
+    privateDeltaBytes = privateProof.deltaBytes;
+  }
   if (content.indexDiff.length || content.worktreeDiff.length) throw new Error('retirement-source-dirty');
   // A clean index can still retain resolve-undo conflict stages that cannot be
   // reconstructed from HEAD. Do not omit that private recovery evidence.
@@ -843,8 +861,15 @@ async function preservePublishedSourceReview(repoPath, tree, forge, content, adm
   const roots = await recoveryObjectHeads(administration, { repoPath, tree }, work);
   // Saved private refs/reflogs may name work beyond the published tip. Do not
   // discard it merely because its metadata fits in the small evidence budget.
-  for (const head of roots) {
+  for (const head of [...roots].sort()) {
     work.check();
+    if (privateSource) {
+      const proof = head === tree.head ? privateProof : await retainPrivateRoot(head, true);
+      if (!proof) throw new Error('retirement-source-private-work-unpublished');
+      if (head !== tree.head) privateDeltaBytes += proof.deltaBytes;
+      privateRecoveryProofs.push(proof);
+      continue;
+    }
     if (!await execGit(['merge-base', '--is-ancestor', head, tree.head], repoPath,
       { ignoreExitCode: true, timeout: 2000, maxBuffer: 16384,
         env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1' } }).then(result => result.exitCode === 0)) throw new Error('retirement-source-private-work-unpublished');
@@ -863,7 +888,7 @@ async function preservePublishedSourceReview(repoPath, tree, forge, content, adm
       files.push({ scope, path: file.path, sha256: file.sha256, data: data.toString('base64') });
     }
   }
-  return { ...source, files, symlinks: { content: content.symlinks, administration: administration.symlinks },
+  return { ...source, ...(privateProof && { privateProof, privateRecoveryProofs }), files, symlinks: { content: content.symlinks, administration: administration.symlinks },
     recoveryHeads: [...roots].sort(), omitted: 'clean-index-and-checkout-pointers-reconstructible; recognized-module-cache-disposable' };
 }
 
@@ -873,7 +898,7 @@ async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { 
   return archiveSnapshots(tree, repoPath, null, work, true, !kind)
     .then(async ([content, administration]) => {
       const preservedSource = kind === 'preserved-supersession'
-        ? await preservePublishedSourceReview(repoPath, tree, forge, content, administration, opts.signal) : null;
+        ? await preservePublishedSourceReview(repoPath, tree, forge, content, administration, opts.signal, opts.retainMissingSource === true) : null;
       // A validation receipt is meaningful local evidence, not disposable cache.
       // Bound its exact bytes into explicit exact-delivery review; unknown files
       // and larger payloads continue to retain their original checkout.
@@ -1042,7 +1067,7 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
   if (retired) return prepareRemovedCheckoutBranch({ appId, release: retired, prUrl, kind }, opts);
   release = bindInventoriedRelease(outcome, release);
   if (!release) return { ok: false, reason: 'release-not-in-inventory' };
-  const reviewOptions = { ...opts, forgeAccount: app.forgeAccount ?? null };
+  const reviewOptions = { ...opts, forgeAccount: app.forgeAccount ?? null, retainMissingSource: true };
   const review = () => previewCurrentCheckout({ repoPath: app.repoPath, release, prUrl, kind }, reviewOptions);
   let prepared = await review();
   if (prepared.reason === 'retirement-local-objects-missing') {
@@ -1709,6 +1734,8 @@ export async function inspectCheckoutRetirementOwnership({ repoPath, release, re
  * @returns {Promise<{ ok: true, branchDeleted: boolean, checkoutIdentity?: string, branchRetainedReason?: string } | { ok: false, reason: string, detail?: string }>}
  */
 async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
+  // A destructive recheck can verify existing preservation, never recreate it.
+  opts = { ...opts, retainMissingSource: false };
   const { readAgents = readClaimOwnershipAgents } = opts;
   // Only the unattended merged-retirement caller sets this, and only without a review.
   const mergedObligationSettled = !review && opts.settleMergedReviewObligation === true;
