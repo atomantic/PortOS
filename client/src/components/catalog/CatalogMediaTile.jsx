@@ -34,7 +34,7 @@ export default function CatalogMediaTile({
         </div>
       )}
       {isVideo && (
-        <video controls preload="none" src={`/data/videos/${m.mediaKey}`} className="w-full aspect-square object-cover bg-black" />
+        <video controls preload="none" src={`/data/videos/${m.mediaKey}`} className="w-full aspect-square object-contain bg-black" />
       )}
       {!isImage && !isAudio && !isVideo && (
         <div className="w-full aspect-square flex items-center justify-center text-[10px] uppercase tracking-wider text-gray-400 px-1 text-center break-all">
