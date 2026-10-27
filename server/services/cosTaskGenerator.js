@@ -1523,7 +1523,8 @@ function stampApprovalReason(metadata, approval) {
  * Helper function to generate a self-improvement task for a specific type
  * Used by both normal rotation and on-demand task requests
  */
-export async function generateSelfImprovementTaskForType(taskType, state) {
+export async function generateSelfImprovementTaskForType(taskType, state, options = {}) {
+  const { providerOverride = null, targetModels = null } = options;
   if (taskType === 'development-watchdog') return null;
   const taskSchedule = await import('./taskSchedule.js');
   const { getTaskPrompt } = await import('./taskPromptService.js');
@@ -1569,6 +1570,24 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   }
   if (interval.executionOptions !== undefined) metadata.executionOptions = interval.executionOptions;
 
+  // On-demand provider / model / effort / executionOptions overrides take precedence
+  if (providerOverride?.provider) {
+    metadata.provider = providerOverride.provider;
+    metadata.providerId = providerOverride.provider;
+  }
+  if (providerOverride?.model) {
+    metadata.model = providerOverride.model;
+  }
+  if (providerOverride?.effort !== undefined) {
+    metadata.effort = providerOverride.effort;
+  }
+  if (providerOverride?.executionOptions !== undefined) {
+    metadata.executionOptions = providerOverride.executionOptions;
+  }
+  if (Array.isArray(targetModels) && targetModels.length > 0) {
+    metadata.targetModels = targetModels;
+  }
+
   // repo-sync's install-wide sweep. This lane is what a global "Run Now" (no
   // app) hits, and sweeping EVERY managed app in one run is the shape the task
   // exists for — so the pre-step runs here, not only in the per-app lane. It
@@ -1589,14 +1608,26 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
     if (inputHook.hookPrompt) description = inputHook.hookPrompt;
   }
 
-  // Operator review and model research deliver actions/data, never a commit.
+  // Operator review delivers actions/issues, never a commit.
   // Stamp the action-output posture the way the audit file-issues path does —
   // `noCodeOutput` is dispatch-stamped, not user-settable, so it cannot arrive
   // from DEFAULT_TASK_INTERVALS through sanitizeTaskMetadata. Without it the
   // completion contract tells a live-checkout agent to commit and `/do:push`.
-  if (taskType === 'user-action-review' || taskType === 'model-comparison-refresh') {
+  if (taskType === 'user-action-review') {
     metadata.noCodeOutput = true;
     metadata.worktreeChangesExpected = false;
+  }
+
+  // Model comparison research investigates gaps, updates the local instance,
+  // and creates a PR to include the new evidence in the shipped PortOS app.
+  if (taskType === 'model-comparison-refresh') {
+    metadata.useWorktree = true;
+    metadata.openPR = true;
+    metadata.worktreeChangesExpected = true;
+    if (metadata.targetModels?.length) {
+      const modelList = metadata.targetModels.map(m => `- ${m}`).join('\n');
+      description = `${description}\n\n## Target models to investigate\nThe user selected specific models in the comparison selector. Focus investigation strictly on the following models:\n${modelList}\nResearch missing intelligence scores, effort levels, and token prices for these models.`;
+    }
   }
 
   // user-action-review: render the delivery posture the operator chose

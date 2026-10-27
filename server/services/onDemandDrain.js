@@ -283,7 +283,15 @@ export async function drainOnDemandRequests(ctx, adapter) {
           s.stats.lastSelfImprovementType = request.taskType;
           await saveState(s);
         });
-        task = await generateSelfImprovementTaskForType(request.taskType, state);
+        const drainOptions = (request.providerOverride || request.targetModels)
+          ? {
+              providerOverride: request.providerOverride ?? null,
+              targetModels: request.targetModels ?? null,
+            }
+          : undefined;
+        task = drainOptions
+          ? await generateSelfImprovementTaskForType(request.taskType, state, drainOptions)
+          : await generateSelfImprovementTaskForType(request.taskType, state);
       }
 
       applyOnDemandConsent(task);

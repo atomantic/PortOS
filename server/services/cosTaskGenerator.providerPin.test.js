@@ -52,6 +52,8 @@ vi.mock('./taskSchedule.js', () => ({
   getPerpetualDrainState: vi.fn(async () => ({ signature: null, dispatchCount: 0 })),
   recordPerpetualDispatch: vi.fn(async () => 1),
   recordPerpetualStall: vi.fn(async () => {}),
+  requiresManagedAppTarget: vi.fn(() => false),
+  INSTALL_WIDE_TASK_TYPES: new Set(['model-comparison-refresh']),
 }));
 
 vi.mock('./appActivity.js', async (importActual) => ({
@@ -90,7 +92,7 @@ vi.mock('./perpetualWork.js', async importOriginal => ({
 
 import { detectActionableWork } from './perpetualWork.js';
 import { recordPerpetualStall } from './taskSchedule.js';
-import { prepareManagedAppImprovementTask } from './cosTaskGenerator.js';
+import { prepareManagedAppImprovementTask, generateSelfImprovementTaskForType } from './cosTaskGenerator.js';
 import { resolveClaimWorkMetadata } from './cosTaskClaimWork.js';
 
 const APP = { id: 'app-1', name: 'Example App', repoPath: '/tmp/example-repo' };
@@ -346,5 +348,41 @@ describe('claim dispatch reviewer identity preflight (#13522)', () => {
     const { task } = await prepare();
     expect(task.description).toContain('@missing-reviewer');
     expect(identityLookup).not.toHaveBeenCalled();
+  });
+});
+
+describe('generateSelfImprovementTaskForType model-comparison-refresh', () => {
+  it('configures worktree, openPR, targetModels, and provider overrides', async () => {
+    getTaskIntervalMock.mockResolvedValue({
+      type: 'on-demand',
+      enabled: false,
+      providerId: null,
+      model: null,
+      prompt: null,
+      taskMetadata: { useWorktree: true, openPR: true, worktreeChangesExpected: true },
+    });
+
+    const task = await generateSelfImprovementTaskForType('model-comparison-refresh', STATE, {
+      providerOverride: {
+        provider: 'anthropic',
+        model: 'claude-3-7-sonnet',
+        effort: 'high',
+        executionOptions: { serviceTier: 'fast' },
+      },
+      targetModels: ['claude-3-7-sonnet', 'gpt-4o'],
+    });
+
+    expect(task).not.toBeNull();
+    expect(task.metadata.useWorktree).toBe(true);
+    expect(task.metadata.openPR).toBe(true);
+    expect(task.metadata.worktreeChangesExpected).toBe(true);
+    expect(task.metadata.provider).toBe('anthropic');
+    expect(task.metadata.model).toBe('claude-3-7-sonnet');
+    expect(task.metadata.effort).toBe('high');
+    expect(task.metadata.executionOptions).toEqual({ serviceTier: 'fast' });
+    expect(task.metadata.targetModels).toEqual(['claude-3-7-sonnet', 'gpt-4o']);
+    expect(task.description).toContain('## Target models to investigate');
+    expect(task.description).toContain('- claude-3-7-sonnet');
+    expect(task.description).toContain('- gpt-4o');
   });
 });

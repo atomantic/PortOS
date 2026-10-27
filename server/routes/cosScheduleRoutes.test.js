@@ -596,6 +596,41 @@ describe('CoS Schedule Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
+      expect(taskSchedule.triggerOnDemandTask).toHaveBeenCalledWith('review', 'my-app', {
+        provider: undefined,
+        model: undefined,
+        effort: undefined,
+        executionOptions: undefined,
+        targetModels: null,
+        targetPullRequest: undefined,
+      });
+    });
+
+    it('forwards provider, model, effort, executionOptions, and targetModels to triggerOnDemandTask', async () => {
+      taskSchedule.triggerOnDemandTask.mockResolvedValue({ id: 'req-2' });
+
+      const response = await request(app)
+        .post('/api/cos/schedule/trigger')
+        .send({
+          taskType: 'model-comparison-refresh',
+          appId: null,
+          provider: 'anthropic',
+          model: 'claude-3-7-sonnet',
+          effort: 'high',
+          executionOptions: { serviceTier: 'fast' },
+          targetModels: ['gpt-6-luna', 'claude-opus-5-5'],
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(taskSchedule.triggerOnDemandTask).toHaveBeenCalledWith('model-comparison-refresh', null, {
+        provider: 'anthropic',
+        model: 'claude-3-7-sonnet',
+        effort: 'high',
+        executionOptions: { serviceTier: 'fast' },
+        targetModels: ['gpt-6-luna', 'claude-opus-5-5'],
+        targetPullRequest: undefined,
+      });
     });
 
     it('rejects missing or malformed taskType before triggering an on-demand task', async () => {
