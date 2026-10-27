@@ -13,6 +13,18 @@ export default function ModelInputPreview({ preview, prompt, onOpenPreview }) {
   return (
     <div className="text-xs space-y-3">
       <ModelReferenceImages images={sent.referenceImages} onOpenPreview={onOpenPreview} />
+      {!!sent.loraAdapters?.length && (
+        <section aria-label="LoRA adapters" className="space-y-1">
+          <h3 className="font-semibold text-gray-300">LoRA adapters</h3>
+          <ul className="space-y-1 text-gray-400">
+            {sent.loraAdapters.map((adapter, index) => (
+              <li key={`${adapter.filename}:${index}`} className="break-words">
+                {adapter.filename} · strength {adapter.scale} · {adapter.source}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <SentPromptPanel
         prompt={prompt}
         sentPrompt={sent.sentPrompt}

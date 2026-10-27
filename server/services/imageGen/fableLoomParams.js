@@ -1,14 +1,23 @@
 import { ServerError } from '../../lib/errorHandler.js';
-import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
+import { existsSync } from 'node:fs';
+import { basename, join, resolve, sep } from 'node:path';
+import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { asFableLoomRenderSettings, inspectEpisodeProductionOrder } from '../../lib/fableLoomProduction.js';
 import { loraCompatKey } from '../../lib/runners.js';
+import { PATHS } from '../../lib/fileUtils.js';
+import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../../lib/imageGenCapabilities.js';
 import { getLoom } from '../fableLoom/records.js';
-import { compileFableLoomVisualRequest, fableLoomImageCapabilities } from '../fableLoom/visualConditioning.js';
+import { compileFableLoomVisualRequest, fableLoomAdapterDigest, fableLoomImageCapabilities } from '../fableLoom/visualConditioning.js';
 import { maxInputImages, resolveCloudProviderConfig } from './cloudProviderConfig.js';
 import { selectLocalImageModelFromSettings } from './prepareParams.js';
 import { applyImageVisualProfile, imageVisualProfileRevision } from './visualProfile.js';
 
 const MAX_REFERENCE_IMAGES = 4;
+
+export const fableLoomMultipartUnsupported = () => new ServerError(
+  'FableLoom scene renders accept gallery images, not file uploads. Upload the image to the gallery first.',
+  { status: 400, code: 'FABLELOOM_MULTIPART_UNSUPPORTED' },
+);
 
 /** Read-only canon preparation after backend resolution, shared by preview and submit. */
 export async function prepareFableLoomImageParams({ params, mode, settings }) {
@@ -46,21 +55,66 @@ export async function prepareFableLoomImageParams({ params, mode, settings }) {
     ? { ...selected, loraCompatKey: loraCompatKey(selected) }
     : (cloud ? { id: cloud.modelId } : null);
   const providerMode = params.mediaProviderPeerId ? 'federated' : mode;
+  const inputBudget = Math.max(0, Math.min(maxInputImages(mode, cloud?.modelId) ?? MAX_REFERENCE_IMAGES, MAX_REFERENCE_IMAGES) - (params.initImagePath ? 1 : 0));
+  const capability = fableLoomImageCapabilities({ mode: providerMode, model, inputBudget });
   const compiled = await compileFableLoomVisualRequest({
     tag: params.fableLoom,
     visualProfileOverride: params.visualProfileOverride,
     kind: 'image',
-    capability: fableLoomImageCapabilities({
-      mode: providerMode,
-      model,
-      // The backend's own input cap (per model for fal.ai), never above
-      // the form ceiling.
-      inputBudget: Math.max(0, Math.min(maxInputImages(mode, cloud?.modelId) ?? MAX_REFERENCE_IMAGES, MAX_REFERENCE_IMAGES) - (params.initImagePath ? 1 : 0)),
-    }),
+    capability,
     authoredPrompt: params.prompt,
     authoredNegativePrompt: params.negativePrompt,
   });
   if (compiled) {
+    const requestReferences = params.referenceImagePaths || [];
+    const requestStrengths = params.referenceImageStrengths || [];
+    const requestFilenames = params.loraFilenames || [];
+    const requestPaths = params.loraPaths || [];
+    const requestScales = params.loraScales || [];
+    const requestAdapters = [...requestFilenames.map(name => join(PATHS.loras, name)), ...requestPaths];
+    const canonAdapters = compiled.loraFilenames || [];
+    const adapterCount = canonAdapters.length + requestAdapters.length;
+    if (requestScales.length > requestAdapters.length) {
+      throw new ServerError('Each requested LoRA scale needs a matching request adapter.', { status: 400, code: 'FABLELOOM_LORA_SCALE_MISMATCH' });
+    }
+    if (requestAdapters.length && !capability.supportsLora) {
+      throw new ServerError('This FableLoom backend cannot use the requested LoRA adapters.', { status: 400, code: 'FABLELOOM_LORA_UNSUPPORTED' });
+    }
+    if (adapterCount > (capability.loraBudget ?? 8)) {
+      throw new ServerError(`FableLoom accepts at most ${capability.loraBudget ?? 8} LoRA adapters including canon; received ${adapterCount}.`, { status: 400, code: 'FABLELOOM_LORA_BUDGET_EXCEEDED' });
+    }
+    const referenceCount = compiled.referenceImagePaths.length + requestReferences.length;
+    const qwenEdit = selected?.pipelineClass === 'QwenImage21Pipeline';
+    const providerInputLimit = qwenEdit ? 10 : maxInputImages(mode, cloud?.modelId);
+    const referenceLimit = CLOUD_IMAGE_GEN_MODES.includes(mode)
+      ? Math.min(providerInputLimit ?? IMAGE_REFERENCE_REQUEST_LIMIT, IMAGE_REFERENCE_REQUEST_LIMIT)
+      : qwenEdit ? 10 : MAX_REFERENCE_IMAGES;
+    if (referenceCount > referenceLimit || (providerInputLimit != null && referenceCount + (params.initImagePath ? 1 : 0) > providerInputLimit)) {
+      throw new ServerError(`FableLoom canon and the request need ${referenceCount} reference images${params.initImagePath ? ' plus an init image' : ''}, exceeding this backend's limit. Remove a reference or choose another backend.`, { status: 400, code: 'FABLELOOM_INPUT_BUDGET_EXCEEDED' });
+    }
+    if (requestStrengths.some(strength => strength !== 1) && (providerMode !== IMAGE_GEN_MODE.LOCAL || selected?.runner !== 'flux2')) {
+      throw new ServerError('This backend cannot apply per-reference strengths. Use full strength or choose FLUX.2.', { status: 400, code: 'FABLELOOM_REFERENCE_STRENGTH_UNSUPPORTED' });
+    }
+    // The quantized FLUX.2 LoRA route switches to bf16 without a KV model and
+    // would otherwise discard every reference after the preview.
+    if (selected?.runner === 'flux2' && (selected.quantization || 'sdnq') !== 'none' && adapterCount && referenceCount) {
+      throw new ServerError('This quantized FLUX.2 model cannot use LoRAs and reference images together. Choose a compatible model or remove one input.', { status: 400, code: 'FABLELOOM_INPUTS_INCOMPATIBLE' });
+    }
+    const loraRoot = `${resolve(PATHS.loras)}${sep}`;
+    if (requestAdapters.some(path => !resolve(path).startsWith(loraRoot) || !existsSync(resolve(path)))) {
+      throw new ServerError('A requested LoRA is unavailable in the local LoRA directory.', { status: 400, code: 'FABLELOOM_LORA_NOT_FOUND' });
+    }
+    const canonPaths = new Set(canonAdapters.map(name => resolve(PATHS.loras, name)));
+    if (requestAdapters.some(path => canonPaths.has(resolve(path)))) {
+      throw new ServerError('A requested LoRA is already selected by scene canon. Remove the duplicate request adapter.', { status: 400, code: 'FABLELOOM_LORA_DUPLICATE' });
+    }
+    const requestDigests = await Promise.all(requestAdapters.map(path => fableLoomAdapterDigest(resolve(path)).catch(() => null)));
+    if (requestDigests.some(digest => !digest)) {
+      throw new ServerError('A requested LoRA could not be fingerprinted for FableLoom provenance.', { status: 400, code: 'FABLELOOM_LORA_UNREADABLE' });
+    }
+    const allReferences = [...compiled.referenceImagePaths, ...requestReferences];
+    const allStrengths = [...compiled.referenceImageStrengths, ...requestReferences.map((_, index) => requestStrengths[index] ?? 1)];
+    const allScales = [...canonAdapters.map((_, index) => compiled.loraScales[index] ?? 1), ...requestAdapters.map((_, index) => requestScales[index] ?? 1)];
     // The compiler owns photography composition; snapshot its profile without
     // appending a second copy of the same clauses or additions.
     params.visualProfile = compiled.visualProfile;
@@ -69,13 +123,19 @@ export async function prepareFableLoomImageParams({ params, mode, settings }) {
     params.negativePrompt = compiled.negativePrompt;
     // The compiler's canon blocks, listed beside what the scene's own request listed (#11317).
     if (compiled.promptAdditions?.length) params.promptAdditions = [...(params.promptAdditions || []), ...compiled.promptAdditions];
-    params.referenceImagePaths = compiled.referenceImagePaths;
-    params.referenceImageStrengths = compiled.referenceImageStrengths;
-    params.loraFilenames = compiled.loraFilenames;
-    params.loraPaths = [];
-    params.loraScales = compiled.loraScales;
+    params.referenceImagePaths = allReferences;
+    params.referenceImageStrengths = allStrengths;
+    params.loraFilenames = [...canonAdapters, ...requestFilenames];
+    params.loraPaths = requestPaths;
+    params.loraScales = allScales;
     params.visualConditioning = compiled.visualConditioning ? {
       ...compiled.visualConditioning,
+      assets: [...compiled.visualConditioning.assets, ...requestReferences.map(path => ({ role: 'request-reference', bindingId: null, required: true, filename: basename(path) }))],
+      adapters: [
+        ...compiled.visualConditioning.adapters.map(adapter => ({ ...adapter, source: 'Canon adapter' })),
+        ...requestAdapters.map((path, index) => ({ filename: basename(path), scale: requestScales[index] ?? 1, characterId: null, sha256: requestDigests[index], source: 'Request adapter' })),
+      ],
+      referenceImageStrengths: allStrengths,
       render: {
         provider: providerMode,
         modelId: model?.id || null,

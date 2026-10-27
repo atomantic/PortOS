@@ -276,6 +276,26 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
     expect(imagesDirContents.filter((f) => f.startsWith('ref-'))).toHaveLength(0);
   });
 
+  it('refuses FableLoom multipart uploads in preview and submission and removes the temporary file', async () => {
+    await withScopedUploadTempDir(async (requestTmpRoot) => {
+      const fableLoom = { loomId: 'example-loom', episodeId: 'example-episode', nodeId: 'example-scene' };
+      const preview = await postJson(app, '/api/image-gen/prompt-preview', {
+        prompt: 'An example scene', mode: 'codex', fableLoom, uploadedReferenceCount: 1,
+      });
+      const submit = await postMultipart(app, '/api/image-gen/generate', [
+        { name: 'prompt', value: 'An example scene' },
+        { name: 'mode', value: 'codex' },
+        { name: 'fableLoom', value: JSON.stringify(fableLoom) },
+        { name: 'referenceImage1', filename: 'a.png', contentType: 'image/png', value: PNG_FIXTURE },
+      ]);
+      expect([preview.status, preview.body.code, preview.body.error]).toEqual([submit.status, submit.body.code, submit.body.error]);
+      expect(preview).toMatchObject({ status: 400, body: { code: 'FABLELOOM_MULTIPART_UNSUPPORTED' } });
+      expect(await listUploadTemps(requestTmpRoot)).toEqual([]);
+      expect(await readdir(refsSandbox)).toEqual([]);
+      expect(enqueueJob).not.toHaveBeenCalled();
+    });
+  });
+
   // Without an explicit body modelId, the FLUX.2 ref gate used to resolve the
   // unpinned `dev` default and 400 even when Settings → Local pinned a
   // FLUX.2 model that the later enqueue would have used (#7362).
