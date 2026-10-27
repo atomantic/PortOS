@@ -3,10 +3,11 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser, Wand2,
-  ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye, Aperture, ThumbsUp, ThumbsDown,
+  ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye, Aperture, ThumbsUp, ThumbsDown, Pencil,
 } from 'lucide-react';
 import VideoStartTrimControl from './VideoStartTrimControl';
 import PromptRefineModal from './PromptRefineModal';
+import QuickImageEdit from './QuickImageEdit';
 import { PromptFromMediaModal } from './PromptFromMedia';
 import AddToCollectionMenu from './AddToCollectionMenu';
 import SharingDownloadButton from './SharingDownloadButton';
@@ -604,6 +605,7 @@ function SettingsPane({
   // install without a FLUX runner can still attempt a (less reliable) pass.
   const regenLightAvailable = !!regenBounds?.lightAvailable;
   const [regenOpen, setRegenOpen] = useState(false);
+  const [quickEditOpen, setQuickEditOpen] = useState(false);
   const [regenStrength, setRegenStrength] = useState(regenDefault);
   // Track whether the user actually moved the slider. When untouched, the
   // request OMITS strength so the server picks its provider-aware default
@@ -914,6 +916,20 @@ function SettingsPane({
           >
             <Sparkles className="w-3.5 h-3.5" /> Refine Prompt
           </button>
+        )}
+        {!isVideo && item.filename && (
+          <button
+            type="button"
+            onClick={() => setQuickEditOpen((o) => !o)}
+            aria-expanded={quickEditOpen}
+            title="Describe a change and re-render this image with it, keeping everything else"
+            className={`flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-white hover:opacity-90 rounded ${quickEditOpen ? "bg-port-accent" : "bg-port-accent/80"}`}
+          >
+            <Pencil className="w-3.5 h-3.5" /> Edit
+          </button>
+        )}
+        {!isVideo && item.filename && quickEditOpen && (
+          <QuickImageEdit item={item} onDone={() => { setQuickEditOpen(false); onClose?.(); }} />
         )}
         {onPromptFrom && (
           <button
