@@ -1596,10 +1596,10 @@ async function deleteBranchAdmitted(dir, branchName, { local = false, remote = f
   }
 
   const opts = { ignoreExitCode: true };
-  const [localResult, remoteResult] = await Promise.all([
-    local ? deletePinnedLocalBranch(dir, branchName, expectedHead) : null,
-    remote ? execGitSafe(['push', 'origin', '--delete', branchName], dir, opts) : null
-  ]);
+  const localResult = local ? await deletePinnedLocalBranch(dir, branchName, expectedHead) : null;
+  // A local owner/ref refusal retains the whole branch, including its remote.
+  const remoteResult = remote && (!localResult || localResult.exitCode === 0)
+    ? await execGitSafe(['push', 'origin', '--delete', branchName], dir, opts) : null;
 
   const results = {};
   if (localResult) {
@@ -1607,6 +1607,7 @@ async function deleteBranchAdmitted(dir, branchName, { local = false, remote = f
       ? 'deleted'
       : localResult.stderr?.includes('not found') ? 'not found' : `failed: ${localResult.stderr?.trim()}`;
   }
+  if (remote && localResult?.exitCode !== undefined && localResult.exitCode !== 0) results.remote = 'retained: local branch deletion refused';
   if (remoteResult) {
     results.remote = remoteResult.exitCode === 0
       ? 'deleted'

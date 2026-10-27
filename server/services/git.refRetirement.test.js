@@ -23,12 +23,13 @@ const git = async args => (await execGit(args, sandbox.repo)).stdout.trim();
 beforeEach(async () => {
   ownership.agents = [];
   ownership.moveHead = null;
-  sandbox = await makeGitSandbox({ prefix: 'portos-pinned-ref-' });
+  sandbox = await makeGitSandbox({ origin: true, prefix: 'portos-pinned-ref-' });
   await git(['checkout', '-b', 'finished']);
   await writeFile(join(sandbox.repo, 'source.txt'), 'private completed source\n');
   await git(['add', 'source.txt']);
   await git(['commit', '-m', 'completed work']);
   head = await git(['rev-parse', 'HEAD']);
+  await git(['push', 'origin', 'finished']);
   await git(['checkout', 'main']);
 });
 afterEach(async () => { if (sandbox) await destroyGitSandbox(sandbox.scratch); });
@@ -64,4 +65,13 @@ it('lets the real receiver refuse a ref that moves after review without deleting
   expect(result.results.local).toBe('failed: branch head or holder changed');
   expect(await git(['rev-parse', 'refs/heads/finished'])).toBe(newer);
   expect(await git(['rev-parse', `refs/portos/completed/${head}`])).toBe(head);
+});
+
+it('retains the remote when a combined request fails its fresh local owner check', async () => {
+  ownership.agents = null;
+  await expect(deleteBranch(sandbox.repo, 'finished', { local: true, remote: true }))
+    .rejects.toMatchObject({ code: 'BRANCH_OWNER_HELD' });
+  expect(await git(['ls-remote', '--heads', 'origin', 'refs/heads/finished']))
+    .toBe(`${head}\trefs/heads/finished`);
+  expect(await git(['rev-parse', 'refs/heads/finished'])).toBe(head);
 });
