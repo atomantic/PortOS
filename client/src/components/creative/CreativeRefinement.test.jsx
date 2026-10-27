@@ -64,4 +64,29 @@ describe('creative draft conversation', () => {
     await waitFor(() => expect(screen.getByText('Apply proposal to editor')).toBeDisabled());
     expect(apply).not.toHaveBeenCalled();
   });
+  it('requires a fresh choice before replacing a newer edit to a proposed field', async () => {
+    const converse = vi.fn().mockResolvedValue({ reply: 'Revised', draft: { description: 'Silver design', prompt: 'New prompt' } });
+    function Host() {
+      const [draft, setDraft] = useState({ description: 'Original', prompt: 'Original prompt' });
+      return <>
+        <input aria-label="Editor description" value={draft.description} onChange={event => setDraft(previous => ({ ...previous, description: event.target.value }))} />
+        <input aria-label="Editor prompt" value={draft.prompt} onChange={event => setDraft(previous => ({ ...previous, prompt: event.target.value }))} />
+        <CreativeRefinement initialDraft={draft} converse={converse} onApply={patch => setDraft(previous => ({ ...previous, ...patch }))} />
+      </>;
+    }
+    render(<Host />);
+    fireEvent.change(screen.getByLabelText('Direction or follow-up question'), { target: { value: 'Try silver' } });
+    fireEvent.click(screen.getByText('Send direction'));
+    await screen.findByDisplayValue('Silver design');
+    fireEvent.change(screen.getByLabelText('Editor description'), { target: { value: 'Newer edit' } });
+    expect(screen.getByText('Apply proposal to editor')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Use proposal for description' }));
+    expect(screen.getByText('Apply proposal to editor')).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('Editor description'), { target: { value: 'Newest edit' } });
+    expect(screen.getByText('Apply proposal to editor')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editor for description' }));
+    fireEvent.click(screen.getByText('Apply proposal to editor'));
+    expect(screen.getByLabelText('Editor description')).toHaveValue('Newest edit');
+    expect(screen.getByLabelText('Editor prompt')).toHaveValue('New prompt');
+  });
 });
