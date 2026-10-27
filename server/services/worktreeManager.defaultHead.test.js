@@ -90,36 +90,29 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('createWorktree for a PR whose head bran
     expect(await git(['rev-parse', 'HEAD'], info.worktreePath)).toBe(head);
   });
 
-  it('settles an integrated no-PR job immediately while retaining its validation bytes outside the checkout', async () => {
+  it('settles an integrated no-PR job immediately and treats ignored cache output as disposable', async () => {
     await execGit(['push', 'origin', 'main'], sandbox.repo);
     const info = await createWorktree('agent-no-change', sandbox.repo, 'task-no-change');
     await writeFile(join(sandbox.repo, '.git/info/exclude'), '.cache/\n');
     await mkdir(join(info.worktreePath, '.cache/pregate'), { recursive: true });
-    const report = JSON.stringify({ validationMode: 'focused', tree: await git(['rev-parse', 'HEAD'], info.worktreePath) });
-    await writeFile(join(info.worktreePath, '.cache/pregate/report.json'), report);
+    await writeFile(join(info.worktreePath, '.cache/pregate/report.json'), JSON.stringify({ validationMode: 'focused' }));
+    await writeFile(join(info.worktreePath, '.cache/pregate/unique.json'), '{"scratch":true}');
     const result = await removeWorktree('agent-no-change', sandbox.repo, info.branchName, { merge: false });
     expect(result, JSON.stringify(result)).toMatchObject({ removed: true });
     expect(existsSync(info.worktreePath)).toBe(false);
-    const directory = join(sandbox.repo, '.git/portos-retirement-validation');
-    const proofs = await Promise.all((await readdir(directory)).map(async name => JSON.parse(await readFile(join(directory, name), 'utf8'))));
-    expect(proofs).toHaveLength(1);
-    expect(proofs[0]).toMatchObject({ kind: 'integrated-local-validation', release: { branch: info.branchName } });
-    expect(Buffer.from(proofs[0].files[0].data, 'base64').toString()).toBe(report);
+    // The forge's CI is the validation record; nothing is copied into the repository's git directory.
+    expect(existsSync(join(sandbox.repo, '.git/portos-retirement-validation'))).toBe(false);
     expect((await execGit(['show-ref', '--verify', `refs/heads/${info.branchName}`], sandbox.repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
   });
 
-  it.each(['unknown', 'oversized'])('retains an integrated checkout with %s ignored evidence', async kind => {
+  it('still retains an integrated checkout holding untracked, non-ignored work', async () => {
     await execGit(['push', 'origin', 'main'], sandbox.repo);
-    const agentId = `agent-unverified-${kind}`;
-    const info = await createWorktree(agentId, sandbox.repo, `task-unverified-${kind}`);
-    await writeFile(join(sandbox.repo, '.git/info/exclude'), '.cache/\n');
-    await mkdir(join(info.worktreePath, '.cache/pregate'), { recursive: true });
-    const file = join(info.worktreePath, '.cache/pregate', kind === 'unknown' ? 'unique.json' : 'report.json');
-    const bytes = kind === 'unknown' ? '{"unique":"retain me"}' : JSON.stringify({ evidence: 'x'.repeat(65536) });
-    await writeFile(file, bytes);
-    expect(await removeWorktree(agentId, sandbox.repo, info.branchName, { merge: false }))
-      .toMatchObject({ removed: false, cleanupIncomplete: true });
-    expect(await readFile(file, 'utf8')).toBe(bytes);
+    const info = await createWorktree('agent-untracked', sandbox.repo, 'task-untracked');
+    const file = join(info.worktreePath, 'unpublished-notes.md');
+    await writeFile(file, 'sole copy');
+    expect(await removeWorktree('agent-untracked', sandbox.repo, info.branchName, { merge: false }))
+      .toMatchObject({ removed: false });
+    expect(await readFile(file, 'utf8')).toBe('sole copy');
     expect(await git(['rev-parse', `refs/heads/${info.branchName}`], sandbox.repo)).toBe(await git(['rev-parse', 'HEAD'], info.worktreePath));
   });
 

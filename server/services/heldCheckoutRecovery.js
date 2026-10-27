@@ -42,15 +42,8 @@ import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArc
 /** Ignored payload must be disposable or match bytes already durably preserved. */
 export async function releaseCheckoutWithoutArchive(context, prepare) {
   const prepared = await prepare();
-  const retained = context.retainValidationEvidence === true
-    ? await retainCompletedCheckoutValidation(context, prepared) : null;
-  const preservedFiles = [...(context.preservedFiles || []), ...(retained?.files || [])];
-  await assertNoUniqueIgnoredCheckoutPayload(context.path, execGit, context.ignoredPaths, preservedFiles, context.repoPath, context.disposableCacheProofs);
-  if (!retained) return prepared;
-  const verify = prepared.verify;
-  return { ...prepared, preservedFiles, validationEvidence: retained.evidence,
-    verify: async holder => await verify(holder) || await retained.verify() };
-
+  await assertNoUniqueIgnoredCheckoutPayload(context.path, execGit, context.ignoredPaths, context.preservedFiles, context.repoPath, context.disposableCacheProofs);
+  return prepared;
 }
 
 /** Git cleanliness alone omits ignored files. Links retain their target bytes. */
@@ -982,40 +975,6 @@ async function retainValidationProof(repoPath, proof, verifyOnly = false) {
   if (!existing && verifyOnly) throw new Error('retirement-validation-preservation-unavailable');
   if (await readFile(file, 'utf8') !== encoded) throw new Error('retirement-validation-preservation-unavailable');
   return { digest };
-}
-
-/** Ordinary completion has no forge review when a permitted no-change job
- * produces only local validation evidence. Retain those bounded bytes under
- * the already verified local integration/checkout identity, never a fake PR. */
-async function retainCompletedCheckoutValidation(context, prepared) {
-  const result = await execGit(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], context.path,
-    { maxBuffer: GIT_OUTPUT_BYTES, bufferOutput: true });
-  if (result.exitCode !== 0) throw new Error('worktree-status-unavailable');
-  const paths = zLines(Buffer.isBuffer(result.stdout) ? archiveText(result.stdout) : result.stdout);
-  const files = [];
-  const work = archiveWork();
-  let total = 0;
-  for (const path of paths) {
-    if (path !== '.cache/pregate/report.json'
-      && !/^\.cache\/test-process-diagnostics\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/.test(path)) continue;
-    const { info } = await listedContentEntry(context.path, path, work);
-    if (!info.isFile() || info.isSymbolicLink() || (total += info.size) > 64 * 1024) throw new Error('retirement-validation-preservation-unavailable');
-    const bytes = await archiveBytes(join(context.path, path), work, 64 * 1024);
-    // These are JSON producers. An unrecognized or truncated record stays local.
-    JSON.parse(bytes.toString('utf8'));
-    files.push({ scope: 'content', path, sha256: evidenceHash(bytes), data: bytes.toString('base64') });
-  }
-  if (!files.length) return null;
-  if (!prepared?.checkoutIdentity || typeof prepared.verify !== 'function' || !prepared.integrationTarget
-    || await realpath(prepared.path) !== await realpath(context.path) || !prepared.head) throw new Error('retirement-validation-preservation-unavailable');
-  const proof = { version: 1, kind: 'integrated-local-validation', release: {
-    path: prepared.path, head: prepared.head, branch: prepared.branch, checkoutIdentity: prepared.checkoutIdentity },
-    integrationTarget: prepared.integrationTarget, files };
-  const evidence = await retainValidationProof(context.repoPath, proof);
-  return { files, evidence, verify: async () => {
-    try { await retainValidationProof(context.repoPath, proof, true); return null; }
-    catch { return 'retirement-validation-preservation-unavailable'; }
-  } };
 }
 
 async function reviewCurrentCheckout(input, opts = {}, captureContent) {

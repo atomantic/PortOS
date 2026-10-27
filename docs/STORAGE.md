@@ -1224,7 +1224,13 @@ PortOS no longer writes `data/cos/held-checkout-archives/`,
 `data/cos/initialized-checkout-retirements/`. A merged, clean checkout is
 removed in place only after checking ignored payload as well as Git status.
 Unverified ignored files keep the checkout and branch in place; independently
-recognized disposable caches retain their existing policy.
+recognized disposable caches retain their existing policy. The exception is an
+agent's own completed checkout (`removeWorktree` in
+`server/services/worktreeManager.js`): its published work lives on the forge, Git
+status guards uncommitted and untracked work, and ignored files are treated as
+disposable build/cache output. Completion no longer scans or hashes them, and no
+longer copies `.cache/pregate` reports into `.git/portos-retirement-validation`;
+required CI on the pull request is the validation record.
 Migration 442 preserves all three historical roots and sibling checkouts such
 as `data/cos/worktrees/` and `data/cos/agents/`. Historical archives can contain
 the only unpublished bytes, quarantined originals or unfinished recovery
