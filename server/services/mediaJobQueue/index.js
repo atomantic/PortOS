@@ -867,8 +867,9 @@ function captureQueueSnapshot() {
   const canWriteOutcome = (job) => completionAdmitted || job.durabilityPending?.status !== 'completed';
   const hasDeferredCompletion = [...pendingTransitions.keys()].some((job) => !canWriteOutcome(job));
   // Strip non-serializable bits.
-  const serializable = live.map((job) => (canWriteOutcome(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs, durabilityPending, imported, videoExecution, videoExecutions }) =>
+  const serializable = live.map((job) => (canWriteOutcome(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs, durabilityPending, imported, videoExecution, videoExecutions, cancelRequested, visualProfileFinishing }) =>
     ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs,
+      ...(status === 'running' && visualProfileFinishing && cancelRequested === true ? { cancelRequested: true } : {}),
       ...(imported === true ? { imported } : {}),
       ...(videoExecution ? { videoExecution } : {}),
       ...(videoExecutions ? { videoExecutions } : {}),
@@ -983,6 +984,7 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
     }
     const persistedJobs = Array.isArray(data?.jobs) ? data.jobs : [];
     const restartedFailedIds = [];
+    const restartedCanceled = [];
     // #1332: training jobs whose detached trainer survived the restart, to be
     // re-enqueued (flagged for re-attach) at the FRONT of the queue so they
     // resume before any new GPU work — collected during the reconcile, unshifted
@@ -1049,6 +1051,18 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
         continue;
       }
       if (j.status === 'running') {
+        // A canceled finish already has its original image. When no remote
+        // reservation remains, no provider needs reconciliation on restart.
+        if (j.kind === 'image' && j.cancelRequested === true && j.params?.visualProfile && j.params?.visualProfileSource
+          && (!isRemoteMediaJob(j) || j.params?.remotePeerReservation !== true)) {
+          const error = 'Canceled during film finishing; original image retained';
+          archive.push({ ...j, status: 'canceled', result: j.params.visualProfileSource, error, completedAt: new Date().toISOString() });
+          restartedCanceled.push({ id: j.id, error });
+          void safeUnlinkUpload(j.params?.uploadedTempPath);
+          void safeUnlinkUpload(j.params?.audioFilePath);
+          for (const p of normalizeTempPaths(j.params?.uploadedTempPaths)) void safeUnlinkUpload(p);
+          continue;
+        }
         // A remote provider job survives this process: its local queue id is
         // also the stable Idempotency-Key. Re-enqueue the same record and let
         // the remote adapter replay the submission, recover the provider job,
@@ -1148,6 +1162,11 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
     for (const id of restartedFailedIds) {
       const entry = ensureSseEntry(id);
       broadcastSse(entry, { type: 'error', error: 'interrupted by restart' });
+      closeJobAfterDelay(sseJobs, id, SSE_CLEANUP_DELAY_MS, entry);
+    }
+    for (const { id, error } of restartedCanceled) {
+      const entry = ensureSseEntry(id);
+      broadcastSse(entry, { type: 'canceled', reason: error });
       closeJobAfterDelay(sseJobs, id, SSE_CLEANUP_DELAY_MS, entry);
     }
     // Pre-seed SSE entries for recovered queued jobs too. Without this, a
@@ -1892,7 +1911,10 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
             // Persist the reason so a late SSE reconnect after the live entry
             // is cleaned up still gets a meaningful terminal frame from the
             // archived state, rather than the generic "Canceled" fallback.
-            j.error = 'Canceled while running';
+            if (j.kind === 'image' && j.params?.visualProfileSource) {
+              j.result = j.params.visualProfileSource;
+              j.error = 'Canceled during film finishing; original image retained';
+            } else j.error = 'Canceled while running';
           }, payload.remoteInputsDisposable === true).catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
         );
         return;
@@ -2331,6 +2353,9 @@ export async function cancelJob(jobId) {
     applyCancellationIntent(runningJob);
     if (runningJob.visualProfileFinishing) {
       runningJob.visualProfileFinishing.abort(new Error('Canceled during film finishing'));
+      // The finish handler may not settle before a crash. Persist both the
+      // local intent and any remote cancellation marker before acknowledging it.
+      await persist();
       return { ok: true, status: 'canceling' };
     }
     if (isRemoteMediaJob(runningJob)) {

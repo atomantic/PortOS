@@ -832,6 +832,82 @@ describe('mediaJobQueue', () => {
     expect(mediaJobQueue.getJob(jobId).result.filename).toBe('example-source.png');
   });
 
+  it.each(['local', 'remote', 'settled-remote'])('persists %s film-finish cancellation before acknowledging and honors it after restart', async route => {
+    let releaseFinish;
+    stubs.finishVisualProfile.mockImplementation(({ signal }) => new Promise((_resolve, reject) => {
+      releaseFinish = () => reject(signal.reason || new Error('fixture cleanup'));
+    }));
+    const generate = route === 'local' ? stubs.generateImageCodex : stubs.generateImageRemote;
+    generate.mockResolvedValue({});
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: {
+      mode: 'codex', prompt: 'Example', visualProfile: { version: 1 },
+      ...(route !== 'local' ? { remoteMedia: remoteImageMediaParams() } : {}),
+      ...(route === 'settled-remote' ? { visualProfileSource: { filename: 'example-source.png' } } : {}),
+    } });
+    if (route !== 'settled-remote') {
+      await waitFor(() => generate.mock.calls.length === 1);
+      imageGenEvents.emit('completed', { generationId: jobId, filename: 'example-source.png', remoteInputsDisposable: true });
+    }
+    await waitFor(() => typeof releaseFinish === 'function');
+    let interruptedSnapshot;
+    try {
+      expect(await mediaJobQueue.cancelJob(jobId)).toMatchObject({ ok: true, status: 'canceling' });
+      interruptedSnapshot = JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8'));
+      const saved = interruptedSnapshot.jobs.find(row => row.id === jobId);
+      expect(saved).toMatchObject({ status: 'running', cancelRequested: true,
+        params: { visualProfileSource: { filename: 'example-source.png' } } });
+      if (route !== 'local') expect(saved.params.remoteMedia.cancelRequested).toBe(true);
+    } finally {
+      releaseFinish();
+    }
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'canceled');
+    await importFresh();
+    // Restore the exact acknowledged snapshot to model process loss before the
+    // in-flight finish handler persisted its terminal cancellation.
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify(interruptedSnapshot));
+    stubs.finishVisualProfile.mockClear();
+    generate.mockClear();
+    if (route === 'remote') generate.mockImplementation(async params => {
+      imageGenEvents.emit('failed', { generationId: params.jobId, error: 'Canceled remotely', remoteInputsDisposable: true });
+    });
+    await mediaJobQueue.initMediaJobQueue();
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'canceled');
+    expect(stubs.finishVisualProfile).not.toHaveBeenCalled();
+    expect(mediaJobQueue.getJob(jobId).result).toMatchObject({ filename: 'example-source.png' });
+    if (route === 'remote') {
+      expect(generate).toHaveBeenCalledWith(expect.objectContaining({ jobId,
+        remoteMedia: expect.objectContaining({ reconcile: true, cancelRequested: true }) }));
+    } else {
+      expect(generate).not.toHaveBeenCalled();
+      const response = { write: vi.fn(), req: { on: vi.fn() }, writeHead: vi.fn(), end: vi.fn() };
+      mediaJobQueue.attachSseClient(jobId, response);
+      expect(response.write.mock.calls.flat().join('')).toContain('"type":"canceled"');
+    }
+  });
+
+  it('does not acknowledge film-finish cancellation when its snapshot cannot be written', async () => {
+    let releaseFinish;
+    stubs.generateImageCodex.mockResolvedValue({});
+    stubs.finishVisualProfile.mockImplementation(({ signal }) => new Promise((_resolve, reject) => {
+      releaseFinish = () => reject(signal.reason || new Error('fixture cleanup'));
+    }));
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: {
+      mode: 'codex', prompt: 'Example', visualProfile: { version: 1 },
+    } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'example-source.png' });
+    await waitFor(() => typeof releaseFinish === 'function');
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    atomicWriteSpy.mockRejectedValueOnce(new Error('synthetic storage failure'));
+    try {
+      await expect(mediaJobQueue.cancelJob(jobId)).rejects.toThrow('synthetic storage failure');
+    } finally {
+      atomicWriteSpy.mockImplementation(realWrite);
+      releaseFinish();
+    }
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'canceled');
+  });
+
   it('retries a failed local finish from its durable source without another image provider call', async () => {
     stubs.generateImageCodex.mockImplementation(async () => ({}));
     stubs.finishVisualProfile.mockRejectedValueOnce(new Error('Browser unavailable')).mockImplementation(async ({ result }) => result);
