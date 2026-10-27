@@ -30,6 +30,7 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { join } from 'path';
 import { normalizeTaskOutcome, resolveTaskOutcome } from '../lib/agentOutcome.js';
 import { execGit } from '../lib/execGit.js';
+import { outsideGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 import { PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 // The DEFINING module, not a barrel (#3450) — see the note in
@@ -1744,7 +1745,11 @@ function completionRecord({ task, verdict, hookResult, fidelity, executionInterr
  * tracking should fire EARLIER via `releaseAgentLane()` — this helper
  * owns the centralized state writes only.
  */
-export async function finalizeAgent({
+export async function finalizeAgent(input) {
+  return outsideGitMutationLifetime(() => finalizeAgentInCompletionContext(input));
+}
+
+async function finalizeAgentInCompletionContext({
   agentId,
   task,
   runId,

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { outsideGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 import { withDeliveryActivity } from './agentDeliveryActivity.js';
 import { storeCompletionData, readCompletionData, completionReplayInput } from './agentCompletionData.js';
 /**
@@ -351,7 +352,11 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
  * `context.prOwnership` is `{ taskOpenPR, agentOpensOwnPr }`, resolved by the
  * entry point from its own source of truth.
  */
-async function runCompletionCleanupSteps(context, { onStepError }) {
+async function runCompletionCleanupSteps(...args) {
+  return outsideGitMutationLifetime(() => runCompletionCleanupInOwnContext(...args));
+}
+
+async function runCompletionCleanupInOwnContext(context, { onStepError }) {
   if (!Object.values(STEP_ERROR_POLICY).includes(onStepError)) throw new Error(`Unknown completion-cleanup step error policy: ${onStepError}`);
   if (cleanupRuns.has(context.agentId)) return cleanupRuns.get(context.agentId);
   const run = withDeliveryActivity(context.agentId, 'Processing completion handoffs and workspace cleanup',
