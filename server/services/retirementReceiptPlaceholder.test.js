@@ -3,13 +3,22 @@ import { beforeEach, afterEach, afterAll, describe, it, expect, vi } from 'vites
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-const fixture = vi.hoisted(() => ({ repo: null, agents: [] }));
+const fixture = vi.hoisted(() => ({ repo: null, agents: [], beforeLock: null, ownerReads: 0 }));
 vi.mock('../lib/fileUtils.js', async importOriginal => {
   const { makePathsProxy, lazyTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
   return makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-receipt-placeholder-') });
 });
 vi.mock('./apps.js', async importOriginal => ({ ...await importOriginal(), getAppById: async () => ({ repoPath: fixture.repo }) }));
-vi.mock('./cosClaimOwnership.js', async importOriginal => ({ ...await importOriginal(), readClaimOwnershipAgents: async () => fixture.agents }));
+vi.mock('./cosClaimOwnership.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual,
+    readClaimOwnershipAgents: async () => { fixture.ownerReads++; return fixture.agents; },
+    withClaimOwnershipLock: callback => actual.withClaimOwnershipLock(async () => {
+      if (fixture.beforeLock) await fixture.beforeLock();
+      return callback();
+    }),
+  };
+});
 import { PATHS } from '../lib/fileUtils.js';
 import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { execGit } from '../lib/execGit.js';
@@ -30,7 +39,7 @@ async function seed({ receipts = [], observation = row } = {}) {
 }
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'portos-placeholder-git-'));
-  fixture.repo = join(root, 'repo'); fixture.agents = [];
+  fixture.repo = join(root, 'repo'); fixture.agents = []; fixture.beforeLock = null; fixture.ownerReads = 0;
   await mkdir(fixture.repo); await mkdir(PATHS.cos, { recursive: true });
   await git('init', '-b', 'main'); await git('config', 'user.name', 'Fixture'); await git('config', 'user.email', 'fixture@example.test');
   await writeFile(join(fixture.repo, 'base.txt'), 'base\n'); await git('add', '.'); await git('commit', '-m', 'base');
@@ -50,6 +59,27 @@ function expectAbsentHistory(result, observation) {
 }
 
 describe('stale branch-only retirement placeholders', () => {
+  it('rechecks receipt-recorded paths inside the owner lock before settling absence', async () => {
+    receipt.branchDeleted = false; // Not eligible for stronger receipt binding.
+    await seed({ receipts: [receipt] });
+    fixture.beforeLock = async () => {
+      await mkdir(receipt.path); await writeFile(join(receipt.path, 'unique.txt'), 'new owner work');
+    };
+    const result = await getBranchReconcileInventory(appId);
+    expect(result.retirementObligations).toContainEqual(row);
+    expect(result.legacyRetirementTransition.resolutions).toEqual([]);
+    expect(await readFile(join(receipt.path, 'unique.txt'), 'utf8')).toBe('new owner work');
+  });
+
+  it('does not read owners or worktrees when no observation is eligible', async () => {
+    await seed();
+    const schedule = await persisted();
+    const outcome = outcomeFrom(schedule); outcome.remaining = []; outcome.retirementObligations = [];
+    await writeFile(schedulePath, JSON.stringify(schedule));
+    await getBranchReconcileInventory(appId);
+    expect(fixture.ownerReads).toBe(0);
+  });
+
   it('uses verified ref finalization to settle a delayed branch-only row without changing physical removal time', async () => {
     const observation = { ...row, createdAt: '2026-01-05T00:00:00.000Z' };
     receipt.branchFinalizedAt = '2026-01-04T00:00:00.000Z';

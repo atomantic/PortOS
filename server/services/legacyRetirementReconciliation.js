@@ -136,25 +136,31 @@ export async function reconcileRecordedReceiptObservations(appId, outcome) {
     retirementReceiptEvidence: Object.fromEntries(Object.entries(outcome.retirementReceiptEvidence || {}).map(([key, receipt]) => [key, annotate(receipt)])) };
 }
 
-export async function _planLegacyRetirementReconciliation({ repoPath, outcome, agents, trees }) {
+function reconciliationCandidates(outcome) {
   const transition = outcome?.legacyRetirementTransition;
-  if (transition?.version !== 1 || !Array.isArray(agents) || !Array.isArray(trees)) return [];
-  const rows = [...new Map([...(outcome.retirementObligations || []), ...(outcome.remaining || [])]
+  if (transition?.version !== 1) return [];
+  return [...new Map([...(outcome.retirementObligations || []), ...(outcome.remaining || [])]
     .filter(row => transition.observations.includes(legacyRetirementKey(row))
       || row.reason === 'retirement-provenance-unverified')
     .map(row => [legacyRetirementKey(row), row])).values()];
+}
+
+async function localCleanupAbsent(repoPath, observation, outcome, trees, agents, identities = new Map()) {
+  if (observation.locked === true || !await absent(repoPath, observation, trees, agents, identities)) return false;
+  // A branch-only placeholder can still refer to a surviving recorded path.
+  const recordedPaths = [...(outcome.retired || []), ...Object.values(outcome.retirementReceiptEvidence || {})]
+    .filter(row => row.branch === observation.branch && typeof row.path === 'string');
+  return (await Promise.all(recordedPaths.map(row => readCheckoutPathPresence(row.path)))).every(value => value === false);
+}
+
+export async function _planLegacyRetirementReconciliation({ repoPath, outcome, agents, trees }) {
+  if (!Array.isArray(agents) || !Array.isArray(trees)) return [];
   const resolutions = [];
   const identities = new Map();
-  for (const observation of rows) {
-    // Local absence settles local cleanup only. It says nothing about whether
-    // deleted source was delivered or preserved; retain that uncertainty in the
-    // existing history instead of demanding another remote merge certificate.
-    if (observation.locked === true || !await absent(repoPath, observation, trees, agents, identities)) continue;
-    // A branch-only placeholder can still refer to a surviving recorded path.
-    // Check those local targets too; an absent ref must not conceal their work.
-    const recordedPaths = [...(outcome.retired || []), ...Object.values(outcome.retirementReceiptEvidence || {})]
-      .filter(row => row.branch === observation.branch && typeof row.path === 'string');
-    if ((await Promise.all(recordedPaths.map(row => readCheckoutPathPresence(row.path)))).some(value => value !== false)) continue;
+  for (const observation of reconciliationCandidates(outcome)) {
+    // This settles local cleanup only; retained history makes no delivery or
+    // preservation claim and requires no second remote merge certificate.
+    if (!await localCleanupAbsent(repoPath, observation, outcome, trees, agents, identities)) continue;
     resolutions.push({ key: legacyRetirementKey(observation), observation,
       target: observation, evidence: { kind: 'current-local-absence', deliveryVerified: false, preservationVerified: false },
       disposition: 'local-cleanup-not-required', removalVerified: false });
@@ -163,7 +169,7 @@ export async function _planLegacyRetirementReconciliation({ repoPath, outcome, a
 }
 
 export async function reconcileLegacyRetirementRecords(appId, outcome) {
-  if (outcome?.legacyRetirementTransition?.version !== 1) return outcome;
+  if (!reconciliationCandidates(outcome).length) return outcome;
   const [{ getAppById }, { readClaimOwnershipAgents, withClaimOwnershipLock }, { listWorktrees },
     store] = await Promise.all([
     import('./apps.js'), import('./cosClaimOwnership.js'), import('./worktreeManager.js'), import('./taskSchedule.js'),
@@ -178,6 +184,6 @@ export async function reconcileLegacyRetirementRecords(appId, outcome) {
     const [currentAgents, currentTrees] = await Promise.all([readClaimOwnershipAgents(), listWorktrees(repoPath)]);
     if (!Array.isArray(currentAgents)) return outcome;
     return store.recordLegacyRetirementResolutions(appId, outcome, resolutions,
-      async () => (await Promise.all(resolutions.map(row => absent(repoPath, row.target, currentTrees, currentAgents)))).every(Boolean));
+      async () => (await Promise.all(resolutions.map(row => localCleanupAbsent(repoPath, row.target, outcome, currentTrees, currentAgents)))).every(Boolean));
   });
 }
