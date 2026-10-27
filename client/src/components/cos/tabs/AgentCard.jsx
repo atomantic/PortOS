@@ -800,6 +800,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 {shortClaudeModelName(agent.metadata.model)}
               </span>
             )}
+            <ExecutionOptionsAttribution value={agent.metadata?.executionOptions} compact />
             {!inactive && (
               // 'stalled' is the one phase that does NOT pulse: the run is still
               // alive but has ignored every nudge, and an animated badge reads as
@@ -962,7 +963,6 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           </div>
         )}
 
-        <ExecutionOptionsAttribution value={agent.metadata?.executionOptions} />
         {/* Agent configuration badges */}
         {(providerConfigBadges.length > 0 || CONFIG_BADGE_KEYS.some(key => agent.metadata?.[key]) || agent.metadata?.effort) && (
           <div className="flex items-center gap-1.5 flex-wrap mb-2">
