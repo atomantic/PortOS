@@ -326,6 +326,29 @@ export function recordRepoStateRecovery(agentId, link, { claimRun = false } = {}
   }));
 }
 
+// Deferred delivery is a domain outcome, not a failed provider execution.
+// Only the server's complete verification and retirement ledgers can settle it.
+function resultAfterCompletionReceipt(agent, metadata) {
+  const result = agent.result;
+  const cleanup = metadata.completionCleanup;
+  const outcome = metadata.cleanupOutcome;
+  if (result?.cleanupPending !== true || result.deliveryRecoveryOwned !== true
+    || result.executionSuccess !== true || result.validationPassed === false
+    || result.taskOutcome?.status !== 'incomplete' || result.taskOutcome?.recovery?.mode !== 'cleanup'
+    || result.executionInterruption || metadata.executionInterruption || metadata.blocker
+    || metadata.checkoutCapture?.status !== 'captured'
+    || metadata.repoStateVerification?.status !== 'completed'
+    || cleanup?.status !== 'completed' || cleanup.version !== 1
+    || ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report', 'worktree']
+      .some(key => cleanup.stages?.[key]?.status !== 'done')
+    || Object.values(cleanup.stages).some(stage => stage.status !== 'done')
+    || outcome?.status !== 'verified' || outcome.unresolved !== 0
+    || outcome.committedIntegrationVerified !== true) return result;
+  return { ...result, success: true, cleanupPending: false,
+    deferredDeliveryOutcome: result.taskOutcome,
+    taskOutcome: { status: 'completed', reason: 'Delivery and repository cleanup verified by server completion receipts.' } };
+}
+
 async function updateCompletionReceipt(agentId, update) {
   return withBackupAssetPublication(() => withStateLock(async () => {
     const state = await loadState();
@@ -339,8 +362,9 @@ async function updateCompletionReceipt(agentId, update) {
     if (!agent || (agent.id || agent.agentId) !== agentId || agent.status !== 'completed') return false;
     const metadata = agent.metadata || {};
     const nextMetadata = await update(metadata, agent);
-    if (nextMetadata === metadata) return true;
-    const updated = { ...agent, metadata: nextMetadata };
+    const result = resultAfterCompletionReceipt(agent, nextMetadata);
+    if (nextMetadata === metadata && result === agent.result) return true;
+    const updated = { ...agent, result, metadata: nextMetadata };
     // Never synthesize a bucket before archiveCompletedAgent moved the flat
     // directory: its retry treats an existing bucket as the completed move.
     if (date && (!state.agents[agentId] || await tryReadFile(join(getAgentDir(agentId, date), 'metadata.json')))) {
