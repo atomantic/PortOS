@@ -710,7 +710,7 @@ describe('work-item target', () => {
 
     it('also supports GitLab while rejecting mismatched or non-forge targets', () => {
       expect(buildPrefetchedIssueContextBlock('claim-issue-gitlab', '42', issueContext)).toContain('Issue number: 42');
-      expect(buildPrefetchedIssueContextBlock('claim-issue', '43', issueContext)).toBe('');
+      expect(buildPrefetchedIssueContextBlock('claim-issue', '43', issueContext)).toContain('Fetch the full live title and body of issue #43');
       expect(buildPrefetchedIssueContextBlock('plan-task', '42', issueContext)).toBe('');
     });
 
@@ -728,12 +728,16 @@ describe('work-item target', () => {
       expect(block.trimEnd().endsWith('</portos-prefetched-issue>')).toBe(true);
     });
 
-    it('rejects oversized direct issue fields instead of truncating them', () => {
+    it('requests the full issue for oversized or incomplete direct snapshots', () => {
       for (const [field, limit] of Object.entries({ title: 1000, body: 12_000, url: 2048 })) {
-        expect(() => buildPrefetchedIssueContextBlock('claim-issue', '42', {
+        const block = buildPrefetchedIssueContextBlock('claim-issue', '42', {
           ...issueContext, [field]: 'x'.repeat(limit + 1)
-        })).toThrow(`Issue ${field} exceeds the ${limit}-character limit`);
+        });
+        expect(block).toContain('Fetch the full live title and body of issue #42');
+        expect(block).not.toContain('## Prefetched Issue Context');
       }
+      expect(buildPrefetchedIssueContextBlock('claim-issue', '42')).toContain('Fetch the full live title and body');
+      expect(buildPrefetchedIssueContextBlock('claim-issue', '42', { number: 42, title: 'Missing body' })).toContain('Fetch the full live title and body');
       expect(buildPrefetchedIssueContextBlock('claim-issue', '42', {
         ...issueContext, body: 'x'.repeat(12_000)
       })).toContain('x'.repeat(12_000));

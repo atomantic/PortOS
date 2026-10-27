@@ -105,6 +105,16 @@ describe('buildIssueReplanTask', () => {
     });
     expect(task.prompt).not.toContain('## Prefetched Issue Context');
     expect(task.prompt).not.toContain('Some other issue');
+    expect(task.prompt).toContain('Fetch the full live title and body of issue #42');
+  });
+
+  it('fetches the full issue when a direct replan snapshot is oversized', async () => {
+    onGithub();
+    const body = `${'x'.repeat(12_001)}ACCEPTANCE_CRITERION_AT_TAIL`;
+    const task = await buildIssueReplanTask(APP, { target: '42', issueContext: { number: 42, title: 'Long', body } });
+    expect(task.prompt).toContain('Fetch the full live title and body of issue #42');
+    expect(task.prompt).not.toContain('## Prefetched Issue Context');
+    expect(task.prompt).not.toContain('ACCEPTANCE_CRITERION_AT_TAIL');
   });
 
   it('refuses a tracker with no issue to comment on', async () => {
