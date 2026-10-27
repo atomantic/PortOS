@@ -716,6 +716,16 @@ async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false } = {}
       emitLog('warn', `Release synchronization handoffs retained: ${error.code || 'outbox-unavailable'}`);
     });
     await reconcileReleasedSelectionHistory(agents);
+    // Older receipts already proved delivery and cleanup, but left the deferred
+    // domain verdict pending. Replay the existing writer, without another probe,
+    // task, completion event or provider budget expenditure.
+    const { recordRepoStateVerification, isSettleableCompletionReceipt } = await import('./cosAgentLifecycle.js');
+    for (const agent of agents.filter(row => row.status === 'completed'
+      && isSettleableCompletionReceipt(row, row.metadata || {})).slice(0, COMPLETION_RECOVERY_BATCH_SIZE)) {
+      await recordRepoStateVerification(agent.id || agent.agentId, agent.metadata.repoStateVerification).catch(error => {
+        emitLog('warn', `Deferred delivery settlement retained: ${error.code || 'receipt-unavailable'}`);
+      });
+    }
     // Replay completed handoffs after restart as well as at their event. Only
     // terminal parents with unfinished delivery qualify; ordinary completed
     // history never incurs a forge probe. Existing batch bounds still apply.

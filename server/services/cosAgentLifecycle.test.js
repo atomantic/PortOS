@@ -116,6 +116,53 @@ import { activeAgents, runnerAgents, completingAgents, spawningTasks } from './a
 
 afterAll(cleanupTempDataRoots);
 
+describe('deferred delivery receipt result', () => {
+  afterEach(async () => { await rm(mockCosState.agentsDir, { recursive: true, force: true }); });
+  const fixture = () => ({ id: 'receipt-result', status: 'completed', startedAt: '2026-01-01T00:00:00Z',
+    completedAt: '2026-01-01T00:01:00Z', result: { success: false, executionSuccess: true,
+      cleanupPending: true, deliveryRecoveryOwned: true,
+      taskOutcome: { status: 'incomplete', reason: 'cleanup pending', recovery: { mode: 'cleanup' } } },
+    metadata: { checkoutCapture: { status: 'captured' }, repoStateVerification: { status: 'completed' },
+      cleanupOutcome: { status: 'verified', unresolved: 0, committedIntegrationVerified: true },
+      completionCleanup: { version: 1, status: 'completed', stages: Object.fromEntries(
+        ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report', 'worktree'].map(key => [key, { status: 'done' }])) } } });
+
+  it('persists settled delivery in live and archived records without re-emitting completion', async () => {
+    const agent = fixture();
+    mockCosState.state = { agents: { [agent.id]: agent } };
+    const directory = join(mockCosState.agentsDir, agent.completedAt.slice(0, 10), agent.id);
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, 'metadata.json'), JSON.stringify(agent));
+    const completed = vi.fn(); cosEvents.on('agent:completed', completed);
+    try {
+      await recordRepoStateVerification(agent.id, { status: 'completed' });
+      const saved = JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8'));
+      expect(saved.result).toMatchObject({ success: true, executionSuccess: true, cleanupPending: false,
+        taskOutcome: { status: 'completed' }, deferredDeliveryOutcome: agent.result.taskOutcome });
+      expect(mockCosState.state.agents[agent.id].result).toEqual(saved.result);
+      delete mockCosState.state.agents[agent.id];
+      await recordRepoStateVerification(agent.id, { status: 'completed' });
+      expect(JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8')).result).toEqual(saved.result);
+      expect(completed).not.toHaveBeenCalled();
+    } finally { cosEvents.off('agent:completed', completed); }
+  });
+
+  it.each(['execution', 'validation', 'unknown-capture', 'pending-stage', 'unresolved-payload', 'unverified-integration', 'original-failure'])(
+    'preserves %s instead of manufacturing success', async kind => {
+      const agent = fixture();
+      if (kind === 'execution') agent.result.executionSuccess = false;
+      if (kind === 'validation') agent.result.validationPassed = false;
+      if (kind === 'unknown-capture') agent.metadata.checkoutCapture = { status: 'pending', unknown: true };
+      if (kind === 'pending-stage') agent.metadata.completionCleanup.stages.worktree.status = 'held';
+      if (kind === 'unresolved-payload') agent.metadata.cleanupOutcome.unresolved = 1;
+      if (kind === 'unverified-integration') agent.metadata.cleanupOutcome.committedIntegrationVerified = false;
+      if (kind === 'original-failure') delete agent.result.cleanupPending;
+      mockCosState.state = { agents: { [agent.id]: agent } };
+      await recordRepoStateVerification(agent.id, { status: 'completed' });
+      expect(mockCosState.state.agents[agent.id].result).toEqual(agent.result);
+    });
+});
+
 describe('cosAgentLifecycle', () => {
   beforeEach(async () => {
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
