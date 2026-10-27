@@ -9,10 +9,16 @@
  * resolver itself runs for real.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+
 import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+vi.mock('../../lib/paths.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-greybox-image-') }));
+afterAll(cleanupTempDataRoots);
 
 const greyboxCatalog = vi.hoisted(() => ({ getIngredient: vi.fn(), listMediaForIngredient: vi.fn() }));
 vi.mock('../catalogDB.js', () => greyboxCatalog);
@@ -24,7 +30,8 @@ const getProject = vi.fn(async () => null);
 vi.mock('../musicVideo/projects.js', () => ({ getProject: (...a) => getProject(...a) }));
 
 const getUniverseRenderPin = vi.fn(async () => null);
-vi.mock('../universeBuilder/crud.js', () => ({ getUniverseRenderPin: (...a) => getUniverseRenderPin(...a) }));
+const getUniverseVisualProfile = vi.fn(async () => null);
+vi.mock('../universeBuilder/crud.js', () => ({ getUniverseRenderPin: (...a) => getUniverseRenderPin(...a), getUniverseVisualProfile: (...a) => getUniverseVisualProfile(...a) }));
 
 const { prepareGenerateParams, selectLocalImageModel, selectLocalImageModelFromSettings } = await import('./prepareParams.js');
 const { AGY_IMAGEGEN_DEFAULT_MODEL } = await import('./modes.js');
@@ -142,6 +149,7 @@ beforeEach(() => {
   getSettings.mockResolvedValue({});
   getProject.mockResolvedValue(null);
   getUniverseRenderPin.mockResolvedValue(null);
+  getUniverseVisualProfile.mockResolvedValue(null);
 });
 
 describe('music-video render-target resolution (#3231 Phase 4)', () => {
@@ -338,4 +346,30 @@ it('sends the live greybox capture before set plates, retains the edited frame f
   expect(editedOldCapture.data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['old-layout.png', 'layout.png', 'plate.png']);
   greyboxCatalog.listMediaForIngredient.mockResolvedValue([]);
   await expect(run({ prompt: 'A wide shot', musicVideo: tag })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_GREYBOX_UNAVAILABLE' });
+});
+
+// Public preparation path used by prompt preview and actual submission.
+it('snapshots universe photography for rendering and respects an explicit disabled override', async () => {
+  const { naturalUniverseVisualProfile } = await import('../../lib/universeVisualProfile.js');
+  const profile = naturalUniverseVisualProfile();
+  getUniverseVisualProfile.mockResolvedValue(profile);
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  const body = { prompt: 'A person beside a window', mode: 'codex', universeRun: { universeId: 'example-universe' } };
+  const prepared = await run(body);
+  expect(prepared.data.prompt).toContain(profile.generation.lighting);
+  expect(prepared.data.visualProfile).toEqual(profile);
+  expect(prepared.data.visualProfileRevision).toMatch(/^[a-f0-9]{64}$/);
+  const disabled = await run({ ...body, visualProfileOverride: null });
+  expect(disabled.data.prompt).toBe(body.prompt);
+  expect(disabled.data.visualProfile).toBeUndefined();
+});
+
+it('leaves FableLoom authored intent for its compiler instead of composing photography twice', async () => {
+  const { naturalUniverseVisualProfile } = await import('../../lib/universeVisualProfile.js');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  const result = await run({ prompt: 'A cautious arrival', negativePrompt: 'authored avoid', visualProfileOverride: naturalUniverseVisualProfile(), fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' } });
+  expect(result.data.prompt).toBe('A cautious arrival');
+  expect(result.data.negativePrompt).toBe('authored avoid');
+  expect(result.data.visualProfile).toBeUndefined();
+  expect(result.data.visualProfileOverride).toBeDefined();
 });

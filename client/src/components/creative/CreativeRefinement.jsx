@@ -52,8 +52,8 @@ export default function CreativeRefinement({ initialDraft, fieldLimits = {}, con
     <textarea id={`${id}-feedback`} value={feedback} onChange={event => { setFeedback(event.target.value); setSent(null); }} maxLength={16000} rows={3}
       disabled={busy || messages.length >= 40} className="w-full bg-port-bg border border-port-border rounded p-2 text-sm" />
     <div className="flex flex-wrap gap-3 text-sm">
-      <button type="button" onClick={() => run()} disabled={busy || !feedback.trim() || !selection.selectedProviderId || messages.length >= 40} className="text-port-accent disabled:opacity-40">{busy ? 'Working…' : 'Send direction'}</button>
-      <button type="button" onClick={() => run(true)} disabled={busy || !feedback.trim() || !selection.selectedProviderId || messages.length >= 40} className="text-port-accent disabled:opacity-40">Preview prompt and context</button>
+      <button type="button" onClick={() => run()} disabled={busy || !feedback.trim() || !selection.selectedProviderId || messages.length >= 40} className="min-h-11 rounded border border-port-accent px-3 py-2 text-port-accent hover:bg-port-accent/10 disabled:opacity-40">{busy ? 'Working…' : 'Send direction'}</button>
+      <button type="button" onClick={() => run(true)} disabled={busy || !feedback.trim() || !selection.selectedProviderId || messages.length >= 40} className="min-h-11 rounded border border-port-accent px-3 py-2 text-port-accent hover:bg-port-accent/10 disabled:opacity-40">Preview prompt and context</button>
     </div>
     {error && <p role="alert" className="text-port-error text-sm">{error}</p>}
     {sent && <SentPromptPanel {...sent} />}
@@ -63,7 +63,7 @@ export default function CreativeRefinement({ initialDraft, fieldLimits = {}, con
       <button type="button" disabled={disabled || busy} onClick={() => {
         const patch = Object.fromEntries(Object.entries(draft).filter(([key, value]) => value !== proposalBase.current?.[key]));
         onApply(patch); setHasProposal(false);
-      }} className="text-sm text-port-accent disabled:opacity-40">Apply proposal to editor</button>
+      }} className="min-h-11 rounded border border-port-accent px-3 py-2 text-sm text-port-accent hover:bg-port-accent/10 disabled:opacity-40">Apply proposal to editor</button>
     </div>}
   </section>;
 }

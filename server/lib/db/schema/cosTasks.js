@@ -5,6 +5,10 @@
 // `cos_task_lists.version` bumps on every write so a cached read can tell
 // whether anything changed without loading rows. Machine-local, never federated.
 export const cosTasksDdl = [
+  `CREATE TABLE IF NOT EXISTS cos_release_synchronizations (
+    identity TEXT PRIMARY KEY,
+    record JSONB NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS cos_tasks (
     source TEXT NOT NULL CHECK (source IN ('user', 'internal')),
     task_id TEXT COLLATE "C" NOT NULL,

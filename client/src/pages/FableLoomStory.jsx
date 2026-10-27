@@ -40,6 +40,7 @@ import LoomEpisodeOutlinePlanner from '../components/fableloom/LoomEpisodeOutlin
 import LoomEpisodeFeedback from '../components/fableloom/LoomEpisodeFeedback';
 import LoomMediaJobWatchers from '../components/fableloom/LoomMediaJobWatchers';
 import LoomNodeEditor from '../components/fableloom/LoomNodeEditor';
+import LoomImageComposer from '../components/fableloom/LoomImageComposer';
 import LoomPlayPanel from '../components/fableloom/LoomPlayPanel';
 import LoomExportModal from '../components/fableloom/LoomExportModal';
 import LoomSettingsDrawer from '../components/fableloom/LoomSettingsDrawer';
@@ -48,7 +49,7 @@ import LoomValidationPanel from '../components/fableloom/LoomValidationPanel';
 import LoomAiRunStatus from '../components/fableloom/LoomAiRunStatus';
 import { fieldClass, labelClass } from '../components/fableloom/fieldStyles';
 import {
-  buildFableLoomImageRequest, buildFableLoomVideoRequest,
+  buildFableLoomVideoRequest,
 } from '../components/fableloom/sceneMediaRequests';
 import { fableLoomMediaReadiness } from '../lib/fableLoomReadiness';
 import { buildFalH3MaxPrompt } from '../lib/falVideoHandoff';
@@ -87,6 +88,7 @@ export default function FableLoomStory({ view = 'graph' }) {
   // this so the graph card and editor rail display one shared lifecycle and the
   // socket hook mounts exactly once per job.
   const [mediaJobs, setMediaJobs] = useState({});
+  const [imageComposer, setImageComposer] = useState(null);
   const [notFound, setNotFound] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -259,7 +261,7 @@ export default function FableLoomStory({ view = 'graph' }) {
     toast.success(progress.source === 'fal-browser' ? 'Scene video ready from fal.ai' : `Scene ${label} ready`);
   }, [applySceneMedia, setSceneMediaJob]);
 
-  const queueSceneImage = useCallback(async (targetNode) => {
+  const submitSceneImage = useCallback(async (targetNode, imageRequest) => {
     const prompt = (targetNode?.imagePrompt || '').trim();
     if (!prompt) {
       toast.error('Write an image prompt first');
@@ -274,12 +276,12 @@ export default function FableLoomStory({ view = 'graph' }) {
       return null;
     }
 
+    const savedNode = episode.nodes.find(item => item.id === targetNode.id);
+    if (savedNode?.imagePrompt !== targetNode.imagePrompt) {
+      const updated = await updateLoomNode(loom.id, episodeId, targetNode.id, { imagePrompt: targetNode.imagePrompt }, { silent: true });
+      setLoom(updated);
+    }
     setSceneMediaJob(targetNode.id, 'image', { jobId: null, status: 'submitting', progress: 0 });
-    const imageRequest = buildFableLoomImageRequest({
-      loom,
-      episodeId,
-      node: targetNode,
-    });
     const queued = await generateImage(imageRequest, { silent: true })
       .catch((err) => {
         setSceneMediaJob(targetNode.id, 'image', {
@@ -318,6 +320,10 @@ export default function FableLoomStory({ view = 'graph' }) {
     toast.success('Scene image queued');
     return queued;
   }, [applySceneMedia, episode, episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
+
+  const queueSceneImage = useCallback((targetNode) => {
+    setImageComposer({ loomId, episodeId, node: targetNode });
+  }, [loomId, episodeId]);
 
   const queueSceneVideo = useCallback(async (targetNode) => {
     const prompt = (targetNode?.videoPrompt || '').trim() || (targetNode?.prose || '').trim();
@@ -781,6 +787,18 @@ export default function FableLoomStory({ view = 'graph' }) {
             setSetupOpen(false);
             navigate(basePath);
           }}
+        />
+      )}
+
+      {imageComposer && episode && imageComposer.loomId === loom.id && imageComposer.episodeId === episode.id && (
+        <LoomImageComposer
+          key={`${loom.id}:${episode.id}:${imageComposer.node.id}`}
+          loom={loom} episode={episode}
+          node={{ ...(episode.nodes.find(item => item.id === imageComposer.node.id) || imageComposer.node), imagePrompt: imageComposer.node.imagePrompt }}
+          universe={linkedUniverse} series={linkedSeries}
+          onRender={submitSceneImage} onClose={() => setImageComposer(null)}
+          disabled={mediaWorkflowBlocked || styleContextLoading || styleContextUnavailable}
+          disabledReason={generationDisabledReason}
         />
       )}
 

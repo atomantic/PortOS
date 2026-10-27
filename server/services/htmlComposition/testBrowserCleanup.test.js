@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import * as fs from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -7,6 +8,8 @@ import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ownTestBodies } from '../../lib/mockPathsDataRoot.js';
 import { _cleanupTestBrowser, _createTestArtifactsRoot, _describeTestChromeStartup, _startTestChromeWithRetry, _testBrowserCleanupSettled, _testChromeProcessFacts, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
+
+vi.mock('node:fs', async importOriginal => ({ ...await importOriginal() }));
 
 async function waitForFile(path, timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs;
@@ -878,6 +881,32 @@ describe('fixture-owned CDP artifacts root', () => {
     const error = await _cleanupTestBrowser({ proc: exited(), artifacts, cleanup: () => {} }).catch(caught => caught);
     expect(error.message).toBe('Test Chrome artifacts cleanup refused; root identity changed');
     expect(existsSync(artifacts.path)).toBe(true);
+    expect(existsSync(`${artifacts.path}-moved`)).toBe(true);
+  });
+
+  it('preserves a replacement whose exact file ID aliases the owned ID as a number', async () => {
+    const ownedId = 9007199254740992n;
+    const replacementId = ownedId + 1n;
+    expect(Number(ownedId)).toBe(Number(replacementId));
+    const realLstat = fs.lstatSync;
+    let replaced = false;
+    vi.spyOn(fs, 'lstatSync').mockImplementation((path, options) => {
+      const stat = realLstat(path, options);
+      if (!stat) return stat;
+      const id = replaced ? replacementId : ownedId;
+      // Model the native Number precision loss without depending on allocation.
+      stat.ino = options?.bigint ? id : Number(id);
+      return stat;
+    });
+    const artifacts = _createTestArtifactsRoot({ parent: runRoot });
+    renameSync(artifacts.path, `${artifacts.path}-moved`);
+    mkdirSync(artifacts.path);
+    writeFileSync(join(artifacts.path, 'replacement.txt'), 'replacement');
+    replaced = true;
+
+    await expect(_cleanupTestBrowser({ proc: exited(), artifacts, cleanup: () => {} }))
+      .rejects.toThrow('Test Chrome artifacts cleanup refused; root identity changed');
+    expect(readFileSync(join(artifacts.path, 'replacement.txt'), 'utf8')).toBe('replacement');
     expect(existsSync(`${artifacts.path}-moved`)).toBe(true);
   });
 

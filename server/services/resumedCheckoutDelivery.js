@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { devNull } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
 import { execGit } from '../lib/execGit.js';
-import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
+import { completedCheckoutReceiptValid, sameTaskRetirementBinding } from './completedCheckoutEvidence.js';
 import { reviewedRetirementPolicy } from './branchCompletionPolicy.js';
 
 const oid = value => typeof value === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(value);
@@ -34,15 +34,15 @@ export async function readResumedCheckoutDeliveries(input, agents) {
       || !samePath(meta?.sourceWorkspace, repoPath) || meta.prCompletionPolicy !== 'review-then-merge'
       || meta.reviewLoopMergeTarget?.url !== prUrl || meta.reviewLoopMergeTarget.branch !== branch
       || (policy && (policy.prUrl !== prUrl || policy.branch !== branch || policy.completion !== 'review-then-merge'))) return null;
-    const rows = meta.completedCheckouts?.filter(row => completedCheckoutReceiptValid(agent, row)
+    const rows = (Array.isArray(meta.completedCheckouts) ? meta.completedCheckouts : []).filter(row => completedCheckoutReceiptValid(agent, row)
       && samePath(row.repoPath, repoPath) && samePath(row.path, meta.workspacePath) && row.branch === branch
       && oid(row.head) && (!policy?.tip || policy.tip === row.head) && isDeepStrictEqual(row.incarnation, checkoutIncarnation));
     return rows?.length === 1 ? rows[0] : null;
   };
   // The archive can contain many unrelated executions. Bound this branch's
   // captured history, rather than refusing because other projects ran tasks.
-  const scoped = agents.filter(agent => Array.isArray(agent?.metadata?.completedCheckouts)
-    && agent.metadata.completedCheckouts.some(row => samePath(row?.repoPath, repoPath) && row.branch === branch));
+  const scoped = agents.filter(agent => [agent?.metadata?.completedCheckouts, agent?.metadata?.checkoutSeeds]
+    .some(rows => Array.isArray(rows) && rows.some(row => samePath(row?.repoPath, repoPath) && row.branch === branch)));
   if (scoped.length > 25) return [];
   const byId = new Map(scoped.map(agent => [agent.id, agent]));
   if (byId.size !== scoped.length) return [];
@@ -67,6 +67,16 @@ export async function readResumedCheckoutDeliveries(input, agents) {
       if (!captured || captured.head !== tip || !samePath(captured.path, input.checkoutPath)
         || successor.result?.cleanupPending !== true || successor.result.taskOutcome?.recovery?.mode !== 'cleanup'
         || reviewedRetirementPolicy({ ...input, agents: [successor] }).reason) continue;
+      for (const parent of scoped) {
+        const binding = sameTaskRetirementBinding(parent, successor, input);
+        if (!binding) continue;
+        const known = binding.sourceCapture?.head || parent.metadata?.branchCompletionPolicy?.tip;
+        if (known && (!oid(known) || !await git(['merge-base', '--is-ancestor', known, tip]).then(() => true, () => false))) continue;
+        evidence.push({ kind: 'same-task-generation', agentId: parent.id, successorAgentId: successor.id, taskId: parent.taskId,
+          capturedHead: binding.sourceCapture?.head ?? null, capturedAt: binding.sourceCapture?.capturedAt ?? null,
+          sourceSeededAt: binding.sourceSeed?.seededAt ?? null, successorCapturedAt: binding.successorCapture.capturedAt,
+          originalPolicyTip: parent.metadata?.branchCompletionPolicy?.tip ?? null, prUrl, tip, checkoutIncarnation });
+      }
       const seen = new Set([successor.id]);
       let child = successor;
       while (child.metadata?.resumedFromAgentId) {

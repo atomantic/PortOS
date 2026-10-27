@@ -1,7 +1,6 @@
-import MediaImage from '../MediaImage';
-import { imageThumbnailSrc } from '../../lib/imageThumbnailSrc';
+import CatalogImagePreview from '../catalog/CatalogImagePreview';
 
-export default function ModelReferenceImages({ images }) {
+export default function ModelReferenceImages({ images, onOpenPreview }) {
   if (!Array.isArray(images)) return null;
   return (
     <section aria-label="Canonical reference images" className="space-y-2">
@@ -14,10 +13,26 @@ export default function ModelReferenceImages({ images }) {
           {images.map((image, index) => (
             <figure key={`${image.filename}:${index}`} className="min-w-0 rounded border border-port-border bg-port-bg p-2 space-y-1">
               {image.url && (
-                <a href={image.url} target="_blank" rel="noreferrer" aria-label={`Open canonical reference ${index + 1}: ${image.filename}`}>
-                  <MediaImage src={imageThumbnailSrc(image.url) || image.url} fallbackSrc={image.url}
-                    alt={`Canonical reference ${index + 1}`} className="w-full h-28 object-contain rounded" />
-                </a>
+                onOpenPreview ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenPreview(image.url, image)}
+                    aria-label={`Open canonical reference ${index + 1}: ${image.filename}`}
+                    className="block w-full rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-port-accent"
+                  >
+                    <CatalogImagePreview
+                      src={image.url}
+                      alt={`Canonical reference ${index + 1}`}
+                      className="w-full h-28 object-contain rounded"
+                    />
+                  </button>
+                ) : (
+                  <CatalogImagePreview
+                    src={image.url}
+                    alt={`Canonical reference ${index + 1}`}
+                    className="w-full h-28 object-contain rounded"
+                  />
+                )
               )}
               <figcaption className="text-[11px] break-words">
                 <span className="block text-gray-300">{image.filename}</span>

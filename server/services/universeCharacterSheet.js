@@ -21,6 +21,8 @@ import { getSettings } from './settings.js';
 import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { purgeReferenceSheetFromAllUniverses } from './universeCanon.js';
 import { universeAestheticLine } from '../lib/universeVisualStyle.js';
+import { applyImageVisualProfile } from './imageGen/visualProfile.js';
+import { resolveUniverseVisualProfile } from '../lib/universeVisualProfile.js';
 import { promptAddition } from '../lib/modelInput.js';
 import { characterSheetReferenceCandidates, resolveCharacterSheetReferences } from '../lib/characterSheetReferences.js';
 import { enqueueJob, getJob, mediaJobEvents } from './mediaJobQueue/index.js';
@@ -398,13 +400,18 @@ export async function buildSheetRenderParams({
   options = {},
   styleLine = '',
   renderPin = {},
+  visualProfile,
   styleChip = { id: 'universe-style', label: 'Universe style' },
   negativesLabel = 'Character sheet negatives',
   referenceCandidates = [],
+  sharedIdentity = '',
 }) {
   const hasPromptOverride = typeof options.overridePrompt === 'string' && !!options.overridePrompt.trim();
   const hasNegativeOverride = typeof options.overrideNegativePrompt === 'string' && !!options.overrideNegativePrompt.trim();
   let prompt = hasPromptOverride ? options.overridePrompt : built.prompt;
+  const identityAddition = !hasPromptOverride && sharedIdentity && !prompt.includes(sharedIdentity)
+    ? promptAddition('shared-character-identity', 'Shared facial identity', sharedIdentity) : null;
+  if (identityAddition) prompt += `\n\nShared facial identity: ${sharedIdentity}`;
   const negativePrompt = hasNegativeOverride ? options.overrideNegativePrompt : built.negativePrompt;
 
   const settings = await getSettings();
@@ -437,6 +444,7 @@ export async function buildSheetRenderParams({
   // style and the sheet negatives it carries are listed on the render's
   // sent-prompt record (#11317). A typed override is sent as written.
   const promptAdditions = [
+    identityAddition,
     !hasPromptOverride && styleLine && prompt.includes(styleLine.trim()) ? promptAddition(styleChip.id, styleChip.label, styleLine) : null,
     !hasNegativeOverride ? promptAddition('sheet-negatives', negativesLabel, built.negativePrompt) : null,
   ].filter(Boolean);
@@ -485,7 +493,8 @@ export async function buildSheetRenderParams({
       params.promptAdditions = [...(params.promptAdditions || []), promptAddition('character-identity', 'Canonical character likeness', text)];
     }
   }
-  return { params, prompt, negativePrompt, modelId, activeMode, referenceImages: references.images };
+  params = applyImageVisualProfile(params, visualProfile);
+  return { params, prompt: params.prompt, negativePrompt: params.negativePrompt, modelId, activeMode, referenceImages: references.images };
 }
 
 export function assertSheetReferencesAvailable(referenceImages) {
@@ -506,7 +515,8 @@ export function assertSheetReferencesAvailable(referenceImages) {
 async function prepareCharacterSheet(universeId, entryId, options) {
   const variant = options.variant || LEGACY_SHEET_VARIANT_ID;
   const variantConfig = getVariantConfig(variant);
-  const universe = await getUniverse(universeId);
+  const loaded = await getUniverse(universeId);
+  const universe = { ...loaded, visualProfile: resolveUniverseVisualProfile(loaded, options.visualProfileOverride) };
   const list = Array.isArray(universe.characters) ? universe.characters : [];
   const character = list.find((c) => c.id === entryId);
   if (!character) {
@@ -528,8 +538,9 @@ async function prepareCharacterSheet(universeId, entryId, options) {
     ? await import('./catalogDB.js').then(({ listMediaForIngredient }) => listMediaForIngredient(character.ingredientId))
     : [];
   const sheet = await buildSheetRenderParams({
-    built, options, styleLine: universeAestheticLine(universe), renderPin: recordRenderPin(universe),
+    built, options, styleLine: universeAestheticLine(universe), renderPin: recordRenderPin(universe), visualProfile: options.visualProfileOverride === undefined ? universe.visualProfile : options.visualProfileOverride,
     referenceCandidates: characterSheetReferenceCandidates(character, media),
+    sharedIdentity: character.visualIdentity,
   });
   return { variant, variantConfig, universe, character, ...sheet };
 }

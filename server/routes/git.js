@@ -9,7 +9,7 @@ import { protectedAgentIds } from '../services/agentState.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import { validateRequest, submoduleStatusQuerySchema, submoduleUpdateSchema, gitDeleteBranchBodySchema,
-  gitPathBodySchema, gitStageBodySchema, gitCommitBodySchema, gitBranchBodySchema, gitOptionalBranchBodySchema,
+  gitPathBodySchema, gitCleanupMergedBodySchema, gitStageBodySchema, gitCommitBodySchema, gitBranchBodySchema, gitOptionalBranchBodySchema,
   gitBranchComparisonBodySchema, gitDiffBodySchema, gitCommitsBodySchema, gitRemoteBranchesBodySchema } from '../lib/validation.js';
 
 /**
@@ -265,10 +265,11 @@ router.post('/reset-to-default', asyncHandler(async (req, res) => {
 // it is clean and its branch is fully in origin/<default>; anything else comes
 // back in `skipped` with the reason.
 router.post('/cleanup-merged', asyncHandler(async (req, res) => {
-  const { path } = validateRequest(gitPathBodySchema, req.body);
+  const { path, branches } = validateRequest(gitCleanupMergedBodySchema, req.body);
   assertAllowedWorkspace(path);
   const { excludeBranches, activeAgentIds } = await getAgentProtections();
-  const result = await git.deleteMergedBranches(path, { excludeBranches, activeAgentIds });
+  const result = await git.deleteMergedBranches(path, { excludeBranches, activeAgentIds,
+    ...(branches && { onlyBranches: new Set(branches) }) });
   res.json(result);
 }));
 

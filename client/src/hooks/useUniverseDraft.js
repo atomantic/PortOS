@@ -53,6 +53,7 @@ export const createEmptyUniverseDraft = () => ({
   compositeSheets: [],
   influences: { embrace: [], avoid: [] },
   styleReferences: [],
+  visualProfile: null,
   locked: {},
   llm: { provider: null, model: null },
 });
@@ -71,6 +72,7 @@ export const universeDraftSnapshot = (draft = {}) => JSON.stringify({
   categories: draft.categories || {},
   compositeSheets: draft.compositeSheets || [],
   influences: ensureInfluences(draft.influences),
+  visualProfile: draft.visualProfile || null,
   locked: draft.locked || {},
   llm: draft.llm || { provider: null, model: null },
 });
@@ -126,7 +128,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
   const mountedRef = useMounted();
   const draftRef = useRef(null);
   const savedDraftSnapshotRef = useRef(universeDraftSnapshot(createEmptyUniverseDraft()));
-  const savedStyleSnapshotRef = useRef(ensureInfluences(createEmptyUniverseDraft().influences));
+  const savedStyleSnapshotRef = useRef({ influences: ensureInfluences(createEmptyUniverseDraft().influences), visualProfile: null });
   const pendingCanonAdditionsRef = useRef(emptyPendingCanon());
   // Mirrors `selectedId` synchronously during render (not via a passive
   // effect, which runs one tick later and would leave a window where a resolving
@@ -179,7 +181,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
 
   const markDraftSaved = useCallback((snapshotSource) => {
     savedDraftSnapshotRef.current = universeDraftSnapshot(snapshotSource);
-    savedStyleSnapshotRef.current = ensureInfluences(snapshotSource?.influences);
+    savedStyleSnapshotRef.current = { influences: ensureInfluences(snapshotSource?.influences), visualProfile: snapshotSource?.visualProfile || null };
     noteUniverseUpdated(snapshotSource?.id, snapshotSource?.updatedAt);
   }, [noteUniverseUpdated]);
 
@@ -191,7 +193,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     saved.styleNotes = snapshotSource?.styleNotes || '';
     saved.influences = ensureInfluences(snapshotSource?.influences);
     savedDraftSnapshotRef.current = JSON.stringify(saved);
-    savedStyleSnapshotRef.current = ensureInfluences(snapshotSource?.influences);
+    savedStyleSnapshotRef.current = { ...savedStyleSnapshotRef.current, influences: ensureInfluences(snapshotSource?.influences) };
   }, []);
 
   const isDraftDirty = useCallback(
@@ -279,6 +281,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
           moodBoardId: universe.moodBoardId || null,
           influences: ensureInfluences(universe.influences),
           styleReferences: universe.styleReferences || [],
+          visualProfile: universe.visualProfile || null,
           locked: universe.locked || {},
           llm: universe.llm || { provider: null, model: null },
         };
@@ -343,6 +346,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
       categories: draft.categories,
       compositeSheets: draft.compositeSheets || [],
       influences: ensureInfluences(draft.influences),
+  visualProfile: draft.visualProfile || null,
       locked: draft.locked || {},
       llm: draft.llm || {},
       // Per-record render pin (#3231 Phase 3) — included only when set so a
@@ -752,7 +756,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
   }, [providers, activeProviderId, draft.llm?.provider]);
   const styleProbeDirty = !sameJsonShape(
     savedStyleSnapshotRef.current,
-    ensureInfluences(draft.influences),
+    { influences: ensureInfluences(draft.influences), visualProfile: draft.visualProfile || null },
   );
   // The render-pin ladder's inputs (see `renderPinLadder`), resolved here at the
   // source — this hook owns every rung — rather than at each consumer, so a new

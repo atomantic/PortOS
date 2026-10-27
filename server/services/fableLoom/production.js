@@ -11,6 +11,7 @@
 import { fableLoomRunEvents } from './runEvents.js';
 import { randomInt, randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
+import { applyImageVisualProfile } from '../imageGen/visualProfile.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
 import { getImageModels, isEditOnly } from '../../lib/mediaModels.js';
@@ -337,6 +338,7 @@ async function loadRecordedConditioning(run, asset) {
 function exactConditioningMismatches(recorded, current) {
   if (!recorded || !current) return ['The recorded visual conditioning could not be reconstructed.'];
   const mismatches = [];
+  if (JSON.stringify(recorded.visualProfile || null) !== JSON.stringify(current.visualProfile || null)) mismatches.push('Recorded visual profile changed.');
   const recordedCapability = recorded.capability || {};
   const currentCapability = current.capability || {};
   for (const key of ['kind', 'backend', 'modelId', 'modelRevision']) {
@@ -541,7 +543,7 @@ async function prepareImageJob(run, asset) {
       provider: mode,
       modelId: local.selectedModel.id,
       modelRevision: local.selectedModel.revision || null,
-      params: {
+      params: applyImageVisualProfile({
         pythonPath: local.pythonPath,
         prompt: conditioned?.prompt || asset.prompt,
         ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
@@ -564,7 +566,7 @@ async function prepareImageJob(run, asset) {
         loraScales: conditioned?.loraScales || [],
         visualConditioning: conditioned?.visualConditioning || null,
         fableLoom: productionTag(run, asset),
-      },
+      }, conditioned?.visualProfile),
     };
   }
 
@@ -583,7 +585,7 @@ async function prepareImageJob(run, asset) {
     provider: mode,
     modelId: cloud.modelId,
     modelRevision: capability.modelRevision || null,
-    params: {
+    params: applyImageVisualProfile({
       mode,
       ...providerParams,
       prompt: conditioned?.prompt || asset.prompt,
@@ -600,7 +602,7 @@ async function prepareImageJob(run, asset) {
       loraScales: conditioned?.loraScales || [],
       visualConditioning: conditioned?.visualConditioning || null,
       fableLoom: productionTag(run, asset),
-    },
+    }, conditioned?.visualProfile),
   };
 }
 

@@ -112,7 +112,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
   return <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0 break-words" aria-label="Creative setup">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h3 className="text-sm font-medium">Character style, universe, cast, places &amp; objects</h3>
-      {!editing && <button type="button" onClick={begin} aria-label={subjects.length || project.concept?.characterStyleId ? 'Edit creative direction' : undefined} className="text-sm text-port-accent min-h-[44px]">{subjects.length || project.concept?.characterStyleId ? 'Edit' : 'Set up creative direction'}</button>}
+      {!editing && <button type="button" onClick={begin} aria-label={subjects.length || project.concept?.characterStyleId ? 'Edit creative direction' : undefined} className="text-sm text-port-accent min-h-[44px] rounded border border-port-border px-3 py-2 hover:bg-port-accent/10">{subjects.length || project.concept?.characterStyleId ? 'Edit' : 'Set up creative direction'}</button>}
     </div>
     {!editing && project.concept?.characterStyleId && <p className="text-xs">Character style: {project.concept.characterStyle?.split(':')[0] || project.concept.characterStyleId}</p>}
     {!editing ? <p className="text-xs text-port-text-muted">{subjects.length ? subjects.map((s) => `${s.name}${s.role === 'protagonist' ? ' (protagonist)' : s.role === 'band' ? ' (band)' : ''}`).join(' · ') : 'Create the band or protagonist, choose a universe, and select the places and objects that anchor the story.'}</p> : <fieldset disabled={saving} className="space-y-3 min-w-0">
@@ -145,7 +145,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
       </div>)}</div>}
       <div className="flex flex-wrap items-center gap-x-3" role="group" aria-label="Add from catalog">
         <span className="text-xs text-port-text-muted">From the catalog:</span>
-        {kinds.map(([kind, label]) => <button key={kind} type="button" disabled={subjects.length >= 24} onClick={() => setCatalogKind(kind)} className="text-sm text-port-accent min-h-[44px] disabled:opacity-50">Add {label.toLowerCase()}</button>)}
+        {kinds.map(([kind, label]) => <button key={kind} type="button" disabled={subjects.length >= 24} onClick={() => setCatalogKind(kind)} className="text-sm text-port-accent min-h-[44px] rounded border border-port-border px-3 py-2 hover:bg-port-accent/10 disabled:opacity-50">Add {label.toLowerCase()}</button>)}
       </div>
       <IngredientPicker
         open={!!catalogKind}
@@ -177,7 +177,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
         <div><label htmlFor={idFor('name')} className="text-xs">Name</label><input id={idFor('name')} maxLength={120} className={inputClass} value={newName} onChange={(e) => setNewName(e.target.value)} /></div>
       </div>
       <label htmlFor={idFor('description')} className="block text-xs">Appearance / description</label><textarea id={idFor('description')} rows={2} maxLength={1000} className={inputClass} value={newDescription} onChange={(e) => setNewDescription(e.target.value)} />
-      <button type="button" className="text-port-accent text-sm min-h-[44px]" disabled={!newName.trim() || subjects.length >= 24} onClick={() => { add(newKind, newName, newDescription); setNewName(''); setNewDescription(''); }}>Add to production</button>
+      <button type="button" className="text-port-accent text-sm min-h-[44px] rounded border border-port-border px-3 py-2 hover:bg-port-accent/10 disabled:opacity-50" disabled={!newName.trim() || subjects.length >= 24} onClick={() => { add(newKind, newName, newDescription); setNewName(''); setNewDescription(''); }}>Add to production</button>
       {(newName.trim() || newDescription.trim()) && <p className="text-xs text-port-text-muted">Add the new subject to the production before saving.</p>}
       <div className="flex flex-wrap gap-3"><button type="button" onClick={save} disabled={!universeReady || !!newName.trim() || !!newDescription.trim()} className="bg-port-accent text-white rounded px-3 py-2 text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save creative setup'}</button><button type="button" onClick={() => setEditing(false)} className="text-sm">Cancel</button></div>
     </fieldset>}
@@ -185,7 +185,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
     {!editing && conflict && <div role="status" className="rounded border border-port-warning/60 p-2 space-y-1">
       <p className="text-xs text-port-warning">{conflict.message}</p>
       <p className="text-xs text-port-text-muted">Generated video is not dispatched without a video tool. Existing approved plans and check-in sheets stay as saved until you replan.</p>
-      <button type="button" onClick={replan} disabled={replanning} className="text-sm text-port-accent min-h-[44px] disabled:opacity-50">{replanning ? 'Replanning…' : 'Replan as code-first, no generated video'}</button>
+      <button type="button" onClick={replan} disabled={replanning} className="text-sm text-port-accent min-h-[44px] rounded border border-port-border px-3 py-2 hover:bg-port-accent/10 disabled:opacity-50">{replanning ? 'Replanning…' : 'Replan as code-first, no generated video'}</button>
     </div>}
     {error && <p role="alert" className="text-sm text-port-error">{error}</p>}
   </section>;

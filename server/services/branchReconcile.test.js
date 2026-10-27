@@ -754,6 +754,22 @@ describe('buildActiveOwnerIds', () => {
 });
 
 describe('gatherBranchState', () => {
+  it('does not turn a ref retired after enumeration into a symbolic commit head', async () => {
+    git.getBranches.mockResolvedValue([{ name: 'feature/finished', isDefault: false, current: false, merged: true }]);
+    wt.listWorktrees.mockResolvedValue([]);
+    execGh.mockResolvedValue('[]');
+    const previous = execGit.getMockImplementation();
+    execGit.mockImplementation(async (args, ...rest) => {
+      if (args[0] === 'rev-parse' && args.includes('refs/heads/feature/finished^{commit}')) {
+        return { exitCode: 128, stdout: 'feature/finished\n' };
+      }
+      if (args[0] === 'show-ref' && args.includes('refs/heads/feature/finished')) return { exitCode: 1, stdout: '' };
+      return previous(args, ...rest);
+    });
+    try { expect(await gatherBranchState('/repo', { defaultBranch: 'main' })).toEqual([]); }
+    finally { execGit.mockImplementation(previous); }
+  });
+
   it('excludes default/current/protected and folds in worktree + PR facts', async () => {
     git.getBranches.mockResolvedValue([
       { name: 'main', isDefault: true, current: true, tracking: 'origin/main', merged: false },

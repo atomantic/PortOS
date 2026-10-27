@@ -119,6 +119,10 @@ describe('claim parent merge admission instructions', () => {
     expect(prompt).toContain('release with outcome resync');
     expect(prompt).toContain('OUTSIDE the lease');
     expect(prompt).toContain('at most 10 minutes');
+    expect(prompt).toContain('Base-only movement is a guard refresh, never a substantive resync round');
+    expect(prompt.indexOf('action\":\"prepare')).toBeLessThan(prompt.indexOf('action\":\"acquire'));
+    expect(prompt).toContain('never restart the budget');
+    expect(prompt).toContain('\"action\":\"yield\"');
     expect(prompt).toContain('lease-expired');
     expect(prompt).toContain('overrides mandatory base-sync instructions in delegated slashdo workflows');
     expect(prompt).toContain('outcome leave-open');

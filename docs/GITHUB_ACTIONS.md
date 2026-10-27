@@ -177,7 +177,7 @@ focused unit tests: edited test files and sibling tests for changed sources,
 including untracked tests, without expanding through transitive imports.
 
 `npm run pregate -- --full` opts into the CI-selected broad suites locally:
-server and client tests, the client build and its API Explorer bundle pin, the
+server and client tests, the client build, the
 boot smoke, browser suites (smoke profile, prerequisites required rather than
 skipped), and the serial `portos_test` DB suite last and alone. Each stage
 receives the environment the matching job sets. A suite the machine cannot run
@@ -230,8 +230,8 @@ record: `docs/plans/2026-10-18-ci-local-first-merge-gate.md`). After the push,
 pushed head, and the impact planner skips what it attests to:
 
 - **What is attested.** Only receipt stages that ran and passed: the
-  hidden-content scan, lint, server and client tests, the client build and its
-  bundle pin, the boot smoke, the browser suites and the DB suite, and the
+  hidden-content scan, lint, server and client tests, the client build,
+  the boot smoke, the browser suites and the DB suite, and the
   shipped prompt-history guard. A suite pregate reported as not run — skipped
   by a `--skip-*` flag, left to CI by a downgraded full plan, or missing a
   prerequisite — is not attested, and a downgraded full plan never attests
@@ -645,8 +645,7 @@ The selected work is split across parallel jobs:
   failed at setup time. (`browser/` gets no such step: zero dependencies, and
   its lockfile is deliberately gitignored.)
 - **Client tests and build** — affected client tests, plus the production build
-  whenever client source changed. Build and the Scalar-removal bundle pin run on
-  shard 1 only.
+  whenever client source changed. The build runs on shard 1 only.
 - **Lint client** — Biome over the changed client sources, in its own job. It used
   to be a shard-1 step on the client job. Steps within a job run sequentially, so
   that put ~31 s of Biome in front of the slowest shard's tests rather than beside
@@ -674,13 +673,12 @@ The selected work is split across parallel jobs:
   They ran after the DB suite on one job until that job set the run's length
   more often than any other; split, each finishes in about the time of its own
   steps.
-- **Windows server tests** — the same server selection, but only on full CI
-  (the candidate → `release` PR, nightly, release, workflow dispatch) or when a
-  Windows-sensitive surface changed (`.ps1` / `.cmd` spawn, PowerShell BOM,
-  `bufferedSpawn`, `cos-runner`, shell/PM2, etc.). Docs-only and ordinary
-  Linux-faithful PRs skip this job. `pinPlatform('win32')` tests still run on
-  Linux. A full plan does not automatically mean a full *Windows* run — see
-  "What a full plan costs the Windows job" below.
+- **Windows native contracts** — one runner for CLI/TUI execution and prompt
+  submission, cmd/PowerShell behavior, process settlement and filesystem/path
+  compatibility. Relevant source/tooling changes and explicit full validation
+  select it. Application import graphs and platform-neutral product suites stay
+  on the primary jobs; see "Windows native contract coverage" below.
+
 - **Node minimum compatibility** — installs every workspace and runs the
   runtime gate on the oldest supported Node. On a pull request it runs only
   when a `package.json`, a lockfile, an `.npmrc`, `.nvmrc`, the gate script or
@@ -742,7 +740,7 @@ The selected work is split across parallel jobs:
   counts as passing here like any other skipped job; the impact summary and
   `suite_reasons` say which ones, and why (see "Pregate attestation").
 - **Full CI Gate** — published only when the plan chose the complete suite and
-  full Windows coverage, with the full browser profile executed in hosted CI.
+  the supported native Windows contracts, with the full browser profile executed in hosted CI.
   Ordinary PR smoke runs cannot publish it, and neither can a run that skipped
   any stage on a pregate attestation — the planner reports `full: false` for
   those. It mirrors `CI Gate`'s result. This is the check the release workflow
@@ -774,25 +772,12 @@ two, see `scripts/vitestCiPool.js`), the Windows server suite ~10 minutes
 minutes. Roughly half of all PR runs went full, so most PRs waited on the
 longest of those.
 
-The three test-runner jobs are therefore matrices. The impact job emits
-`server_shards`, `client_shards`, and `windows_shards` — `[1]` for exact-file
-plans and `[1..n]` for full plans. Windows also uses its full matrix for
-related-test plans: a single shared source can select most of the server graph
-and exceed the bounded test-step budget on one Windows runner. Full Windows
-shards reached 19,911 passing tests in 877.6 seconds before post-test timeout,
-and another reached 1,091/1,100 modules at the 15-minute deadline (2026-10-24,
-#13402). The test step now has 25 minutes within its unchanged 40-minute job (#13301);
-the two-worker cap and all tests remain unchanged. Matrices are
-sized by `FULL_SUITE_SHARDS` in
-`scripts/ci-test-plan.js` (client 3, Windows 4, server 2) — and each job builds
-its matrix from that output. The decision has to be made in the planner: a
-job-level `if` cannot read the `matrix` context, so a job cannot skip its own
-extra shards. `scripts/run-ci-tests.js` turns `CI_SHARD=<index>/<count>` into
-a file-selection slice before launching Vitest (without a `--shard` flag),
-using the same path-hash partition — every shard is a
-fixed, disjoint subset, and their union is the complete selected suite. Windows
-related plans retain the same source graph and explicit contracts on every
-shard; only execution is partitioned. Scoped Linux plans fan out the same way
+Primary server/client test jobs use matrices. The impact job emits
+`server_shards` and `client_shards` from `FULL_SUITE_SHARDS` (server 2, client 3).
+Windows emits `[1]` for its native contract runner. `scripts/run-ci-tests.js`
+turns `CI_SHARD=<index>/<count>` into a disjoint path-hash file slice before
+launching Vitest; the union is the complete selected suite. Windows uses exact
+native selectors and never repeats a related-graph traversal. Scoped Linux plans fan out the same way
 (`fansOut()` in the planner): a server `related` plan always does, because its
 import-graph reach is unbounded by the explicit selector count (scoped server
 runs took 6.1 min median, 9.4 p90, on one runner), and either runner does when
@@ -803,9 +788,8 @@ shards, the DB/browser suites, and a Windows run (#11871). Exact-file plans
 under the cap and client `related` plans stay on one runner. Vitest refuses a
 shard count above the number of files it resolved, so a runner fans out only
 when at least that many explicit selectors are files the Linux job actually
-runs (DB and browser suites have their own jobs); each shard repeats Vitest's
-related-graph pass, the trade the Windows job already makes. Once-only steps — smoke boot, the client build, the
-Scalar-removal bundle pin — pin themselves to shard 1; lint is not among them,
+runs (DB and browser suites have their own jobs); each primary shard repeats Vitest's related-graph pass. Once-only steps — smoke boot and the client build —
+pin themselves to shard 1; lint is not among them,
 because it has its own job (see above). `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are
 free, so the fan-out costs only concurrency.
@@ -816,183 +800,95 @@ once-only steps on shard 1.
 
 ### What a full plan costs the Windows job
 
-Measured from 11 real full CI runs (`gh api repos/atomantic/PortOS/actions/runs/<id>/jobs`,
-September 2026). A full run is **12 jobs / 28.7 runner-minutes**:
+Windows CI covers the supported native boundary: CLI/TUI launch and prompt
+submission, cmd/PowerShell execution and quoting, process cancellation/settlement,
+and filesystem/path semantics. It runs the explicit `WINDOWS_CONTRACT_TESTS`
+registry on one Windows runner. It does not follow the application import graph
+or duplicate platform-neutral application suites, including on full, scheduled
+and release validation. Full primary server/client/browser/database coverage is
+unchanged. Worker concurrency remains two and existing deadlines remain intact.
 
-| Job | Jobs | Runner-min | At `windows-latest` 2x |
-| --- | --- | --- | --- |
-| Windows server tests | 3 | 11.8 | 23.5 |
-| Client tests and build | 3 | 8.3 | 8.3 |
-| Server tests | 2 | 6.8 | 6.8 |
-| DB tests, impact, both gates | 4 | 1.7 | 1.7 |
-| **Total** | **12** | **28.7** | **40.4** |
+Native changes and Windows-installed dependency/tooling changes select the native
+job. Client-only configuration, known platform-neutral schema/package changes
+and ordinary application changes do not select it. An explicit full run includes
+it. A missing native inventory fails plan publication instead of producing a
+successful empty Windows job. Required `CI Gate` still waits for every selected
+job. `Full CI Gate`, used for release reuse, requires a full primary plan and the
+selected native Windows contract set, with a successful aggregate gate.
 
-Measured before lint moved to its own job, so the client column still carries the
-~31 s of Biome that now runs beside it rather than inside it. The matrix is 13
-jobs rather than 12; the totals move less than that implies, because
-`Cache client node_modules` now skips the 393 MB `npm ci` on all four jobs that
-install this workspace.
+### Primary functional coverage and secondary compatibility
 
-Windows is 41% of a full run's runner occupancy, and 58% once GitHub's 2x
-`windows-latest` multiplier is applied. **This repository is public, so those
-minutes are not billed** — the cost that binds is runner occupancy and
-concurrent-job slots, which is what makes several simultaneous PR builds queue.
-The 2x column is kept because a fork on private billing does pay it.
+Run the functional suite once on the primary environment. Secondary OS/browser
+coverage consists of basic app/runner smoke checks and focused compatibility
+regressions. A Safari-specific report should yield a generic compatibility
+contract where possible, or a small WebKit regression when the engine is
+necessary, rather than a second full application suite.
 
-**Not every full plan needs a full Windows run.** Replaying 250 merge commits
-through `buildCiTestPlan`, 64 went full — and 24 of those (38%) went full for a
-reason `windows-server` cannot observe:
+The current browser job uses Chrome/Chromium via `scripts/lib/testChrome.js`.
+Its two jobs are disjoint file shards selected by `CI_SHARD`; they are not two
+browser engines or duplicate executions of every suite. Each selected browser
+file runs once. No Firefox/WebKit full-suite matrix exists to remove. Existing
+browser suites retain their distinct substantive assertions; this audit adds no
+speculative cross-browser matrix.
 
-| Full-plan reason | Runs | Windows-relevant? |
-| --- | --- | --- |
-| targeted test set exceeded safety cap (no longer full; see "Full-suite sharding") | 17 | no — capacity, not risk |
-| wide change (>30 executable files) | 6 | no — capacity, not risk |
-| client composition root / build config / lint config / test setup | 1 | no — client-only |
-| dependency manifest, server contract, CI pipeline script, workflow, … | 40 | yes at the time — manifests and server contracts are now narrowed (below) |
+### Windows native contract coverage
 
-So each full trigger in `FULL_TRIGGER_RULES` carries a `windowsEscalates` flag,
-and `fullPlan()` escalates Windows to the complete server suite only when **any**
-matching trigger is Windows-relevant, the diff touches `WINDOWS_RISK_RULES`, or
-the run is force-full. **Any** is load-bearing: the reason line reports only the
-first match in sorted-path order, and the `client/src/App.jsx` branch returns
-before the trigger loop, so both read the same OR over every match. A diff that
-edits `App.jsx` *and* bumps a lockfile escalates. Otherwise the job drops to **one shard running
-`WINDOWS_CONTRACT_TESTS`** — reduced, never skipped, and exactly the depth a
-Windows-risk scoped PR already gets.
+The canonical registry is `scripts/ci-test-plan.js` (23 files):
 
-**Workflows and pipeline scripts decide by what runs on `windows-latest`.** Only
-`ci.yml` defines the windows-server job, so only it escalates Windows; `release.yml`,
-`eidoverse-acceptance.yml` and `ci-cancel-recovery.yml` still force a full Linux plan but
-Windows runs the baseline. Likewise only the pipeline scripts the Windows job executes
-(`ci-base-sha`, `run-ci-tests`, and `lib/githubOutput` which the runner imports) escalate it;
-`ci-test-plan`, `run-ci-lint`, `scan-diff-hidden-content` and `verify-ci-status` run on Linux jobs
-only. The nightly run and the candidate → `release` PR keep the complete matrix as the net.
+| Boundary | Retained suites |
+| --- | --- |
+| CLI launch, lookup, environment and cwd | `allowedCommands`, `agentGuard/index`, `bashResolver`, `bufferedSpawn`, `cliProviderRun`, `detachedSpawn`, `processEnv`, `processEnv.spawnOptions`, `spawnCwd` |
+| Shell dialects and TUI submission | `shellCd`, `shellExit`, `shellLivenessProbe`, `shellReadinessProbe`, `tuiPromptRunner`, `shell.windows` |
+| Native cancellation, ownership and filesystem safety | `windowsGitProcess`, `windowsGitProcess.protocol`, `gitRepositoryIdentity`, `checkoutRetirementAdmission`, `worktreeOwnership`, `staticImportGraph`, `nativeTrash`, `nativeTrash.smoke` |
 
-**Dependency manifests decide per package.** The planner's 32-PR sample in
-October 2026 traced every full plan to a lockfile/manifest change (4),
-`server/lib/validation.js` (2) or `.github/workflows/ci.yml` (2). A lockfile
-bump that swapped one pure-JS Gmail client still ran the whole suite on three
-Windows shards (~11 min each), although nothing it installs differs by
-platform. A changed `package.json`/`package-lock.json` (root, `server`,
-`client`, `autofixer`) therefore still forces a full plan, but its trigger
-carries `windowsEscalates: 'dependencies'`: `collectPlanInputs()` reads each
-file at `CI_BASE_SHA` (`git show`; the base is inside the depth-2 checkout)
-and in the tree under test, and `classifyDependencyChange()` diffs them.
-Only manifests (and `.npmrc`) of workspaces in `WINDOWS_INSTALLED_WORKSPACES`
-(`server`, pinned to the `windows-server` install steps by a test) are diffed;
-root, client and autofixer changes keep the Windows baseline.
-Windows escalates when any added, removed or changed lockfile entry (either
-side) has `hasInstallScript`, `os`, `cpu`, `libc`, `optional` or
-`devOptional`, or matches `PLATFORM_PACKAGE_RES` — every `TRUSTED_REBUILDS`
-package (mirrored rather than imported, so the pre-install planner does not
-load the rebuild script's spawn helpers; a test fails on drift) plus the
-native/platform families (`sharp`,
-`@img/*`, `esbuild`, `@rollup/rollup-*`, `rolldown`, `@biomejs/*`,
-`playwright*`, …: dispatchers whose own entry carries no platform
-metadata); when the lockfile's top-level fields or its root entry's non-dependency
-fields (`engines`) change; when a `package.json` field other than metadata
-and the dependency maps changes (`engines`, `overrides`,
-`optionalDependencies`, `scripts`, …); and whenever a version cannot be read
-or parsed (fail closed: a new or deleted manifest, an unavailable base, or no
-verdict at all). Any `.npmrc` change escalates on its own trigger. Otherwise
-Windows runs the contract baseline, and `suite_reasons.windows` names the
-decision and the packages behind it. Replayed against recent server bumps:
-zod, express, undici and the Gmail swap keep the baseline; playwright-core
-and Vitest (rolldown bindings) escalate.
+`server/services/shell.windows.test.js` uses real ConPTY with cmd and PowerShell,
+a tiny local CLI stand-in and synthetic prompt/reply files. It verifies exact
+prompt submission, child environment and working-directory handling with spaces,
+metacharacters and literal brackets. It also checks native path casing and
+separator containment. It calls no provider and loads no model.
 
-`server/lib/validation.js` and `server/lib/schemaVersions.js` stay full-plan
-triggers for their import fan-out but no longer escalate Windows: they are pure
-schema logic with no spawn, path or filesystem semantics, and neither is in
-`WINDOWS_RISK_RULES`. `Full CI Gate` still requires `windows_mode == 'full'`,
-so none of these baseline plans can stand in for the complete Windows suite a
-release relies on.
+Application routes, PM2 parsing/standardization, media and ML jobs, provider
+selection policy, static source pins and broad Git-history/archive workflows
+remain covered in the primary jobs. No migration, data-integrity, security,
+ownership, cleanup or cancellation assertion is deleted for this selection
+change. In particular, `primaryCheckoutGuard.test.js` and `worktreeReap.test.js`
+still test shipping ownership/retirement behavior on the primary runner. Their
+broad real-Git histories/configuration fixtures are not native CLI contracts.
+Native Git child ownership and settlement remain independently exercised on
+Windows; a failure there must still be fixed, not hidden by this boundary.
 
-**Measured full trigger: `server/services/worktreeManager.js` (#9999).** A
-two-file change to this module expanded through Vitest's import-consumer
-traversal to 57 explicit selectors and a ~941-file, ~40-minute local run
-(including real Chrome/ffmpeg renders), while still reading as a scoped plan
-because `MAX_TARGETED_TEST_FILES` counts only explicit selectors. It now plans
-full (Windows escalates, since the module owns cross-platform worktree
-lifecycle). Default `npm run pregate` therefore runs only its always-run guards
-for it, `--full` runs everything (the build, smoke, browser and DB suites
-included), and CI runs the full sharded suite. Its test
-file alone stays scoped; the #9673 consumer traversal is unchanged elsewhere.
+### Windows selection for mixed changes
 
-Three properties keep that safe, each pinned by `scripts/ci-test-plan.test.js`:
+Windows source changes select the curated contracts directly, with no related
+application consumers. Linux retains the complete diff-selected server coverage.
+The representative `windowsGitProcess.protocol.test.js` plus `zodCompat.js` diff
+therefore retains the schema's primary-platform coverage while selecting the
+native Windows set on one runner.
 
-- **Fail-closed by default.** `windowsEscalates` defaults to `true`, so a
-  `fullPlan()` call site added later over-tests rather than under-tests.
-- **Fail-closed on an empty baseline.** `run-ci-tests.js` prints "No server
-  tests selected" and exits 0 for an empty `files` list, so a downgrade that
-  resolved to no tracked contract tests would be a green job that ran nothing.
-  The planner falls back to the full suite instead.
-- **Force-full keeps the discovery net.** Nightly, the candidate → `release` PR,
-  release, and an explicit full-CI request still run the complete Windows
-  matrix. `ci.yml` has no push trigger, so those are the whole net for a Windows
-  regression on a surface nobody has tagged yet (`staticImportGraph` in #5909,
-  `voice/fineTuning` in #6268), and worst-case detection latency for a
-  downgraded PR is the next nightly — always before a release, because the
-  candidate → `release` PR is force-full. That is not a new exposure: it is the
-  same net every PR touching no `WINDOWS_RISK_RULES` file already relies on,
-  which is most of them. This change widens that population by 24 runs in 250.
-
-**Before / after**, on the same 250-merge sample:
-
-| | Jobs | Runner-min | 2x-equivalent |
-| --- | --- | --- | --- |
-| Full run, Windows-relevant (40 of 64) — unchanged | 12 | 28.7 | 40.4 |
-| Full run, downgraded (24 of 64) — before | 12 | 28.7 | 40.4 |
-| Full run, downgraded (24 of 64) — after | **10** | **18.4** | **19.9** |
-| Per merged PR, averaged over all 250 — before | — | 10.25 | 13.78 |
-| Per merged PR, averaged over all 250 — after | — | **9.26** | **11.81** |
-
-That is −36% runner-minutes on a downgraded full run (−51% at the 2x multiplier),
-and **−9.6% overall runner-minutes / −14.3% 2x-equivalent** across the whole sample.
-The one estimated input is the baseline Windows shard at ~1.5 min (~0.83 min
-measured fixed overhead plus the contract suite); every other figure is measured.
-
-There is **no wall-clock regression**: a downgraded run's Windows job goes from 4.15 min to
-~1.5 min, so the full path gets *shorter*, and no full-Windows run changes at all.
-
-**Historical three-shard sizing.** Dropping Windows from 3 to 2 was measured and
-rejected. Per-shard step timings put fixed overhead (checkout, setup-node, cache
-restore) at only ~0.83 min of the 4.15-min shard; the rest is the test step. Going
-3 → 2 therefore removes one setup (~1.7 equivalent-minutes, 7%) while adding
-~1.65 min to the full path's critical chain. Tightening the selection above beat
-that at zero wall-clock cost, so the matrix stayed at 3 at that point.
-The later full-suite capacity measurements below justify its current four shards.
-`max-parallel` is not an alternative — it lowers peak concurrency, not total
-occupancy.
+Before this support-boundary change, pipeline/full plans selected four Windows
+jobs over the server inventory. They now select one job over 23 native suites.
+This is a measured selection/setup reduction, not an execution-time or
+runner-minute speedup claim. The obsolete Scalar package/chunk absence suite and
+its extra post-build invocation are retired; the actual rendered API Explorer
+contracts and production client build remain.
 
 ### Windows full-suite capacity
 
-Full and related Windows plans use four shards; the 43-test contract baseline
-and other focused exact-file plans still use one job. Worker concurrency remains
-two, with the same 25-minute test-step and 40-minute job deadlines. The generic
-Vitest path-hash partition still owns every full-suite file exactly once.
+Historical full-run evidence is retained for comparison. On run
+[40420582344](https://github.com/atomantic/PortOS/actions/runs/40420582344), the
+workflow took 25m37s; Windows shard 1 took 24m46s, including 23m20s in its test
+step. Windows shard 2 failed native Git startup and cleanup; the other Windows
+shards passed. This was not a controlled before/after experiment and does not
+establish the startup cause or a runtime improvement from the new selection.
 
-On release CI run `40339302684`, three-shard Windows runner 1 reached its step
-deadline after 1,119 completed modules with only the quiet planner suite left.
-There were no assertion failures. Its largest file,
-`heldCheckoutRecovery.test.js`, took 1,005.5 seconds versus 772.3 seconds in the
-preceding completed run; the planner suite took only 32.6 seconds previously.
-Adding capacity addresses the aggregate backlog rather than suppressing that
-planner contract or extending any deadline.
-
-Measured file durations from the current and preceding runs, including import
-and setup overhead calibrated from their completed jobs, give this sizing model:
-
-| Full Windows shards | Files per shard | Largest estimated shard | Headroom below 1,500 seconds |
-| --- | --- | --- | --- |
-| 3 | 1,128 / 1,128 / 1,127 | 1,592 seconds | None |
-| 4 | 846 / 846 / 846 / 845 | 1,343 seconds | 157 seconds |
-| 5 | 677 / 677 / 677 / 676 / 676 | 1,216 seconds | 284 seconds |
-
-These are planning estimates, not hosted validation results. They use the larger
-observed duration per file, the unchanged two-worker cap, quiet-group sequencing,
-and approximately 0.255 seconds of measured per-file import/setup overhead. The
-five-shard estimate also respects the indivisible 1,005.5-second file. Four is
-the smallest measured partition with room below the unchanged step deadline.
+Run [40425197057](https://github.com/atomantic/PortOS/actions/runs/40425197057)
+also exposed a 30-second Windows timeout in the Metal profile cache persistence
+test. Its source requests 130 concurrent learn updates against a temporary JSON
+cache to verify the 128-entry bound, reload and expiry. Those assertions retain
+value on the primary platform; they do not justify a native Windows media suite.
+The new native TUI fixture writes only a small script and synthetic reply per
+shell, with no repository/dependency copy, media payload or model data. Cleanup
+waits for actual ConPTY exit before removing its fixture.
 
 ### Python sidecar scripts
 
@@ -1437,16 +1333,21 @@ required CI gate.
 Use the workflow-dispatch button for an immediate full run. A PR also chooses
 full CI automatically when its impact cannot be classified safely.
 
-### Rebase Before Push
+### Before Push
 
-Since CI may auto-commit changelog archives, always rebase before pushing:
+Fetch the intended base and inspect the branch and working tree before pushing:
 
 ```bash
 git fetch origin main
-git rebase origin/main
 npm run pregate
-git push
 ```
+
+Commit intended changes and push to the branch's verified remote destination.
+Integrate the fetched base when there is an actual conflict, an enforced
+up-to-date policy, or evidenced semantic overlap; rerun pregate after a rebase.
+A moving main alone does not require a new head or another hosted CI run.
+Managed merges still require fresh combined-tree structural guards and live
+head/base checks under the merge policy in the root AGENTS.md.
 
 ## Adapting for Sub-Projects
 
@@ -1548,3 +1449,41 @@ all stop recovery. The existing Actions write grant is reused without adding
 permissions. Private repositories that cannot read the PR with that grant remain
 held rather than expanding authority. No PR checkout or code executes in this
 privileged observer; both scripts run from the default branch's sparse checkout.
+
+## Bounded frozen release-candidate failure collection
+
+CI explicitly sets `PORTOS_CI_TEST_POLICY=release-candidate` only for same-repository
+`codex/release-*` pull requests targeting `release`. Ordinary PRs, nightly runs,
+release pushes and local `test:ci` keep bail=1. The shared CI command entry point supplies one
+bail flag, raises it to five for that policy, and disables both Vitest retries
+and the launcher's native-crash retry. Nested bare Vitest runs retain their own bail policy rather than inheriting the
+outer npm lifecycle setting. Existing worker caps, shard selection,
+quiet groups, database isolation and deadlines do not change.
+
+The lifecycle reporter records up to five assertion failures, preserving the
+first. Failed hooks (including assertion failures in hooks), collection errors,
+non-assertion errors, unhandled errors and process teardown timeouts stop safe
+collection. Vitest receives graceful cancellation; the launcher independently
+monitors atomic reporter evidence and cancels its owned process tree on unsafe
+or malformed evidence, using existing escalation and settlement guards. Already
+running work can finish during cancellation; its later output is **unverified**,
+not additional independent regressions. Failed assertions are candidates for
+investigation, not proof that failures are independent or predate an amendment.
+Capped, interrupted, unsafe or missing-evidence runs remain red and cannot write
+green memo entries or support CI-skipping attestation. First-cause run evidence
+and process-settlement refusals remain in each attempt's diagnostics directory.
+
+`invocation.json` binds policy, candidate head, tested checkout, actual checkout
+base, shard, selection digest, workflow run ID/attempt and start/finish times.
+`run.json` contains the bounded assertion list, stop reason and coverage status;
+the ordinary JSON report and process evidence remain available. Report coverage
+as unverified after any stop, including tests that never ran. A successful shard
+alone is not evidence that the whole candidate passed.
+
+For hosted before/after comparisons, group workflow rounds by exact candidate
+head/base and selection digest. Use Actions job queued/start/completion times to
+separate queue time from execution time; sum job execution minutes for
+runner-minutes and report failures collected per invocation. Keep non-reproducing
+failures and classify amendment-introduced regressions separately from failures
+shown to exist at the original cutoff. No hosted duration improvement is claimed
+by this implementation; a local synthetic collection test cannot measure it.

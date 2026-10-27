@@ -1,6 +1,6 @@
 /** Capped forge scope must not strand an exact delivered clean checkout. */
 import { afterAll, afterEach, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -41,6 +41,7 @@ vi.mock('./taskScheduleStore.js', () => ({
   },
 }));
 const { listWorktrees } = await import('./worktreeManager.js');
+const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
 const { prepareInventoriedCheckoutRetirement, retireInventoriedCheckout, inspectCheckoutRetirementOwnership } = await import('./heldCheckoutRecovery.js');
 const { _createInitializedCheckoutRecovery } = await import('./initializedCheckoutRecovery.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
@@ -70,7 +71,7 @@ afterEach(({ task, signal }) => {
 afterAll(() => owned.finish(cleanupTempDataRoots));
 
 describe('exact delivered head retirement with capped historical API (real Git)', () => {
-  it.each(['exact', 'exact-initialized', 'wrong-head', 'unpublished', 'wrong-base', 'wrong-target', 'wrong-merge-proof', 'missing-object', 'remote-change', 'dirty', 'active', 'supersession'])(
+  it.each(['exact', 'exact-initialized', 'named-sibling', 'named-sibling-unrelated', 'same-task-seeded', 'wrong-head', 'unpublished', 'wrong-base', 'wrong-target', 'wrong-merge-proof', 'missing-object', 'remote-change', 'dirty', 'active', 'supersession'])(
     'retains all existing retirement gates: %s', async scenario => {
       scratch = await realpath(await mkdtemp(join(tmpdir(), 'exact-delivery-')));
       const repo = join(scratch, 'repo'); await materializeGitRepo(repo);
@@ -93,6 +94,57 @@ describe('exact delivered head retirement with capped historical API (real Git)'
       fixture.app = { id: 'app-exact', repoPath: repo };
       fixture.policies = [{ id: 'completed-original', status: 'completed', result: { success: true }, metadata: {
         workspacePath: repo, claimBranches: [branch], prCompletionPolicy: 'review-then-merge' } }];
+      let retainedSibling = null;
+      if (scenario.startsWith('named-sibling')) {
+        retainedSibling = join(scratch, 'earlier-review');
+        await execGit(['worktree', 'move', path, retainedSibling], repo);
+        let capturedHead = head;
+        if (scenario === 'named-sibling-unrelated') {
+          const tree = (await execGit(['rev-parse', 'HEAD^{tree}'], retainedSibling)).stdout.trim();
+          capturedHead = (await execGit(['commit-tree', tree, '-m', 'unrelated source history'], repo)).stdout.trim();
+          await execGit(['reset', '--hard', capturedHead], retainedSibling);
+        }
+        const captured = await readCompletedCheckoutIdentity({ repoPath: repo, branch, path: retainedSibling, head: capturedHead });
+        await execGit(['checkout', '--detach', capturedHead], retainedSibling);
+        await execGit(['update-ref', `refs/heads/${branch}`, head, capturedHead], repo);
+        await execGit(['worktree', 'add', path, branch], repo);
+        await writeFile(join(retainedSibling, 'wanted-private.txt'), 'retain this other original checkout\n');
+        fixture.policies = [{ id: 'earlier-review', taskId: 'old-review-task', status: 'completed',
+          startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-02T00:00:00Z',
+          result: { success: false, executionSuccess: true, validationPassed: null }, metadata: {
+            sourceWorkspace: repo, workspacePath: retainedSibling, worktreeBranch: branch,
+            prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { url: fixture.pr.url, branch },
+            completedCheckouts: [{ ...captured, version: 1, agentId: 'earlier-review',
+              startedAt: '2026-01-01T00:00:00Z', capturedAt: '2026-01-01T00:00:01Z' }],
+          } }];
+      }
+      if (scenario === 'same-task-seeded') {
+        const captured = await readCompletedCheckoutIdentity({ repoPath: repo, branch, path, head });
+        const identity = async target => {
+          const stat = await lstat(target, { bigint: true });
+          return { dev: String(stat.dev), ino: String(stat.ino), birthtimeNs: String(stat.birthtimeNs) };
+        };
+        const repository = await identity(repo), checkout = await identity(path);
+        const makeOwner = (id, hour, unknown) => {
+          const startedAt = `2026-01-01T0${hour}:00:00.000Z`;
+          const seededAt = `2026-01-01T0${hour}:00:01.000Z`;
+          const seed = { version: 1, agentId: id, startedAt, seededAt, repoPath: repo, branch, path,
+            repository, checkout, incarnation: captured.incarnation };
+          return { id, taskId: 'one-original-task', status: 'completed', startedAt,
+            completedAt: `2026-01-01T0${hour}:01:00.000Z`,
+            result: { success: false, executionSuccess: true, validationPassed: null, cleanupPending: true,
+              taskOutcome: { recovery: { mode: 'cleanup' } } },
+            metadata: { instanceId: 'fixture-instance', isWorktree: true, sourceWorkspace: repo,
+              workspacePath: path, worktreeBranch: branch, prCompletionPolicy: 'review-then-merge',
+              reviewLoopMergeTarget: { url: fixture.pr.url, branch }, checkoutSeeds: [seed],
+              completionTaskDispatch: { taskId: 'one-original-task', taskType: 'internal', expected: [
+                ['claimedBy', 'fixture-instance'], ['claimedAt', seededAt], ['lastSpawnedAt', seededAt], ['totalSpawnCount', 2]] },
+              checkoutCapture: { status: unknown ? 'pending' : 'captured', unknown, targets: [] },
+              completedCheckouts: unknown ? [] : [{ ...captured, version: 2, agentId: id, startedAt, seededAt,
+                capturedAt: `2026-01-01T0${hour}:01:01.000Z` }] } };
+        };
+        fixture.policies = [makeOwner('unknown-original', 1, true), makeOwner('verified-successor', 2, false)];
+      }
       fixture.schedulePath = join(scratch, 'schedule.json');
       await writeFile(fixture.schedulePath, JSON.stringify({ tasks: {}, executions: {} }));
       const release = { branch, path, head, locked: false, lockReason: null };
@@ -122,9 +174,26 @@ describe('exact delivered head retirement with capped historical API (real Git)'
       });
       const input = { appId: fixture.app.id, release, prUrl: fixture.pr.url,
         ...(scenario === 'supersession' && { kind: 'source-supersession' }) };
+      if (scenario === 'same-task-seeded') {
+        const original = structuredClone(fixture.policies);
+        const mutations = [
+          rows => { rows[0].metadata.instanceId = 'another-install'; },
+          rows => { rows[0].completedAt = rows[1].completedAt; },
+          rows => { rows[0].metadata.checkoutSeeds[0].checkout = { ...rows[0].metadata.checkoutSeeds[0].checkout, ino: '999999' }; },
+          rows => { rows[1].metadata.completionTaskDispatch.expected[3][1] = 1; },
+          rows => { rows[0].result.taskOutcome.recovery.mode = 'approval'; },
+        ];
+        for (const [mutationIndex, mutate] of mutations.entries()) {
+          fixture.policies = structuredClone(original); mutate(fixture.policies);
+          expect(await prepareInventoriedCheckoutRetirement(input, opts), `refusal mutation ${mutationIndex}`).toMatchObject({ ok: false,
+            reason: 'retirement-policy-not-legacy-completed' });
+          expect((await listWorktrees(repo)).some(tree => resolve(tree.path) === resolve(path))).toBe(true);
+        }
+        fixture.policies = original;
+      }
       const prepared = scenario === 'exact-initialized' ? await initialized.review(input)
         : await prepareInventoriedCheckoutRetirement(input, opts);
-      if (['exact', 'exact-initialized', 'remote-change', 'dirty'].includes(scenario)) {
+      if (['exact', 'exact-initialized', 'named-sibling', 'same-task-seeded', 'remote-change', 'dirty'].includes(scenario)) {
         expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { forge: { scopeProof: 'exact-delivered-head' },
           comparison: { disposition: 'integrated', exactMergedDelivery: true } } });
         expect(fixture.calls.some(args => args.includes('--paginate'))).toBe(false);
@@ -133,16 +202,22 @@ describe('exact delivered head retirement with capped historical API (real Git)'
         const confirmation = { appId: fixture.app.id, release,
           review: { prUrl: fixture.pr.url, digest: prepared.review.digest, acceptSuperseded: false } };
         const retired = scenario === 'exact-initialized' ? await initialized.retire(confirmation) : await retireInventoriedCheckout(confirmation, opts);
-        if (scenario === 'exact' || scenario === 'exact-initialized') {
+        if (['exact', 'exact-initialized', 'named-sibling', 'same-task-seeded'].includes(scenario)) {
           expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
           const outcome = await getBranchReconcileOutcome(fixture.app.id);
           expect(outcome.retired).toEqual(expect.arrayContaining([expect.objectContaining({ path, branch, head, branchDeleted: true })]));
           expect((await listWorktrees(repo)).filter(tree => resolve(tree.path) === resolve(path))).toEqual([]);
+          if (retainedSibling) {
+            expect(await readFile(join(retainedSibling, 'wanted-private.txt'), 'utf8')).toBe('retain this other original checkout\n');
+            expect((await listWorktrees(repo)).find(tree => resolve(tree.path) === resolve(retainedSibling))).toBeDefined();
+            expect(fixture.policies[0].result.success).toBe(false);
+          }
           return;
         }
         expect(retired).toMatchObject({ ok: false, reason: scenario === 'dirty' ? 'worktree-dirty' : 'retirement-remote-head-changed' });
       } else expect(prepared).toMatchObject({ ok: false, reason: scenario === 'active' ? 'claim-owner-active'
-        : scenario === 'missing-object' ? 'retirement-proof-fetch-failed'
+        : scenario === 'named-sibling-unrelated' ? 'retirement-policy-not-legacy-completed'
+          : scenario === 'missing-object' ? 'retirement-proof-fetch-failed'
           : scenario === 'wrong-target' ? 'retirement-merge-not-in-target'
           : scenario === 'wrong-merge-proof' ? 'retirement-pr-not-matching-merged' : 'retirement-original-scope-unavailable' });
       expect((await execGit(['rev-parse', 'HEAD'], path)).stdout.trim()).toBe(release.head);
@@ -187,6 +262,33 @@ describe('rewritten detached original retirement (real Git)', () => {
       fixture.app = { id: 'app-detached', repoPath: repo };
       fixture.policies = [{ id: 'completed-original', status: 'completed', result: { success: true }, metadata: {
         workspacePath: repo, claimBranches: [branch], prCompletionPolicy: 'review-then-merge' } }];
+      if (scenario === 'same-task-seeded') {
+        const captured = await readCompletedCheckoutIdentity({ repoPath: repo, branch, path, head });
+        const identity = async target => {
+          const stat = await lstat(target, { bigint: true });
+          return { dev: String(stat.dev), ino: String(stat.ino), birthtimeNs: String(stat.birthtimeNs) };
+        };
+        const repository = await identity(repo), checkout = await identity(path);
+        const makeOwner = (id, hour, unknown) => {
+          const startedAt = `2026-01-01T0${hour}:00:00.000Z`;
+          const seededAt = `2026-01-01T0${hour}:00:01.000Z`;
+          const seed = { version: 1, agentId: id, startedAt, seededAt, repoPath: repo, branch, path,
+            repository, checkout, incarnation: captured.incarnation };
+          return { id, taskId: 'one-original-task', status: 'completed', startedAt,
+            completedAt: `2026-01-01T0${hour}:01:00.000Z`,
+            result: { success: false, executionSuccess: true, validationPassed: null, cleanupPending: true,
+              taskOutcome: { recovery: { mode: 'cleanup' } } },
+            metadata: { instanceId: 'fixture-instance', isWorktree: true, sourceWorkspace: repo,
+              workspacePath: path, worktreeBranch: branch, prCompletionPolicy: 'review-then-merge',
+              reviewLoopMergeTarget: { url: fixture.pr.url, branch }, checkoutSeeds: [seed],
+              completionTaskDispatch: { taskId: 'one-original-task', taskType: 'internal', expected: [
+                ['claimedBy', 'fixture-instance'], ['claimedAt', seededAt], ['lastSpawnedAt', seededAt], ['totalSpawnCount', 2]] },
+              checkoutCapture: { status: unknown ? 'pending' : 'captured', unknown, targets: [] },
+              completedCheckouts: unknown ? [] : [{ ...captured, version: 2, agentId: id, startedAt, seededAt,
+                capturedAt: `2026-01-01T0${hour}:01:01.000Z` }] } };
+        };
+        fixture.policies = [makeOwner('unknown-original', 1, true), makeOwner('verified-successor', 2, false)];
+      }
       fixture.schedulePath = join(scratch, 'schedule.json');
       await writeFile(fixture.schedulePath, JSON.stringify({ tasks: {}, executions: {} }));
       if (scenario === 'unique-work') {

@@ -109,11 +109,11 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
           {owner ? <Link to={threadRefUrl('universe', owner.refId)} className="ml-2 text-port-accent hover:underline break-words">{owner.refName || owner.refId}</Link>
             : <span className="ml-2 text-port-warning">{context?.status === 'conflict' ? 'Conflicting owners — review required' : 'Ownership needs review'}</span>}
         </div>
-        <button type="button" onClick={() => setOpen((value) => !value)} className="text-xs text-port-accent hover:underline">{open ? 'Close' : owner || readOnly ? 'Fork / experiment with redesign…' : 'Resolve ownership / fork…'}</button>
+        <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} className="min-h-11 rounded border border-port-border px-3 py-2 text-xs text-port-accent hover:bg-port-accent/10">{open ? 'Close' : owner || readOnly ? 'Fork / experiment with redesign…' : 'Resolve ownership / fork…'}</button>
       </div>
       {!owner && <p className="text-xs text-gray-400">Existing references are preserved. Select an owning universe explicitly to establish story and style context.</p>}
       {owner && !refs.some((ref) => ref.refKind === 'universe' && ref.refId === owner.refId) && !readOnly && <button type="button"
-        onClick={addToCanon} disabled={busy || unsaved} className="text-xs text-port-accent hover:underline disabled:opacity-40">Add to owning universe</button>}
+        onClick={addToCanon} disabled={busy || unsaved} className="min-h-11 rounded border border-port-border px-3 py-2 text-xs text-port-accent hover:bg-port-accent/10 disabled:opacity-40">Add to owning universe</button>}
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-gray-400">Used in</span>
         {refs.length === 0 && <span className="text-gray-500">{context?.usageComplete === false ? 'Detailed usage pending' : 'No linked containers'}</span>}

@@ -19,8 +19,8 @@ export default function A2vLoraStageControls({ value = [1, 1], onChange, support
         ))}
       </div>
       <div className="flex flex-wrap gap-3 text-xs">
-        <button type="button" disabled={disabled} className="text-port-accent" onClick={() => onChange([1, 1])}>Default [1, 1]</button>
-        <button type="button" disabled={disabled || !supported} className="text-port-accent disabled:opacity-50" onClick={() => onChange([0, 1])}>Motion-friendly [0, 1]</button>
+        <button type="button" disabled={disabled} className="min-h-11 rounded border border-port-border px-3 py-2 text-port-accent hover:bg-port-accent/10 disabled:opacity-50" onClick={() => onChange([1, 1])}>Default [1, 1]</button>
+        <button type="button" disabled={disabled || !supported} className="min-h-11 rounded border border-port-border px-3 py-2 text-port-accent hover:bg-port-accent/10 disabled:opacity-50" onClick={() => onChange([0, 1])}>Motion-friendly [0, 1]</button>
       </div>
       {loras.map((lora) => <p key={lora.filename} className="break-all text-xs text-port-text-muted">{lora.name || lora.filename}: motion {((lora.scale ?? 1) * value[0]).toFixed(2)}, detail {((lora.scale ?? 1) * value[1]).toFixed(2)}</p>)}
     </fieldset>

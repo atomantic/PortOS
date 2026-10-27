@@ -21,6 +21,41 @@ PortOS is a highly opinionated, personal project — a single developer's "every
 - **Small, focused PRs are far more likely to land than large ones.** If you're proposing a new feature area rather than a fix, consider opening an issue first to check it's a direction the project wants, before investing significant time.
 - **Bug fixes, docs corrections, and small quality-of-life improvements are the easiest path in.**
 
+## Platform support and issue triage
+
+macOS is the primary target for the interactive app and browser experience;
+Windows is secondary. Linux interactive browser compatibility is not a support
+target. Linux server support is unchanged.
+
+Run functional coverage once on the primary environment. Secondary operating
+systems and browsers use small smoke checks for basic app/runner failure plus
+focused compatibility regressions. For a Safari-specific failure, first express
+the generic compatibility contract at the narrowest useful boundary; retain a
+small WebKit check when the engine itself is necessary. Do not multiply the full
+application suite across browsers or operating systems. Distinct assertions
+remain covered even when redundant environment executions are removed.
+
+Native Windows CI targets CLI/TUI launch and prompt submission, cmd/PowerShell
+execution and quoting, process cancellation/settlement, and filesystem/path
+semantics. Platform-neutral application, media and Git-history workflows run in
+the primary server/client jobs. Full, scheduled and release validation retain
+the same Windows native contract set; they do not duplicate the application
+suite on Windows. Keep native data-ownership and safe-deletion checks intact.
+
+For browser reports, record OS/version, browser/version, rendering engine, and
+whether the failure occurs interactively or in a headed/headless test. Include
+redacted reproduction evidence and the affected code or check. Before claiming
+work whose only reproduction is a Linux browser, establish either reproduction
+on macOS or Windows, or concrete impact on shared code, server behavior, security,
+or data integrity. If evidence shows the report is confined to unsupported Linux
+interactive browser compatibility, close it as not planned and explain that scope.
+An inconclusive reproduction does not establish unsupported-only scope.
+
+A headless Linux CI failure may reveal a shared regression or a broken test
+contract. Investigate the cause and affected behavior; Linux CI alone is not a
+reason to dismiss it. Preserve required checks and report their actual results;
+do not skip or weaken them to apply this support policy.
+
 ## Development Setup
 
 Choose the PostgreSQL backend before running `npm run install:all`: install and start Docker with Compose for the default Docker backend, or set `PGMODE=native` in the repository-root `.env` for a fresh native install. Preserve existing settings and check for a conflicting exported `PGMODE`. Existing installs must retain the backend holding their records; see [SETUP.md](./SETUP.md) before changing it.

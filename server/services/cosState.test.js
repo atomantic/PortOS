@@ -116,13 +116,16 @@ describe('cosState persistence', () => {
 
   it('preserves durable merge leases across reloads and does not default malformed ownership', async () => {
     const lease = { kind: 'agent', agentId: 'parent', repository: 'github.com/example/repo', token: 'example-token' };
-    writeState({ agents: {}, mergeAdmissions: { [lease.repository]: lease } });
+    const preparations = { [lease.repository]: [{ owner: 'agent:parent', token: 'turn-token', grantedAt: 123 }] };
+    writeState({ agents: {}, mergeAdmissions: { [lease.repository]: lease }, mergePreparations: preparations });
     let store = await freshModule();
     await store.saveState(await store.loadState());
     store = await freshModule();
     expect(await store.readMergeAdmissionStateForSafetyCheck()).toEqual({
-      trusted: true, agents: {}, mergeAdmissions: { [lease.repository]: lease },
+      trusted: true, agents: {}, mergeAdmissions: { [lease.repository]: lease }, mergePreparations: preparations,
     });
+    writeState({ agents: {}, mergeAdmissions: {}, mergePreparations: null });
+    expect((await store.readMergeAdmissionStateForSafetyCheck()).mergePreparations).toBeNull();
     writeState({ agents: {}, mergeAdmissions: null });
     expect((await store.readMergeAdmissionStateForSafetyCheck()).mergeAdmissions).toBeNull();
     writeFileSync(STATE_PATH, 'broken');

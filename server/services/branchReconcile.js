@@ -962,6 +962,17 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
 
   const inputs = [];
   for (const b of candidates) {
+    const tipOut = await execGit(['rev-parse', '--verify', `refs/heads/${b.name}^{commit}`], repoPath,
+      { ignoreExitCode: true }).catch(() => null);
+    const tipText = tipOut?.stdout?.trim();
+    const tip = tipOut?.exitCode === 0 && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(tipText || '') ? tipText : null;
+    if (!tip) {
+      // Retirement can remove a ref after enumeration. Git echoes an unknown
+      // name on failed rev-parse; that text is never a captured commit head.
+      const present = await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${b.name}`], repoPath,
+        { ignoreExitCode: true }).catch(() => null);
+      if (present?.exitCode === 1) continue;
+    }
     const upstreamName = upstreamBranchName(b.tracking);
     const wt = worktreeByBranch.get(b.name) || null;
     const worktreePath = wt?.path || null;
@@ -976,11 +987,6 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
     // the harder cases via hasBranchMergeEvidence (covers squash + rebase). Short
     // -circuit when the cheap check already proved it merged.
     const hasMergeEvidence = b.merged || await hasBranchMergeEvidence(repoPath, b.name, defaultBranch);
-    // Tip SHA is the primary cache key for a recorded SUPERSEDED verdict (see
-    // supersededLedger.js) — a branch that moved must be re-analyzed. `null` on
-    // failure so an unreadable tip can never match a recorded one.
-    const tipOut = await execGit(['rev-parse', b.name], repoPath, { ignoreExitCode: true }).catch(() => null);
-    const tip = (tipOut?.stdout || '').trim() || null;
     const claimOwnerReason = resolveClaimOwnerReason({ branch: b.name, path: worktreePath, claimOwners, sourceWorkspace: repoPath });
     const completionPolicyReason = await readBranchCompletionHold({ repoPath, branch: b.name, prUrl: prsByHead.get(b.name)?.url, tip, agents: completionPolicies, retirement: hasMergeEvidence });
     inputs.push({

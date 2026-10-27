@@ -14,11 +14,11 @@
     "test": "vitest run --configLoader runner",
     "test:fast": "vitest run --configLoader runner",
     "test:watch": "vitest --configLoader runner",
-    "test:ci": "vitest run --bail=1 --silent=passed-only --reporter=default --reporter=github-actions --configLoader runner",
+    "test:ci": "node ../scripts/run-vitest-ci.js run --silent=passed-only --reporter=default --reporter=github-actions --configLoader runner",
     "test:coverage": "vitest run --coverage --configLoader runner",
     "setup:db:test": "node scripts/setup-db-test.mjs",
     "test:db": "vitest run --config vitest.config.db.js --configLoader runner",
-    "test:db:ci": "vitest run --config vitest.config.db.js --bail=1 --reporter=default --reporter=github-actions --configLoader runner"
+    "test:db:ci": "node ../scripts/run-vitest-ci.js run --config vitest.config.db.js --reporter=default --reporter=github-actions --configLoader runner"
   },
   "dependencies": {
     "@babel/parser": "8.0.7",

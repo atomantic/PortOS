@@ -133,6 +133,56 @@ describe('outside merge admission through the authenticated HTTP boundary', () =
     expect(fixture.state.mergeAdmissions).toEqual({});
   });
 
+  it('shares preparation order with CoS parents, blocks legacy overtaking and refreshes only the base binding', async () => {
+    const { claimMergeAdmission } = await import('../services/cosMergeAdmission.js');
+    fixture.state.agents.parent = { id: 'parent', taskId: 'task-parent', startedAt: '2026-01-01T00:00:00Z', status: 'running',
+      metadata: { sourceWorkspace: example.repoPath, claimPicksOwnBranch: true } };
+    persist();
+    const first = (await post({ action: 'prepare', ...example.input })).body;
+    expect(first.prepared).toBe(true);
+    expect(fixture.state.mergeAdmissions).toEqual({});
+    expect((await claimMergeAdmission({ agentId: 'parent', action: 'prepare' })).prepared).toBe(false);
+    expect((await acquire(example, { session: sessionB })).body.admitted).toBe(false);
+    const nextBase = 'a'.repeat(40);
+    fixture.refs[example.key].target.oid = nextBase;
+    expect((await acquire()).body).toMatchObject({ admitted: false, reason: 'external-pr-changed' });
+    const refreshed = { ...example.input, baseSha: nextBase };
+    expect((await post({ action: 'prepare', ...refreshed })).body).toEqual(first);
+    const lease = (await post({ action: 'acquire', ...refreshed })).body;
+    expect(lease).toMatchObject({ admitted: true, baseSha: nextBase });
+    expect((await release(lease.token)).body.released).toBe(true);
+    expect((await claimMergeAdmission({ agentId: 'parent', action: 'prepare' })).prepared).toBe(true);
+    // A foreign session cannot yield this parent's or another session's turn.
+    expect((await post({ action: 'yield', token: first.preparationToken }, { session: sessionB })).body)
+      .toMatchObject({ admitted: false, reason: 'preparation-owner-mismatch' });
+  });
+
+  it('expires many abandoned external waiters together while preserving a polling parent behind them', async () => {
+    const { claimMergeAdmission } = await import('../services/cosMergeAdmission.js');
+    fixture.state.agents.parent = { id: 'parent', taskId: 'task-parent', startedAt: '2026-01-01T00:00:00Z', status: 'running',
+      metadata: { sourceWorkspace: example.repoPath, claimPicksOwnBranch: true } };
+    persist();
+    let now = Date.now();
+    const date = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const first = (await post({ action: 'prepare', ...example.input })).body;
+      expect(first.prepared).toBe(true);
+      for (let index = 1; index <= 12; index++) {
+        const session = index.toString(16).padStart(64, '0');
+        expect((await post({ action: 'prepare', ...example.input }, { session })).body.prepared).toBe(false);
+      }
+      expect((await claimMergeAdmission({ agentId: 'parent', action: 'prepare' })).prepared).toBe(false);
+      for (let minute = 0; minute < 3; minute++) {
+        now += 60_000;
+        expect((await claimMergeAdmission({ agentId: 'parent', action: 'prepare' })).prepared).toBe(false);
+      }
+      expect(fixture.state.mergePreparations[example.key]).toHaveLength(2);
+      expect((await post({ action: 'yield', token: first.preparationToken })).body.yielded).toBe(true);
+      expect((await claimMergeAdmission({ agentId: 'parent', action: 'prepare' })).prepared).toBe(true);
+      expect(fixture.state.mergeAdmissions).toEqual({});
+    } finally { date.mockRestore(); }
+  });
+
   it('binds a real operator credential and separate run secret without creating CoS agents', async () => {
     const granted = await acquire();
     expect(granted.status).toBe(200);

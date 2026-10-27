@@ -5,6 +5,7 @@
  * Scoped under `/:id`, so mount order relative to crud.js doesn't matter.
  */
 
+import { universeVisualProfileSchema } from '../../lib/universeVisualProfileValidation.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../lib/errorHandler.js';
@@ -81,6 +82,7 @@ const renderSchema = z.object({
   negativePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional(),
   extraStyle: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional(),
   stylePresetId: z.string().trim().max(80).optional(),
+  visualProfileOverride: universeVisualProfileSchema.nullable().optional(),
   // Matches /api/image-gen/generate's LoRA contract: basenames only (server
   // resolves against PATHS.loras), max 8 stacked LoRAs per render. Keeping
   // the two routes in sync so a payload that's accepted here can also flow

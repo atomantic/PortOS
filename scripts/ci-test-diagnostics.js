@@ -5,6 +5,9 @@ import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepSummary } from './lib/githubOutput.js';
 
+// Run-level errors plus five bounded assertion records and module progress.
+export const RUN_DIAGNOSTIC_MAX_BYTES = 320_000;
+
 const repoRoot = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/');
 
 // Publish repository identities only; never expose a runner's private paths.
@@ -35,6 +38,26 @@ export function processExitDiagnostic(run) {
     return 'Diagnostic gap: Vitest process exit event unavailable; final process status is unverified.';
   }
   return `Vitest process exit event: code=${final.eventCode}; exitCode=${final.exitCode}.`;
+}
+
+export function validCollectionDiagnostic(c) {
+  return c?.limit === 5 && Array.isArray(c.failures) && c.failures.length <= 5
+    && c.failures.every(failure => typeof failure?.file === 'string' && typeof failure.name === 'string'
+      && Array.isArray(failure.errors) && failure.errors.every(error => typeof error === 'string'))
+    && [null, 'unsafe', 'assertion-limit'].includes(c.stop)
+    && ['complete', 'unverified'].includes(c.coverage)
+    && (c.stop !== 'assertion-limit' || c.failures.length === 5)
+    && (c.coverage !== 'complete' || (c.stop === null && c.failures.length === 0));
+}
+
+export function collectionDiagnostic(run) {
+  const c = run.collection;
+  if (!validCollectionDiagnostic(c)) {
+    return 'Release-candidate collection evidence malformed or unavailable; coverage unverified.';
+  }
+  return `Release-candidate assertion collection: ${c.failures.length}/5; stop=${c.stop || 'none'}; coverage=${c.coverage}. `
+    + 'Only failures recorded before the stop are collection candidates; independence requires investigation. '
+    + 'In-flight/unfinished tests and later output are unverified; a red run never authorizes green memo or attestation.';
 }
 
 function readReport(path, limit = 100_000) {
@@ -72,6 +95,12 @@ export async function collectTestDiagnostics(root, {
       lines.push(`Launcher ${invocation.completed ? 'completed' : 'interrupted or completion not recorded'}; `
         + `exit=${Number.isInteger(invocation.status) ? invocation.status : 'unavailable'}; `
         + `signal=${/^SIG[A-Z]+$/.test(invocation.signal) ? invocation.signal : 'none'}.`);
+      if (invocation.policy === 'release-candidate') {
+        const candidate = invocation.candidate;
+        const sha = value => /^[a-f0-9]{40}$/.test(value ?? '') ? value : 'unavailable';
+        lines.push(`Release-candidate provenance: head=${sha(candidate?.head)}; base=${sha(candidate?.base)}; checkout=${sha(candidate?.checkout)}; `
+          + `selection=${/^[a-f0-9]{64}$/.test(candidate?.selectionSha256 ?? '') ? candidate.selectionSha256 : 'unavailable'}.`);
+      }
       const boundary = ['direct npm process', 'cmd.exe -> npm.cmd'].includes(invocation.commandBoundary) ? invocation.commandBoundary : 'unavailable';
       lines.push(`Observed command boundary: ${boundary}.`);
       for (const [event, value] of [['exit', invocation.childExit], ['close', invocation.childClose]]) {
@@ -84,11 +113,12 @@ export async function collectTestDiagnostics(root, {
       lines.push('Diagnostic gap: invocation metadata unavailable; launcher completion is unverified.');
     }
     try {
-      const run = readReport(join(dir, 'run.json'), 160_000);
+      const run = readReport(join(dir, 'run.json'), RUN_DIAGNOSTIC_MAX_BYTES);
       if (!Array.isArray(run.activeModules) || !Array.isArray(run.completedModules)
         || !Number.isInteger(run.completedCount) || !Number.isInteger(run.errorCount)) throw Error('invalid progress');
       const reason = ['passed', 'failed', 'interrupted', 'not-finished'].includes(run.reason) ? run.reason : 'unavailable';
       lines.push(processExitDiagnostic(run));
+      if (run.collection) lines.push(collectionDiagnostic(run));
       lines.push(`Vitest progress: reason=${reason}; completed=${run.completedCount}; unhandledErrors=${run.errorCount}.`);
       lines.push(`Queued/unfinished modules (up to 100): ${run.activeModules.slice(0, 100).map(diagnosticTestFile).join(', ') || 'none recorded'}`);
       lines.push(`Last completed modules (up to 100): ${run.completedModules.slice(-100).map(diagnosticTestFile).join(', ') || 'none recorded'}`);

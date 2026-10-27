@@ -9,6 +9,7 @@
  */
 
 import { enqueueJob, cancelJob } from '../mediaJobQueue/index.js';
+import { applyImageVisualProfile } from '../imageGen/visualProfile.js';
 import { getSettings } from '../settings.js';
 import { getSeries, STYLE_PROMPT_OVERRIDE_MODE_DEFAULT } from './series.js';
 import { getIssue } from './issues.js';
@@ -304,7 +305,8 @@ const enqueueImageJob = async ({ prompt, world, settings, options, mode, owner, 
       denoise,
       ...baseParams,
     };
-  const { jobId } = await enqueueJob({ kind: 'image', params, owner });
+  const profile = series?.stylePromptOverrideMode === 'override' && series.stylePromptOverride?.trim() ? null : world?.visualProfile;
+  const { jobId } = await enqueueJob({ kind: 'image', params: applyImageVisualProfile(params, profile), owner });
   console.log(`${logLine} mode=${mode} jobId=${jobId.slice(0, 8)}`);
   return jobId;
 };

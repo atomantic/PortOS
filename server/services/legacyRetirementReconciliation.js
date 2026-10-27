@@ -97,9 +97,19 @@ function targetFor(outcome, row, repoPath, agents) {
 // placeholder needs a unique receipt, while a moved observation needs the same
 // captured physical generation. Neither path infers deletion from absence.
 const receiptIdentity = row => JSON.stringify([row.branch, row.path, row.head, row.checkoutIdentity, row.retiredAt, row.archiveDir ?? null]);
+// Failed rev-parse historically echoed the missing branch into head. This
+// producer artifact identifies no commit or new physical incarnation.
+const echoedRefPlaceholder = row => typeof row?.branch === 'string' && row.head === row.branch
+  && typeof row.path === 'string' && isAbsolute(row.path) && row.checkoutIdentity == null;
+const finalizedRefPlaceholder = (observation, receipt) => observation.path == null && observation.head == null
+  && observation.checkoutIdentity == null && ['deleted', 'observed-absent'].includes(receipt.branchFinalization?.kind)
+  && Number.isFinite(Date.parse(receipt.branchFinalizedAt))
+  && Date.parse(receipt.branchFinalizedAt) >= Date.parse(receipt.retiredAt)
+  && Date.parse(receipt.branchFinalizedAt) <= Date.now();
 const staleObservation = row => ['retirement-receipt-unverified', 'retirement-provenance-unverified'].includes(row?.reason)
   && typeof row.branch === 'string' && row.branch && row.locked !== true && Number.isFinite(Date.parse(row.createdAt))
   && ((row.path == null && row.head == null && row.checkoutIdentity == null)
+    || echoedRefPlaceholder(row)
     || (typeof row.path === 'string' && isAbsolute(row.path) && oid(row.head) && /^[a-f0-9]{64}$/.test(row.checkoutIdentity || '')));
 
 /** Metadata repair only. Complete receipts and their original timestamps remain
@@ -111,11 +121,14 @@ export async function reconcileRecordedReceiptObservations(appId, outcome) {
   const receipts = [...(outcome.retired || []), ...Object.values(outcome.retirementReceiptEvidence || {})];
   const bindings = rows.flatMap(observation => {
     const observed = Math.max(Date.parse(observation.createdAt), Date.parse(observation.observedAt || observation.createdAt));
+    const echoed = echoedRefPlaceholder(observation);
     const candidates = [...new Map(receipts.filter(row => row.branch === observation.branch && row.branchDeleted === true
       && (row.archiveDir == null || (typeof row.archiveDir === 'string' && row.archiveDir.length > 0))
       && (!observation.checkoutIdentity || observation.checkoutIdentity === row.checkoutIdentity)
       && typeof row.path === 'string' && isAbsolute(row.path) && oid(row.head) && /^[a-f0-9]{64}$/.test(row.checkoutIdentity || '')
-      && Number.isFinite(Date.parse(row.retiredAt)) && Date.parse(row.retiredAt) >= observed && Date.parse(row.retiredAt) <= Date.now())
+      && (!echoed || samePath(observation.path, row.path))
+      && Number.isFinite(Date.parse(row.retiredAt))
+      && (echoed || finalizedRefPlaceholder(observation, row) || Date.parse(row.retiredAt) >= observed) && Date.parse(row.retiredAt) <= Date.now())
       .map(row => [receiptIdentity(row), row])).values()];
     if (candidates.length !== 1) return [];
     const receipt = candidates[0];
@@ -137,7 +150,7 @@ export async function reconcileRecordedReceiptObservations(appId, outcome) {
   for (const binding of bindings) {
     if (!await absent(app.repoPath, binding.receipt, trees, agents, identities)
       || !await absent(app.repoPath, binding.observation, trees, agents, identities)) continue;
-    if (binding.observation.head && binding.observation.head !== binding.receipt.head
+    if (!echoedRefPlaceholder(binding.observation) && binding.observation.head && binding.observation.head !== binding.receipt.head
       && !await ancestor(app.repoPath, binding.observation.head, binding.receipt.head)) continue;
     const key = receiptIdentity(binding.receipt);
     const history = binding.receipt.settledObservations || [];

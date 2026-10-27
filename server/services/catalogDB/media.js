@@ -36,16 +36,21 @@ async function insertMedia(runQuery, ingredientId, mediaKey, kind, options) {
   const metadataColumn = hasMetadata ? ', metadata' : '';
   const metadataPlaceholder = hasMetadata ? ', $6' : '';
   const metadataUpdate = hasMetadata ? ', metadata = EXCLUDED.metadata' : '';
+  const hasLibrary = hasOwn(options, 'library');
+  const libraryColumn = hasLibrary ? ', library' : '';
+  const libraryPlaceholder = hasLibrary ? `, $${hasMetadata ? 7 : 6}` : '';
+  const libraryUpdate = hasLibrary ? ', library = EXCLUDED.library' : '';
   const result = await runQuery(
-    `INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption${metadataColumn})
-     VALUES (catalog_resolve_ingredient_id($1), $2, $3, $4, $5${metadataPlaceholder})
+    `INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption${metadataColumn}${libraryColumn})
+     VALUES (catalog_resolve_ingredient_id($1), $2, $3, $4, $5${metadataPlaceholder}${libraryPlaceholder})
      ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
        SET deleted = false, deleted_at = NULL,
-           role = EXCLUDED.role, caption = EXCLUDED.caption${metadataUpdate}
+           role = EXCLUDED.role, caption = EXCLUDED.caption${metadataUpdate}${libraryUpdate}
      RETURNING *`,
     [
       ingredientId, mediaKey, kind, role, caption,
       ...(hasMetadata ? [toPgJson(options.metadata || {})] : []),
+      ...(hasLibrary ? [toPgJson(normalizeLibrary(options.library))] : []),
     ],
   );
   return rowToMedia(result.rows[0]);
@@ -172,7 +177,20 @@ export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {
       ...(hasOwn(patch, 'variant') ? { variant: patch.variant } : {}),
       ...(hasOwn(patch, 'tags') ? { tags: patch.tags } : {}),
       ...(hasOwn(patch, 'guide') ? { guide: patch.guide } : {}),
+      ...(hasOwn(patch, 'review') ? { review: { ...prev.review, ...patch.review } } : {}),
+      ...(hasOwn(patch, 'derivedFrom') ? { derivedFrom: patch.derivedFrom } : {}),
     });
+    if (['bad', 'rejected'].includes(next.review?.status)) {
+      await client.query(`UPDATE catalog_ingredient_media SET library = jsonb_set(COALESCE(library, '{}'::jsonb), '{guide}', 'false'::jsonb, true)
+        WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind <> $3 AND deleted = false
+          AND library->>'guide' = 'true'`, [ingredientId, mediaKey, kind]);
+    }
+    if (next.guide === true) {
+      const rejected = await client.query(`SELECT EXISTS (SELECT 1 FROM catalog_ingredient_media
+        WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind <> $3 AND deleted = false
+          AND library->'review'->>'status' IN ('bad', 'rejected')) AS blocked`, [ingredientId, mediaKey, kind]);
+      if (rejected.rows[0].blocked) next.guide = false;
+    }
     if (next.guide === true && prev.guide !== true) {
       const count = await client.query(
         `SELECT COUNT(*)::int AS n FROM catalog_ingredient_media

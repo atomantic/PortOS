@@ -28,6 +28,8 @@ vi.mock('./cosState.js', () => ({
 
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: vi.fn(async () => Object.values(mockCosState.state?.agents || {})) }));
 const recoveryTasks = vi.hoisted(() => new Map());
+const releaseHandoff = vi.hoisted(() => ({ ensure: vi.fn(async () => ({ taskId: 'task-release-sync-example' })) }));
+vi.mock('./releaseSynchronization.js', () => ({ ensureReleaseSynchronization: releaseHandoff.ensure }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./cosTaskStore.js', () => ({
   getTaskById: vi.fn(async id => recoveryTasks.get(id) || null),
@@ -99,7 +101,7 @@ vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await import
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -482,6 +484,33 @@ describe('completeAgent budget-ledger ordering (#1683)', () => {
     expect(order).toEqual(['usage', 'completed']);
   });
 
+  it('archives a publisher only after its durable continuation is confirmed', async () => {
+    const publication = { status: 'verified', synchronizationHandoffVersion: 1, identity: 'a'.repeat(64), publishedAt: '2026-01-01T00:00:00Z' };
+    const agent = { id: 'agent-publisher', taskId: 'task-example-release', status: 'running',
+      startedAt: '2026-01-01T00:00:00Z', metadata: { taskAnalysisType: 'do-release', releasePublication: publication } };
+    mockCosState.state.agents[agent.id] = agent;
+    releaseHandoff.ensure.mockRejectedValueOnce(new Error('synthetic handoff unavailable'));
+    await expect(completeAgent(agent.id, { success: true })).rejects.toThrow('handoff unavailable');
+    expect(mockCosState.state.agents[agent.id].status).toBe('running');
+    const completed = await completeAgent(agent.id, { success: true });
+    expect(completed.status).toBe('completed');
+    expect(completed.metadata.releasePublication).toEqual(publication);
+    expect(releaseHandoff.ensure).toHaveBeenCalledWith(expect.objectContaining({ id: agent.id, taskId: agent.taskId }));
+  });
+
+  it('refuses enrollment racing a completion that only observed the legacy receipt', async () => {
+    const id = 'agent-publication-race';
+    mockCosState.state.agents[id] = { id, taskId: 'task-example-release', status: 'running', startedAt: '2026-01-01T00:00:00Z',
+      metadata: { taskAnalysisType: 'do-release', releasePublication: { status: 'verified', identity: 'b'.repeat(64) } } };
+    loadState.mockImplementationOnce(async () => {
+      const legacy = structuredClone(mockCosState.state);
+      mockCosState.state.agents[id].metadata.releasePublication.synchronizationHandoffVersion = 1;
+      return legacy;
+    });
+    await expect(completeAgent(id, { success: true })).rejects.toThrow('handoff ownership changed');
+    expect(mockCosState.state.agents[id].status).toBe('running');
+  });
+
   it('retains delivery outcome through archive storage and list projection without changing feedback', async () => {
     const { toAgentListItem } = await import('../lib/cosAgentListProjection.js');
     const agentId = 'agent-task-outcome';
@@ -636,6 +665,29 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(await settleAbsentTaskCompletion(id, expected)).toBe(false);
   });
 
+  it('settles only the unchanged predecessor cleanup ledger, preserving unknown capture and failed execution', async () => {
+    const id = 'seeded-predecessor', startedAt = '2026-01-01T00:00:00Z', completedAt = '2026-01-01T00:01:00Z';
+    const stages = Object.fromEntries(['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].map(key => [key, { status: 'done' }]));
+    stages.worktree = { status: 'held', reason: 'checkout-capture-pending' };
+    const record = { id, taskId: 'same-task', status: 'completed', startedAt, completedAt,
+      result: { success: false, executionSuccess: true }, metadata: { completedCheckouts: [],
+        checkoutCapture: { status: 'pending', unknown: true, targets: [] },
+        completionCleanup: { version: 1, status: 'pending', stages, replay: { version: 1 } } } };
+    mockCosState.state.agents[id] = record;
+    const directory = join(mockCosState.agentsDir, completedAt.slice(0, 10), id);
+    await mkdir(directory, { recursive: true }); await writeFile(join(directory, 'metadata.json'), JSON.stringify(record));
+    const proof = { successorAgentId: 'delivered-successor', head: 'a'.repeat(40), checkoutIdentity: 'b'.repeat(64) };
+    expect(await recordSuccessorCheckoutRetirement(id, { ...record, metadata: { ...record.metadata, changed: true } }, proof)).toBe(false);
+    expect(await recordSuccessorCheckoutRetirement(id, structuredClone(record), proof)).toBe(true);
+    const saved = JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8'));
+    expect(saved.metadata.checkoutCapture).toMatchObject({ status: 'retired', unknown: true, successorAgentId: proof.successorAgentId });
+    expect(saved.metadata.completedCheckouts).toEqual([]);
+    expect(saved.metadata.completionCleanup.status).toBe('completed');
+    expect(saved.metadata.completionCleanup).not.toHaveProperty('replay');
+    expect(saved.result).toEqual(record.result);
+    expect(await recordSuccessorCheckoutRetirement(id, record, proof)).toBe(false);
+  });
+
   it('drops replay inputs from durable terminal ledgers without erasing independent preservation holds', async () => {
     const id = 'claim-terminal-ledger';
     const startedAt = '2026-01-01T00:00:00Z';
@@ -685,6 +737,66 @@ describe('completeAgent idempotence (#3384)', () => {
     const persisted = JSON.parse(await readFile(join(mockCosState.agentsDir, failed.completedAt.slice(0, 10), id, 'metadata.json'), 'utf8'));
     expect(persisted.result).toEqual(failed.result);
     expect(persisted.metadata.completedCheckouts).toEqual([evidence]);
+  });
+
+  for (const inline of [false, true, 'claim']) seedBodies.it(`recovers an unknown terminal capture through verified merge proof, inline=${inline}`, async () => {
+    const scratch = await mkdtemp(join(tmpdir(), 'portos-reviewed-capture-'));
+    try {
+      const repo = join(scratch, 'repo'), checkout = join(scratch, 'checkout');
+      await materializeGitRepo(repo);
+      await execGit(['worktree', 'add', '-b', 'feature/reviewed', checkout, 'main'], repo);
+      const actual = await vi.importActual('./completedCheckoutEvidence.js');
+      captureCheckoutSeeds.mockImplementationOnce(actual.captureCheckoutSeeds);
+      captureCompletedCheckouts.mockImplementationOnce(actual.captureCompletedCheckouts);
+      const agentId = 'reviewed-unknown', prUrl = 'https://github.com/example/repo/pull/7';
+      await registerAgent(agentId, 'reviewed-task', { isWorktree: true, sourceWorkspace: repo,
+        workspacePath: checkout, worktreeBranch: 'feature/reviewed',
+        ...(inline === 'claim' ? { isWorktree: false, configClaimFlow: true, claimBranches: ['feature/reviewed'], workspacePath: repo }
+          : inline ? { prOpenedBy: 'agent-inline', configOpenPR: true,
+          prDeliveryTarget: { branch: 'feature/reviewed', workspacePath: checkout } }
+          : { reviewLoopMergeTarget: { url: prUrl, branch: 'feature/reviewed' } }) });
+      if (inline === 'claim') {
+        const bound = await getAgent(agentId);
+        await updateAgent(agentId, { metadata: { ...bound.metadata, checkoutSeeds: await actual.captureCheckoutSeeds(bound) } });
+      }
+      const merged = vi.spyOn(await import('./completedCheckoutEvidence.js'), 'readMergedClaimEvidence').mockResolvedValue(null);
+      const head = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
+      const unavailable = vi.spyOn(await import('./worktreeManager.js'), 'listWorktrees')
+        .mockRejectedValueOnce(new Error('completion inventory unavailable'))
+        .mockRejectedValueOnce(new Error('preterminal fallback unavailable'));
+      const completed = await completeAgent(agentId, { success: true });
+      unavailable.mockRestore();
+      expect(completed.metadata.checkoutCapture).toMatchObject({ status: 'pending', unknown: true, targets: [] });
+      const originalResult = structuredClone(completed.result);
+      delete mockCosState.state.agents[agentId];
+      expect(await retryCompletionCheckoutCapture(agentId)).toBe(false); // No guessed historical head.
+      const retirement = { repoPath: repo, branch: 'feature/reviewed', path: checkout, head, prUrl, verifiedMergedHead: head };
+      expect(await retryCompletionCheckoutCapture(agentId, { retirement: { ...retirement, prUrl: prUrl + '0' } })).toBe(false);
+      expect(await retryCompletionCheckoutCapture(agentId, { retirement: { ...retirement, verifiedMergedHead: 'a'.repeat(40) } })).toBe(false);
+      mockCosState.state.agents['later-owner'] = { id: 'later-owner', status: 'completed', startedAt: new Date().toISOString(),
+        metadata: { sourceWorkspace: repo, workspacePath: checkout, worktreeBranch: retirement.branch } };
+      expect(await retryCompletionCheckoutCapture(agentId, { retirement })).toBe(false);
+      delete mockCosState.state.agents['later-owner'];
+      if (inline) {
+        merged.mockResolvedValue({ prUrl, mergedAt: new Date().toISOString() });
+        mockCosState.state.agents['later-owner'] = { id: 'later-owner', status: 'running', startedAt: new Date().toISOString(),
+          metadata: { sourceWorkspace: repo, workspacePath: checkout, worktreeBranch: retirement.branch } };
+        expect(await retryCompletionCheckoutCapture(agentId)).toBe(false);
+        delete mockCosState.state.agents['later-owner'];
+      }
+      const captureEvents = vi.spyOn(cosEvents, 'emit');
+      expect(await retryCompletionCheckoutCapture(agentId, inline ? {} : { retirement })).toBe(true);
+      expect(captureEvents.mock.calls.filter(([event]) => event === 'agent:checkout-captured')).toEqual([['agent:checkout-captured', { agentId }]]);
+      const saved = await getAgent(agentId);
+      expect(saved.result).toEqual(originalResult);
+      expect(saved.completedAt).toBe(completed.completedAt);
+      expect(saved.metadata.completedCheckouts).toEqual([expect.objectContaining({ version: 2, head })]);
+      expect(completedCheckoutReceiptValid(saved, saved.metadata.completedCheckouts[0])).toBe(true);
+      expect(await retryCompletionCheckoutCapture(agentId, { retirement })).toBe(false);
+      expect(captureEvents.mock.calls.filter(([event]) => event === 'agent:checkout-captured')).toHaveLength(1);
+      captureEvents.mockRestore();
+      merged.mockRestore();
+    } finally { await rm(scratch, { recursive: true, force: true }); }
   });
 
   for (const scenario of ['unchanged', 'physical-generation', 'new-owner', 'later-head', 'orphan-empty', 'orphan-physical-generation', 'orphan-new-owner', 'orphan-later-head']) {

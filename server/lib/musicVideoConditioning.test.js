@@ -17,10 +17,10 @@ const castMedia = { [CAST_ID]: [guide('adult.png', 27), guide('child.png', 7), g
 const ids = (refs) => refs.map((ref) => ref.imageId);
 
 describe('musicVideoConditioningReferences with Casting guides', () => {
-  it('leads with the guide closest to the scene age, then fills from the project references', () => {
+  it('leads with age-compatible guides, then fills from the project references', () => {
     const scene = { characterVariant: { ingredientId: CAST_ID, age: 7 } };
     const refs = musicVideoConditioningReferences(project(authored), scene, castMedia);
-    expect(ids(refs)).toEqual(['child.png', 'teen.png', 'adult.png', 'lead.png']);
+    expect(ids(refs)).toEqual(['child.png', 'lead.png', 'set.png']);
     expect(refs[0]).toMatchObject({ role: 'character', castGuide: true, label: 'Example Lead · age 7' });
     expect(ids(musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID, age: 27 } }, castMedia))[0])
       .toBe('adult.png');
@@ -37,9 +37,9 @@ describe('musicVideoConditioningReferences with Casting guides', () => {
 
   // Uniquely catches a guide the image route would reject (400) taking a slot a sendable guide should fill.
   it('skips guides a frame render cannot name, letting the next candidate take the slot', () => {
-    const media = { [CAST_ID]: [guide('child.gif', 7), guide('nested/child.png', 7), guide('teen.png', 17)] };
+    const media = { [CAST_ID]: [guide('child.gif', 7), guide('nested/child.png', 7), guide('child.png', 7)] };
     expect(ids(musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID, age: 7 } }, media)))
-      .toEqual(['teen.png', 'lead.png', 'set.png']);
+      .toEqual(['child.png', 'lead.png', 'set.png']);
   });
 
   // Uniquely catches unsendable flagged guides letting non-guide images condition the shot.
@@ -68,7 +68,7 @@ describe('musicVideoConditioningReferences with Casting guides', () => {
   it('keeps a slot for a fitted shot\'s storyboard panel art, after the identities', () => {
     const scene = { characterVariant: { ingredientId: CAST_ID, age: 7 }, panelId: 'panel-1', panelArt: 'panel.png' };
     const refs = musicVideoConditioningReferences(project(authored), scene, castMedia);
-    expect(ids(refs)).toEqual(['child.png', 'teen.png', 'adult.png', 'panel.png']);
+    expect(ids(refs)).toEqual(['child.png', 'lead.png', 'set.png', 'panel.png']);
     expect(refs[3]).toMatchObject({ id: 'mvr-panel-panel-1', label: 'Storyboard panel' });
     expect(ids(musicVideoConditioningReferences(project(authored), { ...scene, frameReferenceIds: ['set'] }))).toEqual(['set.png']);
     expect(ids(musicVideoConditioningReferences(project(authored), { ...scene, frameReferenceIds: ['mvr-panel-panel-1'] }))).toEqual(['panel.png']);

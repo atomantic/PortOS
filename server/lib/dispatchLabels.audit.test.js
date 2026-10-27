@@ -7,6 +7,8 @@
  * self-diagnostics summary are excluded on purpose.
  */
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -28,12 +30,11 @@ const MODEL_RE = /model:light\|medium\|heavy|model:light\/medium\/heavy|"model":
 const EFFORT_RE = /effort:low\|medium\|high\|xhigh\|max|effort:low\/medium\/high\/xhigh\/max|"effort": "low \| medium \| high \| xhigh \| max"|effort:<level>/;
 const GOOD_FIRST_RE = /good first issue|good-first-issue|goodFirstIssue/;
 
-function walk(dir, acc = []) {
+function walk(dir, root, acc = []) {
   for (const name of readdirSync(dir)) {
-    if (name.startsWith('.') && name !== '.claude') continue;
+    if ((name.startsWith('.') && name !== '.claude') || SKIP_DIR.has(name)) continue;
     const full = join(dir, name);
-    const rel = relative(ROOT, full);
-    if ([...SKIP_DIR].some((d) => rel === d || rel.startsWith(`${d}/`))) continue;
+    const rel = relative(root, full);
     let st;
     try {
       st = lstatSync(full);
@@ -42,7 +43,7 @@ function walk(dir, acc = []) {
     }
     if (st.isSymbolicLink()) continue;
     if (st.isDirectory()) {
-      walk(full, acc);
+      walk(full, root, acc);
       continue;
     }
     if (!/\.(js|md)$/.test(name)) continue;
@@ -52,13 +53,13 @@ function walk(dir, acc = []) {
   return acc;
 }
 
-function collect() {
+function collect(repoRoot = ROOT) {
   const files = [];
   for (const root of SCAN_ROOTS) {
-    const full = join(ROOT, root);
+    const full = join(repoRoot, root);
     try {
       const st = lstatSync(full);
-      if (st.isDirectory()) walk(full, files);
+      if (st.isDirectory()) walk(full, repoRoot, files);
       else if (st.isFile()) files.push(full);
     } catch {
       // missing optional root
@@ -71,6 +72,21 @@ function collect() {
 
 describe('issue-create paths mention dispatch + contributor labels (#4351)', () => {
   const hits = collect();
+
+  it('keeps the issue-label audit bounded to authored files beside nested dependencies and data', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'portos-dispatch-audit-'));
+    try {
+      const authored = [join(root, 'server', 'planner.js'), join(root, '.claude', 'skills', 'planner', 'SKILL.md')];
+      const generated = [join(root, 'server', 'node_modules', 'example', 'index.js'), join(root, 'server', 'data', 'private.js')];
+      for (const file of [...authored, ...generated]) {
+        await mkdir(dirname(file), { recursive: true });
+        await writeFile(file, 'gh issue create --title synthetic');
+      }
+      expect(collect(root).map(({ file }) => file).sort()).toEqual(authored.sort());
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
   it('finds the planner-driven create sites', () => {
     const rels = hits.map(({ file }) => relative(ROOT, file));

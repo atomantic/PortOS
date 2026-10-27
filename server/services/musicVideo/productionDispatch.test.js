@@ -7,10 +7,16 @@
  * only the queue and the video submit service are doubled.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+
 import { basename, join } from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { PATHS } from '../../lib/paths.js';
+
+vi.mock('../../lib/paths.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-greybox-production-') }));
+afterAll(cleanupTempDataRoots);
 const greyboxCatalog = vi.hoisted(() => ({ getIngredient: vi.fn(), listMediaForIngredient: vi.fn() }));
 vi.mock('../catalogDB.js', () => greyboxCatalog);
 

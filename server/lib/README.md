@@ -151,7 +151,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `catalogIdentityValidation.js` | Bilateral canonical catalog identity operator and peer evidence schemas. |
 | `catalogGreyboxValidation.js` | Endpoint-specific greybox request schemas, kept outside general catalog validation to avoid loading scene validation for unrelated catalog operations. |
 | `catalogValidation.js` | Creative ingredients catalog route schemas (scraps, ingredients, links, relations, tags, revisions, sync envelope). |
-| `catalogMediaLibrary.js` | Casting reference library helpers: normalize variant/tags/guide, filter by age/era/look/tag, pick up to 4 render guides. |
+| `catalogAppearance.js` | Project an alternate age/look's appearance and clothing without copying canonical outfits; retain shared facial identity. |
+| `catalogMediaLibrary.js` | Normalize reference variants, reviews, exact feedback and refinement lineage; filter by age/era/look/tag/rating and select up to 4 compatible render guides, excluding bad/rejected images. |
 | `characterSheetReferences.js` | Select canonical character-sheet images, resolve viewable assets, and report missing files, model support and provider limits for preview/render parity. |
 | `cosValidation.js` | Chief-of-Staff task/job/loop/learning schemas, the Code-Review settings slice, and the task-metadata sanitizer. `createCosTaskSchema`'s metadata-bound fields are carried onto the task by `services/cosTaskIntake.js` (parity-checked by its test). The Review-Loop reviewer vocabulary lives in `reviewerConfig.js` (#5702) and is re-exported flat from here. |
 | `creativeBriefLimits.js` | `COMMISSION_NAME_MAX` / `COMMISSION_INTENT_MAX` / `COMMISSION_STYLE_SPEC_MAX` / `COMMISSION_BRIEF_TAG_MAX` and `CREATIVE_DIRECTOR_GOAL_MAX` — the creative brief caps `creativeCommissionValidation.js` and `creativeDirectorValidation.js` enforce and the browser forms use as a silent input `maxLength`. A pure leaf (the schemas pull `zod`) so `client/src/components/creative-commission/commissionForm.js` and `client/src/lib/creativeDirectorPlan.js` re-export one definition instead of copying the numbers. |
@@ -1024,3 +1025,10 @@ migration with explicit recognition of the outgoing shipped defaults.
 | `providerExecutionOptions.js` | Read-only runtime capabilities and per-dispatch execution-option preparation. |
 
 | `catalogRedesign.js` | Shared editable redesign fields and per-field limits for catalog creative conversations. |
+
+| `releasePublication.js` | Validated request for forge-verified release publication milestones. |
+| `releaseSynchronization.js` | Frozen continuation policy fields and mandatory synchronization obligations shared by publication enrollment, verification and task update guards. |
+
+| `realityStarterV2.js` | Frozen original natural-photography starter and optional preview recipe; V1 remains available to migrations. |
+| `universeVisualProfile.js` | Shared profile normalization, original photography default, labeled additions, explicit overrides and separate color/texture strength. |
+| `universeVisualProfileValidation.js` | Strict API validation for optional universe photography and finishing profiles. |
