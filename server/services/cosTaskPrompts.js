@@ -5,7 +5,7 @@
  * and persistence remain in cosTaskGenerator.js.
  */
 
-import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, isToolFreeReviewer } from '../lib/validation.js';
+import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, buildReviewerMaxRoundsNote, isToolFreeReviewer } from '../lib/validation.js';
 import { isCompleteIssueContext } from '../../lib/issueContext.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { shellQuote } from '../lib/shellQuote.js';
@@ -113,6 +113,9 @@ export const appendTargetWorkItemBlock = (promptTaskType, ref, excludeLabelsBloc
 
 export const appendReviewerEffortBlock = (reviewers, reviewerEfforts, reviewerModels) =>
   appendBlock(buildReviewerEffortNote(reviewers, reviewerEfforts, { reviewerModels }));
+
+export const appendReviewerMaxRoundsBlock = (reviewers, reviewerMaxRounds, usernames) =>
+  appendBlock(buildReviewerMaxRoundsNote(reviewers, reviewerMaxRounds, usernames));
 
 export function buildLocalReviewerInstructions(reviewers, reviewerModels = {}, reviewerEfforts = {}, { claimCommentGate = false, enforceIsolation = false } = {}) {
   const localReviewers = (reviewers || []).filter((reviewer) => isToolFreeReviewer(reviewer));

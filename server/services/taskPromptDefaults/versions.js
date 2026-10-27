@@ -116,10 +116,10 @@ export const PROMPT_VERSIONS = {
 // Epic decomposition reads only the owner's own comments, never the public
 // thread, resolving the account itself so a pinned epic still finds them.
 // A forge reviewer (`@login`) may be a person: wait up to 4 hours per round and iterate with them.
-PROMPT_VERSIONS['claim-issue'] = 53; // v53: recheck the final selected issue and resolve every accepted hosted review finding. v52: compose target and completion policy from shared sections. v51: Hosting-provider merge authority; no second local certificate. Prior: v50: hardware-bound help wanted requires explicit prerequisite labels and independent platform slices. v49: a merged clean checkout is removed in place; do not copy it into an archive. v48: fresh claims reject same-login assignment and PR body/commit evidence.
-PROMPT_VERSIONS['claim-issue-gitlab'] = 47; // v47: recheck the selected child and preserve epic handoff policy; resolve every accepted hosted review finding. v46: compose target and completion policy from shared sections. v45: Hosting-provider merge authority; no second local certificate. Prior: v44: hardware-bound help wanted requires explicit prerequisite labels and independent platform slices. v43: a merged clean checkout is removed in place; do not copy it into an archive. v42: same-login assignment is not run ownership; inspect MR closing trailers.
+PROMPT_VERSIONS['claim-issue'] = 55; // v55: the reviewer budget also governs the published-review stop and the publication gate. v54: per-reviewer ~max budgets replace the hardcoded 3 rounds; a spent optional budget never blocks the PR (disclose the partial review). v53: recheck the final selected issue and resolve every accepted hosted review finding. v52: compose target and completion policy from shared sections. v51: Hosting-provider merge authority; no second local certificate. Prior: v50: hardware-bound help wanted requires explicit prerequisite labels and independent platform slices. v49: a merged clean checkout is removed in place; do not copy it into an archive. v48: fresh claims reject same-login assignment and PR body/commit evidence.
+PROMPT_VERSIONS['claim-issue-gitlab'] = 49; // v49: the reviewer budget also governs the published-review stop and the publication gate. v48: per-reviewer ~max budgets replace the hardcoded 3 rounds; a spent optional budget never blocks the MR. v47: recheck the selected child and preserve epic handoff policy; resolve every accepted hosted review finding. v46: compose target and completion policy from shared sections. v45: Hosting-provider merge authority; no second local certificate. Prior: v44: hardware-bound help wanted requires explicit prerequisite labels and independent platform slices. v43: a merged clean checkout is removed in place; do not copy it into an archive. v42: same-login assignment is not run ownership; inspect MR closing trailers.
 // Accepted review findings require resolution regardless of severity.
-PROMPT_VERSIONS['claim-issue-jira'] = 27; // v25: API calls target {portosApiUrl}, expanded at spawn to the loopback origin (#12405).
+PROMPT_VERSIONS['claim-issue-jira'] = 28; // v28: per-reviewer ~max budgets replace the hardcoded 3 rounds. v25: API calls target {portosApiUrl}, expanded at spawn to the loopback origin (#12405).
 
 // Audit anchor for reference-watch's read/write coupling.
 // The reference-watch schedule default (`taskMetadata.readOnly` in DEFAULT_TASK_INTERVALS)
@@ -137,8 +137,8 @@ PROMPT_VERSIONS['claim-issue-jira'] = 27; // v25: API calls target {portosApiUrl
 export const REFERENCE_WATCH_AUDITED_VERSION = 5;
 
 // Guard generated GitHub merges with fresh state/head/admission and confirmed readback (#12273).
-PROMPT_VERSIONS['plan-task'] = 27; // Hosting-provider merge authority; no second local certificate. Prior: v26: a merged clean checkout is removed in place; do not copy it into an archive.
+PROMPT_VERSIONS['plan-task'] = 28; // v28: per-reviewer ~max budgets replace the hardcoded 3 rounds. Hosting-provider merge authority; no second local certificate. Prior: v26: a merged clean checkout is removed in place; do not copy it into an archive.
 
 // A still-owned checkout hands off to exact, durable completion recovery.
-PROMPT_VERSIONS['plan-task-claim'] = 3; // Hosting-provider merge authority; no second local certificate. Prior: v2: a merged clean checkout is removed in place; do not copy it into an archive.
+PROMPT_VERSIONS['plan-task-claim'] = 5; // v5: the reviewer budget also governs the PR-side stop and the publication gate. v4: per-reviewer ~max budgets replace the hardcoded 3 rounds. Hosting-provider merge authority; no second local certificate. Prior: v2: a merged clean checkout is removed in place; do not copy it into an archive.
 PROMPT_VERSIONS['branch-cleanup'] = 3; // Hosting-provider merge authority; no second local certificate. Prior: v2: a merged clean checkout is removed in place; do not copy it into an archive.

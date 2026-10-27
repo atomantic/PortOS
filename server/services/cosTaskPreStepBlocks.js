@@ -38,6 +38,7 @@ import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
 import { renderOrPrependSection } from '../lib/promptSectionRenderer.js';
 import {
   appendReviewerEffortBlock,
+  appendReviewerMaxRoundsBlock,
   buildLocalReviewerInstructions,
   buildTargetWorkItemBlock,
 } from './cosTaskPrompts.js';
@@ -1083,6 +1084,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
     reviewers: promptReviewers,
     reviewerModels: promptReviewerModels,
     reviewerEfforts: promptReviewerEfforts,
+    reviewerMaxRounds: promptReviewerMaxRounds,
     csv: reviewersCsv
   } = claimReviewers;
   // {issueAuthorFilter} directive — the filter was already merged (global →
@@ -1145,6 +1147,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
     // and give it two owners to drift apart.
     + (rendersReviewers
         ? appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels)
+          + appendReviewerMaxRoundsBlock(promptReviewers, promptReviewerMaxRounds, claimReviewers.usernames)
           + buildLocalReviewerInstructions(promptReviewers, promptReviewerModels, promptReviewerEfforts, {
             claimCommentGate: promptTaskType === 'claim-issue',
             enforceIsolation: promptTaskType.startsWith('claim-issue'),

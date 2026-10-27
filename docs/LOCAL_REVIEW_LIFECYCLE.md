@@ -66,6 +66,16 @@ produce `review-blocked`; it permits publication but prevents merge. Unresolved
 accepted findings/rejection, failed tests/build, unpushed fixes and persistence
 failures prevent publication. Do not substitute self-review for unavailable review.
 
+A reviewer's configured `~max=<n>` budget caps calls to that reviewer, not the
+obligation to fix findings. Spending it ends that reviewer's loop with `partial`
+status; it neither requires another cycle nor prevents publication. Each accepted
+finding is still fixed, or rejected/tracked with concrete rationale. Disclose the
+rounds each reviewer ran, the revision it last reviewed and what remained in the
+PR/MR body, without claiming approval the reviewer did not give. Only a required
+reviewer's unavailability (`review-blocked`) holds the merge; an exhausted or
+unavailable optional reviewer adds no local merge hold. Remote merge eligibility
+stays with the hosting provider's required checks and reviews.
+
 Set `LOCAL_STOP_TRIGGERED=true` and `LOCAL_STOP_INDEX` to the configured zero-based
 reviewer position on a qualifying stop, including the final reviewer. Otherwise
 use false/-1. Compute `LOCAL_PHASE_COMMITS` from `LOCAL_PHASE_START_SHA..HEAD`.
