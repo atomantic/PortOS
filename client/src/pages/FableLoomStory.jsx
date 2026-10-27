@@ -322,8 +322,8 @@ export default function FableLoomStory({ view = 'graph' }) {
   }, [applySceneMedia, episode, episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
 
   const queueSceneImage = useCallback((targetNode) => {
-    setImageComposer({ episodeId, node: targetNode });
-  }, [episodeId]);
+    setImageComposer({ loomId, episodeId, node: targetNode });
+  }, [loomId, episodeId]);
 
   const queueSceneVideo = useCallback(async (targetNode) => {
     const prompt = (targetNode?.videoPrompt || '').trim() || (targetNode?.prose || '').trim();
@@ -790,7 +790,7 @@ export default function FableLoomStory({ view = 'graph' }) {
         />
       )}
 
-      {imageComposer && episode && imageComposer.episodeId === episode.id && (
+      {imageComposer && episode && imageComposer.loomId === loom.id && imageComposer.episodeId === episode.id && (
         <LoomImageComposer
           key={`${loom.id}:${episode.id}:${imageComposer.node.id}`}
           loom={loom} episode={episode}
