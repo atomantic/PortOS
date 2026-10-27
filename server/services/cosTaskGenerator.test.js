@@ -15,8 +15,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'fs';
 import * as taskStore from './cosTaskStore.js';
 import * as appActivity from './appActivity.js';
+import { releaseTaskDispatchDisposition } from './releaseSynchronization.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+
+vi.mock('./releaseSynchronization.js', () => ({ releaseTaskDispatchDisposition: vi.fn(async () => null) }));
 
 // buildJiraTicketTask resolves the claim-issue-jira prompt body (dynamic import)
 // and the Code Review Defaults (static import). Mock both leaf services so the
@@ -2200,6 +2203,23 @@ describe('admitAutoApprovedSystemTasks dry-run/execute parity', () => {
     expect(persist).toHaveBeenCalledTimes(1);
     expect(persist).toHaveBeenCalledWith('exhausted', expect.objectContaining({ status: 'blocked' }), 'internal');
 
+    vi.restoreAllMocks();
+  });
+
+  it('dispatches enrolled release continuation without a schedule and withholds the next release in both engines', async () => {
+    vi.spyOn(appActivity, 'isAppOnCooldown').mockResolvedValue(false);
+    vi.mocked(releaseTaskDispatchDisposition).mockImplementation(async t => t.id === 'sync'
+      ? 'registered-continuation' : t.metadata?.analysisType === 'do-release' ? 'wait-for-synchronization' : null);
+    const tasks = [task('sync', { analysisType: 'release-sync' }),
+      task('unregistered', { analysisType: 'release-sync' }), task('next-release', { analysisType: 'do-release' }),
+      task('disabled', { analysisType: 'disabled-type' })];
+    for (const mode of ['dry-run', 'execute']) {
+      const admitted = await admitAutoApprovedSystemTasks(ctxFor(mode, tasks), execAdapter(4));
+      expect(admitted.map(t => t.id)).toEqual(['sync']);
+    }
+    const prepared = await prepareManagedAppImprovementTask('do-release', { id: 'example-app' }, {}, { onDemand: true });
+    expect(prepared).toMatchObject({ task: null, skip: { gate: 'release-synchronization' } });
+    vi.mocked(releaseTaskDispatchDisposition).mockResolvedValue(null);
     vi.restoreAllMocks();
   });
 });

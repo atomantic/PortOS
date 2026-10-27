@@ -9,8 +9,8 @@ vi.mock('./codeReview.js', () => ({ getCodeReviewDefaults: async () => ({}),
   resolveReviewLoopOptions: async () => ({ reviewers: ['codex'], optionalReviewers: [], reviewerEfforts: { codex: 'high' }, reviewerApplies: false, reviewStopMode: 'on-clean' }) }));
 
 import { addTask, getTaskById, updateTask } from './cosTaskStore.js';
-import { ensureReleaseSynchronization } from './releaseSynchronization.js';
-import { readReleaseSynchronizationOutbox } from './releaseSynchronizationStore.js';
+import { ensureReleaseSynchronization, releaseTaskDispatchDisposition } from './releaseSynchronization.js';
+import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
 
 afterAll(cleanupTempDataRoots);
 
@@ -27,4 +27,24 @@ it('registers and rejoins a real task-store continuation with its frozen review 
   expect(await ensureReleaseSynchronization(publisher)).toEqual(first);
   expect((await getTaskById(task.id)).metadata.reviewLoopPRUrl).toBe('https://github.com/example/repo/pull/42');
   expect((await readReleaseSynchronizationOutbox()).publications[publication.identity].obligations.requiredCi.status).toBe('pending');
+
+  // Registration survives a restart/re-read without requiring a fictitious
+  // release-sync schedule. A changed task cannot borrow that exemption.
+  const saved = await getTaskById(first.taskId);
+  expect(await releaseTaskDispatchDisposition(saved)).toBe('registered-continuation');
+  expect(await releaseTaskDispatchDisposition({ ...saved, id: 'another-task' })).toBeNull();
+  expect(await releaseTaskDispatchDisposition({ ...saved, metadata: { ...saved.metadata, app: 'another-app' } })).toBeNull();
+
+  // main may still carry 1.2.2 after 1.2.3 publishes. Do not start another
+  // daily release/version selection until the existing synchronization settles.
+  const nextRelease = { metadata: { analysisType: 'do-release', app: 'example-app' } };
+  expect(await releaseTaskDispatchDisposition(nextRelease)).toBe('wait-for-synchronization');
+  expect(await releaseTaskDispatchDisposition({ metadata: { analysisType: 'do-release', app: 'other-app' } })).toBeNull();
+  const entry = (await readReleaseSynchronizationOutbox()).publications[publication.identity];
+  entry.synchronization = { status: 'verified', attempts: 1, checkedAt: '2026-01-01T02:00:00Z',
+    verifiedAt: '2026-01-01T02:00:00Z', retryAt: null, blocker: null };
+  for (const name of Object.keys(entry.obligations)) entry.obligations[name] = {
+    status: 'verified', verifiedAt: '2026-01-01T02:00:00Z', evidence: { source: 'test-fixture' } };
+  await saveReleaseSynchronization(entry);
+  expect(await releaseTaskDispatchDisposition(nextRelease)).toBeNull();
 });
