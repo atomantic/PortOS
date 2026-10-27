@@ -934,10 +934,24 @@ async function getVideoHistorySnapshot() {
   return { data, checksum: computeChecksum(data) };
 }
 
-async function applyVideoHistoryRemote(remoteData) {
+async function applyVideoHistoryRemote(remoteData, source) {
   if (!remoteData) return { applied: false, count: 0 };
   const incoming = Array.isArray(remoteData.videos) ? remoteData.videos : [];
   if (incoming.length === 0) return { applied: false, count: 0 };
+
+  // `host`-mode peers keep the bytes: index their video rows as peer-hosted so
+  // /data/videos and /data/video-thumbnails stream from the peer instead of
+  // rendering "Syncing". Runs before the merge's no-change early return so rows
+  // merged earlier still get indexed; markHosted skips files already local.
+  if (source?.peerId) {
+    const senderPeer = (await getPeers().catch(() => [])).find((p) => p.instanceId === source.peerId);
+    if (senderPeer?.mediaSyncMode === 'host') {
+      const hosted = incoming
+        .filter((r) => typeof r?.filename === 'string' && r.filename)
+        .map((r) => ({ kind: 'video', filename: r.filename }));
+      await markHosted(source.peerId, hosted);
+    }
+  }
 
   // The whole read/merge/write runs inside the shared history mutation queue so
   // a local completion (videoDownload) or another peer's snapshot can't be
