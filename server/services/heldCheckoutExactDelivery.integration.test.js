@@ -74,13 +74,14 @@ afterEach(({ task, signal }) => {
 afterAll(() => owned.finish(cleanupTempDataRoots));
 
 describe('exact delivered head retirement with capped historical API (real Git)', () => {
-  it.each(['exact', 'exact-initialized', 'named-sibling', 'named-sibling-unrelated', 'same-task-seeded', 'wrong-head', 'unpublished', 'wrong-base', 'wrong-target', 'wrong-merge-proof', 'missing-object', 'remote-change', 'dirty', 'active', 'supersession'])(
+  it.each(['exact', 'exact-initialized', 'named-sibling', 'named-sibling-unrelated', 'same-task-seeded', 'precreation', 'precreation-dirty', 'precreation-untracked', 'precreation-active', 'precreation-uncertain', 'precreation-late', 'wrong-head', 'unpublished', 'wrong-base', 'wrong-target', 'wrong-merge-proof', 'missing-object', 'remote-change', 'dirty', 'active', 'supersession'])(
     'retains all existing retirement gates: %s', async scenario => {
       scratch = await realpath(await mkdtemp(join(tmpdir(), 'exact-delivery-')));
       const repo = join(scratch, 'repo'); await materializeGitRepo(repo);
       const remote = fixture.remote = join(scratch, 'origin.git'); await execGit(['init', '--bare', remote], scratch);
       await execGit(['remote', 'add', 'origin', remote], repo);
-      const branch = 'delivery/candidate'; const path = join(repo, '.claude', 'worktrees', 'candidate');
+      const branch = scenario.startsWith('precreation') ? 'claim/issue-42' : 'delivery/candidate';
+      const path = join(repo, '.claude', 'worktrees', 'candidate');
       await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
       await writeFile(join(path, 'feature.txt'), 'delivered feature\n');
       await execGit(['add', 'feature.txt'], path); await execGit(['commit', '-m', 'delivered feature'], path);
@@ -97,6 +98,23 @@ describe('exact delivered head retirement with capped historical API (real Git)'
       fixture.app = { id: 'app-exact', repoPath: repo };
       fixture.policies = [{ id: 'completed-original', status: 'completed', result: { success: true }, metadata: {
         workspacePath: repo, claimBranches: [branch], prCompletionPolicy: 'review-then-merge' } }];
+      if (scenario.startsWith('precreation')) {
+        const captured = await readCompletedCheckoutIdentity({ repoPath: repo, branch, path, head });
+        const startedAt = new Date(Date.now() - 10_000).toISOString();
+        const completedAt = new Date().toISOString();
+        fixture.policies = [{ id: 'failed-before-creation', taskId: 'claim-task', status: 'completed',
+          startedAt: '2000-01-01T00:00:00.000Z', completedAt: '2000-01-01T00:01:00.000Z',
+          result: { success: false, executionSuccess: false, completionReason: 'paste-not-rendered',
+            errorAnalysis: { category: 'startup-failure', origin: 'runner', completionReason: 'paste-not-rendered' } },
+          metadata: { instanceId: 'fixture-instance', workspacePath: repo, isWorktree: false, configClaimFlow: true, claimBranch: branch,
+            claimSelectionPending: true, claimPicksOwnBranch: false, prCompletionPolicy: 'merge-on-green' } },
+        { id: 'completed-claim', taskId: 'claim-task', status: 'completed', startedAt, completedAt,
+          result: { success: true, executionSuccess: true }, metadata: { instanceId: 'fixture-instance', workspacePath: repo,
+            claimBranches: [branch], claimReleasedBranches: [], prCompletionPolicy: 'merge-on-green',
+            completedCheckouts: [{ ...captured, version: 1, agentId: 'completed-claim', startedAt, capturedAt: completedAt }] } }];
+        if (scenario === 'precreation-uncertain') fixture.policies[0].metadata.checkoutSeeds = [];
+        if (scenario === 'precreation-late') fixture.policies[0].completedAt = new Date(Date.now() + 60_000).toISOString();
+      }
       let retainedSibling = null;
       if (scenario.startsWith('named-sibling')) {
         retainedSibling = join(scratch, 'earlier-review');
@@ -161,7 +179,7 @@ describe('exact delivered head retirement with capped historical API (real Git)'
       if (scenario === 'wrong-target') fixture.refs.release = fixture.refs.main;
       if (scenario === 'wrong-merge-proof') fixture.detail.merge_commit_sha = fixture.refs.main;
       if (scenario === 'missing-object') fixture.pr.mergeCommit.oid = fixture.detail.merge_commit_sha = 'c'.repeat(40);
-      if (scenario === 'active' || scenario === 'original-active') fixture.owners = [{ id: 'active-owner', status: 'running', metadata: {
+      if (['active', 'original-active', 'precreation-active'].includes(scenario)) fixture.owners = [{ id: 'active-owner', status: 'running', metadata: {
         isWorktree: true, sourceWorkspace: repo, workspacePath: path, worktreeBranch: branch } }];
       await recordBranchReconcileOutcome(fixture.app.id, { status: 'incomplete', remaining: [{ ...release, reason: 'pr-completion-review-required' }] });
       const opts = { cosDir: join(scratch, 'cos'), readAgents: async () => fixture.owners };
@@ -196,16 +214,17 @@ describe('exact delivered head retirement with capped historical API (real Git)'
       }
       const prepared = scenario === 'exact-initialized' ? await initialized.review(input)
         : await prepareInventoriedCheckoutRetirement(input, opts);
-      if (['exact', 'exact-initialized', 'named-sibling', 'same-task-seeded', 'remote-change', 'dirty'].includes(scenario)) {
+      if (['exact', 'exact-initialized', 'named-sibling', 'same-task-seeded', 'precreation', 'precreation-dirty', 'precreation-untracked', 'remote-change', 'dirty'].includes(scenario)) {
         expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { forge: { scopeProof: 'exact-delivered-head' },
           comparison: { disposition: 'integrated', exactMergedDelivery: true } } });
         expect(fixture.calls.some(args => args.includes('--paginate'))).toBe(false);
         if (scenario === 'remote-change') await execGit(['update-ref', `refs/heads/${branch}`, merge, head], remote);
-        if (scenario === 'dirty') await writeFile(join(path, 'feature.txt'), 'wanted local edit\n');
+        if (['dirty', 'precreation-dirty'].includes(scenario)) await writeFile(join(path, 'feature.txt'), 'wanted local edit\n');
+        if (scenario === 'precreation-untracked') await writeFile(join(path, 'wanted.txt'), 'wanted untracked work\n');
         const confirmation = { appId: fixture.app.id, release,
           review: { prUrl: fixture.pr.url, digest: prepared.review.digest, acceptSuperseded: false } };
         const retired = scenario === 'exact-initialized' ? await initialized.retire(confirmation) : await retireInventoriedCheckout(confirmation, opts);
-        if (['exact', 'exact-initialized', 'named-sibling', 'same-task-seeded'].includes(scenario)) {
+        if (['exact', 'exact-initialized', 'named-sibling', 'same-task-seeded', 'precreation'].includes(scenario)) {
           expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
           const outcome = await getBranchReconcileOutcome(fixture.app.id);
           expect(outcome.retired).toEqual(expect.arrayContaining([expect.objectContaining({ path, branch, head, branchDeleted: true })]));
@@ -215,10 +234,12 @@ describe('exact delivered head retirement with capped historical API (real Git)'
             expect((await listWorktrees(repo)).find(tree => resolve(tree.path) === resolve(retainedSibling))).toBeDefined();
             expect(fixture.policies[0].result.success).toBe(false);
           }
+          if (scenario === 'precreation') expect(fixture.policies[0].result.success).toBe(false);
           return;
         }
-        expect(retired).toMatchObject({ ok: false, reason: scenario === 'dirty' ? 'worktree-dirty' : 'retirement-remote-head-changed' });
-      } else expect(prepared).toMatchObject({ ok: false, reason: scenario === 'active' ? 'claim-owner-active'
+        expect(retired).toMatchObject({ ok: false, reason: ['dirty', 'precreation-dirty', 'precreation-untracked'].includes(scenario) ? 'worktree-dirty' : 'retirement-remote-head-changed' });
+      } else expect(prepared).toMatchObject({ ok: false, reason: ['active', 'precreation-active'].includes(scenario) ? 'claim-owner-active'
+        : ['precreation-uncertain', 'precreation-late'].includes(scenario) ? 'retirement-policy-not-legacy-completed'
         : scenario === 'named-sibling-unrelated' ? 'retirement-policy-not-legacy-completed'
           : scenario === 'missing-object' ? 'retirement-proof-fetch-failed'
           : scenario === 'wrong-target' ? 'retirement-merge-not-in-target'
@@ -228,7 +249,8 @@ describe('exact delivered head retirement with capped historical API (real Git)'
         .toMatchObject([{ branch: `refs/heads/${branch}`, head: release.head }]);
       expect((await getBranchReconcileOutcome(fixture.app.id)).retired || []).toEqual([]);
       if (scenario === 'unpublished') expect(await readFile(join(path, 'wanted.txt'), 'utf8')).toContain('wanted work');
-      if (scenario === 'dirty') expect(await readFile(join(path, 'feature.txt'), 'utf8')).toContain('wanted local edit');
+      if (scenario === 'precreation-untracked') expect(await readFile(join(path, 'wanted.txt'), 'utf8')).toContain('wanted untracked work');
+      if (['dirty', 'precreation-dirty'].includes(scenario)) expect(await readFile(join(path, 'feature.txt'), 'utf8')).toContain('wanted local edit');
     });
 });
 
