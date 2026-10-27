@@ -42,8 +42,8 @@ describe('persisted reference-sheet publication', () => {
       { filename: 'canon.png', source: 'Primary canon image', status: 'included', url: '/data/image-refs/canon.png' },
     ] } });
     render(<Panel />);
-    const reference = await screen.findByRole('link', { name: /Open canonical reference 1/ });
-    expect(reference).toHaveAttribute('href', '/data/image-refs/canon.png');
+    const reference = await screen.findByAltText('Canonical reference 1');
+    expect(reference).toHaveAttribute('src', '/data/image-refs/canon.png');
     expect(screen.getByText('Will be sent to the model')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
     expect(screen.getByText('Use the canonical identity')).toBeInTheDocument();
