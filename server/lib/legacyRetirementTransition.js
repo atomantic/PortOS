@@ -21,7 +21,9 @@ export function markLegacyRetirements(outcome) {
 export function applyLegacyRetirementResolutions(outcome, resolutions, now) {
   const transition = outcome?.legacyRetirementTransition;
   if (transition?.version !== 1) return outcome;
-  const accepted = resolutions.filter(row => transition.observations.includes(row.key));
+  const current = new Set([...(outcome.retirementObligations || []), ...(outcome.remaining || [])].map(legacyRetirementKey));
+  const accepted = resolutions.filter(row => current.has(row.key) && (transition.observations.includes(row.key)
+    || (row.disposition === 'local-cleanup-not-required' && row.observation.reason === 'retirement-provenance-unverified')));
   if (!accepted.length) return outcome;
   const keys = new Set(accepted.map(row => row.key));
   const history = [...transition.resolutions];
