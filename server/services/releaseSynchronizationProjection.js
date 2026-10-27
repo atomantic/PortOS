@@ -33,23 +33,43 @@ function buildReleaseSynchronizationPayload(entry) {
   };
 }
 
-function findMatchingOutboxEntry(item, outbox) {
-  if (!item || !outbox?.publications) return null;
+function findMatchingOutboxEntryForTask(task, outbox) {
+  if (!task || !outbox?.publications) return null;
   const publications = Object.values(outbox.publications);
   if (!publications.length) return null;
 
-  const identity = item.metadata?.releasePublication?.identity
-    || item.metadata?.releaseSynchronization?.identity;
+  const identity = task.metadata?.releasePublication?.identity
+    || task.metadata?.releaseSynchronization?.identity;
   if (identity && outbox.publications[identity]) {
     return outbox.publications[identity];
   }
-  const taskId = item.taskId || item.id;
-  const matchTask = publications.find(e => e.task?.id === taskId || e.owner?.taskId === taskId);
-  if (matchTask) return matchTask;
+  const taskId = task.id;
+  if (!taskId) return null;
 
-  const agentId = item.id || item.agentId;
-  const matchAgent = publications.find(e => e.owner?.agentId === agentId);
-  if (matchAgent) return matchAgent;
+  return publications.find(e => e.task?.id === taskId || e.owner?.taskId === taskId) || null;
+}
+
+function findMatchingOutboxEntryForAgent(agent, outbox) {
+  if (!agent || !outbox?.publications) return null;
+  const publications = Object.values(outbox.publications);
+  if (!publications.length) return null;
+
+  const identity = agent.metadata?.releasePublication?.identity
+    || agent.metadata?.releaseSynchronization?.identity;
+  if (identity && outbox.publications[identity]) {
+    return outbox.publications[identity];
+  }
+
+  // Publisher agent matches specifically by recorded owner agentId
+  const agentId = agent.id || agent.agentId;
+  const matchPublisher = publications.find(e => e.owner?.agentId === agentId);
+  if (matchPublisher) return matchPublisher;
+
+  // Continuation agent matches specifically by the continuation task ID
+  if (agent.taskId) {
+    const matchContinuation = publications.find(e => e.task?.id === agent.taskId);
+    if (matchContinuation) return matchContinuation;
+  }
 
   return null;
 }
@@ -58,7 +78,7 @@ export function projectTaskReleaseMilestones(task, entryOrOutbox) {
   if (!task) return task;
   const entry = entryOrOutbox?.version === 1 && entryOrOutbox.identity
     ? entryOrOutbox
-    : findMatchingOutboxEntry(task, entryOrOutbox);
+    : findMatchingOutboxEntryForTask(task, entryOrOutbox);
   if (!entry) return task;
 
   const metadata = { ...task.metadata };
@@ -76,7 +96,7 @@ export function projectAgentReleaseMilestones(agent, entryOrOutbox) {
   if (!agent) return agent;
   const entry = entryOrOutbox?.version === 1 && entryOrOutbox.identity
     ? entryOrOutbox
-    : findMatchingOutboxEntry(agent, entryOrOutbox);
+    : findMatchingOutboxEntryForAgent(agent, entryOrOutbox);
   if (!entry) return agent;
 
   const metadata = { ...agent.metadata };

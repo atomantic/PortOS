@@ -43,6 +43,25 @@ import ActionableInsightsBanner from '../components/cos/ActionableInsightsBanner
 const COS_PAGE_SUBSCRIBE = { taskLists: 'invalidate' };
 const COS_PAGE_RELEASE = { taskLists: 'full' };
 
+function mergeAgentRecords(base, update) {
+  if (!base) return update;
+  if (!update) return base;
+  return {
+    ...base,
+    ...update,
+    metadata: {
+      ...base.metadata,
+      ...update.metadata,
+      ...(base.metadata?.releasePublication && !update.metadata?.releasePublication
+        ? { releasePublication: base.metadata.releasePublication }
+        : {}),
+      ...(base.metadata?.releaseSynchronization && !update.metadata?.releaseSynchronization
+        ? { releaseSynchronization: base.metadata.releaseSynchronization }
+        : {}),
+    },
+  };
+}
+
 const AgentsTab = lazy(() => import('../components/cos/tabs/AgentsTab'));
 
 // Task editing is not needed to view agents, so keep its forms and drag/drop
@@ -350,7 +369,7 @@ export default function ChiefOfStaff() {
     agentReadRef.current = null;
     if (Array.isArray(data)) {
       const merged = new Map(data.map(agent => [agent.id, agent]));
-      for (const [id, agent] of request.updates) merged.set(id, { ...merged.get(id), ...agent });
+      for (const [id, agent] of request.updates) merged.set(id, mergeAgentRecords(merged.get(id), agent));
       const snapshot = [...merged.values()].filter(agent => agent.status !== 'completed' || agent.deliveryPending);
       setAgents(snapshot);
       setAgentsLoaded(true);
@@ -612,25 +631,11 @@ export default function ChiefOfStaff() {
     const handleAgentUpdated = (updatedAgent) => {
       if (!needsAgents) return;
       const updates = agentReadRef.current?.updates;
-      updates?.set(updatedAgent.id, { ...updates.get(updatedAgent.id), ...updatedAgent });
+      updates?.set(updatedAgent.id, mergeAgentRecords(updates.get(updatedAgent.id), updatedAgent));
       // Update the specific agent in the agents list without fetching all data
-      setAgents(prev => prev.map(agent => {
-        if (agent.id !== updatedAgent.id) return agent;
-        return {
-          ...agent,
-          ...updatedAgent,
-          metadata: {
-            ...agent.metadata,
-            ...updatedAgent.metadata,
-            ...(agent.metadata?.releasePublication && !updatedAgent.metadata?.releasePublication
-              ? { releasePublication: agent.metadata.releasePublication }
-              : {}),
-            ...(agent.metadata?.releaseSynchronization && !updatedAgent.metadata?.releaseSynchronization
-              ? { releaseSynchronization: agent.metadata.releaseSynchronization }
-              : {}),
-          },
-        };
-      }).filter(agent => agent.status !== 'completed' || agent.deliveryPending));
+      setAgents(prev => prev.map(agent =>
+        agent.id === updatedAgent.id ? mergeAgentRecords(agent, updatedAgent) : agent
+      ).filter(agent => agent.status !== 'completed' || agent.deliveryPending));
       if (updatedAgent.status === 'completed' || updatedAgent.metadata?.releaseSynchronization) {
         setCompletedRevision(value => value + 1);
       }

@@ -110,6 +110,26 @@ describe('releaseSynchronizationProjection', () => {
     expect(projectedPublisher.metadata.releaseSynchronization.prUrl).toBe('https://github.com/example/repo/pull/42');
   });
 
+  it('does not falsely project publisher synchronization onto earlier attempts sharing the task ID', () => {
+    // Earlier attempt on the same publisher task ID that failed
+    const earlierAttempt = {
+      id: 'publisher-agent-failed-attempt',
+      taskId: 'publisher-task-1',
+      metadata: {},
+    };
+    const projectedEarlier = projectAgentReleaseMilestones(earlierAttempt, outbox);
+    expect(projectedEarlier.metadata.releaseSynchronization).toBeUndefined();
+
+    // Successful attempt matching owner.agentId
+    const successfulAttempt = {
+      id: 'publisher-agent-1',
+      taskId: 'publisher-task-1',
+      metadata: {},
+    };
+    const projectedSuccess = projectAgentReleaseMilestones(successfulAttempt, outbox);
+    expect(projectedSuccess.metadata.releaseSynchronization.status).toBe('verified');
+  });
+
   it('projects whole task sources in queue and history views', () => {
     const source = {
       tasks: [
