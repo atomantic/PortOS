@@ -20,6 +20,7 @@ import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanup
 import { buildQualitySnapshot } from './appQualityFederation.js';
 import { classifyQualitySnapshot, serializeQualitySnapshot } from './appQualitySnapshotFormat.js';
 import { getActiveAgentIds } from './agentState.js';
+import { readAgentsStateForSafetyCheck } from './cosState.js';
 
 const sha = value => /^[a-f0-9]{40}$/.test(value || '');
 const time = value => Number.isFinite(Date.parse(value));
@@ -34,7 +35,7 @@ async function readSynchronizationForge(origin, forgeExec, path, paginate = fals
   return JSON.parse(await execGh(args, undefined, forgeExec));
 }
 
-async function checkoutTargets(entry, agents) {
+async function checkoutTargets(entry, agents, liveAgents) {
   const targets = [];
   for (const agent of agents.filter(value => value.taskId === entry.task.id
     || (value.id === entry.owner.agentId && value.startedAt === entry.owner.startedAt))
@@ -53,7 +54,7 @@ async function checkoutTargets(entry, agents) {
         checkoutIdentity: retirementCheckoutIdentityFromPointer(seed.incarnation?.pointer), createdAt: seed.seededAt, agentId: agent.id };
       if (!target.checkoutIdentity || !time(target.createdAt)) hold('checkout-generation-unverified');
       if (claimCheckoutOwner({ branchName: target.branch, holderPath: target.path, sourceWorkspace: target.repoPath,
-        agents, ignoreIds: agents.filter(value => value.taskId === entry.task.id || value.id === entry.owner.agentId).map(value => value.id) })) hold('checkout-conflicting-live-owner');
+        agents: liveAgents, ignoreIds: agents.filter(value => value.taskId === entry.task.id || value.id === entry.owner.agentId).map(value => value.id) })) hold('checkout-conflicting-live-owner');
       const previousIndex = targets.findIndex(row => row.path === target.path && row.checkoutIdentity === target.checkoutIdentity);
       if (previousIndex < 0) targets.push(target);
       else {
@@ -95,7 +96,11 @@ async function context(entry, agents) {
   if (repository.full_name !== origin.fullName || typeof repository.default_branch !== 'string') hold('synchronization-default-unreadable');
   const development = await api(`git/ref/heads/${encodeURIComponent(repository.default_branch)}`);
   if (development.object?.type !== 'commit' || !sha(development.object.sha)) hold('synchronization-default-unreadable');
-  const checkouts = await checkoutTargets(entry, agents);
+  // Archived completion records establish delivery history, not current
+  // checkout occupancy. Compact legacy records need not have a live status.
+  const live = await readAgentsStateForSafetyCheck();
+  if (!live.trusted || !live.agents || Array.isArray(live.agents)) hold('checkout-ownership-unreadable');
+  const checkouts = await checkoutTargets(entry, agents, Object.values(live.agents));
   const syncCheckouts = checkouts.filter(row => ownersOf(entry, agents).some(agent => agent.id === row.agentId));
   if (!syncCheckouts.length) hold('continuation-checkout-unverified');
   const saved = entry.obligations.synchronizationPr.evidence;

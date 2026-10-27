@@ -5,7 +5,7 @@ import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../lib/m
 
 const f = vi.hoisted(() => ({ agents: [], pr: null, review: null, reviews: [], checks: [], receipts: [],
   present: true, busy: false, unavailable: false, ancestor: true, quality: null, qualityFile: null, failSave: false,
-  missingSyncAncestry: false, retirementUnavailable: false }));
+  missingSyncAncestry: false, retirementUnavailable: false, liveAgents: null, liveTrusted: true }));
 vi.mock('../lib/fileUtils.js', async original => {
   const actual = await original();
   return makePathsProxy(actual, { dataRoot: lazyTempDataRoot('release-sync-verifier-'), overrides: {
@@ -15,7 +15,9 @@ vi.mock('../lib/fileUtils.js', async original => {
     },
   } });
 });
-vi.mock('./cosState.js', () => ({ loadState: async () => ({ agents: {} }), withStateLock: createFileWriteQueue() }));
+vi.mock('./cosState.js', () => ({ loadState: async () => ({ agents: {} }), withStateLock: createFileWriteQueue(),
+  readAgentsStateForSafetyCheck: async () => ({ trusted: f.liveTrusted,
+    agents: Object.fromEntries((f.liveAgents || f.agents).map(agent => [agent.id, agent])) }) }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./codeReview.js', () => ({ getCodeReviewDefaults: async () => ({}), resolveReviewLoopOptions: async () => ({
   reviewers: ['codex'], usernames: ['example-reviewer'], optionalReviewers: [], reviewerApplies: false }) }));
@@ -70,6 +72,8 @@ afterAll(cleanupTempDataRoots);
 let identity, taskId, publication;
 const getReleaseSynchronization = async key => (await readReleaseSynchronizationOutbox()).publications[key];
 beforeEach(async () => {
+  f.liveAgents = null;
+  f.liveTrusted = true;
   restorePlatform = pinPlatform('darwin');
   f.failSave = false;
   identity = (await import('node:crypto')).randomBytes(32).toString('hex');
@@ -206,6 +210,17 @@ it('rejects a conflicting live checkout owner without modifying the dispatch, an
   expect(saved.obligations.candidateFixes.blocker).toBe('candidate-fixes-not-preserved');
   expect(saved.obligations.releaseAncestry.blocker).toBe('published-ancestry-not-preserved');
   expect((await getTaskById(taskId)).metadata.releaseSynchronization.identity).toBe(identity);
+});
+
+it('keeps compact historical completions out of live ownership checks while refusing an unreadable current registry', async () => {
+  finishExecution();
+  f.liveAgents = [...f.agents];
+  f.agents.push({ id: 'historical-compact-record', agentId: 'historical-compact-record',
+    taskId: 'old-task', completedAt: '2025-12-01T00:00:00Z', exitCode: 0, success: true });
+  f.liveTrusted = false;
+  expect((await verifyReleaseSynchronizationTask(taskId)).blocker).toBe('checkout-ownership-unreadable');
+  f.liveTrusted = true;
+  expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
 });
 
 it('requires development quality evidence and refreshes it without redoing a successful local review', async () => {
