@@ -1347,8 +1347,8 @@ Commit intended changes and push to the branch's verified remote destination.
 Integrate the fetched base when there is an actual conflict, an enforced
 up-to-date policy, or evidenced semantic overlap; rerun pregate after a rebase.
 A moving main alone does not require a new head or another hosted CI run.
-Managed merges still require fresh combined-tree structural guards and live
-head/base checks under the merge policy in the root AGENTS.md.
+Managed merges follow the hosting-provider eligibility and pinned-head policy
+in the root AGENTS.md; combined-tree guards remain available for investigation.
 
 ## Adapting for Sub-Projects
 

@@ -185,15 +185,16 @@ previous-tag comparison, chosen version/name and amendment ledger. A PR targetin
 `release` forces full CI regardless of its head branch; require both `CI Gate`
 and `Full CI Gate` on the current candidate head.
 
-For the repository's pre-merge structural guard, compare the candidate against
-**`origin/release`, its actual PR base**, not `origin/main`. Before merging, verify
-the PR head still equals the validated candidate SHA and the target still equals
-`RELEASE_BASE_SHA`. Hold merge admission only for the final live-state check,
-merge attempt and readback. Use a merge commit and `--match-head-commit` with the
-validated head; never squash/rebase away the candidate ancestry, bypass required
-checks, or use a moving `main` PR. If the target changed, release admission and
-reconcile the competing release/version and resulting tree outside the lease.
-It is not permission to recut from `main` or reuse checks on a different tree.
+When investigating integration with a structural guard, compare the candidate
+against **`origin/release`, its actual PR base**, not `origin/main`. Before
+merging, verify the PR head still equals the validated candidate SHA and the
+target still equals `RELEASE_BASE_SHA`. The hosting provider's rules own merge
+eligibility; follow the root merge policy without adding another admission
+certificate. Use a merge commit and `--match-head-commit` with the validated
+head; never squash/rebase away the candidate ancestry, bypass required checks,
+or use a moving `main` PR. If the target changed, reconcile the competing
+release/version and resulting tree; do not recut from `main` or reuse checks on
+a different tree.
 
 #### 5. Verify publication
 
