@@ -561,13 +561,7 @@ async function bootDaemon(state) {
       if (sweep && (sweep.merged || sweep.escalated || sweep.timedOut)) {
         emitLog('info', `🤖 Pending merges: ${sweep.merged} merged, ${sweep.escalated} escalated, ${sweep.timedOut} timed out`);
       }
-      // Flagged merges (#12549) whose checks were still running when the run ended.
-      const { sweepMergeGateWatches } = await import('./mergeGateAudit.js');
-      const gate = await sweepMergeGateWatches().catch((err) => {
-        console.warn(`⚠️ sweepMergeGateWatches failed: ${err?.message || err}`);
-        return null;
-      });
-      if (gate?.recovered) emitLog('info', `🚦 Merge-gate watches: ${gate.recovered} recovery task(s) queued, ${gate.remaining} still watching`);
+
     },
     metadata: { description: 'CoS pending merge-only PR drain' }
   });

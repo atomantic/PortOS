@@ -764,7 +764,6 @@ export * from './openapiSpec.js';
 export * from './openapiDowngrade.js';
 export * from './orchestrationProfile.js';
 export * from './apiToolResource.js';
-export * from './mergeGateAudit.js';
 export * from './mergeGateContract.js';
 export * from './preflightPlan.js';
 export * from './prDisposition.js';

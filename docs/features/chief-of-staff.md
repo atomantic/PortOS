@@ -141,30 +141,15 @@ and reports progress every minute; after 10 minutes the reviewed PR (and any
 claim) is left open — a refusal is never permission to merge without admission. Sweep deferrals preserve their retry budget; the sweep already
 holds the lease only around its own read → assess → pinned merge.
 
-### Post-merge gate audit (#12549)
+### Hosting-provider merge authority
 
-Admission and "merge on green" are prompt rules; an agent with `gh` access can
-still merge around them. When a claim run finishes, `mergeGateAudit.js` (hung
-off the post-cleanup audit in `agentWorktreeCleanup.js`) lists the PRs merged
-from the run's bound claim branches and flags each one that either held no
-admission lease at `mergedAt` (within the 5-minute hold) or had a check run or
-commit status on the merged head that was not completed-green before it (runs
-created after the merge are ignored). The lease evidence is `mergeAdmissionHistory` on the
-run (each release records its `acquiredAt`/`releasedAt`) plus a lease it still
-holds. A head the pending-merge coordinator merged itself is never flagged: the
-coordinator marks the run's `mergeHandoffReceipts` entry (`coordinatorMergedAt`)
-when its own merge call succeeds, so a run that handed a head off and then merged
-around the queue is still caught. An audit whose forge reads fail is kept as an
-`audit` entry in `mergeGateWatches` and retried by the sweep.
-
-A violation is written to the run (`mergeGateViolations`), the run-events ledger
-(`run.merge-gate-violation`) and a notification. If the flagged head's checks
-fail, ONE recovery task for the default branch is queued; its description names
-the merged SHA, so concurrent runs and repeat audits deduplicate on the task
-queue. Heads whose checks were still running are watched on the app
-(`mergeGateWatches`) and resolved by a bounded fast poll and the 30-minute
-pending-merge sweep. Detection only: nothing merges, reverts or changes branch
-protection.
+GitHub or GitLab repository rules determine merge eligibility. A confirmed merged
+state for the assigned repository and pull request establishes delivery; PortOS
+does not recertify it against local admission history, review receipts, or check
+completion timestamps. An unreadable API response is unknown, not confirmation.
+Local cleanup still verifies the exact checkout, active ownership, and unique
+content before removing anything. Delivery and local cleanup remain separate
+facts, so a merged PR never authorizes deletion of unrelated or unfinished work.
 
 ### Completion recovery and merged cleanup
 

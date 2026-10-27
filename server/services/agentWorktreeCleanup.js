@@ -107,12 +107,8 @@ export async function cleanupAgentWorktree(agentId, success, options = {}) {
   // output buffer for the duration of the probes.
   const originalTask = options?.originalTask || null;
   run.then(
-    (warnings) => Promise.all([
-      auditRepoState(agentId, success, originalTask, warnings)
-        .catch(err => emitLog('warn', `🔎 Repo-state audit failed for ${agentId}: ${err.message}`, { agentId })),
-      auditMergeGate(agentId, originalTask)
-        .catch(err => emitLog('warn', `🚦 Merge-gate audit failed for ${agentId}: ${err.message}`, { agentId })),
-    ]),
+    (warnings) => auditRepoState(agentId, success, originalTask, warnings)
+      .catch(err => emitLog('warn', `🔎 Repo-state audit failed for ${agentId}: ${err.message}`, { agentId })),
     // A cleanup that threw has no end state to audit; `settled` still rejects.
     () => {}
   // Nothing awaits this chain, so a throw from the reporting itself would surface
@@ -145,19 +141,6 @@ async function auditRepoState(agentId, success, originalTask, warnings) {
     prExpected: isTruthyMeta(originalTask?.metadata?.openPR),
     cleanupWarnings: warnings || [],
   });
-}
-
-/**
- * Post-merge gate audit (#12549): did a claim run's merged PR hold the merge
- * admission lease and land on green checks? Detection only; it flags and files
- * one default-branch recovery task. Lazily imported like the repo-state audit.
- */
-async function auditMergeGate(agentId, originalTask) {
-  const { auditClaimMergeGate } = await import('./mergeGateAudit.js');
-  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
-  const agentState = await getAgentRecord(agentId).catch(() => null);
-  if (!agentState) return;
-  await auditClaimMergeGate({ agentId, task: originalTask, agentState });
 }
 
 // A disposition is selected once, after forge evidence is available. Merge is
