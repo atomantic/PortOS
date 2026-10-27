@@ -1,4 +1,5 @@
-import { afterAll, beforeEach, expect, it, vi } from 'vitest';
+import { pinPlatform } from '../lib/testHelper.js';
+import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
@@ -26,6 +27,10 @@ vi.mock('../lib/execGit.js', () => ({ execGit: async () => ({ stdout: f.pr.head.
 vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original(), readCompletedCheckoutIdentity: async row =>
   f.present ? { ...row, incarnation: f.agents[1].metadata.checkoutSeeds[0].incarnation } : null }));
 vi.mock('../lib/localReviewLifecycle.js', () => ({ localReviewLifecycle: async () => f.review || { reusable: false, receipt: null } }));
+vi.mock('../lib/windowsAgentProcess.js', () => ({ readWindowsAgentSettlement: async agent => {
+  if (f.busy) throw Object.assign(new Error('synthetic unavailable native proof'), { code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED' });
+  return { owner: { agentId: agent.id, startedAt: agent.startedAt }, active: 0 };
+} }));
 vi.mock('../lib/processCwdProbe.js', () => ({ hasProcessCwdInside: async () => f.busy }));
 vi.mock('./repoCleanupObservation.js', () => ({ readCheckoutPathPresence: async () => f.present, readLocalBranchPresence: async () => f.present }));
 vi.mock('./taskSchedule.js', () => ({ getBranchReconcileOutcome: async () => {
@@ -60,10 +65,13 @@ import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckout
 import { cosEvents } from './cosEvents.js';
 import { classifyQualitySnapshot, qualityFileFromWireSnapshot } from './appQualitySnapshotFormat.js';
 
+let restorePlatform;
+afterEach(() => restorePlatform?.());
 afterAll(cleanupTempDataRoots);
 let identity, taskId, publication;
 const getReleaseSynchronization = async key => (await readReleaseSynchronizationOutbox()).publications[key];
 beforeEach(async () => {
+  restorePlatform = pinPlatform('darwin');
   f.failSave = false;
   identity = (await import('node:crypto')).randomBytes(32).toString('hex');
   const source = await addTask({ description: `Release example ${identity}`, app: 'example-app' });
@@ -287,4 +295,23 @@ it('retains complete retirement receipts on an unreadable follow-up while anothe
   expect((await getReleaseSynchronization(identity)).obligations.retirement).toEqual(prior);
   f.reviews = approval;
   expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
+});
+
+it('requires Windows native tree proof independently of completed task prose and binds it to retained checkout generations', async () => {
+  restorePlatform();
+  restorePlatform = pinPlatform('win32');
+  await verifyReleaseSynchronizationTask(taskId);
+  finishExecution();
+  f.busy = true;
+  await verifyReleaseSynchronizationTask(taskId);
+  let saved = await getReleaseSynchronization(identity);
+  expect(saved.obligations.processSettlement).toMatchObject({ status: 'blocked', blocker: 'WINDOWS_AGENT_PROCESS_UNVERIFIED' });
+  expect(saved.publication).toEqual(publication);
+  expect(saved.obligations.retirement.status).not.toBe('verified');
+  f.busy = false;
+  expect(await verifyReleaseSynchronizationTask(taskId)).toMatchObject({ status: 'verified', blocker: null });
+  saved = await getReleaseSynchronization(identity);
+  expect(saved.obligations.processSettlement.evidence.receipts).toHaveLength(2);
+  expect(saved.obligations.processSettlement.evidence.checkouts[0].checkoutIdentity)
+    .toBe(retirementCheckoutIdentityFromPointer(f.agents[1].metadata.checkoutSeeds[0].incarnation.pointer));
 });

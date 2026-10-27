@@ -262,6 +262,19 @@ only writer of those receipts. No verifier merges a PR, changes a published tag,
 steals a checkout, or resets a task retry budget. Status-view integration is
 tracked in #13773 under #13760.
 
+On Windows, newly registered release publishers and synchronization agents launch
+inside a native Job with breakaway disabled, atomically assigned at process
+creation. The supervisor retains the root's native handle and creation time and
+writes a durable settlement receipt only after the root and every Job descendant
+have exited. Cancellation requests terminate the owned Job and wait for the same
+empty-Job proof. The server compares the original agent/start reservation and
+launch identity after restart, and binds it to each server-captured checkout
+generation; a recycled PID is never treated as the original process. Runner and
+session checks, exact retirement receipts, review, CI and admission still apply.
+Legacy unsupervised runs, lost supervisors, failed native inspection and missing
+or conflicting receipts remain blocked. An empty Windows cwd listing is never a
+substitute for this proof.
+
 #### 6. Synchronize back without changing the published release
 
 After publication, the durable continuation opens a normal **`release` → `main`** synchronization PR and

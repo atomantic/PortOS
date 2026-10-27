@@ -1,3 +1,4 @@
+import { prepareWindowsAgentLaunch, watchWindowsAgentProcess } from '../lib/windowsAgentProcess.js';
 import * as pty from 'node-pty';
 import os from 'os';
 import { basename } from 'path';
@@ -268,12 +269,8 @@ export function createShellSession(socket, options = {}) {
 
   let ptyProcess;
   try {
-    ptyProcess = pty.spawn(shell, shellArgs, {
-      ...ptyTerminalOptions({ cwd, cols: options.cols, rows: options.rows }),
-      // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). An interactive
-      // login shell rewrites PWD itself at startup, but a non-login shell may
-      // not, and an agent-TUI session injects its CLI command into this shell.
-      env: withSpawnCwdEnv({
+    // Pin PWD to the spawn cwd; a non-login shell may not rewrite it.
+    const childEnv = withSpawnCwdEnv({
         // `options.env` is a DELTA here — this base is always unioned underneath
         // it. A caller that has already narrowed its environment to a strict
         // allowlist must use `spawnCommandSession` instead, which unions nothing
@@ -284,8 +281,13 @@ export function createShellSession(socket, options = {}) {
         // Single-user/single-instance deployment (Tailscale-only) makes this acceptable.
         ...(options.env || {}),
         ...TERM_ENV
-      }, cwd)
+      }, cwd);
+    const launch = prepareWindowsAgentLaunch(options.agentId, shell, shellArgs, { cwd, env: childEnv, pty: true });
+    ptyProcess = pty.spawn(launch.command, launch.args, {
+      ...ptyTerminalOptions({ cwd, cols: options.cols, rows: options.rows }),
+      env: childEnv
     });
+    watchWindowsAgentProcess(ptyProcess, launch);
   } catch (err) {
     console.error(`❌ Failed to spawn PTY: ${err.message}`);
     socket?.emit?.('shell:error', { error: `Failed to spawn shell: ${err.message}` });
@@ -475,10 +477,12 @@ export function spawnCommandSession(command, args = [], options = {}) {
   const { command: ptyCommand, args: ptyArgs } = prepareCliSpawn(executable, args, childEnv);
 
   console.log(`🐚 Creating command session ${sessionId.slice(0, 8)} (${basename(command)})`);
-  const ptyProcess = pty.spawn(ptyCommand, ptyArgs, {
+  const launch = prepareWindowsAgentLaunch(options.agentId, ptyCommand, ptyArgs, { cwd, env: childEnv, pty: true });
+  const ptyProcess = pty.spawn(launch.command, launch.args, {
     ...ptyTerminalOptions({ cwd, cols: options.cols, rows: options.rows }),
     env: childEnv
   });
+  watchWindowsAgentProcess(ptyProcess, launch);
 
   adoptPtySession(sessionId, ptyProcess, { ...options, cwd, shell: null });
   broadcastSessionList();

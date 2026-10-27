@@ -92,6 +92,10 @@ export async function registerAgent(agentId, taskId, metadata = {}) {
       const { captureCheckoutSeeds } = await import('./completedCheckoutEvidence.js');
       registered.metadata = { ...metadata, checkoutSeeds: await captureCheckoutSeeds(registered) };
     }
+    if (process.platform === 'win32' && ['do-release', 'release-sync'].includes(metadata.taskAnalysisType)) {
+      const { reserveWindowsAgentProcess } = await import('../lib/windowsAgentProcess.js');
+      await reserveWindowsAgentProcess(registered);
+    }
     state.agents[agentId] = registered;
 
     state.stats.agentsSpawned++;

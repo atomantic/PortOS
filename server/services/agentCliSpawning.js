@@ -1,3 +1,4 @@
+import { prepareWindowsAgentLaunch, watchWindowsAgentProcess } from '../lib/windowsAgentProcess.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
@@ -273,7 +274,8 @@ export async function spawnDirectly({
       })
     : { ...preparedSpawn, env: childEnv };
   if (!isolatedSpawn) return null;
-  const { command: spawnCommand, args: spawnArgs } = isolatedSpawn;
+  const launch = prepareWindowsAgentLaunch(agentId, isolatedSpawn.command, isolatedSpawn.args, { cwd, env: isolatedSpawn.env });
+  const { command: spawnCommand, args: spawnArgs } = launch;
 
   const claudeProcess = spawn(spawnCommand, spawnArgs, {
     cwd,
@@ -284,6 +286,7 @@ export async function spawnDirectly({
     // its own signalable process group. See needsProcessGroup.
     detached: processGroup
   });
+  watchWindowsAgentProcess(claudeProcess, launch);
 
   // Remember the detached group so the graceful-shutdown sweep can reach it:
   // detaching moved this child out of the server's own process group, and a
