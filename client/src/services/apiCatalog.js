@@ -206,6 +206,11 @@ export const attachCatalogIngredientMedia = (id, body, options) =>
 export const setCatalogIngredientPortrait = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/media/portrait`, { method: 'POST', body: JSON.stringify(body), ...options });
 
+// Attach a just-rendered image; the server picks portrait vs reference and
+// returns `{ media, kind, attached }` (attached:false when already filed).
+export const attachCatalogIngredientGeneratedImage = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/media/generated`, { method: 'POST', body: JSON.stringify(body), ...options });
+
 export const detachCatalogIngredientMedia = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/media`, { method: 'DELETE', body: JSON.stringify(body), ...options });
 

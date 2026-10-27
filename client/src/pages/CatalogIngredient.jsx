@@ -28,6 +28,7 @@ import {
   restoreCatalogIngredientRevision,
   attachCatalogIngredientMedia,
   setCatalogIngredientPortrait,
+  attachCatalogIngredientGeneratedImage,
   detachCatalogIngredientMedia,
   uploadCatalogIngredientMediaFile,
   recordCatalogIngredientVoiceMemo,
@@ -402,19 +403,18 @@ function IngredientEditor() {
   };
 
   // A freshly-generated image lands in the media library as `<jobId>.png`; wire
-  // it onto this ingredient. First image becomes the portrait (so it shows as
-  // the card thumbnail immediately); later ones attach as references.
+  // it onto this ingredient. The server decides under the ingredient lock: the
+  // first image becomes the portrait (so it shows as the card thumbnail
+  // immediately), later ones references, and a render the completion hook
+  // already filed is left as is (#13833).
   const handleGeneratedImage = useCallback(async (filename) => {
     if (!record || identityReadOnly || !filename) return;
-    const hasPortrait = media.some((m) => m.kind === 'portrait');
-    const ok = await (hasPortrait
-      ? attachCatalogIngredientMedia(record.id, { mediaKey: filename, kind: 'reference' }, { silent: true })
-      : setCatalogIngredientPortrait(record.id, { mediaKey: filename }, { silent: true })
-    ).then(() => true).catch((err) => { toast.error(err?.message || 'Failed to attach generated image'); return false; });
-    if (!ok) return;
+    const result = await attachCatalogIngredientGeneratedImage(record.id, { mediaKey: filename }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Failed to attach generated image'); return null; });
+    if (!result) return;
     refreshMedia();
-    toast.success(hasPortrait ? 'Generated image attached' : 'Generated portrait set');
-  }, [record, media, refreshMedia, identityReadOnly]);
+    toast.success(result.kind === 'portrait' ? 'Generated portrait set' : 'Generated image attached');
+  }, [record, refreshMedia, identityReadOnly]);
 
   // Upload a dropped/picked file straight onto the ingredient. The server picks
   // the media kind (image→reference, audio, video) from the MIME and stores the
