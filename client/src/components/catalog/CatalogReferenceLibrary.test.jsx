@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
+import { MemoryRouter } from 'react-router';
 
 vi.mock('../../services/apiCatalog', () => ({
   updateCatalogIngredientMediaLibrary: vi.fn(async () => ({})),
@@ -13,6 +14,7 @@ vi.mock('../../hooks/useModelInputPreview', () => ({
 vi.mock('../pipeline/MediaJobThumb', () => ({ default: ({ onFilename }) => <button onClick={() => onFilename('refined.png')}>Complete refinement</button> }));
 const api = await import('../../services/apiCatalog');
 const { default: CatalogReferenceLibrary } = await import('./CatalogReferenceLibrary.jsx');
+const { CatalogImagePreviewProvider } = await import('./CatalogImagePreview.jsx');
 
 const media = [
   { mediaKey: 'seven.png', kind: 'reference', library: { variant: { age: 7 }, guide: true, tags: ['vhs'] } },
@@ -144,6 +146,8 @@ describe('CatalogReferenceLibrary', () => {
       return <CatalogReferenceLibrary ingredientId="cast" media={rows} onChanged={onChanged} onMediaUpdated={updated => setRows([updated])} />;
     }
     render(<Gallery />);
+    // Rating an item bad drops it from the default view; refining needs it to stay visible.
+    fireEvent.change(screen.getByLabelText('Rating'), { target: { value: '' } });
     fireEvent.click(screen.getByText(/Review & refine/));
     fireEvent.change(screen.getByLabelText('Reference rating'), { target: { value: 'bad' } });
     fireEvent.change(screen.getByLabelText('Editing guidance'), { target: { value: feedback } });
@@ -205,6 +209,37 @@ describe('CatalogReferenceLibrary', () => {
     expect(screen.queryByTestId('library-row')).toBeNull();
   });
 
+  it('steps through previews with prev/next and rates then advances from the enlarged modal', async () => {
+    function Gallery() {
+      const [rows, setRows] = useState(['a.png', 'b.png', 'c.png'].map(mediaKey => ({ mediaKey, kind: 'reference' })));
+      return <CatalogReferenceLibrary ingredientId="cat-chr-1" media={rows}
+        onMediaUpdated={updated => setRows(prev => prev.map(r => r.mediaKey === updated.mediaKey ? updated : r))} />;
+    }
+    api.updateCatalogIngredientMediaLibrary.mockImplementation(async (_id, body) => ({ mediaKey: body.mediaKey, kind: body.kind, library: { review: body.review } }));
+    render(<MemoryRouter initialEntries={['/?preview=catalog-image%3Aimages%3Ab.png']}><CatalogImagePreviewProvider name="Cat"><Gallery /></CatalogImagePreviewProvider></MemoryRouter>);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('2 / 3')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Previous image' }));
+    expect(await within(await screen.findByRole('dialog')).findByText('1 / 3')).toBeInTheDocument();
+    // Rating bad drops a.png from the default view and moves on to b.png.
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /bad/i }));
+    await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
+      'cat-chr-1', { mediaKey: 'a.png', kind: 'reference', review: { status: 'bad' } }, { silent: true }));
+    expect(await screen.findByText('1 / 2')).toBeInTheDocument();
+  });
+
+  it('defaults to good and unreviewed references, hiding bad and rejected until the filter changes', () => {
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[
+      { mediaKey: 'a.png', kind: 'reference', library: { review: { status: 'good' } } },
+      { mediaKey: 'b.png', kind: 'reference' },
+      { mediaKey: 'c.png', kind: 'reference', library: { review: { status: 'bad' } } },
+      { mediaKey: 'd.png', kind: 'reference', library: { review: { status: 'rejected' } } },
+    ]} />);
+    expect(screen.getAllByTestId('library-row')).toHaveLength(2);
+    fireEvent.change(screen.getByLabelText('Rating'), { target: { value: '' } });
+    expect(screen.getAllByTestId('library-row')).toHaveLength(4);
+  });
+
   it('renders good, bad, and rejected rating buttons on reference image cards and toggles rating', async () => {
     const onChanged = vi.fn();
     render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[
@@ -242,6 +277,9 @@ describe('CatalogReferenceLibrary', () => {
     }));
 
     render(<Gallery />);
+    // Bad items are hidden by the default "Good & unreviewed" filter.
+    expect(screen.queryByTestId('library-row')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Rating'), { target: { value: '' } });
     const ratingGroup = screen.getByRole('group', { name: 'Rating for sample.png' });
     const badBtn = within(ratingGroup).getByRole('button', { name: /bad/i });
     expect(badBtn).toHaveAttribute('aria-pressed', 'true');

@@ -1,4 +1,5 @@
 import { useId, useMemo, useState } from 'react';
+import { useCatalogPreviewSequence } from './CatalogImagePreview';
 import { Ban, Compass, Star, ThumbsDown, ThumbsUp } from 'lucide-react';
 import CatalogMediaTile from './CatalogMediaTile';
 import CatalogReferenceReview from './CatalogReferenceReview';
@@ -7,6 +8,33 @@ import { formatCount } from '../../utils/formatters';
 import { updateCatalogIngredientMediaLibrary, attachCatalogIngredientMediaFromMoodBoard } from '../../services/apiCatalog';
 
 export const MAX_CAST_GUIDES = 4;
+const RATINGS = [
+  { status: 'good', label: 'Good', Icon: ThumbsUp, on: 'border-port-success bg-port-success/20 text-port-success', hover: 'hover:border-port-success hover:text-port-success' },
+  { status: 'bad', label: 'Bad', Icon: ThumbsDown, on: 'border-port-warning bg-port-warning/20 text-port-warning', hover: 'hover:border-port-warning hover:text-port-warning' },
+  { status: 'rejected', label: 'Rejected', Icon: Ban, on: 'border-port-error bg-port-error/20 text-port-error', hover: 'hover:border-port-error hover:text-port-error' },
+];
+// Clicking the active rating clears it back to unreviewed.
+const rateReview = (m, status) => {
+  const review = m.library?.review || {};
+  return { review: { status: (review.status || 'unreviewed') === status ? 'unreviewed' : status, ...(review.feedback ? { feedback: review.feedback } : {}) } };
+};
+
+function RatingButtons({ media, busy, onRate, className = 'grid grid-cols-3 gap-1.5' }) {
+  const current = media.library?.review?.status || 'unreviewed';
+  return (
+    <div role="group" aria-label={`Rating for ${media.mediaKey}`} className={className}>
+      {RATINGS.map(({ status, label, Icon, on, hover }) => (
+        <button key={status} type="button" disabled={busy} aria-pressed={current === status}
+          title={current === status ? `Marked ${status} (click to clear)` : `Mark reference as ${status}`}
+          onClick={() => onRate(status)}
+          className={`flex min-h-11 items-center justify-center gap-1.5 rounded border px-2 text-xs font-medium transition-colors disabled:opacity-40 ${current === status ? on : `border-port-border text-gray-300 ${hover}`}`}>
+          <Icon size={13} aria-hidden="true" /> {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 const ERAS = ['child', 'teen', 'adult', 'elder'];
 const LIBRARY_KINDS = new Set(['portrait', 'reference', 'video']);
 const eraFor = (m) => m.library?.variant?.era
@@ -15,7 +43,7 @@ const eraFor = (m) => m.library?.variant?.era
 export default function CatalogReferenceLibrary({ ingredientId, media = [], forms = [], readOnly = false, onChanged, onMediaUpdated, referenceMedia = media, missingMedia = new Set(), onSetPortrait, onDetach, revision, blockedReason }) {
   const id = useId();
   const [armedDetach, setArmedDetach] = useState(null);
-  const [filter, setFilter] = useState({ form: '', age: '', era: '', tag: '', review: '', guides: false, allMedia: false });
+  const [filter, setFilter] = useState({ form: '', age: '', era: '', tag: '', review: 'active', guides: false, allMedia: false });
   const [error, setError] = useState('');
   const [busyKey, setBusyKey] = useState('');
   const [boardId, setBoardId] = useState('');
@@ -36,7 +64,7 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
     && (filter.age === '' || m.library?.variant?.age === Number(filter.age))
     && (!filter.era || eraFor(m) === filter.era)
     && (!filter.tag || (m.library?.tags || []).includes(filter.tag))
-    && (!filter.review || (m.library?.review?.status || 'unreviewed') === filter.review)
+    && (!filter.review || (filter.review === 'active' ? !['bad', 'rejected'].includes(m.library?.review?.status) : (m.library?.review?.status || 'unreviewed') === filter.review))
     && (!filter.guides || (m.library?.guide === true && !rejected.has(m.mediaKey))));
 
   // One visual can have both portrait and reference attachments with independent metadata.
@@ -46,6 +74,26 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(m);
   }
+
+  // Enlarged previews step through the filtered images and rate in place.
+  const tilesByKey = new Map();
+  for (const [, attachments] of groups) {
+    const tile = attachments.find((m) => m.kind === 'portrait') || attachments[0];
+    if (tile.kind !== 'video') tilesByKey.set(tile.mediaKey, tile);
+  }
+  const sequenceKeys = [...tilesByKey.keys()];
+  const sequence = useMemo(() => ({
+    keys: sequenceKeys,
+    render: (key, { nextKey, prevKey, goTo }) => {
+      const m = tilesByKey.get(key);
+      if (!m || readOnly || m.readOnly) return null;
+      // The rated image may leave the filtered list, so step on to a neighbor.
+      return <RatingButtons media={m} busy={!!busyKey} className="grid min-w-0 flex-1 basis-60 grid-cols-3 gap-1.5"
+        onRate={async (status) => { if (await save(m, rateReview(m, status))) goTo(nextKey ?? prevKey); }} />;
+    },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [sequenceKeys.join('|'), media, busyKey, readOnly]);
+  useCatalogPreviewSequence(sequence);
 
   const save = async (m, patch) => {
     setError('');
@@ -126,6 +174,7 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
         </label>
         <label htmlFor={`${id}-review`} className="min-w-0 space-y-1"><span>Rating</span>
           <select id={`${id}-review`} value={filter.review} onChange={event => setFilter({ ...filter, review: event.target.value })} className={fieldClass}>
+            <option value="active">Good &amp; unreviewed</option>
             <option value="">All ratings</option>
             {['unreviewed', 'good', 'bad', 'rejected'].map(value => <option key={value} value={value}>{value}</option>)}
           </select>
@@ -161,65 +210,8 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
                       </div>
                       <p className="text-xs text-gray-400 [overflow-wrap:anywhere]">{summary}</p>
                       {m.kind !== 'video' && (editable ? (
-                        <div role="group" aria-label={`Rating for ${m.mediaKey}`} className="grid grid-cols-3 gap-1.5">
-                          <button
-                            type="button"
-                            disabled={!!busyKey}
-                            aria-pressed={currentStatus === 'good'}
-                            title={currentStatus === 'good' ? 'Marked good (click to clear)' : 'Mark reference as good'}
-                            onClick={() => save(m, {
-                              review: {
-                                status: currentStatus === 'good' ? 'unreviewed' : 'good',
-                                ...(review.feedback ? { feedback: review.feedback } : {}),
-                              },
-                            })}
-                            className={`flex min-h-11 items-center justify-center gap-1.5 rounded border px-2 text-xs font-medium transition-colors disabled:opacity-40 ${
-                              currentStatus === 'good'
-                                ? 'border-port-success bg-port-success/20 text-port-success'
-                                : 'border-port-border text-gray-300 hover:border-port-success hover:text-port-success'
-                            }`}
-                          >
-                            <ThumbsUp size={13} aria-hidden="true" /> Good
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!!busyKey}
-                            aria-pressed={currentStatus === 'bad'}
-                            title={currentStatus === 'bad' ? 'Marked bad (click to clear)' : 'Mark reference as bad'}
-                            onClick={() => save(m, {
-                              review: {
-                                status: currentStatus === 'bad' ? 'unreviewed' : 'bad',
-                                ...(review.feedback ? { feedback: review.feedback } : {}),
-                              },
-                            })}
-                            className={`flex min-h-11 items-center justify-center gap-1.5 rounded border px-2 text-xs font-medium transition-colors disabled:opacity-40 ${
-                              currentStatus === 'bad'
-                                ? 'border-port-warning bg-port-warning/20 text-port-warning'
-                                : 'border-port-border text-gray-300 hover:border-port-warning hover:text-port-warning'
-                            }`}
-                          >
-                            <ThumbsDown size={13} aria-hidden="true" /> Bad
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!!busyKey}
-                            aria-pressed={currentStatus === 'rejected'}
-                            title={currentStatus === 'rejected' ? 'Marked rejected (click to clear)' : 'Mark reference as rejected'}
-                            onClick={() => save(m, {
-                              review: {
-                                status: currentStatus === 'rejected' ? 'unreviewed' : 'rejected',
-                                ...(review.feedback ? { feedback: review.feedback } : {}),
-                              },
-                            })}
-                            className={`flex min-h-11 items-center justify-center gap-1.5 rounded border px-2 text-xs font-medium transition-colors disabled:opacity-40 ${
-                              currentStatus === 'rejected'
-                                ? 'border-port-error bg-port-error/20 text-port-error'
-                                : 'border-port-border text-gray-300 hover:border-port-error hover:text-port-error'
-                            }`}
-                          >
-                            <Ban size={13} aria-hidden="true" /> Rejected
-                          </button>
-                        </div>
+                        <RatingButtons media={m} busy={!!busyKey} onRate={(status) => save(m, rateReview(m, status))} />
+                        
                       ) : currentStatus !== 'unreviewed' && (
                         <p className={`text-xs font-medium capitalize ${
                           currentStatus === 'good' ? 'text-port-success' : currentStatus === 'bad' ? 'text-port-warning' : 'text-port-error'
