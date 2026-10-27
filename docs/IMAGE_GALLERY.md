@@ -31,7 +31,8 @@ The LoRA import dialog and Image Gen use this page contract. Image Gen requests
 hidden matches of the same search/favorite scope independently of the page's
 `hidden` filter. Expanding hidden images loads 60 at a time. `starred=true`
 filters against the local author's stars before LIMIT (a peer's star alone does
-not qualify). Favorites consult the authoritative annotation map; that metadata
+not qualify). `rating=good|bad` filters the same way against the local
+author's good/bad rating (Media History's Good and Bad chips). Favorites and ratings consult the authoritative annotation map; that metadata
 read remains proportional to the number of annotations, while image rows and
 payloads stay bounded. Background render completions refresh only the recent
 window and totals, preserving loaded hidden pages. Explicit gallery mutations

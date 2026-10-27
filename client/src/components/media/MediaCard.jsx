@@ -1,5 +1,5 @@
 import { memo, useState } from 'react';
-import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maximize2, Wand2, Star, MessageSquare, Pencil, Box, Timer } from 'lucide-react';
+import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maximize2, Wand2, Star, MessageSquare, Pencil, Box, Timer, ThumbsUp, ThumbsDown } from 'lucide-react';
 import MediaImage from '../MediaImage';
 import AddToCollectionMenu from './AddToCollectionMenu';
 import PinToMoodBoardMenu from './PinToMoodBoardMenu';
@@ -88,6 +88,7 @@ function MediaCard({
   showCollectionMenu = true,
   showMoodBoardMenu = true,
   starred = false,
+  rating = null,
   hasNote = false,
   onToggleStar,
   onAnnotate,
@@ -169,7 +170,7 @@ function MediaCard({
             {selectionLabel}
           </div>
         )}
-        {(onToggleStar || starred || hasNote) && (
+        {(onToggleStar || starred || hasNote || rating) && (
           <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 pointer-events-none">
             {onToggleStar && (
               <button
@@ -186,6 +187,15 @@ function MediaCard({
                   <Star className={`w-3.5 h-3.5 ${starred ? 'fill-current' : ''}`} />
                 </span>
               </button>
+            )}
+            {rating && (
+              <span
+                className={`pointer-events-auto p-1 rounded-full text-white ${rating === 'good' ? 'bg-port-success/90' : 'bg-port-error/90'}`}
+                title={rating === 'good' ? 'Rated good' : 'Rated bad'}
+                aria-label={rating === 'good' ? 'Rated good' : 'Rated bad'}
+              >
+                {rating === 'good' ? <ThumbsUp className="w-3 h-3" /> : <ThumbsDown className="w-3 h-3" />}
+              </span>
             )}
             {hasNote && (
               <span

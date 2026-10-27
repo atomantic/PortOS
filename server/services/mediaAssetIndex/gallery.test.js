@@ -117,6 +117,17 @@ describe('recent image filters', () => {
     expect(disk).not.toHaveBeenCalled();
   });
 
+  it('scopes a page to the local author\'s good or bad rating in the file escape hatch', async () => {
+    const disk = vi.fn(async () => [{ filename: 'keep.png' }, { filename: 'junk.png' }, { filename: 'plain.png' }]);
+    listAnnotations.mockResolvedValue({
+      'image:keep.png': { own: { starred: false, rating: 'good' } },
+      'image:junk.png': { own: { starred: true, rating: 'bad' }, others: [{ rating: 'good' }] },
+      'image:plain.png': { own: null, others: [{ rating: 'bad' }] },
+    });
+    expect((await listGalleryPage({ limit: 5, rating: 'bad' }, disk)).items).toEqual([{ filename: 'junk.png' }]);
+    expect((await listGalleryPage({ limit: 5, rating: 'good', starred: true }, disk)).items).toEqual([]);
+  });
+
   it('uses exact filename lookup for older deep links and handles empty own favorites in the file escape hatch', async () => {
     const disk = vi.fn(async () => [
       { filename: 'new.png' }, { filename: 'older.png', hidden: true },

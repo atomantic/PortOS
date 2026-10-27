@@ -13,8 +13,10 @@ import { PreviewContext, SequenceContext, catalogImageItem, safeBasename } from 
 // `catalog-image:<mount>:<file>` links this page wrote before.
 // A panel can register an ordered `sequence` ({ keys, render }) via
 // useCatalogPreviewSequence: prev/next then steps over `keys` (image
-// filenames) and `render(key, { nextKey, prevKey, goTo })` adds the page's own
-// controls (rating, guide, primary, remove) to the viewer's side pane.
+// filenames), `render(key, { nextKey, prevKey, goTo })` adds the page's own
+// controls (guide, primary, remove) to the viewer's side pane, and
+// `rating(key, nav)` puts the record's reference rating in the viewer's
+// standard good/bad slot.
 export function useCatalogPreviewSequence(sequence) {
   const setSequence = useContext(SequenceContext);
   useEffect(() => {
@@ -45,7 +47,9 @@ export function CatalogImagePreviewProvider({ children }) {
   const prevKey = index > 0 ? sequence.keys[index - 1] : null;
   const nextKey = index >= 0 && index < sequence.keys.length - 1 ? sequence.keys[index + 1] : null;
   const goTo = (key) => setPreview(key ? catalogImageItem('images', key) : null);
-  const pageActions = index >= 0 ? sequence.render?.(preview.filename, { nextKey, prevKey, goTo }) : null;
+  const nav = { nextKey, prevKey, goTo };
+  const pageActions = index >= 0 ? sequence.render?.(preview.filename, nav) : null;
+  const ratingControl = index >= 0 ? sequence.rating?.(preview.filename, nav) ?? null : null;
   return (
     <PreviewContext.Provider value={setPreview}>
       <SequenceContext.Provider value={setSequence}>
@@ -58,6 +62,7 @@ export function CatalogImagePreviewProvider({ children }) {
         annotations={annotations}
         updateAnnotation={updateAnnotation}
         pageActions={pageActions}
+        ratingControl={ratingControl}
         {...(preview?.filename ? {
           onRemix: actions.handleRemix,
           onSendToImage: actions.handleSendToImage,

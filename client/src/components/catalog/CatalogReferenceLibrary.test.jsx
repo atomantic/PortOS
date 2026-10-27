@@ -236,7 +236,8 @@ describe('CatalogReferenceLibrary', () => {
     // The page's own controls sit in the viewer beside the standard actions.
     expect(within(dialog).getByRole('button', { name: 'Film look' })).toBeInTheDocument();
     // Rating bad drops a.png from the default view and moves on to b.png.
-    fireEvent.click(within(within(dialog).getByTestId('page-actions')).getByRole('button', { name: /bad/i }));
+    // The record's rating takes the viewer's standard good/bad slot.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Bad' }));
     await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
       'cat-chr-1', { mediaKey: 'a.png', kind: 'reference', review: { status: 'bad' } }, { silent: true }));
     expect(await screen.findByRole('dialog', { name: 'Media viewer — b.png' })).toBeInTheDocument();

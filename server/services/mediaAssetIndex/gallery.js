@@ -11,7 +11,7 @@ const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : 0
 const text = value => typeof value === 'string' && value.trim() ? value : null;
 const readImages = async diskReader => (diskReader || (await import('../imageGen/local.js')).listGallery)();
 
-async function resolveScope({ collectionId, starred, mediaKeys, collectionSnapshot }) {
+async function resolveScope({ collectionId, starred, rating, mediaKeys, collectionSnapshot }) {
   let keys = mediaKeys;
   let excludeKeys;
   let orderedKeys;
@@ -27,24 +27,24 @@ async function resolveScope({ collectionId, starred, mediaKeys, collectionSnapsh
       keys = keys ? keys.filter(key => orderedKeys.includes(key)) : orderedKeys;
     }
   }
-  if (starred) {
+  if (starred || rating) {
     const annotations = await (await import('../mediaAnnotations.js')).listAnnotations();
-    const ownStars = Object.entries(annotations).filter(([, entry]) => entry.own?.starred).map(([key]) => key);
-    keys = keys ? keys.filter(key => ownStars.includes(key)) : ownStars;
+    const own = Object.entries(annotations).filter(([, entry]) => (!starred || entry.own?.starred) && (!rating || entry.own?.rating === rating)).map(([key]) => key);
+    keys = keys ? keys.filter(key => own.includes(key)) : own;
   }
   return { mediaKeys: keys, excludeKeys, orderedKeys, collection };
 }
 
 /** Bounded reads; sidecars remain the reconcile authority and test escape hatch. */
 export async function listGalleryPage({
-  limit = 60, offset = 0, q = '', hidden, filename, starred = false, summary = false, compact = false,
+  limit = 60, offset = 0, q = '', hidden, filename, starred = false, rating, summary = false, compact = false,
   kind = 'image', media = false, cover = false, videoSnapshot, collectionSnapshot, collectionId, universeId, entryCategory, entryKind, mediaKeys,
 } = {}, diskReader) {
   const mixed = media || kind !== 'image';
   const videoReader = mixed && videoSnapshot == null ? await import('../videoGen/history.js') : null;
   const videos = mixed ? videoSnapshot ?? await (compact && !q.trim()
     ? videoReader.loadCompactHistory() : videoReader.loadHistory()) : undefined;
-  const scope = await resolveScope({ collectionId, starred, mediaKeys, collectionSnapshot });
+  const scope = await resolveScope({ collectionId, starred, rating, mediaKeys, collectionSnapshot });
   const filters = { kind: kind === 'all' ? undefined : kind, q, hidden, filename,
     universeId, entryCategory, entryKind, mediaKeys: scope.mediaKeys, excludeKeys: scope.excludeKeys, videos };
   let items;
@@ -74,8 +74,8 @@ export async function listGalleryPage({
     total = visible.length;
     hiddenTotal = matches.filter(row => !!row.data.hidden).length;
     if (summary && mixed) {
-      // Kind-chip counts follow search and collection, before kind/favorites.
-      const countScope = starred ? await resolveScope({ collectionId, mediaKeys, collectionSnapshot }) : scope;
+      // Kind-chip counts follow search and collection, before kind/favorites/rating.
+      const countScope = starred || rating ? await resolveScope({ collectionId, mediaKeys, collectionSnapshot }) : scope;
       const counted = candidates.filter(row => matching(row, { ...filters, kind: undefined }, countScope)
         && (hidden === undefined || !!row.data.hidden === hidden));
       counts = { image: counted.filter(row => row.kind === 'image').length,
@@ -87,7 +87,7 @@ export async function listGalleryPage({
   } else if (summary && mixed) {
     // The DB reader returns compact rows itself: without a search it never
     // sends or buffers full prompts/detail bodies (#9676).
-    const countScope = starred ? await resolveScope({ collectionId, mediaKeys, collectionSnapshot }) : scope;
+    const countScope = starred || rating ? await resolveScope({ collectionId, mediaKeys, collectionSnapshot }) : scope;
     ({ items, total, hiddenTotal, counts } = await listMixedGalleryPage({
       ...filters, limit, offset, orderedKeys: scope.orderedKeys, cover, countMediaKeys: countScope.mediaKeys, compact,
     }));

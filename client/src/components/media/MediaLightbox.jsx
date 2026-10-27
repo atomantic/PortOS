@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser, Wand2,
-  ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye, Aperture,
+  ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye, Aperture, ThumbsUp, ThumbsDown,
 } from 'lucide-react';
 import VideoStartTrimControl from './VideoStartTrimControl';
 import PromptRefineModal from './PromptRefineModal';
@@ -121,6 +121,11 @@ function describeImageExecution(item) {
 // `{ look, onSave, name }` — lets the pane read and write the hosting music
 // video project's finishing look.
 //
+// Good/bad rating sits beside the star. By default it is the media item's own
+// rating (synced like stars and notes); a page that rates items in its own
+// store (a catalog reference) passes `ratingControl` — `{ value, onRate(next),
+// busy, title }` with `next` 'good' | 'bad' | null — and that replaces it.
+//
 // pageActions — optional node with the hosting page's own controls for this
 // item (a catalog reference's rating, guide and remove buttons). It sits at the
 // top of the details pane so page-specific actions stay in place beside the
@@ -159,6 +164,7 @@ export default function MediaLightbox({
   onFilmLookComplete,
   filmLookProject = null,
   pageActions = null,
+  ratingControl = null,
 }) {
   const [fullScreen, setFullScreen] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
@@ -524,6 +530,7 @@ export default function MediaLightbox({
             onRefine={item.compact ? undefined : () => setRefineOpen(true)}
             onPromptFrom={item.filename || item.id ? () => setPromptFromOpen(true) : undefined}
             pageActions={pageActions}
+            rating={ratingControl || (onAnnotationChange ? { value: annotation?.rating ?? null, onRate: (next) => onAnnotationChange({ rating: next }) } : null)}
             annotation={annotation}
             onAnnotationChange={onAnnotationChange}
             onPromptChange={item.compact ? undefined : onPromptChange}
@@ -574,7 +581,7 @@ function SettingsPane({
   onClose, onRemix, onSendToImage, onSendToVideo, onSendTo3d, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
   copy, onRefine, onPromptFrom,
   annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead, onTrimStart, videoRef,
-  variantGroup, onSelectVariant, onFilmLook, pageActions,
+  variantGroup, onSelectVariant, onFilmLook, pageActions, rating,
 }) {
   const [posterSaving, setPosterSaving] = useState(false);
   const [posterError, setPosterError] = useState(null);
@@ -706,7 +713,19 @@ function SettingsPane({
       {item.raw?.appId && <a className="block p-3 text-port-accent" href={`/apps/${encodeURIComponent(item.raw.appId)}/overview`}>Open source app</a>}
       <header className="shrink-0 flex items-center justify-between p-3 border-b border-port-border">
         <span className="text-xs uppercase tracking-wide text-gray-400">{isVideo ? 'Video' : 'Image'} settings</span>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
+          {rating && [['good', ThumbsUp, 'bg-port-success/90 text-white'], ['bad', ThumbsDown, 'bg-port-error/90 text-white']].map(([value, Icon, on]) => {
+            const active = rating.value === value;
+            return (
+              <button key={value} type="button" disabled={rating.busy} aria-pressed={active}
+                onClick={() => rating.onRate(active ? null : value)}
+                className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded disabled:opacity-50 ${active ? on : 'text-gray-400 hover:text-white hover:bg-port-border/50'}`}
+                aria-label={value === 'good' ? 'Good' : 'Bad'}
+                title={active ? `Rated ${value} (tap to clear)` : (rating.title?.[value] || (value === 'good' ? 'Good: keep it' : 'Bad: a file to clean up'))}>
+                <Icon className="w-4 h-4" />
+              </button>
+            );
+          })}
           {onAnnotationChange && (
             <button
               type="button"
