@@ -527,7 +527,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // back onto the newer peer. Backend values in `IMAGE_GEN_MODES` /
   // `VIDEO_GEN_MODES` are pinned in schemaVersions.test.js to move with this.
   // v11 adds Runway image backend pins; older peers would erase the unknown mode.
-  fableLoom: 11,
+  // v12 records exact per-render request input identities, prompts and visual
+  // profile. Older sanitizers strip them; old inbound edits preserve them only
+  // for the same render when the v11-representable manifest still matches.
+  fableLoom: 12,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).
