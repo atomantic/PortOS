@@ -16,7 +16,8 @@ its first camera shot:
   with north at −Z and east at +X. Skaters enter through doors on the north-west
   into a small lobby with check-in and video games. From there a 1.7 m walkway,
   room for two people to pass, runs east between the north wall and the rink. The
-  36 × 23 m rink meets the south and west walls, and its east wall runs straight to
+  38 × 24.5 m rink (about 10,000 sq ft, the documented size of the original maple
+  floor) meets the south and west walls, and its east wall runs straight to
   the south wall; the sound booth looks onto it through a window in the west wall.
   A regulation WFTDA flat track for roller derby, with its infield, jammer line and
   pivot line, sits in the middle of the rink with room for the 10 ft safety zone.
