@@ -546,7 +546,7 @@ describe('claim-work single-source routing', () => {
 
   it('selects the delegated prompt body (promptTaskType), honoring a direct claim-work customization', () => {
     expect(GEN_SRC).toContain('promptKeyForBody');
-    expect(GEN_SRC).toContain('await getTaskPrompt(promptKeyForBody)');
+    expect(GEN_SRC).toContain('await getTaskPrompt(promptKeyForBody,');
     // A claim-work customization (interval.prompt) wins; otherwise delegate.
     expect(GEN_SRC).toMatch(/promptKeyForBody\s*=\s*\(taskType === 'claim-work' && !interval\.prompt\)\s*\?\s*promptTaskType\s*:\s*taskType/);
   });
@@ -728,14 +728,14 @@ describe('work-item target', () => {
       expect(block.trimEnd().endsWith('</portos-prefetched-issue>')).toBe(true);
     });
 
-    it('caps direct service payloads before they reach the agent prompt', () => {
+    it('preserves direct issue payloads without truncation', () => {
       const block = buildPrefetchedIssueContextBlock('claim-issue', '42', {
         ...issueContext,
         body: 'x'.repeat(20_000)
       });
 
       expect(block).toContain('x'.repeat(12_000));
-      expect(block).not.toContain('x'.repeat(12_001));
+      expect(block).toContain('x'.repeat(20_000));
     });
   });
 
@@ -750,12 +750,12 @@ describe('work-item target', () => {
       expect(block).toContain('safety, ownership, verification, reviewer, or PR requirements');
     });
 
-    it('omits blank guidance and caps direct service payloads', () => {
+    it('omits blank guidance and preserves direct guidance without truncation', () => {
       expect(buildClaimOverrideContextBlock('   ')).toBe('');
 
       const block = buildClaimOverrideContextBlock('x'.repeat(8_000));
       expect(block).toContain('x'.repeat(4_000));
-      expect(block).not.toContain('x'.repeat(4_001));
+      expect(block).toContain('x'.repeat(8_000));
     });
   });
 

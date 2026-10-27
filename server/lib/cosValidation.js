@@ -121,8 +121,8 @@ const slashdoCommandSchema = z.string().refine(isValidSlashdoCommand, {
 
 // The app Issues tab already fetched the selected forge issue while listing the
 // page. Keep that payload bounded when it is carried into a manual claim so the
-// prompt cannot be inflated by a hand-crafted request. The generator truncates
-// direct service calls too; this is the route boundary for browser requests.
+// prompt cannot be inflated by a hand-crafted request. Oversized requests are
+// rejected at the route boundary instead of silently truncating issue content.
 const prefetchedIssueContextSchema = z.object({
   number: z.number().int().positive(),
   title: z.string().max(1000).optional(),

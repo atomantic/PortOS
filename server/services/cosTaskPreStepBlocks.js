@@ -1112,7 +1112,8 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
     .replace(/\{modeInstructions\}/g, () => blocks.modeInstructions || '')
     .replace(/\{trackerInstructions\}/g, () => blocks.trackerInstructions);
 
-  return reviewerIdentityNotice + applyAppPlaceholders(withBlocks, app)
+  const claimPolicyFirst = promptTaskType === 'claim-issue' || promptTaskType === 'claim-issue-gitlab';
+  return (claimPolicyFirst ? '' : reviewerIdentityNotice) + applyAppPlaceholders(withBlocks, app)
     // Function form — reviewersCsv can carry a user-set reviewerModels pin,
     // and normalizeReviewerModel allows `$` in that free text (only `[`, `]`,
     // `,`, and line breaks/tabs are forbidden), so a string replacement would
@@ -1134,6 +1135,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
     .replace(/\{repoFullName\}/g, () => blocks.repoFullName)
     .replace(/\{defaultBranch\}/g, () => blocks.defaultBranch)
     .replace(/\{planConstraint\}/g, () => blocks.planConstraint)
+    + (claimPolicyFirst ? reviewerIdentityNotice : '')
     // The effort note and the local-reviewer procedure accompany the reviewer
     // CSV, so they are appended only when this template actually carries one. A
     // task type whose prompt does NOT drive its own reviewers gets its PR

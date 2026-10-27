@@ -3,10 +3,10 @@ import { LOCAL_REVIEW_ATTRIBUTION_GUIDE } from '../../lib/localReviewBridge.js';
 import { shellQuote } from '../../lib/shellQuote.js';
 
 /** Runtime identity reaches stored/custom claim prompts without rewriting them. */
-export function buildPrAttributionSection({ model = null, forgeCli = 'gh' } = {}) {
+export function buildPrAttributionSection({ model = null, forgeCli = 'gh', includeReview = true } = {}) {
   // A provider name identifies a runner, not the model that opened the PR.
   const id = normalizePlannerId(model);
-  const reviewNote = `\n\nBefore pre-PR review/creation READ \`${LOCAL_REVIEW_ATTRIBUTION_GUIDE}\`: apply/verify additive \`reviewer:<model>\` labels from executed reviews only. Preserve existing labels; exclude configured/queued reviewers and requested forge users.`;
+  const reviewNote = includeReview ? `\n\nBefore pre-PR review/creation READ \`${LOCAL_REVIEW_ATTRIBUTION_GUIDE}\`: apply/verify additive \`reviewer:<model>\` labels from executed reviews only. Preserve existing labels; exclude configured/queued reviewers and requested forge users.` : '';
   const heading = '## PR Model Attribution';
   if (!id) return `${heading}\n\nWhen opening a PR/MR, use the model supplied by your trusted execution context for an implementer:<model> label (implementer::<model> on GitLab). PortOS did not resolve a model for this run. Never guess from your provider name, issue routing labels, reviewer model, or self-identification. If no model can be verified, report the missing attribution in your completion summary.${reviewNote}`;
   const cli = forgeCli === 'glab' ? 'glab' : 'gh';

@@ -105,6 +105,28 @@ const generate = async (taskType = 'ux') => {
   return prepared.task;
 };
 
+it('dispatches a scheduled claim using the resolved app completion policy', async () => {
+  const { getTaskPrompt } = await import('./taskPromptService.js');
+  const realService = await vi.importActual('./taskPromptService.js');
+  const prior = getTaskPrompt.getMockImplementation();
+  getTaskPrompt.mockImplementation(realService.getTaskPrompt);
+  getTaskIntervalMock.mockResolvedValue({ type: 'weekly', taskMetadata: {} });
+  getAppTaskTypeOverridesMock.mockResolvedValue({});
+  getCodeReviewDefaultsMock.mockResolvedValue({ reviewers: ['codex'], usernames: [], optionalReviewers: [] });
+  try {
+    for (const policy of ['merge-on-green', 'leave-open']) {
+      const result = await prepareManagedAppImprovementTask('claim-issue', { ...APP, defaultPrCompletion: policy }, STATE, { skipPreconditions: true });
+      expect(result.task.metadata.prCompletion).toBe(policy);
+      expect(result.task.description).toContain(`Effective PR completion policy: ${policy}`);
+      expect(result.task.description).toContain('gh issue list --state open');
+      expect(result.task.description.includes('Run each LOCAL reviewer')).toBe(policy === 'leave-open');
+      expect(result.task.description.includes('gh pr merge')).toBe(policy === 'merge-on-green');
+    }
+  } finally {
+    getTaskPrompt.mockImplementation(prior);
+  }
+});
+
 describe('per-app provider/model pin on a task type with no buildTaskInput hook', () => {
   beforeEach(() => {
     vi.clearAllMocks();

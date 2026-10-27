@@ -36,6 +36,7 @@ import {
   REFERENCE_WATCH_AUDITED_VERSION,
   promptMatchesShippedDefault
 } from './taskPromptDefaults.js';
+import { composeClaimIssuePrompt } from './taskPromptDefaults/prompts.js';
 
 // Re-export the prompt data/compat constants so existing importers of this
 // module keep working unchanged after the leaf split.
@@ -147,9 +148,11 @@ async function resolvePromptPlaceholders(prompt) {
   return prompt;
 }
 
-export async function getTaskPrompt(taskType, { claimFlow = false } = {}) {
+export async function getTaskPrompt(taskType, { claimFlow = false, claimIssueOptions = null, withSource = false } = {}) {
   const interval = await getTaskInterval(taskType);
-  const storedDefault = claimFlow && promptMatchesShippedDefault(interval.prompt, taskType);
+  const storedDefault = claimFlow && interval.promptSource !== 'user'
+    && promptMatchesShippedDefault(interval.prompt, taskType);
+  const customized = Boolean(interval.prompt && !storedDefault);
   let prompt = (interval.prompt && !storedDefault ? interval.prompt : null)
     || (claimFlow ? CLAIM_FLOW_DEFAULT_PROMPTS[taskType] : null)
     || DEFAULT_TASK_PROMPTS[taskType]
@@ -160,7 +163,18 @@ Repository: {repoPath}
 Perform ${taskType} analysis on {appName}.
 Analyze the codebase and make improvements. Commit changes with clear descriptions.`;
 
-  return resolvePromptPlaceholders(prompt);
+  // Compose only a recognized shipped default. A stored user prompt remains
+  // intact, including text that resembles a shipped section or phase heading.
+  const composed = claimFlow && !customized && claimIssueOptions
+    && (taskType === 'claim-issue' || taskType === 'claim-issue-gitlab');
+  if (composed) {
+    prompt = composeClaimIssuePrompt({
+      ...claimIssueOptions,
+      forge: taskType === 'claim-issue' ? 'github' : 'gitlab',
+    });
+  }
+  const resolvedPrompt = await resolvePromptPlaceholders(prompt);
+  return withSource ? { prompt: resolvedPrompt, composed: Boolean(composed) } : resolvedPrompt;
 }
 
 /**
