@@ -25,7 +25,7 @@ import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { realpathSync, constants } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { lstat, stat, realpath, readlink, readdir, opendir, readFile, chmod, open, mkdir, mkdtemp, unlink, symlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { tmpdir, devNull } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve, relative, sep } from 'node:path';
 import { sameRetirementCheckout, unresolvedRetirements } from '../lib/reconcileRetirementEvidence.js';
@@ -717,6 +717,26 @@ async function retirementPolicy(repoPath, branch, opts, reviewIdentity = {}) {
       head: identity.tip, allowLocked: true }).catch(() => null);
     if (!generation) return initial;
     identity = { ...identity, checkoutIncarnation: generation.incarnation };
+  }
+  // The explicitly released named copy may predate a separate review checkout.
+  // Retain that original's obligation; prove its captured commits are contained
+  // in this exact merged source instead of treating its old verdict as this copy's owner.
+  if (!identity.detachedCheckoutIdentity && identity.retirementForge?.scopeProof === 'exact-delivered-head') {
+    const { completedCheckoutReceiptValid } = await import('./completedCheckoutEvidence.js');
+    const siblings = Array.isArray(policies) ? policies.flatMap(agent => agent.status === 'completed' && Array.isArray(agent.metadata?.completedCheckouts)
+      ? agent.metadata.completedCheckouts.filter(row => completedCheckoutReceiptValid(agent, row)
+        && row.branch === branch && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(row.head || ''))
+        .map(row => ({ agent, row })) : []) : [];
+    const repository = await realpath(repoPath).catch(() => null);
+    const namedSiblingCaptures = [];
+    if (repository && siblings.length <= 25) for (const { agent, row } of siblings) {
+      if (await realpath(row.repoPath).catch(() => null) !== repository) continue;
+      const included = await execGit(['--no-replace-objects', '-c', 'core.commitGraph=false', 'merge-base', '--is-ancestor', row.head, identity.tip], repoPath,
+        { ignoreExitCode: true, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_GRAFT_FILE: devNull } });
+      if (included.exitCode === 0) namedSiblingCaptures.push({ agentId: agent.id, capturedHead: row.head, capturedAt: row.capturedAt,
+        path: row.path, incarnation: row.incarnation, checkoutIncarnation: identity.checkoutIncarnation });
+    }
+    identity = { ...identity, namedSiblingCaptures };
   }
   const resumed = reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...identity, checkoutIdentities });
   if (!resumed.reason) return resumed;
@@ -1879,7 +1899,8 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, branch, review.prUrl, reviewForgeOptions(release, review.kind, opts)).catch(() => null);
     const policies = reviewed.review.policy?.policies || [];
     const captured = policies.find(row => row.continuedDelivery)?.continuedDelivery.checkoutIncarnation
-      || policies.find(row => row.resumedCleanup)?.resumedCleanup.checkoutIncarnation;
+      || policies.find(row => row.resumedCleanup)?.resumedCleanup.checkoutIncarnation
+      || policies.find(row => row.retainedSiblingObligation?.releasedCopyIncarnation)?.retainedSiblingObligation.releasedCopyIncarnation;
     const identity = await integratedPolicyReviewIdentity(repoPath, release, review.prUrl, forge, captured);
     const policy = identity ? await retirementPolicy(repoPath, branch, opts, identity) : null;
     if (JSON.stringify(policy) !== JSON.stringify(reviewed.review.policy) || JSON.stringify(forge) !== JSON.stringify(reviewed.review.forge)) {

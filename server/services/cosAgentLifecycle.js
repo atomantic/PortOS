@@ -369,6 +369,29 @@ export async function recordCompletionCleanup(agentId, startedAt, patch) {
   return saved && matched;
 }
 
+/** Settle only an earlier run's physical cleanup after its verified successor.
+ * Keep the original unknown capture and failed execution verdict explicit. */
+export async function recordSuccessorCheckoutRetirement(agentId, expected, proof) {
+  let matched = false;
+  const saved = await updateCompletionReceipt(agentId, (metadata, agent) => {
+    if (agent.status !== 'completed' || agent.startedAt !== expected.startedAt || agent.taskId !== expected.taskId
+      || !isDeepStrictEqual(metadata, expected.metadata) || metadata.checkoutCapture?.status !== 'pending'
+      || metadata.checkoutCapture.unknown !== true || metadata.completionCleanup?.status !== 'pending') return metadata;
+    const stages = metadata.completionCleanup.stages;
+    if (!stages || !stages.worktree || ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].some(key => stages[key]?.status !== 'done')
+      || Object.entries(stages).some(([key, stage]) => key !== 'worktree' && stage.status !== 'done')) return metadata;
+    matched = true;
+    const completionCleanup = { ...metadata.completionCleanup, status: 'completed', updatedAt: new Date().toISOString(),
+      stages: { ...stages, worktree: { status: 'done', retryable: false, verifiedBy: 'delivered-successor', successorAgentId: proof.successorAgentId } } };
+    delete completionCleanup.context; delete completionCleanup.replay;
+    return { ...metadata, completionCleanup,
+      checkoutCapture: { ...metadata.checkoutCapture, status: 'retired', reason: 'retired-by-verified-successor', ...proof },
+      repoStateVerification: { ...metadata.repoStateVerification, status: 'completed', reasons: [],
+        checkedAt: new Date().toISOString(), deliveryVerifiedBySuccessor: proof.successorAgentId } };
+  });
+  return saved && matched;
+}
+
 /** Commit receipt-backed verification and ledger settlement together. Removing
  * replay proof before the verification write would strand a crash/restart. */
 export async function settleAbsentTaskCompletion(agentId, expected) {
