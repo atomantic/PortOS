@@ -17,6 +17,14 @@ describe('buildOpenApiSpec', () => {
     expect(spec.components.securitySchemes.basicAuth).toBeDefined();
   });
 
+  it('documents selected merged cleanup and its fail-closed request scope', () => {
+    const spec = buildInternalOpenApiSpec({});
+    const body = spec.paths['/api/git/cleanup-merged'].post.requestBody.content['application/json'].schema;
+    expect(body.properties.branches).toMatchObject({ type: 'array', minItems: 1, maxItems: 100, items: { type: 'string' } });
+    expect(body.required).toEqual(['path']);
+    expect(body.additionalProperties).toBe(false);
+  });
+
   it('includes NO paths when nothing is exposed', () => {
     const spec = buildOpenApiSpec({}, {});
     expect(Object.keys(spec.paths)).toHaveLength(0);

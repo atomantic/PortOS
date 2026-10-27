@@ -2095,9 +2095,11 @@ export async function deleteMergedRemoteBranches(dir, names, { defaultBranch, ex
  * @param {Set<string>} options.excludeBranches - Additional branches to protect (e.g., active agent branches)
  * @param {Set<string>} [options.activeAgentIds] - CoS agent ids whose worktrees must survive. Anything
  *   but a Set (the default) reads as "liveness unknown" and holds every `agent-*` worktree.
+ * @param {Set<string>} [options.onlyBranches] Limit candidates without bypassing any retirement guard.
  * @returns {Promise<{deleted: Array<{name: string, local: string, remote: string, worktree?: string}>, skipped: string[], defaultBranch: string}>}
  */
-export async function deleteMergedBranches(dir, { excludeBranches, activeAgentIds = null } = {}) {
+export async function deleteMergedBranches(dir, { excludeBranches, activeAgentIds = null, onlyBranches } = {}) {
+  if (onlyBranches !== undefined && !(onlyBranches instanceof Set)) throw new Error('Cleanup branch selector must be a Set');
   const { cleanupMerged } = await import('./branchReconcile.js');
   const { baseBranch } = await getRepoBranches(dir);
   const defaultBranch = baseBranch || 'main';
@@ -2118,6 +2120,7 @@ export async function deleteMergedBranches(dir, { excludeBranches, activeAgentId
   const remoteNames = remote.stdout.trim().split('\n').filter(ref => ref.startsWith('origin/')).map(ref => ref.slice(7));
   const names = new Set([...local, ...remoteNames]);
   for (const name of names) {
+    if (onlyBranches && !onlyBranches.has(name)) continue;
     if (protectedSet.has(name) || name === 'HEAD') continue;
     const exclusions = typeof excludeBranches === 'function' ? await excludeBranches() : excludeBranches;
     if (exclusions?.has(name)) { skipped.push(`${name} (used by an active agent)`); continue; }
