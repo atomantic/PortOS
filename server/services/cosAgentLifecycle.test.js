@@ -1,3 +1,4 @@
+import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 
 import { mkdir, rm, writeFile, readFile, mkdtemp, rename } from 'fs/promises';
@@ -101,7 +102,7 @@ vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await import
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -712,6 +713,77 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(await settleAbsentTaskCompletion(id, expected)).toBe(false);
   });
 
+  it.each(['verified', 'refused-cas', 'wrong-head', 'wrong-generation', 'wrong-task', 'failed-validation'])(
+    'persists known same-head predecessor settlement atomically: %s', async scenario => {
+      const id = 'known-predecessor', startedAt = '2026-01-01T00:00:00Z', completedAt = '2026-01-01T00:01:00Z';
+      const pointer = { dev: '1', ino: '2', birthtimeNs: '3' };
+      const capture = { version: 1, agentId: id, startedAt, capturedAt: completedAt, head: 'a'.repeat(40),
+        repoPath: '/synthetic/repo', branch: 'feature/retired', path: '/synthetic/old-path',
+        incarnation: { pointer, gitdir: { ...pointer, path: '/synthetic/repo/.git/worktrees/original' } } };
+      const stages = Object.fromEntries(['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].map(key => [key, { status: 'done' }]));
+      stages.worktree = { status: 'held', reason: 'checkout-incarnation-changed' };
+      const record = { id, taskId: 'same-task', status: 'completed', startedAt, completedAt,
+        result: { success: false, executionSuccess: true, validationPassed: scenario === 'failed-validation' ? false : null,
+          cleanupPending: true, deliveryRecoveryOwned: true,
+          taskOutcome: { status: 'incomplete', reason: 'retirement pending', recovery: { mode: 'cleanup' } } },
+        metadata: { sourceWorkspace: capture.repoPath, workspacePath: capture.path, worktreeBranch: capture.branch,
+          reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7', branch: capture.branch },
+          completedCheckouts: [capture], checkoutCapture: { status: 'captured' }, repoStateVerification: { status: 'pending' },
+          cleanupOutcomes: { [JSON.stringify([capture.branch, capture.path])]: { branch: capture.branch, path: capture.path, status: 'blocked' } },
+          completionCleanup: { version: 1, status: 'pending', stages, replay: { version: 1 } } } };
+      mockCosState.state.agents[id] = record;
+      const directory = join(mockCosState.agentsDir, completedAt.slice(0, 10), id);
+      await mkdir(directory, { recursive: true }); await writeFile(join(directory, 'metadata.json'), JSON.stringify(record));
+      const expected = structuredClone(record);
+      if (scenario === 'refused-cas') expected.metadata.changed = true;
+      if (scenario === 'wrong-task') expected.taskId = 'other-task';
+      const proof = { successorAgentId: 'delivered-successor', head: capture.head, prUrl: record.metadata.reviewLoopMergeTarget.url,
+        checkoutIdentity: retirementCheckoutIdentityFromPointer(pointer), receiptDigest: 'b'.repeat(64), sourceCapture: structuredClone(capture) };
+      if (scenario === 'wrong-head') proof.head = 'c'.repeat(40);
+      if (scenario === 'wrong-generation') proof.sourceCapture.incarnation.pointer.ino = '9';
+      const completion = vi.fn(); cosEvents.on('agent:completed', completion);
+      try {
+        expect(await recordSuccessorCheckoutRetirement(id, expected, proof)).toBe(scenario === 'verified');
+        const saved = JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8'));
+        expect(saved.metadata.completedCheckouts).toEqual([capture]);
+        expect(saved.metadata.checkoutCapture).toEqual({ status: 'captured' });
+        if (scenario === 'verified') {
+          expect(saved.result).toMatchObject({ success: true, executionSuccess: true, cleanupPending: false,
+            deferredDeliveryOutcome: record.result.taskOutcome, taskOutcome: { status: 'completed' } });
+          expect(saved.metadata.cleanupOutcome).toMatchObject({ status: 'verified', unresolved: 0, committedIntegrationVerified: true,
+            branch: capture.branch, path: capture.path });
+          expect(saved.metadata.completionCleanup.status).toBe('completed');
+          expect(saved.metadata.repoStateVerification).toMatchObject({ status: 'completed', deliveryVerifiedBySuccessor: proof.successorAgentId });
+          expect(await recordSuccessorCheckoutRetirement(id, expected, proof)).toBe(false);
+        } else expect(saved).toEqual(record);
+        expect(completion).not.toHaveBeenCalled();
+      } finally { cosEvents.off('agent:completed', completion); }
+    });
+
+  it('settles an own-seed retirement receipt without inventing a captured head or successful result', async () => {
+    const id = 'seeded-retired', startedAt = '2026-01-01T00:00:00Z', completedAt = '2026-01-01T00:01:00Z';
+    const stages = Object.fromEntries(['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].map(key => [key, { status: 'done' }]));
+    stages.worktree = { status: 'held', reason: 'checkout-capture-pending' };
+    const record = { id, taskId: 'failed-investigation', status: 'completed', startedAt, completedAt,
+      result: { success: false, executionSuccess: true, validationPassed: false, taskOutcome: { status: 'blocked' } },
+      metadata: { completedCheckouts: [], checkoutCapture: { status: 'pending', unknown: true, targets: [] },
+        completionCleanup: { version: 1, status: 'pending', stages, replay: { version: 1 } } } };
+    mockCosState.state.agents[id] = record;
+    const directory = join(mockCosState.agentsDir, completedAt.slice(0, 10), id);
+    await mkdir(directory, { recursive: true }); await writeFile(join(directory, 'metadata.json'), JSON.stringify(record));
+    const proof = { retiredHead: 'a'.repeat(40), checkoutIdentity: 'b'.repeat(64), receiptDigest: 'c'.repeat(64) };
+    expect(await recordSeededCheckoutRetirement(id, { ...record, metadata: { ...record.metadata, changed: true } }, proof)).toBe(false);
+    expect(await recordSeededCheckoutRetirement(id, structuredClone(record), proof)).toBe(true);
+    const saved = JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8'));
+    expect(saved.metadata.checkoutCapture).toMatchObject({ status: 'retired', unknown: true, reason: 'retired-by-service-receipt', ...proof });
+    expect(saved.metadata.completedCheckouts).toEqual([]);
+    expect(saved.metadata.completionCleanup).toMatchObject({ status: 'completed', stages: { worktree: { status: 'done', verifiedBy: 'service-retirement-receipt' } } });
+    expect(saved.metadata.completionCleanup).not.toHaveProperty('replay');
+    expect(saved.metadata.repoStateVerification).toMatchObject({ status: 'completed', physicalRetirementVerified: true });
+    expect(saved.result).toEqual(record.result);
+    expect(await recordSeededCheckoutRetirement(id, record, proof)).toBe(false);
+  });
+
   it('settles only the unchanged predecessor cleanup ledger, preserving unknown capture and failed execution', async () => {
     const id = 'seeded-predecessor', startedAt = '2026-01-01T00:00:00Z', completedAt = '2026-01-01T00:01:00Z';
     const stages = Object.fromEntries(['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].map(key => [key, { status: 'done' }]));
@@ -786,7 +858,7 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(persisted.metadata.completedCheckouts).toEqual([evidence]);
   });
 
-  for (const inline of [false, true, 'claim']) seedBodies.it(`recovers an unknown terminal capture through verified merge proof, inline=${inline}`, async () => {
+  for (const inline of [false, true, 'claim', 'review']) seedBodies.it(`recovers an unknown terminal capture through verified merge proof, inline=${inline}`, async () => {
     const scratch = await mkdtemp(join(tmpdir(), 'portos-reviewed-capture-'));
     try {
       const repo = join(scratch, 'repo'), checkout = join(scratch, 'checkout');
@@ -799,6 +871,7 @@ describe('completeAgent idempotence (#3384)', () => {
       await registerAgent(agentId, 'reviewed-task', { isWorktree: true, sourceWorkspace: repo,
         workspacePath: checkout, worktreeBranch: 'feature/reviewed',
         ...(inline === 'claim' ? { isWorktree: false, configClaimFlow: true, claimBranches: ['feature/reviewed'], workspacePath: repo }
+          : inline === 'review' ? { prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { url: prUrl, branch: 'feature/reviewed' } }
           : inline ? { prOpenedBy: 'agent-inline', configOpenPR: true,
           prDeliveryTarget: { branch: 'feature/reviewed', workspacePath: checkout } }
           : { reviewLoopMergeTarget: { url: prUrl, branch: 'feature/reviewed' } }) });
@@ -825,6 +898,10 @@ describe('completeAgent idempotence (#3384)', () => {
       expect(await retryCompletionCheckoutCapture(agentId, { retirement })).toBe(false);
       delete mockCosState.state.agents['later-owner'];
       if (inline) {
+        if (inline === 'review') {
+          merged.mockResolvedValue({ prUrl: `${prUrl}0`, mergedAt: new Date().toISOString() });
+          expect(await retryCompletionCheckoutCapture(agentId)).toBe(false);
+        }
         merged.mockResolvedValue({ prUrl, mergedAt: new Date().toISOString() });
         mockCosState.state.agents['later-owner'] = { id: 'later-owner', status: 'running', startedAt: new Date().toISOString(),
           metadata: { sourceWorkspace: repo, workspacePath: checkout, worktreeBranch: retirement.branch } };

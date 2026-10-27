@@ -1,3 +1,4 @@
+import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 /**
  * CoS Agent Lifecycle Module
  *
@@ -23,7 +24,7 @@ import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir } from './cosAgentIndex.js';
-import { hasClaimCheckoutBindings } from './completedCheckoutEvidence.js';
+import { hasClaimCheckoutBindings, completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
 import { isAgentHandoff } from '../lib/agentOutcome.js';
 import { collectProtectedCleanupOwners } from '../lib/taskRetryHold.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
@@ -304,19 +305,21 @@ export async function recordRepoCleanupRecovery(agentId, branch, observation, pa
 
 /** Domain outcome is independent of whether the provider process exited cleanly. */
 export function recordCleanupOutcome(agentId, outcome) {
-  return updateCompletionReceipt(agentId, metadata => {
-    const key = JSON.stringify([outcome.branch || null, outcome.path || null]);
-    const prior = { ...metadata.cleanupOutcomes };
-    // A branch-only hold is provisional, not a separate checkout. Resolving
-    // its original path replaces that placeholder, never another known path.
-    if (outcome.branch && outcome.path) delete prior[JSON.stringify([outcome.branch, null])];
-    const cleanupOutcomes = { ...prior, [key]: { ...outcome, observedAt: new Date().toISOString() } };
-    const rows = Object.values(cleanupOutcomes);
-    const incomplete = rows.filter(row => row.status !== 'verified');
-    const aggregate = incomplete.find(row => row.status === 'blocked') || incomplete[0] || rows[0];
-    return { ...metadata, cleanupOutcomes, cleanupOutcome: { ...aggregate,
-      status: incomplete.length ? aggregate.status : 'verified', total: rows.length, unresolved: incomplete.length } };
-  });
+  return updateCompletionReceipt(agentId, metadata => metadataWithCleanupOutcome(metadata, outcome));
+}
+
+function metadataWithCleanupOutcome(metadata, outcome) {
+  const key = JSON.stringify([outcome.branch || null, outcome.path || null]);
+  const prior = { ...metadata.cleanupOutcomes };
+  // A branch-only hold is provisional, not a separate checkout. Resolving
+  // its original path replaces that placeholder, never another known path.
+  if (outcome.branch && outcome.path) delete prior[JSON.stringify([outcome.branch, null])];
+  const cleanupOutcomes = { ...prior, [key]: { ...outcome, observedAt: new Date().toISOString() } };
+  const rows = Object.values(cleanupOutcomes);
+  const incomplete = rows.filter(row => row.status !== 'verified');
+  const aggregate = incomplete.find(row => row.status === 'blocked') || incomplete[0] || rows[0];
+  return { ...metadata, cleanupOutcomes, cleanupOutcome: { ...aggregate,
+    status: incomplete.length ? aggregate.status : 'verified', total: rows.length, unresolved: incomplete.length } };
 }
 
 /** Server-only recovery backlink; works after the parent leaves live retention. */
@@ -405,23 +408,51 @@ export async function recordCompletionCleanup(agentId, startedAt, patch) {
 
 /** Settle only an earlier run's physical cleanup after its verified successor.
  * Keep the original unknown capture and failed execution verdict explicit. */
-export async function recordSuccessorCheckoutRetirement(agentId, expected, proof) {
+export function recordSuccessorCheckoutRetirement(agentId, expected, proof) {
+  return recordCheckoutRetirement(agentId, expected, proof, 'delivered-successor');
+}
+
+/** A canonical service receipt proves physical retirement, not an unknown
+ * original terminal head or a successful execution. Preserve both as history. */
+export function recordSeededCheckoutRetirement(agentId, expected, proof) {
+  return recordCheckoutRetirement(agentId, expected, proof, 'service-retirement-receipt');
+}
+
+async function recordCheckoutRetirement(agentId, expected, proof, verifiedBy) {
   let matched = false;
   const saved = await updateCompletionReceipt(agentId, (metadata, agent) => {
     if (agent.status !== 'completed' || agent.startedAt !== expected.startedAt || agent.taskId !== expected.taskId
-      || !isDeepStrictEqual(metadata, expected.metadata) || metadata.checkoutCapture?.status !== 'pending'
-      || metadata.checkoutCapture.unknown !== true || metadata.completionCleanup?.status !== 'pending') return metadata;
+      || !isDeepStrictEqual(metadata, expected.metadata) || metadata.completionCleanup?.status !== 'pending') return metadata;
+    const source = proof.sourceCapture;
+    if (source) {
+      if (verifiedBy !== 'delivered-successor' || metadata.checkoutCapture?.status !== 'captured'
+        || agent.result?.executionSuccess !== true || agent.result.validationPassed === false
+        || agent.result.cleanupPending !== true || agent.result.deliveryRecoveryOwned !== true
+        || agent.result.taskOutcome?.status !== 'incomplete' || agent.result.taskOutcome?.recovery?.mode !== 'cleanup'
+        || agent.result.executionInterruption || metadata.executionInterruption || metadata.blocker
+        || !proof.successorAgentId || proof.successorAgentId === agentId || proof.head !== source.head
+        || !/^[a-f0-9]{64}$/.test(proof.receiptDigest || '')
+        || retirementCheckoutIdentityFromPointer(source.incarnation?.pointer) !== proof.checkoutIdentity
+        || proof.prUrl !== metadata.reviewLoopMergeTarget?.url || source.branch !== metadata.worktreeBranch
+        || source.repoPath !== metadata.sourceWorkspace || source.path !== metadata.workspacePath
+        || !metadata.completedCheckouts?.some(row => completedCheckoutReceiptValid(agent, row) && isDeepStrictEqual(row, source))) return metadata;
+    } else if (metadata.checkoutCapture?.status !== 'pending' || metadata.checkoutCapture.unknown !== true) return metadata;
     const stages = metadata.completionCleanup.stages;
     if (!stages || !stages.worktree || ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].some(key => stages[key]?.status !== 'done')
       || Object.entries(stages).some(([key, stage]) => key !== 'worktree' && stage.status !== 'done')) return metadata;
     matched = true;
     const completionCleanup = { ...metadata.completionCleanup, status: 'completed', updatedAt: new Date().toISOString(),
-      stages: { ...stages, worktree: { status: 'done', retryable: false, verifiedBy: 'delivered-successor', successorAgentId: proof.successorAgentId } } };
+      stages: { ...stages, worktree: { status: 'done', retryable: false, verifiedBy, ...(proof.successorAgentId && { successorAgentId: proof.successorAgentId }) } } };
     delete completionCleanup.context; delete completionCleanup.replay;
-    return { ...metadata, completionCleanup,
-      checkoutCapture: { ...metadata.checkoutCapture, status: 'retired', reason: 'retired-by-verified-successor', ...proof },
+    const updated = { ...metadata, completionCleanup,
+      checkoutCapture: source ? metadata.checkoutCapture : { ...metadata.checkoutCapture, status: 'retired', reason: verifiedBy === 'delivered-successor' ? 'retired-by-verified-successor' : 'retired-by-service-receipt', ...proof },
       repoStateVerification: { ...metadata.repoStateVerification, status: 'completed', reasons: [],
-        checkedAt: new Date().toISOString(), deliveryVerifiedBySuccessor: proof.successorAgentId } };
+        checkedAt: new Date().toISOString(), ...(proof.successorAgentId
+          ? { deliveryVerifiedBySuccessor: proof.successorAgentId } : { physicalRetirementVerified: true }) } };
+    return source ? metadataWithCleanupOutcome(updated, { status: 'verified', reason: 'same-head-successor-retirement-verified',
+      branch: source.branch, path: source.path, prUrl: proof.prUrl, committedIntegrationVerified: true,
+      successorAgentId: proof.successorAgentId, preservation: { verifiedAt: new Date().toISOString(),
+        checkoutIdentity: proof.checkoutIdentity, receiptDigest: proof.receiptDigest } }) : updated;
   });
   return saved && matched;
 }
@@ -467,7 +498,7 @@ export async function retryCompletionCheckoutCapture(agentId, { retirement } = {
     const original = await getAgentRecord(agentId);
     const meta = original?.metadata;
     const seed = meta?.checkoutSeeds?.length === 1 ? meta.checkoutSeeds[0] : null;
-    // Inline and branch-selecting claim agents can merge before terminal capture fails.
+    // Inline, claim and review-loop deliveries can merge before terminal capture fails.
     // Resolve fresh forge proof outside the ownership lock; the locked replay
     // below still rechecks the original generation, head and every later owner.
     if (original?.status === 'completed' && original.result?.executionSuccess === true
@@ -478,7 +509,10 @@ export async function retryCompletionCheckoutCapture(agentId, { retirement } = {
         && meta.prDeliveryTarget?.branch === seed.branch
         && await realpath(meta.prDeliveryTarget.workspacePath || '').catch(() => null) === seed.path)
         || (meta.configClaimFlow === true && hasClaimCheckoutBindings(meta) && meta.claimBranches?.includes(seed.branch)
-          && await realpath(meta.sourceWorkspace || meta.workspacePath || '').catch(() => null) === seed.repoPath))) {
+          && await realpath(meta.sourceWorkspace || meta.workspacePath || '').catch(() => null) === seed.repoPath)
+        || (meta.prCompletionPolicy === 'review-then-merge' && meta.reviewLoopMergeTarget?.branch === seed.branch
+          && meta.worktreeBranch === seed.branch
+          && await realpath(meta.workspacePath || '').catch(() => null) === seed.path))) {
       const { execGit } = await import('../lib/execGit.js');
       const head = await execGit(['rev-parse', '--verify', 'HEAD^{commit}'], seed.path, {
         env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_REPLACE_OBJECTS: '1' }, timeout: 5000,
