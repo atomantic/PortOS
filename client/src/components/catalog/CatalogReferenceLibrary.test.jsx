@@ -204,4 +204,64 @@ describe('CatalogReferenceLibrary', () => {
     fireEvent.click(screen.getByLabelText('Guides only'));
     expect(screen.queryByTestId('library-row')).toBeNull();
   });
+
+  it('renders good, bad, and rejected rating buttons on reference image cards and toggles rating', async () => {
+    const onChanged = vi.fn();
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[
+      { mediaKey: 'sample.png', kind: 'reference', library: { review: { status: 'unreviewed' } } },
+    ]} onChanged={onChanged} />);
+
+    const ratingGroup = screen.getByRole('group', { name: 'Rating for sample.png' });
+    const goodBtn = within(ratingGroup).getByRole('button', { name: /good/i });
+    const badBtn = within(ratingGroup).getByRole('button', { name: /bad/i });
+    const rejectedBtn = within(ratingGroup).getByRole('button', { name: /rejected/i });
+
+    expect(goodBtn).toHaveAttribute('aria-pressed', 'false');
+    expect(badBtn).toHaveAttribute('aria-pressed', 'false');
+    expect(rejectedBtn).toHaveAttribute('aria-pressed', 'false');
+
+    // Click Good
+    fireEvent.click(goodBtn);
+    await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
+      'cat-chr-1',
+      { mediaKey: 'sample.png', kind: 'reference', review: { status: 'good' } },
+      { silent: true },
+    ));
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it('reflects active rating on buttons, preserves feedback and allows toggling back to unreviewed', async () => {
+    function Gallery() {
+      const [rows, setRows] = useState([
+        { mediaKey: 'sample.png', kind: 'reference', library: { review: { status: 'bad', feedback: 'Fix lighting' } } },
+      ]);
+      return <CatalogReferenceLibrary ingredientId="cat-chr-1" media={rows} onMediaUpdated={updated => setRows([updated])} />;
+    }
+    api.updateCatalogIngredientMediaLibrary.mockImplementationOnce(async (_id, body) => ({
+      mediaKey: body.mediaKey, kind: body.kind, library: { review: body.review },
+    }));
+
+    render(<Gallery />);
+    const ratingGroup = screen.getByRole('group', { name: 'Rating for sample.png' });
+    const badBtn = within(ratingGroup).getByRole('button', { name: /bad/i });
+    expect(badBtn).toHaveAttribute('aria-pressed', 'true');
+
+    // Clicking bad again should toggle back to unreviewed while preserving feedback
+    fireEvent.click(badBtn);
+    await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
+      'cat-chr-1',
+      { mediaKey: 'sample.png', kind: 'reference', review: { status: 'unreviewed', feedback: 'Fix lighting' } },
+      { silent: true },
+    ));
+    await waitFor(() => expect(badBtn).toHaveAttribute('aria-pressed', 'false'));
+  });
+
+  it('shows static rating text and hides rating buttons in read-only mode', () => {
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[
+      { mediaKey: 'sample.png', kind: 'reference', library: { review: { status: 'good' } } },
+    ]} readOnly />);
+
+    expect(screen.queryByRole('group', { name: 'Rating for sample.png' })).toBeNull();
+    expect(screen.getByText('Rating: good')).toBeInTheDocument();
+  });
 });
