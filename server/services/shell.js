@@ -4,7 +4,7 @@ import { basename } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { scheduleSubmitEnters, SUBMIT_KEY } from '../lib/tuiHandshake.js';
-import { buildCdCommand } from '../lib/shellCd.js';
+import { buildCdCommand, detectShellFlavor } from '../lib/shellCd.js';
 import { resolveInteractiveShell } from '../lib/interactiveShellResolver.js';
 import { buildRunThenExitCommand } from '../lib/shellExit.js';
 import { buildReadinessProbe } from '../lib/shellReadinessProbe.js';
@@ -258,12 +258,17 @@ export function createShellSession(socket, options = {}) {
   const sessionId = uuidv4();
   const shell = options.shell || getDefaultShell();
   const cwd = options.cwd || os.homedir();
+  // Windows PowerShell can discard a bracketed startup cwd as a wildcard.
+  // Honor an explicit workspace after profiles load, without disabling them.
+  const shellArgs = options.cwd && detectShellFlavor(shell) === 'powershell'
+    ? ['-NoExit', '-Command', buildCdCommand(cwd, shell)]
+    : [];
 
   console.log(`🐚 Creating shell session ${sessionId.slice(0, 8)} (${shell})`);
 
   let ptyProcess;
   try {
-    ptyProcess = pty.spawn(shell, [], {
+    ptyProcess = pty.spawn(shell, shellArgs, {
       ...ptyTerminalOptions({ cwd, cols: options.cols, rows: options.rows }),
       // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). An interactive
       // login shell rewrites PWD itself at startup, but a non-login shell may

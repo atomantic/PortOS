@@ -199,7 +199,7 @@ describe('resolvePlanStages', () => {
     expect(stages.map(stage => stage.name)).toEqual([
       'hidden-content scan', 'server structural guards', 'client structural guards',
       'client/server lint', 'server tests', 'client tests', 'client build',
-      'API Explorer bundle pin', 'boot smoke', 'browser suites', 'DB provision (portos_test)', 'DB suite (portos_test)',
+      'boot smoke', 'browser suites', 'DB provision (portos_test)', 'DB suite (portos_test)',
     ]);
     for (const scope of ['server', 'client']) {
       expect(stages.find(stage => stage.name === `${scope} tests`).env).toMatchObject({
@@ -239,7 +239,7 @@ describe('pregate hidden-content invocation', () => {
     git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
     git('config', 'core.excludesFile', join(scratch, 'empty-excludes'));
     // Copy the real builtin-only entrypoints so REPO_ROOT targets this fixture.
-    // No runners or test files: docs-only changes produce an empty test plan.
+    // Docs-only changes select no test owners; full plans still have a native inventory.
     for (const path of [
       'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
@@ -262,6 +262,7 @@ describe('pregate hidden-content invocation', () => {
       mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
       write(join(workspace, 'package-lock.json'), JSON.stringify({ packages: { '': {} } }));
     }
+    write('server/lib/bufferedSpawn.test.js', '// Native inventory fixture\n');
     mkdirSync(join(root, 'docs'));
     write(trackedPath, clean);
     git('add', '--all');
@@ -1298,7 +1299,7 @@ describe('resource suite stages', () => {
     const stages = resolvePlanStages(fullPlan, { baseSha: 'base', databaseEnv });
     expect(stages.map((stage) => stage.name)).toEqual([
       'hidden-content scan', 'client/server lint', 'server tests', 'client tests',
-      'client build', 'API Explorer bundle pin', 'boot smoke', 'browser suites',
+      'client build', 'boot smoke', 'browser suites',
       'DB provision (portos_test)', 'DB suite (portos_test)',
     ]);
     expect(stages.map(describeStageCommand)).toEqual([
@@ -1307,7 +1308,6 @@ describe('resource suite stages', () => {
       'node scripts/run-ci-tests.js server',
       'node scripts/run-ci-tests.js client',
       'npm run build --prefix client',
-      'npm run test --prefix client -- ApiExplorer.bundle',
       'node scripts/smoke-boot.js',
       'node scripts/run-ci-tests.js server',
       'npm run setup:db:test --prefix server',
@@ -1344,7 +1344,7 @@ describe('resource suite stages', () => {
     expect(names({ build: true })).not.toContain('build');
     expect(names({ smoke: true })).not.toContain('smoke');
     expect(names({ db: true, browser: true, build: true, smoke: true })).toEqual(['scan', 'lint', 'server', 'client']);
-    expect(names({})).toEqual(['scan', 'lint', 'server', 'client', 'build', 'build', 'smoke', 'browser', 'db', 'db']);
+    expect(names({})).toEqual(['scan', 'lint', 'server', 'client', 'build', 'smoke', 'browser', 'db', 'db']);
   });
 
   it('plans no resource stage the planner did not select', () => {
