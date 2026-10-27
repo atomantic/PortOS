@@ -1241,7 +1241,8 @@ async function settleAbsentCheckout({ agentState, metadata, app, sourceWorkspace
       path: worktreePath, branch: branchName, head: forge.prHead, createdAt: capture.capturedAt,
       checkoutIdentity: retirementCheckoutIdentityFromPointer(capture.incarnation.pointer),
     } }).catch(() => null);
-    capturedCovered = !!preservation && (await execGit(['merge-base', '--is-ancestor', capturedHead, forge.prHead], sourceWorkspace,
+    capturedCovered = preservation?.kind === 'service-retirement-receipt'
+      && (await execGit(['merge-base', '--is-ancestor', capturedHead, forge.prHead], sourceWorkspace,
       { ignoreExitCode: true, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
   }
   const integrated = forge && capturedCovered && (await execGit(['merge-base', '--is-ancestor', forge.mergeCommit, forge.targetHead ?? forge.defaultHead], sourceWorkspace,
