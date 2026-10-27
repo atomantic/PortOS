@@ -86,6 +86,30 @@ describe('attachMedia', () => {
   });
 });
 
+describe('updateMediaLibrary', () => {
+  it('merges generated defaults under edits made after the hook read the attachment', async () => {
+    const edited = { variant: { age: 31, label: 'Later edit' }, tags: ['chosen'], guide: true,
+      review: { status: 'good', feedback: 'Keep this review' } };
+    const row = { ingredient_id: 'i1', media_key: 'refined.png', kind: 'reference', library: edited,
+      role: null, caption: null, created_at: new Date('2026-01-01T00:00:00Z'), deleted: false };
+    await db.query.withImplementation(async (sql, params) => {
+      if (sql.includes('SELECT * FROM catalog_ingredient_media')) return { rows: [row] };
+      if (sql.includes('AS blocked')) return { rows: [{ blocked: false }] };
+      if (sql.includes('UPDATE catalog_ingredient_media SET library = $4')) {
+        row.library = JSON.parse(params[3]);
+        return { rows: [row] };
+      }
+      return { rows: [] };
+    }, async () => {
+      const lineage = { mediaKey: 'source.png', kind: 'reference' };
+      const result = await catalogDB.updateMediaLibrary('i1', 'refined.png', 'reference', {
+        variant: { age: 27 }, tags: ['old'], guide: false, review: { status: 'unreviewed', feedback: 'Old instruction' }, derivedFrom: lineage,
+      }, { preserveExisting: true });
+      expect(result.library).toEqual({ ...edited, derivedFrom: lineage });
+    });
+  });
+});
+
 describe('detachMedia', () => {
   it('soft-deletes (tombstone) — never a hard DELETE', async () => {
     await catalogDB.detachMedia('i1', 'hero.png', 'portrait');

@@ -86,7 +86,7 @@ describe('catalogImageAttachHook', () => {
     listMediaForIngredient.mockResolvedValue([{ mediaKey: 'refined.png', kind: 'reference' }]);
     mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-refine', library } }, 'refined.png'));
     await hook.__testing.settled();
-    expect(updateMediaLibrary).toHaveBeenCalledWith('ing-refine', 'refined.png', 'reference', library);
+    expect(updateMediaLibrary).toHaveBeenCalledWith('ing-refine', 'refined.png', 'reference', library, { preserveExisting: true });
     expect(changed).toHaveBeenCalledOnce();
     expect(changed).toHaveBeenCalledWith({ ingredientId: 'ing-refine' });
     listMediaForIngredient.mockResolvedValue([{ mediaKey: 'refined.png', kind: 'reference', library }]);

@@ -59,7 +59,7 @@ async function attachGeneratedImage({ ingredientId, kind, role, library, filenam
   const existingRow = existing.find((m) => m.mediaKey === filename);
   if (existingRow) {
     const needsMetadata = library && !existingRow.library?.derivedFrom;
-    if (needsMetadata) await updateMediaLibrary(ingredientId, filename, existingRow.kind, library);
+    if (needsMetadata) await updateMediaLibrary(ingredientId, filename, existingRow.kind, library, { preserveExisting: true });
     // The mounted client won the optimistic attach for this render. If it
     // landed as the PORTRAIT, still record its queuedAt in the guard — otherwise
     // a later OLDER portrait render isn't seen as stale and would clobber this

@@ -156,7 +156,7 @@ export async function getMissingMediaForIngredient(ingredientId, { media } = {})
 // Casting reference library: merge a variant/tags/guide patch into one live
 // media row. Turning a guide ON is serialized on the owning ingredient row and
 // refused (409) past MAX_CAST_GUIDES so the render picker's cap holds.
-export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {}) {
+export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {}, { preserveExisting = false } = {}) {
   ingredientId = await assertCatalogIdentityWritable(ingredientId);
   return withTransaction(async (client) => {
     await client.query('SELECT id FROM catalog_ingredients WHERE id = catalog_resolve_ingredient_id($1) FOR UPDATE', [ingredientId]);
@@ -172,13 +172,17 @@ export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {
       throw err;
     }
     const prev = normalizeLibrary(row.library);
+    // A completion hook may race a user's edits after an optimistic attach.
+    // Merge its defaults under the freshly locked row, not a stale read from
+    // the hook; a present field (including a complete review or variant) wins.
+    const effective = preserveExisting ? { ...patch, ...prev } : patch;
     const next = normalizeLibrary({
       ...prev,
-      ...(hasOwn(patch, 'variant') ? { variant: patch.variant } : {}),
-      ...(hasOwn(patch, 'tags') ? { tags: patch.tags } : {}),
-      ...(hasOwn(patch, 'guide') ? { guide: patch.guide } : {}),
-      ...(hasOwn(patch, 'review') ? { review: { ...prev.review, ...patch.review } } : {}),
-      ...(hasOwn(patch, 'derivedFrom') ? { derivedFrom: patch.derivedFrom } : {}),
+      ...(hasOwn(effective, 'variant') ? { variant: effective.variant } : {}),
+      ...(hasOwn(effective, 'tags') ? { tags: effective.tags } : {}),
+      ...(hasOwn(effective, 'guide') ? { guide: effective.guide } : {}),
+      ...(hasOwn(effective, 'review') ? { review: { ...prev.review, ...effective.review } } : {}),
+      ...(hasOwn(effective, 'derivedFrom') ? { derivedFrom: effective.derivedFrom } : {}),
     });
     if (['bad', 'rejected'].includes(next.review?.status)) {
       await client.query(`UPDATE catalog_ingredient_media SET library = jsonb_set(COALESCE(library, '{}'::jsonb), '{guide}', 'false'::jsonb, true)
