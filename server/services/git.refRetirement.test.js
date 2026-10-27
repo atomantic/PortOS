@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeGitSandbox, destroyGitSandbox } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
@@ -87,6 +87,18 @@ it('deletes the remote when a combined request finds the local branch already ab
     branch: 'finished', results: { local: 'not found', remote: 'deleted' },
   });
   expect(await git(['ls-remote', '--heads', 'origin', 'refs/heads/finished'])).toBe('');
+});
+
+it.each(['directory', 'dangling symlink'])('retains the remote when the local ref is an occupied %s', async kind => {
+  const gitDir = await git(['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  await git(['branch', '-D', 'finished']);
+  const refPath = join(gitDir, 'refs', 'heads', 'finished');
+  if (kind === 'directory') await mkdir(refPath);
+  else await symlink(join(sandbox.scratch, 'missing-ref'), refPath);
+  const result = await deleteBranch(sandbox.repo, 'finished', { local: true, remote: true });
+  expect(result.results).toEqual({ local: 'failed: unable to resolve branch head', remote: 'retained: local branch deletion refused' });
+  expect(await git(['ls-remote', '--heads', 'origin', 'refs/heads/finished']))
+    .toBe(`${head}\trefs/heads/finished`);
 });
 
 it('retains the remote when the local ref cannot be resolved or changes during deletion', async () => {
