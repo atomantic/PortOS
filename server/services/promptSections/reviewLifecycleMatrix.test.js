@@ -180,6 +180,9 @@ it.each(['inline', 'followUp'])('binds a GitHub username review to current chang
   expect(section).toContain('base movement alone does not require a new review');
   expect(section).toContain('do not request or wait on unverifiable history');
   expect(section).toContain('If readback fails, report the request as unverified');
+  expect(section).toContain('only an applicable APPROVED review with no later undismissed CHANGES_REQUESTED from that reviewer satisfies the approval gate');
+  expect(section).toContain('A COMMENTED or CHANGES_REQUESTED review supplies findings but not approval: after addressing them, request a fresh review if no request is pending');
+  expect(section).toContain('For an optional reviewer, an applicable completed review can be used after addressing its findings');
 });
 
 describe('buildReviewLoopFollowUpSection — phase × forge × leaveOpen × verbosity matrix', () => {
