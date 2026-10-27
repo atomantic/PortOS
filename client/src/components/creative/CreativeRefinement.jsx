@@ -19,6 +19,13 @@ export default function CreativeRefinement({ initialDraft, fieldLimits = {}, con
   const [error, setError] = useState('');
   const [sent, setSent] = useState(null);
   const [hasProposal, setHasProposal] = useState(false);
+  const [resolutions, setResolutions] = useState({});
+  const patchEntries = hasProposal ? Object.entries(draft).filter(([key, value]) => value !== proposalBase.current?.[key]) : [];
+  const conflicts = patchEntries.filter(([key, value]) => initialDraft[key] !== proposalBase.current?.[key] && initialDraft[key] !== value);
+  const resolutionFor = (key, value) => {
+    const resolution = resolutions[key];
+    return resolution?.current === initialDraft[key] && resolution?.proposed === value ? resolution.choice : null;
+  };
   const run = async (preview = false) => {
     if (flight.current || !feedback.trim() || !selection.selectedProviderId) return;
     flight.current = true; setBusy(true); setError('');
@@ -60,9 +67,21 @@ export default function CreativeRefinement({ initialDraft, fieldLimits = {}, con
     {hasProposal && <div className="space-y-2">
       {Object.entries(draft).map(([key, value]) => <div key={key}><label htmlFor={`${id}-${key}`} className="block text-xs">{key.replace(/([A-Z])/g, ' $1')}</label>
         <textarea id={`${id}-${key}`} value={value} maxLength={fieldLimits[key] ?? 12000} disabled={busy} onChange={event => setDraft(previous => ({ ...previous, [key]: event.target.value }))} rows={3} className="w-full bg-port-bg border border-port-border rounded p-2 text-sm" /></div>)}
-      <button type="button" disabled={disabled || busy} onClick={() => {
-        const patch = Object.fromEntries(Object.entries(draft).filter(([key, value]) => value !== proposalBase.current?.[key]));
-        onApply(patch); setHasProposal(false);
+      {conflicts.map(([key, value]) => <div key={key} className="rounded border border-port-warning p-3 space-y-2 text-sm">
+        <p>The editor and proposal both changed {key.replace(/([A-Z])/g, ' $1')}. Choose which to keep.</p>
+        <p className="whitespace-pre-wrap break-words"><strong>Editor:</strong> {initialDraft[key]}</p>
+        <p className="whitespace-pre-wrap break-words"><strong>Proposal:</strong> {value}</p>
+        <div className="flex flex-wrap gap-2">
+          {['editor', 'proposal'].map(choice => <button key={choice} type="button" aria-pressed={resolutionFor(key, value) === choice}
+            onClick={() => setResolutions(previous => ({ ...previous, [key]: { current: initialDraft[key], proposed: value, choice } }))}
+            className="min-h-11 rounded border border-port-accent px-3 py-2 text-port-accent hover:bg-port-accent/10 aria-pressed:bg-port-accent/20">
+            {choice === 'editor' ? 'Keep editor' : 'Use proposal'} for {key.replace(/([A-Z])/g, ' $1')}
+          </button>)}
+        </div>
+      </div>)}
+      <button type="button" disabled={disabled || busy || conflicts.some(([key, value]) => !resolutionFor(key, value))} onClick={() => {
+        const patch = Object.fromEntries(patchEntries.filter(([key, value]) => resolutionFor(key, value) !== 'editor'));
+        onApply(patch); setHasProposal(false); setResolutions({});
       }} className="min-h-11 rounded border border-port-accent px-3 py-2 text-sm text-port-accent hover:bg-port-accent/10 disabled:opacity-40">Apply proposal to editor</button>
     </div>}
   </section>;

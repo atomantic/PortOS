@@ -33,7 +33,9 @@ export default function ComparisonResearch({
     return () => { active = false; };
   }, []);
   const provider = providers.find(item => item.id === draft.providerId);
-  const valid = Boolean(provider && (!provider.models?.length || provider.models.includes(draft.model)));
+  const valid = Boolean(provider && draft.model && (!provider.models?.length
+    || provider.defaultModel === draft.model
+    || provider.models.some(model => (typeof model === 'string' ? model : model?.id) === draft.model)));
   const dirty = saved?.providerId !== draft.providerId
     || (saved?.model || '') !== (draft.model || '')
     || (saved?.effort || '') !== (draft.effort || '')
@@ -105,6 +107,8 @@ export default function ComparisonResearch({
         onModelChange={model => setDraft(previous => ({ ...previous, model }))}
         emptyProviderOption="Choose provider"
         emptyModelOption="Choose model"
+        alwaysShowModel
+        includeDefaultModel
         highlightToolUse={true}
       />
       <div className="flex flex-wrap gap-3 items-center">

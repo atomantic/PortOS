@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { expect, it } from 'vitest';
-import AgentResultLine, { SecurityScanEvidence } from './AgentResultLine';
+import AgentResultLine, { ReleasePublicationLine, SecurityScanEvidence } from './AgentResultLine';
 
 it('separates clean execution, assessment persistence and delivery validation', () => {
   const agent = { result: { success: true, validationPassed: false, auditAssessment: { status: 'persistence-failed' } } };
@@ -323,4 +323,18 @@ it('does not synthesize verified synchronization from task execution success or 
   expect(screen.queryByText('Published — synchronization verified')).not.toBeInTheDocument();
   expect(screen.getByText('Execution completed')).toBeInTheDocument();
   expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+});
+
+it('does not claim publication from synchronization metadata without a verified receipt', () => {
+  const sync = { identity: 'a'.repeat(64), status: 'running', tag: 'v1.2.3', releaseUrl: 'https://github.com/example/repo/releases/tag/v1.2.3', publishedAt: '2026-01-01T12:00:00Z' };
+  const view = render(<ReleasePublicationLine synchronization={sync} />);
+  expect(screen.getByText('Publication not verified — synchronization running')).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: 'v1.2.3' })).not.toBeInTheDocument();
+  expect(view.container.querySelector('time')).toBeNull();
+  view.rerender(<ReleasePublicationLine publication={{ status: 'pending', tag: sync.tag, releaseUrl: sync.releaseUrl }} synchronization={sync} />);
+  expect(screen.getByText('Publication not verified — synchronization running')).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: 'v1.2.3' })).not.toBeInTheDocument();
+  view.rerender(<ReleasePublicationLine publication={{ status: 'verified', tag: sync.tag, releaseUrl: sync.releaseUrl }} synchronization={sync} />);
+  expect(screen.getByText('Published — synchronization running')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'v1.2.3' })).toHaveAttribute('href', sync.releaseUrl);
 });

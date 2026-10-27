@@ -2150,8 +2150,19 @@ async function reviewRemovedCheckoutBranch({ appId, release, prUrl, kind }, opts
   const holders = await listWorktrees(app.repoPath).catch(() => null);
   if (!holders || holders.some(row => shortBranch(row.branch) === release.branch)) return { ok: false, reason: 'branch-has-new-holder' };
   const ref = `refs/heads/${release.branch}`;
-  const missing = await execGit(['show-ref', '--verify', '--quiet', ref], app.repoPath,
-    { ignoreExitCode: true }).then(row => row.exitCode === 1, () => false);
+  // show-ref exit 1 also covers broken symbolic and malformed loose refs, so
+  // only the bounded files-backend inspection can establish actual absence.
+  const { readLocalBranchPresence } = await import('./repoCleanupObservation.js');
+  const presence = await readLocalBranchPresence(app.repoPath, release.branch);
+  if (presence === null) return { ok: false, reason: 'branch-ref-presence-unverified' };
+  // Never treat a symbolic ref as the reviewed direct branch, even if its
+  // target currently resolves to the same commit.
+  if (presence) {
+    const symbolic = await execGit(['symbolic-ref', '--quiet', ref], app.repoPath,
+      { ignoreExitCode: true }).catch(() => null);
+    if (symbolic?.exitCode !== 1) return { ok: false, reason: 'branch-ref-presence-unverified' };
+  }
+  const missing = presence === false;
   const tip = missing ? null : await execGit(['rev-parse', '--verify', ref], app.repoPath).then(row => row.stdout.trim(), () => null);
   if ((!missing && tip !== release.head) || (receipt.branchDeleted === true && !missing)) {
     return { ok: false, reason: 'branch-ref-changed-or-recreated' };

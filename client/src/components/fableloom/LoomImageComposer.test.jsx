@@ -27,7 +27,11 @@ it('drops an obsolete preview and submits only the currently previewed authored 
   await act(async () => pending[1]({
     sentPrompt: 'Revised scene\n\nStyle: charcoal lines',
     promptAdditions: [{ id: 'loom-style', label: 'Loom style', text: 'Style: charcoal lines' }],
+    referenceImages: [{ filename: 'reference.png', source: 'Request reference', status: 'included', strength: 0.4 }],
+    loraAdapters: [{ filename: 'example.safetensors', scale: 0.65, source: 'Request adapter' }],
   }));
+  expect(screen.getByText('Strength 0.4')).toBeInTheDocument();
+  expect(screen.getByRole('region', { name: 'LoRA adapters' })).toHaveTextContent('example.safetensors · strength 0.65 · Request adapter');
   fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
   expect(screen.getByLabelText('Scene image prompt')).toHaveValue('Revised scene');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Render', exact: true })));

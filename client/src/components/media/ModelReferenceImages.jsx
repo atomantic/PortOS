@@ -37,6 +37,7 @@ export default function ModelReferenceImages({ images, onOpenPreview }) {
               <figcaption className="text-[11px] break-words">
                 <span className="block text-gray-300">{image.filename}</span>
                 <span className="block text-gray-500">{image.source}</span>
+                {typeof image.strength === 'number' && <span className="block text-gray-500">Strength {image.strength}</span>}
                 <span className={image.status === 'included' ? 'text-port-success' : 'text-port-warning'}>
                   {image.status === 'included' ? 'Will be sent to the model'
                     : image.status === 'missing' ? 'Missing file — restore or update this reference'

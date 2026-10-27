@@ -185,15 +185,16 @@ previous-tag comparison, chosen version/name and amendment ledger. A PR targetin
 `release` forces full CI regardless of its head branch; require both `CI Gate`
 and `Full CI Gate` on the current candidate head.
 
-For the repository's pre-merge structural guard, compare the candidate against
-**`origin/release`, its actual PR base**, not `origin/main`. Before merging, verify
-the PR head still equals the validated candidate SHA and the target still equals
-`RELEASE_BASE_SHA`. Hold merge admission only for the final live-state check,
-merge attempt and readback. Use a merge commit and `--match-head-commit` with the
-validated head; never squash/rebase away the candidate ancestry, bypass required
-checks, or use a moving `main` PR. If the target changed, release admission and
-reconcile the competing release/version and resulting tree outside the lease.
-It is not permission to recut from `main` or reuse checks on a different tree.
+When investigating integration with a structural guard, compare the candidate
+against **`origin/release`, its actual PR base**, not `origin/main`. Before
+merging, verify the PR head still equals the validated candidate SHA and the
+target still equals `RELEASE_BASE_SHA`. The hosting provider's rules own merge
+eligibility; follow the root merge policy without adding another admission
+certificate. Use a merge commit and `--match-head-commit` with the validated
+head; never squash/rebase away the candidate ancestry, bypass required checks,
+or use a moving `main` PR. If the target changed, reconcile the competing
+release/version and resulting tree; do not recut from `main` or reuse checks on
+a different tree.
 
 #### 5. Verify publication
 
@@ -242,7 +243,7 @@ physical checkout seeds. It never transfers checkout authority. The continuation
 uses the procedure below and ordinary delivery, admission and retirement recovery.
 Completed task history still owns its publication identity and cannot be deleted
 through task CRUD. Execution success does **not** mark synchronization verified:
-individual obligations remain pending until independently verified. A bounded recovery
+the delivery and other obligations remain pending until their evidence is observed. A bounded recovery
 sweep checks the same outbox after restart, including completed task/agent history.
 It records pending, running, blocked or verified synchronization separately from the
 original publication timestamp and link. Transport failures retain successful
@@ -250,12 +251,14 @@ revision-bound proof and durable retry times; conflicting owners remain blocked.
 
 Verification inspects the exact same-repository synchronization PR/head and its
 merged development ancestry (including the candidate head and published promotion).
-GitHub's confirmed merge establishes delivery under its repository rules; PortOS
-does not recertify local review, CI timestamps or merge admission. The
-retirement service retains the continuation's private local-review receipt before
-removing its checkout; retirement refuses an uncollected receipt. Legacy or missing
-review evidence is a blocker, never a synthesized clean review. The historical
-reviewed head stays historical when later hosted feedback changes the PR.
+A provider-confirmed merge establishes delivery under the repository's merge
+policy. The legacy local-review, hosted-review, CI and admission obligation names
+record that provider authority; they do not claim that PortOS independently
+re-inspected each review, check or lease after the merge. Run the requested reviews
+and validation during delivery without treating an unavailable review as clean.
+Keep the historical reviewed head in the private local-review receipt when later
+hosted feedback changes the PR; never synthesize a missing review. Before checkout
+retirement, the service retains the synchronization evidence bound to that checkout.
 
 The development quality snapshot must include the available local numeric
 measurements; an independently observed lack of local measurements is recorded

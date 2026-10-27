@@ -106,6 +106,20 @@ describe('assembled forge claim prompts', () => {
     expect(claim.prompt).toContain('draft: true');
   });
 
+  it.each(['review-then-merge', 'leave-open', 'draft'])('keeps the selected GitLab epic child and its %s handoff policy', async (policy) => {
+    state.tracker = 'gitlab';
+    const { prompt } = await buildClaimWorkTask(app, { target: '42', prCompletion: policy });
+    const epic = prompt.slice(prompt.indexOf('## Phase 1b'), prompt.indexOf('## Phase 2'));
+    expect(prompt).toContain('set `CANDIDATE="$NUM"` and repeat the permitted contributor-comment check for that final issue');
+    expect(prompt).toContain('Resolve every accepted finding before proceeding, regardless of severity.');
+    if (policy === 'review-then-merge') {
+      expect(epic).toContain('close #${EPIC} when it was the LAST open child');
+    } else {
+      expect(epic).toContain('leave the epic open for human reconciliation');
+      expect(epic).not.toContain('close #${EPIC} when it was the LAST open child');
+    }
+  });
+
   it.each(['github', 'gitlab'])('keeps automatic %s selection while applying its effective policy', async (tracker) => {
     state.tracker = tracker;
     const type = tracker === 'github' ? 'claim-issue' : 'claim-issue-gitlab';

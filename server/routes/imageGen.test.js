@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vites
 import express from 'express';
 import { resolveImageCleaners } from '../lib/imageCleanDefaults.js';
 import { request as httpRequest } from 'node:http';
+import { createHash } from 'node:crypto';
 import { pinPlatform, request, startLoopbackServer, closeLoopbackServer } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -63,6 +64,8 @@ const fableLoomImageCapabilities = vi.hoisted(() => vi.fn(() => ({ version: 1, k
 vi.mock('../services/fableLoom/visualConditioning.js', () => ({
   compileFableLoomVisualRequest,
   fableLoomImageCapabilities,
+  fableLoomAdapterDigest: (...args) => vi.importActual('../services/fableLoom/visualConditioning.js')
+    .then(actual => actual.fableLoomAdapterDigest(...args)),
 }));
 
 vi.mock('../services/imageGen/index.js', () => ({
@@ -72,8 +75,8 @@ vi.mock('../services/imageGen/index.js', () => ({
   attachSseClient: vi.fn(() => false),
   cancel: vi.fn(() => false),
   cancelJob: vi.fn(() => false),
-  IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex', GROK: 'grok', AGY: 'agy' },
-  IMAGE_GEN_MODES: ['external', 'local', 'codex', 'grok', 'agy'],
+  IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex', GROK: 'grok', AGY: 'agy', FAL: 'fal' },
+  IMAGE_GEN_MODES: ['external', 'local', 'codex', 'grok', 'agy', 'fal'],
   CLOUD_IMAGE_GEN_MODES: ['codex', 'grok', 'agy'],
   resolveImageCleaners,
   local: {
@@ -343,7 +346,7 @@ describe('Image Gen Routes', () => {
   describe('FableLoom preview/send parity with the real compiler', () => {
     const defaultCompile = compileFableLoomVisualRequest.getMockImplementation();
     const defaultCapabilities = fableLoomImageCapabilities.getMockImplementation();
-    let canonLoom, canonUniverse, canonSeries;
+    let canonLoom, canonUniverse, canonSeries, canonLoras;
     beforeEach(async () => {
       const { naturalUniverseVisualProfile } = await import('../lib/universeVisualProfile.js');
       canonUniverse = {
@@ -365,12 +368,13 @@ describe('Image Gen Routes', () => {
         }] }],
       };
       canonSeries = null;
+      canonLoras = [];
       getLoom.mockImplementation(async () => canonLoom);
       const real = await vi.importActual('../services/fableLoom/visualConditioning.js');
       fableLoomImageCapabilities.mockImplementation(real.fableLoomImageCapabilities);
       compileFableLoomVisualRequest.mockImplementation(args => real.compileFableLoomVisualRequest({
         ...args, loadLoom: async () => canonLoom, loadUniverse: async () => canonUniverse,
-        loadSeries: async () => canonSeries, resolveLoras: async () => [],
+        loadSeries: async () => canonSeries, resolveLoras: async () => canonLoras,
       }));
       await fileUtils.ensureDir(fileUtils.PATHS.images);
       for (const name of ['neutral', 'profile', 'full-body', 'hall']) {
@@ -437,6 +441,153 @@ describe('Image Gen Routes', () => {
         if (text) expect(params.prompt.split(text)).toHaveLength(2);
       }
       if (!expectedProfile) expect(params.prompt).not.toContain(canonUniverse.visualProfile.generation.lighting);
+    });
+
+    it('preserves authored references and adapters in the preview and queued request', async () => {
+      canonLoom.episodes[0].nodes[0].visualCanon.placeId = null;
+      await fileUtils.ensureDir(fileUtils.PATHS.loras);
+      await writeFile(pathJoin(fileUtils.PATHS.images, 'example-request.png'), 'synthetic image fixture');
+      await writeFile(pathJoin(fileUtils.PATHS.loras, 'example-one.safetensors'), 'synthetic adapter');
+      await writeFile(pathJoin(fileUtils.PATHS.loras, 'example-one.safetensors.metadata.json'), JSON.stringify({ triggerWords: ['LOOM_TOKEN'] }));
+      await writeFile(pathJoin(fileUtils.PATHS.loras, 'example-two.safetensors'), 'synthetic adapter');
+      await writeFile(pathJoin(fileUtils.PATHS.loras, 'example-canon.safetensors'), 'synthetic canon adapter');
+      canonLoras = [{ filename: 'example-canon.safetensors', scale: 0.75, character: { entryId: 'example-character' } }];
+      const body = {
+        prompt: 'The scout arrives', mode: 'local', modelId: 'flux2-klein-9b-bf16',
+        fableLoom: { loomId: canonLoom.id, episodeId: 'ep-1', nodeId: 'node-1' },
+        referenceImageFiles: ['example-request.png'], referenceStrengths: [0.4],
+        loraFilenames: ['example-one.safetensors'],
+        loraPaths: [pathJoin(fileUtils.PATHS.loras, 'example-two.safetensors')], loraScales: [0.65, 0.35],
+      };
+      const settings = { imageGen: { mode: 'local', local: { modelId: body.modelId } } };
+      getSettings.mockResolvedValueOnce(settings);
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      getSettings.mockResolvedValueOnce(settings);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+      expect([preview.status, submit.status]).toEqual([200, 200]);
+      const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
+      expect(params.referenceImagePaths.map(path => basename(path))).toEqual([
+        'example-neutral.png', 'example-profile.png', 'example-full-body.png', 'example-request.png',
+      ]);
+      expect(params.referenceImageStrengths).toEqual([1, 1, 1, 0.4]);
+      expect(params.loraFilenames).toEqual(['example-canon.safetensors', ...body.loraFilenames]);
+      expect(params.loraPaths).toEqual(body.loraPaths);
+      expect(params.loraScales).toEqual([0.75, ...body.loraScales]);
+      expect(preview.body.sentPrompt).toContain('LOOM_TOKEN');
+      expect(params.visualConditioning.renderedPrompt).toBe(preview.body.sentPrompt);
+      expect(params.visualConditioning.adapters.map(adapter => adapter.sha256)).toEqual([
+        'synthetic canon adapter', 'synthetic adapter', 'synthetic adapter',
+      ].map(contents => createHash('sha256').update(contents).digest('hex')));
+      expect(preview.body.referenceImages.map(item => item.filename)).toEqual(params.referenceImagePaths.map(path => basename(path)));
+      expect(preview.body.referenceImages.at(-1)).toMatchObject({ source: 'Request reference', strength: 0.4 });
+      expect(preview.body.loraAdapters).toEqual([
+        { filename: 'example-canon.safetensors', scale: 0.75, source: 'Canon adapter' },
+        { filename: 'example-one.safetensors', scale: 0.65, source: 'Request adapter' },
+        { filename: 'example-two.safetensors', scale: 0.35, source: 'Request adapter' },
+      ]);
+    });
+
+    it('keeps the Qwen backend reference capacity for an authored draft', async () => {
+      canonLoom.episodes[0].nodes[0].visualCanon.mode = 'draft';
+      const references = Array.from({ length: 5 }, (_, index) => `example-user-${index}.png`);
+      await Promise.all(references.map(name => writeFile(pathJoin(fileUtils.PATHS.images, name), 'synthetic image fixture')));
+      const body = { prompt: 'The scout arrives', mode: 'local', modelId: 'qwen-image-2.1', referenceImageFiles: references,
+        fableLoom: { loomId: canonLoom.id, episodeId: 'ep-1', nodeId: 'node-1' } };
+      const settings = { imageGen: { mode: 'local', local: { modelId: body.modelId } } };
+      getSettings.mockResolvedValueOnce(settings);
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      getSettings.mockResolvedValueOnce(settings);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+      expect([preview.status, submit.status]).toEqual([200, 200]);
+      const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
+      expect(params.referenceImagePaths.map(path => basename(path))).toEqual(references);
+      expect(preview.body.referenceImages.map(item => item.filename)).toEqual(references);
+    });
+
+    it.each(['codex', 'fal'])('retains more than four authored references on %s', async mode => {
+      const references = Array.from({ length: 5 }, (_, index) => `example-cloud-${index}.png`);
+      await Promise.all(references.map(name => writeFile(pathJoin(fileUtils.PATHS.images, name), 'synthetic image fixture')));
+      const body = { prompt: 'The scout arrives', mode, referenceImageFiles: references,
+        fableLoom: { loomId: canonLoom.id, episodeId: 'ep-1', nodeId: 'node-1' } };
+      const settings = { imageGen: { mode, [mode]: { enabled: true } } };
+      getSettings.mockResolvedValueOnce(settings);
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      getSettings.mockResolvedValueOnce(settings);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+      expect([preview.status, submit.status]).toEqual([200, 200]);
+      const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
+      expect(params.referenceImagePaths.slice(-5).map(path => basename(path))).toEqual(references);
+      expect(preview.body.referenceImages.map(item => item.filename)).toEqual(params.referenceImagePaths.map(path => basename(path)));
+      expect(params.referenceImagePaths).toHaveLength(9);
+    });
+
+    it.each([
+      ['reference budget', 'agy', { referenceImageFiles: ['example-hall.png'] }, 'FABLELOOM_INPUT_BUDGET_EXCEEDED'],
+      ['unsupported adapter', 'codex', { loraFilenames: ['example.safetensors'] }, 'FABLELOOM_LORA_UNSUPPORTED'],
+      ['quantized adapter and references', 'local', { modelId: 'flux2-klein-9b', loraFilenames: ['example.safetensors'] }, 'FABLELOOM_INPUTS_INCOMPATIBLE'],
+      ['adapter budget', 'local', { modelId: 'flux2-klein-9b-bf16', loraFilenames: Array.from({ length: 8 }, (_, i) => `example-${i}.safetensors`), loraPaths: ['/example/other.safetensors'] }, 'FABLELOOM_LORA_BUDGET_EXCEEDED'],
+      ['missing adapter', 'local', { modelId: 'flux2-klein-9b-bf16', loraFilenames: ['missing-example.safetensors'] }, 'FABLELOOM_LORA_NOT_FOUND'],
+      ['duplicate adapter', 'local', { modelId: 'flux2-klein-9b-bf16', loraFilenames: ['example.safetensors'] }, 'FABLELOOM_LORA_DUPLICATE'],
+      ['orphan adapter scale', 'local', { modelId: 'flux2-klein-9b-bf16', loraScales: [0.5] }, 'FABLELOOM_LORA_SCALE_MISMATCH'],
+      ['unsupported reference strength', 'codex', { referenceImageFiles: ['example-hall.png'], referenceStrengths: [0.4] }, 'FABLELOOM_REFERENCE_STRENGTH_UNSUPPORTED'],
+      ['orphan reference strength', 'codex', { referenceStrengths: [0.4] }, 'FABLELOOM_REFERENCE_STRENGTH_MISMATCH'],
+    ])('refuses %s in both preview and submission without queueing', async (_label, mode, extra, code) => {
+      await fileUtils.ensureDir(fileUtils.PATHS.loras);
+      await writeFile(pathJoin(fileUtils.PATHS.loras, 'example.safetensors'), 'synthetic adapter');
+      if (_label === 'duplicate adapter') canonLoras = [{ filename: 'example.safetensors', scale: 0.75, character: { entryId: 'example-character' } }];
+      if (_label === 'unsupported reference strength') canonLoom.episodes[0].nodes[0].visualCanon.placeId = null;
+      const body = { prompt: 'The scout arrives', mode, ...extra,
+        fableLoom: { loomId: canonLoom.id, episodeId: 'ep-1', nodeId: 'node-1' } };
+      const settings = { imageGen: { mode, local: { modelId: body.modelId }, codex: { enabled: true }, agy: { enabled: true } } };
+      getSettings.mockResolvedValueOnce(settings);
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      getSettings.mockResolvedValueOnce(settings);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+      expect([preview.status, preview.body.code, preview.body.error]).toEqual([submit.status, submit.body.code, submit.body.error]);
+      expect(preview.status).toBe(400);
+      expect(preview.body.code).toBe(code);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('refuses unrecordable canon adapter evidence in preview and submission', async () => {
+      canonLoom.episodes[0].nodes[0].visualCanon.placeId = null;
+      await fileUtils.ensureDir(fileUtils.PATHS.loras);
+      await writeFile(pathJoin(fileUtils.PATHS.loras, 'example-canon.safetensors'), 'synthetic canon adapter');
+      canonLoras = [{ filename: 'example-canon.safetensors', scale: 3, character: { entryId: 'example-character' } }];
+      const body = {
+        mode: 'local', modelId: 'flux2-klein-9b-bf16', prompt: 'The scout arrives',
+        fableLoom: { loomId: canonLoom.id, episodeId: 'ep-1', nodeId: 'node-1' },
+      };
+      const localSettings = { imageGen: { mode: 'local', local: { modelId: body.modelId } } };
+      getSettings.mockResolvedValueOnce(localSettings);
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      getSettings.mockResolvedValueOnce(localSettings);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+      expect([preview.status, preview.body.code]).toEqual([400, 'FABLELOOM_PROVENANCE_UNAVAILABLE']);
+      expect([submit.status, submit.body.code, submit.body.error]).toEqual([preview.status, preview.body.code, preview.body.error]);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['Windows mflux', 'win32', 'dev'], ['MOSS', 'darwin', 'moss-image-sft-bf16'],
+    ])('refuses an init image on %s in preview and submission before queueing', async (_label, platform, modelId) => {
+      const restore = pinPlatform(platform);
+      try {
+        canonLoom.episodes[0].nodes[0].visualCanon = { mode: 'locked', characterAppearances: [], placeId: null, objectIds: [] };
+        const body = {
+          mode: 'local', modelId, prompt: 'An authored view', initImageFile: 'example-hall.png',
+          fableLoom: { loomId: canonLoom.id, episodeId: 'ep-1', nodeId: 'node-1' },
+        };
+        const localSettings = { imageGen: { mode: 'local', local: { modelId, pythonPath: '/example/python' } } };
+        getSettings.mockResolvedValueOnce(localSettings);
+        const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+        getSettings.mockResolvedValueOnce(localSettings);
+        const submit = await request(app).post('/api/image-gen/generate').send(body);
+        expect(preview.status).toBe(400);
+        expect(preview.body.code).toBe('FABLELOOM_INIT_UNSUPPORTED');
+        expect([submit.status, submit.body.code, submit.body.error]).toEqual([preview.status, preview.body.code, preview.body.error]);
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      } finally { restore(); }
     });
 
     it.each(['missing-universe', 'missing-binding', 'unsupported-backend', 'disabled-provider'])('matches the %s refusal without provider work', async failure => {

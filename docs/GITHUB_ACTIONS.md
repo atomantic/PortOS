@@ -833,13 +833,13 @@ speculative cross-browser matrix.
 
 ### Windows native contract coverage
 
-The canonical registry is `scripts/ci-test-plan.js` (23 files):
+The canonical registry is `scripts/ci-test-plan.js` (25 files):
 
 | Boundary | Retained suites |
 | --- | --- |
 | CLI launch, lookup, environment and cwd | `allowedCommands`, `agentGuard/index`, `bashResolver`, `bufferedSpawn`, `cliProviderRun`, `detachedSpawn`, `processEnv`, `processEnv.spawnOptions`, `spawnCwd` |
 | Shell dialects and TUI submission | `shellCd`, `shellExit`, `shellLivenessProbe`, `shellReadinessProbe`, `tuiPromptRunner`, `shell.windows` |
-| Native cancellation, ownership and filesystem safety | `windowsGitProcess`, `windowsGitProcess.protocol`, `gitRepositoryIdentity`, `checkoutRetirementAdmission`, `worktreeOwnership`, `staticImportGraph`, `nativeTrash`, `nativeTrash.smoke` |
+| Native cancellation, ownership and filesystem safety | `execGit`, `windowsAgentProcess`, `windowsGitProcess`, `windowsGitProcess.protocol`, `gitRepositoryIdentity`, `checkoutRetirementAdmission`, `worktreeOwnership`, `staticImportGraph`, `nativeTrash`, `nativeTrash.smoke` |
 
 `server/services/shell.windows.test.js` uses real ConPTY with cmd and PowerShell,
 a tiny local CLI stand-in and synthetic prompt/reply files. It verifies exact
@@ -866,7 +866,8 @@ therefore retains the schema's primary-platform coverage while selecting the
 native Windows set on one runner.
 
 Before this support-boundary change, pipeline/full plans selected four Windows
-jobs over the server inventory. They now select one job over 23 native suites.
+jobs over the server inventory. At that change, they selected one job over 23
+native suites; the curated set can grow as native contracts are added.
 This is a measured selection/setup reduction, not an execution-time or
 runner-minute speedup claim. The obsolete Scalar package/chunk absence suite and
 its extra post-build invocation are retired; the actual rendered API Explorer
@@ -1346,8 +1347,8 @@ Commit intended changes and push to the branch's verified remote destination.
 Integrate the fetched base when there is an actual conflict, an enforced
 up-to-date policy, or evidenced semantic overlap; rerun pregate after a rebase.
 A moving main alone does not require a new head or another hosted CI run.
-Managed merges still require fresh combined-tree structural guards and live
-head/base checks under the merge policy in the root AGENTS.md.
+Managed merges follow the hosting-provider eligibility and pinned-head policy
+in the root AGENTS.md; combined-tree guards remain available for investigation.
 
 ## Adapting for Sub-Projects
 

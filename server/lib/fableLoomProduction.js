@@ -47,12 +47,13 @@ const trimModelId = (value) => (typeof value === 'string' && value.trim()
   ? value.trim().slice(0, 64)
   : null);
 
-const recordedFileChecksumIssue = ({ label, filename, sha256 }, installedByFilename) => {
+const recordedFileChecksumIssue = ({ label, filename, relativePath, sha256 }, installedByFilename) => {
   if (!isNonBlankStr(filename)) return `Recorded character ${label} has no filename.`;
   if (!isNonBlankStr(sha256)) {
     return `Recorded character ${label} "${filename}" has no checksum to verify exact inputs.`;
   }
-  const installedFile = installedByFilename.find((file) => file?.filename === filename);
+  const installedFile = installedByFilename.find((file) => file?.filename === filename
+    && (relativePath ? file.relativePath === relativePath : !file.relativePath || file.relativePath === filename));
   if (!installedFile) return `Recorded character ${label} "${filename}" is not installed locally.`;
   if (!isNonBlankStr(installedFile.sha256)) {
     return `Installed character ${label} "${filename}" has no checksum to verify exact inputs.`;

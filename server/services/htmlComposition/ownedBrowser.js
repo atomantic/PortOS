@@ -76,7 +76,7 @@ function isolationUnavailable(reason) {
 // Generated previews pass `'required'` and talk CDP over pipes so loopback IP
 // can be denied too. `'off'` exists for the egress negative control.
 export async function launchCompositionBrowser({
-  signal, startupMs = 20000, shutdownMs = 5000, isolation = 'legacy', support,
+  signal, startupMs = 20000, shutdownMs = 5000, isolation = 'legacy', support, onCleanupFailure,
 } = {}) {
   signal?.throwIfAborted();
   const piped = isolation !== 'legacy';
@@ -353,7 +353,7 @@ export async function launchCompositionBrowser({
     if (piped) return { transport, close, lifecycleFacts, mechanism: plan.mechanism };
     return { webSocketDebuggerUrl: ready, close, lifecycleFacts };
   } catch (error) {
-    await close();
+    try { await close(); } catch (cleanupError) { onCleanupFailure?.(cleanupError); throw cleanupError; }
     throw error;
   }
 }

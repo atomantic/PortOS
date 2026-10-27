@@ -3,7 +3,7 @@ import { normalizeUniverseVisualProfile, visualProfileLook } from '../../lib/uni
 import { imageVisualProfileRevision } from './visualProfile.js';
 
 /** Provider-independent finish, after its source exists and before queue completion. */
-export async function finishVisualProfileImage({ result, profile: input, signal }) {
+export async function finishVisualProfileImage({ result, profile: input, signal, onCleanupFailure }) {
   const profile = normalizeUniverseVisualProfile(input);
   if (!profile || !result.filename) throw new Error('Image visual profile or source is invalid');
   const { assertGalleryFilename, readImageSidecar, fillImageSidecarFields } = await import('./local.js');
@@ -17,7 +17,7 @@ export async function finishVisualProfileImage({ result, profile: input, signal 
   const { applyFilmLookBake } = await import('./filmLookBake.js');
   signal.throwIfAborted();
   const finishedVariant = await applyFilmLookBake({ filename: result.filename, sourceMeta: { ...sourceMeta, ...metadata,
-    generationVisualProfile: sourceMeta.visualProfile, generationVisualProfileRevision: sourceMeta.visualProfileRevision }, look, signal });
+    generationVisualProfile: sourceMeta.visualProfile, generationVisualProfileRevision: sourceMeta.visualProfileRevision }, look, signal, onCleanupFailure });
   signal.throwIfAborted();
   // The authoritative reference remains the ungraded source. Presentation
   // variants are discoverable in the gallery without contaminating identity refs.

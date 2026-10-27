@@ -17,6 +17,7 @@ import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { extname, join } from 'node:path';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { describeFilmLook, filmLookFilterMarkup, isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
 import { persistVariant } from './variants.js';
@@ -62,7 +63,7 @@ function filmLookBakePage(look, { width, height, src }) {
  * Bake `look` into a new copy of gallery image `filename`; resolves the
  * gallery-compatible record of the copy (persistVariant's shape).
  */
-export async function applyFilmLookBake({ filename, sourceMeta, look: input, signal }) {
+export async function applyFilmLookBake({ filename, sourceMeta, look: input, signal, onCleanupFailure }) {
   const look = normalizeFilmLook(input);
   if (!look || isFilmLookNeutral(look)) throw new ServerError('The film look has no effect; move a control before saving a copy', { status: 422, code: 'FILM_LOOK_NEUTRAL' });
   if (look.version === 2 && sourceMeta.filmLookFrom) {
@@ -91,12 +92,19 @@ export async function applyFilmLookBake({ filename, sourceMeta, look: input, sig
   const scratch = join(PATHS.data, FILM_LOOK_SCRATCH_DIR, id);
   let page;
   let png;
+  let cleanupUncertain = false;
+  const recordCleanupFailure = () => {
+    if (cleanupUncertain) return;
+    cleanupUncertain = true;
+    maintenance.markCurrentUnsettled();
+    onCleanupFailure?.();
+  };
   try {
     await mkdir(scratch, { recursive: true });
     const src = `source${ext}`;
     await copyFile(sourcePath, join(scratch, src));
     await writeFile(join(scratch, 'index.html'), filmLookBakePage(look, { width, height, src }));
-    page = await openComposition(`${FILM_LOOK_SCRATCH_DIR}/${id}`, { signal, ownedBrowser: true });
+    page = await openComposition(`${FILM_LOOK_SCRATCH_DIR}/${id}`, { signal, ownedBrowser: true, onOwnerCleanupFailure: recordCleanupFailure });
     await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
     if (look.version === 2) await page.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
     // The resize relays out the page; the screenshot waits for the paint after it.
@@ -107,8 +115,8 @@ export async function applyFilmLookBake({ filename, sourceMeta, look: input, sig
     await page.close({ verify: true });
     page = null;
   } finally {
-    if (page) await page.close().catch(() => {});
-    await rm(scratch, { recursive: true, force: true }).catch(() => {});
+    if (page) await page.close().catch(error => { recordCleanupFailure(); throw error; });
+    if (!cleanupUncertain) await rm(scratch, { recursive: true, force: true }).catch(error => { recordCleanupFailure(); throw error; });
   }
   const data = Buffer.from(png, 'base64');
 
