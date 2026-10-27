@@ -149,8 +149,10 @@ export function universeStylePreset(universe, series = null) {
     override: series?.stylePromptOverride,
     mode: series?.stylePromptOverrideMode,
   });
-  const negativePrompt = universeVisualStyleTokens(universe).avoid.join(', ');
   const visualProfile = resolveUniverseVisualProfile(universe, undefined, series);
+  // A series replacement suppresses the inherited photography profile, while
+  // the universe's explicit avoid chips still apply to every series.
+  const negativePrompt = universeVisualStyleTokens({ ...universe, visualProfile }).avoid.join(', ');
   if (!prompt && !negativePrompt && !visualProfile) return null;
   return { prompt, negativePrompt, ...(visualProfile ? { visualProfile } : {}) };
 }
