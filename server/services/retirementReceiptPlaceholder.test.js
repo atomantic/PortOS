@@ -41,6 +41,14 @@ beforeEach(async () => {
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 afterAll(cleanupTempDataRoots);
 
+function expectAbsentHistory(result, observation) {
+  expect(result.retirementObligations).not.toContainEqual(expect.objectContaining(observation));
+  expect(result.legacyRetirementTransition.resolutions).toContainEqual(expect.objectContaining({
+    observation, removalVerified: false,
+    evidence: { kind: 'current-local-absence', deliveryVerified: false, preservationVerified: false },
+  }));
+}
+
 describe('stale branch-only retirement placeholders', () => {
   it('uses verified ref finalization to settle a delayed branch-only row without changing physical removal time', async () => {
     const observation = { ...row, createdAt: '2026-01-05T00:00:00.000Z' };
@@ -54,7 +62,7 @@ describe('stale branch-only retirement placeholders', () => {
   });
 
   it.each(['settled', 'recreated', 'ambiguous', 'different-path'])(
-    'reconciles a delayed echoed-ref row only against its absent exact receipt: %s', async scenario => {
+    'keeps verified receipt binding distinct from absent historical source: %s', async scenario => {
       const observation = { ...row, path: receipt.path, head: row.branch,
         createdAt: '2026-01-03T00:00:00.000Z' }; // After the real removal receipt.
       const receipts = [receipt];
@@ -69,7 +77,8 @@ describe('stale branch-only retirement placeholders', () => {
         const saved = await readFile(schedulePath, 'utf8');
         await getBranchReconcileInventory(appId);
         expect(await readFile(schedulePath, 'utf8')).toBe(saved);
-      } else expect(result.retirementObligations).toContainEqual(expect.objectContaining(observation));
+      } else if (scenario === 'recreated') expect(result.retirementObligations).toContainEqual(expect.objectContaining(observation));
+      else expectAbsentHistory(result, observation);
       if (scenario === 'recreated') expect(await readFile(join(receipt.path, 'unique.txt'), 'utf8')).toBe('unfinished work');
     });
 
@@ -99,7 +108,7 @@ describe('stale branch-only retirement placeholders', () => {
     expect(await readFile(schedulePath, 'utf8')).toBe(before);
     expect(await git('status', '--porcelain')).toBe('');
   });
-  it('keeps the unprocessed observation when one receipt reaches its audit budget in a batch', async () => {
+  it('retains receipt audit limits and records excess absent observations without claiming deletion', async () => {
     receipt.settledObservations = Array.from({ length: 999 }, (_, i) => ({ observation: { ...row, branch: `feature/prior-${i}` }, settledAt: receipt.retiredAt }));
     await seed({ receipts: [receipt] });
     const second = { ...row, createdAt: '2026-01-01T00:00:01.000Z' };
@@ -108,7 +117,7 @@ describe('stale branch-only retirement placeholders', () => {
     await writeFile(schedulePath, JSON.stringify(schedule));
     const result = await getBranchReconcileInventory(appId);
     expect(result.retired[0].settledObservations).toHaveLength(1000);
-    expect(result.retirementObligations).toEqual([second]);
+    expectAbsentHistory(result, second);
   });
 
   it.each(['moved', 'progressed', 'old-path-recreated', 'unrelated-head'])(
@@ -129,6 +138,9 @@ describe('stale branch-only retirement placeholders', () => {
       if (['moved', 'progressed'].includes(scenario)) {
         expect(result.remaining).toEqual([]); expect(result.retirementObligations).toEqual([]);
         expect(result.retired[0]).toMatchObject({ retiredAt: receipt.retiredAt, settledObservations: [{ observation }] });
+      } else if (scenario === 'unrelated-head') {
+        expectAbsentHistory(result, observation);
+        expect(result.retired[0].settledObservations).toBeUndefined();
       } else {
         expect(result.retirementObligations).toContainEqual(expect.objectContaining(observation));
         if (scenario === 'old-path-recreated') expect(await readFile(join(observation.path, 'new.txt'), 'utf8')).toBe('unique work\n');
@@ -136,7 +148,7 @@ describe('stale branch-only retirement placeholders', () => {
     });
 
   it.each(['ambiguous', 'recreated-branch', 'recreated-path', 'active-owner', 'human-handoff', 'new-generation', 'newer-placeholder', 'missing-receipt', 'unreadable-owners', 'locked-placeholder', 'nonreceipt', 'invalid-archive'])(
-    'retains real or ambiguous unfinished evidence: %s', async scenario => {
+    'retains live holds and audits absent ambiguous history: %s', async scenario => {
       const receipts = [receipt]; const observation = { ...row };
       if (scenario === 'ambiguous') receipts.push({ ...receipt, checkoutIdentity: 'c'.repeat(64) });
       if (scenario === 'recreated-branch') await git('branch', row.branch);
@@ -152,7 +164,8 @@ describe('stale branch-only retirement placeholders', () => {
       if (scenario === 'invalid-archive') receipt.archiveDir = '';
       await seed({ receipts, observation });
       const result = await getBranchReconcileInventory(appId);
-      expect(result.retirementObligations).toContainEqual(expect.objectContaining(observation));
+      if (['ambiguous', 'new-generation', 'newer-placeholder', 'missing-receipt', 'nonreceipt', 'invalid-archive'].includes(scenario)) expectAbsentHistory(result, observation);
+      else expect(result.retirementObligations).toContainEqual(expect.objectContaining(observation));
       expect(result.retired?.some(value => value.settledObservations?.length)).toBe(false);
       if (scenario === 'recreated-path') expect(await readFile(join(receipt.path, 'new-work.txt'), 'utf8')).toBe('unique work\n');
     });

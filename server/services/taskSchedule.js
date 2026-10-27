@@ -930,20 +930,20 @@ export async function getBranchReconcileOutcome(appId) {
 
 export async function getBranchReconcileInventory(appId) {
   const outcome = await getBranchReconcileOutcome(appId);
+  // Preserve stronger existing receipt bindings before retiring an observation
+  // as merely absent. Absence never replaces a real deletion receipt.
+  const repaired = ![...(outcome?.remaining || []), ...(outcome?.retirementObligations || [])].some(row => isObligationRow(row))
+    ? outcome : await updateSchedule(async schedule => {
+      const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+      const before = record.branchReconcileOutcome;
+      const after = await repairReceiptObservations(appId, before);
+      const changed = after !== before;
+      if (changed) record.branchReconcileOutcome = after;
+      return { result: after, changed };
+    });
   const { reconcileLegacyRetirementRecords } = await import('./legacyRetirementReconciliation.js');
-  const current = await reconcileLegacyRetirementRecords(appId, outcome).catch(() => outcome);
-  if (![...(current?.remaining || []), ...(current?.retirementObligations || [])].some(row => isObligationRow(row))) return reconcileMissingInventory(appId, current);
-  // Recover persisted receipt bindings after restart too; compare/write inside the
-  // normal serialized store, without replaying an old retirement transaction.
-  const repaired = await updateSchedule(async schedule => {
-    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
-    const before = record.branchReconcileOutcome;
-    const after = await repairReceiptObservations(appId, before);
-    const changed = after !== before;
-    if (changed) record.branchReconcileOutcome = after;
-    return { result: after, changed };
-  });
-  return reconcileMissingInventory(appId, repaired);
+  const current = await reconcileLegacyRetirementRecords(appId, repaired).catch(() => repaired);
+  return reconcileMissingInventory(appId, current);
 }
 
 const missingPreservationObligation = row => ({ ...row, reason: 'retirement-provenance-unverified' });

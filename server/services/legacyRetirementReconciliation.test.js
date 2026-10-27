@@ -91,7 +91,7 @@ describe('legacy retirement transition at the persisted reconciliation boundary'
     markLegacyRetirements(outcome);
     const plans = await _planLegacyRetirementReconciliation({ repoPath: repo, outcome, agents: [], trees: [], defaultHead: forge.mergeCommit });
     expect(plans).toHaveLength(1);
-    expect(plans[0]).toMatchObject({ removalVerified: true, evidence: { kind: 'existing-service-receipt', receipt } });
+    expect(plans[0]).toMatchObject({ removalVerified: false, evidence: { kind: 'current-local-absence', preservationVerified: false } });
     // A newer reviewed head retired the same physical checkout after this
     // observation. Old intermediate heads are not separate lost checkouts.
     const intermediate = { ...row, head: 'c'.repeat(40), checkoutIdentity: receipt.checkoutIdentity,
@@ -99,7 +99,7 @@ describe('legacy retirement transition at the persisted reconciliation boundary'
     const progressed = { retirementObligations: [intermediate], remaining: [intermediate], retired: [receipt] };
     markLegacyRetirements(progressed);
     expect(await _planLegacyRetirementReconciliation({ repoPath: repo, outcome: progressed, agents: [], trees: [], defaultHead: forge.mergeCommit }))
-      .toMatchObject([{ removalVerified: true, observation: intermediate }]);
+      .toMatchObject([{ removalVerified: false, observation: intermediate }]);
     const changed = { ...malformed, checkoutIdentity: 'b'.repeat(64) };
     const different = { retirementObligations: [changed], remaining: [changed], retired: [receipt] };
     markLegacyRetirements(different);

@@ -7,7 +7,6 @@ import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
 import { explicitPrCompletion, PR_COMPLETIONS } from '../lib/prDisposition.js';
 import { legacyRetirementKey } from '../lib/legacyRetirementTransition.js';
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
-import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
 
 const oid = value => typeof value === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(value);
 const samePath = (a, b) => typeof a === 'string' && typeof b === 'string'
@@ -50,29 +49,6 @@ async function absent(repoPath, row, trees, agents, identities = new Map()) {
     || trees.some(tree => tree.branch === `refs/heads/${row.branch}` || samePath(tree.path, row.path))) return false;
   if (row.path && await readCheckoutPathPresence(row.path) !== false) return false;
   return !row.branch || await readLocalBranchPresence(repoPath, row.branch) === false;
-}
-
-function targetFor(outcome, row, repoPath, agents) {
-  const knownReceipts = [...(outcome.retired || []), ...Object.values(outcome.retirementReceiptEvidence || {})];
-  const receipts = knownReceipts
-    .filter(receipt => receipt.branchDeleted === true && receipt.branch === row.branch && oid(receipt.head)
-      && receipt.path && Number.isFinite(Date.parse(receipt.retiredAt))
-      && (!row.path || samePath(row.path, receipt.path))
-      && (!oid(row.head) || row.head === receipt.head || (row.checkoutIdentity && row.checkoutIdentity === receipt.checkoutIdentity
-        && Number.isFinite(Date.parse(row.observedAt || row.createdAt))
-        && Date.parse(receipt.retiredAt) >= Date.parse(row.observedAt || row.createdAt)))
-      && (!row.checkoutIdentity || row.checkoutIdentity === receipt.checkoutIdentity));
-  const unique = [...new Map(receipts.map(receipt => [JSON.stringify([receipt.path, receipt.head, receipt.checkoutIdentity]), receipt])).values()];
-  if (unique.length === 1) return { target: { ...row, ...unique[0] }, receipt: unique[0] };
-  if (unique.length > 1) return null;
-  if (row.checkoutIdentity && knownReceipts.some(receipt => receipt.branch === row.branch
-    && samePath(receipt.path, row.path) && receipt.checkoutIdentity && receipt.checkoutIdentity !== row.checkoutIdentity)) return null;
-  if (oid(row.head) && row.path) return { target: row };
-  const captures = agents.flatMap(agent => (agent.metadata?.completedCheckouts || [])
-    .filter(capture => samePath(capture.repoPath, repoPath) && capture.branch === row.branch
-      && (!row.path || samePath(row.path, capture.path)) && (!oid(row.head) || row.head === capture.head)
-      && !row.checkoutIdentity && completedCheckoutReceiptValid(agent, capture)));
-  return captures.length === 1 ? { target: { ...row, ...captures[0] } } : null;
 }
 
 // Bind a stale observation only to an existing service receipt: an unscoped
@@ -173,12 +149,15 @@ export async function _planLegacyRetirementReconciliation({ repoPath, outcome, a
     // Local absence settles local cleanup only. It says nothing about whether
     // deleted source was delivered or preserved; retain that uncertainty in the
     // existing history instead of demanding another remote merge certificate.
-    if (!await absent(repoPath, observation, trees, agents, identities)) continue;
-    const receipt = targetFor(outcome, observation, repoPath, agents)?.receipt;
+    if (observation.locked === true || !await absent(repoPath, observation, trees, agents, identities)) continue;
+    // A branch-only placeholder can still refer to a surviving recorded path.
+    // Check those local targets too; an absent ref must not conceal their work.
+    const recordedPaths = [...(outcome.retired || []), ...Object.values(outcome.retirementReceiptEvidence || {})]
+      .filter(row => row.branch === observation.branch && typeof row.path === 'string');
+    if ((await Promise.all(recordedPaths.map(row => readCheckoutPathPresence(row.path)))).some(value => value !== false)) continue;
     resolutions.push({ key: legacyRetirementKey(observation), observation,
-      target: observation, evidence: receipt ? { kind: 'existing-service-receipt', receipt }
-        : { kind: 'current-local-absence', deliveryVerified: false, preservationVerified: false },
-      disposition: 'local-cleanup-not-required', removalVerified: Boolean(receipt) });
+      target: observation, evidence: { kind: 'current-local-absence', deliveryVerified: false, preservationVerified: false },
+      disposition: 'local-cleanup-not-required', removalVerified: false });
   }
   return resolutions;
 }
