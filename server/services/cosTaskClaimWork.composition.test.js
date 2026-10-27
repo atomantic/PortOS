@@ -26,7 +26,7 @@ import { buildImprovementTaskDescription } from './cosTaskPreStepBlocks.js';
 import { preflightClaimReviewers } from './claimReviewerPreflight.js';
 
 const app = { id: 'fixture', name: 'Fixture', repoPath: '/fixture' };
-const issueContext = { number: 42, title: 'A target issue', body: 'User-visible issue body.\n'.repeat(500) };
+const issueContext = { number: 42, title: 'A target issue', body: 'User-visible issue body.\n'.repeat(400) };
 
 const renderAgent = (claim, resume = false) => buildLightContextPrompt({
   id: 'task-fixture', description: 'Claim the selected issue',
@@ -43,7 +43,7 @@ beforeEach(() => { state.tracker = 'github'; state.prompts = {}; });
 describe('assembled forge claim prompts', () => {
   it.each(['github', 'gitlab'])('pins the %s target before safety checks and preserves complete supplied content', async (tracker) => {
     state.tracker = tracker;
-    const guidance = `Keep the full guidance. ${'x'.repeat(4100)}`;
+    const guidance = `Keep the full guidance. ${'x'.repeat(3900)}`;
     const claim = await buildClaimWorkTask(app, { target: '42', issueContext, overrideContext: guidance, prCompletion: 'merge-on-green' });
     const prompt = renderAgent(claim);
     expect(claim.prompt.indexOf('issue #42')).toBeLessThan(100);
@@ -63,12 +63,14 @@ describe('assembled forge claim prompts', () => {
     expect(prompt).not.toContain('Run each LOCAL reviewer');
     expect(prompt).not.toContain('REVIEW_ATTEMPTED_HEAD=');
     expect(prompt).not.toContain('Required-review publication rule');
-    expect(prompt).not.toContain('PR_REVIEW_ATTRIBUTION.md');
+    expect(prompt).toContain('If this workflow actually runs local pre-PR reviewers');
     expect(prompt).toContain('self-review');
     if (tracker === 'github') {
       expect(prompt.indexOf('Before assigning a contributor')).toBeLessThan(prompt.indexOf('gh issue edit "${CANDIDATE}" --add-assignee'));
       expect(prompt).toContain('commits endpoints');
       expect(prompt).toContain('--match-head-commit');
+    } else {
+      expect(prompt).toContain('If no claimant exists, set `NUM="$CANDIDATE"`');
     }
   });
 
@@ -87,7 +89,19 @@ describe('assembled forge claim prompts', () => {
       expect(prompt).not.toContain('gh pr merge');
       expect(prompt).not.toContain('gh issue close');
       expect(prompt).not.toContain('branch-reconcile/checkouts/retire');
+      if (policy === 'draft') {
+        expect(prompt).toContain('gh pr create --draft');
+        expect(prompt).toContain('gh pr view --json isDraft');
+      }
     }
+  });
+
+  it('creates and verifies a GitLab draft explicitly', async () => {
+    state.tracker = 'gitlab';
+    const claim = await buildClaimWorkTask(app, { target: '42', prCompletion: 'draft' });
+    expect(claim.prompt).toContain('--yes --draft');
+    expect(claim.prompt).toContain('glab mr view --output json');
+    expect(claim.prompt).toContain('draft: true');
   });
 
   it.each(['github', 'gitlab'])('keeps automatic %s selection while applying its effective policy', async (tracker) => {
@@ -110,6 +124,7 @@ describe('assembled forge claim prompts', () => {
     expect(claim.prompt.indexOf('Effective PR completion policy: leave-open')).toBeLessThan(claim.prompt.indexOf(custom));
     expect(claim.prompt).toContain('Target Issue Constraint');
     expect(claim.prompt).not.toContain('## Before claim mutation');
+    expect(renderAgent(claim)).toContain('If this workflow actually runs local pre-PR reviewers');
   });
 
   it('keeps the target and policy first when optional reviewer preflight emits a notice', async () => {
@@ -126,6 +141,14 @@ describe('assembled forge claim prompts', () => {
     expect(claim.prompt).toContain(custom);
     expect(claim.prompt).toContain('Effective PR completion policy: merge-on-green');
     expect(claim.prompt).toContain('Target Issue Constraint');
+    expect(renderAgent(claim)).toContain('If this workflow actually runs local pre-PR reviewers');
+  });
+
+  it('rejects oversized direct claim inputs before constructing a partial prompt', async () => {
+    await expect(buildClaimWorkTask(app, { target: '42', issueContext: { ...issueContext, body: 'x'.repeat(12_001) } }))
+      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    await expect(buildClaimWorkTask(app, { target: '42', overrideContext: 'x'.repeat(4_001) }))
+      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
   });
 
   it('does not recompose an explicitly user-pinned body even if it equals the shipped default', async () => {

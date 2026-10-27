@@ -5,7 +5,8 @@
  * and persistence remain in cosTaskGenerator.js.
  */
 
-import { buildReviewerEffortNote, isToolFreeReviewer } from '../lib/validation.js';
+import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, PREFETCHED_ISSUE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, isToolFreeReviewer } from '../lib/validation.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import { neutralizePromptTags } from '../lib/promptFencing.js';
 import { LOCAL_REVIEW_BRIDGE_SCRIPT, localReviewAttributionErrorGate } from '../lib/localReviewBridge.js';
@@ -56,6 +57,12 @@ export function buildPrefetchedIssueContextBlock(promptTaskType, target, issueCo
   const issueNumber = Number(issueContext?.number);
   if (!Number.isSafeInteger(issueNumber) || issueNumber !== Number(target)) return '';
 
+  for (const [field, limit] of Object.entries(PREFETCHED_ISSUE_CONTEXT_MAX_CHARS)) {
+    if (typeof issueContext?.[field] === 'string' && issueContext[field].length > limit) {
+      throw new ServerError(`Issue ${field} exceeds the ${limit}-character limit`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+  }
+
   const title = typeof issueContext?.title === 'string'
     ? neutralizePromptTags(issueContext.title)
     : '';
@@ -86,6 +93,9 @@ export const appendPrefetchedIssueContext = (promptTaskType, target, issueContex
 
 export function buildClaimOverrideContextBlock(overrideContext) {
   if (typeof overrideContext !== 'string') return '';
+  if (overrideContext.length > CLAIM_OVERRIDE_CONTEXT_MAX_CHARS) {
+    throw new ServerError(`Claim guidance exceeds the ${CLAIM_OVERRIDE_CONTEXT_MAX_CHARS}-character limit`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
   if (!overrideContext.trim()) return '';
 
   return `## Claim Override Context

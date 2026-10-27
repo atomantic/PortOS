@@ -649,7 +649,6 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
   const attributionOptions = skipDevContext ? null : {
     providerId, model: providerModel,
     forgeCli: await resolveManualForgeCli(workspaceDir, worktreeInfo, task),
-    includeReview: !claimFlow || prCompletion !== PR_COMPLETIONS.MERGE_ON_GREEN,
   };
   const issueFilingSection = skipDevContext
     ? ''
@@ -1154,8 +1153,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   // and a model cannot name itself.
   const lightFilingSection = buildIssueFilingSection({ providerId, model: providerModel, forgeCli: resolvedForgeCli, taskBody: [task.description, context] });
   if (lightFilingSection) contractSections.push(lightFilingSection);
-  contractSections.push(buildPrAttributionSection({ model: providerModel, forgeCli: resolvedForgeCli,
-    includeReview: !claimFlow || prCompletion !== PR_COMPLETIONS.MERGE_ON_GREEN }));
+  contractSections.push(buildPrAttributionSection({ model: providerModel, forgeCli: resolvedForgeCli }));
 
   // --- Orchestrated execution ---------------------------------------------
   // Sits directly after planner attribution and before the worktree/completion

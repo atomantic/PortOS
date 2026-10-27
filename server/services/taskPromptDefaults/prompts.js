@@ -3587,7 +3587,7 @@ On a failed or incomplete fetch, truncate the file and retry once; if it still f
 ${CLAIM_COMMENT_CLASSIFIER}
 rm -f "$COMMENTS_FILE"
 \`\`\`
-For a claimant, verify project assignment eligibility, assign the exact login and verify readback; then mark in-progress and retire contributor-invitation labels. Stop without a worktree. If eligibility, assignment or readback fails, do not claim it yourself or write claim markers; follow the selection exit.`;
+For a claimant, verify project assignment eligibility, assign the exact login and verify readback; then mark in-progress and retire contributor-invitation labels. Stop without a worktree. If eligibility, assignment or readback fails, do not claim it yourself or write claim markers; follow the selection exit. If no claimant exists, set \`NUM="$CANDIDATE"\` and continue.`;
 
 function claimPinnedPreparation(forge, target) {
   const github = forge === 'github';
@@ -3644,10 +3644,15 @@ Follow the repository's changelog convention, then review your own diff for reus
 function claimPublication(forge, { review, leaveOpen, draft }) {
   const github = forge === 'github';
   const change = github ? 'PR' : 'MR';
-  const create = github ? '`gh pr create`' : '`glab mr create --source-branch "claim/issue-${NUM}" --target-branch "${DEFAULT_BRANCH}" --yes`';
+  const create = github
+    ? `\`gh pr create${draft ? ' --draft' : ''} --title "<title>" --body-file "<body-file>"\``
+    : `\`glab mr create --fill --source-branch "claim/issue-\${NUM}" --target-branch "\${DEFAULT_BRANCH}" --yes${draft ? ' --draft' : ''}\``;
+  const draftCheck = github
+    ? '`gh pr view --json isDraft -q .isDraft` returns `true`'
+    : '`glab mr view --output json` reports `draft: true`';
   return `## Phase 6 — Publish and validate
 
-Push \`claim/issue-\${NUM}\`, confirm \`git log --oneline @{u}..HEAD\` is empty, and open the ${change} with ${create}${draft ? ' as a draft' : ''}. Summarize the change and test plan. For a complete fix use \`Closes #\${NUM}\`; for partial scope use \`Refs #\${NUM}\` and a Remaining section. This flow does NOT touch PLAN.md.
+Push \`claim/issue-\${NUM}\`, confirm \`git log --oneline @{u}..HEAD\` is empty, and open the ${change} non-interactively with ${create}. Summarize the change and test plan. For a complete fix use \`Closes #\${NUM}\`; for partial scope use \`Refs #\${NUM}\` and a Remaining section. Verify the published description contains the intended trailer, updating it if necessary. ${draft ? `Verify ${draftCheck}; if not, preserve the claim and report the publication failure.` : ''} This flow does NOT touch PLAN.md.
 
 ${review ? (github ? CLAIM_GITHUB_PUBLISHED_REVIEW : CLAIM_GITLAB_PUBLISHED_REVIEW) : ''}
 

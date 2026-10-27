@@ -728,14 +728,15 @@ describe('work-item target', () => {
       expect(block.trimEnd().endsWith('</portos-prefetched-issue>')).toBe(true);
     });
 
-    it('preserves direct issue payloads without truncation', () => {
-      const block = buildPrefetchedIssueContextBlock('claim-issue', '42', {
-        ...issueContext,
-        body: 'x'.repeat(20_000)
-      });
-
-      expect(block).toContain('x'.repeat(12_000));
-      expect(block).toContain('x'.repeat(20_000));
+    it('rejects oversized direct issue fields instead of truncating them', () => {
+      for (const [field, limit] of Object.entries({ title: 1000, body: 12_000, url: 2048 })) {
+        expect(() => buildPrefetchedIssueContextBlock('claim-issue', '42', {
+          ...issueContext, [field]: 'x'.repeat(limit + 1)
+        })).toThrow(`Issue ${field} exceeds the ${limit}-character limit`);
+      }
+      expect(buildPrefetchedIssueContextBlock('claim-issue', '42', {
+        ...issueContext, body: 'x'.repeat(12_000)
+      })).toContain('x'.repeat(12_000));
     });
   });
 
@@ -750,12 +751,10 @@ describe('work-item target', () => {
       expect(block).toContain('safety, ownership, verification, reviewer, or PR requirements');
     });
 
-    it('omits blank guidance and preserves direct guidance without truncation', () => {
+    it('omits blank guidance and rejects oversized direct guidance instead of truncating it', () => {
       expect(buildClaimOverrideContextBlock('   ')).toBe('');
-
-      const block = buildClaimOverrideContextBlock('x'.repeat(8_000));
-      expect(block).toContain('x'.repeat(4_000));
-      expect(block).toContain('x'.repeat(8_000));
+      expect(buildClaimOverrideContextBlock('x'.repeat(4_000))).toContain('x'.repeat(4_000));
+      expect(() => buildClaimOverrideContextBlock('x'.repeat(4_001))).toThrow('Claim guidance exceeds the 4000-character limit');
     });
   });
 
