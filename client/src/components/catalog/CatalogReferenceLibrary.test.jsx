@@ -274,7 +274,7 @@ describe('CatalogReferenceLibrary', () => {
     expect(screen.getAllByTestId('library-row')).toHaveLength(4);
   });
 
-  it('renders good, bad, and rejected rating buttons on reference image cards and toggles rating', async () => {
+  it('rates reference cards good or bad only, and shows a legacy rejected rating as bad', async () => {
     const onChanged = vi.fn();
     render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[
       { mediaKey: 'sample.png', kind: 'reference', library: { review: { status: 'unreviewed' } } },
@@ -283,11 +283,11 @@ describe('CatalogReferenceLibrary', () => {
     const ratingGroup = screen.getByRole('group', { name: 'Rating for sample.png' });
     const goodBtn = within(ratingGroup).getByRole('button', { name: /good/i });
     const badBtn = within(ratingGroup).getByRole('button', { name: /bad/i });
-    const rejectedBtn = within(ratingGroup).getByRole('button', { name: /rejected/i });
+    expect(within(ratingGroup).queryByRole('button', { name: /rejected/i })).toBeNull();
+    expect(screen.queryByRole('option', { name: 'rejected' })).toBeNull();
 
     expect(goodBtn).toHaveAttribute('aria-pressed', 'false');
     expect(badBtn).toHaveAttribute('aria-pressed', 'false');
-    expect(rejectedBtn).toHaveAttribute('aria-pressed', 'false');
 
     // Click Good
     fireEvent.click(goodBtn);
@@ -297,6 +297,16 @@ describe('CatalogReferenceLibrary', () => {
       { silent: true },
     ));
     expect(onChanged).toHaveBeenCalled();
+  });
+
+  it('keeps a legacy rejected reference out of the default view and lists it under bad', () => {
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[
+      { mediaKey: 'old.png', kind: 'reference', library: { review: { status: 'rejected' } } },
+    ]} />);
+    expect(screen.queryByTestId('library-row')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Rating'), { target: { value: 'bad' } });
+    const ratingGroup = screen.getByRole('group', { name: 'Rating for old.png' });
+    expect(within(ratingGroup).getByRole('button', { name: /bad/i })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('reflects active rating on buttons, preserves feedback and allows toggling back to unreviewed', async () => {

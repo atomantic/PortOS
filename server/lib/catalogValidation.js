@@ -13,7 +13,7 @@
 import { z } from 'zod';
 import { universeVisualProfileSchema } from './universeVisualProfileValidation.js';
 import { BIBLE_LIMITS, FORM_ID_PATTERN } from './storyBible.js';
-import { REFERENCE_REVIEW_STATUSES, REFERENCE_FEEDBACK_MAX } from './catalogMediaLibrary.js';
+import { REFERENCE_REVIEW_STATUSES, REFERENCE_REVIEW_WRITE_STATUSES, REFERENCE_FEEDBACK_MAX } from './catalogMediaLibrary.js';
 import {
   INGREDIENT_TYPE_IDS,
   RELATION_KIND_IDS,
@@ -409,7 +409,7 @@ export const catalogMediaLibraryPatchSchema = z.object({
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   guide: z.boolean().optional(),
   review: z.object({
-    status: z.enum(REFERENCE_REVIEW_STATUSES),
+    status: z.enum(REFERENCE_REVIEW_WRITE_STATUSES),
     feedback: z.string().max(REFERENCE_FEEDBACK_MAX).optional(),
   }).strict().optional(),
 }).strict();
