@@ -1,4 +1,4 @@
-import { ciTestConfig } from '../scripts/ciTestPolicy.js';
+import { ciTestConfig, ciTestRunnerAccess } from '../scripts/ciTestPolicy.js';
 import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 import { applyRunnerSelection, vitestRunnerSelection } from '../scripts/vitestCiPool.js';
@@ -46,6 +46,7 @@ export { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
  * checkHealth consumer is left out.
  */
 const config = defineConfig({
+  plugins: ciTestRunnerAccess(),
   server: { watch: VITEST_WATCH_OPTIONS },
   // Anchor to the config, even when --root or the caller cwd differs.
   cacheDir: fileURLToPath(new URL('./.cache/vitest-db', import.meta.url)),
