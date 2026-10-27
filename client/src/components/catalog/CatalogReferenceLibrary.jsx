@@ -1,5 +1,5 @@
 import { useId, useMemo, useState } from 'react';
-import { Compass, Star } from 'lucide-react';
+import { Ban, Compass, Star, ThumbsDown, ThumbsUp } from 'lucide-react';
 import CatalogMediaTile from './CatalogMediaTile';
 import CatalogReferenceReview from './CatalogReferenceReview';
 import { rejectedReferenceKeys } from '../../../../server/lib/catalogMediaLibrary.js';
@@ -150,6 +150,8 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
                   const title = lib.variant?.label || m.caption || m.mediaKey;
                   const summary = [forms.find((f) => f.id === lib.variant?.formId)?.label || 'Canonical',
                     Number.isInteger(lib.variant?.age) ? `Age ${lib.variant.age}` : '', eraFor(m), ...(lib.tags || [])].filter(Boolean).join(' · ');
+                  const review = lib.review || {};
+                  const currentStatus = review.status || 'unreviewed';
                   return (
                     <div key={key} role="group" aria-label={`${m.kind} details for ${m.mediaKey}`} className="min-w-0 space-y-2 border-t border-port-border p-3">
                       <div className="flex min-w-0 items-start gap-2">
@@ -158,6 +160,71 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
                         <span className="shrink-0 text-xs text-gray-500">{m.kind}</span>
                       </div>
                       <p className="text-xs text-gray-400 [overflow-wrap:anywhere]">{summary}</p>
+                      {m.kind !== 'video' && (editable ? (
+                        <div role="group" aria-label={`Rating for ${m.mediaKey}`} className="grid grid-cols-3 gap-1.5">
+                          <button
+                            type="button"
+                            disabled={!!busyKey}
+                            aria-pressed={currentStatus === 'good'}
+                            title={currentStatus === 'good' ? 'Marked good (click to clear)' : 'Mark reference as good'}
+                            onClick={() => save(m, {
+                              review: {
+                                status: currentStatus === 'good' ? 'unreviewed' : 'good',
+                                ...(review.feedback ? { feedback: review.feedback } : {}),
+                              },
+                            })}
+                            className={`flex min-h-11 items-center justify-center gap-1.5 rounded border px-2 text-xs font-medium transition-colors disabled:opacity-40 ${
+                              currentStatus === 'good'
+                                ? 'border-port-success bg-port-success/20 text-port-success'
+                                : 'border-port-border text-gray-300 hover:border-port-success hover:text-port-success'
+                            }`}
+                          >
+                            <ThumbsUp size={13} aria-hidden="true" /> Good
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!!busyKey}
+                            aria-pressed={currentStatus === 'bad'}
+                            title={currentStatus === 'bad' ? 'Marked bad (click to clear)' : 'Mark reference as bad'}
+                            onClick={() => save(m, {
+                              review: {
+                                status: currentStatus === 'bad' ? 'unreviewed' : 'bad',
+                                ...(review.feedback ? { feedback: review.feedback } : {}),
+                              },
+                            })}
+                            className={`flex min-h-11 items-center justify-center gap-1.5 rounded border px-2 text-xs font-medium transition-colors disabled:opacity-40 ${
+                              currentStatus === 'bad'
+                                ? 'border-port-warning bg-port-warning/20 text-port-warning'
+                                : 'border-port-border text-gray-300 hover:border-port-warning hover:text-port-warning'
+                            }`}
+                          >
+                            <ThumbsDown size={13} aria-hidden="true" /> Bad
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!!busyKey}
+                            aria-pressed={currentStatus === 'rejected'}
+                            title={currentStatus === 'rejected' ? 'Marked rejected (click to clear)' : 'Mark reference as rejected'}
+                            onClick={() => save(m, {
+                              review: {
+                                status: currentStatus === 'rejected' ? 'unreviewed' : 'rejected',
+                                ...(review.feedback ? { feedback: review.feedback } : {}),
+                              },
+                            })}
+                            className={`flex min-h-11 items-center justify-center gap-1.5 rounded border px-2 text-xs font-medium transition-colors disabled:opacity-40 ${
+                              currentStatus === 'rejected'
+                                ? 'border-port-error bg-port-error/20 text-port-error'
+                                : 'border-port-border text-gray-300 hover:border-port-error hover:text-port-error'
+                            }`}
+                          >
+                            <Ban size={13} aria-hidden="true" /> Rejected
+                          </button>
+                        </div>
+                      ) : currentStatus !== 'unreviewed' && (
+                        <p className={`text-xs font-medium capitalize ${
+                          currentStatus === 'good' ? 'text-port-success' : currentStatus === 'bad' ? 'text-port-warning' : 'text-port-error'
+                        }`}>Rating: {currentStatus}</p>
+                      ))}
                       {m.kind !== 'video' && (editable ? (
                         <button type="button" disabled={!!busyKey || rejected.has(m.mediaKey) || (!isGuide && guideCount >= MAX_CAST_GUIDES)} aria-pressed={isGuide}
                           title={!isGuide && guideCount >= MAX_CAST_GUIDES ? `At most ${MAX_CAST_GUIDES} render guides` : 'Use as a render guide'}
