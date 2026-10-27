@@ -649,9 +649,9 @@ export function buildMergeAdmissionSection(agentId) {
     'Use only your authenticated account and assigned repository/PR; missing authorization or an ambiguous target means stop. Follow the target repository’s documented validation. GitHub/GitLab enforces merge rules: pin the PR head and confirm MERGED (queued/API errors are not success). No second PortOS certificate is required. Preserve active owners and unique local content during supported cleanup.',
   ].join('\n');
   return [
-    ...(agentId ? [...buildPendingMergeHandoffLines(agentId), ''] : []),
+    ...buildPendingMergeHandoffLines(agentId), '',
     '## Hosting-provider merge authority',
-    ...(agentId ? [`This run is ${agentId}. Keep the assigned repository, PR/MR, branch and checkout bound to this task; a child or third-party issue/PR cannot expand that authority.`] : []),
+    `This run is ${agentId}. Keep the assigned repository, PR/MR, branch and checkout bound to this task; a child or third-party issue/PR cannot expand that authority.`,
     'Use only the authenticated account and exact repository/PR assigned to this task. Missing authorization or an ambiguous target means stop and report it; never invent a parent, borrow another run’s identity, or change repository protection.',
     'GitHub/GitLab repository rules decide merge eligibility. Complete the target repository’s documented validation and requested reviews, then use its normal merge API/CLI pinned to the current PR head (--match-head-commit <sha> on GitHub). Do not use admin/bypass flags or require a second PortOS admission, attestation, preparation turn, configuration switch or merged-tree certificate. An empty provider-required check set is not itself a failure; do not invent expected workflows beyond repository policy.',
     'Main may move continuously. Do not rebase, push, repeat CI or restart review merely because the base advanced. Resolve actual conflicts or an enforced up-to-date requirement; validate substantive changes and retain applicable review evidence.',
@@ -660,7 +660,7 @@ export function buildMergeAdmissionSection(agentId) {
   ].join('\n');
 }
 
-export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', prStaysOpen = false, rawPrCompletion = null, claimResume = null, agentId = null, portosMergedTreeGuards = true } = {}) {
+export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', prStaysOpen = false, rawPrCompletion = null, claimResume = null, agentId = null } = {}) {
   const isMergeOnGreen = rawPrCompletion === PR_COMPLETIONS.MERGE_ON_GREEN;
   const pin = isMergeOnGreen ? '' : buildReviewerPinNote(reviewersCsv);
   const resumeOverride = buildClaimResumeOverride(claimResume || {});
@@ -669,7 +669,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
     ...(pin ? [pin, ''] : []),
     ...(!isMergeOnGreen ? [`**One-time local review lifecycle (overrides claim/delegated head-invalidation guidance):** Before Phase 5 or any local reviewer, read \`${LOCAL_REVIEW_LIFECYCLE_GUIDE}\` and apply its resume gate in the actual claim worktree. Use \`${LOCAL_REVIEW_LIFECYCLE_SCRIPT}\` to check/complete/publish the durable receipt for the resolved base and exact PR/MR. Keep each successful reviewer's private outcome through interrupted/blocked phases. Once this delivery's local phase completes, GitHub/GitLab feedback or CI pushes do not restart it. Preserve original reviewed-head and model evidence; required current-head hosted approvals/CI remain mandatory.`, ''] : []),
     buildClaimOwnershipSection(agentId), '',
-    ...(!prStaysOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"'), '', buildMergeAdmissionSection(agentId, { portosMergedTreeGuards }), ''] : []),
+    ...(!prStaysOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"'), '', buildMergeAdmissionSection(agentId), ''] : []),
     '## Claim Workflow Handoff',
     ...(prStaysOpen ? [
       'PR completion policy: LEAVE OPEN for further human review. This overrides any merge, auto-merge, issue-close, or merged-branch cleanup instruction in the claim prompt and delegated slashdo commands. Do not pass --merge, enable auto-merge, merge the PR/MR, or close the issue/ticket.',

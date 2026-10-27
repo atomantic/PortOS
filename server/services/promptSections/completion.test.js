@@ -101,7 +101,6 @@ describe('hosting-provider merge instructions', () => {
     expect(prompt).not.toContain('/api/cos/merge-admission');
     expect(prompt).not.toContain('portos_check_merge_admission');
     expect(prompt).not.toContain('--guards-only --merged-with');
-    expect(buildClaimFlowCompletionSection({ portosMergedTreeGuards: false })).toContain('target repository’s documented validation');
     expect(buildClaimFlowCompletionSection({ prStaysOpen: true })).not.toContain('## Hosting-provider merge authority');
   });
 });
