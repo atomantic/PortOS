@@ -719,6 +719,7 @@ async function main() {
   }
 
   assertNodeVersion();
+  assertGitMergeTree(REPO_ROOT);
 
   if (options.mergedWith) {
     const status = await withMergedPregateTree(REPO_ROOT, options.mergedWith, async ({ root, base }) => {
