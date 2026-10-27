@@ -22,7 +22,7 @@ import { attachNodeImage } from './fableLoom/records.js';
 import { readImageSidecar } from './imageGen/local.js';
 
 /** Preserve the tuple actually executed, not the defaults that happened to be queued. */
-export async function conditioningForCompletedImage(job, filename) {
+async function conditioningForCompletedImage(job, filename) {
   const conditioning = job.params?.visualConditioning;
   if (!conditioning) return null;
   const backend = conditioning.capability?.backend;

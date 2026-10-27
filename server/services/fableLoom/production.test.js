@@ -2,9 +2,8 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PATHS } from '../../lib/fileUtils.js';
-import { sanitizeVisualConditioning } from '../../lib/fableLoomPlayback.js';
 import { prepareFableLoomImageParams } from '../imageGen/fableLoomParams.js';
-import { conditioningForCompletedImage } from '../fableLoomSceneImageHook.js';
+import { initFableLoomSceneImageHook, __testing as sceneImageHookTesting } from '../fableLoomSceneImageHook.js';
 import { fableLoomRunEvents } from './runEvents.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -29,6 +28,9 @@ const queueMocks = vi.hoisted(() => {
       const handlers = listeners.get(event) || [];
       handlers.push(handler);
       listeners.set(event, handlers);
+    }),
+    off: vi.fn((event, handler) => {
+      listeners.set(event, (listeners.get(event) || []).filter((listener) => listener !== handler));
     }),
     emit: (event, payload) => {
       for (const handler of listeners.get(event) || []) handler(payload);
@@ -471,8 +473,11 @@ describe('fableLoom production service', () => {
     const dir = await mkdtemp(join(tmpdir(), 'fableloom-replay-'));
     const originalImages = PATHS.images;
     const originalLoras = PATHS.loras;
+    const originalData = PATHS.data;
     PATHS.images = join(dir, 'images');
     PATHS.loras = join(dir, 'loras');
+    PATHS.data = join(dir, 'data');
+    let store;
     try {
       await mkdir(PATHS.images, { recursive: true });
       await mkdir(join(PATHS.loras, 'nested'), { recursive: true });
@@ -526,10 +531,28 @@ describe('fableLoom production service', () => {
         filename: 'node-1.png', modelId: 'image-model', prompt: prepared.prompt,
         width: 1024, height: 576, steps: 20, guidance: 1, quantize: '8', seed: 123,
       } });
-      const attached = await conditioningForCompletedImage({ params: { visualConditioning: prepared.visualConditioning } }, 'node-1.png');
-      const savedManifest = join(dir, 'manifest.json');
-      await writeFile(savedManifest, JSON.stringify(sanitizeVisualConditioning(attached)));
-      const reloaded = JSON.parse(await readFile(savedManifest, 'utf8'));
+      const actualRecords = await vi.importActual('./records.js');
+      store = await vi.importActual('./store.js');
+      store._resetFableLoomBackend();
+      await store.writeRaw('loom-1', exactLoom);
+      records.attachNodeImage.mockImplementation(actualRecords.attachNodeImage);
+      sceneImageHookTesting.reset();
+      initFableLoomSceneImageHook();
+      queueMocks.mediaJobEvents.emit('completed', {
+        kind: 'image', id: 'render-job-1',
+        params: { ...prepared, fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' } },
+        result: { filename: 'node-1.png' },
+      });
+      await sceneImageHookTesting.settled();
+      expect(records.attachNodeImage).toHaveBeenCalledWith('loom-1', 'ep-1', 'node-1', expect.objectContaining({
+        filename: 'node-1.png', jobId: 'render-job-1', visualConditioning: expect.objectContaining({
+          renderedPrompt: prepared.prompt, render: expect.objectContaining({ parameters: expect.objectContaining({ seed: 123 }) }),
+        }),
+      }));
+      const storedLoom = JSON.parse(await readFile(join(PATHS.data, 'fableloom', 'loom-1', 'index.json'), 'utf8'));
+      const reloadedLoom = await actualRecords.getLoom('loom-1');
+      const reloaded = reloadedLoom.episodes[0].nodes[0].visualConditioning;
+      expect(storedLoom.episodes[0].nodes[0].visualConditioning).toEqual(reloaded);
       expect(reloaded.assets).toEqual(expect.arrayContaining([
         expect.objectContaining({ role: 'request-reference', inputRoot: 'images', filename: 'reference.png' }),
         expect.objectContaining({ role: 'request-init', inputRoot: 'images', strength: 0.3 }),
@@ -538,7 +561,8 @@ describe('fableLoom production service', () => {
         expect.objectContaining({ source: 'Canon adapter', filename: 'canon.safetensors' }),
         expect.objectContaining({ source: 'Request adapter', relativePath: 'nested/adapter.safetensors' }),
       ]);
-      for (const node of exactLoom.episodes[0].nodes) node.visualConditioning = reloaded;
+      for (const node of reloadedLoom.episodes[0].nodes) node.visualConditioning = reloaded;
+      records.getLoom.mockResolvedValue(reloadedLoom);
       await startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'exact_inputs', assetTypes: ['image'], nodeIds: ['node-1'] });
       await vi.waitFor(() => expect(queueMocks.enqueueJob).toHaveBeenCalled());
       expect(queueMocks.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({
@@ -547,10 +571,10 @@ describe('fableLoom production service', () => {
         referenceImagePaths: [...canonImages, reference], referenceImageStrengths: [1, 1, 1, 0.4],
         loraFilenames: ['canon.safetensors'], loraPaths: [adapter], loraScales: [0.8, 0.7],
       }) }));
-      exactLoom.episodes[0].nodes[0].visualCanon.placeId = 'place-that-no-longer-exists';
+      reloadedLoom.episodes[0].nodes[0].visualCanon.placeId = 'place-that-no-longer-exists';
       await expect(startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'exact_inputs', assetTypes: ['image'], nodeIds: ['node-1'] }))
         .rejects.toMatchObject({ code: 'EXACT_INPUTS_REFUSED', status: 409 });
-      exactLoom.episodes[0].nodes[0].visualCanon.placeId = null;
+      reloadedLoom.episodes[0].nodes[0].visualCanon.placeId = null;
       await writeFile(reference, 'reference-changed');
       await expect(startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'exact_inputs', assetTypes: ['image'], nodeIds: ['node-1'] }))
         .rejects.toMatchObject({ code: 'EXACT_INPUTS_REFUSED', status: 409 });
@@ -564,8 +588,12 @@ describe('fableLoom production service', () => {
         .rejects.toMatchObject({ code: 'EXACT_INPUTS_REFUSED', status: 409 });
       expect(queueMocks.enqueueJob).toHaveBeenCalledTimes(1);
     } finally {
+      sceneImageHookTesting.reset();
+      records.attachNodeImage.mockReset();
+      store?._resetFableLoomBackend();
       PATHS.images = originalImages;
       PATHS.loras = originalLoras;
+      PATHS.data = originalData;
       await rm(dir, { recursive: true, force: true });
     }
   });
