@@ -59,6 +59,17 @@ function expectAbsentHistory(result, observation) {
 }
 
 describe('stale branch-only retirement placeholders', () => {
+  it('settles a path-only observation without reading an unrelated owners missing branch policy', async () => {
+    const observation = { path: join(root, 'absent-detached-checkout'), head: receipt.head,
+      reason: row.reason, createdAt: row.createdAt };
+    fixture.agents = [{ id: 'unrelated-owner', status: 'completed', metadata: {
+      sourceWorkspace: fixture.repo, workspacePath: join(root, 'another-checkout'), prCompletionPolicy: 'leave-open',
+    } }];
+    await seed({ observation });
+    const result = await getBranchReconcileInventory(appId);
+    expectAbsentHistory(result, observation);
+  });
+
   it('rechecks receipt-recorded paths inside the owner lock before settling absence', async () => {
     receipt.branchDeleted = false; // Not eligible for stronger receipt binding.
     await seed({ receipts: [receipt] });
