@@ -91,6 +91,7 @@ describe('provider seed parity — data.reference ↔ aiToolkit sample', () => {
         }
         if (id === 'codex' || id === 'codex-tui') {
           expect(provider.models, `${seedName}.${id} lost the current Codex Sol model`).toContain('gpt-6.1-sol');
+          expect(provider.models, `${seedName}.${id} lost GPT-6.1 Terra`).toContain('gpt-6.1-terra');
           expect(provider.models).not.toContain('gpt-5.3-codex-spark');
         }
       }
