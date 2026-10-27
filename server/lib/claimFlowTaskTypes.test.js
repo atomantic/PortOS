@@ -1,31 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync, statSync } from 'fs';
-import { join, dirname, relative } from 'path';
-import { fileURLToPath } from 'url';
+import { collectServerSources, readServerSource } from './testHelper.js';
 
 import { CLAIM_FLOW_TASK_TYPES } from './claimFlowTaskTypes.js';
 import { isClaimFlowTask } from '../services/agentPromptBuilder.js';
 
-const LIB_DIR = dirname(fileURLToPath(import.meta.url));
-const SERVER_DIR = join(LIB_DIR, '..');
-const OWNING_MODULE = join(LIB_DIR, 'claimFlowTaskTypes.js');
+const OWNING_MODULE = 'lib/claimFlowTaskTypes.js';
 
 // A LOCAL binding of the name — `const`/`let`/`var CLAIM_FLOW_TASK_TYPES = …`.
 // An `import { CLAIM_FLOW_TASK_TYPES } from …` line binds the same name but is
 // exactly what this issue asks for, so it must NOT match (probed below).
 const LOCAL_DECLARATION = /(?:^|[;{}\n])\s*(?:const|let|var)\s+CLAIM_FLOW_TASK_TYPES\s*=/;
-
-const SKIP_DIRS = new Set(['node_modules', '.git', 'coverage', 'dist', 'build']);
-
-function collectSourceFiles(dir, out = []) {
-  for (const entry of readdirSync(dir)) {
-    if (SKIP_DIRS.has(entry)) continue;
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) collectSourceFiles(full, out);
-    else if (/\.(js|mjs|jsx)$/.test(entry) && !full.endsWith('.test.js')) out.push(full);
-  }
-  return out;
-}
 
 describe('CLAIM_FLOW_TASK_TYPES is declared exactly once', () => {
   it('detects a re-declaration and ignores an import of the same name', () => {
@@ -37,10 +21,13 @@ describe('CLAIM_FLOW_TASK_TYPES is declared exactly once', () => {
   });
 
   it('has no second declaration anywhere under server/', () => {
-    const offenders = collectSourceFiles(SERVER_DIR)
+    // The shared source inventory excludes live Vitest module-cache entries;
+    // statting those temporary files races their rename/removal during CI.
+    const sources = collectServerSources();
+    expect(sources).toContain(OWNING_MODULE);
+    const offenders = sources
       .filter(file => file !== OWNING_MODULE)
-      .filter(file => LOCAL_DECLARATION.test(readFileSync(file, 'utf8')))
-      .map(file => relative(SERVER_DIR, file));
+      .filter(file => LOCAL_DECLARATION.test(readServerSource(file)));
     expect(offenders).toEqual([]);
   });
 
@@ -51,7 +38,7 @@ describe('CLAIM_FLOW_TASK_TYPES is declared exactly once', () => {
     ['services/agentPromptBuilder.js', 'reads the set back via isClaimFlowDispatch()', false],
     ['services/cosTaskGenerator.js', 'stamps metadata.claimFlow from the set', true],
   ])('%s imports the shared set (%s)', (relPath, _desc, direct) => {
-    const source = readFileSync(join(SERVER_DIR, relPath), 'utf8');
+    const source = readServerSource(relPath);
     expect(LOCAL_DECLARATION.test(source)).toBe(false);
     if (direct) {
       expect(source).toMatch(/import\s*\{[^}]*\bCLAIM_FLOW_TASK_TYPES\b[^}]*\}\s*from\s*'\.\.\/lib\/claimFlowTaskTypes\.js'/);

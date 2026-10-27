@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +8,63 @@ import { join, resolve as resolvePath } from 'node:path';
 import { spawn } from './childProcess.js';
 
 const compilerKey = Symbol.for('portos.windowsGitSupervisor');
+const startupPhases = new Set(['startup', 'compiler-setup', 'compiler-spawn', 'compiler-exit', 'compiler-timeout',
+  'git-lookup', 'broker-spawn', 'broker-readiness', 'broker-exit', 'broker-transport', 'broker-protocol', 'native-launch']);
+const spawnErrorCodes = new Set(['ENOENT', 'EACCES', 'EPERM', 'EMFILE', 'ENFILE', 'ENOMEM', 'EAGAIN']);
+const compilerStages = ['powershell-ready', 'add-type-start', 'add-type-complete'];
+const compilerStageValues = new Set(['unobserved', 'unconfirmed-progress', ...compilerStages]);
+const boundedMilliseconds = value => Number.isInteger(value) && value >= 0 && value <= 120000;
+
+/** Only fixed categories and bounded numeric results may leave the startup boundary. */
+export function windowsGitFailureMetadata(error) {
+  if (!startupPhases.has(error?.startupPhase)) return {};
+  const result = { startupPhase: error.startupPhase };
+  if (error.startupPhase === 'compiler-exit' && Number.isInteger(error.compilerExitCode)
+    && error.compilerExitCode >= -0x80000000 && error.compilerExitCode <= 0xffffffff) {
+    result.compilerExitCode = error.compilerExitCode;
+  }
+  if (['compiler-spawn', 'broker-spawn'].includes(error.startupPhase) && spawnErrorCodes.has(error.spawnErrorCode)) {
+    result.spawnErrorCode = error.spawnErrorCode;
+  }
+  if (error.startupPhase.startsWith('compiler-') && compilerStageValues.has(error.compilerStage)) {
+    result.compilerStage = error.compilerStage;
+    for (const field of ['compilerElapsedMs', 'compilerScriptStartMs', 'compilerScriptMs']) {
+      if (boundedMilliseconds(error[field])) result[field] = error[field];
+    }
+  }
+  return result;
+}
+
+// One bounded receipt in the existing private compiler directory. Reading it
+// only on failure leaves stdio and launch ordering intact. A missing or partial
+// write is inconclusive; raw compiler text and absolute times never escape.
+function compilerProgress(directory) {
+  const file = join(directory, 'compiler-progress.json');
+  const started = performance.now();
+  const wallStarted = Date.now();
+  return {
+    file,
+    metadata() {
+      const result = { compilerStage: 'unobserved', compilerElapsedMs: Math.round(performance.now() - started) };
+      let bytes;
+      try { bytes = readFileSync(file); }
+      catch { return result; }
+      result.compilerStage = 'unconfirmed-progress';
+      if (bytes.length > 256) return result;
+      try {
+        const frame = JSON.parse(bytes.toString('utf8'));
+        if (Object.keys(frame).length !== 3 || !compilerStages.includes(frame.stage)
+          || !boundedMilliseconds(frame.elapsedMs) || !Number.isSafeInteger(frame.startedAt)) return result;
+        result.compilerStage = frame.stage;
+        result.compilerScriptMs = frame.elapsedMs;
+        const scriptStartMs = frame.startedAt - wallStarted;
+        // Wall-clock movement makes this interval inconclusive, not zero.
+        if (boundedMilliseconds(scriptStartMs)) result.compilerScriptStartMs = scriptStartMs;
+      } catch { /* a partial receipt is not a confirmed compiler phase */ }
+      return result;
+    },
+  };
+}
 
 // One private compiler result per Node process, including module reloads. Never
 // execute a pre-existing cache binary, or compile into a checkout being mutated.
@@ -26,19 +83,28 @@ function supervisor() {
       await writeFile(source, await readFile(new URL('./windowsGitSupervisor.cs', import.meta.url)));
       const { windowsPowerShell51Path, findCommandOnPath } = await import('./processEnv.js');
       const quote = value => `'${value.replaceAll("'", "''")}'`;
-      const script = `$ErrorActionPreference='Stop'; Add-Type -Path ${quote(source)} -ReferencedAssemblies System.Web.Extensions -OutputAssembly ${quote(executable)} -OutputType ConsoleApplication`;
+      const progress = compilerProgress(directory);
+      const phase = stage => `try { [IO.File]::WriteAllText(${quote(progress.file)}, ('{"stage":"${stage}","elapsedMs":' + $portosCompilerClock.ElapsedMilliseconds + ',"startedAt":' + $portosCompilerStarted + '}')); } catch {};`;
+      const script = `$ErrorActionPreference='Stop'; try { $portosCompilerStarted=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); $portosCompilerClock=[Diagnostics.Stopwatch]::StartNew(); } catch {}; ${phase('powershell-ready')} ${phase('add-type-start')} Add-Type -Path ${quote(source)} -ReferencedAssemblies System.Web.Extensions -OutputAssembly ${quote(executable)} -OutputType ConsoleApplication; ${phase('add-type-complete')}`;
       await new Promise((resolve, reject) => {
-        const compiler = spawn(windowsPowerShell51Path(),
-          ['-NoProfile', '-NonInteractive', '-Command', script], { cwd: directory, stdio: 'ignore' });
+        let compiler;
+        try {
+          compiler = spawn(windowsPowerShell51Path(),
+            ['-NoProfile', '-NonInteractive', '-Command', script], { cwd: directory, stdio: 'ignore' });
+        } catch (error) { reject(unavailable('compiler-spawn', { spawnErrorCode: error.code, ...progress.metadata() })); return; }
         const timer = setTimeout(() => {
+          // Killing PowerShell is not proof its compiler descendants released
+          // the private inputs. Keep that resource obligation through teardown.
+          state.held = true;
+          state.holdReasons.add('compiler-unconfirmed');
           try { compiler.kill(); } catch { /* report unavailable without launching Git */ }
-          reject(unavailable());
+          reject(unavailable('compiler-timeout', progress.metadata()));
         }, 15000);
-        compiler.once('error', () => { clearTimeout(timer); reject(unavailable()); });
-        compiler.once('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(unavailable()); });
+        compiler.once('error', error => { clearTimeout(timer); reject(unavailable('compiler-spawn', { spawnErrorCode: error.code, ...progress.metadata() })); });
+        compiler.once('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(unavailable('compiler-exit', { compilerExitCode: code, ...progress.metadata() })); });
       });
       return { directory, executable, state, findCommandOnPath };
-    })();
+    })().catch(error => { throw unavailable(error?.startupPhase ?? 'compiler-setup', error); });
   }
   const exitKey = Symbol.for('portos.windowsGitSupervisorExit');
   if (!process[exitKey]) {
@@ -79,7 +145,10 @@ async function cleanupSupervisor(state) {
   } finally { clearTimeout(timer); }
 }
 
-const unavailable = () => Object.assign(new Error('Windows Git containment unavailable'), { code: 'GIT_CONTAINMENT_UNAVAILABLE' });
+const unavailable = (startupPhase = 'startup', details = {}) => Object.assign(new Error('Windows Git containment unavailable'), {
+  code: 'GIT_CONTAINMENT_UNAVAILABLE', ...windowsGitFailureMetadata({ ...details,
+    startupPhase: startupPhases.has(startupPhase) ? startupPhase : 'startup' }),
+});
 const held = reasons => Object.assign(new Error('Git work settlement is held'), {
   code: 'GIT_SETTLEMENT_HELD', settlement: 'held', settlementReasons: [...reasons].sort(),
 });
@@ -120,32 +189,36 @@ function idleBroker(state) {
 async function ensureBroker(state, executable, directory) {
   if (state.stopping) await state.stopping;
   if (state.broker) {
-    if (state.broker.failed) throw unavailable();
+    if (state.broker.failed) throw state.broker.failure;
     return state.broker.ready;
   }
-  const child = spawn(executable, [], { cwd: directory, stdio: ['pipe', 'pipe', 'ignore'], shell: false });
+  let child;
+  try { child = spawn(executable, [], { cwd: directory, stdio: ['pipe', 'pipe', 'ignore'], shell: false }); }
+  catch (error) { throw unavailable('broker-spawn', { spawnErrorCode: error.code }); }
   const broker = { process: child, jobs: new Map() };
   state.broker = broker;
   let ready, rejectReady, closed;
   broker.ready = new Promise((resolve, reject) => { ready = resolve; rejectReady = reject; });
   broker.closed = new Promise(resolve => { closed = resolve; });
-  const lost = () => {
+  const lost = failure => {
     broker.failed = true;
-    rejectReady(unavailable());
-    for (const finish of [...broker.jobs.values()]) finish({ settled: false, launched: true, exitCode: 1, reason: 'supervisor-unconfirmed' });
+    broker.failure ||= failure;
+    rejectReady(broker.failure);
+    for (const finish of [...broker.jobs.values()]) finish({ settled: false, launched: true, exitCode: 1,
+      reason: 'supervisor-unconfirmed', ...windowsGitFailureMetadata(broker.failure) });
   };
   const timer = setTimeout(() => {
-    lost();
+    lost(unavailable('broker-readiness'));
     try { child.kill(); } catch { /* no Git request precedes readiness */ }
   }, 15000);
-  child.once('error', lost);
+  child.once('error', error => lost(unavailable('broker-spawn', { spawnErrorCode: error.code })));
   child.once('close', () => {
     clearTimeout(timer);
-    lost();
+    lost(unavailable('broker-exit'));
     if (state.broker === broker) state.broker = null;
     closed();
   });
-  child.stdin.on('error', lost);
+  child.stdin.on('error', () => lost(unavailable('broker-transport')));
   let buffered = '';
   child.stdout.on('data', data => {
     try {
@@ -174,7 +247,7 @@ async function ensureBroker(state, executable, directory) {
       }
       if (buffered.length > 24000) throw unavailable();
     } catch {
-      lost();
+      lost(unavailable('broker-protocol'));
       try { child.kill(); } catch { /* retain every affected job */ }
     }
   });
@@ -208,8 +281,10 @@ export function startGit(args, options, wire) {
     // or PATH to the environment the caller explicitly selected for Git.
     const searchPath = pathKey === undefined || env[pathKey] === undefined
       ? inheritedPath : String(env[pathKey]);
-    const gitExecutable = findCommandOnPath('git.exe', { env: { PATH: `${childOptions.cwd};${searchPath}` }, cwd: childOptions.cwd });
-    if (!gitExecutable) throw unavailable();
+    let gitExecutable;
+    try { gitExecutable = findCommandOnPath('git.exe', { env: { PATH: `${childOptions.cwd};${searchPath}` }, cwd: childOptions.cwd }); }
+    catch { throw unavailable('git-lookup'); }
+    if (!gitExecutable) throw unavailable('git-lookup');
     const broker = await ensureBroker(state, executable, directory);
     const id = randomUUID();
     const child = new EventEmitter();
@@ -239,10 +314,10 @@ export function startGit(args, options, wire) {
       broker.process.stdin.write(`${JSON.stringify({ action: 'start', id, executable: gitExecutable,
         args: commandArgs, cwd: childOptions.cwd, env: selectedEnv })}\n`);
     } catch {
-      finish({ settled: false, launched: true, exitCode: 1, reason: 'supervisor-unconfirmed' });
+      finish({ settled: false, launched: true, exitCode: 1, reason: 'supervisor-unconfirmed', startupPhase: 'broker-transport' });
     }
     await child.gitSettlement;
-  }).catch(() => { throw unavailable(); });
+  }).catch(error => { throw unavailable(error?.startupPhase, error); });
   owner.operations.add(operation);
   const finished = () => { owner.operations.delete(operation); idleBroker(owner); };
   void operation.then(finished, finished);

@@ -402,6 +402,7 @@ export const ALWAYS_RUN_TESTS = [
   // admission with no import edge back to the owner inventory it must join.
   'server/lib/backupAssetOwners.test.js',
   'server/lib/childProcess.guards.test.js',
+  'server/lib/claimFlowTaskTypes.test.js',
   'server/lib/cliChildEnv.test.js',
   'server/lib/editorial/proseTics.test.js',
   'server/lib/generatedManifests.test.js',
