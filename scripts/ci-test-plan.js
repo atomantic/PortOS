@@ -306,6 +306,7 @@ export const WINDOWS_CONTRACT_TESTS = [
   'server/services/shell.windows.test.js',
   'server/services/tuiPromptRunner.test.js',
   // Real native ownership/cancellation and safe filesystem semantics.
+  'server/lib/execGit.test.js',
   'server/lib/windowsAgentProcess.test.js',
   'server/lib/windowsGitProcess.test.js',
   'server/lib/windowsGitProcess.protocol.test.js',

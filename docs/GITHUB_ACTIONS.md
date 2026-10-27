@@ -866,7 +866,8 @@ therefore retains the schema's primary-platform coverage while selecting the
 native Windows set on one runner.
 
 Before this support-boundary change, pipeline/full plans selected four Windows
-jobs over the server inventory. They now select one job over 23 native suites.
+jobs over the server inventory. At that change, they selected one job over 23
+native suites; the curated set can grow as native contracts are added.
 This is a measured selection/setup reduction, not an execution-time or
 runner-minute speedup claim. The obsolete Scalar package/chunk absence suite and
 its extra post-build invocation are retired; the actual rendered API Explorer

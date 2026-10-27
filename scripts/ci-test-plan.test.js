@@ -1783,13 +1783,20 @@ describe('Windows native support boundary', () => {
     expect(WINDOWS_CONTRACT_TESTS).toEqual(expect.arrayContaining([
       'server/lib/cliProviderRun.test.js', 'server/lib/detachedSpawn.test.js',
       'server/services/shell.windows.test.js', 'server/services/tuiPromptRunner.test.js',
-      'server/lib/windowsGitProcess.test.js', 'server/lib/windowsGitProcess.protocol.test.js',
+      'server/lib/execGit.test.js', 'server/lib/windowsGitProcess.test.js', 'server/lib/windowsGitProcess.protocol.test.js',
       'server/lib/windowsAgentProcess.test.js',
       'server/lib/gitRepositoryIdentity.test.js', 'server/lib/checkoutRetirementAdmission.test.js',
       'server/lib/nativeTrash.smoke.test.js',
     ]));
     const repo = fileURLToPath(new URL('../', import.meta.url));
     expect(WINDOWS_CONTRACT_TESTS.every(path => existsSync(join(repo, path)))).toBe(true);
+  });
+
+  it('runs the junction settlement contract on Windows when its test changes', () => {
+    const test = 'server/lib/execGit.test.js';
+    const plan = buildCiTestPlan([test], { trackedFiles: [...options.trackedFiles, test] });
+    expect(plan.windows).toBe(true);
+    expect(plan.windowsFiles).toContain(test);
   });
 
   it('fails the emitted CI plan instead of publishing a green empty Windows job', () => {
