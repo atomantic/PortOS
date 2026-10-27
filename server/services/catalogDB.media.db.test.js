@@ -306,4 +306,19 @@ describe.skipIf(!runDb)('atomic local image writes', () => {
     const outcome = await merge;
     expect(outcome?.code === '40P01' ? outcome.message : null).toBeNull();
   });
+
+  // The client files the newer render first; an explicit-portrait completion
+  // queued before that choice must not replace it, whatever the hook guard saw.
+  it.each([
+    ['queued before', -60_000, { 'newer.png': 'portrait', 'older.png': 'reference' }],
+    ['queued after', 60_000, { 'older.png': 'portrait' }],
+  ])('files an explicit portrait %s a newer live portrait accordingly', async (_label, offset, expected) => {
+    const id = await ingredient();
+    await catalogDB.attachGeneratedMedia(id, 'newer.png');
+    hook.initCatalogImageAttachHook();
+    mediaJobEvents.emit('completed', { kind: 'image', params: { catalogAttach: { ingredientId: id, kind: 'portrait' } },
+      result: { filename: 'older.png' }, queuedAt: new Date(Date.now() + offset).toISOString() });
+    await hook.__testing.settled();
+    expect(Object.fromEntries((await liveRows(id)).map((row) => [row.media_key, row.kind]))).toEqual(expected);
+  });
 });

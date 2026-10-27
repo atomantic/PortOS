@@ -22,8 +22,9 @@ export default function CatalogImageAction({ ingredient, getType = getCatalogTyp
       // The server chooses the kind under the ingredient lock and leaves a
       // render the completion hook already filed as is (#13833).
       const { kind } = await attachCatalogIngredientGeneratedImage(ingredient.id, { mediaKey: filename }, { silent: true });
-      const portrait = (details.media || []).find(item => item.kind === 'portrait');
-      onCover?.(`/data/images/${encodeURIComponent(kind === 'portrait' ? filename : portrait?.mediaKey || filename)}`);
+      // A reference never becomes the cover; without a known portrait, keep the current one.
+      const coverKey = kind === 'portrait' ? filename : (details.media || []).find(item => item.kind === 'portrait')?.mediaKey;
+      if (coverKey) onCover?.(`/data/images/${encodeURIComponent(coverKey)}`);
     }).catch(error => toast.error(error.message || 'Could not attach the generated image'));
   }, [ingredient.id, onCover]);
 

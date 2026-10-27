@@ -51,8 +51,11 @@ export async function attachMedia(ingredientId, mediaKey, kind, options = {}) {
 // filename as portrait AND reference. A render already attached under any kind
 // is returned untouched (`attached: false`); explicit attaches through
 // attachMedia/setPortraitMedia stay free to add a second kind on purpose.
-// `kind` is 'portrait', 'reference', or 'auto' (first image → portrait).
-export async function attachGeneratedMedia(ingredientId, mediaKey, { kind = 'auto', ...options } = {}) {
+// `kind` is 'portrait', 'reference', or 'auto' (first image → portrait). With a
+// job `queuedAt`, an explicit portrait yields to a different live portrait
+// changed after the job was queued (filed as a reference instead), so an older
+// render never replaces a newer choice from any writer.
+export async function attachGeneratedMedia(ingredientId, mediaKey, { kind = 'auto', queuedAt = null, ...options } = {}) {
   ingredientId = await assertCatalogIdentityWritable(ingredientId, options);
   return inTransaction(options, async (client) => {
     await lockIngredient(client, ingredientId);
@@ -66,7 +69,11 @@ export async function attachGeneratedMedia(ingredientId, mediaKey, { kind = 'aut
     // hook's newest-render guard still sees it.
     const existing = rows.find((row) => row.media_key === mediaKey);
     if (existing) return { media: rowToMedia(existing), kind: existing.kind, attached: false };
-    const target = kind === 'auto' ? (rows.some((row) => row.kind === 'portrait') ? 'reference' : 'portrait') : kind;
+    const queuedTime = queuedAt ? Date.parse(queuedAt) : NaN;
+    const newerPortrait = Number.isFinite(queuedTime) && rows.some((row) => row.kind === 'portrait'
+      && row.media_key !== mediaKey && row.updated_at && new Date(row.updated_at).getTime() > queuedTime);
+    const target = kind === 'auto' ? (rows.some((row) => row.kind === 'portrait') ? 'reference' : 'portrait')
+      : kind === 'portrait' && newerPortrait ? 'reference' : kind;
     const media = target === 'portrait'
       ? await setPortraitMedia(ingredientId, mediaKey, { ...options, client })
       : await insertMedia(client.query.bind(client), ingredientId, mediaKey, target, options);

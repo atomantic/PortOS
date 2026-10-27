@@ -70,6 +70,7 @@ async function attachGeneratedImage({ ingredientId, kind, role, library, filenam
   // library tag, a revived tombstone keeps its fields; lineage is filled below.
   const result = await attachGeneratedMedia(ingredientId, filename, {
     kind: target,
+    ...(queuedAt ? { queuedAt } : {}),
     ...(mediaRole ? { role: mediaRole } : {}),
     ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
     ...(library ? { library, preserveExistingOnConflict: true } : {}),

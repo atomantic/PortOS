@@ -116,7 +116,7 @@ describe('catalogImageAttachHook', () => {
   it('demotes a stale would-be-portrait to a reference instead of clobbering a newer portrait (#1791)', async () => {
     await emit({ catalogAttach: { ingredientId: 'ing-q', kind: 'portrait' } }, 'new.png', '2026-06-29T00:00:02.000Z');
     await emit({ catalogAttach: { ingredientId: 'ing-q', kind: 'portrait' } }, 'old.png', '2026-06-29T00:00:01.000Z');
-    expect(attachGeneratedMedia).toHaveBeenLastCalledWith('ing-q', 'old.png', { kind: 'reference' });
+    expect(attachGeneratedMedia).toHaveBeenLastCalledWith('ing-q', 'old.png', { kind: 'reference', queuedAt: '2026-06-29T00:00:01.000Z' });
     expect(attachedKeys()).toEqual([{ mediaKey: 'new.png', kind: 'portrait' }, { mediaKey: 'old.png', kind: 'reference' }]);
   });
 
