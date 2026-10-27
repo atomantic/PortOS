@@ -257,7 +257,19 @@ async function archiveCompletedAgent(agentId, agent) {
  * lock serializes live updates and archive rewrites; no transcript is loaded.
  */
 export function recordRepoStateVerification(agentId, verification) {
-  return updateCompletionReceipt(agentId, metadata => ({ ...metadata, repoStateVerification: { ...metadata.repoStateVerification, ...verification } }));
+  return updateCompletionReceipt(agentId, metadata => {
+    const capture = metadata.checkoutCapture;
+    const retired = capture?.status === 'retired' && capture.unknown === true
+      && /^[a-f0-9]{64}$/.test(capture.receiptDigest || '') && /^[a-f0-9]{64}$/.test(capture.checkoutIdentity || '')
+      && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(capture.retiredHead || '')
+      && metadata.repoStateVerification?.physicalRetirementVerified === true
+      && metadata.completionCleanup?.status === 'completed'
+      && ['service-retirement-receipt', 'inherited-service-retirement-receipt'].includes(metadata.completionCleanup.stages?.worktree?.verifiedBy);
+    // An absent task cannot undo an already verified physical retirement. The
+    // startup selector may still hold the snapshot from before receipt replay.
+    const next = verification.status === 'pending' && retired ? { ...verification, status: 'completed', reasons: [] } : verification;
+    return { ...metadata, repoStateVerification: { ...metadata.repoStateVerification, ...next } };
+  });
 }
 
 /** Reserve a cognitive recovery once per exact observation on its original run.
@@ -418,6 +430,11 @@ export function recordSeededCheckoutRetirement(agentId, expected, proof) {
   return recordCheckoutRetirement(agentId, expected, proof, 'service-retirement-receipt');
 }
 
+/** An unseeded primary continuation never acquires its parent's retired checkout. */
+export function recordInheritedCheckoutRetirement(agentId, expected, proof) {
+  return recordCheckoutRetirement(agentId, expected, proof, 'inherited-service-retirement-receipt');
+}
+
 async function recordCheckoutRetirement(agentId, expected, proof, verifiedBy) {
   let matched = false;
   const saved = await updateCompletionReceipt(agentId, (metadata, agent) => {
@@ -437,6 +454,10 @@ async function recordCheckoutRetirement(agentId, expected, proof, verifiedBy) {
         || source.repoPath !== metadata.sourceWorkspace || source.path !== metadata.workspacePath
         || !metadata.completedCheckouts?.some(row => completedCheckoutReceiptValid(agent, row) && isDeepStrictEqual(row, source))) return metadata;
     } else if (metadata.checkoutCapture?.status !== 'pending' || metadata.checkoutCapture.unknown !== true) return metadata;
+    if (verifiedBy === 'inherited-service-retirement-receipt'
+      && (!proof.inheritedFromAgentId || metadata.resumedFromAgentId !== proof.inheritedFromAgentId
+        || metadata.isWorktree !== false || metadata.checkoutSeeds?.length || metadata.completedCheckouts?.length
+        || metadata.worktreeBranch || metadata.prDeliveryTarget || metadata.reviewLoopMergeTarget)) return metadata;
     const stages = metadata.completionCleanup.stages;
     if (!stages || !stages.worktree || ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].some(key => stages[key]?.status !== 'done')
       || Object.entries(stages).some(([key, stage]) => key !== 'worktree' && stage.status !== 'done')) return metadata;
@@ -445,7 +466,8 @@ async function recordCheckoutRetirement(agentId, expected, proof, verifiedBy) {
       stages: { ...stages, worktree: { status: 'done', retryable: false, verifiedBy, ...(proof.successorAgentId && { successorAgentId: proof.successorAgentId }) } } };
     delete completionCleanup.context; delete completionCleanup.replay;
     const updated = { ...metadata, completionCleanup,
-      checkoutCapture: source ? metadata.checkoutCapture : { ...metadata.checkoutCapture, status: 'retired', reason: verifiedBy === 'delivered-successor' ? 'retired-by-verified-successor' : 'retired-by-service-receipt', ...proof },
+      checkoutCapture: source ? metadata.checkoutCapture : { ...metadata.checkoutCapture, status: 'retired', reason: verifiedBy === 'delivered-successor' ? 'retired-by-verified-successor'
+        : verifiedBy === 'inherited-service-retirement-receipt' ? 'inherited-scope-already-retired' : 'retired-by-service-receipt', ...proof },
       repoStateVerification: { ...metadata.repoStateVerification, status: 'completed', reasons: [],
         checkedAt: new Date().toISOString(), ...(proof.successorAgentId
           ? { deliveryVerifiedBySuccessor: proof.successorAgentId } : { physicalRetirementVerified: true }) } };

@@ -38,7 +38,7 @@ vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original
 vi.mock('./cos.js', () => ({}));
 vi.mock('./agentCompletionData.js', () => ({ readCompletionData: vi.fn() }));
 vi.mock('./agentCompletionCleanup.js', () => ({ replayAgentCompletionCleanup: vi.fn(async () => {}) }));
-vi.mock('./cosAgentLifecycle.js', async original => ({ recordSeededCheckoutRetirement: vi.fn(async () => true), isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, recordSuccessorCheckoutRetirement: vi.fn(async () => true), settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
+vi.mock('./cosAgentLifecycle.js', async original => ({ recordInheritedCheckoutRetirement: vi.fn(async () => true), recordSeededCheckoutRetirement: vi.fn(async () => true), isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, recordSuccessorCheckoutRetirement: vi.fn(async () => true), settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]), withClaimOwnershipLock: fn => fn() }));
 vi.mock('./taskSchedule.js', () => ({ recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
 vi.mock('./taskScheduleStore.js', () => ({ loadSchedule: vi.fn(async () => ({})) }));
@@ -93,7 +93,7 @@ import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
 import { readCompletionData } from './agentCompletionData.js';
-import { recordCompletionCleanup, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion } from './cosAgentLifecycle.js';
+import { recordCompletionCleanup, recordInheritedCheckoutRetirement, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion } from './cosAgentLifecycle.js';
 import { replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { resumeAgentCompletionRetirement, verifyAgentRepoState, sweepRepoStateVerifications, bindCompletionRetirementEvents, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
@@ -467,6 +467,54 @@ describe('verifyAgentRepoState — clean runs', () => {
       expect(state.result).toEqual({ success: false, validationPassed: false, taskOutcome: { status: 'blocked' } });
       expect(addTask).not.toHaveBeenCalled(); expect(updateTask).not.toHaveBeenCalled();
       expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    });
+
+  it.each(['startup', 'direct', 'wrong-parent', 'wrong-task', 'foreign-instance', 'own-seed', 'live-owner', 'live-source-path',
+    'parent-raced', 'late-retirement', 'wrong-generation', 'wrong-branch', 'unreadable-receipt'])(
+    'settles only a primary continuation of an already retired inherited scope: %s', async scenario => {
+      const physical = { dev: '1', ino: '2', birthtimeNs: '3' };
+      const seed = { version: 1, agentId: 'parent', startedAt: CREATED_AT, seededAt: '2026-01-01T00:00:01.000Z',
+        repoPath: '/repo', branch: BRANCH, path: WORKTREE, repository: physical, checkout: physical,
+        incarnation: { pointer: physical, gitdir: { ...physical, path: '/repo/.git/worktrees/parent' } } };
+      const parent = { id: 'parent', taskId: 'old-claim', status: 'completed', startedAt: CREATED_AT,
+        completedAt: '2026-01-01T00:01:00.000Z', result: { success: false }, metadata: {
+          instanceId: 'fixture-local', sourceWorkspace: '/repo', workspacePath: WORKTREE, worktreeBranch: BRANCH,
+          checkoutSeeds: [seed], completedCheckouts: [{ version: 1, agentId: 'parent', startedAt: CREATED_AT,
+            capturedAt: '2026-01-01T00:00:59.000Z', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
+            incarnation: seed.incarnation }], completionCleanup: { status: 'completed' }, repoStateVerification: { status: 'completed' } } };
+      const child = { id: 'child', taskId: 'old-claim', status: 'completed', startedAt: '2026-01-01T00:04:00.000Z',
+        completedAt: '2026-01-01T00:05:00.000Z', result: { success: false, executionSuccess: true, taskOutcome: { status: 'incomplete' } },
+        metadata: { instanceId: 'fixture-local', isWorktree: false, workspacePath: '/repo', resumedFromAgentId: 'parent',
+          claimBranches: [BRANCH], checkoutCapture: { status: 'pending', unknown: true, targets: [] },
+          completionCleanup: { status: 'pending' }, repoStateVerification: { status: 'pending' } } };
+      const receipt = { path: WORKTREE, branch: BRANCH, head: HEAD, checkoutIdentity: retirementCheckoutIdentityFromPointer(physical),
+        branchDeleted: true, archiveDir: null, retiredAt: '2026-01-01T00:02:00.000Z' };
+      if (scenario === 'wrong-parent') child.metadata.resumedFromAgentId = 'missing';
+      if (scenario === 'wrong-task') parent.taskId = 'other-task';
+      if (scenario === 'foreign-instance') child.metadata.instanceId = 'foreign';
+      if (scenario === 'own-seed') child.metadata.checkoutSeeds = [seed];
+      if (scenario === 'wrong-branch') child.metadata.claimBranches = ['unrelated'];
+      if (scenario === 'late-retirement') receipt.retiredAt = '2026-01-01T00:04:01.000Z';
+      if (scenario === 'wrong-generation') receipt.checkoutIdentity = 'f'.repeat(64);
+      if (scenario === 'live-source-path') readCheckoutPathPresence.mockResolvedValue(true);
+      if (scenario === 'live-owner') readClaimOwnershipAgents.mockResolvedValue([{ status: 'running', metadata: { sourceWorkspace: '/repo', worktreeBranch: BRANCH } }]);
+      loadSchedule.mockResolvedValue({ executions: { 'task:branch-reconcile': { perApp: { app: { branchReconcileOutcome: { retired: [receipt] } } } } } });
+      if (scenario === 'unreadable-receipt') loadSchedule.mockRejectedValue(new Error('synthetic unreadable receipts'));
+      lstat.mockResolvedValue({ isDirectory: () => true, dev: 1n, ino: 2n, birthtimeNs: 3n });
+      findMissingCheckoutPreservation.mockResolvedValue({ kind: 'service-retirement-receipt', evidenceDigest: 'a'.repeat(64), recheck: async () => true });
+      let parentReads = 0;
+      getAgentRecord.mockImplementation(async id => id === child.id ? child : id === parent.id
+        ? scenario === 'parent-raced' && ++parentReads > 1 ? { ...parent, taskId: 'changed' } : parent : null);
+      readBranchCompletionPolicies.mockResolvedValue([parent, child]);
+      if (scenario === 'direct') await resumeAgentCompletionRetirement(child.id);
+      else await sweepRepoStateVerifications();
+      expect(recordInheritedCheckoutRetirement).toHaveBeenCalledTimes(['startup', 'direct'].includes(scenario) ? 1 : 0);
+      if (['startup', 'direct'].includes(scenario)) expect(recordInheritedCheckoutRetirement).toHaveBeenCalledWith(child.id, child, {
+        checkoutIdentity: receipt.checkoutIdentity, retiredHead: HEAD, receiptDigest: 'a'.repeat(64), inheritedFromAgentId: parent.id });
+      expect(child.result).toEqual({ success: false, executionSuccess: true, taskOutcome: { status: 'incomplete' } });
+      expect(child.metadata.checkoutSeeds).toEqual(scenario === 'own-seed' ? [seed] : undefined);
+      expect(recordSeededCheckoutRetirement).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled(); expect(updateTask).not.toHaveBeenCalled(); expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     });
 
   it.each(['available', 'unavailable'])('shares one %s receipt context across ordinary startup replay records', async scenario => {
