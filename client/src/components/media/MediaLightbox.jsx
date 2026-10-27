@@ -11,7 +11,8 @@ import { PromptFromMediaModal } from './PromptFromMedia';
 import AddToCollectionMenu from './AddToCollectionMenu';
 import SharingDownloadButton from './SharingDownloadButton';
 import PinToMoodBoardMenu from './PinToMoodBoardMenu';
-import FilmLookEditor from './FilmLookEditor.jsx';
+import FilmLookPane, { useFilmLookDraft } from './FilmLookPane.jsx';
+import FilmLookPreview from './FilmLookPreview.jsx';
 import MediaImage from '../MediaImage';
 import { useScrollLock } from '../../hooks/useScrollLock';
 import { useSwipeNav } from '../../hooks/useSwipeNav';
@@ -47,6 +48,15 @@ import ContinuationDetails from '../videoGen/ContinuationDetails';
 // `a11yConventions.test.js` allowlists it on that basis.
 
 const NOTE_MAX = 2000;
+
+// The side pane stacks under the media on phones and sits beside it from md up.
+// Film look gets a wider pane (two slider columns) and more of a phone screen.
+const ASIDE_CLASSES = 'shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border min-h-0 max-h-dvh-cap md:[--dvh-cap:92vh] md:[--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem]';
+const DETAILS_ASIDE_SIZE = 'md:w-80 lg:w-96 [--dvh-cap:40vh] [--dvh-cap-dynamic:40dvh]';
+// The live-look image is a plain <img> inside a wrapper, so it cannot shrink
+// to the flex row the way MediaImage does; cap it to what the pane leaves.
+const FILM_LOOK_IMG_MAX = 'max-w-full max-h-[calc(42dvh-2rem)] md:max-h-[calc(92dvh-2rem)]';
+const FILM_LOOK_ASIDE_SIZE = 'md:w-96 lg:w-[28rem] xl:w-[32rem] [--dvh-cap:50vh] [--dvh-cap-dynamic:50dvh]';
 const NOTE_DEBOUNCE_MS = 500;
 const SAVED_INDICATOR_MS = 1500;
 
@@ -104,10 +114,11 @@ function describeImageExecution(item) {
 // onClean(item) — optional. Returning a rejected promise keeps the lightbox
 // open (e.g. on error) so the user can retry.
 //
-// Film look (lib/filmLook.js) is offered on every gallery image: the editor
-// bakes a filtered copy and reports it through `onFilmLookComplete(variant)`
+// Film look (lib/filmLook.js) is offered on every gallery image: the side pane
+// swaps to the look's controls while the image shows the look live, and the
+// pane bakes a filtered copy reported through `onFilmLookComplete(variant)`
 // (the host splices it in like a clean). `filmLookProject` — optional
-// `{ look, onSave, name }` — lets the editor read and write the hosting music
+// `{ look, onSave, name }` — lets the pane read and write the hosting music
 // video project's finishing look.
 //
 // variantGroup — optional `{ active, group: [{ label, item }, ...] }` shape
@@ -147,6 +158,12 @@ export default function MediaLightbox({
   const [refineOpen, setRefineOpen] = useState(false);
   const [promptFromOpen, setPromptFromOpen] = useState(false);
   const [filmLookOpen, setFilmLookOpen] = useState(false);
+  // Videos never take the live look: an SVG filter over playing video drops
+  // phones below 1 fps (see FilmLookFrame). The pane stays open across
+  // prev/next and simply hides on a video.
+  const filmLookAvailable = !!item && item.kind !== 'video' && !!item.filename && !item.compact;
+  const filmLookShown = filmLookOpen && filmLookAvailable;
+  const filmLook = useFilmLookDraft(item, filmLookShown, filmLookProject);
   useScrollLock(!!item);
   // Read callbacks + frequently-changing values from refs so the keydown
   // listener and the note-save debounce don't tear down on every parent
@@ -190,7 +207,7 @@ export default function MediaLightbox({
       if (e.key === 'Escape') {
         if (refineOpen) { setRefineOpen(false); return; }
         if (promptFromOpen) { setPromptFromOpen(false); return; }
-        if (filmLookOpen) { setFilmLookOpen(false); return; }
+        if (filmLookShown) { setFilmLookOpen(false); return; }
         if (fullScreen) { setFullScreen(false); return; }
         cb.onClose();
         return;
@@ -220,10 +237,10 @@ export default function MediaLightbox({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [item, hasPrevious, hasNext, fullScreen, refineOpen, promptFromOpen, filmLookOpen]);
+  }, [item, hasPrevious, hasNext, fullScreen, refineOpen, promptFromOpen, filmLookShown]);
 
   // Reset refine modal when the previewed item changes.
-  useEffect(() => { setRefineOpen(false); setPromptFromOpen(false); setFilmLookOpen(false); }, [item?.key]);
+  useEffect(() => { setRefineOpen(false); setPromptFromOpen(false); }, [item?.key]);
 
   const { onTouchStart, onTouchEnd, onTouchCancel } = useSwipeNav({ onPrevious, onNext, hasPrevious, hasNext });
 
@@ -328,7 +345,7 @@ export default function MediaLightbox({
 
   const cardClasses = fullScreen
     ? 'relative w-full h-full bg-black flex'
-    : 'relative bg-port-card border border-port-border rounded-xl overflow-hidden max-w-6xl w-full max-h-dvh-cap [--dvh-cap:92vh] [--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem] flex flex-col md:flex-row';
+    : `relative bg-port-card border border-port-border rounded-xl overflow-hidden ${filmLookShown ? 'max-w-6xl md:max-w-[min(90rem,calc(100vw-8rem))]' : 'max-w-6xl'} w-full max-h-dvh-cap [--dvh-cap:92vh] [--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem] flex flex-col md:flex-row`;
   const overlayPad = fullScreen ? 'p-0' : 'p-4';
   const imgMax = fullScreen ? 'max-w-[100vw] max-h-dvh-cap' : 'max-w-full max-h-dvh-cap [--dvh-cap:92vh] [--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem]';
   // Anchor low in fullscreen so the chevrons land in the letterbox bar of a
@@ -448,6 +465,10 @@ export default function MediaLightbox({
               preload="metadata"
               className={imgMax}
             />
+          ) : filmLookShown ? (
+            filmLook.waiting
+              ? <p className="p-4 text-sm text-gray-400" role={filmLook.sourceError ? 'alert' : 'status'}>{filmLook.sourceError || 'Loading ungraded source…'}</p>
+              : <FilmLookPreview src={filmLook.src} alt={item.prompt} look={filmLook.look} className="flex min-h-0 items-center justify-center" imgClassName={fullScreen ? imgMax : FILM_LOOK_IMG_MAX} />
           ) : (
             <MediaImage src={item.previewUrl} alt={item.prompt} className={`${imgMax} object-contain`} placeholderClassName="w-full h-full" />
           )}
@@ -468,7 +489,13 @@ export default function MediaLightbox({
           )}
         </div>
 
-        {!fullScreen && (
+        {!fullScreen && filmLookShown && (
+          <aside className={`${ASIDE_CLASSES} ${FILM_LOOK_ASIDE_SIZE}`} onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}>
+            <FilmLookPane item={item} draft={filmLook} onBack={() => setFilmLookOpen(false)} onComplete={onFilmLookComplete} projectLook={filmLookProject} />
+          </aside>
+        )}
+        {!fullScreen && !filmLookShown && (
           <SettingsPane
             item={item}
             meta={meta}
@@ -499,14 +526,11 @@ export default function MediaLightbox({
             videoRef={videoRef}
             variantGroup={variantGroup}
             onSelectVariant={onSelectVariant}
-            onFilmLook={!isVideo && item.filename && !item.compact ? () => setFilmLookOpen(true) : undefined}
+            onFilmLook={filmLookAvailable ? () => setFilmLookOpen(true) : undefined}
           />
         )}
       </div>
       <PromptRefineModal item={item} open={refineOpen} onClose={() => setRefineOpen(false)} />
-      {!isVideo && item.filename && (
-        <FilmLookEditor item={item} open={filmLookOpen} onClose={() => setFilmLookOpen(false)} onComplete={onFilmLookComplete} projectLook={filmLookProject} />
-      )}
       <PromptFromMediaModal item={item} open={promptFromOpen} onClose={() => setPromptFromOpen(false)} onResult={onPromptAnalysis} />
     </div>,
     document.body
@@ -545,7 +569,6 @@ function SettingsPane({
   annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead, onTrimStart, videoRef,
   variantGroup, onSelectVariant, onFilmLook,
 }) {
-  const asideClasses = 'md:w-80 lg:w-96 shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border min-h-0 max-h-dvh-cap [--dvh-cap:40vh] [--dvh-cap-dynamic:40dvh] md:[--dvh-cap:92vh] md:[--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem]';
   const [posterSaving, setPosterSaving] = useState(false);
   const [posterError, setPosterError] = useState(null);
   const savePoster = async atSec => {
@@ -665,7 +688,7 @@ function SettingsPane({
   }, [saveStatus]);
   return (
     <aside
-      className={asideClasses}
+      className={`${ASIDE_CLASSES} ${DETAILS_ASIDE_SIZE}`}
       onClick={(e) => e.stopPropagation()}
       // Same containment, minus Escape: a keystroke from a focused control in
       // this sidebar (an annotation field, a toggle) must not bubble to the

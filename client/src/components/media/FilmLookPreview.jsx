@@ -7,7 +7,7 @@ import { filmLookFilterMarkup, isFilmLookNeutral, normalizeFilmLook } from '../.
  * as it will at full size. Press and hold (or press space) on the picture to
  * see the original underneath. `frame` re-seeds the grain and drift.
  */
-export default function FilmLookPreview({ src, alt = '', look, frame = 0, className = '' }) {
+export default function FilmLookPreview({ src, alt = '', look, frame = 0, className = '', imgClassName = 'max-h-full max-w-full' }) {
   const imgRef = useRef(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [showOriginal, setShowOriginal] = useState(false);
@@ -35,7 +35,7 @@ export default function FilmLookPreview({ src, alt = '', look, frame = 0, classN
       role="img" aria-label={`${alt || 'Image'} with the film look applied. Hold to compare with the original.`} tabIndex={0}>
       {built && <div aria-hidden="true" dangerouslySetInnerHTML={{ __html: built.svg }} />}
       <img ref={imgRef} src={src} alt="" draggable={false} onLoad={() => imgRef.current && setSize({ width: Math.round(imgRef.current.clientWidth), height: Math.round(imgRef.current.clientHeight) })}
-        className="block max-h-full max-w-full object-contain" style={{ filter: filtered ? built.css : 'none' }} data-testid="film-look-image" />
+        className={`block object-contain ${imgClassName}`} style={{ filter: filtered ? built.css : 'none' }} data-testid="film-look-image" />
       {built?.active && (
         <span className="port-media-overlay pointer-events-none absolute bottom-2 left-2 rounded px-1.5 py-0.5 text-[10px]">{showOriginal ? 'Original' : 'Hold to compare'}</span>
       )}
