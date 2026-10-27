@@ -50,6 +50,33 @@ it('merges newer installed evidence with shipped evidence and includes only sele
   expect((await request(app).get('/comparison')).body.observations.some(row => row.id === imported.id)).toBe(true);
 });
 
+it('exposes Terra pricing and measured effort scores to existing Codex installs', async () => {
+  await writeFile(join(dir, 'model-comparison.json'), JSON.stringify({ schemaVersion: 1, observations: [observation] }));
+  const codexApp = express();
+  codexApp.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [
+    { id: 'codex', name: 'Codex', command: 'codex', models: ['gpt-6.1-terra'] },
+  ] }) }));
+  codexApp.use(errorMiddleware);
+
+  const result = await request(codexApp).get('/comparison');
+  expect(result.status).toBe(200);
+  const pricing = result.body.observations.find(row => row.id === 'openai-gpt-6.1-terra-pricing-2026-10-27-standard');
+  expect(pricing).toMatchObject({ quality: null, inputPerMillion: { value: 1 }, outputPerMillion: { value: 5 } });
+  const max = result.body.composite.rows.find(row => row.model === 'gpt-6.1-terra' && row.effort === 'max');
+  expect(max.quality).toMatchObject({ value: 48, estimated: false });
+  expect(max.costPerTask).toMatchObject({ value: 0.4, estimated: false });
+  const medium = result.body.composite.rows.find(row => row.model === 'gpt-6.1-terra' && row.effort === 'medium');
+  expect(medium.quality).toMatchObject({ value: 41, estimated: false });
+  expect(medium.costPerTask).toMatchObject({ value: 0.1, estimated: false });
+  const ultra = result.body.composite.rows.find(row => row.model === 'gpt-6.1-terra' && row.effort === 'ultra');
+  expect(ultra.inputPerMillion).toMatchObject({ value: 1, estimated: false });
+  expect(ultra.outputPerMillion).toMatchObject({ value: 5, estimated: false });
+  expect(ultra.quality).toMatchObject({ value: 48, estimated: true });
+  expect(ultra.quality.method).toContain('Nearest effort of this exact model');
+  expect(ultra.costPerTask).toBeNull();
+  expect(ultra.needsResearch).toBe(true);
+});
+
 it('imports sourced public observations durably, retains newer metrics, and serializes concurrent imports', async () => {
   const input = { schemaVersion: 1, observations: [{ ...observation, id: 'example-new', model: 'example-new-model' }] };
   await importModelComparison(input);

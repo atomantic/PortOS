@@ -76,6 +76,19 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('ProviderModelSelector — preset-first', () => {
+  it('offers and selects Ultra for Codex GPT-6.1 Terra, but not Luna', () => {
+    const codex = { id: 'codex-cli', name: 'Codex CLI', type: 'cli', command: 'codex', enabled: true, models: ['gpt-6.1-terra', 'gpt-6-luna'] };
+    const { onEffortChange, rerender } = renderSelector({ providers: [codex], selectedProviderId: codex.id, selectedModel: 'gpt-6.1-terra' });
+    const effort = screen.getByRole('combobox', { name: 'Thinking effort' });
+    expect(within(effort).getByRole('option', { name: 'ultra' })).toBeInTheDocument();
+    expect(within(effort).queryByRole('option', { name: 'minimal' })).toBeNull();
+    fireEvent.change(effort, { target: { value: 'ultra' } });
+    expect(onEffortChange).toHaveBeenCalledWith('ultra');
+
+    rerender({ selectedModel: 'gpt-6-luna' });
+    expect(within(screen.getByRole('combobox', { name: 'Thinking effort' })).queryByRole('option', { name: 'ultra' })).toBeNull();
+  });
+
   it('groups presets by harness in registry order, then a Custom group ending in the compose entry', () => {
     renderSelector({ selectedProviderId: 'mystery' });
     const select = providerSelect();

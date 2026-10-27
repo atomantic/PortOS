@@ -964,6 +964,23 @@ describe('usage.js — cache tiers and measured/estimate provenance (#3124 Phase
 describe('buildUsageReport — cache pricing and source reporting', () => {
   const providers = [{ id: 'claude-code', name: 'Claude Code', type: 'cli', command: 'claude' }];
 
+  it('prices GPT-6.1 Terra usage with its published standard and cache tiers', () => {
+    const usage = {
+      sessions: 1, messages: 1, tokensIn: 1_000_000, tokensOut: 1_000_000,
+      cacheReadTokens: 1_000_000, cacheWriteTokens: 1_000_000, source: 'measured',
+    };
+    const daily = { '2026-10-27': { sessions: 1, messages: 1, byProvider: {
+      codex: { ...usage, name: 'Codex', byModel: { 'gpt-6.1-terra': usage } },
+    } } };
+    const report = buildUsageReport(daily, { providers: [{ id: 'codex', type: 'cli', command: 'codex' }] });
+
+    expect(report.totals.estimatedCost).toBeCloseTo(7.3);
+    expect(report.providers[0].models[0]).toMatchObject({
+      model: 'gpt-6.1-terra', rateModel: 'gpt-6.1-terra', rateMatch: 'exact',
+      inputPer1M: 1, outputPer1M: 5, cacheReadPer1M: 0.05, cacheWritePer1M: 1.25,
+    });
+  });
+
   it('prices cache read and write tiers into the estimated cost', () => {
     const daily = {
       '2026-07-01': {
