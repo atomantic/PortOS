@@ -455,7 +455,7 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // and the three keyed pins come out together, so a new pin kind cannot reach
     // one site and silently miss another. It also applies the claim copilot
     // guard, which is what keeps the retired Copilot fallback from reappearing.
-    expect(GEN_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers)');
+    expect(GEN_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers)');
     // Every claim path layers the app's claim-work metadata over the defaults
     // through claimReviewersFrom — no path may resolve the defaults alone with
     // a bare `{}` (that silently drops a pinned override; #6210).
@@ -503,7 +503,7 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // feed the cap into the shared claim resolver, which applies task-over-default
     // precedence (unit-tested in reviewerConfig.test.js).
     expect(CLAIM_SRC).toContain('reviewerMaxRounds: reviewerMaxRounds ?? metadata?.reviewerMaxRounds');
-    expect(GEN_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers)');
+    expect(GEN_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers)');
     expect(LAYER_SRC).not.toContain('resolveReviewerMaxRounds(');
   });
 

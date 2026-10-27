@@ -931,7 +931,7 @@ export function prioritizeToolFreeReviewers(reviewers) {
  * the persisted task metadata at spawn time. Feeding both the same function is
  * what makes `reviewerConfigMetadata`'s round-trip exact.
  */
-export function resolveClaimReviewerConfig(metadata, codeReviewDefaults, defaultReviewers) {
+export function resolveClaimReviewerConfig(metadata, codeReviewDefaults, defaultReviewers, providers = []) {
   if (metadata?.prCompletion === PR_COMPLETIONS.MERGE_ON_GREEN) {
     return {
       reviewers: [],
@@ -948,7 +948,7 @@ export function resolveClaimReviewerConfig(metadata, codeReviewDefaults, default
   return {
     ...config,
     reviewers,
-    csv: buildReviewersCsv(reviewers, config.usernames, config.optionalReviewers, config.reviewerMaxRounds, config.reviewerModels, config.reviewerEfforts)
+    csv: buildReviewersCsv(reviewers, config.usernames, config.optionalReviewers, config.reviewerMaxRounds, config.reviewerModels, config.reviewerEfforts, providers)
   };
 }
 
@@ -1252,9 +1252,83 @@ export const reviewerTokenSlug = (token) => String(token).split('[')[0].split('~
  * @param {string[]} tokens - emitted reviewer tokens (decorated or bare)
  * @returns {{flagTokens: string[], portosOnly: string[]}}
  */
-export function splitSlashdoReviewerTokens(tokens) {
+/**
+ * Resolve a provider record (or provider ID) to a canonical reviewer slug
+ * (e.g. 'codex', 'claude', 'antigravity', etc.).
+ *
+ * @param {object|string} provider
+ * @param {string} [providerId]
+ * @returns {string|null}
+ */
+export function resolveProviderReviewerSlug(provider, providerId = null) {
+  if (provider && typeof provider === 'object') {
+    const candidates = [
+      provider.harnessId && provider.harnessId !== 'direct' ? provider.harnessId : null,
+      provider.command === 'agy' ? 'antigravity' : provider.command === 'cursor-agent' ? 'cursor' : provider.command,
+      provider.executionSourceProviderId && !provider.executionSourceProviderId.startsWith('selection-')
+        ? provider.executionSourceProviderId.replace(/-(cli|tui)$/, '')
+        : null,
+      provider.id ? provider.id.replace(/-(cli|tui)$/, '') : null,
+      provider.id
+    ].filter(Boolean);
+
+    for (const raw of candidates) {
+      if (typeof raw !== 'string') continue;
+      const normalized = REVIEWER_ALIASES[raw.toLowerCase()] || raw.toLowerCase();
+      if (REVIEWER_VALUES.includes(normalized)) {
+        return normalized;
+      }
+    }
+  }
+
+  const rawId = typeof provider === 'string' ? provider : (providerId || (provider?.id ?? null));
+  if (typeof rawId === 'string' && rawId) {
+    const stripped = rawId.replace(/^provider:/, '').replace(/-(cli|tui)$/, '').toLowerCase();
+    const normalized = REVIEWER_ALIASES[stripped] || stripped;
+    if (REVIEWER_VALUES.includes(normalized)) return normalized;
+    for (const v of REVIEWER_VALUES) {
+      if (stripped === v || stripped.startsWith(`${v}-`) || stripped.endsWith(`-${v}`)) {
+        return v;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Partition emitted `--review-with` tokens into the ones slashdo can parse and
+ * the ones PortOS serves itself.
+ *
+ * slashdo's parser ABORTS the whole command on an unknown `--review-with` value,
+ * so a PORTOS_ONLY_REVIEWERS slug in that flag doesn't degrade the run — it kills
+ * it, and the PR the invocation existed to open never gets created. Every emitter
+ * of that flag therefore drops those slugs and names them separately, alongside
+ * the Local Reviewer Procedure that actually runs them.
+ *
+ * An `@login` entry is always a valid slashdo reviewer. `portosOnly` is reported
+ * by BARE slug — the `[<model>]`/`~<suffix>` decoration is slashdo grammar, and
+ * these reviewers never reach a slashdo parser.
+ *
+ * @param {string[]} tokens - emitted reviewer tokens (decorated or bare)
+ * @param {Array<object>} [providers] - configured provider records to resolve provider tokens
+ * @returns {{flagTokens: string[], portosOnly: string[]}}
+ */
+export function splitSlashdoReviewerTokens(tokens, providers = []) {
   const trimmed = (Array.isArray(tokens) ? tokens : []).map(t => String(t).trim()).filter(Boolean);
-  const isSlashdoToken = t => t.startsWith('@') || (!PORTOS_ONLY_REVIEWERS.includes(reviewerTokenSlug(t)) && !isProviderReviewer(reviewerTokenSlug(t)));
+  const isSlashdoToken = t => {
+    if (t.startsWith('@')) return true;
+    const rawSlug = reviewerTokenSlug(t);
+    let effectiveSlug = rawSlug;
+    if (isProviderReviewer(rawSlug)) {
+      const providerId = rawSlug.slice('provider:'.length);
+      const provider = Array.isArray(providers)
+        ? providers.find(p => p && (p.id === providerId || `provider:${p.id}` === rawSlug))
+        : null;
+      effectiveSlug = resolveProviderReviewerSlug(provider, providerId);
+      if (!effectiveSlug) return false;
+    }
+    return !PORTOS_ONLY_REVIEWERS.includes(effectiveSlug);
+  };
   return {
     flagTokens: trimmed.filter(isSlashdoToken),
     portosOnly: [...new Set(trimmed.filter(t => !isSlashdoToken(t)).map(reviewerTokenSlug))],
@@ -1364,12 +1438,34 @@ function reviewerEffortLookup(reviewerEfforts) {
  * PortOS's `lmstudio` reviewer has no slashdo slug at all (its model rides in the
  * `POST /api/code-review/local` body instead).
  */
-function markSuffixes(token, optSet, maxLookup, modelLookup, effortLookup) {
+function markSuffixes(token, optSet, maxLookup, modelLookup, effortLookup, providers = []) {
   const key = token.toLowerCase();
-  const max = maxLookup?.get(key);
-  const model = BRACKET_MODEL_REVIEWERS.includes(key) ? modelLookup?.get(key) : undefined;
-  const effort = effortLookup?.get(key);
-  return `${token}${model ? `[${model}]` : ''}${optSet.has(key) ? '~opt' : ''}${max === undefined ? '' : `~max=${max}`}${effort ? `~effort=${effort}` : ''}`;
+  let emitToken = token;
+  let provider = null;
+  let slug = null;
+
+  if (isProviderReviewer(token)) {
+    const providerId = token.slice('provider:'.length);
+    provider = Array.isArray(providers)
+      ? providers.find(p => p && (p.id === providerId || `provider:${p.id}` === token))
+      : null;
+    slug = resolveProviderReviewerSlug(provider, providerId);
+    if (slug) {
+      emitToken = slug;
+    }
+  }
+
+  const slugKey = slug ? slug.toLowerCase() : null;
+  const max = maxLookup?.get(key) ?? (slugKey ? maxLookup?.get(slugKey) : undefined);
+  const effort = effortLookup?.get(key) ?? (slugKey ? effortLookup?.get(slugKey) : undefined);
+  const isOpt = optSet?.has(key) || (slugKey ? optSet?.has(slugKey) : false);
+
+  const modelKey = slugKey || key;
+  const model = BRACKET_MODEL_REVIEWERS.includes(modelKey)
+    ? (modelLookup?.get(key) || (slugKey ? modelLookup?.get(slugKey) : undefined) || provider?.defaultModel || undefined)
+    : undefined;
+
+  return `${emitToken}${model ? `[${model}]` : ''}${isOpt ? '~opt' : ''}${max === undefined ? '' : `~max=${max}`}${effort ? `~effort=${effort}` : ''}`;
 }
 
 /**
@@ -1470,7 +1566,7 @@ export function resolveKeyedReviewers(reviewers, hasUsernames) {
  * gets `~effort=<level>`.
  * The flag-string variant is `buildReviewWithArgs`.
  */
-export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}) {
+export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, providers = []) {
   const users = normalizeReviewUsernames(usernames);
   const keyed = Array.isArray(reviewers) && reviewers.length ? reviewers : (users.length ? [] : [...DEFAULT_REVIEWERS]);
   const optSet = optionalReviewerSet(optionalReviewers);
@@ -1478,7 +1574,7 @@ export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers =
   const modelLookup = reviewerModelLookup(reviewerModels);
   const effortLookup = reviewerEffortLookup(reviewerEfforts);
   const combined = [...keyed, ...users.map(u => `@${u}`)];
-  return combined.map(t => markSuffixes(t, optSet, maxLookup, modelLookup, effortLookup)).join(',');
+  return combined.map(t => markSuffixes(t, optSet, maxLookup, modelLookup, effortLookup, providers)).join(',');
 }
 
 /**
@@ -1523,6 +1619,7 @@ export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers =
  * @param {Object<string, number>} [options.reviewerMaxRounds] - per-reviewer `~max=<n>` caps
  * @param {Object<string, string>} [options.reviewerModels] - per-reviewer `[<model>]` pins
  * @param {Object<string, string>} [options.reviewerEfforts] - per-reviewer `~effort=<level>` pins
+ * @param {Array<object>} [options.providers] - configured provider records to resolve provider tokens
  * @returns {string} the slashdo review flag string (possibly empty)
  */
 export function buildReviewWithArgs(reviewers, {
@@ -1533,6 +1630,7 @@ export function buildReviewWithArgs(reviewers, {
   reviewerMaxRounds = {},
   reviewerModels = {},
   reviewerEfforts = {},
+  providers = [],
 } = {}) {
   const users = normalizeReviewUsernames(usernames);
   const keyed = resolveKeyedReviewers(reviewers, users.length > 0);
@@ -1540,7 +1638,7 @@ export function buildReviewWithArgs(reviewers, {
   // PortOS-only reviewers are dropped rather than emitted — see the doc comment
   // above and `splitSlashdoReviewerTokens`. The surrounding prompt still names the
   // full reviewer list and the Local Reviewer Procedure that runs them.
-  const combined = splitSlashdoReviewerTokens(configured).flagTokens;
+  const combined = splitSlashdoReviewerTokens(configured, providers).flagTokens;
   const optSet = optionalReviewerSet(optionalReviewers);
   const maxLookup = reviewerMaxRoundsLookup(reviewerMaxRounds);
   const modelLookup = reviewerModelLookup(reviewerModels);
@@ -1560,11 +1658,17 @@ export function buildReviewWithArgs(reviewers, {
     && effortLookup.get(DEFAULT_REVIEWER) === undefined;
   // Keyed by resolved SLUG, like every other per-reviewer lookup in this function,
   // so a bracketed or suffixed token cannot slip past the comparison.
-  const hasApplyCapableReviewer = combined.some(t => isApplyCapableReviewer(reviewerTokenSlug(t)));
+  const hasApplyCapableReviewer = combined.some(t => {
+    const raw = reviewerTokenSlug(t);
+    const resolved = isProviderReviewer(raw)
+      ? resolveProviderReviewerSlug(Array.isArray(providers) ? providers.find(p => p && (p.id === raw.slice(9) || `provider:${p.id}` === raw)) : null, raw.slice(9))
+      : raw;
+    return isApplyCapableReviewer(resolved || raw);
+  });
   const parts = [];
   // Nothing slashdo can parse (a list of PortOS-only reviewers): emit no flag at
   // all rather than a bare `--review-with`.
-  if (!isDefaultOnly && combined.length) parts.push(`--review-with ${combined.map(t => markSuffixes(t, optSet, maxLookup, modelLookup, effortLookup)).join(',')}`);
+  if (!isDefaultOnly && combined.length) parts.push(`--review-with ${combined.map(t => markSuffixes(t, optSet, maxLookup, modelLookup, effortLookup, providers)).join(',')}`);
   if (combined.length >= 2) {
     if (stopMode === 'on-findings') parts.push('--review-stop-on-findings');
     else if (stopMode === 'on-clean') parts.push('--review-stop-on-clean');

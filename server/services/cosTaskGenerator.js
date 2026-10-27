@@ -1661,8 +1661,11 @@ export async function generateSelfImprovementTaskForType(taskType, state, option
   // Resolve that token here so the global/on-demand path gets the same reviewer
   // contract and local-review procedure as an app-scoped release task.
   if (description.includes('{reviewers}')) {
-    const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
-    const reviewers = resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers);
+    const [codeReviewDefaults, providers] = await Promise.all([
+      getCodeReviewDefaults().catch(() => null),
+      import('./providers.js').then(m => m.listProviders()).catch(() => [])
+    ]);
+    const reviewers = resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers);
     Object.assign(metadata, reviewerConfigMetadata(reviewers));
     description = description
       .replace(/\{reviewers\}/g, () => reviewers.csv)
