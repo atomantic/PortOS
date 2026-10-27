@@ -110,14 +110,19 @@ request `kind: "preserved-supersession"` with the replacement merged PR, inspect
 the exact source/replacement differences, and confirm the returned digest with
 `acceptSuperseded: true` and that same kind.
 
-This narrower mode requires an exact same-repository published source ref and
-one closed, unmerged source PR at that head. Missing, advanced, reopened,
-ambiguous or foreign source evidence refuses removal. An index with resolve-undo conflict stages remains held. Every private recovery
-commit must be reachable from the published source head. Existing owner,
+Published sources require an exact same-repository source ref and one closed,
+unmerged source PR at that head. A private source instead retains its exact
+commit/tree objects under `refs/portos/retained-checkout-source/<head>`; it does
+not need publication or a patch-size inspection limit. Separate private recovery
+commits are retained too. Missing, advanced, reopened, ambiguous or foreign
+source evidence refuses removal. An index with resolve-undo conflict stages
+remains held. Existing owner,
 completion-policy, inventory-generation and final content checks still apply.
 
-Before removal, the service durably retains at most 64 KiB of non-cache files
-and private Git evidence in the local schedule record. It also retains symlink
+Before removal, the service durably retains at most 64 KiB of checkout-only
+non-cache files and Git administration evidence in the local schedule record.
+Git source objects remain reachable through the exact retained refs rather than
+being copied into that record. It also retains symlink
 metadata. Only independently recognized module cache artifacts and a clean,
 reconstructible index/checkout pointers are omitted. The aggregate encoded evidence store is bounded to 1 MiB. Stale, unconsumed
 preparations are pruned; completed preservation evidence is never evicted just
@@ -127,6 +132,17 @@ archive directory. Preparation is replayable and does not settle an obligation
 or claim deletion. A completed service removal records
 `disposition: "superseded-preserved"`, bound to that preparation digest, instead
 of claiming merged delivery. Ordinary merged cleanup does not use this mode.
+
+### Released ref without a checkout
+
+Use the existing `POST /api/git/delete-branch` with the repository `path`, exact
+`branch`, `local: true`, `remote: false`, and caller-observed `expectedHead`.
+Do not invent a checkout path for the checkout-review endpoint. The Git service
+checks current owners and worktree holders, retains the exact source under
+`refs/portos/completed/<head>`, and removes only that ref with compare-and-swap.
+Refresh branch reconciliation afterward to observe the actual remaining refs.
+This is an explicit source-retaining removal, not a claim that its original
+commits were merged.
 
 To recover the prototype, fetch the recorded source ref, verify the exact head,
 and create a new checkout. Retained small files and symlink metadata are audit

@@ -366,9 +366,9 @@ describe('rewritten detached original retirement (real Git)', () => {
 // source remains recoverable without keeping a checkout or archiving a repository.
 describe('bounded source preservation retirement (real Git)', () => {
   it.each(['preserved', 'wrong-generation', 'active-owner', 'wrong-ref', 'symbolic-ref', 'changed-ref', 'deleted-ref', 'over-budget',
-    'private-prototype', 'private-open', 'private-remote-changed', 'private-changed-ref', 'private-deleted-ref', 'private-over-budget',
-    'private-active', 'private-content-over-budget', 'private-extra-root', 'private-extra-ref-change',
-    'private-extra-over-budget', 'private-noncommit-root', 'private-ancestor-history'])(
+    'private-prototype', 'private-open', 'private-remote-changed', 'private-changed-ref', 'private-deleted-ref', 'private-large-source',
+    'private-active', 'private-content-over-budget', 'private-extra-root', 'private-extra-ref-change', 'private-missing-source-object',
+    'private-noncommit-root', 'private-ancestor-history'])(
     'binds exact retained source and existing safety gates: %s', async scenario => {
       scratch = await realpath(await mkdtemp(join(tmpdir(), 'retained-source-')));
       const repo = join(scratch, 'repo'); await materializeGitRepo(repo);
@@ -379,8 +379,8 @@ describe('bounded source preservation retirement (real Git)', () => {
       const base = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
       const branch = 'delivery/candidate', originalPath = join(scratch, 'original'), path = join(scratch, 'resumed');
       await execGit(['worktree', 'add', '-b', branch, originalPath, 'main'], repo);
-      const originalBytes = ['over-budget', 'private-over-budget'].includes(scenario) ? `${'bounded draft evidence '.repeat(4000)}\n`
-        : ['private-extra-over-budget', 'private-ancestor-history'].includes(scenario) ? `${'bounded draft evidence '.repeat(1700)}\n` : 'original captured draft\n';
+      const originalBytes = ['over-budget', 'private-large-source'].includes(scenario) ? `${'bounded draft evidence '.repeat(4000)}\n`
+        : scenario === 'private-ancestor-history' ? `${'bounded draft evidence '.repeat(1700)}\n` : 'original captured draft\n';
       await writeFile(join(originalPath, 'options.txt'), originalBytes);
       await execGit(['add', 'options.txt'], originalPath); await execGit(['commit', '-m', 'captured draft'], originalPath);
       if (scenario === 'private-ancestor-history') {
@@ -445,26 +445,31 @@ describe('bounded source preservation retirement (real Git)', () => {
         await writeFile(join(repo, '.git', 'info', 'exclude'), 'private-evidence.txt\n');
         await writeFile(join(path, 'private-evidence.txt'), scenario === 'private-content-over-budget'
           ? Buffer.alloc(64 * 1024 + 1) : evidenceBytes);
-        if (['private-extra-root', 'private-extra-ref-change', 'private-extra-over-budget', 'private-noncommit-root'].includes(scenario)) {
+        if (['private-extra-root', 'private-extra-ref-change', 'private-large-source', 'private-noncommit-root'].includes(scenario)) {
           extraRootHead = scenario === 'private-noncommit-root'
             ? (await execGit(['rev-parse', `${sourceHead}:options.txt`], repo)).stdout.trim()
             : (await execGit(['commit-tree', `${sourceHead}^{tree}`, '-p', base, '-m', 'preserve exact private source metadata'], repo)).stdout.trim();
           const gitdir = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
           await writeFile(join(gitdir, 'ORIG_HEAD'), `${extraRootHead}\n`);
         }
+        if (scenario === 'private-missing-source-object') {
+          const blob = (await execGit(['rev-parse', `${sourceHead}:options.txt`], repo)).stdout.trim();
+          await rm(join(repo, '.git', 'objects', blob.slice(0, 2), blob.slice(2)));
+        }
       }
       const kind = privatePrototype ? 'preserved-supersession' : undefined;
       await recordBranchReconcileOutcome(fixture.app.id, { status: 'incomplete', remaining: [{ ...release, reason: 'worktree-unmanaged-location' }] });
       const opts = { cosDir: join(scratch, 'cos'), readAgents: async () => fixture.owners }; await mkdir(opts.cosDir);
       const prepared = await prepareInventoriedCheckoutRetirement({ appId: fixture.app.id, release, prUrl: fixture.pr.url, kind }, opts);
-      if (!['preserved', 'changed-ref', 'deleted-ref', 'private-prototype', 'private-changed-ref', 'private-deleted-ref', 'private-extra-root', 'private-extra-ref-change', 'private-ancestor-history'].includes(scenario)) {
+      if (!['preserved', 'changed-ref', 'deleted-ref', 'private-prototype', 'private-changed-ref', 'private-deleted-ref', 'private-extra-root', 'private-extra-ref-change', 'private-ancestor-history', 'private-large-source'].includes(scenario)) {
         expect(prepared.ok, JSON.stringify(prepared)).toBe(false);
         expect((await listWorktrees(repo)).some(row => resolve(row.path) === path)).toBe(true);
         return;
       }
       if (privatePrototype) expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: {
         kind, preservedSource: { kind: 'private-retained-source', head: sourceHead, privateProof: {
-          retainedRef, retainedHead: sourceHead, deltaSha256: expect.stringMatching(/^[a-f0-9]{64}$/) } } } });
+          version: 2, retainedRef, retainedHead: sourceHead,
+          sourceTree: (await execGit(['rev-parse', `${sourceHead}^{tree}`], repo)).stdout.trim() } } } });
       else expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { policy: { policies: expect.arrayContaining([
         expect.objectContaining({ id: earlier.id, success: false, resumedCleanup: { sourcePreservation: {
           sourceHead, base, retainedRef, retainedHead: sourceHead, sourceCommits: 1,
@@ -479,7 +484,7 @@ describe('bounded source preservation retirement (real Git)', () => {
       if (['deleted-ref', 'private-deleted-ref'].includes(scenario)) await execGit(['update-ref', '-d', retainedRef, sourceHead], repo);
       const retired = await retireInventoriedCheckout({ appId: fixture.app.id, release,
         review: { prUrl: fixture.pr.url, digest: prepared.review.digest, kind, acceptSuperseded: privatePrototype } }, opts);
-      const retiredExpected = ['preserved', 'private-prototype', 'private-extra-root', 'private-ancestor-history'].includes(scenario);
+      const retiredExpected = ['preserved', 'private-prototype', 'private-extra-root', 'private-ancestor-history', 'private-large-source'].includes(scenario);
       expect(retired.ok, JSON.stringify(retired)).toBe(retiredExpected);
       expect((await listWorktrees(repo)).some(row => resolve(row.path) === path)).toBe(!retiredExpected);
       if (['deleted-ref', 'private-deleted-ref'].includes(scenario)) expect((await execGit(['show-ref', '--verify', '--quiet', retainedRef], repo,
