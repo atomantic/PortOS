@@ -90,7 +90,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // it on an unrelated Universe edit and LWW the loss back. The catalog gate stays
   // put: catalog peer-receive stores the payload verbatim.
   // v16 = optional generation/finishing visual profile. Older sanitizers strip it.
-  universes: 16,
+  // v17 = film look controls for dye crossover, halation spread, lens fall-off,
+  // tape softness and tracking. An older strict film-look schema refuses the
+  // profile's finishing look; an older normalizer drops the controls.
+  universes: 17,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -777,7 +780,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // and its missing-capture refusal. Optional on existing records; no backfill.
   // v27 = original version-2 film response controls and recipes. Older
   // renderers discard these controls and cannot reproduce the chosen finish.
-  musicVideoProjects: 27,
+  // v28 = film look controls for dye crossover, halation spread, lens fall-off,
+  // tape softness and tracking. Older renderers discard them and cannot
+  // reproduce the chosen finish.
+  musicVideoProjects: 28,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

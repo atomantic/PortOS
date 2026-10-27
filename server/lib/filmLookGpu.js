@@ -374,16 +374,16 @@ void main() {
   vec4 c = unpremul(texelFetch(a, pixel(), 0));
   color = premul(c * slope + intercept);
 }`,
-    transferTable: `uniform sampler2D a; uniform float curve[256];
-float mapped(float x) {
+    transferTable: `uniform sampler2D a; uniform sampler2D curves;
+float mapped(float x, int channel) {
   float p = clamp(x, 0.0, 1.0) * 255.0;
   int i = min(254, int(floor(p)));
-  return mix(curve[i], curve[i + 1], p - float(i));
+  return mix(texelFetch(curves, ivec2(i, 0), 0)[channel], texelFetch(curves, ivec2(i + 1, 0), 0)[channel], p - float(i));
 }
 void main() {
   if (clipped()) { color = vec4(0.0); return; }
   vec4 c = unpremul(texelFetch(a, pixel(), 0));
-  color = premul(vec4(mapped(c.r), mapped(c.g), mapped(c.b), c.a));
+  color = premul(vec4(mapped(c.r, 0), mapped(c.g, 1), mapped(c.b, 2), c.a));
 }`,
     composite: `uniform sampler2D a; uniform sampler2D b; uniform int op; uniform vec4 k;
 void main() {
@@ -497,6 +497,7 @@ void main() {
   let output = null;
   const tableCache = new Map();
   const kernelCache = new Map();
+  const curveCache = new Map();
   const profileCache = new Map();
   const resize = (w, h) => {
     if (w === width && h === height) return;
@@ -614,6 +615,20 @@ void main() {
       tableCache.set(seed, { latticeTexture, gradientTexture });
     }
     return tableCache.get(seed);
+  };
+  const curveTexture = (channels) => {
+    const key = channels.map(values => values.join(' ')).join('|');
+    if (!curveCache.has(key)) {
+      const data = new Float32Array(256 * 4);
+      for (let i = 0; i < 256; i++) { data[i * 4] = channels[0][i]; data[i * 4 + 1] = channels[1][i]; data[i * 4 + 2] = channels[2][i]; data[i * 4 + 3] = 1; }
+      if (curveCache.size > 16) {
+        const [oldest, value] = curveCache.entries().next().value;
+        gl.deleteTexture(value);
+        curveCache.delete(oldest);
+      }
+      curveCache.set(key, texture(256, 1, gl.RGBA32F, gl.RGBA, gl.FLOAT, data));
+    }
+    return curveCache.get(key);
   };
   const kernelTexture = (sigma) => {
     const key = String(sigma);
@@ -793,11 +808,12 @@ void main() {
         run('matrix', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniformMatrix4fv(u.m, false, m); gl.uniform4f(u.bias, values[4], values[9], values[14], values[19]); });
       } else if (p.type === 'feComponentTransfer') {
         if (p.funcs.R?.type === 'table') {
-          const values = String(p.funcs.R.tableValues || '').trim().split(/[\s,]+/).map(Number);
-          if (values.length !== 256 || values.some(v => !Number.isFinite(v) || v < 0 || v > 1)
-            || ['G', 'B'].some(c => p.funcs[c]?.type !== 'table' || p.funcs[c].tableValues !== p.funcs.R.tableValues)
+          // Each channel may carry its own response (dye crossover); all three are 256-entry tables.
+          const channels = ['R', 'G', 'B'].map(c => (p.funcs[c]?.type === 'table' ? String(p.funcs[c].tableValues || '').trim().split(/[\s,]+/).map(Number) : null));
+          if (channels.some(values => !values || values.length !== 256 || values.some(v => !Number.isFinite(v) || v < 0 || v > 1))
             || (p.funcs.A && p.funcs.A.type !== 'identity')) throw new Error('unsupported film response table');
-          run('transferTable', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniform1fv(u['curve[0]'], values); });
+          const curves = curveTexture(channels);
+          run('transferTable', target, (u, bind) => { clipUniform(u, region); bind('a', a); bind('curves', curves); });
         } else {
         const slope = [1, 1, 1, 1], intercept = [0, 0, 0, 0];
         ['R', 'G', 'B', 'A'].forEach((channel, i) => {
