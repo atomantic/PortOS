@@ -6,7 +6,7 @@
  * remain readable.
  */
 import { describe, it as vitestIt, expect, beforeEach as vitestBeforeEach, afterEach, afterAll, vi } from 'vitest';
-import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat, lstat } from 'fs/promises';
+import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, link, utimes, truncate, chmod, stat, lstat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { createHash } from 'node:crypto';
@@ -65,6 +65,25 @@ vi.mock('./cosClaimOwnershipState.js', async importOriginal => {
 const SYMLINKS = process.platform !== 'win32';
 const retirementFaults = vi.hoisted(() => ({ onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null }));
 const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null }));
+
+const cacheFaults = vi.hoisted(() => ({ onOpen: null, afterOpen: null, onRead: null, onLstat: null }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, lstat: async (...args) => {
+    await cacheFaults.onLstat?.(args[0]);
+    return actual.lstat(...args);
+  }, open: async (...args) => {
+    await cacheFaults.onOpen?.(args[0]);
+    const handle = await actual.open(...args);
+    await cacheFaults.afterOpen?.(args[0]);
+    const read = handle.read.bind(handle);
+    handle.read = async (...readArgs) => {
+      await cacheFaults.onRead?.(args[0]);
+      return read(...readArgs);
+    };
+    return handle;
+  } };
+});
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
@@ -150,6 +169,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     receiptTiming.current = remoteSquash || task.name.startsWith('settles a normally merged checkout before the next scan')
       ? { entryPoint: remoteSquash ? 'remote squash receipt' : task.name.endsWith('cleanupMerged') ? 'cleanupMerged' : 'early reaper', started: performance.now(), phases: {} } : null;
     await receiptTiming.run('fixture-setup', async () => {
+      Object.assign(cacheFaults, { onOpen: null, afterOpen: null, onRead: null, onLstat: null });
       Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
       Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null, onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null });
       scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
@@ -1518,6 +1538,212 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(retired.archiveDir ?? null).toBeNull();
     expect(existsSync(c.path)).toBe(false);
     expect(await registered(c.path)).toBe(false);
+    expect(await archives()).toEqual([]);
+  });
+
+  // This lifecycle uniquely exercises the old 16 MiB per-module proof failure,
+  // including persisted settlement, without relaxing any production budget.
+  it('retires a cache whose former per-file metadata exceeds 16 MiB with bounded streaming proof', async () => {
+    const c = await reviewedCheckout('compact-cache-cardinality');
+    const root = await moduleCache(c, { count: 0, bytes: 1 });
+    const count = 80000;
+    const fixtureStarted = performance.now();
+    const payloads = Array.from({ length: 256 }, (_, index) => join(scratch, `cache-fixture-payload-${index}`));
+    for (let offset = 0; offset < payloads.length; offset += 32) await Promise.all(payloads.slice(offset, offset + 32).map(path => writeFile(path, 'x')));
+    let oldMetadataBytes = 0;
+    for (let offset = 0; offset < count; offset += 32) {
+      await Promise.all(Array.from({ length: Math.min(32, count - offset) }, async (_, index) => {
+        const name = (offset + index).toString(16).padStart(64, '0');
+        oldMetadataBytes += Buffer.byteLength(JSON.stringify({ path: `server/.cache/vitest/modules/${name}`,
+          bytes: 1, sha256: '0'.repeat(64), disposableCache: true }));
+        // Share fixture storage, while the service still opens and hashes every
+        // distinct path. Mutation cases below use independent ordinary files.
+        await link(payloads[(offset + index) % payloads.length], join(root, name));
+      }));
+    }
+    console.log(`📏 Cache fixture: ${JSON.stringify({ entries: count, creationMs: Math.ceil(performance.now() - fixtureStarted) })}`);
+    expect(oldMetadataBytes).toBeGreaterThan(16 * 1024 * 1024);
+    const initialHeap = process.memoryUsage().heapUsed;
+    let peakHeap = initialHeap;
+    let opened = 0;
+    cacheFaults.onOpen = () => { if (++opened % 1024 === 0) peakHeap = Math.max(peakHeap, process.memoryUsage().heapUsed); };
+    const started = performance.now();
+    const prepared = await c.prepare();
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, archiveUsage: {
+      cacheRoots: 1, cacheEntries: count + 2, cacheBytes: expect.any(Number), cacheReadBytes: expect.any(Number),
+    } });
+    expect(prepared.review.disposableCacheProofs).toEqual([{ version: 1, producer: 'vitest-modules',
+      root: 'server/.cache/vitest/modules', entries: count + 2, bytes: prepared.archiveUsage.cacheBytes,
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }]);
+    expect(prepared.archiveUsage.metadata).toBeLessThan(64 * 1024);
+    expect(prepared.archiveUsage.directory).toBeLessThan(16 * 1024 * 1024);
+    expect(prepared.archiveUsage.cacheProofPeakBytes).toBeLessThan(4096);
+    expect(prepared.archiveUsage.cacheReadBytes).toBeGreaterThanOrEqual(prepared.archiveUsage.cacheBytes);
+    console.log(`📏 Compact cache proof: ${JSON.stringify({ oldMetadataBytes, ...prepared.archiveUsage,
+      previewMs: Math.ceil(performance.now() - started), sampledPeakHeapDeltaBytes: peakHeap - initialHeap })}`);
+    const retired = await c.confirm(prepared.review);
+    expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+    expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
+      branch: c.release.branch, path: c.path, head: c.release.head, branchDeleted: true,
+    }));
+    expect(existsSync(c.path)).toBe(false);
+    expect(await registered(c.path)).toBe(false);
+    expect(await archives()).toEqual([]);
+  }, 180000);
+
+  it('binds a deterministic cache proof independent of enumeration order', async () => {
+    const c = await reviewedCheckout('compact-cache-order');
+    await moduleCache(c, { count: 3, bytes: 8 });
+    const first = await c.prepare();
+    injected.onOtherFiles = output => output.split('\0').filter(Boolean).reverse().join('\0') + '\0';
+    const second = await c.prepare();
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(second.review.digest).toBe(first.review.digest);
+    expect(second.archiveUsage.cacheEntries).toBe(5);
+  });
+
+  it.each(['same-size-content', 'size', 'added', 'removed', 'tag', 'metadata', 'unexpected', 'symlink', 'junction', 'parent', 'identical-parent'])(
+    'preserves checkout/ref when a compact cache changes after review: %s', async change => {
+      const c = await reviewedCheckout(`compact-cache-${change}`);
+      const root = await moduleCache(c, { bytes: 24 });
+      const prepared = await c.prepare();
+      expect(prepared.ok).toBe(true);
+      const module = join(root, 'a'.repeat(40));
+      if (change === 'same-size-content') await writeFile(module, 'y'.repeat(24));
+      if (change === 'size') await writeFile(module, 'changed size');
+      if (change === 'added') await writeFile(join(root, 'b'.repeat(64)), 'added');
+      if (change === 'removed') await rm(module);
+      if (change === 'tag') await writeFile(join(root, 'CACHEDIR.TAG'), 'changed marker');
+      if (change === 'metadata') await writeFile(join(root, '_metadata.json'), JSON.stringify({ lockfileHash: 'c'.repeat(8) }));
+      if (change === 'unexpected') await writeFile(join(root, 'wanted-unique-output'), 'retain me');
+      if (change === 'identical-parent') {
+        const original = join(scratch, 'original-cache-root');
+        await rename(root, original);
+        await cp(original, root, { recursive: true });
+      }
+      if (['symlink', 'junction', 'parent'].includes(change)) {
+        const outside = join(scratch, 'outside-compact-cache');
+        await mkdir(outside);
+        await writeFile(join(outside, 'wanted'), 'outside bytes');
+        if (change === 'parent') {
+          await rename(root, root + '-original');
+          await symlink(outside, root, process.platform === 'win32' ? 'junction' : 'dir');
+        } else if (change === 'junction') await symlink(outside, join(root, 'b'.repeat(40)), process.platform === 'win32' ? 'junction' : 'dir');
+        else if (SYMLINKS) { await rm(module); await symlink(join(outside, 'wanted'), module); }
+        else { await rm(module); await mkdir(module); }
+      }
+      const retired = await c.confirm(prepared.review);
+      expect(retired.ok).toBe(false);
+      expect(await registered(c.path)).toBe(true);
+      expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+      expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+      expect(await archives()).toEqual([]);
+    });
+
+  it.each(['link', 'directory'])('refuses a cache parent replaced during open before reading redirected bytes: %s', async kind => {
+    const c = await reviewedCheckout('compact-cache-parent-race');
+    const root = await moduleCache(c, { bytes: 24 });
+    const module = join(root, 'a'.repeat(40));
+    const outside = join(scratch, 'outside-redirected-cache');
+    await mkdir(outside);
+    await writeFile(join(outside, 'a'.repeat(40)), 'outside bytes must never be read');
+    let replaced = false;
+    let reads = 0;
+    cacheFaults.onOpen = async path => {
+      if (path !== module || replaced) return;
+      replaced = true;
+      await rename(root, root + '-original');
+      if (kind === 'link') await symlink(outside, root, process.platform === 'win32' ? 'junction' : 'dir');
+      else { await mkdir(root); await writeFile(module, 'different inode'); }
+    };
+    cacheFaults.onRead = path => { if (path === module) reads++; };
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-test-cache-changed', archiveUsage: { cacheRoots: 1 } });
+    expect(replaced).toBe(true);
+    expect(reads).toBe(0);
+    expect(await registered(c.path)).toBe(true);
+    expect(await readFile(join(outside, 'a'.repeat(40)), 'utf8')).toBe('outside bytes must never be read');
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+  });
+
+  it('detects an ancestor temporarily redirected and restored before the descriptor fence', async () => {
+    const c = await reviewedCheckout('compact-cache-restored-ancestor');
+    const root = await moduleCache(c, { count: 2, bytes: 24 });
+    const module = join(root, '1'.padStart(40, '0'));
+    const originalModule = join(root, '0'.repeat(40));
+    const originalBytes = await readFile(module);
+    const ancestor = dirname(dirname(root));
+    const saved = join(scratch, 'original-cache-ancestor');
+    const outside = join(scratch, 'outside-cache-ancestor');
+    await mkdir(join(outside, 'vitest/modules'), { recursive: true });
+    await writeFile(join(outside, 'vitest/modules', '1'.padStart(40, '0')), 'outside payload must not be read');
+    let unblockOriginal;
+    const parentRestored = new Promise(resolve => { unblockOriginal = resolve; });
+    let swapped = false;
+    let restored = false;
+    let reads = 0;
+    cacheFaults.onLstat = async path => {
+      if (path === originalModule) await parentRestored;
+      if (path !== module || swapped) return;
+      swapped = true;
+      await rename(ancestor, saved);
+      await symlink(outside, ancestor, process.platform === 'win32' ? 'junction' : 'dir');
+    };
+    cacheFaults.afterOpen = async path => {
+      if (path !== module || restored) return;
+      await rm(ancestor, { recursive: true });
+      await rename(saved, ancestor);
+      restored = true;
+      unblockOriginal();
+    };
+    cacheFaults.onRead = path => { if (path === module || path === originalModule) reads++; };
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-test-cache-changed' });
+    expect(swapped && restored).toBe(true);
+    expect(reads).toBe(0);
+    expect(await readFile(module)).toEqual(originalBytes);
+    expect(await registered(c.path)).toBe(true);
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+  });
+
+  it('recomputes the compact proof under the final destructive fence', async () => {
+    const c = await reviewedCheckout('compact-cache-final-fence');
+    const root = await moduleCache(c, { bytes: 24 });
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true);
+    let snapshots = 0;
+    injected.onSnapshot = async () => {
+      // Confirmation's admission snapshot still matches; mutate only at finish.
+      if (++snapshots === 2) await writeFile(join(root, 'a'.repeat(40)), 'changed at final fence');
+    };
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    expect(snapshots).toBe(2);
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+  });
+
+  it.each(['cancel', 'time'])('keeps originals with bounded numeric cache evidence on %s exhaustion', async kind => {
+    const c = await reviewedCheckout('compact-cache-budget');
+    const root = await moduleCache(c, { count: 2, bytes: 32 });
+    const controller = new AbortController();
+    c.opts.signal = controller.signal;
+    let clock;
+    cacheFaults.onRead = path => {
+      if (!path.endsWith('0'.repeat(40))) return;
+      if (kind === 'cancel') controller.abort();
+      else clock = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 600001);
+    };
+    let prepared;
+    try { prepared = await c.prepare(); } finally { clock?.mockRestore(); }
+    expect(prepared).toMatchObject({ ok: false,
+      reason: kind === 'cancel' ? 'retirement-archive-cancelled' : 'retirement-archive-work-limit-exceeded',
+      archiveUsage: { cacheRoots: 1, cacheReadBytes: expect.any(Number) },
+    });
+    expect(Object.values(prepared.archiveUsage).every(value => typeof value === 'number' && Number.isFinite(value))).toBe(true);
+    expect(JSON.stringify(prepared.archiveUsage)).not.toContain('modules');
+    expect(await readFile(join(root, '0'.repeat(40)), 'utf8')).toContain('synthetic compiled module');
+    expect(await registered(c.path)).toBe(true);
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
     expect(await archives()).toEqual([]);
   });
 

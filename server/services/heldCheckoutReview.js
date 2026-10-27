@@ -204,7 +204,7 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
 /** Returned differences are review material, not executable instructions or an
  * automated supersession verdict. Every byte and identity participates in digest.
  */
-export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, kind, contentFingerprint, administrationFingerprint, policy, preservedSource = null, validationReceipt = null, validationArtifacts = null }, {
+export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, kind, contentFingerprint, administrationFingerprint, policy, preservedSource = null, validationReceipt = null, validationArtifacts = null, disposableCacheProofs = null }, {
   readForge = readRetirementForgeEvidence, forgeAccount = null,
 } = {}) {
   const forge = await readForge(repoPath, release.branch, prUrl, { forgeAccount, ...(!kind && { exactDeliveredHead: release.head }),
@@ -226,6 +226,7 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
     const evidence = { repoPath, release, forge, contentFingerprint, administrationFingerprint, policy,
       ...(validationReceipt && { validationReceipt }),
       ...(validationArtifacts && { validationArtifacts }),
+      ...(disposableCacheProofs && { disposableCacheProofs }),
       comparison: { base: release.head, paths: [], localPatch: '', difference: '', exactMergedDelivery: !represented, ...(represented && { representedDetachedDelivery: true }), disposition: 'integrated' } };
     return { digest: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'), ...evidence };
   }
@@ -266,6 +267,7 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
   const evidence = { repoPath, release, forge, contentFingerprint, administrationFingerprint, policy,
     ...(validationReceipt && { validationReceipt }),
       ...(validationArtifacts && { validationArtifacts }),
+      ...(disposableCacheProofs && { disposableCacheProofs }),
     ...(kind && { kind }), ...(preservedSource && { preservedSource }),
     comparison: { base, paths, localPatch, difference, exactMergedDelivery, disposition: mechanicallyEquivalent ? 'integrated' : 'review-supersession' } };
   return { digest: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'), ...evidence };

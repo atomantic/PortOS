@@ -1028,6 +1028,8 @@ migration with explicit recognition of the outgoing shipped defaults.
 | `catalogRedesign.js` | Shared editable redesign fields and per-field limits for catalog creative conversations. |
 
 | `releasePublication.js` | Validated request for forge-verified release publication milestones. |
+
+| `testCacheRetirementProof.js` | Bounded, versioned streaming proofs of independently recognized Vitest module caches for current merged-checkout retirement; binds marker bytes, ordered file digests and directory generations without changing historical archive formats. |
 | `releaseSynchronization.js` | Frozen continuation policy fields and mandatory synchronization obligations shared by publication enrollment, verification and task update guards. |
 
 | `realityStarterV2.js` | Frozen original natural-photography starter and optional preview recipe; V1 remains available to migrations. |
