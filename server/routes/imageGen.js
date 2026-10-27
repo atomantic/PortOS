@@ -14,7 +14,7 @@ import { assertCatalogIdentityWritable } from '../services/catalogDB/identityAcc
 import { createImageGalleryHandlers } from './imageGalleryRead.js';
 import { Router } from 'express';
 import { z } from 'zod';
-import { applyImageVisualProfile } from '../services/imageGen/visualProfile.js';
+import { prepareFableLoomImageParams } from '../services/imageGen/fableLoomParams.js';
 import { finishVisualProfileImage } from '../services/imageGen/finishVisualProfile.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
@@ -23,7 +23,7 @@ import {
 import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
-import { maxInputImages, resolveCloudProviderConfig } from '../services/imageGen/cloudProviderConfig.js';
+import { resolveCloudProviderConfig } from '../services/imageGen/cloudProviderConfig.js';
 import setupRouter, { streamMossAction } from './imageGenSetup.js';
 import { usesMossSwift } from '../lib/imageRuntimeRemedies.js';
 import { downloadMossWeights, mossModelCacheStatus, verifyMossWeights, repairMossWeights } from '../services/imageGen/mossWeights.js';
@@ -33,7 +33,7 @@ import { getImageModels, requiredReposForModel } from '../lib/mediaModels.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded } from '../lib/fileUtils.js';
-import { prepareGenerateParams, resolveLocalImageModel, selectLocalImageModelFromSettings } from '../services/imageGen/prepareParams.js';
+import { prepareGenerateParams, resolveLocalImageModel } from '../services/imageGen/prepareParams.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { applyFilmLookBake, readFilmLookSource } from '../services/imageGen/filmLookBake.js';
 import { universeVisualProfileSchema } from '../lib/universeVisualProfileValidation.js';
@@ -56,12 +56,7 @@ import { getSettings } from '../services/settings.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 import { collectRemoteInputAssets } from '../services/federatedMedia/inputAssets.js';
 import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
-import { asFableLoomRenderSettings, inspectEpisodeProductionOrder } from '../lib/fableLoomProduction.js';
-import { attachNodeImage, getLoom } from '../services/fableLoom/records.js';
-import {
-  compileFableLoomVisualRequest, fableLoomImageCapabilities,
-} from '../services/fableLoom/visualConditioning.js';
-import { loraCompatKey } from '../lib/runners.js';
+import { attachNodeImage } from '../services/fableLoom/records.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { promptAdditionsSchema } from '../lib/modelInput.js';
 
@@ -508,85 +503,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     referenceImageFields: REFERENCE_IMAGE_FIELDS,
   });
 
-  // FableLoom is compiled server-side after the backend pin resolves. The
-  // browser's prompt/reference fields are hints only: stable scene bindings,
-  // approved assets and deterministic graph continuity own the final request.
-  if (params.fableLoom) {
-    const taggedLoom = await getLoom(params.fableLoom.loomId);
-    const taggedEpisode = taggedLoom?.episodes?.find((episode) => episode.id === params.fableLoom.episodeId);
-    const renderSettings = taggedLoom ? asFableLoomRenderSettings(taggedLoom.renderSettings) : null;
-    if (renderSettings) {
-      params.width = renderSettings.width;
-      params.height = renderSettings.height;
-      params.aspectRatio = renderSettings.aspectRatio;
-    }
-    if (taggedLoom && taggedEpisode) {
-      const episodeOrder = inspectEpisodeProductionOrder(taggedLoom, taggedEpisode);
-      if (!episodeOrder.ready) {
-        throw new ServerError(
-          `FableLoom storyboard production is out of order: ${episodeOrder.reason}`,
-          {
-            status: 409,
-            code: 'FABLELOOM_EPISODE_ORDER_BLOCKED',
-            context: { details: { episodeOrder } },
-          },
-        );
-      }
-    }
-    const selected = mode === IMAGE_GEN_MODE.LOCAL
-      ? selectLocalImageModelFromSettings(settings, params.modelId)
-      : null;
-    const cloud = selected ? null : resolveCloudProviderConfig(settings, mode, {
-      model: params.cloudModel, modelIsShippedDefault: params.cloudModelIsShippedDefault,
-    });
-    const model = selected
-      ? { ...selected, loraCompatKey: loraCompatKey(selected) }
-      : (cloud ? { id: cloud.modelId } : null);
-    const providerMode = params.mediaProviderPeerId ? 'federated' : mode;
-    const compiled = await compileFableLoomVisualRequest({
-      tag: params.fableLoom,
-      visualProfileOverride: data.visualProfileOverride,
-      kind: 'image',
-      capability: fableLoomImageCapabilities({
-        mode: providerMode,
-        model,
-        // The backend's own input cap (per model for fal.ai), never above
-        // the form ceiling.
-        inputBudget: Math.min(maxInputImages(mode, cloud?.modelId) ?? MAX_REFERENCE_IMAGES, MAX_REFERENCE_IMAGES),
-      }),
-      authoredPrompt: params.prompt,
-      authoredNegativePrompt: params.negativePrompt,
-    });
-    if (compiled) {
-      Object.assign(params, applyImageVisualProfile({ ...params, prompt: compiled.prompt, negativePrompt: compiled.negativePrompt }, compiled.visualProfile));
-      params.prompt = compiled.prompt;
-      params.negativePrompt = compiled.negativePrompt;
-      // The compiler's canon blocks, listed beside what the scene's own request listed (#11317).
-      if (compiled.promptAdditions?.length) params.promptAdditions = [...(params.promptAdditions || []), ...compiled.promptAdditions];
-      params.referenceImagePaths = compiled.referenceImagePaths;
-      params.referenceImageStrengths = compiled.referenceImageStrengths;
-      params.loraFilenames = compiled.loraFilenames;
-      params.loraPaths = [];
-      params.loraScales = compiled.loraScales;
-      params.visualConditioning = compiled.visualConditioning ? {
-        ...compiled.visualConditioning,
-        render: {
-          provider: providerMode,
-          modelId: model?.id || null,
-          modelRevision: model?.revision || null,
-          parameters: {
-            width: params.width,
-            height: params.height,
-            ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
-          },
-        },
-      } : null;
-    } else {
-      // Legacy unlinked scenes have no canon compilation, but an explicit
-      // request profile still owns its photography and optional finish.
-      Object.assign(params, applyImageVisualProfile(params, data.visualProfileOverride));
-    }
-  }
+  await prepareFableLoomImageParams({ params, mode, settings });
 
   // Resolve an optional universe-collection target into a job tag the
   // completion hook understands. Done server-side so a base-style probe lands

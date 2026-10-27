@@ -14,6 +14,12 @@ vi.mock('../services/api', () => ({
   addLoomNode: vi.fn(),
   deleteLoomEpisode: vi.fn(),
   generateImage: vi.fn(),
+  previewImagePrompt: vi.fn(async body => ({
+    sentPrompt: `Universe style: painted ink. Motivated window light.\n\n${body.prompt}`,
+    sentNegativePrompt: 'glossy skin',
+    promptAdditions: [{ id: 'universe-style', label: 'Universe style', text: 'painted ink. Motivated window light.' }],
+    referenceImages: [{ filename: 'example-canon.png', status: 'included', source: 'character-neutral' }],
+  })),
   generateVideo: vi.fn(),
   getLoom: vi.fn(),
   getPipelineSeries: vi.fn(),
@@ -470,6 +476,14 @@ describe('FableLoomStory scene media lifecycle', () => {
 
     const generate = await findEnabledByRole('button', { name: 'Canvas generate image' });
     await user.click(generate);
+    expect(api.generateImage).not.toHaveBeenCalled();
+    const fullPrompt = await screen.findByRole('button', { name: 'Show full prompt' });
+    await user.click(fullPrompt);
+    expect(screen.getByText(/Universe style: painted ink.*Motivated window light./)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy full prompt' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Scene image prompt')).toHaveValue('an ancient gate in alien grass');
+    expect(screen.getByText('example-canon.png')).toBeInTheDocument();
+    await user.click(await findEnabledByRole('button', { name: 'Render', exact: true }));
 
     await waitFor(() => expect(api.generateImage).toHaveBeenCalledTimes(1));
     expect(api.generateImage).toHaveBeenCalledWith({
@@ -487,6 +501,27 @@ describe('FableLoomStory scene media lifecycle', () => {
     expect(toastMocks.error).toHaveBeenCalledWith(
       'Scene image generation failed: Synthetic provider failure',
     );
+  });
+
+  it('saves edited authored text before Render and refuses generation when the save fails', async () => {
+    const user = userEvent.setup();
+    const initial = loom({ episodes: [episode({ nodes: [{ id: 'node-1', title: 'Gate', imagePrompt: 'The gate', transitions: [] }] })] });
+    api.getLoom.mockResolvedValue(initial);
+    api.updateLoomNode.mockRejectedValueOnce(new Error('Synthetic save failure'));
+    api.updateLoomNode.mockResolvedValueOnce({ ...initial, episodes: [episode({ nodes: [{ ...initial.episodes[0].nodes[0], imagePrompt: 'The revised gate' }] })] });
+    api.generateImage.mockResolvedValue({ jobId: 'example-job', status: 'queued' });
+    renderEditor();
+    await user.click(await screen.findByRole('button', { name: 'Canvas generate image' }));
+    const prompt = screen.getByLabelText('Scene image prompt');
+    await user.clear(prompt);
+    await user.type(prompt, 'The revised gate');
+    await user.click(await findEnabledByRole('button', { name: 'Render', exact: true }));
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledWith('Synthetic save failure'));
+    expect(api.generateImage).not.toHaveBeenCalled();
+    expect(prompt).toHaveValue('The revised gate');
+    await user.click(await findEnabledByRole('button', { name: 'Render', exact: true }));
+    await waitFor(() => expect(api.generateImage).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'The revised gate' }), { silent: true }));
+    expect(api.updateLoomNode).toHaveBeenCalledWith('loom-1', 'ep-1', 'node-1', { imagePrompt: 'The revised gate' }, { silent: true });
   });
 
   it('shows a synchronously generated scene image without watching a nonexistent job', async () => {
@@ -510,6 +545,7 @@ describe('FableLoomStory scene media lifecycle', () => {
     renderEditor();
 
     await user.click(await screen.findByRole('button', { name: 'Canvas generate image' }));
+    await user.click(await findEnabledByRole('button', { name: 'Render', exact: true }));
 
     await waitFor(() => expect(screen.getByTestId('canvas-image-filename'))
       .toHaveTextContent('finished-scene.png'));
@@ -542,6 +578,7 @@ describe('FableLoomStory scene media lifecycle', () => {
     renderEditor();
 
     await user.click(await screen.findByRole('button', { name: 'Canvas generate second image' }));
+    await user.click(await findEnabledByRole('button', { name: 'Render', exact: true }));
 
     await waitFor(() => expect(api.generateImage).toHaveBeenCalledWith({
       prompt: 'the same scout crosses into the observatory',
@@ -575,6 +612,7 @@ describe('FableLoomStory scene media lifecycle', () => {
     renderEditor();
 
     await user.click(await screen.findByRole('button', { name: 'Canvas generate second image' }));
+    await user.click(await findEnabledByRole('button', { name: 'Render', exact: true }));
 
     await waitFor(() => expect(api.generateImage).toHaveBeenCalledTimes(1));
     expect(api.generateImage.mock.calls[0]).toEqual([{
