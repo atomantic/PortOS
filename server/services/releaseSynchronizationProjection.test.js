@@ -1,11 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { readReleaseSynchronizationOutbox } from './releaseSynchronizationStore.js';
 import {
-  buildReleaseSynchronizationPayload,
-  findMatchingOutboxEntry,
   projectTaskReleaseMilestones,
   projectAgentReleaseMilestones,
   projectTaskSourceReleaseMilestones,
+  getProjectedTask,
+  getProjectedAgent,
+  getProjectedAgentList,
 } from './releaseSynchronizationProjection.js';
+
+vi.mock('./releaseSynchronizationStore.js', () => ({
+  readReleaseSynchronizationOutbox: vi.fn(),
+  saveReleaseSynchronization: vi.fn(),
+}));
 
 describe('releaseSynchronizationProjection', () => {
   const identity = 'd'.repeat(64);
@@ -62,9 +69,11 @@ describe('releaseSynchronizationProjection', () => {
     },
   };
 
-  it('builds a complete synchronization projection payload', () => {
-    const payload = buildReleaseSynchronizationPayload(entry);
-    expect(payload).toEqual({
+  it('projects release publication and synchronization onto parent and continuation tasks', () => {
+    const continuationTask = { id: `task-release-sync-${identity}`, metadata: {} };
+    const projectedContinuation = projectTaskReleaseMilestones(continuationTask, entry);
+    expect(projectedContinuation.metadata.releasePublication).toEqual(publication);
+    expect(projectedContinuation.metadata.releaseSynchronization).toEqual({
       version: 1,
       identity,
       status: 'verified',
@@ -81,36 +90,17 @@ describe('releaseSynchronizationProjection', () => {
       publisherTaskId: 'publisher-task-1',
       taskId: `task-release-sync-${identity}`,
     });
-  });
-
-  it('matches outbox entries by identity, task ID (continuation and parent), and agent ID', () => {
-    // By identity
-    expect(findMatchingOutboxEntry({ metadata: { releasePublication: { identity } } }, outbox)).toBe(entry);
-    expect(findMatchingOutboxEntry({ metadata: { releaseSynchronization: { identity } } }, outbox)).toBe(entry);
-
-    // By task ID
-    expect(findMatchingOutboxEntry({ id: `task-release-sync-${identity}` }, outbox)).toBe(entry);
-    expect(findMatchingOutboxEntry({ id: 'publisher-task-1' }, outbox)).toBe(entry);
-
-    // By agent ID
-    expect(findMatchingOutboxEntry({ id: 'publisher-agent-1' }, outbox)).toBe(entry);
-
-    // Unmatched
-    expect(findMatchingOutboxEntry({ id: 'unrelated-task' }, outbox)).toBeNull();
-  });
-
-  it('projects release publication and synchronization onto parent and continuation tasks', () => {
-    const continuationTask = { id: `task-release-sync-${identity}`, metadata: {} };
-    const projectedContinuation = projectTaskReleaseMilestones(continuationTask, entry);
-    expect(projectedContinuation.metadata.releasePublication).toEqual(publication);
-    expect(projectedContinuation.metadata.releaseSynchronization.identity).toBe(identity);
-    expect(projectedContinuation.metadata.releaseSynchronization.status).toBe('verified');
-    expect(projectedContinuation.metadata.releaseSynchronization.prUrl).toBe('https://github.com/example/repo/pull/42');
 
     const parentTask = { id: 'publisher-task-1', metadata: {} };
     const projectedParent = projectTaskReleaseMilestones(parentTask, outbox);
     expect(projectedParent.metadata.releasePublication).toEqual(publication);
     expect(projectedParent.metadata.releaseSynchronization.identity).toBe(identity);
+
+    // Unmatched task returns unchanged
+    expect(projectTaskReleaseMilestones({ id: 'unrelated-task', metadata: {} }, outbox)).toEqual({
+      id: 'unrelated-task',
+      metadata: {},
+    });
   });
 
   it('projects release publication and synchronization onto agents', () => {
@@ -134,5 +124,41 @@ describe('releaseSynchronizationProjection', () => {
     expect(projected.tasks[0].metadata.releaseSynchronization.status).toBe('verified');
     expect(projected.tasks[1].metadata.releaseSynchronization).toBeUndefined();
     expect(projected.completed[0].metadata.releaseSynchronization.status).toBe('verified');
+  });
+
+  it('projects completed-task pages with items array', () => {
+    const page = {
+      items: [
+        { id: `task-release-sync-${identity}`, metadata: {} },
+        { id: 'publisher-task-1', metadata: {} },
+        { id: 'regular-task', metadata: {} },
+      ],
+      total: 3,
+      nextCursor: null,
+    };
+    const projected = projectTaskSourceReleaseMilestones(page, outbox);
+    expect(projected.items[0].metadata.releaseSynchronization.status).toBe('verified');
+    expect(projected.items[1].metadata.releaseSynchronization.status).toBe('verified');
+    expect(projected.items[2].metadata.releaseSynchronization).toBeUndefined();
+  });
+
+  it('projects agent list with release milestones', async () => {
+    readReleaseSynchronizationOutbox.mockResolvedValue(outbox);
+    const agents = [
+      { id: 'publisher-agent-1', metadata: {} },
+      { id: 'unrelated-agent', metadata: {} },
+    ];
+    const projected = await getProjectedAgentList(agents);
+    expect(projected[0].metadata.releaseSynchronization.status).toBe('verified');
+    expect(projected[1].metadata.releaseSynchronization).toBeUndefined();
+  });
+
+  it('gets projected task and agent records asynchronously', async () => {
+    readReleaseSynchronizationOutbox.mockResolvedValue(outbox);
+    const task = await getProjectedTask({ id: 'publisher-task-1', metadata: {} });
+    expect(task.metadata.releaseSynchronization.status).toBe('verified');
+
+    const agent = await getProjectedAgent({ id: 'publisher-agent-1', metadata: {} });
+    expect(agent.metadata.releaseSynchronization.status).toBe('verified');
   });
 });

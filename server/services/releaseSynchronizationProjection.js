@@ -4,7 +4,7 @@
  */
 import { readReleaseSynchronizationOutbox } from './releaseSynchronizationStore.js';
 
-export function buildReleaseSynchronizationPayload(entry) {
+function buildReleaseSynchronizationPayload(entry) {
   if (!entry) return null;
   const syncPr = entry.obligations?.synchronizationPr?.evidence?.prUrl
     || entry.obligations?.localReview?.evidence?.prUrl
@@ -33,7 +33,7 @@ export function buildReleaseSynchronizationPayload(entry) {
   };
 }
 
-export function findMatchingOutboxEntry(item, outbox) {
+function findMatchingOutboxEntry(item, outbox) {
   if (!item || !outbox?.publications) return null;
   const publications = Object.values(outbox.publications);
   if (!publications.length) return null;
@@ -96,19 +96,32 @@ export async function getProjectedTask(task) {
   return projectTaskReleaseMilestones(task, outbox);
 }
 
+function projectAgentListReleaseMilestones(agents, outbox) {
+  if (!Array.isArray(agents) || !outbox?.publications || Object.keys(outbox.publications).length === 0) return agents;
+  return agents.map(agent => projectAgentReleaseMilestones(agent, outbox));
+}
+
 export async function getProjectedAgent(agent) {
   if (!agent) return agent;
   const outbox = await readReleaseSynchronizationOutbox().catch(() => null);
   return projectAgentReleaseMilestones(agent, outbox);
 }
 
+export async function getProjectedAgentList(agents) {
+  if (!Array.isArray(agents) || agents.length === 0) return agents;
+  const outbox = await readReleaseSynchronizationOutbox().catch(() => null);
+  return projectAgentListReleaseMilestones(agents, outbox);
+}
+
 export function projectTaskSourceReleaseMilestones(source, outbox) {
   if (!source || !outbox?.publications || Object.keys(outbox.publications).length === 0) return source;
   const projectList = list => Array.isArray(list) ? list.map(t => projectTaskReleaseMilestones(t, outbox)) : list;
+  if (Array.isArray(source)) return source.map(t => projectTaskReleaseMilestones(t, outbox));
   return {
     ...source,
-    tasks: projectList(source.tasks),
-    completed: projectList(source.completed),
+    ...(source.tasks ? { tasks: projectList(source.tasks) } : {}),
+    ...(source.completed ? { completed: projectList(source.completed) } : {}),
+    ...(source.items ? { items: projectList(source.items) } : {}),
     ...(source.selectedTask ? { selectedTask: projectTaskReleaseMilestones(source.selectedTask, outbox) } : {}),
   };
 }

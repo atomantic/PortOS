@@ -594,6 +594,36 @@ describe('CoS Routes', () => {
       expect(response.body[0].metadata.taskDescription).toBe('Fix the thing');
       expect(response.body[0].metadata.taskDescriptionTruncated).toBeUndefined();
     });
+
+    it('projects release publication and synchronization milestones onto agent list items', async () => {
+      const { saveReleaseSynchronization } = await import('../services/releaseSynchronizationStore.js');
+      const identity = 'f'.repeat(64);
+      await saveReleaseSynchronization({
+        version: 1,
+        identity,
+        owner: { taskId: 'task-sync-agent', agentId: 'agent-sync-pub' },
+        publication: { identity, status: 'verified', tag: 'v2.0.0' },
+        task: { id: 'task-sync-agent' },
+        obligations: {
+          synchronizationPr: {
+            status: 'verified',
+            evidence: { prUrl: 'https://github.com/example/repo/pull/101', headSha: 'b'.repeat(40) },
+          },
+        },
+        synchronization: { status: 'verified' },
+      });
+      getAgents.mockResolvedValue([
+        { id: 'agent-sync-pub', status: 'completed', metadata: { taskDescription: 'Publish release' } }
+      ]);
+
+      const response = await request(app).get('/api/cos/agents');
+      expect(response.status).toBe(200);
+      expect(response.body[0].metadata.releaseSynchronization).toMatchObject({
+        status: 'verified',
+        identity,
+        prUrl: 'https://github.com/example/repo/pull/101',
+      });
+    });
   });
 
   describe('GET /api/cos/agents/history', () => {

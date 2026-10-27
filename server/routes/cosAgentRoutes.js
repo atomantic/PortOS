@@ -144,7 +144,8 @@ router.get('/agents', asyncHandler(async (req, res) => {
     getAgents(),
     active ? getTaskView({ kind: 'queue' }) : null,
   ]);
-  if (!active) return res.json(toAgentListItems(agents));
+  const { getProjectedAgentList } = await import('../services/releaseSynchronizationProjection.js');
+  if (!active) return res.json(toAgentListItems(await getProjectedAgentList(agents)));
 
   const resident = new Map(agents.map(agent => [agent.id, agent]));
   const visible = new Map(agents.filter(agent => agent.status !== 'completed').map(agent => [agent.id, agent]));
@@ -162,7 +163,7 @@ router.get('/agents', asyncHandler(async (req, res) => {
       visible.set(id, { ...agent, deliveryPending: true, ...(deliveryActivity && { deliveryActivity }) });
     }
   }));
-  res.json(toAgentListItems([...visible.values()]));
+  res.json(toAgentListItems(await getProjectedAgentList([...visible.values()])));
 }));
 
 // Bounded completed history, including state records not yet archived.
@@ -173,7 +174,8 @@ const completedQuerySchema = z.object({
 router.get('/agents/completed', asyncHandler(async (req, res) => {
   const query = validateRequest(completedQuerySchema, req.query);
   const page = await getCompletedAgentPage({ ...query, liveAgents: await getAgents() });
-  res.json({ ...page, items: toAgentListItems(page.items) });
+  const { getProjectedAgentList } = await import('../services/releaseSynchronizationProjection.js');
+  res.json({ ...page, items: toAgentListItems(await getProjectedAgentList(page.items)) });
 }));
 
 // GET /api/cos/agents/history - Get available date buckets with counts
@@ -194,8 +196,9 @@ router.get('/agents/history', asyncHandler(async (req, res) => {
   // distinct from a bucket that read back empty, which the client must not
   // mistake for "not hydrated" and re-request.
   const latestDate = dates[0]?.date;
+  const { getProjectedAgentList } = await import('../services/releaseSynchronizationProjection.js');
   const latest = latestDate
-    ? { date: latestDate, agents: toAgentListItems(await getAgentsByDate(latestDate)) }
+    ? { date: latestDate, agents: toAgentListItems(await getProjectedAgentList(await getAgentsByDate(latestDate))) }
     : null;
   res.json({ dates, latest });
 }));
@@ -207,7 +210,8 @@ router.get('/agents/history/:date', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid date format (expected YYYY-MM-DD)', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const agents = await getAgentsByDate(date);
-  res.json(toAgentListItems(agents));
+  const { getProjectedAgentList } = await import('../services/releaseSynchronizationProjection.js');
+  res.json(toAgentListItems(await getProjectedAgentList(agents)));
 }));
 
 // GET /api/cos/agents/feedback/pending - Reconciled durable feedback actions.
