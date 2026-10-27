@@ -27,6 +27,7 @@ import {
   reviewerEffortArgs,
   reviewerModelArg,
   buildReviewerEffortNote,
+  buildReviewerMaxRoundsNote,
   buildReviewerPinNote,
   buildReviewersCsv,
   claimSafeReviewers,
@@ -326,6 +327,19 @@ describe('per-reviewer reasoning effort (reviewerEfforts)', () => {
     expect(reviewerEffortArgs('antigravity', 'ultra')).toEqual([]);
     // Case/whitespace still normalize through rather than being rejected.
     expect(reviewerEffortArgs('codex', ' HIGH ')).toEqual(['-c', 'model_reasoning_effort=high']);
+  });
+
+  it('renders each configured ~max budget as prose and says exhaustion is not a block', () => {
+    const note = buildReviewerMaxRoundsNote(['grok', 'codex', '@alice'], { grok: 2, '@alice': 1, claude: 5, codex: 0 });
+    expect(note).toContain('`grok` → 2 rounds');
+    expect(note).toContain('`@alice` → 1 round.');
+    expect(note).toContain('`codex` → loop until clean (no cap)');
+    // A cap on a reviewer the prompt does not name must not leak in.
+    expect(note).not.toContain('claude');
+    expect(note).toMatch(/never blocks opening the PR/);
+    expect(note).not.toMatch(/3 rounds/);
+    expect(buildReviewerMaxRoundsNote(['grok'], {})).toBe('');
+    expect(buildReviewerMaxRoundsNote(undefined, { grok: 2 })).toBe('');
   });
 
   it('builds the hand-invocation note only for CLI reviewers carrying an effort', () => {

@@ -144,6 +144,16 @@ describe('assembled forge claim prompts', () => {
     expect(renderAgent(claim)).toContain('If this workflow actually runs local pre-PR reviewers');
   });
 
+  it.each(['github', 'gitlab'])('renders the configured %s reviewer budget and no hardcoded three-round cap', async (tracker) => {
+    state.tracker = tracker;
+    const { prompt } = await buildClaimWorkTask(app, {
+      target: '42', prCompletion: 'review-then-merge', reviewers: ['codex'], optionalReviewers: ['codex'], reviewerMaxRounds: { codex: 2 },
+    });
+    expect(prompt).toContain('`codex` → 2 rounds');
+    expect(prompt).not.toMatch(/capped at 3 rounds|after 3 rounds, or its fixes/);
+    expect(prompt).toContain('never blocks opening');
+  });
+
   it('keeps the target and policy first when optional reviewer preflight emits a notice', async () => {
     vi.mocked(preflightClaimReviewers).mockResolvedValueOnce('\n\n## Reviewer identity preflight\nOptional reviewer unavailable.\n');
     const claim = await buildClaimWorkTask(app, { target: '42', prCompletion: 'review-then-merge' });

@@ -1191,6 +1191,29 @@ export function buildReviewerEffortNote(reviewers, reviewerEfforts = {}, { revie
   return `Invoke each reviewer CLI at its pinned reasoning effort: ${entries.join(', ')}. Pass the flag yourself when you spawn the reviewer — nothing else in this prompt applies it (a \`~effort=<level>\` suffix in a reviewer list is slashdo's own grammar, which only its \`--review-with\` parses).`;
 }
 
+/**
+ * Prose budget for a prompt whose agent runs each reviewer by hand (the claim
+ * flows). The `~max=<n>` suffix in `{reviewers}` is slashdo grammar that nothing
+ * parses there, so a configured cap only binds when it is spelled out. A cap
+ * limits reviewer CALLS; it never obliges another review cycle, and a reviewer
+ * with no cap keeps the flow's default. `0` is "loop until clean", not zero.
+ *
+ * @param {string[]} reviewers - the reviewer tokens the prompt names
+ * @param {Object<string, number>} [reviewerMaxRounds] - token-keyed caps
+ * @returns {string} a paragraph, or '' when no named reviewer carries a cap
+ */
+export function buildReviewerMaxRoundsNote(reviewers, reviewerMaxRounds = {}) {
+  const lookup = reviewerMaxRoundsLookup(reviewerMaxRounds);
+  const entries = (Array.isArray(reviewers) ? reviewers : [])
+    .filter((token) => lookup.has(String(token).toLowerCase()))
+    .map((token) => {
+      const max = lookup.get(String(token).toLowerCase());
+      return `\`${token}\` → ${max === 0 ? 'loop until clean (no cap)' : `${max} round${max === 1 ? '' : 's'}`}`;
+    });
+  if (!entries.length) return '';
+  return `**Review round caps (\`~max=<n>\` in the reviewer list):** these budgets replace any default round limit stated in the phases above, per reviewer: ${entries.join(', ')}. A round is one call to that reviewer plus the fixes it prompts; never call a reviewer more often than its budget, and a reviewer without a listed cap keeps the default stated above. When a budget is spent, stop calling that reviewer and advance — that is not a failure and not a reason to run another cycle. If findings remain at that point, fix each accepted one in the branch, or reject/track it with concrete rationale (a filed issue or a note in the PR body), and record in the PR body how many rounds each reviewer ran, the revision it last reviewed and what remained, without implying approval it did not give. An exhausted OPTIONAL reviewer budget never blocks opening the PR; hosting-provider required checks and reviews alone decide merge eligibility.`;
+}
+
 // Examples of slashdo commands that run a review loop and therefore resolve
 // `--review-with` from a saved default when the invocation doesn't pin one.
 // EXAMPLES, deliberately — the rule is stated over "any `/do:*` that reviews"

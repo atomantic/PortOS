@@ -29,6 +29,7 @@ import {
   appendClaimOverrideContext,
   appendPrefetchedIssueContext,
   appendReviewerEffortBlock,
+  appendReviewerMaxRoundsBlock,
   appendTargetWorkItemBlock,
   buildLocalReviewerInstructions,
   buildIssueReplanPrompt,
@@ -221,6 +222,7 @@ export async function buildClaimWorkTask(app, {
     reviewers: reviewersList,
     reviewerModels: promptReviewerModels,
     reviewerEfforts: promptReviewerEfforts,
+    reviewerMaxRounds: promptReviewerMaxRounds,
     csv: reviewersCsv
   } = claimReviewers;
   const issueAuthorFilterBlock = resolveIssueAuthorFilterBlock(promptTaskType, resolvedAuthorFilter);
@@ -246,6 +248,7 @@ export async function buildClaimWorkTask(app, {
     + appendPrefetchedIssueContext(promptTaskType, targetRef, issueContext)
     + appendClaimOverrideContext(overrideContext)
     + appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels)
+    + appendReviewerMaxRoundsBlock(reviewersList, promptReviewerMaxRounds)
     + buildLocalReviewerInstructions(reviewersList, promptReviewerModels, promptReviewerEfforts, {
       claimCommentGate: promptTaskType === 'claim-issue',
       enforceIsolation: promptTaskType.startsWith('claim-issue'),
@@ -294,11 +297,11 @@ async function resolveClaimReviewerPrompt(app) {
   const effectivePrCompletion = metadata?.prCompletion ?? resolveAppPrCompletion(app, metadata);
   const config = claimReviewersFrom(metadata, codeReviewDefaults, { prCompletion: effectivePrCompletion });
   const reviewerIdentityNotice = await preflightClaimReviewers(app, config, { metadata, appOverrideMetadata });
-  const { reviewers: list, reviewerModels, reviewerEfforts, csv } = config;
+  const { reviewers: list, reviewerModels, reviewerEfforts, reviewerMaxRounds, csv } = config;
   return {
     csv,
     taskMetadata: reviewerConfigMetadata(config),
-    effortBlock: appendReviewerEffortBlock(list, reviewerEfforts, reviewerModels),
+    effortBlock: appendReviewerEffortBlock(list, reviewerEfforts, reviewerModels) + appendReviewerMaxRoundsBlock(list, reviewerMaxRounds),
     localReviewerBlock: reviewerIdentityNotice + buildLocalReviewerInstructions(list, reviewerModels, reviewerEfforts, { enforceIsolation: true }),
   };
 }
