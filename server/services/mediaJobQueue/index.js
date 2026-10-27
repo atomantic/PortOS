@@ -96,6 +96,11 @@ export { isRemoteMediaJob };
 
 const boundedVideoChunks = value => Math.min(8, Math.max(1, Math.trunc(Number(value) || 1)));
 
+// Browser startup and each CDP command have their own deadlines, but a
+// multi-step finish needs an overall bound as well. Abort cooperatively and
+// retain the lane until the owned browser and any publication work settle.
+export const VISUAL_PROFILE_FINISH_TIMEOUT_MS = 3 * 60 * 1000;
+
 const isLocalFinishReplay = (job) => job.kind === 'image' && job.params?.visualProfile && job.params?.visualProfileSource
   && !job.params?.remoteMedia?.reconcile && job.params?.remotePeerReservation !== true;
 
@@ -1868,6 +1873,10 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
         if (job.visualProfileFinishing || !canRequestCancellation(job)) return;
         const controller = new AbortController();
         job.visualProfileFinishing = controller;
+        const finishWatchdog = setTimeout(() => {
+          controller.abort(new Error('Film finishing exceeded its 3-minute deadline'));
+        }, VISUAL_PROFILE_FINISH_TIMEOUT_MS);
+        finishWatchdog.unref?.();
         if (job.cancelRequested) controller.abort(new Error('Canceled during film finishing'));
         clearInterval(watchdogTimer);
         handlers.progress({ type: 'progress', progress: 0.95, message: 'Saving universe visual profile and film finish' });
@@ -1880,7 +1889,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
             controller.signal.throwIfAborted();
             const { finishVisualProfileImage } = await import('../imageGen/finishVisualProfile.js');
             const finished = await finishVisualProfileImage({ result, profile: job.params.visualProfile,
-              revision: job.params.visualProfileRevision, signal: controller.signal });
+              revision: job.params.visualProfileRevision, signal: controller.signal, onCleanupFailure: () => permit.markUnsettled() });
             controller.signal.throwIfAborted();
             await terminate('completed', j => { j.result = finished; }, remoteInputsDisposable === true);
           } catch (error) {
@@ -1888,7 +1897,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
               j.result = result;
               j.error = job.cancelRequested ? 'Canceled during film finishing; original image retained' : `Film finishing failed; original image retained: ${error.message}`;
             }, remoteInputsDisposable === true);
-          } finally { delete job.visualProfileFinishing; }
+          } finally { clearTimeout(finishWatchdog); delete job.visualProfileFinishing; }
         })().catch(e => console.error(`❌ media-job [${job.id.slice(0, 8)}] film finishing handler failed: ${e.message}`)));
         return;
       }

@@ -131,7 +131,7 @@ const PREVIEW_BRIDGE_SCRIPT = `(() => {
 export async function openComposition(directory, {
   signal, validateAssets, streamMedia = false, mediaMode = 'code-images-video', ownedBrowser = false, initScripts = [],
   isolation = 'legacy', contentSecurityPolicy, freezeNetworkConstructors = true, onEvent, previewBridge = false,
-  refuseUnknown = 'fail', lockLoopback = false,
+  refuseUnknown = 'fail', lockLoopback = false, onOwnerCleanupFailure,
 } = {}) {
   const assets = await snapshotAssets(directory, { streamMedia });
   validateAssets?.(assets);
@@ -141,7 +141,10 @@ export async function openComposition(directory, {
   };
   if (ownedBrowser) {
     const { launchCompositionBrowser } = await import('./ownedBrowser.js');
-    const owner = await launchCompositionBrowser({ signal, isolation });
+    const owner = await launchCompositionBrowser({ signal, isolation, onCleanupFailure: onOwnerCleanupFailure });
+    const closeOwner = async () => {
+      try { await owner.close(); } catch (error) { onOwnerCleanupFailure?.(error); throw error; }
+    };
     try {
       const page = await connectComposition(assets, {
         ...connectOptions,
@@ -152,10 +155,10 @@ export async function openComposition(directory, {
           : { webSocketDebuggerUrl: owner.webSocketDebuggerUrl, 'User-Agent': 'HeadlessChrome/' },
       });
       return { ...page, close: async options => {
-        try { await page.close(options); } finally { await owner.close(); }
+        try { await page.close(options); } finally { await closeOwner(); }
       } };
     } catch (error) {
-      await owner.close();
+      await closeOwner();
       throw error;
     }
   }

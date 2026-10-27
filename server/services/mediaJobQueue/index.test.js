@@ -979,6 +979,58 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(jobId).status === 'canceled');
   });
 
+  it('aborts a stalled finish at its deadline and holds the lane until browser cleanup settles', async () => {
+    let releaseCleanup;
+    let aborted = false;
+    const cleanup = new Promise(resolve => { releaseCleanup = resolve; });
+    stubs.generateImage.mockImplementation(async () => ({}));
+    stubs.finishVisualProfile.mockImplementation(({ signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => {
+        aborted = true;
+        void cleanup.then(() => reject(signal.reason));
+      }, { once: true });
+    }));
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'local', prompt: 'First', visualProfile: { version: 1 } } });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    const next = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'local', prompt: 'Next' } });
+    vi.useFakeTimers();
+    try {
+      imageGenEvents.emit('completed', { generationId: first.jobId, filename: 'original.png' });
+      await vi.waitFor(() => expect(stubs.finishVisualProfile).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(mediaJobQueue.VISUAL_PROFILE_FINISH_TIMEOUT_MS);
+      expect(aborted).toBe(true);
+      expect(mediaJobQueue.getJob(first.jobId).status).toBe('running');
+      expect(mediaJobQueue.getJob(first.jobId).params.visualProfileSource.filename).toBe('original.png');
+      expect(mediaJobQueue.getJob(next.jobId).status).toBe('queued');
+      expect(stubs.generateImage).toHaveBeenCalledTimes(1);
+      releaseCleanup();
+      await vi.waitFor(() => expect(mediaJobQueue.getJob(first.jobId).status).toBe('failed'));
+      expect(mediaJobQueue.getJob(first.jobId)).toMatchObject({
+        result: { filename: 'original.png' }, error: expect.stringContaining('exceeded its 3-minute deadline'),
+      });
+      await vi.waitFor(() => expect(stubs.generateImage).toHaveBeenCalledTimes(2));
+      imageGenEvents.emit('completed', { generationId: next.jobId, filename: 'next.png' });
+    } finally {
+      releaseCleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it('retains maintenance ownership when the finish browser cleanup is unverified', async () => {
+    stubs.generateImage.mockImplementation(async () => ({}));
+    stubs.finishVisualProfile.mockImplementation(async ({ onCleanupFailure }) => {
+      onCleanupFailure();
+      throw new Error('Owned browser cleanup did not settle');
+    });
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'local', prompt: 'First', visualProfile: { version: 1 } } });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'original.png' });
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'failed');
+    await waitFor(() => maintenance.status().blockers.some(blocker => blocker.resource === jobId && blocker.unsettled));
+    expect(mediaJobQueue.getJob(jobId).result.filename).toBe('original.png');
+  });
+
   it('retries a failed local finish from its durable source without another image provider call', async () => {
     stubs.generateImageCodex.mockImplementation(async () => ({}));
     stubs.finishVisualProfile.mockRejectedValueOnce(new Error('Browser unavailable')).mockImplementation(async ({ result }) => result);
