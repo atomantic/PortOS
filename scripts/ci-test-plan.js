@@ -1379,6 +1379,10 @@ const narrowSharedBasenameHits = (source, hits, cwd) => {
 
 export function emitGitHubPlan(plan) {
   if (plan.windows && plan.windowsFiles.length === 0) throw new Error('Windows native contract inventory is empty');
+  if (plan.windows) {
+    const missing = WINDOWS_CONTRACT_TESTS.filter(path => !plan.windowsFiles.includes(path));
+    if (missing.length) throw new Error(`Windows native contract inventory is missing: ${missing.join(', ')}`);
+  }
   const outputs = {
     full: plan.full,
     reason: plan.reason.replace(/[`<>\r\n]+/g, ' '),
