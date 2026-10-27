@@ -839,19 +839,17 @@ async function preservePublishedSourceReview(repoPath, tree, forge, content, adm
     || (privateSource ? forge.remoteHead !== null : forge.remoteHead !== `${tree.head}\t${tree.branch}`)) throw new Error('retirement-source-not-published');
   let privateProof, retainPrivateRoot;
   const privateRecoveryProofs = [];
-  let privateDeltaBytes = 0;
   const privateDeadline = performance.now() + 10000;
   if (privateSource) {
     if ((await git(['show-ref', '--verify', '--hash', tree.branch], repoPath)).trim() !== tree.head) throw new Error('retirement-local-source-head-changed');
     const target = forge.targetHead ?? forge.defaultHead;
     await git(['merge-base', '--is-ancestor', forge.mergeCommit, target], repoPath);
-    const { retainCheckoutSourceProof } = await import('./resumedCheckoutDelivery.js');
-    retainPrivateRoot = (head, allowIntegratedSource = false) => retainCheckoutSourceProof({ repoPath,
-      sourceHead: head, comparisonHead: target, targetHead: target, retainMissingSource, allowIntegratedSource,
-      maxDeltaBytes: 64 * 1024 - privateDeltaBytes, deadline: privateDeadline }).catch(() => null);
+    const { retainCheckoutSourceObjects } = await import('./resumedCheckoutDelivery.js');
+    retainPrivateRoot = head => retainCheckoutSourceObjects({ repoPath,
+      sourceHead: head, targetHead: target, retainMissingSource,
+      deadline: privateDeadline }).catch(() => null);
     privateProof = await retainPrivateRoot(tree.head);
     if (!privateProof) throw new Error('retirement-source-preservation-unavailable');
-    privateDeltaBytes = privateProof.deltaBytes;
   }
   if (content.indexDiff.length || content.worktreeDiff.length) throw new Error('retirement-source-dirty');
   // A clean index can still retain resolve-undo conflict stages that cannot be
@@ -864,9 +862,8 @@ async function preservePublishedSourceReview(repoPath, tree, forge, content, adm
   for (const head of [...roots].sort()) {
     work.check();
     if (privateSource) {
-      // The retained tip already keeps its commit ancestors reachable. Charging
-      // each reflog checkpoint's patch again rejects one bounded draft history
-      // as though it were several independent bodies of private work.
+      // The retained tip already keeps its commit ancestors reachable; reflog
+      // checkpoints in that history need no additional retention refs.
       if (head !== tree.head) {
         const read = args => {
           const remaining = Math.floor(privateDeadline - performance.now());
@@ -884,9 +881,8 @@ async function preservePublishedSourceReview(repoPath, tree, forge, content, adm
           continue;
         }
       }
-      const proof = head === tree.head ? privateProof : await retainPrivateRoot(head, true);
+      const proof = head === tree.head ? privateProof : await retainPrivateRoot(head);
       if (!proof) throw new Error('retirement-source-private-work-unpublished');
-      if (head !== tree.head) privateDeltaBytes += proof.deltaBytes;
       privateRecoveryProofs.push(proof);
       continue;
     }
