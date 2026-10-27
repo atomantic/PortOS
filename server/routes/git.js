@@ -275,10 +275,10 @@ router.post('/cleanup-merged', asyncHandler(async (req, res) => {
 
 // POST /api/git/delete-branch - Delete a branch locally and/or remotely
 router.post('/delete-branch', asyncHandler(async (req, res) => {
-  const { path, branch, local, remote } = validateRequest(gitDeleteBranchBodySchema, req.body);
+  const { path, branch, local, remote, expectedHead } = validateRequest(gitDeleteBranchBodySchema, req.body);
   assertAllowedWorkspace(path);
   const { excludeBranches } = await getAgentProtections();
-  const result = await git.deleteBranch(path, branch, { local, remote, excludeBranches });
+  const result = await git.deleteBranch(path, branch, { local, remote, excludeBranches, ...(expectedHead && { expectedHead }) });
   res.json(result);
 }));
 

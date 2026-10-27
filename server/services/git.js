@@ -1558,13 +1558,17 @@ export async function getWorktreeBranches(dir) {
  * @param {object} options
  * @param {boolean} options.local - Delete local branch
  * @param {boolean} options.remote - Delete remote branch
+ * @param {string} [options.expectedHead] - Exact caller-observed local ref (local-only operation)
  * @param {Set<string>} options.excludeBranches - Additional branches to protect (e.g., active agent branches)
  */
 export async function deleteBranch(dir, branchName, options = {}) {
   return withCheckoutMutation(dir, () => deleteBranchAdmitted(dir, branchName, options));
 }
 
-async function deleteBranchAdmitted(dir, branchName, { local = false, remote = false, excludeBranches } = {}) {
+async function deleteBranchAdmitted(dir, branchName, { local = false, remote = false, excludeBranches, expectedHead = null } = {}) {
+  if (expectedHead && (!local || remote || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead))) {
+    throw new ServerError('Expected head requires a valid local-only deletion', { status: 400, code: 'INVALID_BRANCH_DELETION' });
+  }
   const { baseBranch } = await getRepoBranches(dir);
   const protectedSet = new Set(PROTECTED_BRANCHES);
   if (baseBranch) protectedSet.add(baseBranch);
@@ -1592,10 +1596,11 @@ async function deleteBranchAdmitted(dir, branchName, { local = false, remote = f
   }
 
   const opts = { ignoreExitCode: true };
-  const [localResult, remoteResult] = await Promise.all([
-    local ? execGitSafe(['branch', '-D', branchName], dir, opts) : null,
-    remote ? execGitSafe(['push', 'origin', '--delete', branchName], dir, opts) : null
-  ]);
+  const localResult = local ? await deletePinnedLocalBranch(dir, branchName, expectedHead) : null;
+  // A local owner/ref refusal retains the whole branch, including its remote.
+  const localRefused = localResult && localResult.exitCode !== 0 && !localResult.notFound;
+  const remoteResult = remote && !localRefused
+    ? await execGitSafe(['push', 'origin', '--delete', branchName], dir, opts) : null;
 
   const results = {};
   if (localResult) {
@@ -1603,6 +1608,7 @@ async function deleteBranchAdmitted(dir, branchName, { local = false, remote = f
       ? 'deleted'
       : localResult.stderr?.includes('not found') ? 'not found' : `failed: ${localResult.stderr?.trim()}`;
   }
+  if (remote && localRefused) results.remote = 'retained: local branch deletion refused';
   if (remoteResult) {
     results.remote = remoteResult.exitCode === 0
       ? 'deleted'
@@ -1612,6 +1618,45 @@ async function deleteBranchAdmitted(dir, branchName, { local = false, remote = f
   }
 
   return { branch: branchName, results };
+}
+
+/** Operator-selected ref removal shares the existing receiver's holder check and
+ * exact-head transaction. It never certifies a merge or removes a checkout. */
+async function deletePinnedLocalBranch(dir, branch, expectedHead) {
+  const ref = `refs/heads/${branch}`;
+  const observed = await execGitSafe(['rev-parse', '--verify', `${ref}^{commit}`], dir, { ignoreExitCode: true });
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
+  const assertNoOwner = async () => {
+    const agents = await readClaimOwnershipAgents();
+    const hold = claimCheckoutOwnerReason({ branchName: branch, holderPath: null, sourceWorkspace: dir, agents });
+    if (hold) throw new ServerError(`Branch retained: ${hold}`, { status: 409, code: 'BRANCH_OWNER_HELD' });
+  };
+  if (observed.exitCode !== 0) {
+    // Only a confirmed absent ref is compatible with continuing a combined
+    // remote deletion. A broken symbolic ref or an unreadable ref is a refusal.
+    const exists = await execGit(['show-ref', '--verify', '--quiet', ref], dir, { ignoreExitCode: true });
+    const symbolic = await execGit(['symbolic-ref', '--quiet', ref], dir, { ignoreExitCode: true });
+    const notFound = exists.exitCode === 1 && !exists.stderr.trim() && symbolic.exitCode === 1 && !symbolic.stderr.trim();
+    if (notFound) await withClaimOwnershipLock(assertNoOwner);
+    return { exitCode: 1, stderr: notFound ? 'branch not found' : 'unable to resolve branch head', notFound };
+  }
+  const head = observed.stdout.trim();
+  if (expectedHead && expectedHead !== head) throw new ServerError('Branch head changed', { status: 409, code: 'BRANCH_HEAD_CHANGED' });
+  const { deleteCompletedLocalBranch } = await import('./worktreeManager.js');
+  return withClaimOwnershipLock(async () => {
+    const beforeMutation = async () => {
+      await assertNoOwner();
+      // Preserve squash-only or explicitly discarded source using the existing
+      // private completed-ref namespace, never a repository archive.
+      const backup = `refs/portos/completed/${head}`;
+      const existing = await execGitSafe(['show-ref', '--verify', '--hash', backup], dir, { ignoreExitCode: true });
+      if (existing.exitCode === 0 && existing.stdout.trim() !== head) throw new Error('Branch source preservation changed');
+      if (existing.exitCode !== 0) await execGit(['update-ref', backup, head, '0'.repeat(head.length)], dir);
+    };
+    const deleted = await deleteCompletedLocalBranch(dir, branch, head, { beforeMutation });
+    return { exitCode: deleted ? 0 : 1, stderr: deleted ? '' : 'branch head or holder changed' };
+  });
 }
 
 /**
