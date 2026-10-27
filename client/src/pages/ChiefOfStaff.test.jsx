@@ -1484,4 +1484,52 @@ describe('ChiefOfStaff active-agent snapshot readiness', () => {
     expect(await screen.findByText('Paused Agents')).toBeInTheDocument();
     expect(screen.queryByText('1 running')).toBeNull();
   });
+
+  it('preserves durable release synchronization milestones when receiving an ordinary lifecycle update', async () => {
+    const identity = 'b'.repeat(64);
+    const pubAgent = {
+      id: 'agent-sync-pub',
+      taskId: 'task-sync-pub',
+      status: 'running',
+      metadata: {
+        taskDescription: 'Publish release v3.0.0',
+        releasePublication: {
+          identity,
+          status: 'verified',
+          tag: 'v3.0.0',
+          releaseUrl: 'https://github.com/example/repo/releases/tag/v3.0.0',
+          publishedAt: '2026-01-01T10:00:00Z',
+        },
+        releaseSynchronization: {
+          version: 1,
+          identity,
+          status: 'verified',
+          prUrl: 'https://github.com/example/repo/pull/105',
+          headSha: 'd'.repeat(40),
+          tag: 'v3.0.0',
+        },
+      },
+    };
+    api.getCosAgents.mockResolvedValue([pubAgent]);
+    await renderSettledAt('agents');
+
+    expect(screen.getByText('Published — synchronization verified')).toBeInTheDocument();
+    expect(screen.getByText(/Sync PR/)).toBeInTheDocument();
+
+    // Ordinary lifecycle update with unprojected/partial metadata
+    await act(async () => {
+      socketHandler('cos:agent:updated')({
+        id: 'agent-sync-pub',
+        taskId: 'task-sync-pub',
+        status: 'running',
+        metadata: {
+          taskDescription: 'Publish release v3.0.0',
+        },
+      });
+    });
+
+    // Milestone remains preserved and visible
+    expect(screen.getByText('Published — synchronization verified')).toBeInTheDocument();
+    expect(screen.getByText(/Sync PR/)).toBeInTheDocument();
+  });
 });

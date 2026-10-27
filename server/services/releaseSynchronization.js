@@ -214,6 +214,7 @@ async function verifyEntry(entry, agents) {
   for (const agent of agents.filter(a => a.taskId === entry.task.id)) {
     cosEvents.emit('agent:updated', projectAgentReleaseMilestones(agent, entry));
   }
+  cosEvents.emit('agents:changed');
   return entry.synchronization;
 }
 
