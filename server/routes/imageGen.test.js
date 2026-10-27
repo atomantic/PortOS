@@ -546,6 +546,28 @@ describe('Image Gen Routes', () => {
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
+    it.each([
+      ['Windows mflux', 'win32', 'dev'], ['MOSS', 'darwin', 'moss-image-sft-bf16'],
+    ])('refuses an init image on %s in preview and submission before queueing', async (_label, platform, modelId) => {
+      const restore = pinPlatform(platform);
+      try {
+        canonLoom.episodes[0].nodes[0].visualCanon = { mode: 'locked', characterAppearances: [], placeId: null, objectIds: [] };
+        const body = {
+          mode: 'local', modelId, prompt: 'An authored view', initImageFile: 'example-hall.png',
+          fableLoom: { loomId: canonLoom.id, episodeId: 'ep-1', nodeId: 'node-1' },
+        };
+        const localSettings = { imageGen: { mode: 'local', local: { modelId, pythonPath: '/example/python' } } };
+        getSettings.mockResolvedValueOnce(localSettings);
+        const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+        getSettings.mockResolvedValueOnce(localSettings);
+        const submit = await request(app).post('/api/image-gen/generate').send(body);
+        expect(preview.status).toBe(400);
+        expect(preview.body.code).toBe('FABLELOOM_INIT_UNSUPPORTED');
+        expect([submit.status, submit.body.code, submit.body.error]).toEqual([preview.status, preview.body.code, preview.body.error]);
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      } finally { restore(); }
+    });
+
     it.each(['missing-universe', 'missing-binding', 'unsupported-backend', 'disabled-provider'])('matches the %s refusal without provider work', async failure => {
       if (failure === 'missing-universe') canonUniverse = null;
       if (failure === 'missing-binding') canonLoom.episodes[0].nodes[0].visualCanon.placeId = 'missing-place';

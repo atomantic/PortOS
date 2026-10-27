@@ -3,7 +3,8 @@ import { existsSync } from 'node:fs';
 import { basename, join, relative, resolve, sep } from 'node:path';
 import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { asFableLoomRenderSettings, inspectEpisodeProductionOrder } from '../../lib/fableLoomProduction.js';
-import { loraCompatKey } from '../../lib/runners.js';
+import { isFlux2, loraCompatKey, usesDiffusersRunner } from '../../lib/runners.js';
+import { usesMossSwift } from '../../lib/imageRuntimeRemedies.js';
 import { PATHS, sha256File } from '../../lib/fileUtils.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../../lib/imageGenCapabilities.js';
 import { getLoom } from '../fableLoom/records.js';
@@ -48,6 +49,14 @@ export async function prepareFableLoomImageParams({ params, mode, settings }) {
   const selected = mode === IMAGE_GEN_MODE.LOCAL
     ? selectLocalImageModelFromSettings(settings, params.modelId)
     : null;
+  if (selected && params.referenceImagePaths?.length
+    && !isFlux2(selected) && !(usesDiffusersRunner(selected) && selected.pipelineClass === 'QwenImage21Pipeline')) {
+    throw new ServerError('This local model cannot use the requested reference images.', { status: 400, code: 'FABLELOOM_REFERENCE_UNSUPPORTED' });
+  }
+  if (selected && params.initImagePath && (usesMossSwift(selected)
+    || (process.platform === 'win32' && !isFlux2(selected) && !usesDiffusersRunner(selected)))) {
+    throw new ServerError('This local runtime cannot use the requested init image. Choose a compatible model.', { status: 400, code: 'FABLELOOM_INIT_UNSUPPORTED' });
+  }
   const cloud = selected ? null : resolveCloudProviderConfig(settings, mode, {
     model: params.cloudModel, modelIsShippedDefault: params.cloudModelIsShippedDefault,
   });
