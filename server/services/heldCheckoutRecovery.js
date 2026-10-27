@@ -864,6 +864,26 @@ async function preservePublishedSourceReview(repoPath, tree, forge, content, adm
   for (const head of [...roots].sort()) {
     work.check();
     if (privateSource) {
+      // The retained tip already keeps its commit ancestors reachable. Charging
+      // each reflog checkpoint's patch again rejects one bounded draft history
+      // as though it were several independent bodies of private work.
+      if (head !== tree.head) {
+        const read = args => {
+          const remaining = Math.floor(privateDeadline - performance.now());
+          if (remaining <= 0) throw new Error('retirement-source-private-work-unpublished');
+          return execGit(['--no-replace-objects', '-c', 'core.commitGraph=false', ...args], repoPath,
+            { ignoreExitCode: true, timeout: Math.min(remaining, 2000), maxBuffer: 16384,
+              env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_GRAFT_FILE: devNull } });
+        };
+        const type = await read(['cat-file', '-t', head]);
+        const ancestor = type.exitCode === 0 && type.stdout.trim() === 'commit'
+          && (await read(['merge-base', '--is-ancestor', head, tree.head])).exitCode === 0;
+        if (ancestor) {
+          privateRecoveryProofs.push({ sourceHead: head, sourceReachableFrom: tree.head,
+            retainedRef: privateProof.retainedRef, retainedHead: privateProof.retainedHead, deltaBytes: 0 });
+          continue;
+        }
+      }
       const proof = head === tree.head ? privateProof : await retainPrivateRoot(head, true);
       if (!proof) throw new Error('retirement-source-private-work-unpublished');
       if (head !== tree.head) privateDeltaBytes += proof.deltaBytes;
