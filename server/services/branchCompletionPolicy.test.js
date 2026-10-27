@@ -276,6 +276,56 @@ describe('scoped legacy retirement policy', () => {
   });
 });
 
+describe('pre-creation claim startup failure', () => {
+  function delivery() {
+    const claim = 'claim/issue-42', checkoutPath = join(tmpdir(), 'later-claim');
+    const tip = 'a'.repeat(40), startedAt = '2026-04-02T00:00:00.000Z', completedAt = '2026-04-02T01:00:00.000Z';
+    const birthtimeNs = String(BigInt(Date.parse('2026-04-01T00:00:00.000Z')) * 1_000_000n);
+    const incarnation = { pointer: { dev: '1', ino: '2', birthtimeNs },
+      gitdir: { path: join(tmpdir(), 'later-gitdir'), dev: '1', ino: '3', birthtimeNs } };
+    const failed = { id: 'failed', taskId: 'task', status: 'completed', startedAt: '2026-03-01T00:00:00.000Z',
+      completedAt: '2026-03-01T00:01:00.000Z', result: { success: false, executionSuccess: false,
+        completionReason: 'paste-not-rendered', errorAnalysis: { category: 'startup-failure', origin: 'runner', completionReason: 'paste-not-rendered' } },
+      metadata: { instanceId: 'local', workspacePath: repoPath, isWorktree: false, configClaimFlow: true,
+        claimBranch: claim, claimSelectionPending: true, claimPicksOwnBranch: false, prCompletionPolicy: 'merge-on-green' } };
+    const completed = { id: 'completed', taskId: 'task', status: 'completed', startedAt, completedAt,
+      result: { success: true, executionSuccess: true }, metadata: { instanceId: 'local', workspacePath: repoPath,
+        claimBranches: [claim], prCompletionPolicy: 'merge-on-green', completedCheckouts: [{ version: 1, agentId: 'completed',
+          startedAt, capturedAt: completedAt, repoPath, branch: claim, path: checkoutPath, head: tip, incarnation }] } };
+    const input = { repoPath, branch: claim, checkoutPath, tip, prUrl, verifiedPrHead: tip, checkoutIncarnation: incarnation,
+      retirementForge: { prUrl, prHead: tip, scopeProof: 'exact-delivered-head' },
+      deliveryContinuations: [{ agentId: completed.id, originalPrUrl: null, prUrl, tip, capturedHead: tip,
+        capturedAt: completedAt, checkoutIncarnation: incarnation }], agents: [failed, completed] };
+    return { input, failed, completed };
+  }
+
+  it('excludes only the proven earlier startup attempt and preserves uncertain ownership', () => {
+    const baseline = delivery();
+    const original = structuredClone(baseline.input.agents);
+    expect(reviewedRetirementPolicy(baseline.input).reason).toBeNull();
+    expect(baseline.input.agents).toEqual(original);
+    const refusals = [
+      ['bound branch', ({ failed }) => { failed.metadata.claimBranches = ['claim/issue-42']; }],
+      ['unknown capture', ({ failed }) => { failed.metadata.checkoutSeeds = []; }],
+      ['missing startup evidence', ({ failed }) => { failed.result.errorAnalysis.origin = null; }],
+      ['unfinished owner', ({ failed }) => { failed.status = 'running'; }],
+      ['handoff policy', ({ failed }) => { failed.metadata.prCompletionPolicy = 'leave-open'; }],
+      ['unknown completion time', ({ failed }) => { failed.completedAt = null; }],
+      ['overlapping generation', ({ failed }) => { failed.completedAt = '2026-04-01T12:00:00.000Z'; }],
+      ['missing checkout identity', ({ input }) => { input.checkoutIncarnation = null; }],
+      ['unverified forge head', ({ input }) => { input.verifiedPrHead = 'b'.repeat(40); }],
+      ['different task', ({ completed }) => { completed.taskId = 'another-task'; }],
+      ['different instance', ({ completed }) => { completed.metadata.instanceId = 'another-instance'; }],
+      ['failed successor', ({ completed }) => { completed.result.success = false; }],
+      ['uncaptured successor', ({ completed }) => { completed.metadata.completedCheckouts = []; }],
+    ];
+    for (const [label, mutate] of refusals) {
+      const context = delivery(); mutate(context);
+      expect(reviewedRetirementPolicy(context.input).reason, label).toBeTruthy();
+    }
+  });
+});
+
 describe('reviewed reused-branch checkout incarnation', () => {
   const checkoutPath = join(tmpdir(), 'synthetic-current-checkout');
   const input = () => ({ repoPath, branch, checkoutPath, prUrl, tip: runtime.tip, verifiedPrHead: runtime.tip,

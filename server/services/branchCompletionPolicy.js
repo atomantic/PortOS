@@ -327,6 +327,45 @@ function knownPhysicalIdentity(value) {
     && /^[1-9]\d*$/.test(value.ino) && /^[1-9]\d*$/.test(value.birthtimeNs);
 }
 
+// A pinned claim reserves its branch before its TUI receives a prompt. A
+// runner-confirmed paste failure cannot own a later, server-captured generation
+// of the same task. A recorded binding or ambiguous identity remains a hold.
+function precreationStartupFailure(policy, input, policies) {
+  const agent = policy.agent, meta = agent.metadata || {}, result = agent.result || {};
+  const started = Date.parse(agent.startedAt), ended = Date.parse(agent.completedAt);
+  const incarnation = input.checkoutIncarnation, forge = input.retirementForge;
+  if (agent.status !== 'completed' || result.success !== false || result.executionSuccess !== false
+    || result.completionReason !== 'paste-not-rendered' || result.errorAnalysis?.completionReason !== 'paste-not-rendered'
+    || result.errorAnalysis?.category !== 'startup-failure' || result.errorAnalysis?.origin !== 'runner'
+    || result.orphaned === true || result.validationPassed === false
+    || policy.completion !== PR_COMPLETIONS.MERGE_ON_GREEN || meta.configClaimFlow !== true
+    || meta.isWorktree !== false || meta.claimPicksOwnBranch !== false || meta.claimSelectionPending !== true
+    || meta.claimBranch !== input.branch || !samePath(meta.workspacePath, input.repoPath) || meta.sourceWorkspace != null
+    || meta.branchCompletionPolicy != null || meta.reviewLoopMergeTarget != null || meta.prDeliveryTarget != null || meta.recoveryMergeTarget != null
+    || ['claimBranches', 'claimReleasedBranches', 'checkoutSeeds', 'checkoutCapture', 'completedCheckouts'].some(key => Object.hasOwn(meta, key))
+    || typeof agent.taskId !== 'string' || !agent.taskId || typeof meta.instanceId !== 'string' || !meta.instanceId || meta.instanceId === 'unknown'
+    || !Number.isFinite(started) || !Number.isFinite(ended) || started > ended
+    || !isAbsolute(input.checkoutPath || '') || samePath(input.checkoutPath, input.repoPath)
+    || !checkoutSeedSchema.shape.incarnation.safeParse(incarnation).success
+    || !isAbsolute(incarnation.gitdir.path) || !knownPhysicalIdentity(incarnation.pointer) || !knownPhysicalIdentity(incarnation.gitdir)
+    || forge?.scopeProof !== 'exact-delivered-head' || forge.prUrl !== input.prUrl
+    || !parsePullRequestUrl(input.prUrl) || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(input.tip || '')
+    || forge.prHead !== input.tip || input.verifiedPrHead !== input.tip) return false;
+  // Compare conservatively past the end of the stored millisecond.
+  const after = (BigInt(ended) + 1n) * 1_000_000n;
+  if (BigInt(incarnation.pointer.birthtimeNs) <= after || BigInt(incarnation.gitdir.birthtimeNs) <= after) return false;
+  return policies.some(candidate => {
+    const next = candidate.agent, nextMeta = next.metadata || {};
+    return next.id !== agent.id && next.taskId === agent.taskId && nextMeta.instanceId === meta.instanceId
+      && candidate.completion === PR_COMPLETIONS.MERGE_ON_GREEN && next.status === 'completed'
+      && next.result?.success === true && next.result?.executionSuccess === true && next.result?.validationPassed !== false
+      && Date.parse(next.startedAt) > ended && Date.parse(next.completedAt) >= Date.parse(next.startedAt)
+      && Array.isArray(nextMeta.completedCheckouts) && nextMeta.completedCheckouts.some(row => completedCheckoutReceiptValid(next, row)
+        && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && samePath(row.path, input.checkoutPath)
+        && row.head === input.tip && isDeepStrictEqual(row.incarnation, incarnation));
+  });
+}
+
 function distinctCapturedAdministration(incarnation, current) {
   return checkoutSeedSchema.shape.incarnation.safeParse(incarnation).success
     && isAbsolute(incarnation.gitdir.path) && knownPhysicalIdentity(incarnation.pointer)
@@ -529,7 +568,8 @@ export function reviewedRetirementPolicy(input) {
   // unrelated history; a current checkout's handoff must never be filtered out.
   const decision = completionDecision({ ...input, prUrl: undefined });
   if (decision.reason === unavailable) return { reason: decision.reason };
-  const resumed = resumedCleanupPolicies(decision.policies || [], input);
+  const allPolicies = decision.policies || [];
+  const resumed = resumedCleanupPolicies(allPolicies.filter(policy => !precreationStartupFailure(policy, input, allPolicies)), input);
   const incarnation = reviewedIncarnation(input, resumed);
   const policies = incarnation?.current || resumed;
   if (policies.some(p => p.completion === PR_COMPLETIONS.LEAVE_OPEN)) return { reason: held };
