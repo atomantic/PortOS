@@ -117,8 +117,12 @@ public static class WindowsAgentSupervisor
             startup.Startup.Flags = 0x100;
             startup.Startup.Input = inherited[0]; startup.Startup.Output = inherited[1]; startup.Startup.Error = inherited[2];
             string executable = (string)request["command"];
+            Require(executable.IndexOf('\0') < 0 && ((string)request["cwd"]).IndexOf('\0') < 0);
             var arguments = new List<string>();
-            foreach (object argument in (IEnumerable)request["args"]) arguments.Add((string)argument);
+            foreach (object argument in (IEnumerable)request["args"]) {
+                Require(((string)argument).IndexOf('\0') < 0);
+                arguments.Add((string)argument);
+            }
             var command = new StringBuilder(Quote(executable));
             if (Path.GetFileName(executable).Equals("cmd.exe", StringComparison.OrdinalIgnoreCase)
                 && arguments.Count >= 2 && arguments[0].Equals("/c", StringComparison.OrdinalIgnoreCase)) {

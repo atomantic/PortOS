@@ -187,4 +187,24 @@ setTimeout(() => process.exit(3), 20000).unref();`);
     }
   }, 30000);
 
+  it('rejects NUL argv before reserving a launch and at the native serialization boundary', async () => {
+    await reserveWindowsAgentProcess(agent);
+    const invalid = ['-e', 'process.stdout.write("unexpected")', 'value\0suffix'];
+    expect(() => prepareWindowsAgentLaunch(agent.id, process.execPath, invalid, { cwd: root, env: process.env })).toThrow(TypeError);
+    expect(existsSync(join(root, 'launch.json'))).toBe(false);
+    const launch = prepareWindowsAgentLaunch(agent.id, process.execPath, ['-e', 'process.stdout.write("unexpected")'], { cwd: root, env: process.env });
+    const spec = JSON.parse(await readFile(launch.args[0], 'utf8'));
+    await writeFile(launch.args[0], JSON.stringify({ ...spec, args: invalid }));
+    const child = watchWindowsAgentProcess(spawn(launch.command, launch.args, { cwd: root, stdio: 'pipe' }), launch);
+    const closed = once(child, 'close');
+    let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    try {
+      expect((await closed)[0]).toBe(1);
+      expect(output).toBe('');
+      expect(existsSync(join(root, 'started.json'))).toBe(false);
+      await expect(readWindowsAgentSettlement(agent)).rejects.toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED' });
+    } finally { killProcessTree(child); await closed; }
+  }, 30000);
+
 });

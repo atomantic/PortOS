@@ -57,6 +57,9 @@ export async function reserveWindowsAgentProcess(agent) {
  * Legacy/unregistered callers retain their old launch and cannot gain proof. */
 export function prepareWindowsAgentLaunch(agentId, command, args, { cwd, env, pty = false } = {}) {
   if (process.platform !== 'win32' || !agentId) return { command, args };
+  if ([command, cwd, ...args].some(value => typeof value === 'string' && value.includes('\0'))) {
+    throw new TypeError('Windows agent launch contains NUL bytes');
+  }
   let reservation;
   try { reservation = reservationSchema.parse(JSON.parse(readFileSync(join(directory(agentId), 'owner.json'), 'utf8'))); }
   catch (error) { if (error.code === 'ENOENT') return { command, args }; throw unavailable(); }
