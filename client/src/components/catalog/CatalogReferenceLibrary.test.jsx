@@ -21,7 +21,15 @@ vi.mock('../media/AddToCollectionMenu', () => ({ default: () => null }));
 vi.mock('../media/PinToMoodBoardMenu', () => ({ default: () => null }));
 vi.mock('../media/PromptRefineModal', () => ({ default: () => null }));
 vi.mock('../media/PromptFromMedia', () => ({ PromptFromMediaModal: () => null }));
-vi.mock('../pipeline/MediaJobThumb', () => ({ default: ({ onFilename }) => <button onClick={() => onFilename('refined.png')}>Complete refinement</button> }));
+vi.mock('../pipeline/MediaJobThumb', () => ({
+  default: ({ jobId, onFilename, onStatus, label }) => (
+    <div data-testid={`job-thumb-${jobId || 'thumb'}`}>
+      <span>{label}</span>
+      <button onClick={() => onFilename?.('refined.png')}>Complete refinement</button>
+      <button onClick={() => onStatus?.('failed', 'Render error')}>Fail refinement</button>
+    </div>
+  ),
+}));
 const api = await import('../../services/apiCatalog');
 const { default: CatalogReferenceLibrary } = await import('./CatalogReferenceLibrary.jsx');
 const { CatalogImagePreviewProvider } = await import('./CatalogImagePreviewProvider.jsx');
@@ -345,5 +353,48 @@ describe('CatalogReferenceLibrary', () => {
 
     expect(screen.queryByRole('group', { name: 'Rating for sample.png' })).toBeNull();
     expect(screen.getByText('Rating: good')).toBeInTheDocument();
+  });
+
+  it('renders pending render placeholder card in gallery and completes through onPendingRenderComplete', async () => {
+    const onPendingRenderComplete = vi.fn();
+    const onPendingRenderFailed = vi.fn();
+    const pendingRenders = [
+      { jobId: 'job-pending-1', instruction: 'make the jacket red', sourceFilename: 'orig.png' },
+    ];
+
+    const { rerender } = render(
+      <CatalogReferenceLibrary
+        ingredientId="cat-chr-1"
+        media={[]}
+        pendingRenders={pendingRenders}
+        onPendingRenderComplete={onPendingRenderComplete}
+        onPendingRenderFailed={onPendingRenderFailed}
+      />
+    );
+
+    const pendingRow = screen.getByTestId('library-row-pending');
+    expect(pendingRow).toBeInTheDocument();
+    expect(within(pendingRow).getByRole('heading', { level: 4, name: 'Edit: make the jacket red' })).toBeInTheDocument();
+    expect(within(pendingRow).getByText('Rendering')).toBeInTheDocument();
+    expect(within(pendingRow).getByText('From orig.png')).toBeInTheDocument();
+    expect(within(pendingRow).getByText('Live updating…')).toBeInTheDocument();
+
+    // Clicking complete on the MediaJobThumb triggers onPendingRenderComplete
+    fireEvent.click(within(pendingRow).getByRole('button', { name: 'Complete refinement' }));
+    expect(onPendingRenderComplete).toHaveBeenCalledWith('job-pending-1', 'refined.png');
+
+    // When the rendered image lands in media, the pending placeholder transitions out
+    rerender(
+      <CatalogReferenceLibrary
+        ingredientId="cat-chr-1"
+        media={[{ mediaKey: 'job-pending-1.png', kind: 'reference', library: { variant: { label: 'New reference' } } }]}
+        pendingRenders={pendingRenders}
+        onPendingRenderComplete={onPendingRenderComplete}
+        onPendingRenderFailed={onPendingRenderFailed}
+      />
+    );
+
+    expect(screen.queryByTestId('library-row-pending')).toBeNull();
+    expect(screen.getByTestId('library-row')).toBeInTheDocument();
   });
 });

@@ -117,9 +117,13 @@ vi.mock('../components/pipeline/MediaJobThumb', async () => {
     useEffect(() => {
       if (!jobId) return;
       if (jobId === 'fail-job') onStatus?.('failed');
-      else onFilename?.(`${jobId}.png`);
+      else if (!jobId.startsWith('manual-')) onFilename?.(`${jobId}.png`);
     }, [jobId, onFilename, onStatus]);
-    return null;
+    return (
+      <div data-testid={`job-thumb-${jobId}`}>
+        <button onClick={() => onFilename?.(`${jobId}.png`)}>Complete job</button>
+      </div>
+    );
   }
   return { default: MockMediaJobThumb };
 });
@@ -1719,4 +1723,66 @@ it('returns to an allowed Universe Cast context while retaining compact page que
   await act(async () => router.navigate(`/casting/cat-chr-1/profile${router.state.location.search}`));
   expect(screen.getByRole('tab', { name: 'Story' })).toHaveAttribute('aria-selected', 'true');
   expect(screen.getByRole('link', { name: 'Back to Casting' })).toHaveAttribute('href', back);
+});
+
+it('adds a card with rendering animation placeholder when editing an image from the casting catalog and live updates when completed', async () => {
+  const { generateImage } = await import('../services/apiSystem');
+  const { attachCatalogIngredientGeneratedImage } = await import('../services/apiCatalog');
+  generateImage.mockResolvedValue({ jobId: 'manual-edit-1', status: 'queued', position: 1 });
+  attachCatalogIngredientGeneratedImage.mockResolvedValue({ kind: 'reference', attached: true });
+
+  getCatalogIngredientDetails.mockResolvedValue({
+    ...detailsOf(CHAR_FIXTURE),
+    media: [
+      { mediaKey: 'one.png', kind: 'reference', library: { variant: { label: 'Primary image' } } },
+    ],
+  });
+
+  await renderPage('/casting/cat-chr-1/references?preview=image%3Aone.png');
+  const dialog = await screen.findByRole('dialog');
+  expect(dialog).toBeInTheDocument();
+
+  // Click the Edit action in the media lightbox
+  const editToggleBtn = within(dialog).getByRole('button', { name: 'Edit' });
+  await act(async () => { fireEvent.click(editToggleBtn); });
+
+  // Enter instructions in QuickImageEdit form
+  const input = await within(dialog).findByLabelText('What should change?');
+  fireEvent.change(input, { target: { value: 'make the jacket red' } });
+  const form = input.closest('form');
+  await act(async () => { fireEvent.submit(form); });
+
+  // generateImage is invoked with catalogIngredientId and reference
+  await waitFor(() => expect(generateImage).toHaveBeenCalledWith(
+    expect.objectContaining({
+      catalogIngredientId: 'cat-chr-1',
+      catalogMediaKind: 'reference',
+      referenceImageFiles: ['one.png'],
+    }),
+    { silent: true },
+  ));
+
+  // The modal is dismissed
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+  // A card with rendering animation placeholder is added to the reference gallery
+  const pendingCard = await screen.findByTestId('library-row-pending');
+  expect(pendingCard).toBeInTheDocument();
+  expect(within(pendingCard).getByRole('heading', { level: 4, name: 'Edit: make the jacket red' })).toBeInTheDocument();
+  expect(within(pendingCard).getByText('Rendering')).toBeInTheDocument();
+  expect(within(pendingCard).getByText('From one.png')).toBeInTheDocument();
+  expect(within(pendingCard).getByText('Live updating…')).toBeInTheDocument();
+
+  // Complete the in-flight render
+  const completeBtn = within(pendingCard).getByRole('button', { name: 'Complete job' });
+  fireEvent.click(completeBtn);
+
+  await waitFor(() => expect(attachCatalogIngredientGeneratedImage).toHaveBeenCalledWith(
+    'cat-chr-1',
+    { mediaKey: 'manual-edit-1.png' },
+    { silent: true },
+  ));
+
+  // Pending card is cleared upon completion
+  await waitFor(() => expect(screen.queryByTestId('library-row-pending')).not.toBeInTheDocument());
 });

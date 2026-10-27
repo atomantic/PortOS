@@ -165,6 +165,8 @@ export default function MediaLightbox({
   filmLookProject = null,
   pageActions = null,
   ratingControl = null,
+  quickEditParams = null,
+  onQuickEditQueued = null,
 }) {
   const [fullScreen, setFullScreen] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
@@ -541,6 +543,8 @@ export default function MediaLightbox({
             variantGroup={variantGroup}
             onSelectVariant={onSelectVariant}
             onFilmLook={filmLookAvailable ? () => setFilmLookOpen(true) : undefined}
+            quickEditParams={quickEditParams}
+            onQuickEditQueued={onQuickEditQueued}
           />
         )}
       </div>
@@ -582,6 +586,7 @@ function SettingsPane({
   copy, onRefine, onPromptFrom,
   annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead, onTrimStart, videoRef,
   variantGroup, onSelectVariant, onFilmLook, pageActions, rating,
+  quickEditParams, onQuickEditQueued,
 }) {
   const [posterSaving, setPosterSaving] = useState(false);
   const [posterError, setPosterError] = useState(null);
@@ -926,7 +931,20 @@ function SettingsPane({
           </button>
         )}
         {!isVideo && item.filename && quickEditOpen && (
-          <QuickImageEdit item={item} onDone={() => { setQuickEditOpen(false); onClose?.(); }} />
+          <QuickImageEdit
+            item={item}
+            generateParams={quickEditParams}
+            onDone={(result, editInfo) => {
+              setQuickEditOpen(false);
+              onClose?.();
+              if (result) {
+                onQuickEditQueued?.(result, {
+                  item,
+                  instruction: editInfo?.instruction,
+                });
+              }
+            }}
+          />
         )}
         {onPromptFrom && (
           <button

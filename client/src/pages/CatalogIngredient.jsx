@@ -44,6 +44,7 @@ import useMounted from '../hooks/useMounted';
 import IngredientPicker from '../components/IngredientPicker';
 import MediaImage from '../components/MediaImage';
 import GenerateImageControl from '../components/catalog/GenerateImageControl';
+import MediaJobThumb from '../components/pipeline/MediaJobThumb';
 import { buildGenerationPromptSeed } from '../lib/catalogImagePrompt';
 import CatalogMediaTile from '../components/catalog/CatalogMediaTile';
 import CatalogImagePreview from '../components/catalog/CatalogImagePreview';
@@ -80,6 +81,7 @@ import { timeAgo, formatDateTime } from '../utils/formatters';
 import { humanizeIntegrityField } from '../lib/characterIntegrity';
 import { listSheetPointers } from '../lib/sheetPointers';
 import { formsOf } from '../lib/catalogForms';
+import { safeReadJsonSession, safeWriteJsonSession, safeRemoveSession } from '../lib/safeStorage';
 
 // Per-type editor field list + badge color now come from the shared registry
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
@@ -417,6 +419,51 @@ function IngredientEditor() {
     toast.success(result.kind === 'portrait' ? 'Generated portrait set' : 'Generated image attached');
   }, [record, refreshMedia, identityReadOnly]);
 
+  const [pendingRenders, setPendingRenders] = useState(() => (
+    id ? (safeReadJsonSession(`catalog_pending_renders_${id}`, []) || []) : []
+  ));
+
+  useEffect(() => {
+    if (!id) return;
+    if (pendingRenders.length > 0) {
+      safeWriteJsonSession(`catalog_pending_renders_${id}`, pendingRenders);
+    } else {
+      safeRemoveSession(`catalog_pending_renders_${id}`);
+    }
+  }, [id, pendingRenders]);
+
+  const handleQuickEditQueued = useCallback((result, { item, instruction } = {}) => {
+    if (!result) return;
+    if (result.jobId) {
+      setPendingRenders((prev) => [
+        ...prev.filter(p => p.jobId !== result.jobId),
+        {
+          jobId: result.jobId,
+          ingredientId: record?.id || id,
+          instruction: instruction || '',
+          sourceFilename: item?.filename || '',
+          startedAt: Date.now(),
+        },
+      ]);
+    } else if (result.filename) {
+      handleGeneratedImage(result.filename);
+    }
+  }, [record?.id, id, handleGeneratedImage]);
+
+  const handlePendingRenderComplete = useCallback(async (jobId, filename) => {
+    setPendingRenders((prev) => prev.filter(p => p.jobId !== jobId));
+    if (filename) {
+      await handleGeneratedImage(filename);
+    }
+  }, [handleGeneratedImage]);
+
+  const handlePendingRenderFailed = useCallback((jobId, status, error) => {
+    setPendingRenders((prev) => prev.filter(p => p.jobId !== jobId));
+    if (error) toast.error(error);
+    else if (status === 'canceled') toast.error('Render canceled');
+    else toast.error('Render failed');
+  }, []);
+
   // Upload a dropped/picked file straight onto the ingredient. The server picks
   // the media kind (image→reference, audio, video) from the MIME and stores the
   // bytes in the matching federating library dir. Reconcile via refreshMedia.
@@ -703,7 +750,11 @@ function IngredientEditor() {
     : isDirty ? `Save your profile edits first — the ${subject} renders from the saved record.` : null);
 
   return (
-    <CatalogImagePreviewProvider key={record.id}>
+    <CatalogImagePreviewProvider
+      key={record.id}
+      ingredientId={record.id}
+      onQuickEditQueued={handleQuickEditQueued}
+    >
     <fieldset disabled={mergeBusy} className="flex h-full min-h-0 min-w-0 flex-col">
       <UnsavedChangesConfirm
         guard={routeGuard}
@@ -990,12 +1041,18 @@ function IngredientEditor() {
             readOnly={identityReadOnly}
             referenceLibrary={record.type === 'character' ? { ingredientId: record.id, forms: formsOf(record.payload), media: media.map(protectMedia), onChanged: refreshMedia,
               revision: record.updatedAt, blockedReason: renderBlockedReason('reference'),
+              pendingRenders: pendingRenders.filter(p => !p.ingredientId || p.ingredientId === record.id),
+              onPendingRenderComplete: handlePendingRenderComplete,
+              onPendingRenderFailed: handlePendingRenderFailed,
               onMediaUpdated: updated => setMedia(previous => previous.map(row => {
                 if (row.mediaKey !== updated.mediaKey || (row.ingredientId || record.id) !== (updated.ingredientId || record.id)) return row;
                 if (row.kind === updated.kind) return updated;
                 return ['bad', 'rejected'].includes(updated.library?.review?.status)
                   ? { ...row, library: { ...(row.library || {}), guide: false } } : row;
               })) } : null}
+            pendingRenders={pendingRenders.filter(p => !p.ingredientId || p.ingredientId === record.id)}
+            onPendingRenderComplete={handlePendingRenderComplete}
+            onPendingRenderFailed={handlePendingRenderFailed}
             media={(tabs ? media.filter(isReferenceTabRow) : media).map(protectMedia)}
             canonImageRefs={[payload.primaryImageRef, ...(Array.isArray(payload.imageRefs) ? payload.imageRefs : [])].filter((ref) =>
               !media.some((m) => (m.kind === 'portrait' || m.kind === 'reference') && m.mediaKey === ref))}
@@ -1414,7 +1471,7 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove, readOnly
 // memo" (MediaRecorder → WAV → Whisper transcript) persist through the catalog
 // media-upload/voice routes into the federating library dirs, then attach via
 // the same media-refs seam gallery picks use.
-function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = null, media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
+function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = null, media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated, pendingRenders = [], onPendingRenderComplete, onPendingRenderFailed }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false); // upload or transcription in flight
@@ -1533,8 +1590,27 @@ function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = 
         </div>
       )}
 
-      {tileMedia.length > 0 && (
+      {!referenceLibrary && (tileMedia.length > 0 || pendingRenders.length > 0) && (
         <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
+          {pendingRenders.map((pending) => (
+            <div key={pending.jobId} data-testid="pending-media-tile" className="rounded-lg border border-port-accent/40 bg-port-bg shadow-sm overflow-hidden flex flex-col">
+              <div className="relative aspect-square w-full bg-port-card/40 flex items-center justify-center overflow-hidden">
+                <MediaJobThumb
+                  jobId={pending.jobId}
+                  label={pending.instruction || 'Refined reference'}
+                  size="fill"
+                  onFilename={(filename) => onPendingRenderComplete?.(pending.jobId, filename)}
+                  onStatus={(status, err) => {
+                    if (status === 'failed' || status === 'canceled') onPendingRenderFailed?.(pending.jobId, status, err);
+                  }}
+                />
+              </div>
+              <div className="p-2 border-t border-port-border text-xs flex items-center justify-between">
+                <span className="truncate text-gray-300 font-medium">{pending.instruction || 'Edited reference'}</span>
+                <span className="text-[10px] text-port-accent uppercase animate-pulse">Rendering</span>
+              </div>
+            </div>
+          ))}
           {tileMedia.map((m) => (
             <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} missing={missingMedia.has(m.mediaKey)}
               onSetPortrait={onSetPortrait} onDetach={onDetach} armedDetach={armedDetach}

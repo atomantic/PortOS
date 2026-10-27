@@ -15,7 +15,7 @@ export const quickEditPrompt = (instruction) =>
  * reference plus a short instruction through the default image render, no
  * prompt rewriting or form detour. The wrapper text is shown beside the input.
  */
-export default function QuickImageEdit({ item, onDone }) {
+export default function QuickImageEdit({ item, onDone, generateParams }) {
   const [instruction, setInstruction] = useState('');
   const [busy, setBusy] = useState(false);
   const canSubmit = instruction.trim() && !busy;
@@ -29,11 +29,12 @@ export default function QuickImageEdit({ item, onDone }) {
       prompt: quickEditPrompt(instruction),
       referenceImageFiles: [item.filename],
       ...(item.width && item.height ? { width: item.width, height: item.height } : {}),
+      ...(generateParams || {}),
     }, { silent: true }).catch((err) => { toast.error(err.message || 'Edit failed'); return null; });
     setBusy(false);
     if (!result) return;
     toast.success(result.mode === IMAGE_GEN_MODE.EXTERNAL ? 'Edit complete' : result.position ? `Edit queued #${result.position}` : 'Edit queued');
-    onDone?.();
+    onDone?.(result, { instruction, item });
   };
 
   return (
