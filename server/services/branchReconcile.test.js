@@ -2469,9 +2469,9 @@ describe('desiredEndState', () => {
     // Cleanup must cross the fresh preview/review/retirement service boundary;
     // descriptive preservation prose cannot authorize shell teardown.
     const cleanupSteps = [
-      'remote state is exactly MERGED',
+      'hosting provider reports the exact PR as MERGED',
       '/checkouts/review',
-      'Read the full returned comparison',
+      'Inspect the returned local identity',
       '/checkouts/retire',
       'Require ok:true and branchDeleted:true',
     ].map(step => instruction.indexOf(step));

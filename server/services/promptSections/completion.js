@@ -644,12 +644,16 @@ function buildPendingMergeHandoffLines(agentId) {
 
 /** Hosting providers own merge eligibility; local scope and cleanup remain bound. */
 export function buildMergeAdmissionSection(agentId) {
+  if (!agentId) return [
+    '## Hosting-provider merge authority',
+    'Use only your authenticated account and assigned repository/PR; missing authorization or an ambiguous target means stop. Follow the target repository’s documented validation. GitHub/GitLab enforces merge rules: pin the PR head and confirm MERGED (queued/API errors are not success). No second PortOS certificate is required. Preserve active owners and unique local content during supported cleanup.',
+  ].join('\n');
   return [
     ...(agentId ? [...buildPendingMergeHandoffLines(agentId), ''] : []),
     '## Hosting-provider merge authority',
     ...(agentId ? [`This run is ${agentId}. Keep the assigned repository, PR/MR, branch and checkout bound to this task; a child or third-party issue/PR cannot expand that authority.`] : []),
     'Use only the authenticated account and exact repository/PR assigned to this task. Missing authorization or an ambiguous target means stop and report it; never invent a parent, borrow another run’s identity, or change repository protection.',
-    'GitHub/GitLab repository rules decide merge eligibility. Complete the target repository’s documented validation and requested reviews, then use its normal merge API/CLI pinned to the current PR head (--match-head-commit on GitHub). Do not use admin/bypass flags or require a second PortOS admission, attestation, preparation turn, configuration switch or merged-tree certificate. An empty provider-required check set is not itself a failure; do not invent expected workflows beyond repository policy.',
+    'GitHub/GitLab repository rules decide merge eligibility. Complete the target repository’s documented validation and requested reviews, then use its normal merge API/CLI pinned to the current PR head (--match-head-commit <sha> on GitHub). Do not use admin/bypass flags or require a second PortOS admission, attestation, preparation turn, configuration switch or merged-tree certificate. An empty provider-required check set is not itself a failure; do not invent expected workflows beyond repository policy.',
     'Main may move continuously. Do not rebase, push, repeat CI or restart review merely because the base advanced. Resolve actual conflicts or an enforced up-to-date requirement; validate substantive changes and retain applicable review evidence.',
     'Native provider auto-merge is allowed when the API accepts it. Enabled/queued is pending, not MERGED: retain responsibility and observe the provider’s final result. A confirmed MERGED state for the exact repository/PR establishes delivery, including auto-merge; API errors or unreadable state never establish success.',
     'After confirmed delivery, use the supported cleanup service for the exact local target. Preserve active owners, dirty/untracked/unique content and protected refs. Release any coordination lease actually held; do not require one as merge certification. Never infer local removal from a remote branch deletion.',
