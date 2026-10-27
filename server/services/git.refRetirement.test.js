@@ -67,11 +67,41 @@ it('lets the real receiver refuse a ref that moves after review without deleting
   expect(await git(['rev-parse', `refs/portos/completed/${head}`])).toBe(head);
 });
 
-it('retains the remote when a combined request fails its fresh local owner check', async () => {
+it('retains the remote when a combined request fails its owner check with or without a local ref', async () => {
   ownership.agents = null;
   await expect(deleteBranch(sandbox.repo, 'finished', { local: true, remote: true }))
     .rejects.toMatchObject({ code: 'BRANCH_OWNER_HELD' });
   expect(await git(['ls-remote', '--heads', 'origin', 'refs/heads/finished']))
     .toBe(`${head}\trefs/heads/finished`);
   expect(await git(['rev-parse', 'refs/heads/finished'])).toBe(head);
+  await git(['branch', '-D', 'finished']);
+  await expect(deleteBranch(sandbox.repo, 'finished', { local: true, remote: true }))
+    .rejects.toMatchObject({ code: 'BRANCH_OWNER_HELD' });
+  expect(await git(['ls-remote', '--heads', 'origin', 'refs/heads/finished']))
+    .toBe(`${head}\trefs/heads/finished`);
+});
+
+it('deletes the remote when a combined request finds the local branch already absent', async () => {
+  await git(['branch', '-D', 'finished']);
+  expect(await deleteBranch(sandbox.repo, 'finished', { local: true, remote: true })).toEqual({
+    branch: 'finished', results: { local: 'not found', remote: 'deleted' },
+  });
+  expect(await git(['ls-remote', '--heads', 'origin', 'refs/heads/finished'])).toBe('');
+});
+
+it('retains the remote when the local ref cannot be resolved or changes during deletion', async () => {
+  await git(['branch', '-D', 'finished']);
+  await git(['symbolic-ref', 'refs/heads/finished', 'refs/heads/missing']);
+  const broken = await deleteBranch(sandbox.repo, 'finished', { local: true, remote: true });
+  expect(broken.results).toEqual({ local: 'failed: unable to resolve branch head', remote: 'retained: local branch deletion refused' });
+  expect(await git(['ls-remote', '--heads', 'origin', 'refs/heads/finished'])).toBe(`${head}\trefs/heads/finished`);
+
+  await git(['symbolic-ref', '--delete', 'refs/heads/finished']);
+  await git(['update-ref', 'refs/heads/finished', head]);
+  const newer = await git(['commit-tree', 'HEAD^{tree}', '-p', head, '-m', 'new owner work']);
+  ownership.moveHead = () => git(['update-ref', 'refs/heads/finished', newer, head]);
+  const moved = await deleteBranch(sandbox.repo, 'finished', { local: true, remote: true });
+  expect(moved.results).toEqual({ local: 'failed: branch head or holder changed', remote: 'retained: local branch deletion refused' });
+  expect(await git(['ls-remote', '--heads', 'origin', 'refs/heads/finished'])).toBe(`${head}\trefs/heads/finished`);
+  expect(await git(['rev-parse', 'refs/heads/finished'])).toBe(newer);
 });
