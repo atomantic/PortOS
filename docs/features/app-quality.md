@@ -157,6 +157,18 @@ database made and dropped by `scripts/rehearsal-scratch-db.js` (#12906); with
 no reachable Postgres it falls back to the file path and reports Postgres as
 uncovered.
 
+`over-engineering` is the removal counterpart of the proportionality check every
+audit carries: other lanes may not propose a new validation layer, archive,
+ledger, retry or recovery workflow, or slower process without a measured harm,
+while this lane hunts the machinery already added — verification of state the
+code host or CI system already owns, archives and retry layers with no reachable
+failure, guards that add CI or local gate time without catching a real
+regression, and docs that mandate such processes. Findings are removals or
+simplifications with measured cost (CI minutes, agent turnaround, local gate
+time, maintenance), plus corrected instruction text. It names no single code
+host or platform, defaults to file-issues, and applies to any repository.
+`simplify` owns code that nothing runs and copy-paste duplication.
+
 Two gap lenses cover defects every page-walking and code-shape audit reads as
 intentional or never reaches:
 

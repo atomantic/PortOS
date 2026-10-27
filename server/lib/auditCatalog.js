@@ -341,6 +341,22 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       noun: 'simplify finding(s)',
     }),
   },
+  // Active cleanup counterpart of the shared proportionality check in
+  // auditQualityInstructions: other lanes avoid ADDING heavyweight process
+  // machinery, this one hunts the machinery already added.
+  'over-engineering': {
+    quotaBurnId: null,
+    label: 'Over-engineering',
+    description: 'Over-engineering audit (process and validation machinery whose cost exceeds its demonstrated harm) — configurable: file issues (default) or implement removals',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'over-engineering-',
+      label: 'over-engineering-audit',
+      issueLabel: 'code-quality',
+      labelDescription: 'Proposed from an over-engineering audit',
+      noun: 'over-engineering finding(s)',
+    }),
+  },
   'module-hygiene': {
     quotaBurnId: null,
     label: 'Module hygiene',
@@ -934,7 +950,7 @@ export const DO_BETTER_SCOPE_COVERAGE = Object.freeze({
   deps: ['better-dependency-freedom', 'security'],
   tests: ['test-coverage', 'better-test-quality', 'better-dev-environment'],
   ux: ['ux', 'design', 'mobile-responsive', 'copy', 'feature-completeness'],
-  structural: ['module-hygiene', 'better-structural-drift', 'simplify'],
+  structural: ['module-hygiene', 'better-structural-drift', 'simplify', 'over-engineering'],
   'cognitive-load': ['better-cognitive-load', 'better-complexity'],
 });
 
@@ -989,6 +1005,7 @@ export const AUDIT_SUGGESTED_AFTER = Object.freeze({
   // The restructuring ladder: consolidate sources of truth, delete what is
   // dead, then draw module boundaries, then reduce what survives.
   simplify: Object.freeze(['better-structural-drift', 'feature-completeness']),
+  'over-engineering': Object.freeze(['simplify']),
   'module-hygiene': Object.freeze(['simplify']),
   'better-dependency-freedom': Object.freeze(['module-hygiene']),
   'better-complexity': Object.freeze(['module-hygiene']),
@@ -1022,6 +1039,7 @@ export const AUDIT_RUN_GUIDANCE = Object.freeze({
   'error-handling': 'Head of the order — safe failure behavior is established before the same code is restructured.',
   'better-structural-drift': 'Start of the restructuring ladder: consolidating sources of truth first means every later refactor targets the surviving implementation.',
   simplify: 'Dead and duplicate code is removed before modules are reorganized, so the reorganization only moves live code.',
+  'over-engineering': 'Follows simplify, which removes code with no behavior; this removes process and validation machinery that works but costs more than the harm it prevents.',
   'module-hygiene': 'Ownership and module boundaries are settled before function-level work, so complexity is measured on the final layout.',
   'better-dependency-freedom': 'Unnecessary dependencies go once ownership is clear, so no effort is spent polishing code a removal deletes.',
   'better-complexity': 'Remeasures the functions that survived the ladder and reduces the costliest branching.',

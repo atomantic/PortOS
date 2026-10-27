@@ -107,6 +107,7 @@ chosen cadence remains the trigger; adding this lane starts no provider work.
 | `design` | Rendered composition, media framing, polished states and intentional theme character; bounded screenshot evidence | `ux`, `design` | file | |
 | `data-safety` | Migrations, schema parity, cross-version safety | `data-safety` | file | |
 | `simplify` | Dead code, duplication, YAGNI | `code-quality`, `simplify` | file | |
+| `over-engineering` | Process and validation machinery costing more than the harm it prevents | `code-quality`, `over-engineering` | file | |
 | `module-hygiene` | Responsibility boundaries, reuse, discoverability | `code-quality`, `module-hygiene` | file | yes |
 | `api-contract` | Route validation, client/server drift, envelopes | `api-contract` | file | |
 | `ui-lifecycle` | UI resource lifetimes, stale data, async ordering, state continuity | `ui-lifecycle` | file | |
@@ -162,6 +163,17 @@ problem:
   primitive or a parity test, never a copied patch (#12092). File splits and
   responsibility boundaries stay with `module-hygiene`, which `simplify` cedes
   by name (#12083).
+- **Over-engineering is the removal counterpart of the proportionality check.**
+  Every lane carries a shared check (`auditQualityInstructions`) that rejects a
+  fix adding a validation layer, archive, ledger, retry or recovery workflow, or
+  slower process. `over-engineering` hunts the machinery already added —
+  re-verification of branch, merge, review or build state the code host or CI
+  system already owns, archives and retry layers with no reachable failure,
+  gates that add CI or local time without catching a regression, and the docs
+  that mandate them. It files only removals or simplifications with a measured
+  time or maintenance cost, and assumes no particular code host or platform.
+  `simplify` keeps code that nothing runs and copy-paste duplication;
+  `over-engineering` keeps process that runs and works but is disproportionate.
 - **Read-modify-write races have one owner.** `data-integrity` owns lost
   updates and read-modify-write races on a persisted record or file;
   `data-safety` and `better-runtime-safety` cede them by name, and runtime-safety
