@@ -168,7 +168,9 @@ history or agent review is needed, and the retirement
 service re-proves merge evidence and ownership under its fence. Nothing is copied
 into an archive. Git-ignored payload is checked separately: unverified ignored
 files retain the checkout and branch, while recognized disposable module caches
-and links retain their existing policy. Historical recovery archives and
+and links retain their existing policy. An agent's own completed checkout is simpler still: only Git status (uncommitted
+or untracked work), claim ownership and merge evidence gate its removal, and
+ignored files are discarded without a payload scan. Historical recovery archives and
 unfinished quarantine journals remain available after setup. Human handoffs
 and unreadable policy stay held. Other completed local review obligations become bounded
 `REVIEW_RETIREMENT` tasks after a fresh merged-PR preview accepts their policy,
