@@ -338,6 +338,8 @@ describe('per-reviewer reasoning effort (reviewerEfforts)', () => {
     expect(note).not.toContain('claude');
     expect(note).toMatch(/never blocks opening the PR/);
     expect(note).not.toMatch(/3 rounds/);
+    // Forge logins live outside the reviewer list but carry `@login` caps.
+    expect(buildReviewerMaxRoundsNote(['grok'], { grok: 2, '@alice': 1 }, ['alice'])).toContain('`@alice` → 1 round');
     expect(buildReviewerMaxRoundsNote(['grok'], {})).toBe('');
     expect(buildReviewerMaxRoundsNote(undefined, { grok: 2 })).toBe('');
   });

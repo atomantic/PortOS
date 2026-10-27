@@ -114,8 +114,8 @@ export const appendTargetWorkItemBlock = (promptTaskType, ref, excludeLabelsBloc
 export const appendReviewerEffortBlock = (reviewers, reviewerEfforts, reviewerModels) =>
   appendBlock(buildReviewerEffortNote(reviewers, reviewerEfforts, { reviewerModels }));
 
-export const appendReviewerMaxRoundsBlock = (reviewers, reviewerMaxRounds) =>
-  appendBlock(buildReviewerMaxRoundsNote(reviewers, reviewerMaxRounds));
+export const appendReviewerMaxRoundsBlock = (reviewers, reviewerMaxRounds, usernames) =>
+  appendBlock(buildReviewerMaxRoundsNote(reviewers, reviewerMaxRounds, usernames));
 
 export function buildLocalReviewerInstructions(reviewers, reviewerModels = {}, reviewerEfforts = {}, { claimCommentGate = false, enforceIsolation = false } = {}) {
   const localReviewers = (reviewers || []).filter((reviewer) => isToolFreeReviewer(reviewer));

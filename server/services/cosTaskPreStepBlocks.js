@@ -1147,7 +1147,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
     // and give it two owners to drift apart.
     + (rendersReviewers
         ? appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels)
-          + appendReviewerMaxRoundsBlock(promptReviewers, promptReviewerMaxRounds)
+          + appendReviewerMaxRoundsBlock(promptReviewers, promptReviewerMaxRounds, claimReviewers.usernames)
           + buildLocalReviewerInstructions(promptReviewers, promptReviewerModels, promptReviewerEfforts, {
             claimCommentGate: promptTaskType === 'claim-issue',
             enforceIsolation: promptTaskType.startsWith('claim-issue'),

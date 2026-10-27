@@ -150,7 +150,7 @@ describe('assembled forge claim prompts', () => {
       target: '42', prCompletion: 'review-then-merge', reviewers: ['codex'], optionalReviewers: ['codex'], reviewerMaxRounds: { codex: 2 },
     });
     expect(prompt).toContain('`codex` → 2 rounds');
-    expect(prompt).not.toMatch(/capped at 3 rounds|after 3 rounds, or its fixes/);
+    expect(prompt).not.toMatch(/capped at 3 rounds|after 3 rounds/);
     expect(prompt).toContain('never blocks opening');
   });
 

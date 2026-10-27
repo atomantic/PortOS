@@ -1200,11 +1200,14 @@ export function buildReviewerEffortNote(reviewers, reviewerEfforts = {}, { revie
  *
  * @param {string[]} reviewers - the reviewer tokens the prompt names
  * @param {Object<string, number>} [reviewerMaxRounds] - token-keyed caps
+ * @param {string[]} [usernames] - forge reviewer logins; their caps are keyed `@login`
+ *   and sit outside `reviewers`, so omitting them leaves a capped login at the default
  * @returns {string} a paragraph, or '' when no named reviewer carries a cap
  */
-export function buildReviewerMaxRoundsNote(reviewers, reviewerMaxRounds = {}) {
+export function buildReviewerMaxRoundsNote(reviewers, reviewerMaxRounds = {}, usernames = []) {
   const lookup = reviewerMaxRoundsLookup(reviewerMaxRounds);
-  const entries = (Array.isArray(reviewers) ? reviewers : [])
+  const tokens = [...(Array.isArray(reviewers) ? reviewers : []), ...(Array.isArray(usernames) ? usernames : []).map((u) => `@${u}`)];
+  const entries = [...new Set(tokens)]
     .filter((token) => lookup.has(String(token).toLowerCase()))
     .map((token) => {
       const max = lookup.get(String(token).toLowerCase());
