@@ -13,6 +13,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { tmpdir } from 'node:os';
 
 const claimVerifier = vi.hoisted(() => ({ verifyClaimDisposition: vi.fn() }));
 vi.mock('./claimDisposition.js', () => claimVerifier);
@@ -219,6 +221,25 @@ beforeEach(() => {
 });
 
 describe('finalizeAgent — goal-fidelity gate', () => {
+  it('captures completion outside an expired spawn Git lifetime without reopening that lifetime', async () => {
+    const git = await vi.importActual('../lib/execGit.js');
+    let completionCallback;
+    await git.withGitMutationLifetime(async () => { completionCallback = AsyncLocalStorage.snapshot(); });
+    let observed;
+    completeAgentMock.mockImplementationOnce(async () => {
+      observed = (await git.execGit(['--version'], tmpdir())).stdout;
+      return null;
+    });
+
+    await completionCallback(async () => {
+      await expect(git.execGit(['--version'], tmpdir())).rejects.toMatchObject({ code: 'GIT_MUTATION_LIFETIME_CLOSED' });
+      await finalize();
+      expect(observed).toMatch(/^git version /);
+      expect(completion()).toMatchObject({ success: true });
+      await expect(git.execGit(['--version'], tmpdir())).rejects.toMatchObject({ code: 'GIT_MUTATION_LIFETIME_CLOSED' });
+    });
+  });
+
   it('accepts a verified operator stand-down without judging a partial landed diff against the still-open issue', async () => {
     const task = { id: 'claim-example', taskType: 'user', metadata: { claimFlow: true, claimTarget: '42' } };
     claimVerifier.verifyClaimDisposition.mockResolvedValue({ status: 'verified', taskId: task.id,
