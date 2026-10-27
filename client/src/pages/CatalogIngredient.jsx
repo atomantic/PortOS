@@ -702,7 +702,7 @@ function IngredientEditor() {
     : isDirty ? `Save your profile edits first — the ${subject} renders from the saved record.` : null);
 
   return (
-    <CatalogImagePreviewProvider key={record.id} name={record.name}>
+    <CatalogImagePreviewProvider key={record.id}>
     <fieldset disabled={mergeBusy} className="flex h-full min-h-0 min-w-0 flex-col">
       <UnsavedChangesConfirm
         guard={routeGuard}

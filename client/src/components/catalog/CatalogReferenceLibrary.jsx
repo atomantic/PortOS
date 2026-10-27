@@ -1,6 +1,6 @@
 import { useId, useMemo, useState } from 'react';
 import { useCatalogPreviewSequence } from './CatalogImagePreview';
-import { Ban, Compass, Star, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { Ban, Compass, Star, ThumbsDown, ThumbsUp, Trash2 } from 'lucide-react';
 import CatalogMediaTile from './CatalogMediaTile';
 import CatalogReferenceReview from './CatalogReferenceReview';
 import { rejectedReferenceKeys } from '../../../../server/lib/catalogMediaLibrary.js';
@@ -31,6 +31,37 @@ function RatingButtons({ media, busy, onRate, className = 'grid grid-cols-3 gap-
           <Icon size={13} aria-hidden="true" /> {label}
         </button>
       ))}
+    </div>
+  );
+}
+
+// The reference's own controls inside the standard media viewer: rate it, make
+// it a render guide, make it the primary image, or remove it from this record
+// (the image itself stays in Media History).
+function PreviewActions({ media: m, busy, isGuide, guideFull, guideBlocked, onRate, onGuide, onSetPortrait, onDetach }) {
+  const [arming, setArming] = useState(false);
+  const btn = 'flex min-h-11 items-center justify-center gap-1.5 rounded border px-2 text-xs disabled:opacity-40';
+  return (
+    <div className="space-y-1.5">
+      <RatingButtons media={m} busy={busy} onRate={onRate} />
+      <div className="grid grid-cols-3 gap-1.5">
+        <button type="button" disabled={busy || guideBlocked || (!isGuide && guideFull)} aria-pressed={isGuide} onClick={onGuide}
+          title={!isGuide && guideFull ? `At most ${MAX_CAST_GUIDES} render guides` : 'Use as a render guide'}
+          className={`${btn} ${isGuide ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-gray-300 hover:border-port-accent'}`}>
+          <Compass size={13} aria-hidden="true" /> {isGuide ? 'Guide' : 'Make guide'}
+        </button>
+        {m.kind === 'portrait'
+          ? <span className={`${btn} border-port-warning/40 text-port-warning`}><Star size={13} aria-hidden="true" /> Primary</span>
+          : <button type="button" disabled={busy || !onSetPortrait} onClick={() => onSetPortrait(m.mediaKey)} title="Make this the record's primary image"
+            className={`${btn} border-port-border text-gray-300 hover:border-port-warning hover:text-port-warning`}>
+            <Star size={13} aria-hidden="true" /> Set primary
+          </button>}
+        <button type="button" disabled={busy || !onDetach} onClick={() => { if (arming) { setArming(false); onDetach(); } else setArming(true); }}
+          onBlur={() => setArming(false)} title="Remove from this record; the image stays in Media History"
+          className={`${btn} ${arming ? 'border-port-error bg-port-error/20 text-port-error' : 'border-port-border text-gray-300 hover:border-port-error hover:text-port-error'}`}>
+          <Trash2 size={13} aria-hidden="true" /> {arming ? 'Tap to remove' : 'Remove'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -87,12 +118,20 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
     render: (key, { nextKey, prevKey, goTo }) => {
       const m = tilesByKey.get(key);
       if (!m || readOnly || m.readOnly) return null;
-      // The rated image may leave the filtered list, so step on to a neighbor.
-      return <RatingButtons media={m} busy={!!busyKey} className="grid min-w-0 flex-1 basis-60 grid-cols-3 gap-1.5"
-        onRate={async (status) => { if (await save(m, rateReview(m, status))) goTo(nextKey ?? prevKey); }} />;
+      const isGuide = m.library?.guide === true && !rejected.has(m.mediaKey);
+      // The rated or removed image may leave the filtered list, so step on to a neighbor.
+      return <PreviewActions key={key} media={m} busy={!!busyKey} isGuide={isGuide} guideFull={guideCount >= MAX_CAST_GUIDES} guideBlocked={rejected.has(m.mediaKey)}
+        onRate={async (status) => { if (await save(m, rateReview(m, status))) goTo(nextKey ?? prevKey); }}
+        onGuide={() => save(m, { guide: !isGuide })}
+        onSetPortrait={onSetPortrait}
+        onDetach={onDetach ? async () => {
+          goTo(nextKey ?? prevKey);
+          // A visual attached as both primary and reference leaves the record entirely.
+          for (const a of groups.get(`image:${key}`) || [m]) await onDetach(a.mediaKey, a.kind);
+        } : undefined} />;
     },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [sequenceKeys.join('|'), media, busyKey, readOnly]);
+  }), [sequenceKeys.join('|'), media, busyKey, readOnly, onSetPortrait, onDetach]);
   useCatalogPreviewSequence(sequence);
 
   const save = async (m, patch) => {

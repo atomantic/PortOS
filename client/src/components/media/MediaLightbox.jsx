@@ -121,6 +121,11 @@ function describeImageExecution(item) {
 // `{ look, onSave, name }` — lets the pane read and write the hosting music
 // video project's finishing look.
 //
+// pageActions — optional node with the hosting page's own controls for this
+// item (a catalog reference's rating, guide and remove buttons). It sits at the
+// top of the details pane so page-specific actions stay in place beside the
+// standard ones.
+//
 // variantGroup — optional `{ active, group: [{ label, item }, ...] }` shape
 // from `computeImageVariantGroup` (in `./variants.js`). When present, the
 // SettingsPane renders a segmented control to swap between the original
@@ -153,6 +158,7 @@ export default function MediaLightbox({
   onSelectVariant,
   onFilmLookComplete,
   filmLookProject = null,
+  pageActions = null,
 }) {
   const [fullScreen, setFullScreen] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
@@ -385,7 +391,7 @@ export default function MediaLightbox({
       ref={overlayRef}
       role="dialog"
       aria-modal="true"
-      aria-label={`Media viewer — ${item.filename || item.key || 'item'}`}
+      aria-label={item.label || `Media viewer — ${item.filename || item.key || 'item'}`}
       className={`fixed inset-0 z-50 bg-black/90 flex items-center justify-center ${overlayPad}`}
       onClick={onClose}
       // The backdrop itself carries no tabIndex (it isn't a tab stop) and its
@@ -470,7 +476,7 @@ export default function MediaLightbox({
               ? <p className="p-4 text-sm text-gray-400" role={filmLook.sourceError ? 'alert' : 'status'}>{filmLook.sourceError || 'Loading ungraded source…'}</p>
               : <FilmLookPreview src={filmLook.src} alt={item.prompt} look={filmLook.look} className="flex min-h-0 items-center justify-center" imgClassName={fullScreen ? imgMax : FILM_LOOK_IMG_MAX} />
           ) : (
-            <MediaImage src={item.previewUrl} alt={item.prompt} className={`${imgMax} object-contain`} placeholderClassName="w-full h-full" />
+            <MediaImage src={item.previewUrl} fallbackSrc={item.fallbackUrl} alt={item.label || item.prompt} className={`${imgMax} object-contain`} placeholderClassName="w-full h-full" />
           )}
           {/* Solid white pill keeps it readable against black letterbox bars. */}
           <button
@@ -516,7 +522,8 @@ export default function MediaLightbox({
             // hydrated (#8292) — refining or editing it would treat the
             // truncation as the saved prompt.
             onRefine={item.compact ? undefined : () => setRefineOpen(true)}
-            onPromptFrom={() => setPromptFromOpen(true)}
+            onPromptFrom={item.filename || item.id ? () => setPromptFromOpen(true) : undefined}
+            pageActions={pageActions}
             annotation={annotation}
             onAnnotationChange={onAnnotationChange}
             onPromptChange={item.compact ? undefined : onPromptChange}
@@ -567,7 +574,7 @@ function SettingsPane({
   onClose, onRemix, onSendToImage, onSendToVideo, onSendTo3d, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
   copy, onRefine, onPromptFrom,
   annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead, onTrimStart, videoRef,
-  variantGroup, onSelectVariant, onFilmLook,
+  variantGroup, onSelectVariant, onFilmLook, pageActions,
 }) {
   const [posterSaving, setPosterSaving] = useState(false);
   const [posterError, setPosterError] = useState(null);
@@ -726,6 +733,7 @@ function SettingsPane({
           consume the entire editing area. Roomy viewports keep actions fixed. */}
       <div className="min-h-0 flex-1 overflow-y-auto roomy-viewport:overflow-hidden roomy-viewport:flex roomy-viewport:flex-col">
       <div className="p-3 space-y-3 text-xs roomy-viewport:min-h-0 roomy-viewport:flex-1 roomy-viewport:overflow-y-auto">
+        {pageActions && <div data-testid="page-actions">{pageActions}</div>}
         {item.compact ? (
           <div>
             <span className="block mb-1 text-gray-500 uppercase tracking-wide">Prompt</span>

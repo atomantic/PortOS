@@ -124,6 +124,9 @@ vi.mock('../components/pipeline/MediaJobThumb', async () => {
   return { default: MockMediaJobThumb };
 });
 vi.mock('../services/apiImageVideo', () => ({
+  listImageVariants: vi.fn(async () => ({ items: [] })),
+  getGalleryImages: vi.fn(async () => []),
+  listMediaGalleryPage: vi.fn(async () => ({ items: [] })),
   listImageGalleryPage: vi.fn(async () => ({ items: [], total: 0, offset: 0, limit: 60 })),
   // Echo the request as the "sent" prompt, with its declared additions as chips.
   previewImagePrompt: vi.fn(async (body) => ({
@@ -133,6 +136,11 @@ vi.mock('../services/apiImageVideo', () => ({
   })),
 }));
 vi.mock('../components/IngredientPicker', () => ({ default: () => null }));
+vi.mock('../hooks/useMediaAnnotations', () => ({ useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: vi.fn() }) }));
+vi.mock('../components/media/AddToCollectionMenu', () => ({ default: () => null }));
+vi.mock('../components/media/PinToMoodBoardMenu', () => ({ default: () => null }));
+vi.mock('../components/media/PromptRefineModal', () => ({ default: () => null }));
+vi.mock('../components/media/PromptFromMedia', () => ({ PromptFromMediaModal: () => null }));
 vi.mock('../components/MediaImage', () => ({ default: ({ src, alt, fallbackSrc }) => <img src={src} alt={alt} data-fallback-src={fallbackSrc} /> }));
 vi.mock('../components/loraTraining/CharacterLoraChip', () => ({ default: () => null }));
 vi.mock('../components/TagPicker', () => ({
@@ -1063,7 +1071,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     fireEvent.click(enlargeBtn);
     const dialog = await screen.findByRole('dialog', { name: 'Canonical reference 1' });
     expect(dialog).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Close image preview' }));
+    fireEvent.click(within(dialog).getAllByRole('button', { name: 'Close' })[0]);
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(within(references).getByText('Will be sent to the model')).toBeInTheDocument();
     expect(within(references).getByText(/Not sent.*limit/)).toBeInTheDocument();
@@ -1082,9 +1090,10 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     await renderPage(route);
     expect(screen.getByAltText('Example subject cover')).toHaveAttribute('src', '/data/image-thumbnails/cover.webp');
     fireEvent.click(screen.getByRole('button', { name: 'Enlarge Example subject cover' }));
-    const preview = screen.getByRole('dialog', { name: 'Example subject cover' });
+    const preview = await screen.findByRole('dialog', { name: 'Example subject cover' });
+    await act(async () => {});
     expect(within(preview).getByAltText('Example subject cover')).toHaveAttribute('data-fallback-src', '/data/image-refs/cover.png');
-    fireEvent.click(within(preview).getByRole('button', { name: 'Close image preview' }));
+    fireEvent.click(within(preview).getAllByRole('button', { name: 'Close' })[0]);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(updateCatalogIngredient).not.toHaveBeenCalled();
   });
@@ -1189,8 +1198,9 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     getCatalogIngredientDetails.mockResolvedValue(detailsOf({ ...HERO, payload: { imageRefs: ['one.png', 'two.png'] } }));
     const { router } = await renderPage('/casting/cat-chr-hero/references');
     fireEvent.click(screen.getAllByRole('button', { name: 'Enlarge Example Hero canon reference' })[0]);
-    expect(new URLSearchParams(router.state.location.search).get('preview')).toBe('catalog-image:images:one.png');
-    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(new URLSearchParams(router.state.location.search).get('preview')).toBe('image:one.png');
+    expect(await screen.findAllByRole('dialog')).toHaveLength(1);
+    await act(async () => {});
     await act(async () => { await router.navigate(-1); });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/casting/cat-chr-hero/references');
@@ -1199,7 +1209,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
   it('opens a direct image link beyond loaded results and preserves its static mount', async () => {
     getCatalogIngredientDetails.mockResolvedValue(detailsOf({ ...HERO, payload: {} }));
     await renderPage('/casting/cat-chr-hero/references?preview=catalog-image%3Aimage-refs%3Aunlisted.png');
-    const dialog = await screen.findByRole('dialog', { name: 'Example Hero image unlisted.png' });
+    const dialog = await screen.findByRole('dialog');
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
     expect(within(dialog).getByRole('img')).toHaveAttribute('src', '/data/image-refs/unlisted.png');
     expect(within(dialog).getByRole('img')).toHaveAttribute('data-fallback-src', '/data/images/unlisted.png');
