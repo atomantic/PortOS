@@ -1637,13 +1637,19 @@ describe('durable completion replay', () => {
     settled.result.taskOutcome = { status: 'completed' };
     settled.result.success = true;
     settled.result.cleanupPending = false;
-    readBranchCompletionPolicies.mockResolvedValue([...ineligible, receipt('write-failed'), receipt('settle-next'), settled]);
+    const tracking = await import('./agentRunTracking.js');
+    const needsRun = vi.spyOn(tracking, 'agentRunDeliveryNeedsReconciliation')
+      .mockImplementation(async agent => agent.id === settled.id);
+    const alreadyRepaired = Array.from({ length: 12 }, (_, index) => ({ ...settled, id: `repaired-${index}` }));
+    readBranchCompletionPolicies.mockResolvedValue([...ineligible, receipt('write-failed'), receipt('settle-next'), ...alreadyRepaired, settled]);
     recordRepoStateVerification.mockRejectedValueOnce(new Error('fixture receipt write failed'));
     expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 0 });
     expect(recordRepoStateVerification.mock.calls).toEqual([
       ['write-failed', { status: 'completed' }], ['settle-next', { status: 'completed' }],
       ['settled-run-projection', { status: 'completed' }],
     ]);
+    expect(needsRun).toHaveBeenCalledTimes(13);
+    needsRun.mockRestore();
     expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('Deferred delivery settlement retained'));
     expect(addTask).not.toHaveBeenCalled();
   });

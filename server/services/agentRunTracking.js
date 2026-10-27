@@ -102,20 +102,32 @@ export async function createAgentRun({ agentId, task, model, provider, workspace
 /** Carry a verified deferred-cleanup verdict into the original durable run.
  * This changes delivery evaluation only; execution timestamps and usage stay put.
  */
-export async function reconcileAgentRunDelivery(agent) {
+async function readDeferredDeliveryRun(agent) {
   const runId = agent.metadata?.runId;
   const result = agent.result;
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(runId || '') || result?.success !== true || result.executionSuccess !== true
     || result.cleanupPending !== false || result.taskOutcome?.status !== 'completed'
-    || result.deferredDeliveryOutcome?.recovery?.mode !== 'cleanup') return false;
-  const path = join(RUNS_DIR, runId, 'metadata.json');
-  const { ok, value: run } = await readJSONFileStrict(path);
+    || result.deferredDeliveryOutcome?.recovery?.mode !== 'cleanup') return null;
+  const { ok, value: run } = await readJSONFileStrict(join(RUNS_DIR, runId, 'metadata.json'));
   if (!ok || !run || run.id !== runId || run.agentId !== agent.id || run.taskId !== agent.taskId || !run.endTime
-    || run.executionSuccess !== true || run.executionInterruption) return false;
+    || run.executionSuccess !== true || run.executionInterruption) return null;
+  return run;
+}
+
+const isDeferredRun = run => run?.taskOutcome?.status === 'incomplete' && run.taskOutcome.recovery?.mode === 'cleanup';
+
+/** Select only stale run projections before applying the bounded replay budget. */
+export async function agentRunDeliveryNeedsReconciliation(agent) {
+  return isDeferredRun(await readDeferredDeliveryRun(agent));
+}
+
+export async function reconcileAgentRunDelivery(agent) {
+  const run = await readDeferredDeliveryRun(agent);
+  if (!run) return false;
   if (run.success === true && run.taskOutcome?.status === 'completed') return true;
-  if (run.taskOutcome?.status !== 'incomplete' || run.taskOutcome.recovery?.mode !== 'cleanup') return false;
-  await withBackupAssetPublication(() => atomicWrite(path, { ...run, success: true,
-    deferredDeliveryOutcome: run.taskOutcome, taskOutcome: result.taskOutcome,
+  if (!isDeferredRun(run)) return false;
+  await withBackupAssetPublication(() => atomicWrite(join(RUNS_DIR, run.id, 'metadata.json'), { ...run, success: true,
+    deferredDeliveryOutcome: run.taskOutcome, taskOutcome: agent.result.taskOutcome,
     error: null, errorDetails: null, errorCategory: null, suggestedFix: null }));
   return true;
 }

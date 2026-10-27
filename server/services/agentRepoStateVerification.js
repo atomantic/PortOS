@@ -915,12 +915,18 @@ async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false } = {}
     // domain verdict pending. Replay the existing writer, without another probe,
     // task, completion event or provider budget expenditure.
     const { recordRepoStateVerification, isSettleableCompletionReceipt } = await import('./cosAgentLifecycle.js');
-    for (const agent of agents.filter(row => {
+    const { agentRunDeliveryNeedsReconciliation } = await import('./agentRunTracking.js');
+    const candidates = agents.filter(row => {
       const result = row.result?.deferredDeliveryOutcome ? { ...row.result, cleanupPending: true,
         taskOutcome: row.result.deferredDeliveryOutcome } : row.result;
       return row.status === 'completed' && isSettleableCompletionReceipt({ ...row, result }, row.metadata || {});
     }).sort((a, b) => Number(a.result?.success === true) - Number(b.result?.success === true)
-      || (b.completedAt || '').localeCompare(a.completedAt || '')).slice(0, COMPLETION_RECOVERY_BATCH_SIZE)) {
+      || (b.completedAt || '').localeCompare(a.completedAt || ''));
+    let replayed = 0;
+    for (const agent of candidates) {
+      if (replayed >= COMPLETION_RECOVERY_BATCH_SIZE) break;
+      if (agent.result?.success === true && !await agentRunDeliveryNeedsReconciliation(agent)) continue;
+      replayed++;
       await recordRepoStateVerification(agent.id || agent.agentId, agent.metadata.repoStateVerification).catch(error => {
         emitLog('warn', `Deferred delivery settlement retained: ${error.code || 'receipt-unavailable'}`);
       });

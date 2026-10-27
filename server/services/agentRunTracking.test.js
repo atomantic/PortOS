@@ -279,15 +279,17 @@ describe('verified deferred cleanup run reconciliation', () => {
       atomicWrite }));
     vi.doMock('../lib/jsonIo.js', async originalModule => ({ ...(await originalModule()),
       readJSONFileStrict: vi.fn(async () => ({ ok: true, value: saved })) }));
-    const { reconcileAgentRunDelivery } = await import('./agentRunTracking.js');
+    const { reconcileAgentRunDelivery, agentRunDeliveryNeedsReconciliation } = await import('./agentRunTracking.js');
     const agent = { id: original.agentId, taskId: original.taskId, metadata: { runId: original.id },
       result: { success: true, executionSuccess: true, cleanupPending: false,
         deferredDeliveryOutcome: original.taskOutcome, taskOutcome: { status: 'completed', reason: 'verified cleanup' } } };
+    expect(await agentRunDeliveryNeedsReconciliation(agent)).toBe(true);
     expect(await reconcileAgentRunDelivery(agent)).toBe(true);
     expect(saved).toMatchObject({ success: true, taskOutcome: { status: 'completed' }, error: null,
       endTime: original.endTime, duration: 1234, usageReconciled: true, deferredDeliveryOutcome: original.taskOutcome });
     expect(await reconcileAgentRunDelivery(agent)).toBe(true);
     expect(atomicWrite).toHaveBeenCalledTimes(1);
+    expect(await agentRunDeliveryNeedsReconciliation(agent)).toBe(false);
     for (const patch of [{ agentId: 'other' }, { taskId: 'other' }, { executionSuccess: false },
       { executionInterruption: { category: 'content-refusal' } }, { taskOutcome: { status: 'blocked' } }]) {
       saved = { ...original, ...patch };
