@@ -9,7 +9,7 @@ describe('greybox starters', () => {
     for (const { scene } of GREYBOX_STARTERS) {
       const parsed = greyboxSceneSchema.parse(scene);
       expect(parsed).toEqual(scene);
-      expect(parsed.parts.length).toBeLessThan(40);
+      expect(parsed.parts.length).toBeLessThan(60);
       expect(parsed.shots.length).toBeGreaterThan(0);
       for (const key of ['parts', 'zones', 'landmarks', 'anchors', 'shots']) {
         expect(new Set(parsed[key].map(({ id }) => id)).size).toBe(parsed[key].length);

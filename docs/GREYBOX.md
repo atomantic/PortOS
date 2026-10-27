@@ -12,9 +12,19 @@ Open an Environment and select its **Greybox** tab. When there is no saved layou
 choose a card under **Start from a starter**. One click saves the scene and opens
 its first camera shot:
 
-- **Roller rink**: a 30 × 14 m oval skate floor, perimeter rails, a DJ booth, snack
-  bar, bench seating and six figure anchors. Includes wide, booth, rail-level and
-  high-angle shots. Skate, seating and service areas have different colours.
+- **Roller rink**: a hall modelled on the plan of Southgate Roller Rink in Seattle,
+  with north at −Z and east at +X. Skaters enter through doors on the north-west
+  into a small lobby with check-in and video games. From there a 1.7 m walkway,
+  room for two people to pass, runs east between the north wall and the rink. The
+  36 × 23 m rink meets the south and west walls, and its east wall runs straight to
+  the south wall; the sound booth looks onto it through a window in the west wall.
+  A regulation WFTDA flat track for roller derby, with its infield, jammer line and
+  pivot line, sits in the middle of the rink with room for the 10 ft safety zone.
+  A knee-high rink wall on the north and east sides has two entrances: one by the
+  door and one at the far end beside skate rental. The east side runs, north to
+  south, restrooms, skate rental, food and tables. Eleven figure anchors and nine
+  shots cover the wide view, derby track, entrance, walkway, rail level, booth
+  window, view from the booth, skate rental and a high angle.
 - **Plain room**: a floor and three walls, open at the front for the camera, with
   a subject anchor and wide and medium shots.
 - **Outdoor plaza**: paving, a fountain, benches, planters and two visitor anchors,
