@@ -396,7 +396,8 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(state.result).toEqual({ success: false, executionSuccess: true, cleanupPending: true });
   });
 
-  it.each(['verified', 'startup', 'duplicate', 'missing-receipt', 'wrong-generation', 'foreign-instance', 'replaced-repository', 'receipt-raced', 'live-owner', 'live-path', 'live-ref'])(
+  it.each(['verified', 'startup', 'duplicate', 'missing-receipt', 'wrong-generation', 'foreign-instance', 'replaced-repository', 'receipt-raced', 'live-owner', 'live-path', 'live-ref',
+    'moved-alias', 'alias-wrong-head', 'alias-wrong-generation', 'alias-wrong-branch', 'alias-unsettled', 'alias-live-path'])(
     'settles only physical cleanup from its own seed and canonical receipt: %s', async scenario => {
       const physical = { dev: '1', ino: '2', birthtimeNs: '3' };
       const seed = { version: 1, agentId: 'unknown-source', startedAt: CREATED_AT,
@@ -411,6 +412,16 @@ describe('verifyAgentRepoState — clean runs', () => {
       const checkoutIdentity = retirementCheckoutIdentityFromPointer(physical);
       const receipt = { path: WORKTREE, branch: BRANCH, head: HEAD, checkoutIdentity,
         branchDeleted: true, retiredAt: '2026-01-01T00:02:00.000Z', archiveDir: null };
+      if (scenario === 'moved-alias' || scenario.startsWith('alias-')) {
+        receipt.path = `${WORKTREE}-successor`;
+        receipt.settledObservations = [{ observation: { path: WORKTREE, branch: BRANCH, head: HEAD, checkoutIdentity },
+          settledAt: '2026-01-01T00:02:01.000Z' }];
+        const alias = receipt.settledObservations[0];
+        if (scenario === 'alias-wrong-head') alias.observation.head = 'c'.repeat(40);
+        if (scenario === 'alias-wrong-generation') alias.observation.checkoutIdentity = 'f'.repeat(64);
+        if (scenario === 'alias-wrong-branch') alias.observation.branch = 'other-branch';
+        if (scenario === 'alias-unsettled') delete alias.settledAt;
+      }
       if (scenario === 'wrong-generation') receipt.checkoutIdentity = 'f'.repeat(64);
       if (scenario === 'foreign-instance') state.metadata.instanceId = 'another-install';
       loadSchedule.mockResolvedValue({ executions: { 'task:branch-reconcile': { perApp: { 'demo-app': {
@@ -420,7 +431,7 @@ describe('verifyAgentRepoState — clean runs', () => {
         recheck: async () => scenario !== 'receipt-raced' });
       if (scenario === 'live-owner') readClaimOwnershipAgents.mockResolvedValue([{ status: 'running', metadata: {
         sourceWorkspace: '/repo', worktreeBranch: BRANCH } }]);
-      if (scenario === 'live-path') readCheckoutPathPresence.mockResolvedValue(true);
+      if (scenario === 'live-path' || scenario === 'alias-live-path') readCheckoutPathPresence.mockResolvedValue(true);
       if (scenario === 'live-ref') readLocalBranchPresence.mockResolvedValue(true);
       getAgentRecord.mockResolvedValue(state); readBranchCompletionPolicies.mockResolvedValue([state]);
       if (scenario === 'startup' || scenario === 'duplicate') {
@@ -446,10 +457,12 @@ describe('verifyAgentRepoState — clean runs', () => {
         const events = new EventEmitter(), unbind = bindCompletionRetirementEvents(events);
         try { await events.listeners('checkout:retired')[0]({ appId: 'demo-app', ...receipt }); } finally { unbind(); }
       }
-      const settled = ['verified', 'startup', 'duplicate'].includes(scenario);
+      const settled = ['verified', 'startup', 'duplicate', 'moved-alias'].includes(scenario);
       expect(recordSeededCheckoutRetirement).toHaveBeenCalledTimes(settled ? 1 : 0);
       if (settled) expect(recordSeededCheckoutRetirement).toHaveBeenCalledWith(state.id, state, {
         checkoutIdentity, retiredHead: HEAD, receiptDigest: 'a'.repeat(64) });
+      if (scenario === 'moved-alias') expect(findMissingCheckoutPreservation).toHaveBeenCalledWith({ repoPath: '/repo',
+        release: { path: receipt.path, branch: BRANCH, head: HEAD, createdAt: seed.seededAt, checkoutIdentity } });
       expect(state.metadata.completedCheckouts).toEqual([]);
       expect(state.result).toEqual({ success: false, validationPassed: false, taskOutcome: { status: 'blocked' } });
       expect(addTask).not.toHaveBeenCalled(); expect(updateTask).not.toHaveBeenCalled();

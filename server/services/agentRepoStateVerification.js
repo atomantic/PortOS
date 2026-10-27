@@ -474,10 +474,16 @@ async function ownSeedRetirementContext() {
     for (const row of [...(outcome?.retired || []), ...Object.values(outcome?.retirementReceiptEvidence || {})]) {
       if (row.branchDeleted !== true || row.archiveDir != null
         || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(row.head || '') || !Number.isFinite(Date.parse(row.retiredAt))) continue;
-      const key = JSON.stringify([row.path, row.branch, row.checkoutIdentity]);
-      const matches = receipts.get(key) || new Map();
-      matches.set(JSON.stringify([row.head, row.retiredAt]), row);
-      receipts.set(key, matches);
+      const aliases = (Array.isArray(row.settledObservations) ? row.settledObservations : []).filter(entry => entry?.observation?.head === row.head
+        && entry.observation.branch === row.branch && entry.observation.checkoutIdentity === row.checkoutIdentity
+        && typeof entry.observation.path === 'string' && entry.observation.path
+        && Number.isFinite(Date.parse(entry.settledAt)) && Date.parse(entry.settledAt) >= Date.parse(row.retiredAt));
+      for (const path of new Set([row.path, ...aliases.map(entry => entry.observation.path)])) {
+        const key = JSON.stringify([path, row.branch, row.checkoutIdentity]);
+        const matches = receipts.get(key) || new Map();
+        matches.set(JSON.stringify([row.path, row.head, row.retiredAt]), row);
+        receipts.set(key, matches);
+      }
     }
   }
   return { instance, receipts };
@@ -516,7 +522,7 @@ async function settleOwnSeedRetirement(agent, context) {
   if (!await repositoryCurrent()) return false;
   const { findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
   const preservation = await findMissingCheckoutPreservation({ repoPath: seed.repoPath,
-    release: { path: seed.path, branch: seed.branch, head: receipt.head, createdAt: seed.seededAt, checkoutIdentity } }).catch(() => null);
+    release: { path: receipt.path, branch: seed.branch, head: receipt.head, createdAt: seed.seededAt, checkoutIdentity } }).catch(() => null);
   if (!preservation || preservation.kind !== 'service-retirement-receipt') return false;
   const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
   return withClaimOwnershipLock(async () => {
