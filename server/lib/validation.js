@@ -3027,6 +3027,16 @@ export const cosAgentFeedbackBodySchema = z.object({
 export const cosAgentBtwBodySchema = z.object({ message: z.string().trim().min(1).max(5000) });
 export const cosTaskReorderBodySchema = z.object({ taskIds: z.array(nonEmptyString) });
 export const cosScheduleTargetBodySchema = z.object({ taskType: nonEmptyString, appId: nullishString });
+export const cosScheduleTriggerBodySchema = z.object({
+  taskType: nonEmptyString,
+  appId: nullishString,
+  provider: nonEmptyString.optional(),
+  model: nonEmptyString.optional(),
+  effort: z.string().trim().nullable().optional(),
+  executionOptions: z.record(z.unknown()).optional(),
+  targetModels: z.array(nonEmptyString).nullable().optional(),
+  targetPullRequest: z.union([z.number(), z.string()]).nullable().optional(),
+});
 // A scoped release names the exact inventory row the operator saw (#12002).
 export const heldCheckoutRetireBodySchema = z.object({
   checkoutIdentity: z.string().regex(/^[a-f0-9]{64}$/).optional(),

@@ -28,7 +28,9 @@ it('compares generations and vendors together with quick model and effort toggle
   fireEvent.click(screen.getByRole('button', { name: '✓ high' }));
   expect(screen.getByTestId('scatter-example:gpt-6-luna')).toHaveAttribute('data-values', '[[0.2,21]]');
   expect(screen.queryByTestId('scatter-example:claude-opus-5-5')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: /Research gaps/ }));
+  fireEvent.click(screen.getByRole('button', { name: /Research all gaps/ }));
+  expect(screen.getByText('Research configuration')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /Research selected/ }));
   expect(screen.getByText('Research configuration')).toBeTruthy();
 });
 
