@@ -36,7 +36,7 @@ const publicAsset = (path, role, bindingId, required = false) => ({
 });
 const adapterDigestCache = new Map();
 
-const adapterDigest = async (path, hashFile) => {
+export const fableLoomAdapterDigest = async (path, hashFile = sha256File) => {
   if (hashFile !== sha256File) return hashFile(path);
   const info = await stat(path);
   const key = `${info.size}:${info.mtimeMs}`;
@@ -226,7 +226,7 @@ const resolveCharacterAdapters = async ({ bindings, capability, locked, resolveL
   const adapters = [];
   for (const lora of acceptedLoras) {
     const path = join(PATHS.loras, basename(lora.filename));
-    const sha256 = await adapterDigest(path, hashFile).catch(() => null);
+    const sha256 = await fableLoomAdapterDigest(path, hashFile).catch(() => null);
     adapters.push({
       characterId: lora.character?.entryId || null,
       filename: basename(lora.filename), scale: lora.scale, sha256,

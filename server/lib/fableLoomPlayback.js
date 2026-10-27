@@ -9,6 +9,8 @@
 
 import { LOOM_LIMITS } from './fableLoomLimits.js';
 import { isNonBlankStr, trimTo } from './textUtils.js';
+import { FILM_LOOK_CONTROLS, FILM_LOOK_PRESET_IDS } from './filmLook.js';
+import { PHOTOGRAPHY_FIELDS, VISUAL_PROFILE_TEXT_MAX } from './universeVisualProfile.js';
 
 // Version of docs/features/fableloom-runtime-v1.md, independent of package schema versions.
 export const FABLELOOM_RUNTIME_VERSION = '1.0.0';
@@ -64,6 +66,76 @@ const SAFE_PRODUCTION_PARAMETER_KEYS = new Set([
   'seed', 'imageStrength', 'quantize', 'effort', 'mode', 'videoMode',
   'aspectRatio', 'disableAudio', 'tiling',
 ]);
+const REPLAY_INPUT_ROOTS = new Set(['images', 'imageRefs', 'visualTemplates', 'imageCleanTmp', 'federatedMediaInbox']);
+const REPLAY_ADAPTER_SOURCES = new Set(['Canon adapter', 'Request adapter']);
+const REPLAY_PROMPT_MAX = 131072;
+const has = (value, key) => Object.hasOwn(value, key);
+const plain = value => value && typeof value === 'object' && !Array.isArray(value);
+const knownKeys = (value, keys) => Object.keys(value).every(key => keys.includes(key));
+const safeFilename = value => typeof value === 'string' && value.length > 0 && value.length <= 256
+  && value !== '.' && value !== '..' && !/[\u0000-\u001f\u007f/\\]/.test(value);
+const safeRelativePath = value => typeof value === 'string' && value.length > 0 && value.length <= 1024
+  && !/[\u0000-\u001f\u007f\\:]/.test(value) && value.split('/').every(part => part && part !== '.' && part !== '..');
+const validDigest = value => typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
+const exactPrompt = value => typeof value === 'string' && value.length <= REPLAY_PROMPT_MAX && !value.includes('\0');
+
+// Unlike normalization for a new request, persisted replay evidence must not
+// turn malformed values into defaults or clamp them to a different input.
+function validReplayProfile(profile) {
+  if (profile === null) return true;
+  if (!plain(profile) || profile.version !== 1 || !knownKeys(profile, ['version', 'generation', 'finishing'])) return false;
+  const fields = PHOTOGRAPHY_FIELDS.map(field => field.id).concat('avoid');
+  if (profile.generation !== undefined && (!plain(profile.generation)
+    || !knownKeys(profile.generation, ['enabled', ...fields])
+    || (has(profile.generation, 'enabled') && typeof profile.generation.enabled !== 'boolean')
+    || fields.some(key => has(profile.generation, key) && (typeof profile.generation[key] !== 'string'
+      || profile.generation[key].length > VISUAL_PROFILE_TEXT_MAX || profile.generation[key].includes('\0'))))) return false;
+  const finishing = profile.finishing;
+  if (finishing === undefined) return true;
+  if (!plain(finishing) || !knownKeys(finishing, ['mode', 'look', 'colorAmount', 'textureAmount'])
+    || (has(finishing, 'mode') && !['off', 'preview', 'save'].includes(finishing.mode))
+    || ['colorAmount', 'textureAmount'].some(key => has(finishing, key) && (!Number.isFinite(finishing[key]) || finishing[key] < 0 || finishing[key] > 1))) return false;
+  const look = finishing.look;
+  if (look == null) return true;
+  if (!plain(look) || !knownKeys(look, ['version', 'preset', ...FILM_LOOK_CONTROLS.map(control => control.id)])
+    || (has(look, 'version') && ![1, 2].includes(look.version))
+    || (has(look, 'preset') && ![...FILM_LOOK_PRESET_IDS, 'custom'].includes(look.preset))) return false;
+  return FILM_LOOK_CONTROLS.every(control => {
+    if (!has(look, control.id)) return true;
+    const value = look[control.id];
+    if (control.type === 'color') return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
+    if (control.type === 'toggle') return typeof value === 'boolean';
+    return Number.isFinite(value) && value >= control.min && value <= control.max;
+  });
+}
+
+function validReplayEvidence(raw) {
+  if (['authoredPrompt', 'authoredNegativePrompt', 'renderedPrompt', 'compiledPrompt', 'compiledNegativePrompt']
+    .some(key => has(raw, key) && !exactPrompt(raw[key]))) return false;
+  if (['visualProfile', 'visualProfileOverride'].some(key => has(raw, key) && !validReplayProfile(raw[key]))) return false;
+  const hasReplay = ['authoredPrompt', 'authoredNegativePrompt', 'renderedPrompt', 'visualProfile', 'visualProfileOverride'].some(key => has(raw, key))
+    || (Array.isArray(raw.assets) && raw.assets.some(item => plain(item) && has(item, 'inputRoot')))
+    || (Array.isArray(raw.adapters) && raw.adapters.some(item => plain(item) && has(item, 'source')));
+  if (hasReplay && ((Array.isArray(raw.assets) && raw.assets.length > LOOM_LIMITS.VISUAL_PROVENANCE_ASSETS_MAX)
+    || (Array.isArray(raw.adapters) && raw.adapters.length > 8)
+    || (Array.isArray(raw.referenceImageStrengths) && (raw.referenceImageStrengths.length > LOOM_LIMITS.VISUAL_PROVENANCE_ASSETS_MAX
+      || raw.referenceImageStrengths.some(value => !Number.isFinite(value) || value < 0 || value > 1))))) return false;
+  const invalidAsset = (Array.isArray(raw.assets) ? raw.assets : []).some(item => {
+    if (!plain(item) || !['request-init', 'request-reference'].includes(item.role)) return false;
+    if (!['inputRoot', 'sha256', 'strength'].some(key => has(item, key))) return false; // legacy incomplete record
+    return !safeFilename(item.filename) || !REPLAY_INPUT_ROOTS.has(item.inputRoot) || !validDigest(item.sha256)
+      || (has(item, 'strength') && (item.role !== 'request-init' || !Number.isFinite(item.strength) || item.strength < 0 || item.strength > 1));
+  });
+  const invalidAdapter = (Array.isArray(raw.adapters) ? raw.adapters : []).some(item => {
+    if (!plain(item) || (!has(item, 'source') && !has(item, 'relativePath'))) return false;
+    const needsPath = item.source === 'Request adapter' || has(item, 'relativePath');
+    return !REPLAY_ADAPTER_SOURCES.has(item.source) || !safeFilename(item.filename)
+      || (needsPath && (!safeRelativePath(item.relativePath) || item.relativePath.split('/').at(-1) !== item.filename))
+      || !validDigest(item.sha256)
+      || !Number.isFinite(item.scale) || item.scale < 0 || item.scale > 2;
+  });
+  return !invalidAsset && !invalidAdapter;
+}
 
 /**
  * Sanitize an audio interval (dialogue, music, or effect).
@@ -152,8 +224,9 @@ export const sanitizeAudioOccupancy = validateAudioOccupancy;
  * sanitizer can safely handle one manifest per rendered clip without a
  * records-module import cycle.
  */
-export function sanitizeVisualConditioning(raw) {
+export function sanitizeVisualConditioning(raw, { legacyV11 = false } = {}) {
   if (!raw || typeof raw !== 'object' || raw.version !== 1) return null;
+  if (!legacyV11 && !validReplayEvidence(raw)) return null;
   const list = (value, max) => (Array.isArray(value) ? value.slice(0, max) : []);
   const nullableRef = (value) => (isNonBlankStr(value) ? trimTo(value, LOOM_LIMITS.REF_ID_MAX) : null);
   const capability = raw.capability && typeof raw.capability === 'object' ? raw.capability : {};
@@ -222,14 +295,19 @@ export function sanitizeVisualConditioning(raw) {
       .filter((item) => item && typeof item === 'object')
       .map((item) => ({
         role: trimTo(item.role, 64), bindingId: nullableRef(item.bindingId),
-        required: item.required === true, filename: trimTo(item.filename, 256),
+        required: item.required === true, filename: !legacyV11 && ['request-init', 'request-reference'].includes(item.role) && safeFilename(item.filename) ? item.filename : trimTo(item.filename, 256),
+        ...(!legacyV11 && ['request-init', 'request-reference'].includes(item.role) && REPLAY_INPUT_ROOTS.has(item.inputRoot) && validDigest(item.sha256) ? { inputRoot: item.inputRoot, sha256: item.sha256,
+          ...(has(item, 'strength') ? { strength: item.strength } : {}) } : {}),
       })),
     adapters: list(raw.adapters, 8)
       .filter((item) => item && typeof item === 'object')
       .map((item) => ({
-        characterId: nullableRef(item.characterId), filename: trimTo(item.filename, 256),
+        characterId: nullableRef(item.characterId), filename: !legacyV11 && REPLAY_ADAPTER_SOURCES.has(item.source) ? item.filename : trimTo(item.filename, 256),
         scale: Number.isFinite(item.scale) ? Math.max(0, Math.min(2, item.scale)) : 1,
         sha256: typeof item.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(item.sha256) ? item.sha256 : null,
+        ...(!legacyV11 && REPLAY_ADAPTER_SOURCES.has(item.source) ? {
+          source: item.source, ...(has(item, 'relativePath') ? { relativePath: item.relativePath } : {}),
+        } : {}),
       })),
     omitted: list(raw.omitted, LOOM_LIMITS.VISUAL_PROVENANCE_MESSAGES_MAX)
       .filter((item) => item && typeof item === 'object')
@@ -242,8 +320,10 @@ export function sanitizeVisualConditioning(raw) {
       .map((item) => trimTo(item, LOOM_LIMITS.VISUAL_NOTE_MAX)).filter(Boolean)
       .slice(0, LOOM_LIMITS.VISUAL_PROVENANCE_MESSAGES_MAX),
     temporalSourceNodeId: nullableRef(raw.temporalSourceNodeId),
-    ...(typeof raw.compiledPrompt === 'string' ? { compiledPrompt: trimTo(raw.compiledPrompt, 8000) } : {}),
-    ...(typeof raw.compiledNegativePrompt === 'string' ? { compiledNegativePrompt: trimTo(raw.compiledNegativePrompt, 8000) } : {}),
+    ...(typeof raw.compiledPrompt === 'string' ? { compiledPrompt: legacyV11 ? trimTo(raw.compiledPrompt, 8000) : raw.compiledPrompt } : {}),
+    ...(typeof raw.compiledNegativePrompt === 'string' ? { compiledNegativePrompt: legacyV11 ? trimTo(raw.compiledNegativePrompt, 8000) : raw.compiledNegativePrompt } : {}),
+    ...(!legacyV11 ? Object.fromEntries(['authoredPrompt', 'authoredNegativePrompt', 'renderedPrompt', 'visualProfile', 'visualProfileOverride']
+      .filter(key => has(raw, key)).map(key => [key, raw[key]])) : {}),
     referenceImageStrengths: (Array.isArray(raw.referenceImageStrengths) ? raw.referenceImageStrengths : [])
       .filter((value) => Number.isFinite(value))
       .map((value) => Math.max(0, Math.min(1, value)))

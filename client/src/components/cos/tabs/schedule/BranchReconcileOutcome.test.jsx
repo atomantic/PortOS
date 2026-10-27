@@ -24,6 +24,16 @@ function open() {
 describe('BranchReconcileOutcome checkout retirement', () => {
   beforeEach(() => { retire.mockReset(); prepare.mockReset(); refresh.mockReset(); });
 
+  it('presents checkout retirement as a visible action before asking for confirmation', () => {
+    render(<BranchReconcileOutcome outcomes={outcomes} apps={[{ id: 'app-1', name: 'Example App' }]} />);
+    fireEvent.click(screen.getByText(/Example App · Incomplete · 2 remaining/));
+    const button = screen.getByRole('button', { name: 'Retire checkout…' });
+    expect(button).toHaveClass('rounded', 'border', 'border-port-border');
+    fireEvent.click(button);
+    expect(screen.getByRole('button', { name: 'Yes, retire checkout' })).toBeVisible();
+    expect(retire).not.toHaveBeenCalled();
+  });
+
   it('shows peer remote inventory separately from drained local work without offering retirement', () => {
     render(<BranchReconcileOutcome outcomes={{ 'app-1': { status: 'drained', remaining: [], remoteInventory: {
       reported: [{ branch: 'feature/peer-only', reason: 'unmerged-remote-only' }],

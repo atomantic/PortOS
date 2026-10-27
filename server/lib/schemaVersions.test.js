@@ -64,7 +64,15 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // adds the shared finite/renewable series-design brief.
     // Older peers stay behind the full render contract until they advertise
     // support for the additive fields.
-    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(11);
+    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(12);
+    const olderPeer = { ...PORTOS_SCHEMA_VERSIONS, fableLoom: 11 };
+    const diff = compareSchemaVersions(PORTOS_SCHEMA_VERSIONS, olderPeer);
+    expect(scopeVersionDiff(diff, RECORD_KIND_SCHEMA_CATEGORIES.fableLoom)).toEqual({
+      compatible: false,
+      ahead: [{ category: 'fableLoom', senderV: 12, receiverV: 11 }],
+      behind: [],
+    });
+    expect(scopeVersionDiff(diff, RECORD_KIND_SCHEMA_CATEGORIES.artist).compatible).toBe(true);
   });
 
   it('version-gates the additive Creative Commission taste brief shape', () => {
@@ -84,7 +92,7 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
       image: ['external', 'local', 'codex', 'grok', 'agy', 'fal', 'runway'],
       video: ['local', 'grok', 'fal', 'reactor', 'runway'],
       creativeCommissions: 6,
-      fableLoom: 11,
+      fableLoom: 12,
     });
   });
 });

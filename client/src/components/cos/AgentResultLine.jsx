@@ -132,22 +132,24 @@ export function SecurityScanEvidence({ scanner, control }) {
 export function ReleasePublicationLine({ publication, synchronization, className = '' }) {
   const pub = publication || synchronization?.publication;
   const sync = synchronization || pub?.synchronization;
+  const publicationVerified = pub?.status === 'verified';
   if (!pub && !sync) return null;
-  if (pub && pub.status !== 'verified' && !sync) return null;
+  if (!publicationVerified && !sync) return null;
 
-  const tag = pub?.tag || sync?.tag;
-  const releaseUrl = pub?.releaseUrl || sync?.releaseUrl;
-  const publishedAt = pub?.publishedAt || sync?.publishedAt;
+  const tag = publicationVerified ? pub?.tag || sync?.tag : null;
+  const releaseUrl = publicationVerified ? pub?.releaseUrl || sync?.releaseUrl : null;
+  const publishedAt = publicationVerified ? pub?.publishedAt || sync?.publishedAt : null;
 
   const syncStatus = sync?.status;
+  const publicationLabel = publicationVerified ? 'Published' : 'Publication not verified';
   const syncLabel = () => {
     if (!syncStatus || syncStatus === 'pending') {
-      return sync ? 'Published — synchronization pending' : 'Published — synchronization not yet verified';
+      return sync ? `${publicationLabel} — synchronization pending` : `${publicationLabel} — synchronization not yet verified`;
     }
-    if (syncStatus === 'running') return 'Published — synchronization running';
-    if (syncStatus === 'blocked') return 'Published — synchronization blocked';
-    if (syncStatus === 'verified') return 'Published — synchronization verified';
-    return 'Published — synchronization not yet verified';
+    if (syncStatus === 'running') return `${publicationLabel} — synchronization running`;
+    if (syncStatus === 'blocked') return `${publicationLabel} — synchronization blocked`;
+    if (syncStatus === 'verified') return `${publicationLabel} — synchronization verified`;
+    return `${publicationLabel} — synchronization not yet verified`;
   };
 
   const syncTone = () => {
@@ -159,7 +161,7 @@ export function ReleasePublicationLine({ publication, synchronization, className
 
   return (
     <div className={`text-sm break-words ${className}`.trim()}>
-      <div className={syncStatus === 'verified' || !syncStatus ? 'text-port-success' : syncTone()}>
+      <div className={!publicationVerified ? 'text-port-warning' : syncStatus === 'verified' || !syncStatus ? 'text-port-success' : syncTone()}>
         {syncLabel()}
       </div>
       {tag && releaseUrl && (

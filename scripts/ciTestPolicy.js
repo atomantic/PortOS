@@ -17,3 +17,15 @@ export function ciTestConfig(env = process.env) {
   return env.PORTOS_CI_COLLECTION === '1'
     ? { runner: fileURLToPath(new URL('./vitestCandidateRunner.js', import.meta.url)) } : {};
 }
+
+// The runner is outside each workspace root. Add only that file after Vite has
+// resolved its normal allow-list, retaining workspace and dependency defaults.
+export function ciTestRunnerAccess(env = process.env) {
+  const runner = ciTestConfig(env).runner?.replaceAll('\\', '/');
+  return runner ? [{
+    name: 'portos:candidate-runner-access',
+    configResolved(config) {
+      if (!config.server.fs.allow.includes(runner)) config.server.fs.allow.push(runner);
+    },
+  }] : [];
+}

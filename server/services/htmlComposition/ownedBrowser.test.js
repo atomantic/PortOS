@@ -185,6 +185,23 @@ describe('owned composition capture browser lifecycle', () => {
     await expect(access(profile)).rejects.toThrow();
   });
 
+  it('reports unsettled child cleanup when cancellation interrupts startup', async () => {
+    const controller = new AbortController();
+    const onCleanupFailure = vi.fn();
+    child.kill = vi.fn(() => true);
+    startup = () => { child.emit('spawn'); controller.abort(new Error('Canceled during startup')); };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const opening = launchCompositionBrowser({ signal: controller.signal, shutdownMs: 100, onCleanupFailure }).catch(error => error);
+    await vi.waitFor(() => expect(child.kill).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(100);
+    const error = await opening;
+    expect(error.message).toContain('cleanup exceeded its deadline');
+    expect(onCleanupFailure).toHaveBeenCalledExactlyOnceWith(error);
+    child.emit('exit', null, 'SIGKILL');
+    child.emit('close', null, 'SIGKILL');
+    await vi.waitFor(() => expect(rm).toHaveBeenCalled());
+  });
+
   it('terminates the owned browser when a running render is canceled, once', async () => {
     const controller = new AbortController();
     const owner = await launchCompositionBrowser({ signal: controller.signal });

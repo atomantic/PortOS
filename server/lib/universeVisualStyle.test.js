@@ -5,6 +5,7 @@ import {
   stripStyleClause,
   universeAestheticLine,
   universeVisualStyleTokens,
+  universeStylePreset,
 } from './universeVisualStyle.js';
 
 const universe = {
@@ -34,6 +35,18 @@ describe('universeVisualStyle', () => {
     expect(buildVisualStyleClause(universe, { ...override, mode: 'append' }))
       .toBe('ligne claire, flat matte color fields. washed sepia');
     expect(buildVisualStyleClause(universe, { ...override, mode: 'override' })).toBe('washed sepia');
+  });
+
+  it('excludes photography negatives when a series replaces the universe profile', () => {
+    const styled = { ...universe, visualProfile: { version: 1, generation: { enabled: true, lighting: 'window light', avoid: 'studio lighting' } } };
+    const override = { stylePromptOverride: 'watercolor', stylePromptOverrideMode: 'override' };
+    expect(universeStylePreset(styled, override)).toEqual({ prompt: 'watercolor', negativePrompt: 'photoreal, gore' });
+    for (const mode of ['prepend', 'append']) {
+      expect(universeStylePreset(styled, { ...override, stylePromptOverrideMode: mode }).negativePrompt)
+        .toBe('photoreal, gore, studio lighting');
+    }
+    expect(universeStylePreset(styled, { ...override, stylePromptOverride: '' }).negativePrompt)
+      .toBe('photoreal, gore, studio lighting');
   });
 
   it('strips the style clause the browser already prefixed, leaving the scene', () => {

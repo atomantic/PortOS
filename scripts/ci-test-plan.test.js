@@ -332,8 +332,6 @@ it('keeps exact-file selection for a test-only diff and traverses a nested featu
 
 it('carries transitive browser re-exports through the planner CLI and fails closed on unresolved edges', () => {
   const root = mkdtempSync(join(tmpdir(), 'portos-ci-browser-deps-'));
-  mkdirSync(join(root, 'server/lib'), { recursive: true });
-  writeFileSync(join(root, 'server/lib/bufferedSpawn.test.js'), '// native inventory fixture\n');
   const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
   const write = (path, source) => {
@@ -352,6 +350,7 @@ it('carries transitive browser re-exports through the planner CLI and fails clos
   }));
   try {
     git('init', '-q');
+    WINDOWS_CONTRACT_TESTS.forEach(path => write(path, '// native inventory fixture\n'));
     write(leaf, 'export const value = 1;\n');
     write('server/lib/shared/leaf.ts', 'export const value = 3;\n');
     write('server/lib/bridge.js', "export { value } from './shared/leaf';\n");
@@ -1784,7 +1783,7 @@ describe('Windows native support boundary', () => {
     expect(WINDOWS_CONTRACT_TESTS).toEqual(expect.arrayContaining([
       'server/lib/cliProviderRun.test.js', 'server/lib/detachedSpawn.test.js',
       'server/services/shell.windows.test.js', 'server/services/tuiPromptRunner.test.js',
-      'server/lib/windowsGitProcess.test.js', 'server/lib/windowsGitProcess.protocol.test.js',
+      'server/lib/execGit.test.js', 'server/lib/windowsGitProcess.test.js', 'server/lib/windowsGitProcess.protocol.test.js',
       'server/lib/windowsAgentProcess.test.js',
       'server/lib/gitRepositoryIdentity.test.js', 'server/lib/checkoutRetirementAdmission.test.js',
       'server/lib/nativeTrash.smoke.test.js',
@@ -1793,16 +1792,34 @@ describe('Windows native support boundary', () => {
     expect(WINDOWS_CONTRACT_TESTS.every(path => existsSync(join(repo, path)))).toBe(true);
   });
 
+  it('runs the junction settlement contract on Windows when its test changes', () => {
+    const test = 'server/lib/execGit.test.js';
+    const plan = buildCiTestPlan([test], { trackedFiles: [...options.trackedFiles, test] });
+    expect(plan.windows).toBe(true);
+    expect(plan.windowsFiles).toContain(test);
+  });
+
   it('fails the emitted CI plan instead of publishing a green empty Windows job', () => {
     const plan = buildCiTestPlan(['.github/workflows/ci.yml'], { trackedFiles: [] });
     expect(() => emitGitHubPlan(plan)).toThrow('Windows native contract inventory is empty');
+  });
+
+  it('fails a scoped CI plan when one registered Windows contract is missing', () => {
+    const missing = 'server/lib/windowsAgentProcess.test.js';
+    const trackedFiles = [...TRACKED, ...WINDOWS_CONTRACT_TESTS.filter(path => path !== missing)];
+    const plan = buildCiTestPlan([missing], { trackedFiles });
+    expect(plan).toMatchObject({ full: false, windows: true });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(() => emitGitHubPlan(plan)).toThrow(`Windows native contract inventory is missing: ${missing}`);
+    } finally {
+      log.mockRestore();
+    }
   });
 });
 
 it('projects transitive browser consumers through the planner CLI without replacing related selection (#10838)', () => {
   const root = mkdtempSync(join(tmpdir(), 'portos-ci-related-browser-'));
-  mkdirSync(join(root, 'server/lib'), { recursive: true });
-  writeFileSync(join(root, 'server/lib/bufferedSpawn.test.js'), '// native inventory fixture\n');
   const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
   const write = (path, source) => {
@@ -1821,6 +1838,7 @@ it('projects transitive browser consumers through the planner CLI without replac
   const browsers = (result) => JSON.parse(result.browser_files);
   try {
     git('init', '-q');
+    WINDOWS_CONTRACT_TESTS.forEach(path => write(path, '// native inventory fixture\n'));
     write(leaf, 'export const value = 1;\n');
     write(unrelated, 'export const value = 2;\n');
     write('server/services/bridge.js', "export { value } from './example/leaf';\n");

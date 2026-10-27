@@ -14,6 +14,7 @@ import {
   buildCiTestPlan,
   collectPlanInputs,
   ALWAYS_RUN_TESTS,
+  WINDOWS_CONTRACT_TESTS,
 } from './ci-test-plan.js';
 import {
   collectPregateChangedFiles,
@@ -291,6 +292,18 @@ describe('pregate hidden-content invocation', () => {
     if (template?.scratch) await destroyGitSandbox(template.scratch);
   });
 
+  // Only cases that select Windows need its complete tracked inventory.
+  // Putting it in the common template would also select unrelated guards.
+  function prepareWindowsInventory() {
+    for (const path of WINDOWS_CONTRACT_TESTS) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      write(path, '// Native inventory fixture\n');
+    }
+    git('add', '--all');
+    git('commit', '-qm', 'native contract inventory fixture');
+    base = git('rev-parse', 'HEAD');
+  }
+
   function prepareGuardFixture({ browser = false } = {}) {
     write('server/lib/index.js', 'export {};\n');
     write('server/lib/README.md', '# Shared helpers\n');
@@ -557,6 +570,8 @@ describe('pregate hidden-content invocation', () => {
   // can produce a misleading product failure or repair the shared source tree.
   it.each(['matching', 'stale', 'missing-package', 'unreadable-package', 'dangling', 'missing-link', 'unlinked'])(
     'checks %s linked dependencies read-only before executing stages', (state) => {
+      // The server lockfile selects the native Windows job.
+      prepareWindowsInventory();
       const worktree = join(scratch, 'linked-worktree');
       git('worktree', 'add', '--detach', worktree, base);
       root = worktree;
@@ -629,6 +644,7 @@ describe('pregate hidden-content invocation', () => {
   );
 
   it('diagnoses a production-only install before spawning development checks', () => {
+    prepareWindowsInventory();
     write('server/package-lock.json', JSON.stringify({ packages: {
       '': {}, 'node_modules/vitest': { version: '5.0.4', dev: true },
     } }));
@@ -934,6 +950,7 @@ describe('pregate hidden-content invocation', () => {
   });
 
   it('preserves binary, empty-file, and stdin-like path findings for untracked additions', () => {
+    prepareWindowsInventory();
     const emptyPath = 'docs/empty\u200B.md';
     write(emptyPath, '');
     write('docs/payload.bin', Buffer.from([0, 1, 2]));

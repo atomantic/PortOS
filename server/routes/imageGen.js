@@ -14,7 +14,7 @@ import { assertCatalogIdentityWritable } from '../services/catalogDB/identityAcc
 import { createImageGalleryHandlers } from './imageGalleryRead.js';
 import { Router } from 'express';
 import { z } from 'zod';
-import { prepareFableLoomImageParams } from '../services/imageGen/fableLoomParams.js';
+import { fableLoomMultipartUnsupported, prepareFableLoomImageParams } from '../services/imageGen/fableLoomParams.js';
 import { finishVisualProfileImage } from '../services/imageGen/finishVisualProfile.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
@@ -34,6 +34,7 @@ import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifie
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded } from '../lib/fileUtils.js';
 import { prepareGenerateParams, resolveLocalImageModel } from '../services/imageGen/prepareParams.js';
+import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../lib/imageGenCapabilities.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { applyFilmLookBake, readFilmLookSource } from '../services/imageGen/filmLookBake.js';
 import { universeVisualProfileSchema } from '../lib/universeVisualProfileValidation.js';
@@ -108,7 +109,7 @@ async function enqueueLoggedImage(req, job) {
 // number of `referenceImageN` upload field names below.
 const MAX_PROMPT_LENGTH = 32000;
 const MAX_LORAS = 8;
-const MAX_REFERENCE_IMAGES = 16;
+const MAX_REFERENCE_IMAGES = IMAGE_REFERENCE_REQUEST_LIMIT;
 const updatePromptSchema = z.object({ prompt: z.string().max(MAX_PROMPT_LENGTH) });
 const galleryImageFilenameSchema = (label) => z.string().max(256)
   .regex(/^[^/\\]+\.(png|jpg|jpeg|webp)$/i, `${label} must be a basename ending in png/jpg/jpeg/webp`);
@@ -495,6 +496,10 @@ router.post('/prompt-preview', asyncHandler(async (req, res) => {
 }));
 
 router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
+  if (typeof req.body?.fableLoom === 'string' && Object.keys(req.files || {}).length) {
+    await Promise.allSettled(Object.values(req.files).map(file => unlinkGuarded(file.path)));
+    throw fableLoomMultipartUnsupported();
+  }
   const data = validateRequest(generateSchema, coerceFormFields(req.body));
   if (data.catalogIngredientId) await assertCatalogIdentityWritable(data.catalogIngredientId);
   const { data: params, mode, settings, uploadedTempPaths } = await prepareGenerateParams({

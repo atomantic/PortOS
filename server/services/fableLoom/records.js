@@ -13,6 +13,7 @@
 
 import { sanitizeShot } from '../../lib/fableLoomShots.js';
 import { randomUUID } from 'crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { ServerError } from '../../lib/errorHandler.js';
 import { sanitizeLlmRoutePin } from '../../lib/llmRoutePin.js';
 import { sanitizeCharacterEvolutionList } from '../../lib/characterEvolution.js';
@@ -781,6 +782,8 @@ const preserveLegacySeriesPlan = (remote, local, senderVersion) => {
   };
 };
 
+const v11VisualProjection = manifest => sanitizeVisualConditioning(manifest, { legacyV11: true });
+
 // An older peer cannot represent newer scene production fields. When that
 // peer wins whole-record LWW after an unrelated edit, retain the local fields
 // on nodes that still exist instead of letting its unaware sanitizer clear
@@ -846,19 +849,66 @@ const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
             ...(senderVersion < 4 ? { protagonistPresence: localNode.protagonistPresence } : {}),
             ...(senderVersion < 3 ? {
               visualCanon: localNode.visualCanon,
-              visualConditioning: localNode.visualConditioning,
-              playbackAssets: {
-                ...node.playbackAssets,
-                ...(localNode.playbackAssets?.visualConditioningByAsset
-                  ? { visualConditioningByAsset: localNode.playbackAssets.visualConditioningByAsset }
-                  : {}),
-              },
             } : {}),
           } : node;
         }),
       };
     }),
   };
+};
+
+// An older peer can edit the story but cannot represent v12 replay evidence.
+// Reuse that evidence only for the same render and an unchanged v11 manifest.
+const sameV11Manifest = (local, remote) => Boolean(local && remote && isDeepStrictEqual(v11VisualProjection(local), remote));
+const sameImage = (local, remote) => Boolean(local.image && local.image === remote.image
+  && local.imageJobId && local.imageJobId === remote.imageJobId);
+const referencesVideo = (node, key) => node.videoHistoryId === key || node.playbackAssets?.entryVideoHistoryId === key
+  || node.playbackAssets?.holdLoopVideoHistoryIds?.includes(key) || Object.values(node.playbackAssets?.exitByTransition || {}).includes(key);
+const sameNodeRender = (local, remote, senderVersion) => {
+  if (local.visualConditioning?.capability?.kind !== 'video') return sameImage(local, remote);
+  const localMap = local.playbackAssets?.visualConditioningByAsset || {};
+  const remoteMap = remote.playbackAssets?.visualConditioningByAsset || {};
+  const matchingKeys = Object.keys(localMap).filter(key => sameV11Manifest(local.visualConditioning, v11VisualProjection(localMap[key])));
+  if (matchingKeys.length) return matchingKeys.some(key => referencesVideo(local, key) && referencesVideo(remote, key)
+    && (senderVersion < 3 || sameV11Manifest(localMap[key], remoteMap[key])));
+  return Boolean(local.videoHistoryId && local.videoHistoryId === remote.videoHistoryId);
+};
+
+const preserveLegacyReplayEvidence = (merged, local, senderVersion, incoming) => {
+  if (!local || local.deleted || incoming.deleted || senderVersion >= 12) return merged;
+  const localEpisodes = new Map(local.episodes.map(episode => [episode.id, episode]));
+  const incomingEpisodes = new Map(incoming.episodes.map(episode => [episode.id, episode]));
+  return { ...merged, episodes: merged.episodes.map(episode => {
+    const localNodes = new Map((localEpisodes.get(episode.id)?.nodes || []).map(node => [node.id, node]));
+    const incomingNodes = new Map((incomingEpisodes.get(episode.id)?.nodes || []).map(node => [node.id, node]));
+    return { ...episode, nodes: episode.nodes.map(node => {
+      const prior = localNodes.get(node.id);
+      const received = incomingNodes.get(node.id);
+      if (!prior || !received) return node;
+      const priorMap = prior.playbackAssets?.visualConditioningByAsset || {};
+      const receivedMap = received.playbackAssets?.visualConditioningByAsset || {};
+      const currentMap = node.playbackAssets?.visualConditioningByAsset || {};
+      // Before v3 peers could not send a per-asset map. An unchanged image
+      // generation or video history id is the evidence for retaining it.
+      const peerMap = senderVersion < 3 ? priorMap : receivedMap;
+      const sameLatestManifest = senderVersion < 2 || sameV11Manifest(prior.visualConditioning, received.visualConditioning);
+      const preserved = Object.fromEntries(Object.entries(peerMap).flatMap(([key, manifest]) => {
+        const old = priorMap[key];
+        const sameRender = old?.capability?.kind === 'image' ? sameImage(prior, received) : referencesVideo(prior, key) && referencesVideo(received, key);
+        const isLatest = sameV11Manifest(prior.visualConditioning, v11VisualProjection(old));
+        const sameManifest = senderVersion < 3 ? (!isLatest || sameLatestManifest) : sameV11Manifest(old, manifest);
+        return sameRender && sameManifest ? [[key, old]] : [];
+      }));
+      return {
+        ...node,
+        ...(sameNodeRender(prior, received, senderVersion) && sameLatestManifest
+          ? { visualConditioning: prior.visualConditioning } : {}),
+        ...(Object.keys(preserved).length ? {
+          playbackAssets: { ...node.playbackAssets, visualConditioningByAsset: { ...currentMap, ...preserved } },
+        } : {}),
+      };
+    }) };
+  }) };
 };
 
 /**
@@ -885,11 +935,13 @@ export async function mergeLoomsFromSync(
     const applied = await queueLoomWrite(remote.id, async () => {
       const local = sanitizeLoom(await readRaw(remote.id));
       if (local && !compareNewerWins(remote.updatedAt, local.updatedAt)) return false;
-      const merged = preserveLegacyVisualProduction(
+      const version = Number(senderSchemaVersions?.fableLoom) || 0;
+      const legacy = preserveLegacyVisualProduction(
         remote,
         local,
-        Number(senderSchemaVersions?.fableLoom) || 0,
+        version,
       );
+      const merged = preserveLegacyReplayEvidence(legacy, local, version, remote);
       if (local) {
         await maybeJournalBeforeOverwrite({
           kind: 'fableLoom', id: remote.id, local, remote: merged, source,

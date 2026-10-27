@@ -62,7 +62,7 @@ function RetireCheckout({ appId, entry, onRetired }) {
   if (state === 'idle') {
     return (
       <div className="pt-1">
-        <button type="button" className="text-port-accent hover:underline" onClick={() => setState('confirming')}>Retire checkout…</button>
+        <button type="button" className="rounded border border-port-border px-2 py-1 text-port-accent hover:border-port-accent" onClick={() => setState('confirming')}>Retire checkout…</button>
         {error && <p role="alert" className="text-port-error break-words">{error}</p>}
       </div>
     );

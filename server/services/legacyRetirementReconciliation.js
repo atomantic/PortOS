@@ -59,13 +59,14 @@ async function absent(repoPath, row, trees, agents, identities = new Map()) {
 // captured physical generation. Neither path infers deletion from absence.
 const receiptIdentity = row => JSON.stringify([row.branch, row.path, row.head, row.checkoutIdentity, row.retiredAt, row.archiveDir ?? null]);
 // Failed rev-parse historically echoed the missing branch into head. This
-// producer artifact identifies no commit or new physical incarnation.
+// producer artifact identifies neither a commit nor a checkout generation.
 const echoedRefPlaceholder = row => typeof row?.branch === 'string' && row.head === row.branch
   && typeof row.path === 'string' && isAbsolute(row.path) && row.checkoutIdentity == null;
-const finalizedRefPlaceholder = (observation, receipt) => observation.path == null && observation.head == null
+const finalizedRefPlaceholder = (observation, receipt, observed) => observation.path == null && observation.head == null
   && observation.checkoutIdentity == null && ['deleted', 'observed-absent'].includes(receipt.branchFinalization?.kind)
   && Number.isFinite(Date.parse(receipt.branchFinalizedAt))
   && Date.parse(receipt.branchFinalizedAt) >= Date.parse(receipt.retiredAt)
+  && Date.parse(receipt.branchFinalizedAt) >= observed
   && Date.parse(receipt.branchFinalizedAt) <= Date.now();
 const staleObservation = row => ['retirement-receipt-unverified', 'retirement-provenance-unverified'].includes(row?.reason)
   && typeof row.branch === 'string' && row.branch && row.locked !== true && Number.isFinite(Date.parse(row.createdAt))
@@ -89,7 +90,9 @@ export async function reconcileRecordedReceiptObservations(appId, outcome) {
       && typeof row.path === 'string' && isAbsolute(row.path) && oid(row.head) && /^[a-f0-9]{64}$/.test(row.checkoutIdentity || '')
       && (!echoed || samePath(observation.path, row.path))
       && Number.isFinite(Date.parse(row.retiredAt))
-      && (echoed || finalizedRefPlaceholder(observation, row) || Date.parse(row.retiredAt) >= observed) && Date.parse(row.retiredAt) <= Date.now())
+      // A branch and path can be reused. An echoed ref carries no generation,
+      // so a receipt predating that observation cannot prove they are the same.
+      && (finalizedRefPlaceholder(observation, row, observed) || Date.parse(row.retiredAt) >= observed) && Date.parse(row.retiredAt) <= Date.now())
       .map(row => [receiptIdentity(row), row])).values()];
     if (candidates.length !== 1) return [];
     const receipt = candidates[0];

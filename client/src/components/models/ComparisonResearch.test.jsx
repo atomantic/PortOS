@@ -18,7 +18,7 @@ vi.mock('../ProviderModelSelector', () => ({
       </select>
       <select aria-label="Research model" disabled={disabled} value={selectedModel} onChange={event => onModelChange(event.target.value)}>
         <option value="">Choose model</option>
-        {(availableModels || ['research-model']).map(m => {
+        {(availableModels?.length ? availableModels : ['catalog-model']).map(m => {
           const val = typeof m === 'string' ? m : m.id;
           return <option key={val} value={val}>{val}</option>;
         })}
@@ -40,6 +40,30 @@ beforeEach(() => {
   getCosSchedule.mockResolvedValue({ tasks: { 'model-comparison-refresh': { enabled: false, type: 'on-demand', providerId: '', model: '' } } });
   updateCosTaskInterval.mockImplementation(async (_type, interval) => ({ interval }));
   triggerCosOnDemandTask.mockResolvedValue({ taskType: 'model-comparison-refresh' });
+});
+
+it('requires a selected model even when the provider has no stored model list', async () => {
+  getProviders.mockResolvedValue({ providers: [{ id: 'example', name: 'Example', models: [] }] });
+  render(<MemoryRouter><ComparisonResearch /></MemoryRouter>);
+  await screen.findByText(/Cadence:/);
+  fireEvent.change(screen.getByLabelText('Research provider'), { target: { value: 'example' } });
+  expect(screen.getByRole('button', { name: 'Save research settings' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Run research now' })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('Research model'), { target: { value: 'catalog-model' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save research settings' }));
+  await screen.findByText(/Research provider saved/);
+  fireEvent.click(screen.getByRole('button', { name: 'Run research now' }));
+  await screen.findByText(/Research queued in CoS/);
+  expect(triggerCosOnDemandTask).toHaveBeenCalledWith('model-comparison-refresh', null, expect.objectContaining({ model: 'catalog-model' }));
+});
+
+it('accepts an object-shaped provider model selected in the shared picker', async () => {
+  getProviders.mockResolvedValue({ providers: [{ id: 'example', name: 'Example', models: [{ id: 'object-model', name: 'Object model' }] }] });
+  render(<MemoryRouter><ComparisonResearch /></MemoryRouter>);
+  await screen.findByText(/Cadence:/);
+  fireEvent.change(screen.getByLabelText('Research provider'), { target: { value: 'example' } });
+  fireEvent.change(screen.getByLabelText('Research model'), { target: { value: 'object-model' } });
+  expect(screen.getByRole('button', { name: 'Save research settings' })).toBeEnabled();
 });
 it('runs research only after an explicit click using saved valid provider settings and reports queue errors', async () => {
   render(<MemoryRouter><ComparisonResearch /></MemoryRouter>);

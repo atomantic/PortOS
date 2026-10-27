@@ -91,21 +91,30 @@ describe('stale branch-only retirement placeholders', () => {
     expect(fixture.ownerReads).toBe(0);
   });
 
-  it('uses verified ref finalization to settle a delayed branch-only row without changing physical removal time', async () => {
+  it.each([
+    { scenario: 'after', finalizedAt: '2026-01-06T00:00:00.000Z', binds: true },
+    { scenario: 'before', finalizedAt: '2026-01-04T00:00:00.000Z', binds: false },
+  ])('binds branch-only observations only when ref finalization is $scenario the observation', async ({ finalizedAt, binds }) => {
     const observation = { ...row, createdAt: '2026-01-05T00:00:00.000Z' };
-    receipt.branchFinalizedAt = '2026-01-04T00:00:00.000Z';
+    receipt.branchFinalizedAt = finalizedAt;
     receipt.branchFinalization = { kind: 'observed-absent' };
     await seed({ receipts: [receipt], observation });
     const result = await getBranchReconcileInventory(appId);
     expect(result.remaining).toEqual([]); expect(result.retirementObligations).toEqual([]);
-    expect(result.retired[0]).toMatchObject({ retiredAt: receipt.retiredAt, branchFinalizedAt: receipt.branchFinalizedAt,
-      settledObservations: [{ observation }] });
+    if (binds) {
+      expect(result.retired).toEqual([{ ...receipt, settledObservations: [{ observation, settledAt: expect.any(String) }] }]);
+      expect(result.legacyRetirementTransition.resolutions).toEqual([]);
+    } else {
+      expect(result.retired).toEqual([receipt]);
+      expectAbsentHistory(result, observation);
+    }
   });
 
-  it.each(['settled', 'recreated', 'ambiguous', 'different-path'])(
+  it.each(['settled', 'older-receipt', 'recreated', 'ambiguous', 'different-path'])(
     'keeps verified receipt binding distinct from absent historical source: %s', async scenario => {
       const observation = { ...row, path: receipt.path, head: row.branch,
-        createdAt: '2026-01-03T00:00:00.000Z' }; // After the real removal receipt.
+        createdAt: '2026-01-03T00:00:00.000Z' };
+      if (scenario !== 'older-receipt') receipt.retiredAt = '2026-01-04T00:00:00.000Z';
       const receipts = [receipt];
       if (scenario === 'recreated') { await mkdir(receipt.path); await writeFile(join(receipt.path, 'unique.txt'), 'unfinished work'); }
       if (scenario === 'ambiguous') receipts.push({ ...receipt, checkoutIdentity: 'c'.repeat(64) });
@@ -119,7 +128,10 @@ describe('stale branch-only retirement placeholders', () => {
         await getBranchReconcileInventory(appId);
         expect(await readFile(schedulePath, 'utf8')).toBe(saved);
       } else if (scenario === 'recreated') expect(result.retirementObligations).toContainEqual(expect.objectContaining(observation));
-      else expectAbsentHistory(result, observation);
+      else {
+        expectAbsentHistory(result, observation);
+        expect(result.retired[0]).toEqual(receipt);
+      }
       if (scenario === 'recreated') expect(await readFile(join(receipt.path, 'unique.txt'), 'utf8')).toBe('unfinished work');
     });
 

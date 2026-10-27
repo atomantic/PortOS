@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
 const fixture = await vi.hoisted(async () => {
   const { mkdtemp } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
@@ -73,6 +74,7 @@ beforeEach(async () => {
   vi.resetModules(); fixture.beforeIndex = null; fixture.bypass = false;
   fixture.state = { agents: {}, config: { completedAgentRetentionMs: 1 }, stats: { tasksCompleted: 0, errors: 0 } };
   await rm(fixture.root, { recursive: true, force: true }); await mkdir(fixture.root);
+  await rm(join(fixture.base, 'release-synchronization.json'), { force: true });
   await writeFile(join(fixture.root, 'index.json'), '{}');
   ({ acquireBackupSnapshotCut: acquireCut } = await import('../lib/backupSnapshotBoundary.js'));
   taskRepo = await import('./cosTaskRepository.js');
@@ -83,6 +85,69 @@ beforeEach(async () => {
   api = { ...await import('./cosAgentLifecycle.js'), ...await import('./cosAgentArchive.js') };
 });
 afterAll(() => rm(fixture.base, { recursive: true, force: true }));
+
+it('retains publisher and continuation history until the outbox verifies synchronization', async () => {
+  const publisher = 'agent-publisher';
+  const continuation = 'agent-continuation';
+  const unrelated = 'agent-unrelated';
+  const unknown = 'agent-unknown';
+  const identity = 'a'.repeat(64);
+  const taskId = `task-release-sync-${identity}`;
+  await seedAgent(publisher, { completed: true, indexed: true, resident: false });
+  await seedAgent(continuation, { completed: true, indexed: true });
+  await seedAgent(unrelated, { completed: true, indexed: true });
+  await seedAgent(unknown, { completed: true, indexed: true, resident: false });
+  const publisherPath = join(fixture.root, date, publisher, 'metadata.json');
+  const publisherRecord = JSON.parse(await readFile(publisherPath, 'utf8'));
+  publisherRecord.taskId = 'publisher-task';
+  await writeFile(publisherPath, JSON.stringify(publisherRecord));
+  fixture.state.agents[continuation].taskId = taskId;
+  await writeFile(join(fixture.root, date, continuation, 'metadata.json'), JSON.stringify(fixture.state.agents[continuation]));
+  fixture.state.agents[unrelated].taskId = 'unrelated-task';
+  await writeFile(join(fixture.root, date, unrelated, 'metadata.json'), JSON.stringify(fixture.state.agents[unrelated]));
+  const entry = {
+    version: 1, identity,
+    owner: { agentId: publisher, taskId: 'publisher-task', startedAt: publisherRecord.startedAt, workspace: '/repo' },
+    publication: { identity, status: 'verified' },
+    task: { id: taskId, metadata: { releaseSynchronization: { identity } } },
+    obligations: Object.fromEntries(RELEASE_SYNC_OBLIGATIONS.map(name => [name, { status: 'pending' }])),
+    checkouts: [], registeredAt: '2001-01-01T02:00:00Z', attempts: 1, lastAttemptAt: null, blocker: null, retryAt: null,
+  };
+  const { saveReleaseSynchronization } = await import('./releaseSynchronizationStore.js');
+  await saveReleaseSynchronization(entry);
+
+  for (const id of [publisher, continuation]) {
+    await expect(api.deleteAgent(id)).rejects.toMatchObject({ status: 409, code: 'AGENT_CLEANUP_OWNED' });
+  }
+  // The same ownership survives eviction of the continuation from live state.
+  delete fixture.state.agents[continuation];
+  await expect(api.deleteAgent(continuation)).rejects.toMatchObject({ status: 409, code: 'AGENT_CLEANUP_OWNED' });
+  // Missing archived task ownership cannot prove that this is not a continuation.
+  expect(await api.clearCompletedAgents()).toEqual({ cleared: 1, retained: 3 });
+  await assertIndexedTrees();
+
+  entry.obligations = Object.fromEntries(RELEASE_SYNC_OBLIGATIONS.map(name => [name, {
+    status: 'verified', verifiedAt: '2001-01-01T03:00:00Z', evidence: { receipt: name },
+  }]));
+  entry.synchronization = { status: 'verified', attempts: 1, checkedAt: '2001-01-01T03:00:00Z',
+    verifiedAt: '2001-01-01T03:00:00Z', retryAt: null, blocker: null };
+  await saveReleaseSynchronization(entry);
+  expect(await api.clearCompletedAgents()).toEqual({ cleared: 3, retained: 0 });
+});
+
+it('retains an enrolled publication before outbox registration and refuses cleanup when that outbox is unreadable', async () => {
+  await seed({ completed: true, indexed: true });
+  fixture.state.agents[id].taskId = 'publisher-task';
+  fixture.state.agents[id].metadata.releasePublication = {
+    status: 'verified', identity: 'b'.repeat(64), synchronizationHandoffVersion: 1,
+  };
+  await writeFile(join(fixture.root, date, id, 'metadata.json'), JSON.stringify(fixture.state.agents[id]));
+  await expect(api.deleteAgent(id)).rejects.toMatchObject({ status: 409, code: 'AGENT_CLEANUP_OWNED' });
+  expect(await api.clearCompletedAgents()).toEqual({ cleared: 0, retained: 1 });
+  await writeFile(join(fixture.base, 'release-synchronization.json'), '{broken');
+  await expect(api.deleteAgent(id)).rejects.toMatchObject({ status: 503, code: 'CLEANUP_OWNERSHIP_UNAVAILABLE' });
+  await assertIndexedTrees();
+});
 
 it('preserves pending verification before the task hold is written and after archival', async () => {
   await seed({ completed: true, indexed: true });

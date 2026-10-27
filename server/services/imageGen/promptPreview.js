@@ -6,14 +6,14 @@
  * the grok/agy output path names the job folder it will get.
  */
 import { basename, join } from 'node:path';
-import { prepareFableLoomImageParams } from './fableLoomParams.js';
+import { fableLoomMultipartUnsupported, prepareFableLoomImageParams } from './fableLoomParams.js';
 import { tmpdir } from 'node:os';
 import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 import { FAL_IMAGE_DEFAULT_MODEL, falImageFamily } from '../../lib/falImageModels.js';
 import { maxInputImages, resolveCloudProviderConfig } from './cloudProviderConfig.js';
 import { resolveInputImages } from './inputImages.js';
-import { prepareGenerateParams, previewUploadLabel, resolveLocalImageModel } from './prepareParams.js';
+import { prepareGenerateParams, previewUploadLabel, resolveLocalImageModel, selectLocalImageModelFromSettings } from './prepareParams.js';
 import { codexSentPrompt } from './codex.js';
 import { grokSentPrompt } from './grok.js';
 import { agySentPrompt } from './agy.js';
@@ -42,6 +42,7 @@ function previewInputImages(mode, params, modelId) {
 const jobOutputPath = (prefix) => join(tmpdir(), `${prefix}-<job>`, 'output.png');
 
 export async function previewImagePrompt({ uploadedInitImage = false, uploadedReferenceCount = 0, ...body }) {
+  if (body.fableLoom && (uploadedInitImage || uploadedReferenceCount)) throw fableLoomMultipartUnsupported();
   const referenceImageFields = Array.from({ length: uploadedReferenceCount }, (_, index) => `referenceImage${index + 1}`);
   const files = {
     ...(uploadedInitImage ? { initImage: {} } : {}),
@@ -49,6 +50,8 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
   };
   const { data: params, mode, settings } = await prepareGenerateParams({ data: body, files, referenceImageFields, preview: true });
   await prepareFableLoomImageParams({ params, mode, settings });
+  const showsReferenceStrengths = params.fableLoom && mode === IMAGE_GEN_MODE.LOCAL && !params.mediaProviderPeerId
+    && selectLocalImageModelFromSettings(settings, params.modelId)?.runner === 'flux2';
   const envelope = {
     mode,
     ...(params.fableLoom ? {
@@ -58,9 +61,14 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
         ...(params.initImagePath ? [{ filename: basename(params.initImagePath), status: 'included', source: 'Init image' }] : []),
         ...(params.referenceImagePaths || []).map((path, index) => ({
           filename: basename(path), status: 'included',
-          source: params.visualConditioning?.assets[index]?.role || 'Scene reference',
+          source: params.visualConditioning?.assets[index]?.role === 'request-reference'
+            ? 'Request reference' : params.visualConditioning?.assets[index]?.role || 'Scene reference',
+          ...(showsReferenceStrengths ? { strength: params.referenceImageStrengths?.[index] ?? 1 } : {}),
         })),
       ],
+      ...((params.visualConditioning?.adapters?.length) ? {
+        loraAdapters: params.visualConditioning.adapters.map(({ filename, scale, source }) => ({ filename, scale, source: source || 'Canon adapter' })),
+      } : {}),
     } : {}),
   };
   const carried = carriedPromptAdditions(params);

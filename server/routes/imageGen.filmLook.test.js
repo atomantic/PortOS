@@ -26,7 +26,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 // The composition browser is a fake page: the test asserts what the bake asks
 // of it (the staged page, the viewport it sizes, one screenshot) and hands back
 // a PNG as the "rendered" frame.
-const browser = vi.hoisted(() => ({ opened: [], commands: [], screenshot: null, closed: 0 }));
+const browser = vi.hoisted(() => ({ opened: [], commands: [], screenshot: null, closed: 0, closeError: null }));
 vi.mock('../services/htmlComposition/browser.js', () => ({
   openComposition: vi.fn(async (directory, options) => {
     const { readFile: read } = await import('fs/promises');
@@ -39,7 +39,10 @@ vi.mock('../services/htmlComposition/browser.js', () => ({
         return method === 'Page.captureScreenshot' ? { data: browser.screenshot.toString('base64') } : {};
       }),
       check: () => {},
-      close: vi.fn(async () => { browser.closed += 1; }),
+      close: vi.fn(async () => {
+        browser.closed += 1;
+        if (browser.closeError) { options.onOwnerCleanupFailure?.(browser.closeError); throw browser.closeError; }
+      }),
     };
   }),
 }));
@@ -76,6 +79,7 @@ describe('POST /api/image-gen/:filename/film-look', () => {
     browser.opened.length = 0;
     browser.commands.length = 0;
     browser.closed = 0;
+    browser.closeError = null;
     browser.screenshot = await png(200, 120, 60);
     await writeFile(join(sandbox, 'images', 'still-1.png'), await png(30, 40, 50));
     await writeFile(join(sandbox, 'images', 'still-1.metadata.json'), JSON.stringify({ prompt: 'a rainy window', seed: 3, modelId: 'example-model', regenerated: true, regenStrength: 0.4 }));
@@ -111,6 +115,15 @@ describe('POST /api/image-gen/:filename/film-look', () => {
     expect(existsSync(join(sandbox, browser.opened[0].directory))).toBe(false);
     const sidecar = JSON.parse(await readFile(join(sandbox, 'images', res.body.filename.replace(/\.png$/, '.metadata.json')), 'utf8'));
     expect(sidecar).toMatchObject({ filmLookFrom: 'still-1.png', cleanedFrom: 'still-1.png' });
+  });
+
+  it('retains the source and scratch evidence when owned-browser cleanup cannot settle', async () => {
+    browser.closeError = new Error('Owned browser cleanup did not settle');
+    const res = await request(app).post('/api/image-gen/still-1.png/film-look').send({ look: { preset: 'neon-rain', grain: 0.6 } });
+    expect(res.status).toBe(500);
+    expect(browser.opened).toHaveLength(1);
+    expect(existsSync(join(sandbox, browser.opened[0].directory))).toBe(true);
+    expect((await readFile(join(sandbox, 'images', 'still-1.png'))).equals(await png(30, 40, 50))).toBe(true);
   });
 
   it('refuses a look that changes nothing, an unknown control, and a missing image without opening a browser', async () => {

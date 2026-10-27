@@ -1,4 +1,4 @@
-import { ciTestConfig } from '../scripts/ciTestPolicy.js';
+import { ciTestConfig, ciTestRunnerAccess } from '../scripts/ciTestPolicy.js';
 import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 import { applyRunnerSelection, vitestCaptureProjects, vitestCiPool, vitestRunnerSelection } from '../scripts/vitestCiPool.js';
@@ -46,6 +46,7 @@ process.env.NODE_DISABLE_COMPILE_CACHE = '1';
 const runnerSelection = vitestRunnerSelection();
 
 const config = defineConfig({
+  plugins: ciTestRunnerAccess(),
   server: { watch: VITEST_WATCH_OPTIONS },
   // Anchor to the config, even when --root or the caller cwd differs.
   cacheDir: fileURLToPath(new URL('./.cache/vitest', import.meta.url)),
