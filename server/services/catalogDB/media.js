@@ -21,10 +21,14 @@ const hasMeaningfulMetadata = (value) => value && typeof value === 'object'
 
 // Every local image write takes the owning ingredient's row lock, so the
 // generated-image decision in attachGeneratedMedia sees each one either fully
-// before or fully after it.
+// before or fully after it. The media table's write lock comes first: merge
+// takes a SHARE ROW EXCLUSIVE table lock and then the ingredient rows, so a
+// writer holding the row while waiting for the table would deadlock with it.
 const IMAGE_KINDS = new Set(['portrait', 'reference']);
-const lockIngredient = (client, ingredientId) => client.query(
-  'SELECT id FROM catalog_ingredients WHERE id = catalog_resolve_ingredient_id($1) FOR UPDATE', [ingredientId]);
+const lockIngredient = async (client, ingredientId) => {
+  await client.query('LOCK TABLE catalog_ingredient_media IN ROW EXCLUSIVE MODE');
+  await client.query('SELECT id FROM catalog_ingredients WHERE id = catalog_resolve_ingredient_id($1) FOR UPDATE', [ingredientId]);
+};
 const inTransaction = (options, fn) => (options.client ? fn(options.client) : withTransaction(fn));
 
 export async function attachMedia(ingredientId, mediaKey, kind, options = {}) {
@@ -54,9 +58,12 @@ export async function attachGeneratedMedia(ingredientId, mediaKey, { kind = 'aut
     await lockIngredient(client, ingredientId);
     const { rows } = await client.query(
       `SELECT * FROM catalog_identity_read_media
-        WHERE ingredient_id = ANY(catalog_identity_member_ids($1)) AND deleted = false`,
+        WHERE ingredient_id = ANY(catalog_identity_member_ids($1)) AND deleted = false
+        ORDER BY (kind = 'portrait') DESC, created_at DESC`,
       [ingredientId],
     );
+    // A key deliberately held as both kinds reports its portrait, so the
+    // hook's newest-render guard still sees it.
     const existing = rows.find((row) => row.media_key === mediaKey);
     if (existing) return { media: rowToMedia(existing), kind: existing.kind, attached: false };
     const target = kind === 'auto' ? (rows.some((row) => row.kind === 'portrait') ? 'reference' : 'portrait') : kind;

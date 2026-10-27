@@ -24,6 +24,7 @@ vi.mock('../lib/db.js', async (importOriginal) => {
   };
 });
 vi.mock('./mediaJobQueue/index.js', () => ({ mediaJobEvents: new EventEmitter() }));
+vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-local-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./catalogMedia.js', () => ({
   readImageGenerationMetadata: async () => ({ prompt: 'Example portrait', seed: 42 }),
 }));
@@ -33,6 +34,7 @@ const { requireDbOrSkip } = await import('../lib/dbTestGate.js');
 const catalogDB = await import('./catalogDB.js');
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
 const hook = await import('./catalogImageAttachHook.js');
+const { mergeIngredients } = await import('./catalogDB/merge.js');
 
 const health = await checkHealth();
 if (health.connected) await ensureSchema();
@@ -77,8 +79,8 @@ async function holdFirstGeneratedReadThen(first, second) {
   return Promise.all([firstDone, secondDone]);
 }
 
-async function ingredient() {
-  const row = await catalogDB.createIngredient({ type: 'character', name: 'Example portrait subject' });
+async function ingredient(payload) {
+  const row = await catalogDB.createIngredient({ type: 'character', name: 'Example portrait subject', ...(payload ? { payload } : {}) });
   ids.push(row.id);
   return row.id;
 }
@@ -260,5 +262,48 @@ describe.skipIf(!runDb)('atomic local image writes', () => {
         metadata: { prompt: 'Example portrait', seed: 42 } }),
       expect.objectContaining({ media_key: 'render.png', kind: 'reference', role: 'plate', caption: 'Chosen later' }),
     ]);
+  });
+
+  it('reports the portrait when a render is deliberately held as both kinds', async () => {
+    const id = await ingredient();
+    await catalogDB.attachMedia(id, 'both.png', 'reference');
+    await catalogDB.setPortraitMedia(id, 'both.png');
+    await catalogDB.attachMedia(id, 'both.png', 'reference', { caption: 'Touched later' });
+    const result = await catalogDB.attachGeneratedMedia(id, 'both.png');
+    expect(result).toMatchObject({ kind: 'portrait', attached: false, media: { kind: 'portrait' } });
+  });
+
+  // Merge takes the media table lock, then ingredient rows. An attach holding
+  // the ingredient row before touching media would deadlock with it.
+  it('orders an attach and an overlapping merge instead of deadlocking', async () => {
+    const id = await ingredient({ locked: false });
+    const sourceId = await ingredient({ locked: false });
+    // The preview row-locks too, so take it before the attach holds the row.
+    const preview = await mergeIngredients({ sourceId, survivorId: id });
+    const release = deferred();
+    let held = false;
+    intercept = async (sql) => {
+      if (!held && sql.includes('catalog_identity_read_media')) {
+        held = true;
+        return () => release.promise;
+      }
+    };
+    const attach = catalogDB.attachGeneratedMedia(id, 'merge-race.png');
+    await vi.waitFor(() => expect(held).toBe(true));
+    const merge = mergeIngredients({ sourceId, survivorId: id, fieldChoices: preview.fieldChoices || {},
+      dryRun: false, previewToken: preview.previewToken }).then(() => 'merged', (err) => err);
+    try {
+      await vi.waitFor(async () => {
+        const waiting = await query('SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted');
+        expect(waiting.rows[0].n).toBeGreaterThan(0);
+      });
+    } finally {
+      release.resolve();
+    }
+    await expect(attach).resolves.toMatchObject({ attached: true });
+    // The merge may still refuse its now-stale preview; it must not be the
+    // deadlock victim (40P01) of the attach.
+    const outcome = await merge;
+    expect(outcome?.code === '40P01' ? outcome.message : null).toBeNull();
   });
 });
