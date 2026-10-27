@@ -1,7 +1,6 @@
 /** Resolve whether the pinned Persistent Mind provider/model can consume images. */
 
-import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
-import { isVisionCapableCliProvider, isVisionModel } from '../lib/localModelHeuristics.js';
+import { isVisionModel } from '../lib/localModelHeuristics.js';
 import { listModels } from './localLlm.js';
 import * as ollamaManager from './ollamaManager.js';
 
@@ -35,16 +34,10 @@ export async function resolvePersistentMindImageCapability(
   { listBackendModels = listModels, getOllamaCapabilities = ollamaManager.getModelCapabilities } = {},
 ) {
   if (!provider) return result('unsupported', 'Choose a Persistent Mind provider before attaching images.');
-  if (isVisionCapableCodexTuiProvider(provider)) {
-    return result('supported', 'Codex TUI accepts image attachments with the initial prompt.');
-  }
-  if (provider.type === 'tui') {
-    return result('unsupported', 'This TUI provider cannot receive Persistent Mind image attachments. Choose Codex or a vision-capable CLI/API provider.');
-  }
-  if (provider.type === 'cli') {
-    return isVisionCapableCliProvider(provider)
-      ? result('supported', 'This headless CLI accepts image attachments through its normal run lifecycle.')
-      : result('unsupported', 'This headless CLI cannot receive Persistent Mind image attachments. Choose Codex, Claude Code, or a vision API provider.');
+  // The mind runs its provider tool-free, and a CLI/TUI reads a staged image
+  // with a file tool, so only a direct API provider can actually see one.
+  if (provider.type === 'cli' || provider.type === 'tui') {
+    return result('unsupported', 'Persistent Mind runs CLI providers without file tools, so they cannot read image attachments. Choose a vision-capable API provider.');
   }
   if (provider.type !== 'api') return result('unsupported', 'This provider transport cannot receive image attachments.');
 

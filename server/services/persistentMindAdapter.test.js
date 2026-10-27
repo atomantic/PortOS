@@ -593,7 +593,7 @@ describe('persistent mind adapter', () => {
   });
 
   it('passes every current-message image to the pinned provider and verifies consumption', async () => {
-    const imageProfile = { provider: { id: 'claude-code', type: 'cli', command: 'claude' }, model: 'example-model', effort: 'high' };
+    const imageProfile = profile;
     const wake = {
       kind: 'message',
       message: {
