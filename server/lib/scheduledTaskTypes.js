@@ -47,6 +47,11 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // `code-quality` (conventional defects: magic values, brittle conditionals,
   // convention violations). Defaults to file-issues.
   'simplify',
+  // Process and validation machinery whose cost exceeds its demonstrated harm:
+  // verification of state the code host or CI already owns, archives and retry
+  // layers with no reachable failure, gates that catch nothing. Distinct from
+  // `simplify` (code with no behavior). Defaults to file-issues.
+  'over-engineering',
   // Structural-maintainability audit. Treats complexity thresholds as candidate
   // signals, then proves responsibility, reuse, or discoverability impact before
   // filing. Direct remediation is isolated in a managed worktree.

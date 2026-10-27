@@ -1229,7 +1229,83 @@ an unfinished feature rather than dead code — check whether documentation,
 interface text, or a plan describes it. If one does, it belongs to the
 incomplete-feature work, which decides whether to finish or remove it; do not
 file a deletion here. File splits and responsibility boundaries belong to the
-module-hygiene work.`,
+module-hygiene work. Validation, recovery, and process machinery that runs and
+works but costs more than the harm it prevents belongs to the over-engineering
+work; this audit covers code that nothing runs or that is copied.`,
+
+  'over-engineering': `[Improvement: {appName}] Over-engineering audit
+
+Find process and validation machinery in {appName} that costs more than the
+harm it prevents, and recommend removing or simplifying it.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+Other audits find defects and propose safeguards. This one runs the other way:
+it looks for safeguards that already exist and asks whether each earns its
+cost. Every finding is a REMOVAL or SIMPLIFICATION, never a new check, layer,
+or workflow.
+
+## Cost is measured, not asserted
+
+Each finding needs a number: CI minutes added per run, agent or developer
+turnaround, local gate or build time, or the lines and modules that must be
+kept correct. Measure with the project's own tooling where you can (CI run
+timings, a timed local run, line counts, import graphs) and state how you
+measured. "This seems heavy" is not a finding. Speed counts: machinery that
+slows CI, the local gate, or an agent's turnaround is paying a cost on every
+single run.
+
+## Hunt for
+
+- **Parallel verification of state another system already owns** — code that
+  re-checks branch, merge, review, deployment, or build status the code host,
+  CI system, package registry, or platform already tracks authoritatively, or
+  that re-derives it into a second copy that can drift. Name the owning system
+  and what it already guarantees.
+- **Recovery machinery with no reachable failure** — archives, ledgers,
+  checkpoints, backups-before-delete, or retry and reconciliation layers whose
+  triggering failure cannot happen, or has never happened in the history, logs,
+  or tests. Show why the failure is unreachable or already handled upstream.
+- **Guards that add time without catching regressions** — CI stages, lint or
+  structural tests, pre-push gates, or validation passes that duplicate a
+  stronger check, run on every change though they only matter for a few paths,
+  or have never failed on a real regression. Cite the run time and the
+  stronger check that already covers the same failure.
+- **Instructions and docs that mandate such processes** — contributor, agent,
+  or workflow documentation requiring steps whose machinery above is removable,
+  or a checklist longer than the failures it prevents.
+
+## Evidence for "no demonstrated harm"
+
+Search history (\`git log -S\`, issue and change-request references in commit
+messages), test names, and logs for the incident the machinery was built for.
+If a real incident exists and the machinery still prevents it, keep it. If the
+cost exceeds the harm and no incident or reachable failure is found, that
+absence is the finding. State what you searched.
+
+## Not yours
+
+- **Code with no behavior** — unreferenced exports, copy-paste duplication,
+  stale scaffolding — belongs to the dead-code and duplication audit
+  (\`simplify\`). This audit targets process and validation machinery that runs and
+  works but is disproportionate, not code that nothing runs.
+- Compatibility and migration code for other installs and versions is not
+  over-engineering; read the project's rules before proposing its removal.
+- Security boundaries, data-loss protections, and checks the project's rules
+  require are not candidates unless you can show they duplicate a stronger one.
+- Do not assume one code host, CI system, or platform. Name the actual systems
+  this repository uses, and keep recommendations valid for them.
+
+## The bar
+
+For each finding give \`file:LINE\` (or the doc and section), what the machinery
+verifies or recovers, who or what already owns that guarantee, the measured
+cost, the demonstrated harm (or its absence), and the proposed removal or
+simplification — including the corrected instruction or doc text when a document
+mandates it. Reject removals that trade real safety for speed you cannot
+measure.`,
 
   'module-hygiene': `[Improvement: {appName}] Module hygiene audit
 

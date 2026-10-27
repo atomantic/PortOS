@@ -23,6 +23,7 @@ export const AUDIT_DISCOVERY = Object.freeze({
   ux: 'Inventory primary user goals and route flows; rank blocked task completion, onboarding friction, navigation dead ends and missing recovery, then walk the worst journeys.',
   'data-safety': 'Inventory destructive writes, migrations, backup/restore and cross-version payloads; rank irreversible data loss and incompatible upgrades first.',
   simplify: 'Scan source exports, callers and repeated blocks across the repository; rank proven dead subsystems and duplicated behavior by maintenance cost and drift.',
+  'over-engineering': 'Inventory validation, recovery, archive, ledger, retry and verification layers, CI stages and local gates, and the docs that mandate them; for each, name the failure it demonstrably prevented (history, tests, incidents) and measure its time or maintenance cost. Rank by cost with no demonstrated harm.',
   'module-hygiene': 'Inventory module sizes, imports, responsibilities and catalogs across source roots; inspect the largest responsibility tangles and most reused missing abstractions.',
   'api-contract': 'Inventory all routes, schemas and clients; compare request/response and version contracts, prioritizing destructive writes and widely consumed APIs.',
   'ui-lifecycle': 'Identify the UI runtime, then scan resource lifetimes, subscriptions, async state updates and shared state across views; rank resource leaks, stale writes and corrupted user state.',
