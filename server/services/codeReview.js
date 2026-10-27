@@ -1588,11 +1588,11 @@ export async function runLocalGoalFidelityReview({ backend, model, objective, di
   const summaryDisclosureObjective = objectiveClass.kind === 'disclosure'
   const systemPrompt = GOAL_FIDELITY_PRIMARY_PROMPTS[objectiveClass.kind]
   const startedAt = Date.now()
-  const complete = () => runReviewerCompletion({
+  const complete = (budgetMs) => runReviewerCompletion({
     backend,
     model,
     effort,
-    timeoutMs,
+    timeoutMs: budgetMs,
     baseUrl,
     messages: [
       { role: 'system', content: systemPrompt },
@@ -1602,14 +1602,16 @@ export async function runLocalGoalFidelityReview({ backend, model, objective, di
       },
     ],
   })
-  let result = await complete()
+  let result = await complete(timeoutMs)
   // A text-only local model rejects image parts outright. Screenshots are
   // supplementary evidence, so judge the diff without them rather than lose
   // the verdict; later evidence passes reuse the text-only content.
   if (!result.ok && screenshotContext.images.length && MULTIMODAL_UNSUPPORTED_RE.test(result.error || '')) {
     console.log(`⏭️ ${backend} model does not support images — retrying goal-fidelity review without task screenshots`)
     userContent = `${objectiveBlock}\n\n(Task screenshots omitted: the reviewer model does not support images.)\n\n${diffBlock}\n\n${coverageNote}`
-    result = await complete()
+    const remainingMs = timeoutMs - (Date.now() - startedAt)
+    if (remainingMs <= 0) return { ok: false, backend, model, error: 'Goal-fidelity review timed out before the text-only retry could run.' }
+    result = await complete(remainingMs)
   }
   if (!result.ok) return result
 
