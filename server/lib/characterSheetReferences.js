@@ -1,7 +1,7 @@
 import { basename, join, relative } from 'node:path';
 import { PATHS } from './paths.js';
 import { isSafeFilename, resolveImageInputPath } from './pathSafety.js';
-import { MAX_CAST_GUIDES, pickGuideMedia } from './catalogMediaLibrary.js';
+import { MAX_CAST_GUIDES, pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
 import { maxInputImages } from './imageGenCapabilities.js';
 import { IMAGE_GEN_MODE } from './generationModes.js';
 import { RUNNER_FAMILIES } from './runners.js';
@@ -11,18 +11,24 @@ const EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'];
 // Explicit guides own selection. Automatic fallback excludes derived looks,
 // sheets and archived media so a previous off-model render cannot seed itself.
 export function characterSheetReferenceCandidates(character, media = [], want = {}) {
+  const age = typeof character.age === 'string' && /^\d+$/.test(character.age.trim()) ? Number(character.age) : undefined;
+  want = { ...(age !== undefined ? { age } : {}), ...want };
+  const formMatches = (m) => !m.library?.variant?.formId || m.library.variant.formId === want.formId
+    || (!want.formId && m.kind === 'portrait' && Number.isInteger(want.age) && m.library.variant.age === want.age);
+  const rejected = rejectedReferenceKeys(media);
   const images = media.filter((m) => m && !m.deleted && ['portrait', 'reference'].includes(m.kind)
-    && (!m.library?.variant?.formId || m.library.variant.formId === want.formId));
+    && !rejected.has(m.mediaKey) && matchesReferenceVariant(m, want) && formMatches(m));
   const guides = images.filter((m) => m.library?.guide === true);
   if (guides.length) return pickGuideMedia(guides, want).map((m) => ({
     filename: m.mediaKey, source: 'Render guide',
   }));
   const candidates = pickGuideMedia(images.filter((m) => !/^(?:sheet:|look:|archive:)/.test(m.role || '')), want)
     .map((m) => ({ filename: m.mediaKey, source: m.kind === 'portrait' ? 'Portrait' : 'Reference library' }));
+  const excluded = new Set(media.filter((m) => !m.deleted && (rejected.has(m.mediaKey) || !matchesReferenceVariant(m, want) || !formMatches(m))).map(m => m.mediaKey));
   const canon = [
     { filename: character.primaryImageRef, source: 'Primary canon image' },
     ...(Array.isArray(character.imageRefs) ? character.imageRefs : []).map((filename) => ({ filename, source: 'Canon image' })),
-  ].filter((ref) => ref.filename);
+  ].filter((ref) => ref.filename && !excluded.has(ref.filename));
   // Keep the selected portrait first, then the authored canon references.
   return [...candidates.filter((c) => c.source === 'Portrait'), ...canon,
     ...candidates.filter((c) => c.source !== 'Portrait')];

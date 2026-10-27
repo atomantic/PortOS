@@ -91,7 +91,7 @@ export async function findMergedPullRequest(repoPath, branch, tip, { forgeAccoun
   return { url: historical[0].url, mergedAt: null };
 }
 
-export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { forgeAccount = null, exactAliasHead = null, sourceSupersessionHead = null, exactDeliveredHead = null, requirePublishedSupersession = false, detachedSourceHead = null } = {}) {
+export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { forgeAccount = null, exactAliasHead = null, sourceSupersessionHead = null, exactDeliveredHead = null, requirePublishedSupersession = false, allowPrivateSupersession = false, detachedSourceHead = null } = {}) {
   const origin = await getOriginInfo(repoPath);
   const parsed = parsePullRequestUrl(prUrl);
   if (!origin || !parsed || parsed.host !== origin.host || `${parsed.owner}/${parsed.repo}` !== origin.fullName) {
@@ -179,7 +179,13 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
     .catch(() => { throw new Error('retirement-remote-ref-unreadable'); })).trim() : null;
   if (publishedRemoteHead && publishedRemoteHead !== `${remote.headRefOid}\trefs/heads/${remote.headRefName}`) throw new Error('retirement-remote-head-changed');
   let sourcePreservation;
-  if (requirePublishedSupersession) {
+  if (requirePublishedSupersession && allowPrivateSupersession && supersession && remoteHead === '') {
+    const localHead = (await git(['show-ref', '--verify', '--hash', `refs/heads/${branch}`], repoPath)).trim();
+    if (localHead !== sourceSupersessionHead) throw new Error('retirement-local-source-head-changed');
+    // This is only a candidate for explicit whole-checkout preservation. The
+    // review builder still verifies the local merge/target and durable source.
+    sourcePreservation = { kind: 'private-retained-source', head: sourceSupersessionHead, remoteRef: `refs/heads/${branch}` };
+  } else if (requirePublishedSupersession) {
     if (!supersession || remoteHead !== `${sourceSupersessionHead}\trefs/heads/${branch}`) throw new Error('retirement-source-not-published');
     // Preserve an exact closed source delivery, not a same-name remote branch
     // alone. A moving, reopened, foreign or ambiguous source remains wanted.
@@ -204,7 +210,7 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
 /** Returned differences are review material, not executable instructions or an
  * automated supersession verdict. Every byte and identity participates in digest.
  */
-export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, kind, contentFingerprint, administrationFingerprint, policy, preservedSource = null, validationReceipt = null, validationArtifacts = null }, {
+export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, kind, contentFingerprint, administrationFingerprint, policy, preservedSource = null, validationReceipt = null, validationArtifacts = null, disposableCacheProofs = null }, {
   readForge = readRetirementForgeEvidence, forgeAccount = null,
 } = {}) {
   const forge = await readForge(repoPath, release.branch, prUrl, { forgeAccount, ...(!kind && { exactDeliveredHead: release.head }),
@@ -226,6 +232,7 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
     const evidence = { repoPath, release, forge, contentFingerprint, administrationFingerprint, policy,
       ...(validationReceipt && { validationReceipt }),
       ...(validationArtifacts && { validationArtifacts }),
+      ...(disposableCacheProofs && { disposableCacheProofs }),
       comparison: { base: release.head, paths: [], localPatch: '', difference: '', exactMergedDelivery: !represented, ...(represented && { representedDetachedDelivery: true }), disposition: 'integrated' } };
     return { digest: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'), ...evidence };
   }
@@ -266,6 +273,7 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
   const evidence = { repoPath, release, forge, contentFingerprint, administrationFingerprint, policy,
     ...(validationReceipt && { validationReceipt }),
       ...(validationArtifacts && { validationArtifacts }),
+      ...(disposableCacheProofs && { disposableCacheProofs }),
     ...(kind && { kind }), ...(preservedSource && { preservedSource }),
     comparison: { base, paths, localPatch, difference, exactMergedDelivery, disposition: mechanicallyEquivalent ? 'integrated' : 'review-supersession' } };
   return { digest: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'), ...evidence };

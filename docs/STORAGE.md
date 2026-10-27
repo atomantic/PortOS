@@ -239,6 +239,8 @@ does not recover nonempty output or general failed saves; those still require th
 
 ## `db-primary` — app-native relational records
 
+- Release synchronization outbox — `cos_release_synchronizations`, keyed by the forge-verified publication identity, retains the original publication receipt, coordinator generation, immutable continuation task/policy, physical checkout seeds, pending delivery obligations and registration retry evidence. PostgreSQL is authoritative and covered by the database backup. The `data/cos/release-synchronization.json` adapter is development/test only. This is machine-local execution/ownership state, never federated; the continuation is pinned to the producing instance through existing task controls. No data seed or input migration is needed for this new empty domain; additive schema initialization creates the table on upgrade. Neither completed-history eviction nor task execution success releases its identity or verifies synchronization. Adapter: `server/services/releaseSynchronizationStore.js`.
+
 - Deep audit evidence — `deep_audit_ledgers` stores each app/category coverage ledger, source/prompt pins, server-assigned attempts, candidates, receipts and invalidated history. Machine-local and covered by the PostgreSQL dump; it does not federate (no sync cursor or tombstones). JSONB holds structured evidence, not binary assets, and row locking serializes updates. No full-text index is needed for keyed checkpoint reads. Additive schema initialization creates the table for existing and fresh installs without transforming old records or seeding data. Agent-written checkpoint JSON under `data/cos/deep-audit-checkpoints/` is a retained recovery input outside source checkouts, captured by normal CoS filesystem backup; imported database receipts remain authoritative. See [Deep audits](./DEEP-AUDITS.md).
 
 
@@ -1308,3 +1310,14 @@ No migration or seed is required: this is a new optional ledger, absent until a
 live completion or an explicit import publishes its first receipt.
 
 LoRA training is retired; its existing datasets, run artifacts, configuration and PostgreSQL history remain intact. See [Data Maintenance](DATA_MAINTENANCE.md) for inventory and explicit removal. Installed adapters and shared inference runtimes remain supported.
+
+### Windows release-agent process settlement
+
+`data/cos/process-settlement/<agent-id>/` retains a server-created agent/start
+reservation, a single-use launch specification, native root identity and immutable
+settlement receipt. This machine-local execution evidence is not federated and is
+kept independently of completed-agent history. Launch specifications can contain
+private command arguments; they are never included in status projections or forge
+artifacts. `data/cos/process-supervisors/` holds freshly compiled native helpers;
+only the current server process's compiler result is reused. Neither directory is
+a database record store or a new retirement owner.

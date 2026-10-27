@@ -105,6 +105,7 @@ export default function ModelComparison() {
   const [query, setQuery] = useState('');
   const [zoom, setZoom] = useState(true);
   const [researchOpen, setResearchOpen] = useState(false);
+  const [researchScope, setResearchScope] = useState('all');
   const [showEstimates, setShowEstimates] = useState(true);
   const [evidenceLimit, setEvidenceLimit] = useState(100);
   const update = patch => setSettings(previous => ({ ...previous, ...patch }));
@@ -171,15 +172,54 @@ export default function ModelComparison() {
     return [...result].map(([key, points]) => ({ key, points: points.sort((a, b) => EFFORTS.indexOf(a.effort) - EFFORTS.indexOf(b.effort)) }));
   }, [plotted]);
   const toggle = (key, value, all) => update({ [key]: (settings[key] ?? all).includes(value) ? (settings[key] ?? all).filter(item => item !== value) : [...(settings[key] ?? all), value] });
+  const selectedModels = settings.models === null ? models : settings.models;
   const researchCount = rows.filter(row => row.needsResearch).length;
+  const selectedResearchCount = scoped.filter(row => (settings.models === null || settings.models.includes(row.model)) && row.needsResearch).length;
 
   return <div className="@container mx-auto w-full min-w-0 space-y-4 p-3 md:p-5">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div><h1 className="text-xl font-semibold">Cost vs. intelligence</h1><p className="text-sm text-port-text-muted">Compare generations, peers and reasoning efforts across your selectable models.</p></div>
-      <div className="flex flex-wrap gap-2"><button className={buttonClass} onClick={reload} disabled={loading}>{loading ? 'Loading…' : 'Reload data'}</button><button className={buttonClass} aria-expanded={researchOpen} onClick={() => setResearchOpen(value => !value)}>Research gaps ({formatCount(researchCount)})</button></div>
+      <div className="flex flex-wrap gap-2">
+        <button className={buttonClass} onClick={reload} disabled={loading}>{loading ? 'Loading…' : 'Reload data'}</button>
+        <button
+          className={buttonClass}
+          aria-expanded={researchOpen && researchScope === 'all'}
+          onClick={() => {
+            if (researchOpen && researchScope === 'all') {
+              setResearchOpen(false);
+            } else {
+              setResearchScope('all');
+              setResearchOpen(true);
+            }
+          }}
+        >
+          Research all gaps ({formatCount(researchCount)})
+        </button>
+        <button
+          className={buttonClass}
+          aria-expanded={researchOpen && researchScope === 'selected'}
+          disabled={selectedModels.length === 0}
+          onClick={() => {
+            if (researchOpen && researchScope === 'selected') {
+              setResearchOpen(false);
+            } else {
+              setResearchScope('selected');
+              setResearchOpen(true);
+            }
+          }}
+        >
+          Research selected ({formatCount(selectedResearchCount)})
+        </button>
+      </div>
     </div>
     {error && <p role="alert" className="text-port-error">{error}</p>}
-    {researchOpen && <ComparisonResearch />}
+    {researchOpen && (
+      <ComparisonResearch
+        scope={researchScope}
+        selectedModels={selectedModels}
+        onScopeChange={setResearchScope}
+      />
+    )}
     <section className="min-w-0 rounded-xl border border-port-border bg-port-card p-4 space-y-3" aria-label="Comparison controls">
       <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-0"><label htmlFor="comparison-price" className="block text-xs mb-1">Cost axis</label><select className="max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" id="comparison-price" value={price[0]} onChange={event => update({ priceId: event.target.value })}>{PRICES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></div>

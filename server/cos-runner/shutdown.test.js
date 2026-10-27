@@ -120,6 +120,8 @@ function runner(assertDatabaseAdmission = vi.fn()) {
     armForceKillShared: armForceKill, killProcessTree, spawn, pty,
     createAgentSentinelAccess,
     buildCliChildEnv: () => ({}), prepareCliSpawn: (command, args) => ({ command, args }),
+    prepareWindowsAgentLaunch: (_agentId, command, args) => ({ command, args }),
+    watchWindowsAgentProcess: child => child,
     prepareCliPrompt: (command, args) => ({ args, useStdin: false, cleanup: vi.fn() }),
     commandExists, findCommandOnPath: command => command,
     isAllowedCommand: () => true, ALLOWED_COMMANDS: ['example-cli'],

@@ -10,7 +10,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { PR_COMPLETIONS, explicitPrCompletion } from '../lib/prDisposition.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
-import { checkoutSeedSchema, completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
+import { checkoutSeedSchema, completedCheckoutReceiptValid, sameTaskRetirementBinding } from './completedCheckoutEvidence.js';
 import { isDeepStrictEqual } from 'node:util';
 
 const samePath = (a, b) => typeof a === 'string' && typeof b === 'string'
@@ -135,7 +135,134 @@ function completionDecision({ repoPath, branch, prUrl, tip, agents }) {
 const reviewTarget = policy => policy.agent.metadata?.reviewLoopMergeTarget;
 const retirementPr = policy => policy.prUrl || reviewTarget(policy)?.url;
 
+/** Validate a persisted review-task handoff, not an inferred physical-owner edge.
+ * Both explicit resume chains remain bound to the same captured generation. */
+export function reviewedDeliveryHandoffValid(input, agents, handoff, agentId) {
+  const task = handoff?.task, meta = task?.metadata;
+  const review = handoff?.reviewChain, source = handoff?.sourceChain;
+  if (!Array.isArray(agents) || !Array.isArray(review) || !Array.isArray(source)
+    || !review.length || !source.length || review.length + source.length > 25
+    || review[0] !== agentId || source.at(-1) !== meta?.sourceAgentId
+    || task?.status !== 'completed' || ![true, 'true'].includes(meta?.reviewLoopFollowUp)
+    || meta.reviewLoopPRUrl !== input.prUrl || meta.reviewLoopPRBranch !== input.branch
+    || meta.reviewLoopLeaveOpen === true || meta.reviewLoopLeaveOpen === 'true'
+    || !meta.sourceTaskId || task.id === meta.sourceTaskId) return false;
+  const byId = new Map(agents.map(agent => [agent?.id, agent]));
+  const ids = [...review, ...source];
+  if (byId.size !== agents.length || new Set(ids).size !== ids.length) return false;
+  const current = byId.get(source[0]);
+  const instance = current?.metadata?.instanceId;
+  if (!instance || instance === 'unknown') return false;
+  for (const chain of [review, source]) {
+    for (let index = 0; index < chain.length; index++) {
+      const agent = byId.get(chain[index]);
+      if (!agent || agent.status !== 'completed' || agent.metadata?.instanceId !== instance
+        || agent.taskId !== (chain === review ? task.id : meta.sourceTaskId)
+        || agent.result?.executionSuccess === false || agent.result?.validationPassed === false
+        || (agent.result?.success !== true && agent.result?.executionSuccess !== true)
+        || agent.metadata?.blocker || agent.result?.taskOutcome?.recovery?.mode === 'approval') return false;
+      const captures = agent.metadata.completedCheckouts?.filter(row => completedCheckoutReceiptValid(agent, row)
+        && samePath(row.repoPath, input.repoPath) && row.branch === input.branch
+        && samePath(row.path, agent.metadata.workspacePath) && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation));
+      if (captures?.length !== 1) return false;
+      if (chain === review && (agent.metadata.reviewLoopMergeTarget?.url !== input.prUrl
+        || agent.metadata.reviewLoopMergeTarget?.branch !== input.branch)) return false;
+      if (index && (byId.get(chain[index - 1]).metadata.resumedFromAgentId !== agent.id
+        || !(Date.parse(agent.completedAt) <= Date.parse(byId.get(chain[index - 1]).startedAt)))) return false;
+    }
+  }
+  const original = byId.get(source.at(-1)), firstReview = byId.get(review.at(-1));
+  return samePath(current.metadata.workspacePath, input.checkoutPath)
+    && !firstReview.metadata.resumedFromAgentId
+    && Date.parse(original.completedAt) <= Date.parse(firstReview.startedAt)
+    && Date.parse(byId.get(review[0]).completedAt) <= Date.parse(current.startedAt);
+}
+
+/** A moved pathname is not a new generation when exact captured administration
+ * and an explicit completed same-task, same-instance resume chain agree. */
+function resumedDeliveryPath(policy, input, proof) {
+  const chain = proof.resumeChain;
+  if (!Array.isArray(chain) || chain.length < 2 || chain.length > 25
+    || new Set(chain).size !== chain.length || chain.at(-1) !== policy.agent.id || !Array.isArray(input.agents)) return false;
+  const byId = new Map(input.agents.map(agent => [agent?.id, agent]));
+  if (byId.size !== input.agents.length) return false;
+  const records = chain.map(id => byId.get(id));
+  const instance = policy.agent.metadata?.instanceId;
+  if (!instance || instance === 'unknown' || !policy.agent.taskId) return false;
+  for (let index = 0; index < records.length; index++) {
+    const agent = records[index];
+    if (!agent || agent.status !== 'completed' || agent.taskId !== policy.agent.taskId
+      || agent.metadata?.instanceId !== instance || agent.result?.validationPassed === false
+      || agent.result?.executionSuccess === false || (agent.result?.success !== true && agent.result?.executionSuccess !== true)
+      || agent.result?.taskOutcome?.recovery?.mode === 'approval' || agent.metadata?.blocker) return false;
+    const captures = agent.metadata.completedCheckouts?.filter(row => completedCheckoutReceiptValid(agent, row)
+      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch
+      && samePath(row.path, agent.metadata.workspacePath) && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation));
+    if (captures?.length !== 1 || (index === 0 && !samePath(captures[0].path, input.checkoutPath))) return false;
+    if (index > 0 && (records[index - 1].metadata.resumedFromAgentId !== agent.id
+      || !(Date.parse(agent.completedAt) <= Date.parse(records[index - 1].startedAt)))) return false;
+  }
+  return true;
+}
+
+/** The original captured generation can outlive a PR's final rewritten head.
+ * Reuse its fresh complete-content forge proof, never another checkout's receipt.
+ * Explicit resume history preserves each prior run's failed execution verdict. */
+function representedOriginalContinuation(policy, input) {
+  const forge = input.retirementForge;
+  if (!/^[a-f0-9]{64}$/.test(input.detachedCheckoutIdentity || '')
+    || !knownPhysicalIdentity(input.detachedCheckoutGitdir) || !isAbsolute(input.detachedCheckoutGitdir.path || '')
+    || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE || retirementPr(policy) !== input.prUrl
+    || (policy.tip && policy.tip !== input.tip)
+    || forge?.scopeProof !== 'represented-detached-head' || forge.prUrl !== input.prUrl
+    || forge.detachedRepresentation?.sourceHead !== input.tip
+    || forge.detachedRepresentation.deliveredHead !== input.verifiedPrHead
+    || forge.prHead !== input.verifiedPrHead || !Array.isArray(input.agents)) return null;
+  const byId = new Map(input.agents.map(agent => [agent?.id, agent]));
+  if (byId.size !== input.agents.length) return null;
+  const capture = agent => {
+    const meta = agent?.metadata;
+    if (agent?.status !== 'completed' || agent.result?.executionSuccess !== true
+      || agent.result.validationPassed === false || agent.result.executionInterruption || meta?.executionInterruption
+      || meta?.blocker || agent.result.taskOutcome?.recovery?.mode === 'approval'
+      || meta?.isWorktree !== true || meta.prCompletionPolicy !== PR_COMPLETIONS.REVIEW_THEN_MERGE
+      || meta.reviewLoopMergeTarget?.url !== input.prUrl || meta.reviewLoopMergeTarget.branch !== input.branch
+      || (meta.branchCompletionPolicy && (meta.branchCompletionPolicy.prUrl !== input.prUrl
+        || meta.branchCompletionPolicy.branch !== input.branch || meta.branchCompletionPolicy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
+        || (meta.branchCompletionPolicy.tip && meta.branchCompletionPolicy.tip !== input.tip)))
+      || !samePath(meta.sourceWorkspace, input.repoPath)) return null;
+    const rows = meta.completedCheckouts?.filter(row => completedCheckoutReceiptValid(agent, row)
+      && row.head === input.tip && row.branch === input.branch && samePath(row.repoPath, input.repoPath)
+      && samePath(row.path, meta.workspacePath) && knownPhysicalIdentity(row.incarnation?.pointer)
+      && isDeepStrictEqual(row.incarnation.gitdir, input.detachedCheckoutGitdir)
+      && createHash('sha256').update(JSON.stringify(['dev', 'ino', 'birthtimeNs'].map(key => row.incarnation.pointer[key])))
+        .digest('hex') === input.detachedCheckoutIdentity);
+    return rows?.length === 1 ? rows[0] : null;
+  };
+  const owners = input.agents.filter(agent => samePath(agent?.metadata?.workspacePath, input.checkoutPath) && capture(agent));
+  if (owners.length !== 1) return null;
+  let current = owners[0];
+  const original = policy.agent, instance = current.metadata.instanceId, chain = [], seen = new Set();
+  if (!instance || instance === 'unknown' || !current.taskId) return null;
+  while (current && chain.length < 25 && !seen.has(current.id)) {
+    const row = capture(current);
+    if (!row || current.taskId !== original.taskId || current.metadata.instanceId !== instance
+      || !Number.isFinite(Date.parse(current.startedAt)) || !(Date.parse(current.completedAt) >= Date.parse(current.startedAt))) return null;
+    seen.add(current.id); chain.push(current.id);
+    if (current.id === original.id) return { kind: 'captured-represented-delivery', agentId: original.id,
+      originalPrUrl: retirementPr(policy) ?? null, prUrl: input.prUrl, tip: input.tip,
+      deliveredHead: input.verifiedPrHead, detachedRepresentation: forge.detachedRepresentation,
+      capturedHead: row.head, capturedAt: row.capturedAt, checkoutIncarnation: row.incarnation, resumeChain: chain };
+    const parent = byId.get(current.metadata.resumedFromAgentId);
+    if (!parent || !(Date.parse(parent.completedAt) <= Date.parse(current.startedAt))) return null;
+    current = parent;
+  }
+  return null;
+}
+
 function continuedDelivery(policy, input) {
+  const represented = representedOriginalContinuation(policy, input);
+  if (represented) return represented;
   if (policy.agent.status !== 'completed'
     || (policy.agent.result?.success !== true && policy.agent.result?.executionSuccess !== true)
     || policy.agent.result?.executionSuccess === false || policy.agent.result?.validationPassed === false
@@ -146,7 +273,9 @@ function continuedDelivery(policy, input) {
     && proof.prUrl === input.prUrl && proof.tip === input.tip
     && (!policy.tip || [proof.originalPrHead, proof.capturedHead].includes(policy.tip))
     && policy.agent.metadata?.completedCheckouts?.some(row => completedCheckoutReceiptValid(policy.agent, row)
-      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && samePath(row.path, input.checkoutPath)
+      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch
+      && (samePath(row.path, input.checkoutPath) || resumedDeliveryPath(policy, input, proof)
+        || reviewedDeliveryHandoffValid(input, input.agents, proof.reviewHandoff, policy.agent.id))
       && row.head === proof.capturedHead && row.capturedAt === proof.capturedAt
       && isDeepStrictEqual(row.incarnation, proof.checkoutIncarnation)
       && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation))) || null;
@@ -207,6 +336,26 @@ function distinctCapturedAdministration(incarnation, current) {
 
 function separatelyDeliveredCheckout(policy, input) {
   const forge = input.retirementForge;
+  if (!input.detachedCheckoutIdentity && forge?.scopeProof === 'exact-delivered-head'
+    && forge.prHead === input.tip && input.verifiedPrHead === input.tip
+    && policy.agent.status === 'completed' && policy.completion === PR_COMPLETIONS.REVIEW_THEN_MERGE
+    && policy.agent.result?.executionSuccess === true && policy.agent.result.validationPassed !== false
+    && policy.agent.result.taskOutcome?.recovery?.mode !== 'approval' && !policy.agent.metadata?.blocker
+    && retirementPr(policy) === input.prUrl) {
+    const rows = policy.agent.metadata?.completedCheckouts?.filter(row => completedCheckoutReceiptValid(policy.agent, row)
+      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch
+      && samePath(row.path, policy.agent.metadata.workspacePath) && !sameReviewedPath(row.path, input.checkoutPath, input)
+      && (!policy.tip || [row.head, input.tip].includes(policy.tip))
+      && (!reviewTarget(policy) || reviewTarget(policy).branch === input.branch)
+      && distinctCapturedAdministration(row.incarnation, input.checkoutIncarnation?.gitdir)
+      && !isDeepStrictEqual(row.incarnation.pointer, input.checkoutIncarnation?.pointer)
+      && input.namedSiblingCaptures?.some(proof => proof.agentId === policy.agent.id
+        && proof.capturedHead === row.head && proof.capturedAt === row.capturedAt && proof.path === row.path
+        && isDeepStrictEqual(proof.incarnation, row.incarnation)
+        && isDeepStrictEqual(proof.checkoutIncarnation, input.checkoutIncarnation)));
+    return rows?.length === 1 ? { ...rows[0], releasedCopyIncarnation: input.checkoutIncarnation } : null;
+  }
+
   if (forge?.scopeProof !== 'represented-detached-head' || forge.detachedRepresentation?.sourceHead !== input.tip
     || forge.detachedRepresentation.deliveredHead !== input.verifiedPrHead
     || completedDetachedSibling(policy, input) || policy.resumedCleanup
@@ -226,7 +375,7 @@ function separatelyDeliveredCheckout(policy, input) {
 
 function reviewedIncarnation(input, policies) {
   if (!isAbsolute(input.checkoutPath || '') || samePath(input.checkoutPath, input.repoPath)
-    || !input.prUrl || input.verifiedPrHead !== input.tip
+    || !input.prUrl || (input.verifiedPrHead !== input.tip && !policies.some(policy => representedOriginalContinuation(policy, input)))
     || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(input.tip || '')) return null;
   const owners = policies.filter(policy => policy.agent.status === 'completed' && (policy.agent.result?.success === true
     || completedCleanupForRetirement(policy, input) || reviewedOrphanCheckout(policy, input) || continuedDelivery(policy, input))
@@ -291,6 +440,18 @@ function completedCleanupForRetirement(policy, input) {
  * A completed cleanup successor can settle its captured ancestors' retirement
  * obligations; their execution failures and task budgets remain historical facts.
  */
+function preservedResumedSource(proof, row, input) {
+  if (proof.kind !== 'preserved-resumed-source') return true;
+  const saved = proof.sourcePreservation;
+  return saved?.sourceHead === row.head && saved.retainedHead === row.head
+    && saved.retainedRef === `refs/portos/retained-checkout-source/${row.head}`
+    && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(saved.base || '')
+    && saved.targetHead === (input.retirementForge?.targetHead ?? input.retirementForge?.defaultHead)
+    && Number.isInteger(saved.sourceCommits) && saved.sourceCommits > 0 && saved.sourceCommits <= 64
+    && Number.isInteger(saved.deltaBytes) && saved.deltaBytes >= 0 && saved.deltaBytes <= 64 * 1024
+    && /^[a-f0-9]{64}$/.test(saved.deltaSha256 || '');
+}
+
 function resumedCleanupPolicies(policies, input) {
   if (input.verifiedPrHead !== input.tip) return policies;
   const byId = new Map(policies.map(policy => [policy.agent.id, policy]));
@@ -306,7 +467,7 @@ function resumedCleanupPolicies(policies, input) {
     const rewritten = row => successor && input.resumedDeliveries?.some(proof =>
       proof.agentId === agent.id && proof.successorAgentId === successor.agent.id && proof.taskId === agent.taskId
       && proof.capturedHead === row.head && proof.capturedAt === row.capturedAt
-      && proof.prUrl === input.prUrl && proof.tip === input.tip
+      && proof.prUrl === input.prUrl && proof.tip === input.tip && preservedResumedSource(proof, row, input)
       && (!policy.tip || policy.tip === row.head) && isDeepStrictEqual(proof.checkoutIncarnation, incarnation));
     const rows = agent.metadata?.completedCheckouts?.filter(row => completedCheckoutReceiptValid(agent, row)
       && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && (!policy.tip || policy.tip === row.head)
@@ -329,11 +490,32 @@ function resumedCleanupPolicies(policies, input) {
       if (!parent || seen.has(parent.agent.id) || parent.agent.taskId !== successor.agent.taskId
         || !(Date.parse(parent.agent.completedAt) <= Date.parse(child.agent.startedAt)) || !receipt(parent, context.checkoutIncarnation, successor)) break;
       seen.add(parent.agent.id);
+      const retained = input.resumedDeliveries?.find(proof => proof.kind === 'preserved-resumed-source'
+        && proof.agentId === parent.agent.id && proof.successorAgentId === successor.agent.id
+        && proof.taskId === parent.agent.taskId && proof.prUrl === input.prUrl && proof.tip === input.tip
+        && isDeepStrictEqual(proof.checkoutIncarnation, context.checkoutIncarnation));
       proofs.set(parent.agent.id, { successorAgentId: successor.agent.id, taskId: successor.agent.taskId,
         checkoutIncarnation: context.checkoutIncarnation,
+        ...(retained && { sourcePreservation: retained.sourcePreservation }),
         ...(sibling && { detachedCheckoutIdentity: input.detachedCheckoutIdentity }) });
       child = parent;
     }
+  }
+  for (const proof of input.resumedDeliveries || []) {
+    if (proof.kind !== 'same-task-generation' || proof.prUrl !== input.prUrl || proof.tip !== input.tip
+      || !isDeepStrictEqual(proof.checkoutIncarnation, input.checkoutIncarnation)) continue;
+    const parent = byId.get(proof.agentId), successor = byId.get(proof.successorAgentId);
+    if (!parent || !successor || parent.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
+      || successor.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE || proof.taskId !== parent.agent.taskId
+      || proof.originalPolicyTip !== (parent.tip ?? null)) continue;
+    const binding = sameTaskRetirementBinding(parent.agent, successor.agent, input);
+    if (!binding || proof.capturedHead !== (binding.sourceCapture?.head ?? null)
+      || proof.capturedAt !== (binding.sourceCapture?.capturedAt ?? null)
+      || proof.sourceSeededAt !== (binding.sourceSeed?.seededAt ?? null)
+      || proof.successorCapturedAt !== binding.successorCapture.capturedAt) continue;
+    proofs.set(parent.agent.id, { successorAgentId: successor.agent.id, taskId: parent.agent.taskId,
+      checkoutIncarnation: input.checkoutIncarnation, evidence: 'server-seeded-task-generation',
+      ...(binding.sourceSeed && { sourceCaptureUnknown: true }) });
   }
   return policies.map(policy => proofs.has(policy.agent.id) ? { ...policy, resumedCleanup: proofs.get(policy.agent.id) } : policy);
 }

@@ -44,6 +44,7 @@ const MODEL_RATE_AS_OF = Object.freeze({
   'claude-opus-5-5': '2026-09-23',
   'gemini-4-argon': '2026-10-17',
   'gpt-6.1-sol': '2026-09-29',
+  'gpt-6.1-terra': '2026-10-27',
   'gpt-6-sol': '2026-09-22',
   'gpt-6-luna': '2026-09-22',
   'gpt-5.6-sol': '2026-09-22',
@@ -208,6 +209,8 @@ const EXACT_RATES = {
   'gpt-6-astra': [10.0, 50.0],
   // https://developers.openai.com/api/docs/models/gpt-6.1-sol
   'gpt-6.1-sol': [2.0, 10.0],
+  // https://developers.openai.com/api/docs/models/gpt-6.1-terra
+  'gpt-6.1-terra': [1.0, 5.0],
   'gpt-6-sol': [2.0, 10.0],
   'gpt-6-luna': [0.1, 0.5],
   'gpt-5.6-sol': [4.0, 20.0],
@@ -313,8 +316,9 @@ const FALLBACK_RATES = { rateModel: null, inputPer1M: 3.0, outputPer1M: 15.0 };
  * Verified on PRICING_AS_OF against the pages listed in the header:
  *   - Anthropic: 0.1x read, 1.25x 5-minute write (2x for the 1-hour TTL, which
  *     Claude Code does not use — `cache_creation_input_tokens` is 5-minute).
- *   - OpenAI: 0.1x cached input; only gpt-5.6 lists a separate cache-write rate
- *     (~1.25x), and Codex reports no cache-write tokens at all.
+ *   - OpenAI: 0.1x cached input by default, with model-specific overrides;
+ *     writes are estimated at 1.25x (Terra's 30-minute rate). Codex reports no
+ *     cache-write tokens; longer retention rates are not modeled.
  *   - xAI (2026-10-24, https://docs.x.ai/docs/models): cached input is a
  *     published price, not one ratio. grok-4.7 and grok-4.6 are $0.50 (0.25x
  *     of $2), grok-4.5 is $0.30 (0.15x), grok-4.3 / grok-4.20 and
@@ -341,6 +345,8 @@ const DEFAULT_CACHE_MULTIPLIERS = { read: 0.1, write: 1.25 };
 const CACHE_MULTIPLIER_RULES = [
   // GPT-6.1 Sol cached input is $0.10/MTok against a $2 input rate.
   { test: /^gpt-6\.1-sol$/, read: 0.05, write: 1.25 },
+  // GPT-6.1 Terra cached input is $0.05/MTok against a $1 input rate.
+  { test: /^gpt-6\.1-terra$/, read: 0.05, write: 1.25 },
   { test: /^grok-4\.7$/, read: 0.25, write: 1 },
   { test: /^grok-4\.6$/, read: 0.25, write: 1 },
   { test: /^grok-4\.5$/, read: 0.15, write: 1 },

@@ -342,6 +342,12 @@ CREATE TABLE IF NOT EXISTS cos_pending_agent_feedback (
   archive_date TEXT
 );
 
+-- Publication ownership outlives task working-set retention. Machine-local.
+CREATE TABLE IF NOT EXISTS cos_release_synchronizations (
+  identity TEXT PRIMARY KEY,
+  record JSONB NOT NULL
+);
+
 -- The CoS task queues, one row per task. `task` is the task in its stored form;
 -- the other columns are the projections the queries need (open queue, history
 -- paging, queue order, recent-completed window). cos_task_lists.version bumps on

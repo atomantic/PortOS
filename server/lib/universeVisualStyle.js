@@ -24,6 +24,7 @@
  */
 
 import { escapeRegExp } from './textUtils.js';
+import { normalizeUniverseVisualProfile, resolveUniverseVisualProfile, visualProfileAdditions } from './universeVisualProfile.js';
 
 const tokenList = (values) => (Array.isArray(values) ? values : [])
   .map((token) => (typeof token === 'string' ? token.trim() : ''))
@@ -37,9 +38,10 @@ export const splitPromptTokens = (text) => (typeof text === 'string' ? text : ''
 
 /** Curated visual token lists for a universe (`[]` for a missing universe). */
 export function universeVisualStyleTokens(universe) {
+  const profile = normalizeUniverseVisualProfile(universe?.visualProfile);
   return {
-    embrace: tokenList(universe?.influences?.embrace),
-    avoid: tokenList(universe?.influences?.avoid),
+    embrace: [...tokenList(universe?.influences?.embrace), ...visualProfileAdditions(profile).map(a => a.text)],
+    avoid: [...tokenList(universe?.influences?.avoid), ...(profile?.generation.enabled && profile.generation.avoid ? [profile.generation.avoid] : [])],
   };
 }
 
@@ -147,7 +149,10 @@ export function universeStylePreset(universe, series = null) {
     override: series?.stylePromptOverride,
     mode: series?.stylePromptOverrideMode,
   });
-  const negativePrompt = universeVisualStyleTokens(universe).avoid.join(', ');
-  if (!prompt && !negativePrompt) return null;
-  return { prompt, negativePrompt };
+  const visualProfile = resolveUniverseVisualProfile(universe, undefined, series);
+  // A series replacement suppresses the inherited photography profile, while
+  // the universe's explicit avoid chips still apply to every series.
+  const negativePrompt = universeVisualStyleTokens({ ...universe, visualProfile }).avoid.join(', ');
+  if (!prompt && !negativePrompt && !visualProfile) return null;
+  return { prompt, negativePrompt, ...(visualProfile ? { visualProfile } : {}) };
 }

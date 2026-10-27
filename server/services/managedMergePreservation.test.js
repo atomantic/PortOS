@@ -29,7 +29,7 @@ it('pins every managed GitHub merge attempt and defers removal until preservatio
       expect(command).not.toContain('--delete-branch');
       expect(command).toContain('--match-head-commit');
     }
-    const proofOrder = ['remote state is exactly MERGED', 'require released:true', 'Recheck live claim/worktree ownership', 'checkouts/review', 'Read the full returned comparison', 'checkouts/retire', 'matching persisted retirement receipt'];
+    const proofOrder = ['hosting provider reports the exact PR as MERGED', 'Release any coordination lease actually held', 'Recheck live claim/worktree ownership', 'checkouts/review', 'Inspect the returned local identity', 'checkouts/retire', 'matching persisted retirement receipt'];
     const positions = proofOrder.map(marker => text.indexOf(marker, text.indexOf('**Managed-worktree')));
     expect(positions.every(at => at >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));

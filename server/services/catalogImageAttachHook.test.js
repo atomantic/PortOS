@@ -7,11 +7,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const attachMedia = vi.fn(async () => ({}));
 const setPortraitMedia = vi.fn(async () => ({}));
 const listMediaForIngredient = vi.fn(async () => []);
+const updateMediaLibrary = vi.fn(async () => ({}));
 // Defaults to "ingredient exists" — the 'gone'-path test overrides per-call.
 const getIngredient = vi.fn(async () => ({ id: 'ing', deleted: false }));
-vi.mock('./catalogDB.js', () => ({ attachMedia, setPortraitMedia, listMediaForIngredient, getIngredient }));
+vi.mock('./catalogDB.js', () => ({ attachMedia, setPortraitMedia, listMediaForIngredient, getIngredient, updateMediaLibrary }));
 
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
+const { catalogEvents } = await import('./catalogEvents.js');
 const hook = await import('./catalogImageAttachHook.js');
 
 const completedImageJob = (params, filename = 'job-abc.png') => ({
@@ -27,13 +29,14 @@ describe('catalogImageAttachHook', () => {
     // mockReset (not mockClear) so a per-test mockImplementation — e.g. the
     // stateful store in the serialization test — can't leak into later tests.
     attachMedia.mockReset();
-    attachMedia.mockResolvedValue({});
+    attachMedia.mockImplementation(async (_id, _filename, _kind, options) => ({ library: options?.library || {} }));
     setPortraitMedia.mockReset();
-    setPortraitMedia.mockResolvedValue({});
+    setPortraitMedia.mockImplementation(async (_id, _filename, options) => ({ library: options?.library || {} }));
     listMediaForIngredient.mockReset();
     listMediaForIngredient.mockResolvedValue([]);
     getIngredient.mockReset();
     getIngredient.mockResolvedValue({ id: 'ing', deleted: false });
+    updateMediaLibrary.mockClear();
   });
 
   afterEach(async () => {
@@ -61,6 +64,45 @@ describe('catalogImageAttachHook', () => {
     await hook.__testing.settled();
     expect(attachMedia).toHaveBeenCalledWith('ing-3', 'ref.png', 'reference');
     expect(setPortraitMedia).not.toHaveBeenCalled();
+  });
+
+  it('durably attaches an unreviewed refinement with age, feedback and source lineage after the client leaves', async () => {
+    const library = { variant: { age: 27, formId: 'adult' }, guide: false,
+      review: { status: 'unreviewed', feedback: 'Keep the face, correct the hair' },
+      derivedFrom: { mediaKey: 'original.png', kind: 'reference' } };
+    mediaJobEvents.emit('completed', completedImageJob({
+      catalogAttach: { ingredientId: 'ing-refine', kind: 'reference', role: 'refinement', library },
+    }, 'refined.png'));
+    await hook.__testing.settled();
+    expect(attachMedia).toHaveBeenCalledWith('ing-refine', 'refined.png', 'reference', { role: 'refinement', library, preserveExistingOnConflict: true });
+    expect(updateMediaLibrary).not.toHaveBeenCalled();
+    expect(setPortraitMedia).not.toHaveBeenCalled();
+  });
+
+  it('notifies other views when an existing attachment gains refinement metadata', async () => {
+    const changed = vi.fn();
+    catalogEvents.on('primitive-changed', changed);
+    const library = { review: { status: 'unreviewed', feedback: 'Correct the hair' }, derivedFrom: { mediaKey: 'source.png', kind: 'reference' } };
+    listMediaForIngredient.mockResolvedValue([{ mediaKey: 'refined.png', kind: 'reference' }]);
+    mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-refine', library } }, 'refined.png'));
+    await hook.__testing.settled();
+    expect(updateMediaLibrary).toHaveBeenCalledWith('ing-refine', 'refined.png', 'reference', library, { preserveExisting: true });
+    expect(changed).toHaveBeenCalledOnce();
+    expect(changed).toHaveBeenCalledWith({ ingredientId: 'ing-refine' });
+    listMediaForIngredient.mockResolvedValue([{ mediaKey: 'refined.png', kind: 'reference', library }]);
+    mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-refine', library } }, 'refined.png'));
+    await hook.__testing.settled();
+    expect(changed).toHaveBeenCalledOnce();
+    catalogEvents.off('primitive-changed', changed);
+  });
+
+  it('preserves an attachment created after the initial read and adds its missing lineage', async () => {
+    const library = { tags: ['original'], review: { status: 'unreviewed' }, derivedFrom: { mediaKey: 'source.png', kind: 'reference' } };
+    attachMedia.mockResolvedValue({ kind: 'reference', library: { review: { status: 'good' } } });
+    mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-refine', kind: 'reference', library } }, 'refined.png'));
+    await hook.__testing.settled();
+    expect(attachMedia).toHaveBeenCalledWith('ing-refine', 'refined.png', 'reference', { library, preserveExistingOnConflict: true });
+    expect(updateMediaLibrary).toHaveBeenCalledWith('ing-refine', 'refined.png', 'reference', library, { preserveExisting: true });
   });
 
   // Uniquely catches a reference sheet taking the portrait slot of a record

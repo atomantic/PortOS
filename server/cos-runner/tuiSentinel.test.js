@@ -71,6 +71,8 @@ async function spawnTui(sentinel = {}, { trackPromptSubmission = true } = {}) {
     createAgentSentinelAccess: vi.fn(() => access),
     parseSentinelPayload, SENTINEL_COMPLETION_MARKER,
     buildCliChildEnv: () => ({}), prepareCliSpawn: (command, args) => ({ command, args }),
+    prepareWindowsAgentLaunch: (_agentId, command, args) => ({ command, args }),
+    watchWindowsAgentProcess: child => child,
     commandExists: vi.fn(async () => true), findCommandOnPath: command => command,
     isAllowedCommand: () => true, ALLOWED_COMMANDS: ['example-cli'],
   });

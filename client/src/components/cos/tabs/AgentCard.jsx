@@ -33,7 +33,7 @@ import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { estimateCosDuration } from '../../../lib/cosDurationEstimate';
 import { isAgentFeedbackUpdateTarget, isSystemAgent as isSystemAgentRecord } from '../../../lib/cosAgentFeedback';
-import AgentResultLine, { SecurityScanEvidence } from '../AgentResultLine';
+import AgentResultLine, { SecurityScanEvidence, ReleasePublicationLine } from '../AgentResultLine';
 import DeliveryStatus from '../DeliveryStatus';
 import AuditSourceEvidence from '../AuditSourceEvidence';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
@@ -1138,6 +1138,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         <AuditSourceEvidence evidence={agent.metadata?.auditSourceEvidence} />
         {agent.deliveryPending && <DeliveryStatus agent={agent} />}
 
+        {!agent.result && <ReleasePublicationLine publication={agent.metadata?.releasePublication} synchronization={agent.metadata?.releaseSynchronization} />}
         {!agent.result && <SecurityScanEvidence scanner={agent.metadata?.securityScan} control={agent.metadata?.securityScanControl} />}
 
         {agent.result && (

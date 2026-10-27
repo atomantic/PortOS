@@ -152,6 +152,7 @@ describe.skipIf(!runDb)('universeBuilder DB adapter round-trip', () => {
 
   it('listStyles projects the live set down to name + style fields', async () => {
     await db.writeRaw('live', U('live', {
+      visualProfile: { version: 1, finishing: { mode: 'preview' } },
       logline: 'a logline that must not ship',
       influences: { embrace: ['inky linework'], avoid: ['lowres'] },
     }));
@@ -167,8 +168,9 @@ describe.skipIf(!runDb)('universeBuilder DB adapter round-trip', () => {
     // The projection is the whole point — nothing else comes back. Keys must
     // also match the file backend's row exactly (store.test.js pins that side).
     expect(Object.keys(live).sort())
-      .toEqual(['createdAt', 'id', 'influences', 'name', 'negativePrompt', 'stylePrompt']);
+      .toEqual(['createdAt', 'id', 'influences', 'name', 'negativePrompt', 'stylePrompt', 'visualProfile']);
     expect(live.logline).toBeUndefined();
+    expect(live.visualProfile).toEqual({ version: 1, finishing: { mode: 'preview' } });
 
     // Legacy v2 prose fields ride along so the service can fold them into tokens.
     const legacy = rows.find((r) => r.id === 'legacy');

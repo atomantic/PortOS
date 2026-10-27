@@ -27,9 +27,16 @@ router.post('/agents/:id/security-scan', asyncHandler(async (req, res) => {
   res.json(await runAgentSecurityScan(req.params.id, input));
 }));
 
+router.post('/agents/:id/release-publication', asyncHandler(async (req, res) => {
+  const { releasePublicationRequestSchema } = await import('../lib/releasePublication.js');
+  const input = validateRequest(releasePublicationRequestSchema, req.body ?? {});
+  const { verifyAgentReleasePublication } = await import('../services/releasePublication.js');
+  res.json(await verifyAgentReleasePublication(req.params.id, input));
+}));
+
 const mergeAdmissionSchema = z.object({
   agentId: z.string().min(1).max(200),
-  action: z.enum(['acquire', 'check', 'release']),
+  action: z.enum(['prepare', 'yield', 'acquire', 'check', 'release']),
   token: z.string().uuid().optional(),
   // Mirrors MERGE_ADMISSION_OUTCOMES; the service stays lazily imported.
   outcome: z.enum(['merged', 'leave-open', 'resync']).optional(),
@@ -45,11 +52,12 @@ router.post('/merge-admission', asyncHandler(async (req, res) => {
 // persisted. Neither an agentId nor a PR's prose can select another owner.
 const externalMergeAdmissionSchema = z.discriminatedUnion('action', [
   z.object({
-    action: z.literal('acquire'), appId: z.string().min(1).max(200),
+    action: z.enum(['prepare', 'acquire']), appId: z.string().min(1).max(200),
     worktreePath: z.string().min(1).max(4096), prUrl: z.string().url().max(2048),
     baseBranch: z.string().min(1).max(255),
     headSha: z.string().regex(/^[a-f0-9]{40}$/), baseSha: z.string().regex(/^[a-f0-9]{40}$/),
   }).strict(),
+  z.object({ action: z.literal('yield'), token: z.string().uuid() }).strict(),
   z.object({ action: z.literal('check'), token: z.string().uuid() }).strict(),
   z.object({ action: z.literal('release'), token: z.string().uuid(),
     outcome: z.enum(['merged', 'leave-open', 'resync']) }).strict(),
@@ -136,7 +144,8 @@ router.get('/agents', asyncHandler(async (req, res) => {
     getAgents(),
     active ? getTaskView({ kind: 'queue' }) : null,
   ]);
-  if (!active) return res.json(toAgentListItems(agents));
+  const { getProjectedAgentList } = await import('../services/releaseSynchronizationProjection.js');
+  if (!active) return res.json(toAgentListItems(await getProjectedAgentList(agents)));
 
   const resident = new Map(agents.map(agent => [agent.id, agent]));
   const visible = new Map(agents.filter(agent => agent.status !== 'completed').map(agent => [agent.id, agent]));
@@ -154,7 +163,7 @@ router.get('/agents', asyncHandler(async (req, res) => {
       visible.set(id, { ...agent, deliveryPending: true, ...(deliveryActivity && { deliveryActivity }) });
     }
   }));
-  res.json(toAgentListItems([...visible.values()]));
+  res.json(toAgentListItems(await getProjectedAgentList([...visible.values()])));
 }));
 
 // Bounded completed history, including state records not yet archived.
@@ -165,7 +174,8 @@ const completedQuerySchema = z.object({
 router.get('/agents/completed', asyncHandler(async (req, res) => {
   const query = validateRequest(completedQuerySchema, req.query);
   const page = await getCompletedAgentPage({ ...query, liveAgents: await getAgents() });
-  res.json({ ...page, items: toAgentListItems(page.items) });
+  const { getProjectedAgentList } = await import('../services/releaseSynchronizationProjection.js');
+  res.json({ ...page, items: toAgentListItems(await getProjectedAgentList(page.items)) });
 }));
 
 // GET /api/cos/agents/history - Get available date buckets with counts
@@ -186,8 +196,9 @@ router.get('/agents/history', asyncHandler(async (req, res) => {
   // distinct from a bucket that read back empty, which the client must not
   // mistake for "not hydrated" and re-request.
   const latestDate = dates[0]?.date;
+  const { getProjectedAgentList } = await import('../services/releaseSynchronizationProjection.js');
   const latest = latestDate
-    ? { date: latestDate, agents: toAgentListItems(await getAgentsByDate(latestDate)) }
+    ? { date: latestDate, agents: toAgentListItems(await getProjectedAgentList(await getAgentsByDate(latestDate))) }
     : null;
   res.json({ dates, latest });
 }));
@@ -199,7 +210,8 @@ router.get('/agents/history/:date', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid date format (expected YYYY-MM-DD)', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const agents = await getAgentsByDate(date);
-  res.json(toAgentListItems(agents));
+  const { getProjectedAgentList } = await import('../services/releaseSynchronizationProjection.js');
+  res.json(toAgentListItems(await getProjectedAgentList(agents)));
 }));
 
 // GET /api/cos/agents/feedback/pending - Reconciled durable feedback actions.
@@ -236,7 +248,8 @@ router.get('/agents/:id', asyncHandler(async (req, res) => {
   if (!agent) {
     throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
   }
-  res.json(agent);
+  const { getProjectedAgent } = await import('../services/releaseSynchronizationProjection.js');
+  res.json(await getProjectedAgent(agent));
 }));
 
 // GET /api/cos/agents/:id/prompt - Read the prompt.txt saved at spawn time

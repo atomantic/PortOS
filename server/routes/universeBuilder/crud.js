@@ -7,6 +7,7 @@
  * mounted BEFORE this one (see index.js).
  */
 
+import { universeVisualProfileSchema } from '../../lib/universeVisualProfileValidation.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { universeStarterPatch } from '../../lib/universeStarters.js';
@@ -44,6 +45,7 @@ const createSchema = z.object({
   categories: categoriesSchema.optional(),
   compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
   influences: influencesSchema.optional(),
+  visualProfile: universeVisualProfileSchema.nullable().optional(),
   styleReferences: styleReferencesField,
   // Base "style probe" render filenames — sanitized + capped server-side.
   // Match the sanitizer cap so over-the-cap requests get a loud 400 instead
@@ -85,6 +87,7 @@ const patchSchema = z.object({
   categories: categoriesSchema.optional(),
   compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
   influences: influencesSchema.optional(),
+  visualProfile: universeVisualProfileSchema.nullable().optional(),
   styleReferences: styleReferencesField,
   // Base "style probe" render filenames — sanitized + capped server-side.
   // Match the sanitizer cap so over-the-cap requests get a loud 400 instead

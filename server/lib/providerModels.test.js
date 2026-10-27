@@ -482,6 +482,12 @@ describe('providerModels', () => {
   });
 
   describe('buildEffortArgs', () => {
+    it('passes Terra Ultra to Codex while keeping Luna at Max', () => {
+      const codex = { id: 'codex', command: 'codex' };
+      expect(buildEffortArgs('ultra', codex, [], 'gpt-6.1-terra')).toEqual(['-c', 'model_reasoning_effort=ultra']);
+      expect(buildEffortArgs('ultra', codex, [], 'gpt-6-luna')).toEqual(['-c', 'model_reasoning_effort=max']);
+    });
+
     it('emits grok’s --effort alias, and suppresses it when --reasoning-effort is baked in', () => {
       const grok = { id: 'grok-cli', command: 'grok' };
       expect(buildEffortArgs('xhigh', grok, [])).toEqual(['--effort', 'xhigh']);

@@ -14,6 +14,7 @@ import {
   buildCiTestPlan,
   collectPlanInputs,
   ALWAYS_RUN_TESTS,
+  WINDOWS_CONTRACT_TESTS,
 } from './ci-test-plan.js';
 import {
   collectPregateChangedFiles,
@@ -199,7 +200,7 @@ describe('resolvePlanStages', () => {
     expect(stages.map(stage => stage.name)).toEqual([
       'hidden-content scan', 'server structural guards', 'client structural guards',
       'client/server lint', 'server tests', 'client tests', 'client build',
-      'API Explorer bundle pin', 'boot smoke', 'browser suites', 'DB provision (portos_test)', 'DB suite (portos_test)',
+      'boot smoke', 'browser suites', 'DB provision (portos_test)', 'DB suite (portos_test)',
     ]);
     for (const scope of ['server', 'client']) {
       expect(stages.find(stage => stage.name === `${scope} tests`).env).toMatchObject({
@@ -239,7 +240,7 @@ describe('pregate hidden-content invocation', () => {
     git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
     git('config', 'core.excludesFile', join(scratch, 'empty-excludes'));
     // Copy the real builtin-only entrypoints so REPO_ROOT targets this fixture.
-    // No runners or test files: docs-only changes produce an empty test plan.
+    // Docs-only changes select no test owners; full plans still have a native inventory.
     for (const path of [
       'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
@@ -262,6 +263,7 @@ describe('pregate hidden-content invocation', () => {
       mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
       write(join(workspace, 'package-lock.json'), JSON.stringify({ packages: { '': {} } }));
     }
+    write('server/lib/bufferedSpawn.test.js', '// Native inventory fixture\n');
     mkdirSync(join(root, 'docs'));
     write(trackedPath, clean);
     git('add', '--all');
@@ -289,6 +291,18 @@ describe('pregate hidden-content invocation', () => {
   afterAll(async () => {
     if (template?.scratch) await destroyGitSandbox(template.scratch);
   });
+
+  // Only cases that select Windows need its complete tracked inventory.
+  // Putting it in the common template would also select unrelated guards.
+  function prepareWindowsInventory() {
+    for (const path of WINDOWS_CONTRACT_TESTS) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      write(path, '// Native inventory fixture\n');
+    }
+    git('add', '--all');
+    git('commit', '-qm', 'native contract inventory fixture');
+    base = git('rev-parse', 'HEAD');
+  }
 
   function prepareGuardFixture({ browser = false } = {}) {
     write('server/lib/index.js', 'export {};\n');
@@ -400,7 +414,7 @@ describe('pregate hidden-content invocation', () => {
   });
 
   // A branch and base can each be green while their combined route inventory fails.
-  it('runs guards on the exact merged tree, propagates failure, and preserves caller state and receipt', () => {
+  it('runs guards against the checked base on the exact merged tree, propagates failure, and preserves caller state and receipt', () => {
     git('config', 'core.autocrlf', 'true');
     mkdirSync(join(root, 'server/routes'), { recursive: true });
     write('server/routes/universe-builder.js', 'export const mutation = false;\n');
@@ -416,6 +430,9 @@ describe('pregate hidden-content invocation', () => {
       import { resolve } from 'path';
       import { pathToFileURL } from 'url';
       if (process.env.PORTOS_TEST_MEMO !== 'off') throw new Error('merged guards reused memo');
+      if (process.env.CI_BASE_SHA !== process.env.PREGATE_FIXTURE_BASE) {
+        throw new Error('guard stages received a different base from the checked merge target');
+      }
       for (const file of JSON.parse(process.env.CI_TEST_FILES)) {
         if (file.endsWith('hostControlRoutes.test.js')) await import(pathToFileURL(resolve(file)));
       }
@@ -429,7 +446,7 @@ describe('pregate hidden-content invocation', () => {
     const movedBase = git('rev-parse', 'HEAD');
     git('checkout', '-qb', 'feature', common);
     const invoke = (...flags) => spawnSync(process.execPath, ['scripts/pregate.js', ...flags], {
-      cwd: root, encoding: 'utf8', env: { ...process.env, PORTOS_TEST_MEMO: 'on' },
+      cwd: root, encoding: 'utf8', env: { ...process.env, PORTOS_TEST_MEMO: 'on', PREGATE_FIXTURE_BASE: flags.at(-1) },
     });
     mkdirSync(join(root, '.cache/pregate'), { recursive: true });
     write(PREGATE_REPORT_PATH, 'original attestation receipt');
@@ -553,6 +570,8 @@ describe('pregate hidden-content invocation', () => {
   // can produce a misleading product failure or repair the shared source tree.
   it.each(['matching', 'stale', 'missing-package', 'unreadable-package', 'dangling', 'missing-link', 'unlinked'])(
     'checks %s linked dependencies read-only before executing stages', (state) => {
+      // The server lockfile selects the native Windows job.
+      prepareWindowsInventory();
       const worktree = join(scratch, 'linked-worktree');
       git('worktree', 'add', '--detach', worktree, base);
       root = worktree;
@@ -625,6 +644,7 @@ describe('pregate hidden-content invocation', () => {
   );
 
   it('diagnoses a production-only install before spawning development checks', () => {
+    prepareWindowsInventory();
     write('server/package-lock.json', JSON.stringify({ packages: {
       '': {}, 'node_modules/vitest': { version: '5.0.4', dev: true },
     } }));
@@ -930,6 +950,7 @@ describe('pregate hidden-content invocation', () => {
   });
 
   it('preserves binary, empty-file, and stdin-like path findings for untracked additions', () => {
+    prepareWindowsInventory();
     const emptyPath = 'docs/empty\u200B.md';
     write(emptyPath, '');
     write('docs/payload.bin', Buffer.from([0, 1, 2]));
@@ -1140,6 +1161,32 @@ describe('the gate end to end', () => {
     expect(result.stdout).toBe('');
   });
 
+  it('refuses unsupported Git before planning or writing a receipt', () => {
+    const receipt = join(REPO_ROOT, PREGATE_REPORT_PATH);
+    const before = existsSync(receipt) ? readFileSync(receipt) : null;
+    const preload = `
+      import childProcess from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      childProcess.spawnSync = (command, args) => {
+        if (command === 'git' && args.join(' ') === 'merge-tree -h') {
+          return { status: 129, stdout: '--write-tree', stderr: 'private subprocess output' };
+        }
+        throw new Error('Unexpected subprocess after capability refusal');
+      };
+      syncBuiltinESMExports();
+    `;
+    const result = spawnSync(process.execPath, [
+      '--import', `data:text/javascript,${encodeURIComponent(preload)}`,
+      join(REPO_ROOT, 'scripts', 'pregate.js'),
+    ], { cwd: REPO_ROOT, encoding: 'utf8' });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Install Git 2.40 or newer');
+    expect(result.stderr).not.toContain('private subprocess output');
+    expect(result.stderr).not.toContain('Unexpected subprocess');
+    expect(result.stdout).not.toContain('Planning against');
+    expect(existsSync(receipt) ? readFileSync(receipt) : null).toEqual(before);
+  });
+
   it('passes an uncommitted new test through the planner override', () => {
     const root = mkdtempSync(join(tmpdir(), 'portos-pregate-'));
     const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
@@ -1269,7 +1316,7 @@ describe('resource suite stages', () => {
     const stages = resolvePlanStages(fullPlan, { baseSha: 'base', databaseEnv });
     expect(stages.map((stage) => stage.name)).toEqual([
       'hidden-content scan', 'client/server lint', 'server tests', 'client tests',
-      'client build', 'API Explorer bundle pin', 'boot smoke', 'browser suites',
+      'client build', 'boot smoke', 'browser suites',
       'DB provision (portos_test)', 'DB suite (portos_test)',
     ]);
     expect(stages.map(describeStageCommand)).toEqual([
@@ -1278,7 +1325,6 @@ describe('resource suite stages', () => {
       'node scripts/run-ci-tests.js server',
       'node scripts/run-ci-tests.js client',
       'npm run build --prefix client',
-      'npm run test --prefix client -- ApiExplorer.bundle',
       'node scripts/smoke-boot.js',
       'node scripts/run-ci-tests.js server',
       'npm run setup:db:test --prefix server',
@@ -1315,7 +1361,7 @@ describe('resource suite stages', () => {
     expect(names({ build: true })).not.toContain('build');
     expect(names({ smoke: true })).not.toContain('smoke');
     expect(names({ db: true, browser: true, build: true, smoke: true })).toEqual(['scan', 'lint', 'server', 'client']);
-    expect(names({})).toEqual(['scan', 'lint', 'server', 'client', 'build', 'build', 'smoke', 'browser', 'db', 'db']);
+    expect(names({})).toEqual(['scan', 'lint', 'server', 'client', 'build', 'smoke', 'browser', 'db', 'db']);
   });
 
   it('plans no resource stage the planner did not select', () => {

@@ -67,6 +67,15 @@ export const FILM_LOOK_CONTROLS = Object.freeze([
   { id: 'tint', group: 'color', label: 'Tint', term: 'green–magenta tint', min: -1, max: 1, step: 0.01, def: 0,
     hint: 'The other white-balance axis. Green reads as fluorescent tubes or expired film; magenta as a faded Polaroid.',
     words: (v) => (v > 0 ? 'magenta tint' : 'green tint, fluorescent cast') },
+  { id: 'shoulder', group: 'color', label: 'Highlight shoulder', term: 'film highlight roll-off', min: 0, max: 1, step: 0.01, def: 0, since: 2,
+    hint: 'Compresses bright tones smoothly while keeping their differences. Cannot recover clipped detail.',
+    words: () => 'gentle photographic highlight roll-off' },
+  { id: 'toe', group: 'color', label: 'Shadow toe', term: 'film shadow response', min: 0, max: 1, step: 0.01, def: 0, since: 2,
+    hint: 'Deepens low tones progressively while holding the black point; leaves midtones alone.',
+    words: () => 'grounded photographic shadows' },
+  { id: 'highlightChroma', group: 'color', label: 'Highlight color restraint', term: 'negative highlight chroma', min: 0, max: 1, step: 0.01, def: 0, since: 2,
+    hint: 'Gently reduces saturation as tones approach white, preserving color in the shadows.',
+    words: () => 'restrained highlight color' },
   { id: 'cast', group: 'color', label: 'Color cast', term: 'color cast · wash', min: 0, max: 1, step: 0.01, def: 0,
     hint: 'A single color laid over everything, like shooting through a tinted window or under a sodium lamp.',
     words: () => 'overall color cast' },
@@ -128,6 +137,12 @@ export const FILM_LOOK_PRESETS = Object.freeze([
     values: { contrast: 0.15, saturation: 0.1, splitTone: 0.6, shadowColor: '#0f5a63', highlightColor: '#ff9a4a', grain: 0.12, grainSize: 0.2, vignette: 0.2 } },
   { id: 'newsprint', label: 'Monochrome', summary: 'Black and white with grain and a fade, like pushed Tri-X.',
     values: { contrast: 0.2, fade: 0.15, saturation: -1, grain: 0.55, grainSize: 0.45, vignette: 0.3 } },
+  { id: 'natural-35mm', label: 'Natural 35mm', summary: 'Original photographic recipe: gentle highlights, grounded shadows, fine grain and restrained local glow.',
+    values: { version: 2, shoulder: 0.5, toe: 0.2, highlightChroma: 0.35, saturation: -0.04, warmth: 0.03, halation: 0.1, grain: 0.18, grainSize: 0.15, vignette: 0.06 } },
+  { id: 'warm-negative', label: 'Warm consumer negative', summary: 'Original warm photographic recipe with soft highlights and a little more grain.',
+    values: { version: 2, shoulder: 0.6, toe: 0.15, highlightChroma: 0.45, warmth: 0.18, saturation: -0.03, halation: 0.13, grain: 0.24, grainSize: 0.22, vignette: 0.1 } },
+  { id: 'cinema-negative', label: 'Restrained cinema negative', summary: 'Original cinema recipe: deeper shadows, controlled highlights and quiet color.',
+    values: { version: 2, shoulder: 0.65, toe: 0.45, highlightChroma: 0.4, saturation: -0.08, warmth: -0.02, halation: 0.08, grain: 0.15, grainSize: 0.13, vignette: 0.08 } },
 ]);
 
 export const FILM_LOOK_PRESET_IDS = Object.freeze(FILM_LOOK_PRESETS.map((preset) => preset.id));
@@ -148,7 +163,9 @@ export function filmLookPreset(id) {
  */
 export function normalizeFilmLook(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
-  const look = { version: FILM_LOOK_VERSION, preset: FILM_LOOK_PRESET_IDS.includes(input.preset) ? input.preset : 'custom' };
+  if (input.version !== undefined && input.version !== 1 && input.version !== 2) return null;
+  const version = input.version === 2 || FILM_LOOK_CONTROLS.some((c) => c.since === 2 && Number(input[c.id]) > 0) ? 2 : FILM_LOOK_VERSION;
+  const look = { version, preset: FILM_LOOK_PRESET_IDS.includes(input.preset) ? input.preset : 'custom' };
   for (const control of FILM_LOOK_CONTROLS) {
     const value = input[control.id];
     if (control.type === 'color') look[control.id] = typeof value === 'string' && HEX.test(value) ? value.toLowerCase() : control.def;
@@ -205,7 +222,7 @@ export function sameFilmLook(a, b) {
   const left = normalizeFilmLook(a);
   const right = normalizeFilmLook(b);
   if (!left || !right) return left === right;
-  return FILM_LOOK_CONTROLS.every((control) => left[control.id] === right[control.id]);
+  return left.version === right.version && FILM_LOOK_CONTROLS.every((control) => left[control.id] === right[control.id]);
 }
 
 /** The control record for an id (label, term, hint, range). */
@@ -246,7 +263,28 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
   // Opaque base: letterbox and transparent areas blend as black, so every
   // arithmetic step below works on alpha 1 and the edges stay clean.
   emit('<feFlood flood-color="#000" result=""/>', 'bg');
-  emit(`<feComposite in="SourceGraphic" in2="bg" operator="over" result=""/>`);
+  if (look?.version === 2) emit('<feComponentTransfer in="SourceGraphic" result=""><feFuncA type="linear" slope="0" intercept="1"/></feComponentTransfer>');
+  else emit(`<feComposite in="SourceGraphic" in2="bg" operator="over" result=""/>`);
+
+  // Version 1 stays byte-for-byte identical. The new curve is evaluated before
+  // glow so optical effects cannot clip the source before its shoulder acts.
+  if (look?.version === 2 && (v('shoulder') || v('toe'))) {
+    const table = Array.from({ length: 256 }, (_, i) => {
+      const x = i / 255;
+      if (x < 0.25) return n(x * (1 - v('toe') * 0.6 * (1 - x / 0.25) ** 2));
+      if (x <= 0.55) return n(x);
+      const t = (x - 0.55) / 0.45;
+      return n(0.55 + 0.45 * t / (1 + v('shoulder') * 0.8 * t));
+    }).join(' ');
+    emit(`<feComponentTransfer in="${cur}" result="">${['R', 'G', 'B'].map((c) => `<feFunc${c} type="table" tableValues="${table}"/>`).join('')}</feComponentTransfer>`);
+  }
+  if (look?.version === 2 && v('highlightChroma')) {
+    const pic = cur;
+    const mask = emit(`<feColorMatrix in="${pic}" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ${LUMA} 0 0" result=""/>`);
+    const neutral = emit(`<feColorMatrix in="${pic}" type="saturate" values="${n(1 - 0.65 * v('highlightChroma'))}" result=""/>`);
+    const local = emit(`<feComposite in="${neutral}" in2="${mask}" operator="in" result=""/>`);
+    emit(`<feComposite in="${local}" in2="${pic}" operator="over" result=""/>`);
+  }
 
   const weave = v('weave');
   if (weave > 0) {
@@ -291,7 +329,7 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
     const [hr, hg, hb] = rgb(hex('halationColor', '#ff5a1f'));
     const luma = emit(`<feColorMatrix in="${pic}" type="matrix" values="${lumaRgb}" result=""/>`);
     const bright = emit(`<feComponentTransfer in="${luma}" result=""><feFuncR type="linear" slope="2.5" intercept="-1.5"/><feFuncG type="linear" slope="2.5" intercept="-1.5"/><feFuncB type="linear" slope="2.5" intercept="-1.5"/></feComponentTransfer>`);
-    const spread = emit(`<feGaussianBlur in="${bright}" stdDeviation="${n((0.008 + 0.03 * halation) * w)}" edgeMode="duplicate" result=""/>`);
+    const spread = emit(`<feGaussianBlur in="${bright}" stdDeviation="${n((look?.version === 2 ? 0.001 + 0.006 * halation : 0.008 + 0.03 * halation) * w)}" edgeMode="duplicate" result=""/>`);
     const tinted = emit(`<feColorMatrix in="${spread}" type="matrix" values="${n(hr)} 0 0 0 0 0 ${n(hg)} 0 0 0 0 0 ${n(hb)} 0 0 0 0 0 1 0" result=""/>`);
     emit(`<feComposite in="${pic}" in2="${tinted}" operator="arithmetic" k1="0" k2="1" k3="${n(1.3 * halation)}" k4="0" result=""/>`);
   }
@@ -378,6 +416,7 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
     emit(`<feBlend in="${faded}" in2="${pic}" mode="screen" result=""/>`);
   }
 
+  if (look?.version === 2 && parts.length > 2) emit(`<feComposite in="${cur}" in2="SourceGraphic" operator="in" result=""/>`);
   const filter = `<filter id="${id}" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB" primitiveUnits="userSpaceOnUse">${parts.join('')}</filter>`;
   return {
     svg: `<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true" focusable="false"><defs>${filter}</defs></svg>`,

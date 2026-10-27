@@ -226,6 +226,20 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/granite-4.2-3b-GGUF'
   },
   {
+    key: 'ministral-3-3b',
+    name: 'Ministral 3 3B Instruct',
+    category: 'lightweight',
+    recommendedFor: ['lightweight', 'general', 'vision', 'multilingual'],
+    params: '3B',
+    size: '2.6 GB',
+    family: 'ministral',
+    description: "Mistral's compact edge instruct model — vision, tools, and a 256K context window in a 3B footprint.",
+    capabilities: ['chat', 'tools', 'vision', 'multilingual'],
+    context: 262144,
+    ollama: 'ministral-3:3b',
+    lmstudio: 'lmstudio-community/Ministral-3-3B-Instruct-2512-GGUF'
+  },
+  {
     key: 'nemotron-3-nano-4b',
     name: 'Nemotron 3 Nano 4B',
     category: 'lightweight',
@@ -282,6 +296,20 @@ export const LOCAL_LLM_CATALOG = [
     context: 131072,
     ollama: 'gemma3:4b',
     lmstudio: 'lmstudio-community/gemma-3-4b-it-GGUF'
+  },
+  {
+    key: 'gemma4-e2b',
+    name: 'Gemma 4 E2B',
+    category: 'lightweight',
+    recommendedFor: ['lightweight', 'general', 'vision', 'reasoning'],
+    params: 'E2B',
+    size: '3.4 GB',
+    family: 'gemma',
+    description: "Google's ultra-compact edge multimodal Gemma 4 (2.3B active params) — on-device reasoning with thinking mode, tools, vision, and a 128K context window.",
+    capabilities: ['chat', 'reasoning', 'tools', 'vision'],
+    context: 131072,
+    ollama: 'gemma4:e2b',
+    lmstudio: 'lmstudio-community/gemma-4-E2B-it-GGUF'
   },
   {
     key: 'gemma4-e4b',
@@ -595,6 +623,20 @@ export const LOCAL_LLM_CATALOG = [
     context: 65536,
     ollama: 'olmo-3.1:32b-instruct',
     lmstudio: 'lmstudio-community/Olmo-3.1-32B-Instruct-GGUF'
+  },
+  {
+    key: 'qwen3-32b',
+    name: 'Qwen3 32B',
+    category: 'reasoning',
+    recommendedFor: ['reasoning', 'general', 'multilingual'],
+    params: '32B',
+    size: '20 GB',
+    family: 'qwen',
+    description: "Alibaba's dense 32B model with dual-mode reasoning (thinking and non-thinking), tools, and strong multilingual capabilities across 100+ languages.",
+    capabilities: ['chat', 'reasoning', 'tools', 'multilingual'],
+    context: 131072,
+    ollama: 'qwen3:32b',
+    lmstudio: 'lmstudio-community/Qwen3-32B-GGUF'
   },
   {
     key: 'deepseek-r1-8b',

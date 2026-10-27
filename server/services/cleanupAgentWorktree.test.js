@@ -61,7 +61,8 @@ vi.mock('./cosState.js', () => ({
 vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined),
   addTask: vi.fn().mockResolvedValue(undefined),
-  getTaskById: vi.fn().mockResolvedValue(null)
+  getTaskById: vi.fn().mockResolvedValue(null),
+  getAllTasks: vi.fn(async () => ({ user: { tasks: [] }, cos: { tasks: [] } }))
 }));
 vi.mock('./cos.js', () => ({
   forceSpawnTask: vi.fn().mockResolvedValue({ success: true })
@@ -260,7 +261,7 @@ import { existsSync as existsSyncMock } from 'fs';
 // retired in #3450.
 import { cleanupAgentWorktree, resolveWorktreeDisposition, spawnMergeRecoveryTask, spawnReviewLoopFollowUp, resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agentWorktreeCleanup.js';
 import { getAgent, getAgentRecord, getAgents, updateAgent } from './cosAgentLifecycle.js';
-import { getTaskById, addTask, updateTask } from './cosTaskStore.js';
+import { getAllTasks, getTaskById, addTask, updateTask } from './cosTaskStore.js';
 import { forceSpawnTask } from './cos.js';
 import { listWorktrees, removeWorktree } from './worktreeManager.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -291,6 +292,27 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     } : {} });
     await cleanupAgentWorktree('agent-runtime', false, { originalTask: { id: 'task-runtime', metadata: { discardWorktree: true } } });
     if (accepted) expect(removeWorktree).not.toHaveBeenCalled();
+    else expect(removeWorktree).toHaveBeenCalled();
+    expect(git.push).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['waiting', 'blocked', true], ['ready', 'pending', true], ['ready', 'in_progress', true],
+    ['waiting', 'blocked', false], ['ready', 'completed', true],
+  ])('preserves only the exact accepted investigator checkout at %s/%s (bound=%s)', async (phase, status, bound) => {
+    const startedAt = '2026-01-01T00:00:00.000Z';
+    getAgent.mockResolvedValue({ ...mockWorktreeAgent({ instanceId: 'fixture-local' }), id: 'waiting-agent',
+      taskId: 'waiting-task', startedAt, result: { success: false,
+        taskOutcome: { status: 'blocked', recovery: { mode: 'dependency-wait' } } } });
+    getTaskById.mockResolvedValue({ id: 'waiting-task', taskType: 'internal', status, metadata: {
+      blockedSystemRecovery: true, preserveOriginalBudget: true, investigationDependencyWait: {
+        version: 1, phase, sourceAgentId: bound ? 'waiting-agent' : 'another-generation', sourceStartedAt: startedAt,
+        instanceId: 'fixture-local',
+      },
+    } });
+    // Deliberately stale caller data must not discard a server-accepted wait.
+    await cleanupAgentWorktree('waiting-agent', false, { originalTask: { id: 'waiting-task', metadata: { discardWorktree: true } } });
+    if (bound && status !== 'completed') expect(removeWorktree).not.toHaveBeenCalled();
     else expect(removeWorktree).toHaveBeenCalled();
     expect(git.push).not.toHaveBeenCalled();
   });
@@ -1336,6 +1358,23 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
       expect(followUp.metadata.reviewLoopReviewerUsernames).toEqual(['ghost-reviewer']);
       expect(followUp.metadata.reviewLoopReviewerIdentityFaults).toBeUndefined();
     });
+
+    it('blocks a required PR author and records an optional author without dropping other reviewers', async () => {
+      execGhMock.mockImplementation((args) => Promise.resolve(args.includes('repos/test/repo/pulls/61') ? 'Author\n' : '{}'));
+      const blocked = await run({ usernames: ['author'] });
+      expect(addTask).not.toHaveBeenCalled();
+      expect(blocked.join(' ')).toMatch(/Required reviewer configuration fault.*author/i);
+
+      await run({ usernames: ['AUTHOR', 'other'], optionalReviewers: ['@author'] });
+      const [followUp] = addTask.mock.calls[0];
+      expect(followUp.metadata.reviewLoopReviewerUsernames).toEqual(['other']);
+      expect(followUp.metadata.reviewLoopReviewerIdentityFaults).toEqual([
+        expect.objectContaining({ token: 'AUTHOR', reason: expect.stringContaining('PR author') })
+      ]);
+      const section = buildReviewLoopFollowUpSection(followUp.metadata);
+      expect(section).toContain('read back pending requested reviewers and completed reviews');
+      expect(section).toContain('treat the request as failed');
+    });
   });
 
   it('spawns a username-only follow-up on a non-GitHub forge (copilot stripped, username drives the loop)', async () => {
@@ -1726,6 +1765,7 @@ describe('releaseRetryHold', () => {
     vi.clearAllMocks();
     git.getDefaultBranch.mockResolvedValue('main');
     git.getWorktreeBranches.mockResolvedValue(new Set());
+    git.getBranch.mockResolvedValue(DEAD_BRANCH);
     git.hasBranchMergeEvidence.mockResolvedValue(false);
     git.getBranchComparison.mockResolvedValue({ ahead: 2, commits: [], stats: {} });
     existsSyncMock.mockReturnValue(false);
@@ -1866,6 +1906,51 @@ describe('releaseRetryHold', () => {
   // them claims the retry with no pointer and restarts from scratch.
   describe('a held task (#3373)', () => {
     const heldTask = { id: 'task-1', status: 'in_progress', metadata: { retryPendingCleanup: 'agent-x', retryPendingSince: new Date().toISOString() } };
+
+    it('joins the exact existing merge coordinator instead of starting a competing original-task retry', async () => {
+      const original = { ...heldTask, description: 'Deliver the change', priority: 'MEDIUM',
+        metadata: { ...heldTask.metadata, app: 'demo', failureCount: 1, totalSpawnCount: 1 } };
+      getTaskById.mockResolvedValue(original);
+      getAllTasks.mockResolvedValueOnce({ cos: { tasks: [{ id: 'follow-up', status: 'in_progress', metadata: {
+        reviewLoopFollowUp: 'true', sourceAgentId: 'agent-x', sourceTaskId: original.id,
+        reviewLoopPRBranch: DEAD_BRANCH, reviewLoopPRUrl: 'https://github.com/example/repo/pull/7', app: 'demo', prCompletion: 'merge-on-green',
+      } }] } });
+      getAgentRecord.mockResolvedValue({ id: 'agent-x', taskId: original.id, status: 'completed',
+        result: { success: false, executionSuccess: true }, metadata: agentMetadata });
+      await releaseRetryHold({ agentId: 'agent-x', task: original, success: false, agentMetadata });
+      expect(updateTask).toHaveBeenCalledOnce();
+      expect(updateTask).toHaveBeenCalledWith(original.id, { status: 'in_progress', metadata: expect.objectContaining({
+        deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-x', deliveryFollowUpTaskId: 'follow-up',
+        retryPendingCleanup: undefined,
+      }) }, 'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedTask: expect.objectContaining({ metadata: original.metadata }) }));
+      expect(updateAgent).toHaveBeenCalledWith('agent-x', { result: { success: false, executionSuccess: true, cleanupPending: true } });
+      expect(addTask).not.toHaveBeenCalled();
+      expect(forceSpawnTask).not.toHaveBeenCalled();
+    });
+
+    it('refuses ambiguous same-deliverable follow-up ownership without releasing another retry', async () => {
+      getTaskById.mockResolvedValue({ ...heldTask, metadata: { ...heldTask.metadata, app: 'demo' } });
+      const metadata = { reviewLoopFollowUp: true, sourceAgentId: 'agent-x', sourceTaskId: heldTask.id,
+        reviewLoopPRBranch: DEAD_BRANCH, reviewLoopPRUrl: 'https://github.com/example/repo/pull/7', app: 'demo' };
+      getAllTasks.mockResolvedValueOnce({ cos: { tasks: [
+        { id: 'one', status: 'pending', metadata }, { id: 'two', status: 'in_progress', metadata },
+      ] } });
+      await expect(releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata }))
+        .rejects.toThrow('Multiple delivery follow-up owners');
+      expect(updateTask).not.toHaveBeenCalled();
+      expect(updateAgent).not.toHaveBeenCalled();
+    });
+
+    it('does not join a different source generation or app merely because the branch matches', async () => {
+      getTaskById.mockResolvedValue({ ...heldTask, metadata: { ...heldTask.metadata, app: 'demo' } });
+      getAllTasks.mockResolvedValueOnce({ cos: { tasks: [{ id: 'other', status: 'in_progress', metadata: {
+        reviewLoopFollowUp: true, sourceAgentId: 'other-agent', sourceTaskId: heldTask.id,
+        reviewLoopPRBranch: DEAD_BRANCH, reviewLoopPRUrl: 'https://github.com/example/repo/pull/7', app: 'other-app',
+      } }] } });
+      await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+      expect(updateTask).toHaveBeenCalledWith(heldTask.id, expect.objectContaining({ status: 'pending' }), 'user', expect.any(Object));
+      expect(updateAgent).not.toHaveBeenCalled();
+    });
 
     it('flips to pending WITH the pointer and the cleared marker in one updateTask', async () => {
       getTaskById.mockResolvedValue(heldTask);

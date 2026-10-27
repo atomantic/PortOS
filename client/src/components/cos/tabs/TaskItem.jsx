@@ -39,6 +39,7 @@ import AgentCard from './AgentCard';
 import PreflightProgress from './PreflightProgress';
 import DeliveryStatus from '../DeliveryStatus';
 import BlockedSystemRecovery from '../BlockedSystemRecovery';
+import { ReleasePublicationLine } from '../AgentResultLine';
 import { isDeliveryCleanupHeld } from '../../../../../server/lib/taskRetryHold.js';
 
 const statusIcons = {
@@ -650,6 +651,13 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                 idScope={idScope}
                 taskId={task.id}
               />
+              {(task.metadata?.releasePublication || task.metadata?.releaseSynchronization) && (
+                <ReleasePublicationLine
+                  publication={task.metadata?.releasePublication}
+                  synchronization={task.metadata?.releaseSynchronization}
+                  className="mt-2"
+                />
+              )}
               {(task.metadata?.model || task.metadata?.provider || task.metadata?.effort) && (
                 <div className="flex flex-wrap items-center gap-2 mt-1">
                   {task.metadata?.model && (

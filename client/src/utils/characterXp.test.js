@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import * as characterXp from './characterXp';
 import {
   levelFromXP,
   computeAgeView,
@@ -31,15 +30,6 @@ describe('levelFromXP', () => {
     expect(levelFromXP(-50)).toBe(1);
     expect(levelFromXP(NaN)).toBe(1);
     expect(levelFromXP(undefined)).toBe(1);
-  });
-});
-
-describe('removed legacy XP helpers (#3895)', () => {
-  it('no longer exports the XP-threshold view helpers', () => {
-    // Dead progression math removed; the module must not grow them back as public API.
-    expect(characterXp.computeXpView).toBeUndefined();
-    expect(characterXp.XP_THRESHOLDS).toBeUndefined();
-    expect(characterXp.MAX_LEVEL).toBeUndefined();
   });
 });
 

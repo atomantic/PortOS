@@ -13,7 +13,7 @@ vi.mock('../../lib/fileUtils.js', async importOriginal => makePathsProxy(await i
   dataRoot: () => lazyTempDataRoot('portos-composition-setup-diagnostics-'),
 }));
 
-const owner = vi.hoisted(() => ({ order: [], transport: null, sent: null, expressions: [] }));
+const owner = vi.hoisted(() => ({ order: [], transport: null, sent: null, expressions: [], closeError: null }));
 vi.mock('./ownedBrowser.js', () => ({
   launchCompositionBrowser: async () => ({
     transport: owner.transport,
@@ -21,7 +21,7 @@ vi.mock('./ownedBrowser.js', () => ({
       owner.order.push('facts');
       return { childSpawned: true, childExited: false, childClosed: false, exitCode: 'none', signalCode: 'none' };
     },
-    close: async () => { owner.order.push('close'); },
+    close: async () => { owner.order.push('close'); if (owner.closeError) throw owner.closeError; },
   }),
 }));
 
@@ -54,7 +54,7 @@ function scriptedTransport(stallOn, replies = {}) {
 const { PATHS } = await import('../../lib/fileUtils.js');
 const { openComposition } = await import('./browser.js');
 
-afterEach(() => { vi.useRealTimers(); owner.order = []; owner.expressions = []; });
+afterEach(() => { vi.useRealTimers(); owner.order = []; owner.expressions = []; owner.closeError = null; });
 afterAll(() => cleanupTempDataRoots());
 
 describe('composition CDP setup timeout evidence', () => {
@@ -79,6 +79,21 @@ describe('composition CDP setup timeout evidence', () => {
     expect(error.message).not.toContain(PATHS.data);
     expect(error.message).not.toContain('session-example');
     expect(owner.order).toEqual(['facts', 'close']);
+  });
+
+  it('reports an owned-browser cleanup failure after a stalled setup', async () => {
+    const directory = 'compositions/cleanup-diagnostics';
+    await mkdir(join(PATHS.data, directory), { recursive: true });
+    await writeFile(join(PATHS.data, directory, 'index.html'), '<html></html>');
+    owner.transport = scriptedTransport('Page.enable');
+    owner.closeError = new Error('Owned browser did not settle');
+    const onOwnerCleanupFailure = vi.fn();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const opened = openComposition(directory, { ownedBrowser: true, onOwnerCleanupFailure }).catch(error => error);
+    await owner.sent;
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(await opened).toBe(owner.closeError);
+    expect(onOwnerCleanupFailure).toHaveBeenCalledExactlyOnceWith(owner.closeError);
   });
 
   // Starvation vs a missed lifecycle event (#12656): the two must not read alike.

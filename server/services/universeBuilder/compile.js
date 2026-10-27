@@ -10,7 +10,8 @@
  */
 
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
-import { joinInfluenceList } from '../../lib/universeVisualStyle.js';
+import { joinInfluenceList, universeVisualStyleTokens } from '../../lib/universeVisualStyle.js';
+import { resolveUniverseVisualProfile, visualProfileAdditions } from '../../lib/universeVisualProfile.js';
 import { promptAddition } from '../../lib/modelInput.js';
 import { flattenCanonDescriptorFragments, richCanonDescriptorFragments } from '../../lib/canonPrompt.js';
 import { getWorldCategoryKeys, normalizeCategoryKey, ENTRY_REF_KIND } from './sanitize.js';
@@ -146,8 +147,10 @@ export function compilePrompts(universe, options = {}) {
   // append on top so the user can layer an extra-style chip, a style preset,
   // or an extra negative without editing the persistent influences. Token
   // lists are comma-joined to match composeStyledPrompt's input expectation.
-  const baselineEmbrace = joinInfluenceList(universe.influences?.embrace);
-  const baselineAvoid = joinInfluenceList(universe.influences?.avoid);
+  const visualProfile = resolveUniverseVisualProfile(universe, options.visualProfileOverride);
+  const tokens = universeVisualStyleTokens({ ...universe, visualProfile });
+  const baselineEmbrace = joinInfluenceList(tokens.embrace);
+  const baselineAvoid = joinInfluenceList(tokens.avoid);
   const embraceParts = [baselineEmbrace, options.stylePresetPrompt, options.extraStyle]
     .map((s) => (typeof s === 'string' ? s.trim() : ''))
     .filter(Boolean);
@@ -163,6 +166,7 @@ export function compilePrompts(universe, options = {}) {
   // negative is the user's text, so it is not an addition.
   const promptAdditions = [
     promptAddition('universe-style', 'Universe style', baselineEmbrace),
+    ...visualProfileAdditions(visualProfile),
     promptAddition('style-preset', options.stylePresetLabel ? `Style preset: ${options.stylePresetLabel}` : 'Style preset', options.stylePresetPrompt),
     promptAddition('extra-style', 'Batch extra style', options.extraStyle),
     promptAddition('universe-avoid', 'Universe avoid (negative prompt)', baselineAvoid),

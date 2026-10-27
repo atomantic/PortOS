@@ -25,6 +25,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { CODEX_SHIPPED_MODELS } from '../internal/codexShippedModels.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -90,7 +91,9 @@ describe('provider seed parity — data.reference ↔ aiToolkit sample', () => {
           expect(provider.models, `${seedName}.${id} lost its configured-default sentinel`).toContain(sentinel);
         }
         if (id === 'codex' || id === 'codex-tui') {
+          expect(provider.models, `${seedName}.${id} diverged from the catalog used during Codex refresh`).toEqual(CODEX_SHIPPED_MODELS);
           expect(provider.models, `${seedName}.${id} lost the current Codex Sol model`).toContain('gpt-6.1-sol');
+          expect(provider.models, `${seedName}.${id} lost GPT-6.1 Terra`).toContain('gpt-6.1-terra');
           expect(provider.models).not.toContain('gpt-5.3-codex-spark');
         }
       }

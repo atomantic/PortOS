@@ -16,6 +16,9 @@
 // brain and digital-twin) can be disambiguated as `brainValidation.X` /
 // `digitalTwinValidation.X`. The catch-all `validation.js` stays flat — its
 // names are the canonical PortOS-wide schemas.
+export * from './windowsAgentProcess.js';
+export * from './releasePublication.js';
+export * from './releaseSynchronization.js';
 export * from './appOperationErrorContext.js';
 export * from './workspaceTestCacheRoots.js';
 export * from './appPromptPlaceholders.js';
@@ -47,6 +50,7 @@ export * as catalogIdentityValidation from './catalogIdentityValidation.js';
 export * as catalogValidation from './catalogValidation.js';
 export * as catalogGreyboxValidation from './catalogGreyboxValidation.js';
 export * as catalogMediaLibrary from './catalogMediaLibrary.js';
+export * from './catalogAppearance.js';
 export * from './characterSheetReferences.js';
 export * as characterAugmentValidation from './characterAugmentValidation.js';
 export * as characterEvolutionValidation from './characterEvolutionValidation.js';
@@ -760,7 +764,6 @@ export * from './openapiSpec.js';
 export * from './openapiDowngrade.js';
 export * from './orchestrationProfile.js';
 export * from './apiToolResource.js';
-export * from './mergeGateAudit.js';
 export * from './mergeGateContract.js';
 export * from './preflightPlan.js';
 export * from './prDisposition.js';
@@ -1001,3 +1004,9 @@ export * from './npmRetirementPayload.js';
 export * from './videoLoraStageValidation.js';
 
 export * from './musicVideoGreybox.js';
+export * from './catalogRedesign.js';
+
+export * from './testCacheRetirementProof.js';
+export * from './realityStarterV2.js';
+export * from './universeVisualProfile.js';
+export * from './universeVisualProfileValidation.js';

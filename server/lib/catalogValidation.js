@@ -11,7 +11,9 @@
  */
 
 import { z } from 'zod';
+import { universeVisualProfileSchema } from './universeVisualProfileValidation.js';
 import { BIBLE_LIMITS, FORM_ID_PATTERN } from './storyBible.js';
+import { REFERENCE_REVIEW_STATUSES, REFERENCE_FEEDBACK_MAX } from './catalogMediaLibrary.js';
 import {
   INGREDIENT_TYPE_IDS,
   RELATION_KIND_IDS,
@@ -23,6 +25,7 @@ import {
 import { csvIdsParam } from './sharedSchemas.js';
 import { SCRAP_SOURCE_KIND_IDS } from './catalogSourceKinds.js';
 import { GENERATION_METADATA_LIMITS } from './pngMetadata.js';
+import { EFFORT_LEVELS } from './providerModels.js';
 
 import { isTruthyMeta } from './metadataFlags.js';
 // Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
@@ -405,6 +408,17 @@ export const catalogMediaLibraryPatchSchema = z.object({
   variant: catalogMediaLibraryVariantSchema.optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   guide: z.boolean().optional(),
+  review: z.object({
+    status: z.enum(REFERENCE_REVIEW_STATUSES),
+    feedback: z.string().max(REFERENCE_FEEDBACK_MAX).optional(),
+  }).strict().optional(),
+}).strict();
+
+export const catalogMediaRefineSchema = z.object({
+  mediaKey: z.string().min(1).max(512),
+  kind: z.enum(['portrait', 'reference']),
+  feedback: z.string().min(1).max(REFERENCE_FEEDBACK_MAX)
+    .refine(value => value.trim().length > 0 && !value.includes('\0'), 'Describe what should change without NUL characters'),
 }).strict();
 // Attach mood-board items to a cast member as references, optionally tagging
 // them all with one variant (e.g. every age-7 sheet) and tags.
@@ -423,6 +437,7 @@ export const catalogMediaLibraryQuerySchema = z.object({
   tag: z.string().trim().min(1).max(40).optional(),
   kind: z.enum(MEDIA_KINDS).optional(),
   guide: z.enum(['true', 'false']).optional(),
+  review: z.enum(REFERENCE_REVIEW_STATUSES).optional(),
 }).strip();
 
 // Set-portrait body — same as attach minus `kind` (the route forces 'portrait').
@@ -442,6 +457,7 @@ export const catalogPortraitSetSchema = z.object({
 // age, era or look/style); absent renders the canonical present-story form.
 export const CATALOG_LOOK_VARIANT_ID = 'look';
 export const catalogSheetRenderSchema = z.object({
+  visualProfileOverride: universeVisualProfileSchema.nullable().optional(),
   variant: z.string().trim().min(1).max(48).optional(),
   wardrobeId: z.string().trim().min(1).max(59).optional(),
   formId: z.string().trim().regex(FORM_ID_PATTERN).optional(),
@@ -906,3 +922,10 @@ export const catalogIngredientCardsQuerySchema = z.object({
 }).strict().refine(query => Array.isArray(query.ids) && query.ids.length > 0, { path: ['ids'], message: 'Ingredient ids are required' });
 
 export const catalogIngredientLockSchema = z.object({ locked: z.boolean() }).strict();
+export const catalogRefinementSchema = z.object({
+  draft: z.record(z.string(), z.string().max(12000)).refine(value => Object.keys(value).length > 0 && Object.keys(value).length <= 8),
+  messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().min(1).max(16000) }).strict()).min(1).max(40),
+  providerId: z.string().min(1).max(200),
+  model: z.string().max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+}).strict();

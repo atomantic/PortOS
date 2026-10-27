@@ -35,7 +35,7 @@ describe('catalogMediaLibrary', () => {
     expect(filterLibraryMedia(media, { guide: true }).map((m) => m.mediaKey)).toEqual(['b.png']);
   });
 
-  it('prefers guides matching the requested age, never videos, capped at 4', () => {
+  it('uses only compatible guides, never fills spare slots with another age', () => {
     const media = [
       row('adult.png', 'reference', { variant: { age: 27 }, guide: true }),
       row('child.png', 'reference', { variant: { age: 7 }, guide: true }),
@@ -43,10 +43,28 @@ describe('catalogMediaLibrary', () => {
       row('unflagged-child.png', 'reference', { variant: { age: 7 } }),
       row('clip.mp4', 'video', { variant: { age: 7 }, guide: true }),
     ];
-    expect(pickGuideMedia(media, { age: 7 }).map((m) => m.mediaKey)).toEqual(['child.png', 'teen.png', 'adult.png']);
+    expect(pickGuideMedia(media, { age: 7 }).map((m) => m.mediaKey)).toEqual(['child.png']);
     expect(pickGuideMedia(media, { age: 27 }, 1).map((m) => m.mediaKey)).toEqual(['adult.png']);
     expect(pickGuideMedia(media, {}, 99)).toHaveLength(3);
     expect(MAX_CAST_GUIDES).toBe(4);
+  });
+
+  it('retains exact feedback, excludes bad/rejected guides and falls back within the requested look', () => {
+    const feedback = '  Keep the face; shorten only the hair.\nPreserve freckles.  ';
+    expect(normalizeLibrary({ guide: true, review: { status: 'bad', feedback } }))
+      .toEqual({ guide: false, review: { status: 'bad', feedback } });
+    const media = [
+      row('wrong-age.png', 'reference', { guide: true, variant: { age: 7 } }),
+      row('bad.png', 'portrait', { guide: true, variant: { age: 27 }, review: { status: 'bad' } }),
+      row('bad.png', 'reference', { variant: { age: 27 } }),
+      row('rejected.png', 'reference', { variant: { age: 27 }, review: { status: 'rejected' } }),
+      row('adult.png', 'reference', { variant: { age: 27, formId: 'adult' }, review: { status: 'good' } }),
+      row('other-look.png', 'reference', { variant: { age: 27, formId: 'costume' } }),
+    ];
+    expect(pickGuideMedia(media, { age: 27, formId: 'adult' }).map(m => m.mediaKey)).toEqual(['adult.png']);
+    expect(filterLibraryMedia(media, { review: 'bad' }).map(m => m.mediaKey)).toEqual(['bad.png']);
+    const derivedFrom = { mediaKey: 'bad.png', kind: 'portrait' };
+    expect(normalizeLibrary({ derivedFrom })).toEqual({ derivedFrom });
   });
 
   it('falls back to portrait then newest when nothing is a guide', () => {

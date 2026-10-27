@@ -1,4 +1,4 @@
-import { pickGuideMedia } from './catalogMediaLibrary.js';
+import { pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
 import { isEditCapableMode, maxInputImages } from './imageGenCapabilities.js';
 import { RUNNER_FAMILIES } from './runners.js';
 import { escapeRegExp } from './textUtils.js';
@@ -69,8 +69,11 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
   // the pick lets the next candidate take an unsendable file's slot. The guide-vs-fallback choice
   // reads the member's real guide flags: with guides flagged, only sendable guides qualify (none
   // left = the automatic set), never the non-guide images pickGuideMedia falls back to.
-  const sendable = media.filter((m) => typeof m?.mediaKey === 'string' && SENDABLE_REFERENCE_FILE.test(m.mediaKey));
-  const flagged = media.some((m) => m && !m.deleted && CAST_IMAGE_KINDS.has(m.kind) && m.library?.guide === true);
+  const want = { age: variant.age, era: variant.era, wardrobeId: variant.wardrobeId };
+  const rejected = rejectedReferenceKeys(media);
+  const eligible = media.filter((m) => m && !m.deleted && !rejected.has(m.mediaKey) && matchesReferenceVariant(m, want));
+  const sendable = eligible.filter((m) => typeof m?.mediaKey === 'string' && SENDABLE_REFERENCE_FILE.test(m.mediaKey));
+  const flagged = eligible.some((m) => CAST_IMAGE_KINDS.has(m.kind) && m.library?.guide === true);
   const candidates = flagged ? sendable.filter((m) => m.library?.guide === true) : sendable;
   if (!candidates.length) return [];
   return pickGuideMedia(candidates, { age: variant.age, era: variant.era, wardrobeId: variant.wardrobeId }, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES)

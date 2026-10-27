@@ -171,6 +171,20 @@ it.each(['local', 'inline', 'followUp'])('requires resolving accepted findings i
   expect(section).not.toContain('Marginal findings alone do not earn another round');
 });
 
+it.each(['inline', 'followUp'])('binds a GitHub username review to current changes in the %s phase', (phase) => {
+  const section = render({ phase, forge: 'gh', leaveOpen: false, verbose: false });
+  expect(section).toContain('snapshot the review IDs before requesting');
+  expect(section).toContain('newly completed, non-dismissed review from that reviewer whose ID was absent from the snapshot');
+  expect(section).toContain('An older review merely appearing in readback does not verify a fresh request');
+  expect(section).toContain('Reuse a non-dismissed completed review only when its reviewed commit is the current head or a verified comparison shows no material change');
+  expect(section).toContain('base movement alone does not require a new review');
+  expect(section).toContain('do not request or wait on unverifiable history');
+  expect(section).toContain('If readback fails, report the request as unverified');
+  expect(section).toContain('only an applicable APPROVED review with no later undismissed CHANGES_REQUESTED from that reviewer satisfies the approval gate');
+  expect(section).toContain('A COMMENTED or CHANGES_REQUESTED review supplies findings but not approval: after addressing them, request a fresh review if no request is pending');
+  expect(section).toContain('For an optional reviewer, an applicable completed review can be used after addressing its findings');
+});
+
 describe('buildReviewLoopFollowUpSection — phase × forge × leaveOpen × verbosity matrix', () => {
   // The pre-PR local phase never merges, never comments on a PR and never emits
   // the verbose variant (`verbose && !localOnly`), so `leaveOpen` and `verbose`

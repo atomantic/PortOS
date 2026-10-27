@@ -4,6 +4,13 @@ import FilmLookControls from './FilmLookControls.jsx';
 import { filmLookPreset } from '../../lib/filmLook.js';
 
 describe('FilmLookControls', () => {
+  it('keeps the current renderer version when a controlled look replaces an older strength anchor', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<FilmLookControls look={{ version: 1, halation: 0.3 }} onChange={onChange} />);
+    rerender(<FilmLookControls look={{ version: 2, halation: 0.3 }} onChange={onChange} />);
+    fireEvent.change(screen.getByLabelText(/Strength/), { target: { value: '0.5' } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ version: 2, halation: 0.15 }));
+  });
   it('applies a preset as a whole saved look, names each control in photography terms and writes the look as prompt words', () => {
     const onChange = vi.fn();
     const onCommit = vi.fn();

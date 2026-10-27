@@ -3479,6 +3479,8 @@ describe('taskSchedule', () => {
         const retire = () => recordHeldCheckoutRetirement('app-1', receipt);
         // Queue both without awaiting: updateSchedule must merge with the prior write.
         await Promise.all(order === 'scan-first' ? [scan(), retire()] : [retire(), scan()]);
+        expect(cosEvents.emit).toHaveBeenCalledWith('checkout:retired', { appId: 'app-1', path: row.path,
+          branch: row.branch, head: row.head, checkoutIdentity: row.checkoutIdentity });
         expect(outcome()).toMatchObject({ retirementObligations: [], remaining: [] });
         const retiredAt = outcome().retired[0].retiredAt;
         vi.setSystemTime(new Date('2026-10-23T00:00:20Z'));

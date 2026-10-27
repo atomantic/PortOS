@@ -6,7 +6,7 @@
  * remain readable.
  */
 import { describe, it as vitestIt, expect, beforeEach as vitestBeforeEach, afterEach, afterAll, vi } from 'vitest';
-import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat, lstat } from 'fs/promises';
+import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, link, utimes, truncate, chmod, stat, lstat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { createHash } from 'node:crypto';
@@ -65,6 +65,25 @@ vi.mock('./cosClaimOwnershipState.js', async importOriginal => {
 const SYMLINKS = process.platform !== 'win32';
 const retirementFaults = vi.hoisted(() => ({ onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null }));
 const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null }));
+
+const cacheFaults = vi.hoisted(() => ({ onOpen: null, afterOpen: null, onRead: null, onLstat: null }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, lstat: async (...args) => {
+    await cacheFaults.onLstat?.(args[0]);
+    return actual.lstat(...args);
+  }, open: async (...args) => {
+    await cacheFaults.onOpen?.(args[0]);
+    const handle = await actual.open(...args);
+    await cacheFaults.afterOpen?.(args[0]);
+    const read = handle.read.bind(handle);
+    handle.read = async (...readArgs) => {
+      await cacheFaults.onRead?.(args[0]);
+      return read(...readArgs);
+    };
+    return handle;
+  } };
+});
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
@@ -150,6 +169,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     receiptTiming.current = remoteSquash || task.name.startsWith('settles a normally merged checkout before the next scan')
       ? { entryPoint: remoteSquash ? 'remote squash receipt' : task.name.endsWith('cleanupMerged') ? 'cleanupMerged' : 'early reaper', started: performance.now(), phases: {} } : null;
     await receiptTiming.run('fixture-setup', async () => {
+      Object.assign(cacheFaults, { onOpen: null, afterOpen: null, onRead: null, onLstat: null });
       Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
       Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null, onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null });
       scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
@@ -1521,6 +1541,221 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
+  // This lifecycle uniquely exercises the old 16 MiB per-module proof failure,
+  // including persisted settlement, without relaxing any production budget.
+  it('retires a cache whose former per-file metadata exceeds 16 MiB with bounded streaming proof', async ({ signal }) => {
+    const c = await reviewedCheckout('compact-cache-cardinality');
+    c.opts.signal = signal;
+    if (signal.aborted) return;
+    const root = await moduleCache(c, { count: 0, bytes: 1 });
+    const count = 80000;
+    const fixtureStarted = performance.now();
+    const payloads = Array.from({ length: 256 }, (_, index) => join(scratch, `cache-fixture-payload-${index}`));
+    for (let offset = 0; offset < payloads.length; offset += 32) {
+      if (signal.aborted) return;
+      await Promise.all(payloads.slice(offset, offset + 32).map(path => writeFile(path, 'x')));
+    }
+    let oldMetadataBytes = 0;
+    for (let offset = 0; offset < count; offset += 32) {
+      if (signal.aborted) return;
+      await Promise.all(Array.from({ length: Math.min(32, count - offset) }, async (_, index) => {
+        const name = (offset + index).toString(16).padStart(64, '0');
+        oldMetadataBytes += Buffer.byteLength(JSON.stringify({ path: `server/.cache/vitest/modules/${name}`,
+          bytes: 1, sha256: '0'.repeat(64), disposableCache: true }));
+        // Share fixture storage, while the service still opens and hashes every
+        // distinct path. Mutation cases below use independent ordinary files.
+        await link(payloads[(offset + index) % payloads.length], join(root, name));
+      }));
+    }
+    if (signal.aborted) return;
+    console.log(`📏 Cache fixture: ${JSON.stringify({ entries: count, creationMs: Math.ceil(performance.now() - fixtureStarted) })}`);
+    expect(oldMetadataBytes).toBeGreaterThan(16 * 1024 * 1024);
+    const initialHeap = process.memoryUsage().heapUsed;
+    let peakHeap = initialHeap;
+    let opened = 0;
+    cacheFaults.onOpen = () => { if (++opened % 1024 === 0) peakHeap = Math.max(peakHeap, process.memoryUsage().heapUsed); };
+    const started = performance.now();
+    const prepared = await c.prepare();
+    if (signal.aborted) return;
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, archiveUsage: {
+      cacheRoots: 1, cacheEntries: count + 2, cacheBytes: expect.any(Number), cacheReadBytes: expect.any(Number),
+    } });
+    expect(prepared.review.disposableCacheProofs).toEqual([{ version: 1, producer: 'vitest-modules',
+      root: 'server/.cache/vitest/modules', entries: count + 2, bytes: prepared.archiveUsage.cacheBytes,
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }]);
+    expect(prepared.archiveUsage.metadata).toBeLessThan(64 * 1024);
+    expect(prepared.archiveUsage.directory).toBeLessThan(16 * 1024 * 1024);
+    expect(prepared.archiveUsage.cacheProofPeakBytes).toBeLessThan(4096);
+    expect(prepared.archiveUsage.cacheReadBytes).toBeGreaterThanOrEqual(prepared.archiveUsage.cacheBytes);
+    console.log(`📏 Compact cache proof: ${JSON.stringify({ oldMetadataBytes, ...prepared.archiveUsage,
+      previewMs: Math.ceil(performance.now() - started), sampledPeakHeapDeltaBytes: peakHeap - initialHeap })}`);
+    const retired = await c.confirm(prepared.review);
+    if (signal.aborted) return;
+    expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+    expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
+      branch: c.release.branch, path: c.path, head: c.release.head, branchDeleted: true,
+    }));
+    expect(existsSync(c.path)).toBe(false);
+    expect(await registered(c.path)).toBe(false);
+    expect(await archives()).toEqual([]);
+  }, 180000);
+
+  it('binds a deterministic cache proof independent of enumeration order', async () => {
+    const c = await reviewedCheckout('compact-cache-order');
+    await moduleCache(c, { count: 3, bytes: 8 });
+    const first = await c.prepare();
+    injected.onOtherFiles = output => output.split('\0').filter(Boolean).reverse().join('\0') + '\0';
+    const second = await c.prepare();
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(second.review.digest).toBe(first.review.digest);
+    expect(second.archiveUsage.cacheEntries).toBe(5);
+  });
+
+  it.each(['same-size-content', 'size', 'added', 'removed', 'tag', 'metadata', 'unexpected', 'symlink', 'junction', 'parent', 'identical-parent'])(
+    'preserves checkout/ref when a compact cache changes after review: %s', async change => {
+      const c = await reviewedCheckout(`compact-cache-${change}`);
+      const root = await moduleCache(c, { bytes: 24 });
+      const prepared = await c.prepare();
+      expect(prepared.ok).toBe(true);
+      const module = join(root, 'a'.repeat(40));
+      if (change === 'same-size-content') await writeFile(module, 'y'.repeat(24));
+      if (change === 'size') await writeFile(module, 'changed size');
+      if (change === 'added') await writeFile(join(root, 'b'.repeat(64)), 'added');
+      if (change === 'removed') await rm(module);
+      if (change === 'tag') await writeFile(join(root, 'CACHEDIR.TAG'), 'changed marker');
+      if (change === 'metadata') await writeFile(join(root, '_metadata.json'), JSON.stringify({ lockfileHash: 'c'.repeat(8) }));
+      if (change === 'unexpected') await writeFile(join(root, 'wanted-unique-output'), 'retain me');
+      if (change === 'identical-parent') {
+        const original = join(scratch, 'original-cache-root');
+        await rename(root, original);
+        await cp(original, root, { recursive: true });
+      }
+      if (['symlink', 'junction', 'parent'].includes(change)) {
+        const outside = join(scratch, 'outside-compact-cache');
+        await mkdir(outside);
+        await writeFile(join(outside, 'wanted'), 'outside bytes');
+        if (change === 'parent') {
+          await rename(root, root + '-original');
+          await symlink(outside, root, process.platform === 'win32' ? 'junction' : 'dir');
+        } else if (change === 'junction') await symlink(outside, join(root, 'b'.repeat(40)), process.platform === 'win32' ? 'junction' : 'dir');
+        else if (SYMLINKS) { await rm(module); await symlink(join(outside, 'wanted'), module); }
+        else { await rm(module); await mkdir(module); }
+      }
+      const retired = await c.confirm(prepared.review);
+      expect(retired.ok).toBe(false);
+      expect(await registered(c.path)).toBe(true);
+      expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+      expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+      expect(await archives()).toEqual([]);
+    });
+
+  it.each(['link', 'directory'])('refuses a cache parent replaced during open before reading redirected bytes: %s', async kind => {
+    const c = await reviewedCheckout('compact-cache-parent-race');
+    const root = await moduleCache(c, { bytes: 24 });
+    const module = join(root, 'a'.repeat(40));
+    const outside = join(scratch, 'outside-redirected-cache');
+    await mkdir(outside);
+    await writeFile(join(outside, 'a'.repeat(40)), 'outside bytes must never be read');
+    let replaced = false;
+    let reads = 0;
+    cacheFaults.onOpen = async path => {
+      if (path !== module || replaced) return;
+      replaced = true;
+      await rename(root, root + '-original');
+      if (kind === 'link') await symlink(outside, root, process.platform === 'win32' ? 'junction' : 'dir');
+      else { await mkdir(root); await writeFile(module, 'different inode'); }
+    };
+    cacheFaults.onRead = path => { if (path === module) reads++; };
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-test-cache-changed', archiveUsage: { cacheRoots: 1 } });
+    expect(replaced).toBe(true);
+    expect(reads).toBe(0);
+    expect(await registered(c.path)).toBe(true);
+    expect(await readFile(join(outside, 'a'.repeat(40)), 'utf8')).toBe('outside bytes must never be read');
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+  });
+
+  it('detects an ancestor temporarily redirected and restored before the descriptor fence', async () => {
+    const c = await reviewedCheckout('compact-cache-restored-ancestor');
+    const root = await moduleCache(c, { count: 2, bytes: 24 });
+    const module = join(root, '1'.padStart(40, '0'));
+    const originalModule = join(root, '0'.repeat(40));
+    const originalBytes = await readFile(module);
+    const ancestor = dirname(dirname(root));
+    const saved = join(scratch, 'original-cache-ancestor');
+    const outside = join(scratch, 'outside-cache-ancestor');
+    await mkdir(join(outside, 'vitest/modules'), { recursive: true });
+    await writeFile(join(outside, 'vitest/modules', '1'.padStart(40, '0')), 'outside payload must not be read');
+    let unblockOriginal;
+    const parentRestored = new Promise(resolve => { unblockOriginal = resolve; });
+    let swapped = false;
+    let restored = false;
+    let reads = 0;
+    cacheFaults.onLstat = async path => {
+      if (path === originalModule) await parentRestored;
+      if (path !== module || swapped) return;
+      swapped = true;
+      await rename(ancestor, saved);
+      await symlink(outside, ancestor, process.platform === 'win32' ? 'junction' : 'dir');
+    };
+    cacheFaults.afterOpen = async path => {
+      if (path !== module || restored) return;
+      await rm(ancestor, { recursive: true });
+      await rename(saved, ancestor);
+      restored = true;
+      unblockOriginal();
+    };
+    cacheFaults.onRead = path => { if (path === module || path === originalModule) reads++; };
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-test-cache-changed' });
+    expect(swapped && restored).toBe(true);
+    expect(reads).toBe(0);
+    expect(await readFile(module)).toEqual(originalBytes);
+    expect(await registered(c.path)).toBe(true);
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+  });
+
+  it('recomputes the compact proof under the final destructive fence', async () => {
+    const c = await reviewedCheckout('compact-cache-final-fence');
+    const root = await moduleCache(c, { bytes: 24 });
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true);
+    let snapshots = 0;
+    injected.onSnapshot = async () => {
+      // Confirmation's admission snapshot still matches; mutate only at finish.
+      if (++snapshots === 2) await writeFile(join(root, 'a'.repeat(40)), 'changed at final fence');
+    };
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    expect(snapshots).toBe(2);
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+  });
+
+  it.each(['cancel', 'time'])('keeps originals with bounded numeric cache evidence on %s exhaustion', async kind => {
+    const c = await reviewedCheckout('compact-cache-budget');
+    const root = await moduleCache(c, { count: 2, bytes: 32 });
+    const controller = new AbortController();
+    c.opts.signal = controller.signal;
+    let clock;
+    cacheFaults.onRead = path => {
+      if (!path.endsWith('0'.repeat(40))) return;
+      if (kind === 'cancel') controller.abort();
+      else clock = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 600001);
+    };
+    let prepared;
+    try { prepared = await c.prepare(); } finally { clock?.mockRestore(); }
+    expect(prepared).toMatchObject({ ok: false,
+      reason: kind === 'cancel' ? 'retirement-archive-cancelled' : 'retirement-archive-work-limit-exceeded',
+      archiveUsage: { cacheRoots: 1, cacheReadBytes: expect.any(Number) },
+    });
+    expect(Object.values(prepared.archiveUsage).every(value => typeof value === 'number' && Number.isFinite(value))).toBe(true);
+    expect(JSON.stringify(prepared.archiveUsage)).not.toContain('modules');
+    expect(await readFile(join(root, '0'.repeat(40)), 'utf8')).toContain('synthetic compiled module');
+    expect(await registered(c.path)).toBe(true);
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+    expect(await archives()).toEqual([]);
+  });
+
   // A successful job's meaningful validation record must survive its checkout,
   // without either declaring it disposable or archiving the whole repository.
   it.each(['preserved', 'changed-source', 'changed-copy', 'store-symlink', 'sidecar', 'oversized'])(
@@ -2451,7 +2686,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['original', 'repo-alias', 'recreated-pointer', 'active-owner', 'different-pr-head', 'failed-validation', 'missing-terminal-head', 'late-writer'])('recovers a merged orphan only from its exact early generation: %s', async scenario => {
+  it.each(['original', 'repo-alias', 'pending-execution', 'recreated-pointer', 'active-owner', 'different-pr-head', 'failed-validation', 'missing-terminal-head', 'late-writer'])('recovers a merged orphan only from its exact early generation: %s', async scenario => {
     const c = await reviewedCheckout(`orphan-${scenario}`);
     await execGit(['worktree', 'unlock', c.path], repo);
     Object.assign(c.release, { locked: false, lockReason: null });
@@ -2470,6 +2705,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     agent.status = 'completed';
     agent.completedAt = new Date().toISOString();
     agent.metadata.completedCheckouts = [];
+    if (scenario === 'pending-execution') {
+      agent.result = { ...agent.result, orphaned: false, executionSuccess: true };
+      agent.metadata.checkoutCapture = { status: 'pending', targets: [], unknown: true };
+    }
     if (scenario === 'missing-terminal-head') agent.metadata.checkoutCapture = { status: 'captured' };
     if (scenario === 'late-writer') {
       await writeFile(join(c.path, 'later-user.txt'), 'later independent work\n');
@@ -2485,7 +2724,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     c.opts.recoverCheckoutCapture = async (id, { retirement }) => {
       expect(id).toBe(agent.id);
       expect(retirement).toMatchObject({ ...c.release, repoPath: realpathSync(repo), path: realpathSync(c.path) });
-      const captured = await evidence.captureSeededCompletionCheckouts(agent);
+      if (scenario === 'pending-execution') expect(retirement).toMatchObject({ prUrl: c.forge.prUrl, verifiedMergedHead: c.release.head });
+      const captured = await evidence.captureSeededCompletionCheckouts(agent, { retirement });
       if (!captured) return false;
       agent.metadata.completedCheckouts = captured;
       recoveries++;
@@ -2500,7 +2740,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     if (scenario === 'different-pr-head') c.forge.prHead = 'b'.repeat(40);
     const prepared = await c.prepare();
     expect(agent.result).toEqual(originalResult);
-    if (!['original', 'repo-alias'].includes(scenario)) {
+    if (!['original', 'repo-alias', 'pending-execution'].includes(scenario)) {
       expect(prepared.ok).toBe(false);
       expect(await registered(c.path)).toBe(true);
       expect(await archives()).toEqual([]);
@@ -2508,7 +2748,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       if (scenario === 'late-writer') expect(await readFile(join(c.path, 'later-user.txt'), 'utf8')).toBe('later independent work\n');
       return;
     }
-    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, orphanedExecution: true }] } } });
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false,
+      ...(scenario === 'pending-execution' ? { continuedDelivery: { capturedHead: c.release.head } } : { orphanedExecution: true }) }] } } });
     const receipt = agent.metadata.completedCheckouts[0];
     expect(receipt).toMatchObject({ version: 2, head: c.release.head });
     expect(evidence.completedCheckoutReceiptValid(agent, receipt)).toBe(true);
@@ -3386,6 +3627,193 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
     expect(await registered(c.release.path)).toBe(true);
     expect(await lockText(c.release.path)).toBe(c.release.lockReason);
+  });
+  async function removedCheckoutWithSurvivingRef(name) {
+    const c = await reviewedCheckout(name, { normalMerge: true });
+    c.forge.scopeProof = 'exact-delivered-head';
+    const checkoutIdentity = await readRetirementCheckoutIdentity(c.path);
+    await execGit(['worktree', 'unlock', c.path], repo);
+    await execGit(['worktree', 'remove', '--force', c.path], repo);
+    await recordHeldCheckoutRetirement('app-1', { ...c.release, checkoutIdentity, branchDeleted: false });
+    const receipt = (await getBranchReconcileOutcome('app-1')).retired[0];
+    const release = { path: receipt.path, head: receipt.head, branch: receipt.branch,
+      checkoutIdentity, locked: false, lockReason: null };
+    const input = { appId: 'app-1', release, prUrl: c.forge.prUrl };
+    const prepared = await prepareInventoriedCheckoutRetirement(input, c.opts);
+    expect(prepared).toMatchObject({ ok: true });
+    const request = { appId: 'app-1', release, review: { digest: prepared.review.digest, prUrl: c.forge.prUrl, acceptSuperseded: false } };
+    return { ...c, release, input, request, receipt };
+  }
+
+  it('finalizes only the surviving ref and preserves the canonical physical-removal receipt on retry', async () => {
+    const c = await removedCheckoutWithSurvivingRef('ref-only-finalization');
+    await recordHeldCheckoutRetirement('app-1', c.receipt); // Replayed physical-removal producer.
+    expect((await getBranchReconcileOutcome('app-1')).retired).toEqual([c.receipt]);
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toEqual({ ok: true, branchDeleted: true });
+    expect(await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${c.release.branch}`], repo, { ignoreExitCode: true }))
+      .toMatchObject({ exitCode: 1 });
+    const outcome = await getBranchReconcileOutcome('app-1');
+    expect(outcome.retired).toHaveLength(1);
+    expect(outcome.retired[0]).toMatchObject({ ...c.receipt, branchDeleted: true, branchFinalizedAt: expect.any(String) });
+    expect(Object.values(outcome.retirementReceiptEvidence)).toContainEqual(outcome.retired[0]);
+    await recordHeldCheckoutRetirement('app-1', c.receipt); // A late partial phase cannot regress completion.
+    expect((await getBranchReconcileOutcome('app-1')).retired).toEqual(outcome.retired);
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toEqual({ ok: true, branchDeleted: true });
+    expect((await getBranchReconcileOutcome('app-1')).retired[0]).toEqual(outcome.retired[0]);
+    await execGit(['branch', c.release.branch, c.release.head], repo);
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toMatchObject({ ok: false, reason: 'branch-ref-changed-or-recreated' });
+  });
+
+  it.each(['dangling symbolic', 'resolved symbolic', 'malformed loose'])(
+    'holds ref-only finalization when a %s ref cannot establish absence', async kind => {
+      const c = await removedCheckoutWithSurvivingRef(`ref-only-unreadable-${kind.replaceAll(' ', '-')}`);
+      const ref = `refs/heads/${c.release.branch}`;
+      const refPath = join(repo, '.git', ref);
+      await execGit(['update-ref', '-d', ref], repo);
+      if (kind === 'resolved symbolic') await execGit(['branch', 'symbolic-target', c.release.head], repo);
+      if (kind.endsWith('symbolic')) await execGit(['symbolic-ref', ref,
+        kind === 'resolved symbolic' ? 'refs/heads/symbolic-target' : 'refs/heads/missing-target'], repo);
+      else {
+        await mkdir(dirname(refPath), { recursive: true });
+        await writeFile(refPath, 'not a valid ref\n');
+      }
+      const before = await readFile(refPath, 'utf8');
+      expect((await execGit(['show-ref', '--verify', '--quiet', ref], repo, { ignoreExitCode: true })).exitCode)
+        .toBe(kind === 'resolved symbolic' ? 0 : 1);
+      expect(await retireInventoriedCheckout(c.request, c.opts))
+        .toMatchObject({ ok: false, reason: 'branch-ref-presence-unverified' });
+      expect(await readFile(refPath, 'utf8')).toBe(before);
+      expect((await getBranchReconcileOutcome('app-1')).retired[0]).toEqual(c.receipt);
+      if (kind === 'resolved symbolic') expect((await execGit(['rev-parse', 'refs/heads/symbolic-target'], repo)).stdout.trim()).toBe(c.release.head);
+    });
+
+  it.each(['tip', 'holder', 'receipt', 'forge', 'path', 'policy', 'owner', 'repository'])(
+    'refuses ref-only finalization when reviewed %s changes before mutation', async change => {
+      const c = await removedCheckoutWithSurvivingRef(`ref-only-${change}`);
+      let ownerStarted = false;
+      const result = await retireInventoriedCheckout(c.request, { ...c.opts, beforeMutation: async () => {
+        if (change === 'repository') injected.app.repoPath = external;
+        if (change === 'tip') await execGit(['update-ref', `refs/heads/${c.release.branch}`, c.forge.changeBase], repo);
+        if (change === 'holder') await execGit(['worktree', 'add', join(external, 'new-holder'), c.release.branch], repo);
+        if (change === 'receipt') (await getBranchReconcileOutcome('app-1')).retired[0].checkoutIdentity = 'f'.repeat(64);
+        if (change === 'forge') c.forge.prHead = c.forge.changeBase;
+        if (change === 'path') await mkdir(c.release.path);
+        if (change === 'policy') injected.policies[0].status = 'running';
+        if (change === 'owner') ownerStarted = true;
+      }, ...(change === 'owner' && { readAgents: async () => ownerStarted ? [{ id: 'active-owner', status: 'running',
+        metadata: { claimBranches: [c.release.branch], sourceWorkspace: repo } }] : [] }) });
+      expect(result.ok).toBe(false);
+      expect((await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${c.release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(0);
+      expect((await getBranchReconcileOutcome('app-1')).retired[0].branchDeleted).toBe(false);
+    });
+
+  it('requires the exact canonical removal receipt and exact PR delivery for ref-only review', async () => {
+    const c = await removedCheckoutWithSurvivingRef('ref-only-invalid-proof');
+    expect(await prepareInventoriedCheckoutRetirement({ ...c.input, release: { ...c.release, checkoutIdentity: '0'.repeat(64) } }, c.opts))
+      .toMatchObject({ ok: false, reason: 'release-not-in-inventory' });
+    expect(await prepareInventoriedCheckoutRetirement({ ...c.input, prUrl: 'https://github.com/example/repo/pull/999' }, c.opts))
+      .toMatchObject({ ok: false, reason: 'retirement-exact-delivery-unverified' });
+  });
+
+  it('keeps explicit human handoffs and stale ref-only approvals refused', async () => {
+    const c = await removedCheckoutWithSurvivingRef('ref-only-handoff');
+    expect(await retireInventoriedCheckout({ ...c.request, review: { ...c.request.review, digest: '0'.repeat(64) } }, c.opts))
+      .toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
+    expect(await prepareInventoriedCheckoutRetirement(c.input, c.opts))
+      .toMatchObject({ ok: false, reason: 'pr-completion-human-handoff' });
+    expect(await prepareInventoriedCheckoutRetirement({ ...c.input, appId: 'different-app' }, c.opts))
+      .toMatchObject({ ok: false, reason: 'app-not-found' });
+  });
+
+  it('retries ref-only receipt persistence after CAS without deleting twice or changing retiredAt', async () => {
+    const c = await removedCheckoutWithSurvivingRef('ref-only-persistence-failure');
+    let deletions = 0;
+    retirementFaults.onBranchDelete = async () => { deletions++; };
+    retirementFaults.failScheduleWrite = retirementFaults.scheduleWrites + 1;
+    expect(await retireInventoriedCheckout(c.request, c.opts))
+      .toEqual({ ok: false, branchDeleted: true, reason: 'synthetic receipt persistence failure' });
+    expect((await getBranchReconcileOutcome('app-1')).retired[0]).toEqual(c.receipt);
+    expect((await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${c.release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
+    retirementFaults.failScheduleWrite = null;
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toEqual({ ok: true, branchDeleted: true });
+    expect(deletions).toBe(1);
+    const retired = (await getBranchReconcileOutcome('app-1')).retired;
+    expect(retired).toHaveLength(1);
+    expect(retired[0]).toMatchObject({ ...c.receipt, branchDeleted: true, branchFinalizedAt: expect.any(String),
+      branchFinalization: { kind: 'observed-absent' } });
+  });
+
+  it('keeps post-CAS receipt recovery held by a new owner or recreated ref', async () => {
+    const c = await removedCheckoutWithSurvivingRef('ref-only-retry-holder');
+    retirementFaults.failScheduleWrite = retirementFaults.scheduleWrites + 1;
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toMatchObject({ ok: false, branchDeleted: true });
+    retirementFaults.failScheduleWrite = null;
+    const owner = async () => [{ id: 'new-owner', status: 'running', metadata: {
+      claimBranches: [c.release.branch], sourceWorkspace: repo,
+    } }];
+    expect(await retireInventoriedCheckout(c.request, { ...c.opts, readAgents: owner }))
+      .toMatchObject({ ok: false, reason: 'claim-owner-active' });
+    await execGit(['branch', c.release.branch, c.forge.changeBase], repo);
+    expect(await retireInventoriedCheckout(c.request, c.opts))
+      .toMatchObject({ ok: false, reason: 'branch-ref-changed-or-recreated' });
+    expect((await getBranchReconcileOutcome('app-1')).retired[0]).toEqual(c.receipt);
+  });
+
+  it('finalizes ref-only removal evidence after display eviction without settling the partial receipt early', async () => {
+    const c = await removedCheckoutWithSurvivingRef('ref-only-evicted');
+    const before = await getBranchReconcileOutcome('app-1');
+    expect(Object.values(before.retirementReceiptEvidence)).toContainEqual(c.receipt);
+    const { hasRetirementReceipt } = await import('../lib/reconcileRetirementEvidence.js');
+    expect(hasRetirementReceipt(before, c.release)).toBe(false);
+    for (let index = 0; index < 21; index++) await recordHeldCheckoutRetirement('app-1', {
+      path: `/synthetic/eviction-${index}`, branch: `feature/eviction-${index}`, head: c.release.head,
+      checkoutIdentity: `${index}`.padStart(64, '0'), branchDeleted: true,
+    });
+    const evicted = await getBranchReconcileOutcome('app-1');
+    expect(evicted.retired.some(row => row.branch === c.release.branch)).toBe(false);
+    expect(Object.values(evicted.retirementReceiptEvidence)).toContainEqual(c.receipt);
+    // Reload JSON as a restart would: durable evidence must be sufficient alone.
+    injected.schedule = JSON.parse(JSON.stringify(injected.schedule));
+    const prepared = await prepareInventoriedCheckoutRetirement(c.input, c.opts);
+    expect(prepared.ok).toBe(true);
+    expect(await retireInventoriedCheckout({ ...c.request, review: { ...c.request.review, digest: prepared.review.digest } }, c.opts))
+      .toEqual({ ok: true, branchDeleted: true });
+    const final = await getBranchReconcileOutcome('app-1');
+    const receipt = Object.values(final.retirementReceiptEvidence).find(row => row.branch === c.release.branch);
+    expect(receipt).toMatchObject({ ...c.receipt, branchDeleted: true, branchFinalizedAt: expect.any(String),
+      branchFinalization: { kind: 'deleted' } });
+    expect(hasRetirementReceipt(final, c.release)).toBe(true);
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toEqual({ ok: true, branchDeleted: true });
+  });
+
+  it('clears and audits only current matching branch-only ref-finalization inventory rows', async () => {
+    const c = await removedCheckoutWithSurvivingRef('ref-only-branch-inventory');
+    const removed = [{ branch: c.release.branch, reason: 'cleanup-disabled' },
+      { branch: c.release.branch, path: c.release.path, head: c.release.head, reason: 'cleanup-disabled' }];
+    const kept = [{ branch: c.release.branch, head: c.forge.changeBase, reason: 'cleanup-disabled' },
+      { branch: c.release.branch, checkoutIdentity: 'f'.repeat(64), reason: 'cleanup-disabled' },
+      { branch: c.release.branch, path: '/synthetic/different-checkout', reason: 'cleanup-disabled' },
+      { branch: 'feature/other', reason: 'cleanup-disabled' }];
+    (await getBranchReconcileOutcome('app-1')).remaining = [...removed, ...kept];
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toEqual({ ok: true, branchDeleted: true });
+    const outcome = await getBranchReconcileOutcome('app-1');
+    expect(outcome.remaining).toEqual(kept);
+    const receipt = outcome.retired.find(row => row.branch === c.release.branch);
+    expect(receipt.retiredAt).toBe(c.receipt.retiredAt);
+    expect(receipt.settledObservations).toEqual(removed.map(observation => ({ observation, settledAt: receipt.branchFinalizedAt })));
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toEqual({ ok: true, branchDeleted: true });
+    // A delayed ordinary inventory row requires fresh absence and its own audit.
+    const delayed = { branch: c.release.branch, reason: 'cleanup-disabled', observedAt: new Date().toISOString() };
+    (await getBranchReconcileOutcome('app-1')).remaining.push(delayed);
+    expect(await retireInventoriedCheckout(c.request, c.opts)).toEqual({ ok: true, branchDeleted: true });
+    const replayed = await getBranchReconcileOutcome('app-1');
+    expect(replayed.remaining).toEqual(kept);
+    expect(replayed.retired[0].branchFinalizedAt).toBe(receipt.branchFinalizedAt);
+    expect(replayed.retired[0].branchFinalization).toEqual({ kind: 'deleted' });
+    const audit = replayed.retired[0].settledObservations.find(row => JSON.stringify(row.observation) === JSON.stringify(delayed));
+    expect(audit).toBeDefined();
+    expect(Date.parse(audit.settledAt)).toBeGreaterThanOrEqual(Date.parse(delayed.observedAt));
   });
 
 });

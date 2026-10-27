@@ -84,6 +84,52 @@ describe('attachMedia', () => {
     expect(calls[0].sql).toMatch(/metadata\)/i);
     expect(calls[0].params).toEqual(['i1', 'render.png', 'reference', null, null, JSON.stringify(metadata)]);
   });
+
+  it('does not replace an attachment that appeared after a completion hook read', async () => {
+    await catalogDB.attachMedia('i1', 'render.png', 'reference', {
+      role: 'refinement', metadata: { prompt: 'old' }, library: { review: { status: 'unreviewed' } }, preserveExistingOnConflict: true,
+    });
+    const conflict = calls.at(-1).sql.split('ON CONFLICT')[1];
+    expect(conflict).not.toMatch(/role = EXCLUDED|caption = EXCLUDED|metadata = EXCLUDED|library = EXCLUDED/);
+  });
+});
+
+describe('updateMediaLibrary', () => {
+  it('merges generated defaults under edits made after the hook read the attachment', async () => {
+    const edited = { variant: { age: 31, label: 'Later edit' }, tags: ['chosen'], guide: true,
+      review: { status: 'good', feedback: 'Keep this review' } };
+    const row = { ingredient_id: 'i1', media_key: 'refined.png', kind: 'reference', library: edited, changed_since_creation: true,
+      role: null, caption: null, created_at: new Date('2026-01-01T00:00:00Z'), deleted: false };
+    await db.query.withImplementation(async (sql, params) => {
+      if (sql.includes('FROM catalog_ingredient_media') && sql.includes('changed_since_creation')) return { rows: [row] };
+      if (sql.includes('AS blocked')) return { rows: [{ blocked: false }] };
+      if (sql.includes('UPDATE catalog_ingredient_media SET library = $4')) {
+        row.library = JSON.parse(params[3]);
+        return { rows: [row] };
+      }
+      return { rows: [] };
+    }, async () => {
+      const lineage = { mediaKey: 'source.png', kind: 'reference' };
+      const result = await catalogDB.updateMediaLibrary('i1', 'refined.png', 'reference', {
+        variant: { age: 27 }, tags: ['old'], guide: false, review: { status: 'unreviewed', feedback: 'Old instruction' }, derivedFrom: lineage,
+      }, { preserveExisting: true });
+      expect(result.library).toEqual({ ...edited, derivedFrom: lineage });
+      // A cleared tag or variant has no key in the normalized row. A changed
+      // row must not resurrect it from the stale generation request.
+      row.library = { review: { status: 'good', feedback: '' } };
+      const cleared = await catalogDB.updateMediaLibrary('i1', 'refined.png', 'reference', {
+        variant: { age: 27 }, tags: ['old'], guide: false, review: { status: 'unreviewed', feedback: 'Old instruction' }, derivedFrom: lineage,
+      }, { preserveExisting: true });
+      expect(cleared.library).toEqual({ review: { status: 'good', feedback: '' }, derivedFrom: lineage });
+      row.library = {};
+      row.changed_since_creation = false;
+      const fresh = await catalogDB.updateMediaLibrary('i1', 'refined.png', 'reference', {
+        variant: { age: 27 }, tags: ['old'], guide: false, review: { status: 'unreviewed', feedback: 'Old instruction' }, derivedFrom: lineage,
+      }, { preserveExisting: true });
+      expect(fresh.library).toEqual({ variant: { age: 27 }, tags: ['old'], guide: false,
+        review: { status: 'unreviewed', feedback: 'Old instruction' }, derivedFrom: lineage });
+    });
+  });
 });
 
 describe('detachMedia', () => {

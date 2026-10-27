@@ -201,6 +201,25 @@ describe('git routes — active agent branch exclusion', () => {
       expect(excludeBranches.has('feature/done-work')).toBe(false);
     });
 
+    it('validates and forwards an explicit branch selection while retaining active-owner protection', async () => {
+      cosAgentLifecycleService.getAgents.mockResolvedValue([{ status: 'running', metadata: { worktreeBranch: 'feature/live' } }]);
+      gitService.deleteMergedBranches.mockResolvedValue({ deleted: [] });
+      const res = await request(makeApp()).post('/api/git/cleanup-merged').send({ path: WORKSPACE, branches: ['feature/done'] });
+      expect(res.status).toBe(200);
+      expect(gitService.deleteMergedBranches).toHaveBeenCalledWith(WORKSPACE, expect.objectContaining({
+        onlyBranches: new Set(['feature/done']), excludeBranches: new Set(['feature/live']), activeAgentIds: expect.any(Set),
+      }));
+    });
+    it('rejects an unknown scope key instead of falling back to global cleanup', async () => {
+      const res = await request(makeApp()).post('/api/git/cleanup-merged').send({ path: WORKSPACE, branch: 'feature/done' });
+      expect(res.status).toBe(400);
+      expect(gitService.deleteMergedBranches).not.toHaveBeenCalled();
+    });
+    it.each([[], ['--unsafe'], 'feature/done'])('refuses malformed or empty scope without calling cleanup: %j', async branches => {
+      const res = await request(makeApp()).post('/api/git/cleanup-merged').send({ path: WORKSPACE, branches });
+      expect(res.status).toBe(400);
+      expect(gitService.deleteMergedBranches).not.toHaveBeenCalled();
+    });
     it('passes an empty Set when no agents are running', async () => {
       cosAgentLifecycleService.getAgents.mockResolvedValue([]);
       gitService.deleteMergedBranches.mockResolvedValue({ deleted: [] });
@@ -277,6 +296,22 @@ describe('git routes — active agent branch exclusion', () => {
       expect(gitService.deleteBranch).toHaveBeenCalledWith(
         WORKSPACE, 'feature/x', expect.objectContaining(flags)
       );
+    });
+
+    it('passes an exact local ref pin and refuses malformed or remote pins', async () => {
+      const expectedHead = 'a'.repeat(40);
+      const response = await request(makeApp()).post('/api/git/delete-branch')
+        .send({ path: WORKSPACE, branch: 'finished', local: true, expectedHead });
+      expect(response.status).toBe(200);
+      expect(gitService.deleteBranch).toHaveBeenCalledWith(WORKSPACE, 'finished',
+        expect.objectContaining({ local: true, remote: false, expectedHead }));
+      gitService.deleteBranch.mockClear();
+      for (const flags of [{ local: true, expectedHead: 'short' }, { remote: true, expectedHead }]) {
+        const rejected = await request(makeApp()).post('/api/git/delete-branch')
+          .send({ path: WORKSPACE, branch: 'finished', ...flags });
+        expect(rejected.status).toBe(400);
+      }
+      expect(gitService.deleteBranch).not.toHaveBeenCalled();
     });
 
     it('passes the active agent branches as excludeBranches to deleteBranch', async () => {

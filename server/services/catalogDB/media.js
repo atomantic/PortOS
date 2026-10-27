@@ -35,17 +35,23 @@ async function insertMedia(runQuery, ingredientId, mediaKey, kind, options) {
   const hasMetadata = hasOwn(options, 'metadata') && hasMeaningfulMetadata(options.metadata);
   const metadataColumn = hasMetadata ? ', metadata' : '';
   const metadataPlaceholder = hasMetadata ? ', $6' : '';
-  const metadataUpdate = hasMetadata ? ', metadata = EXCLUDED.metadata' : '';
+  const preserveOnConflict = options.preserveExistingOnConflict === true;
+  const metadataUpdate = hasMetadata && !preserveOnConflict ? ', metadata = EXCLUDED.metadata' : '';
+  const hasLibrary = hasOwn(options, 'library');
+  const libraryColumn = hasLibrary ? ', library' : '';
+  const libraryPlaceholder = hasLibrary ? `, $${hasMetadata ? 7 : 6}` : '';
+  const libraryUpdate = hasLibrary && !preserveOnConflict ? ', library = EXCLUDED.library' : '';
+  const fieldsUpdate = preserveOnConflict ? '' : ', role = EXCLUDED.role, caption = EXCLUDED.caption';
   const result = await runQuery(
-    `INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption${metadataColumn})
-     VALUES (catalog_resolve_ingredient_id($1), $2, $3, $4, $5${metadataPlaceholder})
+    `INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption${metadataColumn}${libraryColumn})
+     VALUES (catalog_resolve_ingredient_id($1), $2, $3, $4, $5${metadataPlaceholder}${libraryPlaceholder})
      ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
-       SET deleted = false, deleted_at = NULL,
-           role = EXCLUDED.role, caption = EXCLUDED.caption${metadataUpdate}
+       SET deleted = false, deleted_at = NULL${fieldsUpdate}${metadataUpdate}${libraryUpdate}
      RETURNING *`,
     [
       ingredientId, mediaKey, kind, role, caption,
       ...(hasMetadata ? [toPgJson(options.metadata || {})] : []),
+      ...(hasLibrary ? [toPgJson(normalizeLibrary(options.library))] : []),
     ],
   );
   return rowToMedia(result.rows[0]);
@@ -151,12 +157,13 @@ export async function getMissingMediaForIngredient(ingredientId, { media } = {})
 // Casting reference library: merge a variant/tags/guide patch into one live
 // media row. Turning a guide ON is serialized on the owning ingredient row and
 // refused (409) past MAX_CAST_GUIDES so the render picker's cap holds.
-export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {}) {
+export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {}, { preserveExisting = false } = {}) {
   ingredientId = await assertCatalogIdentityWritable(ingredientId);
   return withTransaction(async (client) => {
     await client.query('SELECT id FROM catalog_ingredients WHERE id = catalog_resolve_ingredient_id($1) FOR UPDATE', [ingredientId]);
     const cur = await client.query(
-      `SELECT * FROM catalog_ingredient_media
+      `SELECT *, (updated_at IS DISTINCT FROM created_at OR updated_at IS NULL OR created_at IS NULL) AS changed_since_creation
+         FROM catalog_ingredient_media
         WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind = $3 AND deleted = false`,
       [ingredientId, mediaKey, kind],
     );
@@ -167,12 +174,33 @@ export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {
       throw err;
     }
     const prev = normalizeLibrary(row.library);
+    // A completion hook may race a user's edits after an optimistic attach.
+    // Edited rows keep their whole library, including fields cleared to an
+    // absent key by normalization; only the missing lineage can be filled.
+    // Compare timestamps in Postgres, which keeps their sub-millisecond
+    // precision. The media update trigger advances this clock monotonically.
+    const generated = preserveExisting && row.changed_since_creation !== false
+      ? (hasOwn(patch, 'derivedFrom') ? { derivedFrom: patch.derivedFrom } : {}) : patch;
+    const effective = preserveExisting ? { ...generated, ...prev } : generated;
     const next = normalizeLibrary({
       ...prev,
-      ...(hasOwn(patch, 'variant') ? { variant: patch.variant } : {}),
-      ...(hasOwn(patch, 'tags') ? { tags: patch.tags } : {}),
-      ...(hasOwn(patch, 'guide') ? { guide: patch.guide } : {}),
+      ...(hasOwn(effective, 'variant') ? { variant: effective.variant } : {}),
+      ...(hasOwn(effective, 'tags') ? { tags: effective.tags } : {}),
+      ...(hasOwn(effective, 'guide') ? { guide: effective.guide } : {}),
+      ...(hasOwn(effective, 'review') ? { review: { ...prev.review, ...effective.review } } : {}),
+      ...(hasOwn(effective, 'derivedFrom') ? { derivedFrom: effective.derivedFrom } : {}),
     });
+    if (['bad', 'rejected'].includes(next.review?.status)) {
+      await client.query(`UPDATE catalog_ingredient_media SET library = jsonb_set(COALESCE(library, '{}'::jsonb), '{guide}', 'false'::jsonb, true)
+        WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind <> $3 AND deleted = false
+          AND library->>'guide' = 'true'`, [ingredientId, mediaKey, kind]);
+    }
+    if (next.guide === true) {
+      const rejected = await client.query(`SELECT EXISTS (SELECT 1 FROM catalog_ingredient_media
+        WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind <> $3 AND deleted = false
+          AND library->'review'->>'status' IN ('bad', 'rejected')) AS blocked`, [ingredientId, mediaKey, kind]);
+      if (rejected.rows[0].blocked) next.guide = false;
+    }
     if (next.guide === true && prev.guide !== true) {
       const count = await client.query(
         `SELECT COUNT(*)::int AS n FROM catalog_ingredient_media

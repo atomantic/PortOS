@@ -112,15 +112,16 @@ describe('CoS Schedule Routes', () => {
     ['review', 'CHECKOUT_REVIEW_REFUSED'], ['retire', 'CHECKOUT_RETIREMENT_REFUSED'],
   ])('returns numeric archive capacity evidence on refused %s without claiming a review or receipt', async (operation, code) => {
     const tuple = { path: '/synthetic/checkout', head: 'a'.repeat(40), branch: 'claim/42', locked: false, lockReason: null };
+    const archiveUsage = { metadata: 1024, directory: 5000000, cacheRoots: 1, cacheEntries: 80002, cacheBytes: 80136, cacheReadBytes: 80272, cacheReadHashMs: 2000, cacheProofPeakBytes: 3200 };
     const archiveLimit = { scope: 'content', kind: 'total', limitBytes: 250 * 1024 * 1024, observedBytes: 264 * 1024 * 1024 };
-    recovery.prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit });
-    recovery.retireInventoriedCheckout.mockResolvedValue({ ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit });
+    recovery.prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit, archiveUsage });
+    recovery.retireInventoriedCheckout.mockResolvedValue({ ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit, archiveUsage });
     const prUrl = 'https://github.com/example/repo/pull/42';
     const evidence = operation === 'review' ? { prUrl } : { review: { prUrl, digest: 'b'.repeat(64), acceptSuperseded: false } };
     const response = await request(app).post(`/api/cos/schedule/branch-reconcile/checkouts/${operation}`)
       .send({ appId: 'app-1', ...tuple, ...evidence });
     expect(response.status).toBe(409);
-    expect(response.body).toMatchObject({ code, context: { reason: 'retirement-archive-limit-exceeded', archiveLimit } });
+    expect(response.body).toMatchObject({ code, context: { reason: 'retirement-archive-limit-exceeded', archiveLimit, archiveUsage } });
     expect(response.body).not.toHaveProperty('review');
     expect(response.body).not.toHaveProperty('archiveDir');
     expect(JSON.stringify(response.body)).not.toContain(tuple.path);
@@ -595,6 +596,41 @@ describe('CoS Schedule Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
+      expect(taskSchedule.triggerOnDemandTask).toHaveBeenCalledWith('review', 'my-app', {
+        provider: undefined,
+        model: undefined,
+        effort: undefined,
+        executionOptions: undefined,
+        targetModels: null,
+        targetPullRequest: undefined,
+      });
+    });
+
+    it('forwards provider, model, effort, executionOptions, and targetModels to triggerOnDemandTask', async () => {
+      taskSchedule.triggerOnDemandTask.mockResolvedValue({ id: 'req-2' });
+
+      const response = await request(app)
+        .post('/api/cos/schedule/trigger')
+        .send({
+          taskType: 'model-comparison-refresh',
+          appId: null,
+          provider: 'anthropic',
+          model: 'claude-3-7-sonnet',
+          effort: 'high',
+          executionOptions: { serviceTier: 'fast' },
+          targetModels: ['gpt-6-luna', 'claude-opus-5-5'],
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(taskSchedule.triggerOnDemandTask).toHaveBeenCalledWith('model-comparison-refresh', null, {
+        provider: 'anthropic',
+        model: 'claude-3-7-sonnet',
+        effort: 'high',
+        executionOptions: { serviceTier: 'fast' },
+        targetModels: ['gpt-6-luna', 'claude-opus-5-5'],
+        targetPullRequest: undefined,
+      });
     });
 
     it('rejects missing or malformed taskType before triggering an on-demand task', async () => {

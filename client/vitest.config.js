@@ -1,3 +1,4 @@
+import { ciTestConfig, ciTestRunnerAccess } from '../scripts/ciTestPolicy.js';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
@@ -14,12 +15,13 @@ const config = defineConfig({
   server: { watch: VITEST_WATCH_OPTIONS },
   // Anchor to the config, even when --root or the caller cwd differs.
   cacheDir: fileURLToPath(new URL('./.cache/vitest', import.meta.url)),
-  plugins: [react()],
+  plugins: [react(), ...ciTestRunnerAccess()],
   resolve: {
     // Share Three.js without bypassing its package exports with a directory alias.
     dedupe: ['three'],
   },
   test: {
+    ...ciTestConfig(),
     // Vitest 5's module cache is separate from Vite cacheDir; dependencies may be shared by worktrees.
     fsModuleCachePath: fileURLToPath(new URL('./.cache/vitest/modules', import.meta.url)),
     globalSetup: [fileURLToPath(new URL('../scripts/vitestTempRootSetup.js', import.meta.url))],
@@ -34,6 +36,8 @@ const config = defineConfig({
       // The runner's selection is for THIS Vitest process only: a suite that
       // spawns a nested Vitest on a fixture must not inherit it.
       PORTOS_CI_TEST_SELECTION: '',
+      PORTOS_CI_COLLECTION: '',
+      PORTOS_CI_TEST_POLICY: '',
       // Same for the memo store: a nested Vitest must point at its own directory or stay off.
       PORTOS_TEST_MEMO_DIR: '',
     },
@@ -79,6 +83,7 @@ config.test = applyRunnerSelection(config.test, runnerSelection);
 config.test.projects = vitestCaptureProjects(config.test, {
   cacheDir: config.cacheDir,
   selection: runnerSelection,
-  exclusiveTests: ['src/test/workspaceCaches.test.js'],
+  // Both suites launch nested Vitest workers and need a quiet client runner.
+  exclusiveTests: ['src/test/workspaceCaches.test.js', 'src/test/candidateRunner.test.js'],
 }).map(project => ({ ...project, plugins: config.plugins, resolve: config.resolve, server: config.server }));
 export default config;

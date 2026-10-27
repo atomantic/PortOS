@@ -350,6 +350,7 @@ it('carries transitive browser re-exports through the planner CLI and fails clos
   }));
   try {
     git('init', '-q');
+    WINDOWS_CONTRACT_TESTS.forEach(path => write(path, '// native inventory fixture\n'));
     write(leaf, 'export const value = 1;\n');
     write('server/lib/shared/leaf.ts', 'export const value = 3;\n');
     write('server/lib/bridge.js', "export { value } from './shared/leaf';\n");
@@ -781,6 +782,7 @@ describe('CI test impact planner', () => {
     for (const path of [
       '.github/workflows/ci.yml',
       'server/vitest.config.js',
+      'client/vitest.config.js',
       'client/src/test/setup.js',
       'server/lib/validation.js',
       // The client lint configuration. Both of these carry real enforced rules —
@@ -846,7 +848,7 @@ describe('CI test impact planner', () => {
       trackedFiles: TRACKED,
       appRouteOnly: isRouteOnlyAppDiff(providerDiff),
     });
-    expect(plan).toMatchObject({ full: true, db: true, smoke: true, windows: true });
+    expect(plan).toMatchObject({ full: true, db: true, smoke: true, windows: false });
     expect(plan.reason).toMatch(/composition root changed/);
   });
 
@@ -1230,7 +1232,7 @@ describe('CI test impact planner', () => {
         build: true,
         smoke: true,
         windows: true,
-        windowsMode: 'full',
+        windowsMode: 'files',
       });
     });
   });
@@ -1279,14 +1281,14 @@ describe('CI test impact planner', () => {
     expect(re.test("'generate_ltx2xpy'")).toBe(false);
   });
 
-  it('uses four full Windows shards while keeping small exact-file plans on one runner', () => {
-    expect(FULL_SUITE_SHARDS.windows).toBe(4);
+  it('keeps Windows native contracts on one runner while primary full plans stay sharded', () => {
+    expect(FULL_SUITE_SHARDS.windows).toBe(1);
     expect(shardIndexes('full', 3)).toEqual([1, 2, 3]);
     expect(shardIndexes('related', 3)).toEqual([1]);
     expect(shardIndexes('files', 3)).toEqual([1]);
     expect(shardIndexes('skip', 3)).toEqual([1]);
     for (const [runner, count] of Object.entries(FULL_SUITE_SHARDS)) {
-      expect(count, runner).toBeGreaterThan(1);
+      if (runner !== 'windows') expect(count, runner).toBeGreaterThan(1);
     }
 
     const full = buildCiTestPlan(['server/vitest.config.js'], { trackedFiles: TRACKED });
@@ -1298,9 +1300,9 @@ describe('CI test impact planner', () => {
     const scoped = buildCiTestPlan(['server/services/auth.js'], { trackedFiles: TRACKED });
     expect(scoped.shards).toEqual({ server: [1], client: [1], windows: [1] });
     const relatedWindows = buildCiTestPlan(['server/lib/bufferedSpawn.js'], { trackedFiles: TRACKED });
-    expect(relatedWindows).toMatchObject({ full: false, windowsMode: 'related',
-      windowsSources: ['server/lib/bufferedSpawn.js'],
-      shards: { server: [1, 2], client: [1], windows: [1, 2, 3, 4] } });
+    expect(relatedWindows).toMatchObject({ full: false, windowsMode: 'files',
+      windowsSources: [],
+      shards: { server: [1, 2], client: [1], windows: [1] } });
     expect(relatedWindows.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS.filter(path => TRACKED.includes(path)).sort());
     const exactWindows = buildCiTestPlan(['server/lib/bufferedSpawn.test.js'], { trackedFiles: TRACKED });
     expect(exactWindows).toMatchObject({ windowsMode: 'files', shards: { windows: [1] } });
@@ -1450,7 +1452,7 @@ describe('CI test impact planner', () => {
     }
   });
 
-  it('escalates Windows only for the workflow and pipeline scripts the windows-server job runs', () => {
+  it('selects native Windows for its registry, workflow and executed pipeline inputs', () => {
     const windowsModeOf = (path) => buildCiTestPlan([path], { trackedFiles: TRACKED }).windowsMode;
     // Defined by / executed on windows-latest.
     for (const path of [
@@ -1459,25 +1461,25 @@ describe('CI test impact planner', () => {
       'scripts/lib/githubOutput.js',
       'scripts/run-ci-tests.js',
       'scripts/run-ci-tests.test.js',
-    ]) expect(windowsModeOf(path), path).toBe('full');
+      'scripts/ci-test-plan.js',
+      'scripts/ci-test-plan.test.js',
+    ]) expect(windowsModeOf(path), path).toBe('files');
     // Still a full Linux plan, but nothing on windows-latest loads them: the
-    // baseline runs and the nightly / release PR keep the complete matrix.
+    // unrelated scripts leave Windows skipped.
     for (const path of [
       '.github/workflows/release.yml',
       '.github/workflows/eidoverse-acceptance.yml',
-      'scripts/ci-test-plan.js',
-      'scripts/ci-test-plan.test.js',
       'scripts/run-ci-lint.js',
       'scripts/scan-diff-hidden-content.js',
       'scripts/verify-ci-status.js',
     ]) {
       const plan = buildCiTestPlan([path], { trackedFiles: TRACKED });
       expect(plan.full, path).toBe(true);
-      expect(plan.windowsMode, path).toBe('files');
+      expect(plan.windowsMode, path).toBe('skip');
     }
     // Any matching trigger still wins: ci.yml next to a Linux-only script escalates.
-    expect(windowsModeOf('.github/workflows/ci.yml')).toBe('full');
-    expect(buildCiTestPlan(['scripts/ci-test-plan.js', '.github/workflows/ci.yml'], { trackedFiles: TRACKED }).windowsMode).toBe('full');
+    expect(windowsModeOf('.github/workflows/ci.yml')).toBe('files');
+    expect(buildCiTestPlan(['scripts/ci-test-plan.js', '.github/workflows/ci.yml'], { trackedFiles: TRACKED }).windowsMode).toBe('files');
   });
 
   it('routes worktree-manager source to a full plan instead of a broad nominal scoped plan (#9999)', () => {
@@ -1486,7 +1488,7 @@ describe('CI test impact planner', () => {
     expect(plan.reason).toMatch(/worktree manager source changed/);
     expect(plan.server.mode).toBe('full');
     expect(plan.client.mode).toBe('full');
-    expect(plan.windowsMode).toBe('full');
+    expect(plan.windowsMode).toBe('files');
     // Its test file alone stays a scoped plan.
     expect(buildCiTestPlan(['server/services/worktreeManager.test.js'], { trackedFiles: TRACKED }).full).toBe(false);
   });
@@ -1504,7 +1506,7 @@ describe('CI test impact planner', () => {
     expect(logs.reason).toMatch(/log socket source changed \(broad import fanout\)/);
     expect(logs.server.mode).toBe('full');
     expect(logs.client.mode).toBe('full');
-    expect(logs.windowsMode).toBe('full');
+    expect(logs.windowsMode).toBe('files');
     expect(logs.shards).toEqual({
       server: shardIndexes('full', FULL_SUITE_SHARDS.server),
       client: shardIndexes('full', FULL_SUITE_SHARDS.client),
@@ -1547,20 +1549,15 @@ describe('CI test impact planner', () => {
     ], { trackedFiles: TRACKED });
     expect(spawn.full).toBe(false);
     expect(spawn.windows).toBe(true);
-    expect(spawn.windowsMode).toBe('related');
-    expect(spawn.windowsSources).toEqual(['server/lib/bufferedSpawn.js']);
-    expect(spawn.windowsFiles).toEqual([
-      'server/lib/bufferedSpawn.test.js',
-      'server/lib/platform.test.js',
-      'server/lib/shellCd.test.js',
-      'server/services/agentTuiSpawning.test.js',
-    ]);
+    expect(spawn.windowsMode).toBe('files');
+    expect(spawn.windowsSources).toEqual([]);
+    expect(spawn.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS.filter(path => TRACKED.includes(path)).sort());
 
     const tuiShell = buildCiTestPlan([
       'server/lib/shellCd.js',
     ], { trackedFiles: TRACKED });
     expect(tuiShell.windows).toBe(true);
-    expect(tuiShell.windowsMode).toBe('related');
+    expect(tuiShell.windowsMode).toBe('files');
 
     const winHelper = buildCiTestPlan([
       'scripts/fix-windows-console.js',
@@ -1569,26 +1566,42 @@ describe('CI test impact planner', () => {
     expect(winHelper.windows).toBe(true);
   });
 
-  it.each(['js', 'test.js'])('runs owned-browser Windows contracts when its %s file changes', extension => {
+  it.each([
+    'server/lib/bufferedSpawn.js',
+    'server/lib/windowsGitProcess.protocol.test.js',
+  ])('does not broaden native coverage for an unrelated server edit beside %s', native => {
+    const neutral = 'server/lib/zodCompat.js';
+    const options = {
+      trackedFiles: [...TRACKED, ...WINDOWS_CONTRACT_TESTS, native, neutral],
+      clientDependencies: [],
+    };
+    const nativeOnly = buildCiTestPlan([native], options);
+    const mixed = buildCiTestPlan([native, neutral], options);
+    expect(mixed.full).toBe(false);
+    expect({ mode: mixed.windowsMode, files: mixed.windowsFiles, sources: mixed.windowsSources, shards: mixed.shards.windows })
+      .toEqual({ mode: nativeOnly.windowsMode, files: nativeOnly.windowsFiles, sources: nativeOnly.windowsSources, shards: nativeOnly.shards.windows });
+    expect(mixed.server.sources).toContain(neutral);
+  });
+
+  it.each(['js', 'test.js'])('keeps owned-browser application coverage on the primary runner for %s changes', extension => {
     const source = 'server/services/htmlComposition/ownedBrowser.js';
     const test = 'server/services/htmlComposition/ownedBrowser.test.js';
     const plan = buildCiTestPlan([`server/services/htmlComposition/ownedBrowser.${extension}`], {
       trackedFiles: [...TRACKED, source, test],
     });
-    expect(plan.windows).toBe(true);
-    expect(plan.windowsFiles).toContain(test);
-    expect(plan.windowsMode).toBe(extension === 'js' ? 'related' : 'files');
-    expect(plan.windowsSources).toEqual(extension === 'js' ? [source] : []);
+    expect(plan.windows).toBe(false);
+    expect(plan.windowsFiles).toEqual([]);
+    expect(plan.server[extension === 'js' ? 'sources' : 'files']).toContain(extension === 'js' ? source : test);
   });
 
-  it('keeps the complete Windows suite for an explicit full-CI request', () => {
+  it('keeps the native Windows set for an explicit full-CI request', () => {
     const plan = buildCiTestPlan(['server/lib/bufferedSpawn.js'], {
       trackedFiles: TRACKED,
       forceFull: true,
     });
 
-    expect(plan.windowsMode).toBe('full');
-    expect(plan.windowsFiles).toEqual([]);
+    expect(plan.windowsMode).toBe('files');
+    expect(plan.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS.filter(path => TRACKED.includes(path)).sort());
   });
 
   it('only names tracked Windows contract tests', () => {
@@ -1609,7 +1622,7 @@ describe('CI test impact planner', () => {
     expect(plan.windowsSources).toEqual([]);
   });
 
-  it('runs every changed retirement fixture on Windows for a test-only repair', () => {
+  it('keeps changed retirement application fixtures on the primary runner', () => {
     const contracts = [
       'server/services/heldCheckoutExactDelivery.integration.test.js',
       'server/services/heldCheckoutRecovery.test.js',
@@ -1617,8 +1630,8 @@ describe('CI test impact planner', () => {
     ];
     const plan = buildCiTestPlan(contracts, { trackedFiles: [...TRACKED, ...contracts] });
 
-    expect(plan.windowsMode).toBe('files');
-    expect(plan.windowsFiles).toEqual(expect.arrayContaining(contracts));
+    expect(plan.windowsMode).toBe('skip');
+    expect(plan.windowsFiles).toEqual([]);
     expect(plan.server.files).toEqual(expect.arrayContaining(contracts));
   });
 
@@ -1705,246 +1718,103 @@ describe('needsSlashdoSubmodule', () => {
   });
 });
 
-// windows-latest bills at GitHub's 2x minute multiplier, and three Windows
-// shards were ~58% of a full run's billable minutes (24.9 of 40.4, measured
-// over 11 real runs). These pin the rule that bought that back: a full plan
-// escalates the Windows job to the complete server suite only when the diff
-// gives windows-server something to prove. Everything else still runs the
-// WINDOWS_CONTRACT_TESTS baseline — reduced, never skipped (issue #7440).
-describe('Windows escalation on a full plan (#7440)', () => {
-  // The contract baseline resolves against tracked files, so a downgrade is
-  // only observable when the contract tests exist in the tree.
-  const TRACKED_WITH_CONTRACTS = [...TRACKED, ...WINDOWS_CONTRACT_TESTS];
-  const plan = (files, options = {}) => buildCiTestPlan(files, {
-    trackedFiles: TRACKED_WITH_CONTRACTS,
-    ...options,
+// The supported Windows boundary is executable behavior, not all application
+// consumers of the process graph. Primary-platform selection remains intact.
+describe('Windows native support boundary', () => {
+  const options = { trackedFiles: [...TRACKED, ...WINDOWS_CONTRACT_TESTS] };
+  const expected = [...WINDOWS_CONTRACT_TESTS].sort();
+
+  it.each([
+    'scripts/deploy.ps1',
+    'server/lib/bufferedSpawn.js',
+    'server/lib/windowsGitSupervisor.cs',
+    'server/lib/windowsAgentSupervisor.cs',
+    'server/lib/windowsAgentProcess.js',
+    'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
+    'server/lib/gitRepositoryIdentity.js',
+    'server/lib/checkoutRetirementAdmission.js',
+    'server/lib/pathSafety.js',
+    'server/services/shell.windows.test.js',
+    'server/services/agentTuiSpawning/sessionController.js',
+    'server/services/tuiPromptRunner.js',
+  ])('selects the native contracts without following application consumers for %s', path => {
+    const plan = buildCiTestPlan([path], options);
+    expect(plan.windows).toBe(true);
+    expect(plan.windowsMode).toBe('files');
+    expect(plan.windowsFiles).toEqual(expected);
+    expect(plan.windowsSources).toEqual([]);
+    expect(plan.shards.windows).toEqual([1]);
   });
 
-  it('keeps the 43-contract Windows baseline on one job despite the larger full matrix', () => {
-    expect(WINDOWS_CONTRACT_TESTS).toHaveLength(43);
-    const downgraded = plan(['client/vite.config.js']);
-
-    // Still a full plan for every Linux suite — only the 2x job narrows.
-    expect(downgraded.full).toBe(true);
-    expect(downgraded.server.mode).toBe('full');
-    expect(downgraded.client.mode).toBe('full');
-    expect(downgraded.shards.server).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.server));
-
-    // Reduced, not skipped: the job runs, on one shard, over the baseline.
-    expect(downgraded.windows).toBe(true);
-    expect(downgraded.windowsMode).toBe('files');
-    expect(downgraded.shards.windows).toEqual([1]);
-    expect(downgraded.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS);
-    expect(downgraded.suiteReasons.windows).toContain('Windows contract baseline');
-  });
-
-  it('treats a capacity escalation as a scoping limit, not a Windows risk signal', () => {
-    // A diff wide enough to blow MAX_CHANGED_CODE_FILES says the planner ran
-    // out of scoping headroom. Nothing about it implicates Windows.
-    const wide = plan(Array.from({ length: 31 }, (_, i) => `server/services/wide${i}.js`));
-
-    expect(wide.full).toBe(true);
-    expect(wide.reason).toContain('wide change');
-    expect(wide.windowsMode).toBe('files');
-    expect(wide.shards.windows).toEqual([1]);
-  });
-
-  it('escalates when ANY matching trigger is Windows-relevant, not just the reported one', () => {
-    // The reason line reports the first match in sorted-path order, which here
-    // is the client-only one. The Windows decision must still see server/index.js.
-    const mixed = plan(['client/vite.config.js', 'server/index.js']);
-
-    expect(mixed.reason).toContain('client/vite.config.js');
-    expect(mixed.windowsMode).toBe('full');
-    expect(mixed.shards.windows).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.windows));
-  });
-
-  it('consults the trigger list from the App.jsx branch too', () => {
-    // client/src/App.jsx returns before the trigger loop, so its branch has to
-    // read the same OR — otherwise an App.jsx PR that also bumps a lockfile or
-    // touches server/index.js downgrades Windows on a diff that must escalate.
-    expect(plan(['client/src/App.jsx']).windowsMode).toBe('files');
-
-    // package-lock.json carries no manifest comparison here, so it fails closed.
-    for (const escalating of ['server/index.js', 'server/package-lock.json', 'server/.npmrc']) {
-      const combined = plan(['client/src/App.jsx', escalating]);
-      expect(combined.reason, escalating).toContain('client composition root changed');
-      expect(combined.windowsMode, escalating).toBe('full');
-    }
-  });
-
-  it('escalates when a Windows-risk file rides along with a client-only trigger', () => {
-    // .ps1 is not in EXECUTABLE_RE, so risk detection must read every changed
-    // path, not only the executable ones.
-    const withPowerShell = plan(['client/vite.config.js', 'scripts/deploy.ps1']);
-
-    expect(withPowerShell.windowsMode).toBe('full');
-    expect(withPowerShell.windowsFiles).toEqual([]);
-  });
-
-  it('keeps the complete matrix on the runs that carry the discovery net', () => {
-    // Nightly, the main -> release PR, release, explicit full request. ci.yml
-    // has no push trigger, so these are the whole discovery net for an
-    // untagged Windows regression.
-    const forced = plan([], { forceFull: true, forceFullReason: 'full CI requested' });
-
-    expect(forced.windowsMode).toBe('full');
-    expect(forced.shards.windows).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.windows));
-  });
-
-  it('fails closed for a call site that passes no windowsEscalates flag', () => {
-    // The unclassified-file branch deliberately omits the flag, so this pins
-    // fullPlan's `windowsEscalates = true` default through a real call site: a
-    // branch added later without the flag over-tests rather than under-tests.
-    const unclassified = plan(['data.reference/bootstrap.bin']);
-
-    expect(unclassified.full).toBe(true);
-    expect(unclassified.windowsMode).toBe('full');
-  });
-
-  it('fails closed to the full suite rather than selecting zero Windows tests', () => {
-    // run-ci-tests.js prints "No server tests selected" and exits 0 on an empty
-    // files list. A downgrade that resolved to [] would be a green job that ran
-    // nothing, so the baseline has to actually exist first.
-    const noContracts = buildCiTestPlan(['client/vite.config.js'], { trackedFiles: [] });
-
-    expect(noContracts.windowsMode).toBe('full');
-    expect(noContracts.shards.windows).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.windows));
-
-    // The downgrade is still reachable — this is a fail-closed fallback, not a
-    // rule that disabled it outright.
-    const withContracts = buildCiTestPlan(['client/vite.config.js'], {
-      trackedFiles: WINDOWS_CONTRACT_TESTS,
+  it.each(['.github/workflows/ci.yml', 'server/vitest.config.js', 'scripts/run-ci-tests.js'])(
+    'keeps full primary coverage and only the native Windows contract set for %s', path => {
+      const plan = buildCiTestPlan([path], options);
+      expect(plan.full).toBe(true);
+      expect(plan.server.mode).toBe('full');
+      expect(plan.client.mode).toBe('full');
+      expect(plan.windowsFiles).toEqual(expected);
+      expect(plan.windowsMode).toBe('files');
+      expect(plan.shards.windows).toEqual([1]);
     });
-    expect(withContracts.windowsMode).toBe('files');
+
+  it('uses the same supported Windows boundary for scheduled/release/full validation', () => {
+    const plan = buildCiTestPlan(['docs/README.md'], { ...options, forceFull: true });
+    expect(plan).toMatchObject({ full: true, server: { mode: 'full' }, client: { mode: 'full' },
+      db: true, build: true, smoke: true, windowsMode: 'files', windowsSources: [] });
+    expect(plan.windowsFiles).toEqual(expected);
+    expect(plan.shards.windows).toEqual([1]);
   });
 
-  describe('no Windows-sensitive surface loses coverage', () => {
-    // One representative path per WINDOWS_RISK_RULES entry. The coverage
-    // assertion below fails when a rule is added without a sample here, so a
-    // new Windows-sensitive surface cannot land untested.
-    const RISK_SAMPLES = [
-      'scripts/deploy.ps1',
-      'scripts/launch.cmd',
-      'scripts/fix-windows-console.js',
-      'scripts/ps1-bom.test.js',
-      'server/lib/nativeTrash.js',
-      'server/lib/nativeTrash.test.js',
+  it.each([
+    'server/lib/primaryCheckoutGuard.test.js',
+    'server/services/worktreeReap.test.js',
+    'server/services/heldCheckoutRecovery.test.js',
+    'server/services/retirementFixture.lifecycle.test.js',
+    'server/services/videoGen/metalBufferProfiles.test.js',
+    'server/routes/apps/crud.test.js',
+  ])('retains %s on the primary runner without adding a Windows application suite', path => {
+    const plan = buildCiTestPlan([path], { trackedFiles: [...TRACKED, path] });
+    expect(plan.server.files).toContain(path);
+    expect(plan.windows).toBe(false);
+    expect(plan.windowsFiles).toEqual([]);
+  });
+
+  it('keeps real native launch, prompt, ownership and filesystem proof in the registry', () => {
+    expect(WINDOWS_CONTRACT_TESTS).toEqual(expect.arrayContaining([
+      'server/lib/cliProviderRun.test.js', 'server/lib/detachedSpawn.test.js',
+      'server/services/shell.windows.test.js', 'server/services/tuiPromptRunner.test.js',
+      'server/lib/execGit.test.js', 'server/lib/windowsGitProcess.test.js', 'server/lib/windowsGitProcess.protocol.test.js',
+      'server/lib/windowsAgentProcess.test.js',
+      'server/lib/gitRepositoryIdentity.test.js', 'server/lib/checkoutRetirementAdmission.test.js',
       'server/lib/nativeTrash.smoke.test.js',
-      'server/lib/bufferedSpawn.js',
-      'server/lib/execGit.js',
-      'server/lib/windowsGitProcess.js',
-      'server/lib/windowsGitProcess.test.js',
-      'server/lib/windowsGitProcess.protocol.test.js',
-      'server/lib/windowsGitSupervisor.cs',
-      'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
-      'server/lib/pathSafety.js',
-      'server/lib/mockPathsDataRoot.js',
-      'server/services/cosAgentIndex.completionOrder.test.js',
-      'server/lib/staticImportGraph.js',
-      'server/services/agentImportCycles.test.js',
-      'server/services/worktreeManager.js',
-      'server/services/heldCheckoutRecovery.js',
-      'server/services/heldCheckoutRecovery.test.js',
-      'server/services/heldCheckoutExactDelivery.integration.test.js',
-      'server/services/retirementFixture.lifecycle.test.js',
-      'server/lib/shellCd.js',
-      'server/lib/agentGuard/index.js',
-      'server/cos-runner/index.js',
-      'server/services/shell.js',
-      'server/services/agentTuiSpawning.js',
-      'server/services/agentTuiSpawning/sessionController.js',
-      'server/services/agentTuiSpawning/sessionController.test.js',
-      'server/services/tuiPromptRunner.js',
-      'server/services/htmlComposition/ownedBrowser.js',
-      'server/services/autonomousJobs/execution.shellSpawn.js',
-      'server/services/voice/fineTuning.js',
-      'server/services/imageGen/codex.js',
-      'server/services/imageGen/codex.test.js',
-      'server/routes/apps/index.js',
-      'server/routes/scaffoldVite.js',
-    ];
+    ]));
+    const repo = fileURLToPath(new URL('../', import.meta.url));
+    expect(WINDOWS_CONTRACT_TESTS.every(path => existsSync(join(repo, path)))).toBe(true);
+  });
 
-    it('covers every risk rule with a sample', () => {
-      const uncovered = WINDOWS_RISK_RULES
-        .filter((rule) => !RISK_SAMPLES.some((path) => rule.test(path)))
-        .map((rule) => String(rule));
+  it('runs the junction settlement contract on Windows when its test changes', () => {
+    const test = 'server/lib/execGit.test.js';
+    const plan = buildCiTestPlan([test], { trackedFiles: [...options.trackedFiles, test] });
+    expect(plan.windows).toBe(true);
+    expect(plan.windowsFiles).toContain(test);
+  });
 
-      expect(uncovered).toEqual([]);
-    });
+  it('fails the emitted CI plan instead of publishing a green empty Windows job', () => {
+    const plan = buildCiTestPlan(['.github/workflows/ci.yml'], { trackedFiles: [] });
+    expect(() => emitGitHubPlan(plan)).toThrow('Windows native contract inventory is empty');
+  });
 
-    it.each(RISK_SAMPLES)('gives %s the complete Windows suite, never the baseline', (path) => {
-      // Differential, so it stays load-bearing for every sample. Asserting
-      // `windows === true` on `plan([path])` alone would be vacuous for
-      // .ps1/.cmd/.bat: those are not in EXECUTABLE_RE, so they force a full
-      // plan as an "unclassified changed file", and EVERY full plan sets
-      // `windows: true` whatever the risk rules say. Pairing the sample with a
-      // client-only trigger makes the plan go full for a reason that WOULD
-      // downgrade, so only the risk rule can produce `full` here.
-      expect(plan(['client/vite.config.js']).windowsMode).toBe('files');
-      expect(plan(['client/vite.config.js', path]).windowsMode).toBe('full');
-    });
-
-    it('routes a scoped Windows-risk change to the Windows job', () => {
-      // The scoped side of the same predicate: no full trigger in sight, so
-      // `windows: true` here is a direct consequence of WINDOWS_RISK_RULES.
-      expect(plan(['server/services/auth.js']).windows).toBe(false);
-      expect(plan(['server/lib/bufferedSpawn.js']).windows).toBe(true);
-    });
-
-    it('selects the Windows Git process regressions for test-only changes (#13703)', () => {
-      const tests = ['server/lib/windowsGitProcess.test.js', 'server/lib/windowsGitProcess.protocol.test.js'];
-      const selected = buildCiTestPlan(tests, { trackedFiles: [...TRACKED, ...WINDOWS_CONTRACT_TESTS, ...tests], clientDependencies: [] });
-      expect(selected).toMatchObject({ full: false, windows: true, windowsMode: 'files' });
-      expect(selected.windowsFiles).toEqual([...new Set([...WINDOWS_CONTRACT_TESTS, ...tests])].sort());
-    });
-
-    it.each(['js', 'test.js'])('runs checkout retirement %s changes on Windows (#13562)', extension => {
-      const source = 'server/services/heldCheckoutRecovery.js';
-      const test = 'server/services/heldCheckoutRecovery.test.js';
-      const selected = buildCiTestPlan([`server/services/heldCheckoutRecovery.${extension}`], {
-        trackedFiles: [...TRACKED, ...WINDOWS_CONTRACT_TESTS, source, test], clientDependencies: [],
-      });
-      expect(selected).toMatchObject({ full: false, windows: true,
-        windowsMode: extension === 'js' ? 'related' : 'files' });
-      expect(selected.windowsSources).toEqual(extension === 'js' ? [source] : []);
-      if (extension === 'test.js') expect(selected.windowsFiles).toContain(test);
-    });
-
-    it('routes native recycling source and both tests to real Windows coverage (#13251)', () => {
-      const source = 'server/lib/nativeTrash.js';
-      const tests = ['server/lib/nativeTrash.test.js', 'server/lib/nativeTrash.smoke.test.js'];
-      const unrelated = 'server/lib/nativeTrashXdg.test.js';
-      const trackedFiles = [...TRACKED, ...WINDOWS_CONTRACT_TESTS, source, ...tests, unrelated];
-      for (const changedFiles of [[source], ...tests.map(path => [path]), [source, ...tests]]) {
-        const selected = buildCiTestPlan(changedFiles, { trackedFiles, clientDependencies: [] });
-        expect(selected.full).toBe(false);
-        expect(selected.windows).toBe(true);
-        expect(selected.windowsMode).toBe(changedFiles.includes(source) ? 'related' : 'files');
-        expect(selected.windowsSources).toEqual(changedFiles.includes(source) ? [source] : []);
-        expect(selected.windowsFiles).toEqual([...new Set([
-          ...WINDOWS_CONTRACT_TESTS, ...changedFiles.filter(path => tests.includes(path)),
-        ])].sort());
-        expect(selected.windowsFiles).not.toContain(unrelated);
-      }
-      // The Linux XDG implementation does not broaden this Windows-only rule.
-      expect(buildCiTestPlan([unrelated], { trackedFiles }).windows).toBe(false);
-    });
-
-    it('selects the changed cancellation fixtures explicitly on Windows without widening unrelated tests (#11641)', () => {
-      const fixtures = ['server/lib/mockPathsDataRoot.test.js', 'server/services/cosAgentIndex.completionOrder.test.js'];
-      const unrelated = 'server/services/exampleUnrelated.test.js';
-      const trackedFiles = [...TRACKED, ...WINDOWS_CONTRACT_TESTS, ...fixtures, unrelated];
-      for (const changedFiles of [fixtures, ...fixtures.map(path => [path])]) {
-        const selected = buildCiTestPlan(changedFiles, { trackedFiles, clientDependencies: [] });
-        expect(selected.full).toBe(false);
-        expect(selected.windowsMode).toBe('files');
-        expect(selected.windowsFiles).toEqual([...new Set([...WINDOWS_CONTRACT_TESTS, ...changedFiles])].sort());
-        expect(selected.windowsFiles).not.toContain(unrelated);
-      }
-      const helper = 'server/lib/mockPathsDataRoot.js';
-      expect(buildCiTestPlan([helper], { trackedFiles: [...trackedFiles, helper], clientDependencies: [] }).windows).toBe(true);
-    });
+  it('fails a scoped CI plan when one registered Windows contract is missing', () => {
+    const missing = 'server/lib/windowsAgentProcess.test.js';
+    const trackedFiles = [...TRACKED, ...WINDOWS_CONTRACT_TESTS.filter(path => path !== missing)];
+    const plan = buildCiTestPlan([missing], { trackedFiles });
+    expect(plan).toMatchObject({ full: false, windows: true });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(() => emitGitHubPlan(plan)).toThrow(`Windows native contract inventory is missing: ${missing}`);
+    } finally {
+      log.mockRestore();
+    }
   });
 });
 
@@ -1968,6 +1838,7 @@ it('projects transitive browser consumers through the planner CLI without replac
   const browsers = (result) => JSON.parse(result.browser_files);
   try {
     git('init', '-q');
+    WINDOWS_CONTRACT_TESTS.forEach(path => write(path, '// native inventory fixture\n'));
     write(leaf, 'export const value = 1;\n');
     write(unrelated, 'export const value = 2;\n');
     write('server/services/bridge.js', "export { value } from './example/leaf';\n");
@@ -2121,7 +1992,7 @@ describe('dependency manifest Windows escalation', () => {
   });
   const lockPlan = (headText, baseText = BASE) => planFor([LOCK], { [LOCK]: classifyDependencyChange(LOCK, baseText, headText) });
 
-  it('keeps a pure-JS version bump on the Windows contract baseline and names the package', () => {
+  it('keeps a pure-JS version bump on the primary platform and names the package', () => {
     const plan = lockPlan(lockfile({
       ...BASE_PACKAGES,
       'node_modules/@googleapis/gmail': { version: '17.0.0', resolved: 'https://registry.example.com/g-17.0.0.tgz' },
@@ -2130,10 +2001,10 @@ describe('dependency manifest Windows escalation', () => {
     // The Linux side stays complete; only Windows narrows.
     expect(plan.full).toBe(true);
     expect(plan.server.mode).toBe('full');
-    expect(plan.windowsMode).toBe('files');
-    expect(plan.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS);
+    expect(plan.windowsMode).toBe('skip');
+    expect(plan.windowsFiles).toEqual([]);
     expect(plan.shards.windows).toEqual([1]);
-    expect(plan.suiteReasons.windows).toContain('Windows contract baseline');
+    expect(plan.suiteReasons.windows).toContain('does not select Windows native contracts');
     expect(plan.suiteReasons.windows).toContain('@googleapis/gmail');
   });
 
@@ -2152,9 +2023,9 @@ describe('dependency manifest Windows escalation', () => {
         .filter(([, entry]) => entry !== undefined));
       const plan = lockPlan(lockfile(packages));
       expect(plan.full, label).toBe(true);
-      expect(plan.windowsMode, label).toBe('full');
+      expect(plan.windowsMode, label).toBe('files');
       expect(plan.shards.windows, label).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.windows));
-      expect(plan.suiteReasons.windows, label).toContain('escalates Windows: platform-sensitive package changed');
+      expect(plan.suiteReasons.windows, label).toContain('selects Windows native contracts: platform-sensitive package changed');
     }
   });
 
@@ -2174,10 +2045,10 @@ describe('dependency manifest Windows escalation', () => {
       ['no packages map', JSON.stringify({ lockfileVersion: 1 }), BASE],
     ]) {
       expect(classifyDependencyChange(LOCK, baseText, headText).escalate, label).toBe(true);
-      expect(lockPlan(headText, baseText).windowsMode, label).toBe('full');
+      expect(lockPlan(headText, baseText).windowsMode, label).toBe('files');
     }
     // No verdict at all — a caller that skipped the comparison — escalates too.
-    expect(planFor([LOCK], {}).windowsMode).toBe('full');
+    expect(planFor([LOCK], {}).windowsMode).toBe('files');
   });
 
   it('escalates Windows for engines, overrides and npm configuration changes', () => {
@@ -2195,23 +2066,23 @@ describe('dependency manifest Windows escalation', () => {
       const plan = planFor([npmrc], {});
       expect(plan.full, npmrc).toBe(true);
       expect(plan.reason, npmrc).toContain('npm configuration changed');
-      expect(plan.windowsMode, npmrc).toBe('full');
+      expect(plan.windowsMode, npmrc).toBe('files');
     }
   });
 
-  it('keeps the Windows baseline for platform-sensitive changes in workspaces the job does not install', () => {
+  it('skips Windows for changes in workspaces the native job does not install', () => {
     const unsafe = lockfile({ ...BASE_PACKAGES, 'node_modules/@scope/binding-win32-x64': { version: '1.0.0', os: ['win32'], cpu: ['x64'] } });
     for (const path of ['package-lock.json', 'client/package-lock.json', 'autofixer/package-lock.json']) {
       const plan = planFor([path], { [path]: classifyDependencyChange(path, BASE, unsafe) });
       expect(plan.full, path).toBe(true);
-      expect(plan.windowsMode, path).toBe('files');
+      expect(plan.windowsMode, path).toBe('skip');
       expect(plan.suiteReasons.windows, path).toContain('the Windows job does not install that workspace');
     }
     for (const path of ['.npmrc', 'client/.npmrc']) {
-      expect(planFor([path], {}).windowsMode, path).toBe('files');
+      expect(planFor([path], {}).windowsMode, path).toBe('skip');
     }
     // The same diff in the server lockfile still escalates.
-    expect(lockPlan(unsafe).windowsMode).toBe('full');
+    expect(lockPlan(unsafe).windowsMode).toBe('files');
   });
 
   it('pins the Windows-installed workspaces to the windows-server install steps in ci.yml', () => {
@@ -2220,15 +2091,15 @@ describe('dependency manifest Windows escalation', () => {
     expect(installed.sort()).toEqual([...WINDOWS_INSTALLED_WORKSPACES].sort());
   });
 
-  it('runs the shared server contracts as a full plan on the Windows baseline', () => {
+  it('runs shared schema contracts on the primary platform', () => {
     for (const path of ['server/lib/validation.js', 'server/lib/schemaVersions.js']) {
       const plan = planFor([path], {});
       expect(plan.full, path).toBe(true);
       expect(plan.server.mode, path).toBe('full');
-      // ci.yml publishes Full CI Gate only for windows_mode 'full' (pinned in
-      // ci-base-sha.test.js), so this plan cannot vouch for Windows coverage.
-      expect(plan.windowsMode, path).toBe('files');
-      expect(plan.windowsFiles, path).toEqual(WINDOWS_CONTRACT_TESTS);
+      // Full CI Gate requires the native Windows job as well as full primary
+      // coverage; this primary-only schema plan leaves that job skipped.
+      expect(plan.windowsMode, path).toBe('skip');
+      expect(plan.windowsFiles, path).toEqual([]);
     }
   });
 

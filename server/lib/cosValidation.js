@@ -121,13 +121,14 @@ const slashdoCommandSchema = z.string().refine(isValidSlashdoCommand, {
 
 // The app Issues tab already fetched the selected forge issue while listing the
 // page. Keep that payload bounded when it is carried into a manual claim so the
-// prompt cannot be inflated by a hand-crafted request. The generator truncates
-// direct service calls too; this is the route boundary for browser requests.
+// prompt cannot be inflated by a hand-crafted request. Oversized requests are
+// rejected at the route boundary instead of silently truncating issue content.
+export const PREFETCHED_ISSUE_CONTEXT_MAX_CHARS = Object.freeze({ title: 1000, body: 12_000, url: 2048 });
 const prefetchedIssueContextSchema = z.object({
   number: z.number().int().positive(),
-  title: z.string().max(1000).optional(),
-  body: z.string().max(12_000).optional(),
-  url: z.string().max(2048).optional(),
+  title: z.string().max(PREFETCHED_ISSUE_CONTEXT_MAX_CHARS.title).optional(),
+  body: z.string().max(PREFETCHED_ISSUE_CONTEXT_MAX_CHARS.body).optional(),
+  url: z.string().max(PREFETCHED_ISSUE_CONTEXT_MAX_CHARS.url).optional(),
 });
 
 // Optional guidance entered on the managed-app Issues tab. It is appended to

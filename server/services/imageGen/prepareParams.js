@@ -28,6 +28,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { applyImageVisualProfile } from './visualProfile.js';
 import { musicVideoStyleImages, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { join } from 'node:path';
@@ -41,13 +42,14 @@ import {
   cloudPromptRequired, maxInputImages, resolveCloudProviderConfig, resolveRenderTargetConfig,
 } from './cloudProviderConfig.js';
 import { RENDER_TARGET, recordRenderPin } from '../../lib/renderTargets.js';
-import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
+import { CLOUD_IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getUniverseRenderPin } from '../universeBuilder/crud.js';
 import { getImageModels, isFlux2, isEditOnly } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { usesDiffusersRunner } from '../../lib/runners.js';
 import { promptAddition } from '../../lib/modelInput.js';
+import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../../lib/imageGenCapabilities.js';
 
 // The job tags that name the record owning a render, each mapped to the record
 // loader and the render target whose `renderDefaults` pin backs it. A generate
@@ -134,6 +136,14 @@ export function selectLocalImageModelFromSettings(settings, modelId, allModels =
 export const previewUploadLabel = (index) => `(uploaded image ${index + 1})`;
 
 export async function prepareGenerateParams({ data, files, referenceImageFields, preview = false }) {
+  let profile = data.visualProfileOverride;
+  if (profile === undefined && !data.musicVideo && data.universeRun?.universeId) {
+    const { getUniverseVisualProfile } = await import('../universeBuilder/crud.js');
+    profile = await getUniverseVisualProfile(data.universeRun.universeId);
+  }
+  // FableLoom's canon compiler owns the photography block. Keep authored
+  // intent untouched until that compiler has resolved explicit overrides.
+  if (!data.fableLoom) data = applyImageVisualProfile(data, profile);
   let initImagePath = null;
   const uploadedTempPaths = [];
   const initUpload = files?.initImage;
@@ -187,6 +197,10 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // while the actual generation silently ignored them. (Reading settings here
   // is cheap — it's already read again below for the per-mode dispatch.)
   const settings = await getSettings();
+  if (data.fableLoom && (data.referenceStrengths?.length || 0) > namedReferenceFiles.length + referenceUploads.length) {
+    cleanupReqFilesTemp();
+    throw new ServerError('Each requested reference strength needs a matching reference image.', { status: 400, code: 'FABLELOOM_REFERENCE_STRENGTH_MISMATCH' });
+  }
   let mode = data.mode || settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
   // #3231 Phase 4 — a render tagged with the record that owns it resolves
   // through the render-target ladder: that record's pin
@@ -282,8 +296,12 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // Freeze the selected preference before capability checks. Explicit ids stay
   // untouched so the existing unknown/hardware rejection still applies.
   if (!data.modelId && localModel?.id) data.modelId = localModel.id;
-  const selectedCloudModel = mode === IMAGE_GEN_MODE.RUNWAY ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : null;
-  const referenceCap = mode === IMAGE_GEN_MODE.RUNWAY ? maxInputImages(mode, selectedCloudModel) : localModel?.pipelineClass === 'QwenImage21Pipeline' ? 10 : 4;
+  const selectedCloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL].includes(mode)
+    ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : null;
+  const referenceCap = mode === IMAGE_GEN_MODE.RUNWAY ? maxInputImages(mode, selectedCloudModel)
+    : localModel?.pipelineClass === 'QwenImage21Pipeline' ? 10
+      : data.fableLoom && CLOUD_IMAGE_GEN_MODES.includes(mode)
+        ? Math.min(maxInputImages(mode, selectedCloudModel) ?? IMAGE_REFERENCE_REQUEST_LIMIT, IMAGE_REFERENCE_REQUEST_LIMIT) : 4;
   if (referenceImageCount > referenceCap) {
     cleanupReqFilesTemp();
     throw new ServerError(
@@ -386,7 +404,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
     stagedRefPaths.push(initImagePath);
     uploadedTempPaths.push(initUpload.path);
   } else if (data.initImageFile) {
-    const resolved = resolveGalleryImage(data.initImageFile);
+    const resolved = resolveGalleryImage(data.initImageFile) || resolveImageInputPath(data.initImageFile);
     if (!resolved) {
       cleanupStagedAndTemp();
       throw new ServerError('Init image not found in gallery', { status: 400, code: 'INIT_IMAGE_NOT_FOUND' });

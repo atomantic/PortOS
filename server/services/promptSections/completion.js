@@ -357,6 +357,15 @@ function isResumedWorktree(task, worktreeInfo) {
  *
  * Returns '' when this isn't a resume, so callers can interpolate unconditionally.
  */
+// Selection uses durable producer metadata, never the task's free-text description.
+export function buildUnnecessaryDispatchSection(task) {
+  const meta = task?.metadata || {};
+  if (![meta.isInvestigation, meta.reviewLoopFollowUp, meta.gitConflictResolution].some(isTruthyMeta)
+    && !meta.githubNotificationResolve) return '';
+  return `## Unnecessary dispatch investigation
+If you verify the assigned action is already complete or no longer needed, before finishing trace why this run was dispatched: inspect the source task, producer, trigger and recovery evidence, and current target state. A failure that no longer reproduces is not a diagnosis. Prefer a bounded, authorized fix and verify it without asking for confirmation. Otherwise search the owning tracker and add redacted evidence to an existing issue or file an actionable issue. Report source-backed reasoning and the fix or issue link, or evidence of a legitimate race with no actionable defect. Do not invent a defect, repeat an already recorded investigation without new evidence, or dispatch an investigation of this investigation. Preserve ownership, cleanup obligations, budgets and the normal no-action-needed semantics.`;
+}
+
 export function buildResumeSection(task, worktreeInfo) {
   if (!isResumedWorktree(task, worktreeInfo)) return '';
   const priorAgentId = task.metadata.resumedFromAgentId;
@@ -379,8 +388,7 @@ Before you write any code, establish what is already done:
    — \`gh pr list --head ${worktreeInfo.branchName} --state all\` on GitHub,
    \`glab mr list --source-branch ${worktreeInfo.branchName}\` on GitLab.
 
-Then do only what remains. If a PR is already **merged**, the work is done — go
-straight to your completion step and report that. If a PR is already **open**,
+Then do only what remains. If a PR is already **merged**, report that at completion.${buildUnnecessaryDispatchSection(task) ? ' First follow the unnecessary dispatch investigation contract in this prompt.' : ''} If a PR is already **open**,
 finish/land that PR rather than opening a second one. Do NOT redo completed work,
 and do NOT revert its commits unless they are actually wrong.
 `;
@@ -620,58 +628,42 @@ const RECORD_REVIEW_HEAD = 'F="$(git rev-parse --git-path portos-review-status)"
  * A GitHub participant may hand its pending CI to the server coordinator, which
  * merges only the recorded head under its own admission (cosMergeHandoff.js).
  */
-function buildPendingMergeHandoffLines(agentId) {
+function buildPendingMergeHandoffLines(agentId, { review = true } = {}) {
   const command = agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/merge-handoff',
     payload: JSON.stringify({ agentId, prUrl: 'PR_URL', headSha: 'HEAD_SHA', worktreePath: 'WORKTREE_PATH' }) });
   return [
-    '**PortOS pending-merge handoff (GitHub, same-repository PR, only for measured CI backlog):** By default this run owns CI, confirmed merge and safe cleanup. Early finish requires the app setting `mergeHandoffMinQueuedRuns` and a fresh server-observed queued workflow count meeting that threshold; absent settings or unknown backlog keep ownership here. The server coordinator then owns the exact published head, failure recovery, merge confirmation and cleanup across restarts. When a configured local review round returns clean, record the head it reviewed beside REVIEW_STATUS (retain that historical reviewed head after later commits; completed pre-PR local review is scoped to this PR delivery, so feedback/CI pushes do not automatically respawn it):',
-    '```bash', RECORD_REVIEW_HEAD, '```',
-    'For handoff evidence, before each local review attempt capture `REVIEW_ATTEMPTED_HEAD=$(git rev-parse HEAD)` and retain that exact value across shell calls. When the completed loop has a nonempty all-optional roster and its only non-clean outcomes are availability, quota/provider, timeout, transport, malformed/empty, or no-verdict failures, record the aggregate status below. This handoff-specific record overrides instructions to leave REVIEW_STATUS=clean for optional unavailability; it does not label any reviewer verdict clean. Never use it for pending review, a required reviewer, accepted unresolved findings or rejection, failed validation, or unpushed fixes. Do not overwrite review-blocked. Later PR commits do not require new local review attempts; never replace the attempted head with the later head. Preserve the PR-bound completed lifecycle receipt across restarts. If writing fails, do not hand off:',
-    '```bash', RECORD_OPTIONAL_INCONCLUSIVE, '```',
-    'Once the published head (`git rev-parse HEAD` equals the PR head) has passed local validation and every configured review is satisfied or explicitly optional-inconclusive, and the PR is ready (not draft), request a handoff only if backlog policy is configured — unless review is `review-blocked` or the PR is being left open, whose stop rules still apply. Replace PR_URL, HEAD_SHA (the full 40-character head) and WORKTREE_PATH (this checkout):',
+    '**PortOS pending-merge handoff (GitHub, same-repository PR, only for measured CI backlog):** By default this run owns CI, confirmed merge and safe cleanup. Early finish requires the app setting `mergeHandoffMinQueuedRuns` and a fresh server-observed queued workflow count meeting that threshold; absent settings or unknown backlog keep ownership here. The server coordinator then owns the exact published head, failure recovery, merge confirmation and cleanup across restarts.',
+    ...(review ? [
+      'When a configured local review round returns clean, record the head it reviewed beside REVIEW_STATUS (retain that historical reviewed head after later commits; completed pre-PR local review is scoped to this PR delivery, so feedback/CI pushes do not automatically respawn it):',
+      '```bash', RECORD_REVIEW_HEAD, '```',
+      'For handoff evidence, before each local review attempt capture `REVIEW_ATTEMPTED_HEAD=$(git rev-parse HEAD)` and retain that exact value across shell calls. When the completed loop has a nonempty all-optional roster and its only non-clean outcomes are availability, quota/provider, timeout, transport, malformed/empty, or no-verdict failures, record the aggregate status below. This handoff-specific record overrides instructions to leave REVIEW_STATUS=clean for optional unavailability; it does not label any reviewer verdict clean. Never use it for pending review, a required reviewer, accepted unresolved findings or rejection, failed validation, or unpushed fixes. Do not overwrite review-blocked. Later PR commits do not require new local review attempts; never replace the attempted head with the later head. Preserve the PR-bound completed lifecycle receipt across restarts. If writing fails, do not hand off:',
+      '```bash', RECORD_OPTIONAL_INCONCLUSIVE, '```',
+    ] : []),
+    `Once the published head (\`git rev-parse HEAD\` equals the PR head) has passed local validation${review ? ' and every configured review is satisfied or explicitly optional-inconclusive' : ''}, and the PR is ready (not draft), request a handoff only if backlog policy is configured${review ? ' — unless review is `review-blocked`, whose stop rule still applies' : ''}. Replace PR_URL, HEAD_SHA (the full 40-character head) and WORKTREE_PATH (this checkout):`,
     '```bash', command, '```',
-    'Require a parsed JSON response with queued:true and a receipt whose headSha equals HEAD_SHA. Then the receipt is your merge outcome: do not wait for CI, acquire admission, merge, enable auto-merge, close the issue, release a claim, or remove the branch or worktree; the coordinator merges or dispatches recovery (a moved head, failed check or conflict). Report the PR URL, head and receipt id, say the PR is handed to the PortOS pending-merge coordinator with CI pending and is NOT yet merged, write the completion sentinel if this run uses one, and stop. This overrides later CI waits, MERGED-only completion and cleanup instructions, including delegated slashdo workflows. On queued:false with retryable:true, retry up to 3 times 5 seconds apart. Any other refusal, an HTTP/auth/transport error or unreadable JSON means no handoff: continue with the CI wait and admission-gated merge below. A refusal never permits merging without admission.',
+    'Require a parsed JSON response with queued:true and a receipt whose headSha equals HEAD_SHA. Then the receipt is your merge outcome: do not wait for CI, acquire admission, merge, enable auto-merge, close the issue, release a claim, or remove the branch or worktree; the coordinator merges or dispatches recovery (a moved head, failed check or conflict). Report the PR URL, head and receipt id, say the PR is handed to the PortOS pending-merge coordinator with CI pending and is NOT yet merged, write the completion sentinel if this run uses one, and stop. This overrides later CI waits, MERGED-only completion and cleanup instructions, including delegated slashdo workflows. On queued:false with retryable:true, retry up to 3 times 5 seconds apart. Any other refusal, an HTTP/auth/transport error or unreadable JSON means no handoff: continue owning delivery through the hosting provider under the repository rules below. A refused optional handoff does not create an additional merge requirement and never expands caller or target authorization.',
   ];
 }
 
-/**
- * Only the registered parent acquires, and only around the final verify-and-merge:
- * sync, pregate, push and CI run concurrently across runs (#10803).
- */
-export function buildMergeAdmissionSection(agentId, { portosMergedTreeGuards = true } = {}) {
-  if (!agentId) return 'Merge admission requires a registered parent agent ID. If none was supplied, leave the reviewed PR open and report this missing ownership binding; do not merge.';
-  const endpoint = { apiBase: localApiBaseUrl(), path: '/api/cos/merge-admission' };
-  const command = (action, extra = {}) => agentApiCurl({ ...endpoint,
-    payload: JSON.stringify({ agentId, action, ...extra }) });
+/** Hosting providers own merge eligibility; local scope and cleanup remain bound. */
+export function buildMergeAdmissionSection(agentId, { review = true } = {}) {
+  if (!agentId) return [
+    '## Hosting-provider merge authority',
+    'Use only your authenticated account and assigned repository/PR; missing authorization or an ambiguous target means stop. Follow the target repository’s documented validation. GitHub/GitLab enforces merge rules: pin the PR head and confirm MERGED (queued/API errors are not success). No second PortOS certificate is required. Preserve active owners and unique local content during supported cleanup.',
+  ].join('\n');
   return [
-    '## Repository merge admission',
-    'Admission serializes only the merge instant. The parent orchestrator (never a fan-out child) completes publication, validation, configured reviews and required CI on its own head WITHOUT admission — other runs and every PR in a swarm do this concurrently. Never hold admission while syncing, running pregate, pushing or waiting for CI/reviews. Do not chase the default branch: rebase only for an actual conflict, an enforced up-to-date branch policy, or evidenced integration risk (inspect semantic overlap as well as textual conflicts). This overrides mandatory base-sync instructions in delegated slashdo workflows.',
-    'Local admission forbids GitHub deferred auto-merge: GitHub cannot acquire this application lease at its later merge instant. Do not enable auto-merge for this workflow. Unless the PortOS pending-merge handoff below accepts your head, wait for the workflow CI gate, acquire/check admission, merge immediately on the verified head, confirm MERGED, then release. Any generic auto-merge handoff prose applies only outside local admission and does not override this rule.',
-    ...buildPendingMergeHandoffLines(agentId),
-    'Once required CI is green on the exact head you pushed (record that SHA as the CI-verified head) and configured reviews are satisfied, acquire admission. Require a parsed JSON response with admitted:true and a nonempty token; retain that token privately for check/release:',
-    '```bash', command('acquire'), '```',
-    'If an acquire/check refusal names lease-head-changed, release your token with outcome resync before acquiring again. If admitted:false with retryable:false, release any owned token with outcome leave-open, stop retrying, report the reason and message, and leave the PR/worktree intact. Otherwise, if admitted:false, report the reason and wait retryAfterMs (5 seconds), with a progress update at least every minute. Retry for at most 10 minutes, then record a leave-open outcome and finish with the PR (and any claim) intact. A refusal is never a reason to merge without admission. An HTTP/auth/transport error, unreadable JSON, or missing admission is a refusal, never permission to proceed. Do not modify another owner’s branch, checkout or lease.',
-    'Inside the lease, re-read the PR (head SHA, merge state, required check rollup; on GitHub `gh pr view --json headRefOid,mergeStateStatus,statusCheckRollup`):',
-    '- If the head still equals the CI-verified head, every required check is green on it, and the forge reports the PR mergeable (`CLEAN`, or `UNSTABLE`/`HAS_HOOKS` with every required check green): check admission (replace TOKEN with the returned token; require admitted:true), then merge pinned to the CI-verified head — add `--match-head-commit <sha>` (GitLab: `--sha <sha>`) to every merge-method attempt your workflow lists; replace any verified-head placeholder with that SHA and retain the pin on every fallback. Managed GitHub merges must preserve local checkouts and branches; this overrides delegated merge instructions that request implicit branch deletion. A base that moved while the PR stays `CLEAN` does NOT require a resync or fresh CI, ' + (portosMergedTreeGuards ? 'but PortOS merged-tree guards must pass before merging. Before acquiring admission, fetch the default branch and run `node scripts/pregate.js --guards-only --merged-with origin/<default>` in the PR checkout, recording the checked head and base SHAs. A missing PortOS guard is a validation defect to repair, never permission to skip it. This applies to single-issue claims and each swarm Phase C merge. A failing guard leaves the PR open with its failing test named. Inside admission, re-read the live default-branch SHA and PR head; if either differs from the guard inputs, release with outcome resync and repeat the guard check OUTSIDE the lease (no rebase or fresh head CI solely for a moved base). Never run guards while holding admission or merge an unchecked combined tree.' : 'Follow the target repository’s documented validation and merge gates. PortOS-only validation scripts do not apply to this managed app; do not copy them into it. Preserve required current-head CI, review and admission checks.'),
-    'Keep the acquired token in the private shell variable MERGE_ADMISSION_TOKEN. Before executing a generated GitHub claim merge block, define this parent-bound check in that same shell; every attempted mutation invokes it freshly. Missing registration, token, transport, readable JSON, or admitted:true stops the merge:',
-    '```bash',
-    'portos_check_merge_admission() {',
-    '  [ -n "${MERGE_ADMISSION_TOKEN:-}" ] || return 1',
-    `  ADMISSION_REQUEST=$(node -e 'process.stdout.write(JSON.stringify({agentId:process.argv[2],action:"check",token:process.argv[1]}))' "$MERGE_ADMISSION_TOKEN" ${shellQuote(agentId)}) || return 1`,
-    `  ADMISSION_RESPONSE=$(${agentApiCurl(endpoint)} --fail --data-binary "$ADMISSION_REQUEST") || return 1`,
-    `  printf '%s' "$ADMISSION_RESPONSE" | node -e 'const fs = require("node:fs"); const response = JSON.parse(fs.readFileSync(0,"utf8")); process.exit(response.admitted === true ? 0 : 1);'`,
-    '}',
-    '```',
-    '- Otherwise (head changed, a required check is not green, or the PR is `DIRTY`/conflicting, `BEHIND` where branch rules require an up-to-date head, `BLOCKED`, or still `UNKNOWN` after a few re-reads): release with outcome resync. Then, OUTSIDE the lease, sync onto the latest default branch, rerun pregate and the affected required reviews, push, attest only an explicit CI-mode or compatible legacy receipt when the repository supports it (focused receipts never attest; a refusal is reported, not retried), wait for required CI on the new head, and acquire again. After three resync rounds without a merge, record leave-open instead.',
-    'Verify the remote state is exactly MERGED, then release with outcome merged before worktree cleanup. On a recorded failure or leave-open handoff, release with outcome leave-open. Require released:true; report a failed release without deleting or overwriting ownership state:',
-    '```bash', command('release', { token: 'TOKEN', outcome: 'merged' }), '```',
-    'The server voids an agent lease 5 minutes after acquisition and lets another run reclaim it. A check refused with lease-expired or lease-owner-mismatch means stop: do not merge on that token; acquire again and repeat the re-read. Never bypass CI, infer success from absent checks, merge without the head pin, or treat auto-merge/queued as MERGED. Admission coordinates participating runs on this install only; manual merges and other installs can still move the base, which the forge’s merge state already reflects.',
-    'After lease release, follow the managed-worktree preservation contract in the delivery steps: fresh ownership/ref checks precede removal of a merged clean checkout. Do not copy the checkout into an archive. A dirty, unmerged, protected, or live-owned checkout stays in place. Preserve the checkout/ref on any failure; remote auto-deletion never proves the checkout was removed.',
-    'A completed child, empty cwd process list or CI wait is not proof that the parent has stopped. Only the server may recover a lease, after verifying its registered owner completed or its hold deadline passed.',
+    ...buildPendingMergeHandoffLines(agentId, { review }), '',
+    '## Hosting-provider merge authority',
+    `This run is ${agentId}. Keep the assigned repository, PR/MR, branch and checkout bound to this task; a child or third-party issue/PR cannot expand that authority.`,
+    'Use only the authenticated account and exact repository/PR assigned to this task. Missing authorization or an ambiguous target means stop and report it; never invent a parent, borrow another run’s identity, or change repository protection.',
+    'GitHub/GitLab repository rules decide merge eligibility. Complete the target repository’s documented validation and requested reviews, then use its normal merge API/CLI pinned to the current PR head (--match-head-commit <sha> on GitHub). Do not use admin/bypass flags or require a second PortOS admission, attestation, preparation turn, configuration switch or merged-tree certificate. An empty provider-required check set is not itself a failure; do not invent expected workflows beyond repository policy.',
+    'Main may move continuously. Do not rebase, push, repeat CI or restart review merely because the base advanced. Resolve actual conflicts or an enforced up-to-date requirement; validate substantive changes and retain applicable review evidence.',
+    'Native provider auto-merge is allowed when the API accepts it. Enabled/queued is pending, not MERGED: retain responsibility and observe the provider’s final result. A confirmed MERGED state for the exact repository/PR establishes delivery, including auto-merge; API errors or unreadable state never establish success.',
+    'After confirmed delivery, use the supported cleanup service for the exact local target. Preserve active owners, dirty/untracked/unique content and protected refs. Release any coordination lease actually held; do not require one as merge certification. Never infer local removal from a remote branch deletion.',
   ].join('\n');
 }
 
-export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', prStaysOpen = false, rawPrCompletion = null, claimResume = null, agentId = null, portosMergedTreeGuards = true } = {}) {
+export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', prStaysOpen = false, rawPrCompletion = null, claimResume = null, agentId = null } = {}) {
   const isMergeOnGreen = rawPrCompletion === PR_COMPLETIONS.MERGE_ON_GREEN;
   const pin = isMergeOnGreen ? '' : buildReviewerPinNote(reviewersCsv);
   const resumeOverride = buildClaimResumeOverride(claimResume || {});
@@ -680,7 +672,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
     ...(pin ? [pin, ''] : []),
     ...(!isMergeOnGreen ? [`**One-time local review lifecycle (overrides claim/delegated head-invalidation guidance):** Before Phase 5 or any local reviewer, read \`${LOCAL_REVIEW_LIFECYCLE_GUIDE}\` and apply its resume gate in the actual claim worktree. Use \`${LOCAL_REVIEW_LIFECYCLE_SCRIPT}\` to check/complete/publish the durable receipt for the resolved base and exact PR/MR. Keep each successful reviewer's private outcome through interrupted/blocked phases. Once this delivery's local phase completes, GitHub/GitLab feedback or CI pushes do not restart it. Preserve original reviewed-head and model evidence; required current-head hosted approvals/CI remain mandatory.`, ''] : []),
     buildClaimOwnershipSection(agentId), '',
-    ...(!prStaysOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"'), '', buildMergeAdmissionSection(agentId, { portosMergedTreeGuards }), ''] : []),
+    ...(!prStaysOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"', { review: !isMergeOnGreen }), '', buildMergeAdmissionSection(agentId, { review: !isMergeOnGreen }), ''] : []),
     '## Claim Workflow Handoff',
     ...(prStaysOpen ? [
       'PR completion policy: LEAVE OPEN for further human review. This overrides any merge, auto-merge, issue-close, or merged-branch cleanup instruction in the claim prompt and delegated slashdo commands. Do not pass --merge, enable auto-merge, merge the PR/MR, or close the issue/ticket.',

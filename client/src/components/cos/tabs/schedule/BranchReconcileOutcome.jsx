@@ -62,7 +62,7 @@ function RetireCheckout({ appId, entry, onRetired }) {
   if (state === 'idle') {
     return (
       <div className="pt-1">
-        <button type="button" className="text-port-accent hover:underline" onClick={() => setState('confirming')}>Archive and retire checkout…</button>
+        <button type="button" className="rounded border border-port-border px-2 py-1 text-port-accent hover:border-port-accent" onClick={() => setState('confirming')}>Retire checkout…</button>
         {error && <p role="alert" className="text-port-error break-words">{error}</p>}
       </div>
     );
@@ -70,8 +70,8 @@ function RetireCheckout({ appId, entry, onRetired }) {
   return (
     <div className="mt-1 space-y-1 rounded border border-port-warning/50 p-2">
       <p className="text-gray-300">
-        Release this exact checkout{entry.locked ? ' and its lock' : ''}? Tracked edits, untracked and ignored files are archived first
-        {entry.branch ? `, then the checkout and branch ${entry.branch} are removed` : ', then the checkout is removed'}. A changed lock, HEAD or a live owner keeps everything in place.
+        Retire this exact merged, clean checkout{entry.locked ? ' and its lock' : ''}?
+        {entry.branch ? ` The checkout and branch ${entry.branch} are removed in place.` : ' The checkout is removed in place.'} No checkout archive is created. Dirty checkouts and checkouts with unique unverified ignored files stay in place. A changed lock, HEAD or a live owner also keeps everything in place.
       </p>
       {needsReview && <div className="space-y-2">
         <label htmlFor={inputId}>Merged pull request URL</label>
@@ -91,7 +91,7 @@ function RetireCheckout({ appId, entry, onRetired }) {
       <div className="flex gap-2">
         <button type="button" className="rounded border border-port-border px-2 py-1" disabled={state === 'pending' || state === 'preparing'} onClick={() => setState('idle')}>Cancel</button>
         <button type="button" className="rounded bg-port-error/80 px-2 py-1 text-white disabled:opacity-50" disabled={state === 'pending' || state === 'preparing' || (needsReview && (!review || (review.comparison.disposition === 'review-supersession' && !acceptSuperseded)))} onClick={retire}>
-          {state === 'pending' ? 'Archiving…' : 'Yes, archive and retire'}
+          {state === 'pending' ? 'Retiring…' : 'Yes, retire checkout'}
         </button>
       </div>
     </div>
@@ -187,7 +187,7 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
                 </ul>
               </details>}
               {(remaining || []).some(isInventoriedCheckout) && (
-                <p>Retiring a checkout is a scoped release of the exact row shown. It needs merged work, no live owner or manual handoff, and a verified archive of unique tracked, untracked and ignored content. Lock age, an absent process, and lock text never release a checkout on their own.</p>
+                <p>Retiring a checkout is a scoped release of the exact row shown. It needs merged work, a clean checkout, no live owner or manual handoff, and no unique unverified ignored payload. No checkout archive is created. Lock age, an absent process, and lock text never release a checkout on their own.</p>
               )}
               {Array.isArray(outcome.retired) && outcome.retired.length > 0 && (
                 <div>

@@ -8,7 +8,7 @@ import { withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SIZE } from './agentDel
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
 import { completionSentinelPresent } from './agentCompletionSentinel.js';
-import { hasClaimCheckoutBindings, completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
+import { hasClaimCheckoutBindings, completedCheckoutReceiptValid, sameTaskRetirementBinding, checkoutSeedSchema } from './completedCheckoutEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { sameRetirementObservation } from '../lib/reconcileRetirementEvidence.js';
 import { resolveRetirementApp } from './retirementAppScope.js';
@@ -383,9 +383,12 @@ export async function verifyAgentRepoState(input) {
       return settled ? result : { ...result, verified: false, skipReason: 'cleanup-receipt-settlement-unverified' };
     }
     const outcomes = result.branches || [result];
+    // A retirement policy refusal is a preservation hold, not failed delivery.
+    // Keep its persisted obligation pending for service replay; requeueing the
+    // original task would launch another review agent against an already merged PR.
     const unsupported = prStaysOpen(input.task) ? { skipReason: 'leave-open-cleanup-unsupported' } : outcomes.find(item => [REPO_STATE_SKIPS.DISABLED, REPO_STATE_SKIPS.NOT_WORKTREE,
       REPO_STATE_SKIPS.PERSISTENT_WORKTREE, REPO_STATE_SKIPS.DISCARDED_WORKTREE,
-      'retirement-app-unavailable', 'retirement-app-ambiguous', 'retirement-policy-not-legacy-completed'].includes(item.skipReason)
+      'retirement-app-unavailable', 'retirement-app-ambiguous'].includes(item.skipReason)
       || (item.skipReason === 'cleanup-delivery-unverified' && (['OPEN', 'CLOSED'].includes(item.observed?.prState)
         || (item.observed?.prState === null && item.observed?.prUrl === null && item.observed?.unreadable?.length === 0))));
     if (cleanupPending && unsupported) {
@@ -444,20 +447,234 @@ export async function verifyAgentRepoState(input) {
 /** Wake only this terminal job after its execution entry was released. The
  * periodic bounded sweep remains the durable fallback if the process exits. */
 const releasedCompletionRuns = createSingleFlight();
-export function resumeAgentCompletionRetirement(agentId) {
-  return releasedCompletionRuns.run(agentId, () => resumeReleasedCompletion(agentId));
+export function resumeAgentCompletionRetirement(agentId, seedContext) {
+  return releasedCompletionRuns.run(agentId, () => resumeReleasedCompletion(agentId, seedContext));
 }
 
-async function resumeReleasedCompletion(agentId) {
+async function verifyReleasedSynchronization(agent) {
+  if (agent?.status === 'completed' && agent.metadata?.taskAnalysisType === 'release-sync') {
+    const { verifyReleaseSynchronizationTask } = await import('./releaseSynchronization.js');
+    await verifyReleaseSynchronizationTask(agent.taskId);
+  }
+}
+
+/** A terminal capture can be unavailable even after the service safely retired
+ * its original seeded generation. Settle physical cleanup only; receipt heads
+ * remain retirement observations and never become original captured heads. */
+async function ownSeedRetirementContext() {
+  const [{ getInstanceId, UNKNOWN_INSTANCE_ID }, { loadSchedule }] = await Promise.all([
+    import('./instanceIdentity.js'), import('./taskScheduleStore.js'),
+  ]);
+  const instance = await getInstanceId();
+  if (!instance || instance === UNKNOWN_INSTANCE_ID) return null;
+  const schedule = await loadSchedule();
+  const receipts = new Map();
+  for (const record of Object.values(schedule.executions?.['task:branch-reconcile']?.perApp || {})) {
+    const outcome = record.branchReconcileOutcome;
+    for (const row of [...(outcome?.retired || []), ...Object.values(outcome?.retirementReceiptEvidence || {})]) {
+      if (row.branchDeleted !== true || row.archiveDir != null
+        || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(row.head || '') || !Number.isFinite(Date.parse(row.retiredAt))) continue;
+      const aliases = (Array.isArray(row.settledObservations) ? row.settledObservations : []).filter(entry => entry?.observation?.head === row.head
+        && entry.observation.branch === row.branch && entry.observation.checkoutIdentity === row.checkoutIdentity
+        && typeof entry.observation.path === 'string' && entry.observation.path
+        && Number.isFinite(Date.parse(entry.settledAt)) && Date.parse(entry.settledAt) >= Date.parse(row.retiredAt));
+      for (const path of new Set([row.path, ...aliases.map(entry => entry.observation.path)])) {
+        const key = JSON.stringify([path, row.branch, row.checkoutIdentity]);
+        const matches = receipts.get(key) || new Map();
+        matches.set(JSON.stringify([row.path, row.head, row.retiredAt]), row);
+        receipts.set(key, matches);
+      }
+    }
+  }
+  return { instance, receipts };
+}
+
+function recordedRetirementSeed(agent) {
+  const meta = agent.metadata;
+  if (meta?.checkoutSeeds?.length !== 1) return null;
+  const seed = meta.checkoutSeeds[0];
+  if (!checkoutSeedSchema.safeParse(seed).success || seed.agentId !== agent.id || seed.startedAt !== agent.startedAt
+    || seed.repoPath !== meta.sourceWorkspace || seed.path !== meta.workspacePath || seed.branch !== meta.worktreeBranch
+    || !(Date.parse(agent.startedAt) <= Date.parse(seed.seededAt) && Date.parse(seed.seededAt) <= Date.parse(agent.completedAt))) return null;
+  return seed;
+}
+
+function ownSeedRetirementSeed(agent) {
+  const meta = agent.metadata;
+  return agent.status === 'completed' && meta?.checkoutCapture?.status === 'pending' && meta.checkoutCapture.unknown === true
+    && meta.completionCleanup?.status === 'pending' ? recordedRetirementSeed(agent) : null;
+}
+
+function inheritedRetirementScope(agent) {
+  const meta = agent.metadata;
+  return agent.status === 'completed' && meta?.isWorktree === false && typeof meta.resumedFromAgentId === 'string'
+    && meta.resumedFromAgentId !== agent.id && meta.checkoutCapture?.status === 'pending' && meta.checkoutCapture.unknown === true
+    && Array.isArray(meta.checkoutCapture.targets) && meta.checkoutCapture.targets.length === 0
+    && meta.completionCleanup?.status === 'pending' && !meta.checkoutSeeds?.length && !meta.completedCheckouts?.length
+    && !meta.worktreeBranch && !meta.prDeliveryTarget && !meta.reviewLoopMergeTarget
+    && meta.claimBranches?.length === 1;
+}
+
+function ownSeedRetirementCandidate(agent, context) {
+  const seed = ownSeedRetirementSeed(agent);
+  if (!seed || !context || agent.metadata.instanceId !== context.instance) return null;
+  const checkoutIdentity = retirementCheckoutIdentityFromPointer(seed.incarnation.pointer);
+  const receipts = [...(context.receipts.get(JSON.stringify([seed.path, seed.branch, checkoutIdentity]))?.values() || [])]
+    .filter(row => Date.parse(row.retiredAt) >= Date.parse(agent.completedAt));
+  return receipts.length === 1 ? { seed, checkoutIdentity, receipt: receipts[0] } : null;
+}
+
+async function settleOwnSeedRetirement(agent, context) {
+  if (!ownSeedRetirementSeed(agent)) return false;
+  const candidate = ownSeedRetirementCandidate(agent, context === undefined ? await ownSeedRetirementContext() : context);
+  if (!candidate) return false;
+  return settleSeedRetirement(agent, candidate);
+}
+
+async function settleInheritedRetirement(agent, context) {
+  if (!inheritedRetirementScope(agent)) return false;
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+  const parent = await getAgentRecord(agent.metadata.resumedFromAgentId).catch(() => null);
+  const seed = parent && recordedRetirementSeed(parent);
+  context = context === undefined ? await ownSeedRetirementContext() : context;
+  if (!seed || !context || parent.status !== 'completed' || parent.taskId !== agent.taskId
+    || parent.metadata.instanceId !== context.instance || agent.metadata.instanceId !== context.instance
+    || agent.metadata.claimBranches[0] !== seed.branch || agent.metadata.workspacePath !== seed.repoPath
+    || seed.path === seed.repoPath || !(Date.parse(parent.completedAt) <= Date.parse(agent.startedAt))
+    || !parent.metadata.completedCheckouts?.some(row => completedCheckoutReceiptValid(parent, row)
+      && row.repoPath === seed.repoPath && row.path === seed.path && row.branch === seed.branch
+      && isDeepStrictEqual(row.incarnation, seed.incarnation))) return false;
+  const checkoutIdentity = retirementCheckoutIdentityFromPointer(seed.incarnation.pointer);
+  const receipts = [...(context.receipts.get(JSON.stringify([seed.path, seed.branch, checkoutIdentity]))?.values() || [])]
+    .filter(row => Date.parse(parent.completedAt) <= Date.parse(row.retiredAt) && Date.parse(row.retiredAt) <= Date.parse(agent.startedAt));
+  if (receipts.length !== 1) return false;
+  return settleSeedRetirement(agent, { seed, checkoutIdentity, receipt: receipts[0] }, parent);
+}
+
+async function settleSeedRetirement(agent, candidate, parent = null) {
+  const { seed, checkoutIdentity, receipt } = candidate;
+  const { lstat } = await import('node:fs/promises');
+  const repositoryCurrent = async () => {
+    const info = await lstat(seed.repoPath, { bigint: true }).catch(() => null);
+    return info?.isDirectory() && ['dev', 'ino', 'birthtimeNs'].every(key => String(info[key]) === seed.repository[key]);
+  };
+  if (!await repositoryCurrent()) return false;
+  const { findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
+  const preservation = await findMissingCheckoutPreservation({ repoPath: seed.repoPath,
+    release: { path: receipt.path, branch: seed.branch, head: receipt.head, createdAt: seed.seededAt, checkoutIdentity } }).catch(() => null);
+  if (!preservation || preservation.kind !== 'service-retirement-receipt') return false;
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
+  return withClaimOwnershipLock(async () => {
+    const { getAgentRecord, recordSeededCheckoutRetirement, recordInheritedCheckoutRetirement } = await import('./cosAgentLifecycle.js');
+    if (parent && !isDeepStrictEqual(await getAgentRecord(parent.id).catch(() => null), parent)) return false;
+    const owners = await readClaimOwnershipAgents().catch(() => null);
+    if (!owners || owners.some(owner => ['running', 'paused'].includes(owner.status)
+      && resolve(owner.metadata?.sourceWorkspace || owner.metadata?.workspacePath || '') === resolve(seed.repoPath)
+      && (resolveTaskTargetBranch(owner.metadata) === seed.branch || owner.metadata?.worktreeBranch === seed.branch
+        || owner.metadata?.claimBranches?.includes(seed.branch)))) return false;
+    if (!await repositoryCurrent() || !await preservation.recheck()
+      || await readCheckoutPathPresence(seed.path) !== false || await readLocalBranchPresence(seed.repoPath, seed.branch) !== false
+      || (await listWorktrees(seed.repoPath)).some(row => row.path === seed.path || row.branch?.replace(/^refs\/heads\//, '') === seed.branch)) return false;
+    const record = parent ? recordInheritedCheckoutRetirement : recordSeededCheckoutRetirement;
+    return record(agent.id, agent, { checkoutIdentity, retiredHead: receipt.head, receiptDigest: preservation.evidenceDigest,
+      ...(parent && { inheritedFromAgentId: parent.id }) });
+  });
+}
+
+function explicitSameHeadResume(agent, successor, input, agents) {
+  const byId = new Map(agents.map(row => [row.id, row]));
+  if (byId.size !== agents.length) return false;
+  let child = successor;
+  const seen = new Set();
+  while (child && seen.size < 25 && !seen.has(child.id)) {
+    if (child.id === agent.id) return true;
+    seen.add(child.id);
+    const parent = byId.get(child.metadata?.resumedFromAgentId);
+    if (!parent || !(Date.parse(parent.completedAt) <= Date.parse(child.startedAt))
+      || sameTaskRetirementBinding(parent, successor, input)?.sourceCapture?.head !== input.tip) return false;
+    child = parent;
+  }
+  return false;
+}
+
+/** A verified successor can settle one generation's physical cleanup. Known
+ * moved predecessors additionally require the exact same captured delivered head. */
+async function settleSeededPredecessor(agent) {
+  const meta = agent.metadata;
+  const known = meta?.checkoutCapture?.status === 'captured' && meta.repoStateVerification?.status === 'pending'
+    && agent.result?.cleanupPending === true && agent.result.taskOutcome?.status === 'incomplete'
+    && agent.result.taskOutcome?.recovery?.mode === 'cleanup';
+  const unknown = meta?.checkoutCapture?.status === 'pending' && meta.checkoutCapture.unknown === true;
+  if ((!known && !unknown) || meta.completionCleanup?.status !== 'pending' || !meta.worktreeBranch || !meta.sourceWorkspace) return false;
+  const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+  const agents = await readBranchCompletionPolicies({ repairIndex: false });
+  const candidates = agents.filter(row => row.taskId === agent.taskId && row.id !== agent.id
+    && row.metadata?.repoStateVerification?.status === 'completed'
+    && (!known || (row.result?.success === true && row.metadata.completionCleanup?.status === 'completed'
+      && row.metadata.cleanupOutcome?.status === 'verified' && row.metadata.cleanupOutcome.unresolved === 0
+      && row.metadata.cleanupOutcome.committedIntegrationVerified === true)));
+  if (!candidates.length || candidates.length > 25) return false;
+  const { findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
+  for (const successor of candidates) {
+    for (const capture of successor.metadata.completedCheckouts || []) {
+      const input = { repoPath: meta.sourceWorkspace, branch: meta.worktreeBranch, tip: capture.head,
+        prUrl: successor.metadata.reviewLoopMergeTarget?.url, checkoutPath: capture.path, checkoutIncarnation: capture.incarnation };
+      const binding = sameTaskRetirementBinding(agent, successor, input);
+      if (known ? binding?.sourceCapture?.head !== capture.head || !explicitSameHeadResume(agent, successor, input, agents) : !binding?.sourceSeed) continue;
+      const release = { path: capture.path, branch: capture.branch, head: capture.head, createdAt: capture.capturedAt,
+        checkoutIdentity: retirementCheckoutIdentityFromPointer(capture.incarnation.pointer) };
+      const preservation = await findMissingCheckoutPreservation({ repoPath: input.repoPath, release }).catch(() => null);
+      if (!preservation || (known && (preservation.kind !== 'service-retirement-receipt'
+        || !/^[a-f0-9]{64}$/.test(preservation.evidenceDigest || '')))) continue;
+      const { recordSuccessorCheckoutRetirement, getAgentRecord } = await import('./cosAgentLifecycle.js');
+      const settled = await withClaimOwnershipLock(async () => {
+        const owners = await readClaimOwnershipAgents().catch(() => null);
+        if (!owners || owners.some(owner => ['running', 'paused'].includes(owner.status)
+          && resolve(owner.metadata?.sourceWorkspace || owner.metadata?.workspacePath || '') === resolve(input.repoPath)
+          && (resolveTaskTargetBranch(owner.metadata) === input.branch || owner.metadata?.worktreeBranch === input.branch
+            || owner.metadata?.claimBranches?.includes(input.branch)))) return false;
+        if (known) {
+          const current = await getAgentRecord(successor.id);
+          if (!current || current.result?.success !== true || current.metadata?.repoStateVerification?.status !== 'completed'
+            || current.metadata.completionCleanup?.status !== 'completed' || current.metadata.cleanupOutcome?.status !== 'verified'
+            || current.metadata.cleanupOutcome.unresolved !== 0 || current.metadata.cleanupOutcome.committedIntegrationVerified !== true
+            || sameTaskRetirementBinding(agent, current, input)?.sourceCapture?.head !== capture.head) return false;
+        }
+        if (!await preservation.recheck() || await readCheckoutPathPresence(capture.path) !== false
+          || await readCheckoutPathPresence(meta.workspacePath) !== false
+          || await readLocalBranchPresence(input.repoPath, input.branch) !== false
+          || (await listWorktrees(input.repoPath)).some(row => row.path === capture.path || row.path === meta.workspacePath
+            || row.branch?.replace(/^refs\/heads\//, '') === input.branch)) return false;
+        return recordSuccessorCheckoutRetirement(agent.id, agent, { successorAgentId: successor.id,
+          checkoutIdentity: release.checkoutIdentity, head: capture.head, prUrl: input.prUrl,
+          ...(known && { sourceCapture: binding.sourceCapture, receiptDigest: preservation.evidenceDigest }) });
+      });
+      if (settled) return true;
+      if (known) return 'successor-retirement-settlement-deferred';
+    }
+  }
+  return false;
+}
+
+async function resumeReleasedCompletion(agentId, seedContext) {
   // A pre-release audit may still be settling an owner-active observation.
   // Wait for it, then start a fresh verification instead of joining its stale result.
   await verificationRuns.get(agentId)?.catch(() => {});
   const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const agent = await getAgentRecord(agentId);
   if (agent?.status !== 'completed') return;
-  const deliveryPending = agent.result?.cleanupPending === true
-    && agent.metadata?.repoStateVerification?.status === 'pending';
-  if (!deliveryPending && agent.metadata?.completionCleanup?.status !== 'pending') return;
+  if (await settleOwnSeedRetirement(agent, seedContext)) return { verified: false, physicalRetirementVerified: true, skipReason: 'original-result-preserved' };
+  if (await settleInheritedRetirement(agent, seedContext)) return { verified: false, physicalRetirementVerified: true, skipReason: 'original-result-preserved' };
+  const predecessor = await settleSeededPredecessor(agent);
+  if (predecessor) return predecessor === true ? { verified: true, retiredBySuccessor: true }
+    : { verified: false, skipReason: predecessor };
+  const deliveryPending = agent.metadata?.repoStateVerification?.status === 'pending'
+    && (agent.result?.cleanupPending === true || agent.result?.success === true);
+  if (!deliveryPending && agent.metadata?.completionCleanup?.status !== 'pending') {
+    await verifyReleasedSynchronization(agent);
+    return;
+  }
   const { getTaskById } = await import('./cosTaskStore.js');
   const task = await getTaskById(agent.taskId);
   const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
@@ -465,19 +682,23 @@ async function resumeReleasedCompletion(agentId) {
   // Failed/no-change runs can still owe physical cleanup. The owner-release
   // event replays that obligation without changing their original verdict or
   // granting a new task/provider retry budget.
-  if (!deliveryPending) return { verified: false, cleanupReplayed: Boolean(task), skipReason: 'original-result-preserved' };
+  if (!deliveryPending) {
+    await verifyReleasedSynchronization(agent);
+    return { verified: false, cleanupReplayed: Boolean(task), skipReason: 'original-result-preserved' };
+  }
   const current = await getAgentRecord(agentId);
   const result = await verifyAgentRepoState({ agentId, agentState: current, task: task || { id: agent.taskId },
     success: current.result?.success === true, prExpected: isTruthyMeta(task?.metadata?.openPR) });
   const settled = await getAgentRecord(agentId);
   if (task) await replayAgentCompletionCleanup(settled);
+  await verifyReleasedSynchronization(settled);
   return result;
 }
 
 /** A completed delivery follow-up settles its original job immediately. No
  * schedule, provider, retry reset or fabricated completion is involved. */
 const completedDeliveryParents = createSingleFlight();
-async function resumeCompletedDeliveryParent(task) {
+async function resumeCompletedDeliveryParent(task, seedContext) {
   const m = task?.metadata;
   if (task?.status !== 'completed' || !isTruthyMeta(m?.reviewLoopFollowUp)
     || typeof m.sourceAgentId !== 'string' || !m.sourceAgentId || typeof m.sourceTaskId !== 'string') return;
@@ -487,7 +708,34 @@ async function resumeCompletedDeliveryParent(task) {
     const [parent, instanceId] = await Promise.all([getAgentRecord(m.sourceAgentId), getInstanceId()]);
     if (parent?.taskId !== m.sourceTaskId || !instanceId || instanceId === UNKNOWN_INSTANCE_ID
       || parent.metadata?.instanceId !== instanceId) return;
-    return resumeAgentCompletionRetirement(m.sourceAgentId);
+    // A follow-up can merge after the original run exhausted pre-merge
+    // contention rounds. Its already-completed cleanup ledger is not delivery
+    // proof, nor a reason to ignore this event. Reuse the normal verifier with
+    // the follow-up target; it independently checks the captured head, current
+    // forge state, ownership and physical checkout before recording settlement.
+    const result = parent.result;
+    const recoveredDelivery = !!parsePullRequestUrl(m.reviewLoopPRUrl)
+      && m.mergedReviewFollowUp?.status === 'verified'
+      && m.mergedReviewFollowUp.prUrl === m.reviewLoopPRUrl
+      && m.reviewLoopPRBranch === parent.metadata?.worktreeBranch
+      && result?.deliveryRecoveryOwned === true && result.executionSuccess === true
+      && result.validationPassed !== false && !result.executionInterruption
+      && !parent.metadata?.executionInterruption
+      && result.taskOutcome?.status === 'incomplete';
+    if (!recoveredDelivery) return resumeAgentCompletionRetirement(m.sourceAgentId, seedContext);
+    await verificationRuns.get(m.sourceAgentId)?.catch(() => {});
+    const { getTaskById } = await import('./cosTaskStore.js');
+    const original = await getTaskById(m.sourceTaskId);
+    if (!original || original.status !== 'completed') return;
+    const verified = await verifyAgentRepoState({ agentId: m.sourceAgentId, agentState: parent,
+      task: { ...original, metadata: { ...original.metadata, reviewLoopPRUrl: m.reviewLoopPRUrl } },
+      success: true, prExpected: true });
+    if (verified.verified) {
+      const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+      await recordRepoStateVerification(m.sourceAgentId, { status: 'completed', deliveryVerified: true,
+        checkedAt: new Date().toISOString(), sourceFollowUpTaskId: task.id });
+    }
+    return verified;
   });
 }
 
@@ -498,8 +746,53 @@ export function bindCompletionRetirementEvents(events) {
     return resumeCompletedDeliveryParent(data.task)
       .catch(error => emitLog('warn', `Parent completion deferred after delivery follow-up: ${error.message}`, { taskId: data.task.id }));
   };
+  const onRetirement = async receipt => {
+    if (!receipt?.appId || !receipt.path || !receipt.branch || !receipt.checkoutIdentity) return;
+    const [{ getAppById }, { readBranchCompletionPolicies }] = await Promise.all([
+      import('./apps.js'), import('./branchCompletionPolicy.js'),
+    ]);
+    const [app, agents] = await Promise.all([getAppById(receipt.appId), readBranchCompletionPolicies({ repairIndex: false })]);
+    if (!app?.repoPath) return;
+    const direct = agents.filter(agent => agent.status === 'completed' && agent.metadata?.completedCheckouts?.some(row =>
+      completedCheckoutReceiptValid(agent, row) && row.repoPath === app.repoPath && row.path === receipt.path
+      && row.branch === receipt.branch && row.head === receipt.head
+      && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer) === receipt.checkoutIdentity));
+    const moved = agent => direct.some(successor => {
+      const capture = successor.metadata.completedCheckouts.find(row => row.path === receipt.path && row.head === receipt.head);
+      const input = { repoPath: app.repoPath, branch: receipt.branch, tip: receipt.head, checkoutPath: receipt.path,
+        checkoutIncarnation: capture.incarnation, prUrl: successor.metadata.reviewLoopMergeTarget?.url };
+      return sameTaskRetirementBinding(agent, successor, input)?.sourceCapture?.head === receipt.head
+        && explicitSameHeadResume(agent, successor, input, agents);
+    });
+    const matches = agents.filter(agent => agent.status === 'completed'
+      && agent.metadata?.repoStateVerification?.status === 'pending'
+      && agent.metadata.completedCheckouts?.some(row => completedCheckoutReceiptValid(agent, row)
+        && row.repoPath === app.repoPath && (row.path === receipt.path || (row.head === receipt.head && moved(agent))) && row.branch === receipt.branch
+        && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer) === receipt.checkoutIdentity))
+      .sort((a, b) => (Date.parse(b.startedAt) || 0) - (Date.parse(a.startedAt) || 0));
+    // A moved predecessor depends on its current owner settling first. Do not
+    // race both against the owner's pre-receipt pending snapshot.
+    for (const agent of matches) await resumeAgentCompletionRetirement(agent.id || agent.agentId);
+    const seeded = agents.filter(agent => agent.status === 'completed' && agent.metadata?.checkoutCapture?.status === 'pending'
+      && agent.metadata.checkoutSeeds?.some(seed => seed.repoPath === app.repoPath && seed.branch === receipt.branch
+        && retirementCheckoutIdentityFromPointer(seed.incarnation?.pointer) === receipt.checkoutIdentity));
+    await Promise.all(seeded.map(agent => resumeAgentCompletionRetirement(agent.id || agent.agentId)));
+  };
+  const onReceipt = receipt => onRetirement(receipt)
+    .catch(error => emitLog('warn', `Completion deferred after retirement receipt: ${error.message}`, { appId: receipt?.appId }));
+  const onCapture = data => {
+    if (typeof data?.agentId !== 'string' || !data.agentId) return;
+    return resumeAgentCompletionRetirement(data.agentId)
+      .catch(error => emitLog('warn', `Completion deferred after checkout capture: ${error.message}`, { agentId: data.agentId }));
+  };
   events.on('tasks:changed', onChange);
-  return () => events.off('tasks:changed', onChange);
+  events.on('checkout:retired', onReceipt);
+  events.on('agent:checkout-captured', onCapture);
+  return () => {
+    events.off('tasks:changed', onChange);
+    events.off('checkout:retired', onReceipt);
+    events.off('agent:checkout-captured', onCapture);
+  };
 }
 
 let completionSweep = null;
@@ -590,8 +883,57 @@ async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false } = {}
   const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
   const { getTaskById } = await import('./cosTaskStore.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
+  // One context covers the prelude and ordinary replay records in this batch.
+  // Null is a failed/unneeded read, not permission to reload it per record.
+  const seedContext = agents.some(agent => ownSeedRetirementSeed(agent) || inheritedRetirementScope(agent)) ? await ownSeedRetirementContext().catch(error => {
+    emitLog('warn', `Seeded retirement receipts unavailable: ${error.message}`);
+    return null;
+  }) : null;
   if (!skipPrelude) {
+    const { recoverReleaseSynchronizationHandoffs } = await import('./releaseSynchronization.js');
+    await recoverReleaseSynchronizationHandoffs(agents).catch(error => {
+      emitLog('warn', `Release synchronization handoffs retained: ${error.code || 'outbox-unavailable'}`);
+    });
     await reconcileReleasedSelectionHistory(agents);
+    // Receipt-less history cannot consume the bounded deep-check turn. Use the
+    // existing attempt timestamp to rotate receipt-backed but still-held rows.
+    for (const agent of agents.filter(row => ownSeedRetirementCandidate(row, seedContext))
+      .sort((a, b) => (a.metadata.completionCleanup.lastAttemptAt || '').localeCompare(b.metadata.completionCleanup.lastAttemptAt || ''))
+      .slice(0, COMPLETION_RECOVERY_BATCH_SIZE)) {
+      const settled = await settleOwnSeedRetirement(agent, seedContext).catch(error => {
+        emitLog('warn', `Seeded retirement settlement deferred for ${agent.id}: ${error.message}`);
+        return false;
+      });
+      if (!settled) {
+        const { recordCompletionCleanup } = await import('./cosAgentLifecycle.js');
+        await recordCompletionCleanup(agent.id, agent.startedAt, { lastAttemptAt: new Date().toISOString() }).catch(error => {
+          emitLog('warn', `Seeded retirement attempt retained: ${error.message}`);
+        });
+      }
+    }
+    // Older receipts already proved delivery and cleanup, but left the deferred
+    // domain verdict pending. Replay the existing writer, without another probe,
+    // task, completion event or provider budget expenditure.
+    const { recordRepoStateVerification, isSettleableCompletionReceipt } = await import('./cosAgentLifecycle.js');
+    for (const agent of agents.filter(row => row.status === 'completed'
+      && isSettleableCompletionReceipt(row, row.metadata || {})).slice(0, COMPLETION_RECOVERY_BATCH_SIZE)) {
+      await recordRepoStateVerification(agent.id || agent.agentId, agent.metadata.repoStateVerification).catch(error => {
+        emitLog('warn', `Deferred delivery settlement retained: ${error.code || 'receipt-unavailable'}`);
+      });
+    }
+    // Replay completed handoffs after restart as well as at their event. Only
+    // terminal parents with unfinished delivery qualify; ordinary completed
+    // history never incurs a forge probe. Existing batch bounds still apply.
+    const parents = new Set(agents.filter(agent => agent.status === 'completed'
+      && agent.result?.deliveryRecoveryOwned === true && agent.result.executionSuccess === true
+      && agent.metadata?.repoStateVerification?.deliveryVerified !== true)
+      .map(agent => agent.id || agent.agentId));
+    if (parents.size) {
+      const followUps = (await readAllTasksFlat()).filter(task => task.status === 'completed'
+        && task.metadata?.mergedReviewFollowUp?.status === 'verified'
+        && parents.has(task.metadata.sourceAgentId)).slice(0, COMPLETION_RECOVERY_BATCH_SIZE);
+      for (const task of followUps) await resumeCompletedDeliveryParent(task, seedContext);
+    }
     const { reconcileCleanupThreads } = await import('./brainTaskThreads.js');
     await reconcileCleanupThreads({ dryRun: false }).catch(error => emitLog('warn', `Cleanup thread reconciliation deferred: ${error.message}`));
     const { recoverLegacyDeliveryBlocks } = await import('./deliveryRecovery.js');
@@ -607,20 +949,28 @@ async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false } = {}
   let checked = 0;
   const selected = pending.slice(0, COMPLETION_RECOVERY_BATCH_SIZE);
   for (const original of selected) {
+    const { getAgentRecord, recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+    let agent = await getAgentRecord(original.id || original.agentId).catch(() => null) || original;
+    if (agent.metadata.completionCleanup?.status === 'completed' && agent.metadata.checkoutCapture?.status === 'retired'
+      && agent.metadata.repoStateVerification?.physicalRetirementVerified === true) {
+      await recordRepoStateVerification(agent.id || agent.agentId, agent.metadata.repoStateVerification);
+      agent = await getAgentRecord(agent.id || agent.agentId).catch(() => null) || agent;
+    }
+    if (agent.metadata.completionCleanup?.status === 'completed' && agent.metadata.repoStateVerification?.status === 'completed') continue;
+    if (await settleInheritedRetirement(agent, seedContext)) { checked++; continue; }
     const { recordCompletionCleanup } = await import('./cosAgentLifecycle.js');
     const attempt = (original.metadata.completionCleanup?.replayAttempts || 0) + 1;
     await recordCompletionCleanup(original.id || original.agentId, original.startedAt, { lastAttemptAt: new Date().toISOString(),
       replayAttempts: attempt, retryAt: new Date(Date.now() + Math.min(30 * 60_000, 60_000 * 2 ** Math.min(attempt - 1, 5))).toISOString() });
     const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
-    const { getAgentRecord } = await import('./cosAgentLifecycle.js');
-    let agent = await getAgentRecord(original.id || original.agentId).catch(() => null) || original;
+    agent = await getAgentRecord(original.id || original.agentId).catch(() => null) || original;
     const lookup = await getTaskById(agent.taskId).then(task => ({ task, readable: true }), () => ({ task: null, readable: false }));
     const task = lookup.task;
     // Definite absence may use the existing immutable-snapshot receipt proof.
     // An unreadable task is not absent, and neither case replays external stages.
     if (!task) {
       const resumed = lookup.readable && agent.result?.cleanupPending === true
-        ? await resumeAgentCompletionRetirement(agent.id || agent.agentId).catch(() => null) : null;
+        ? await resumeAgentCompletionRetirement(agent.id || agent.agentId, seedContext).catch(() => null) : null;
       if (!resumed?.verified) {
         const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
         await recordRepoStateVerification(agent.id || agent.agentId, { status: 'pending',
@@ -874,14 +1224,34 @@ async function settleAbsentCheckout({ agentState, metadata, app, sourceWorkspace
   const delivery = capturedHead && !originalPrUrl && !observed.prState
     ? await probePrForBranch(sourceWorkspace, branchName).catch(() => null) : observed;
   const proofUrl = originalPrUrl || delivery?.prUrl;
-  const forge = proofUrl && delivery?.prState === 'MERGED' ? await readRetirementForgeEvidence(sourceWorkspace, branchName, proofUrl,
+  let forge = proofUrl && delivery?.prState === 'MERGED' ? await readRetirementForgeEvidence(sourceWorkspace, branchName, proofUrl,
     { forgeAccount: app?.forgeAccount ?? null, ...(capturedHead && { exactDeliveredHead: capturedHead }) }).catch(() => null) : null;
-  const integrated = forge && (!capturedHead || forge.prHead === capturedHead) && (await execGit(['merge-base', '--is-ancestor', forge.mergeCommit, forge.targetHead ?? forge.defaultHead], sourceWorkspace,
+  if (capturedHead && proofUrl && delivery?.prState === 'MERGED' && forge?.prHead !== capturedHead) {
+    forge = await readRetirementForgeEvidence(sourceWorkspace, branchName, proofUrl,
+      { forgeAccount: app?.forgeAccount ?? null }).catch(() => null);
+  }
+  let preservation = null;
+  let capturedCovered = !capturedHead || forge?.prHead === capturedHead;
+  if (forge && capturedHead && !capturedCovered) {
+    // A later head may have been delivered and safely retired from this exact
+    // generation. Require the durable removal receipt, not ancestry alone.
+    const capture = captures[0];
+    const { findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
+    preservation = await findMissingCheckoutPreservation({ repoPath: sourceWorkspace, release: {
+      path: worktreePath, branch: branchName, head: forge.prHead, createdAt: capture.capturedAt,
+      checkoutIdentity: retirementCheckoutIdentityFromPointer(capture.incarnation.pointer),
+    } }).catch(() => null);
+    capturedCovered = preservation?.kind === 'service-retirement-receipt'
+      && (await execGit(['merge-base', '--is-ancestor', capturedHead, forge.prHead], sourceWorkspace,
+      { ignoreExitCode: true, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
+  }
+  const integrated = forge && capturedCovered && (await execGit(['merge-base', '--is-ancestor', forge.mergeCommit, forge.targetHead ?? forge.defaultHead], sourceWorkspace,
     { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
   if (!staysOpen && integrated) {
     const { withClaimOwnershipLock } = await import('./cosClaimOwnership.js');
     const verified = await withClaimOwnershipLock(async () => {
-      if (await resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchName, worktreePath })
+      if ((preservation && !await preservation.recheck())
+        || await resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchName, worktreePath })
         || (worktreePath && await readCheckoutPathPresence(worktreePath) !== false)
         || await readLocalBranchPresence(sourceWorkspace, branchName) !== false) return false;
       return await record('verified', 'already-absent-merged', { prUrl: proofUrl, committedIntegrationVerified: true }) === true;

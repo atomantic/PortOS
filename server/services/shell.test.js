@@ -1,3 +1,9 @@
+// Native Job/receipt behavior is exercised by windowsAgentProcess.test.js;
+// these transport fixtures own no real agent reservation or process tree.
+vi.mock('../lib/windowsAgentProcess.js', () => ({
+  prepareWindowsAgentLaunch: (_agentId, command, args) => ({ command, args }),
+  watchWindowsAgentProcess: child => child,
+}));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { basename, dirname } from 'path';
 
@@ -62,6 +68,15 @@ afterEach(() => {
 });
 
 describe('createShellSession', () => {
+  it('pins an explicitly requested PowerShell workspace after profile loading', () => {
+    const cwd = "D:\\work\\workspace [literal] & O'Neil";
+    shell.createShellSession(makeSocket(), { shell: 'powershell.exe', cwd });
+    expect(defaultSpawn.mock.calls[0].slice(0, 2)).toEqual(['powershell.exe', [
+      '-NoExit', '-Command', "Set-Location -LiteralPath 'D:\\work\\workspace [literal] & O''Neil'",
+    ]]);
+    expect(defaultSpawn.mock.calls[0][2].cwd).toBe(cwd);
+  });
+
   it('spawns a PTY and returns a session id', () => {
     const socket = makeSocket();
     const id = shell.createShellSession(socket, { shell: '/bin/zsh', cwd: '/tmp', cols: 100, rows: 30 });

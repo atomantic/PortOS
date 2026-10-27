@@ -11,6 +11,11 @@
 import { fableLoomRunEvents } from './runEvents.js';
 import { randomInt, randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
+import { sanitizeVisualConditioning } from '../../lib/fableLoomPlayback.js';
+import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
+import { prepareFableLoomImageParams } from '../imageGen/fableLoomParams.js';
+import { recordedAdapterFiles, restoreRequestInputs } from './requestInputs.js';
+import { applyImageVisualProfile } from '../imageGen/visualProfile.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
 import { getImageModels, isEditOnly } from '../../lib/mediaModels.js';
@@ -51,7 +56,7 @@ import { analyzeEpisodeContinuity } from '../../lib/fableLoomContinuity.js';
 import { analyzeSeriesStoryOutlines } from '../../lib/fableLoomOutline.js';
 import { getUniverse } from '../universeBuilder.js';
 import { listVoiceProfiles } from '../voice/profiles.js';
-import { listLoras } from '../loras.js';
+import { listLoras, readTriggerWordsByFilename } from '../loras.js';
 import { getLoom, findEpisode } from './records.js';
 
 const BATCH_RUN_MAX_AGE_MS = 2 * 60 * 60 * 1000;
@@ -336,7 +341,11 @@ async function loadRecordedConditioning(run, asset) {
 
 function exactConditioningMismatches(recorded, current) {
   if (!recorded || !current) return ['The recorded visual conditioning could not be reconstructed.'];
+  recorded = sanitizeVisualConditioning(recorded);
+  current = sanitizeVisualConditioning(current);
   const mismatches = [];
+  if (!recorded || !current) return ['The recorded visual conditioning could not be reconstructed.'];
+  if (JSON.stringify(recorded.visualProfile || null) !== JSON.stringify(current.visualProfile || null)) mismatches.push('Recorded visual profile changed.');
   const recordedCapability = recorded.capability || {};
   const currentCapability = current.capability || {};
   for (const key of ['kind', 'backend', 'modelId', 'modelRevision']) {
@@ -517,10 +526,39 @@ async function prepareImageJob(run, asset) {
     model: mode === IMAGE_GEN_MODE.LOCAL ? provisionalModel : { id: cloud?.modelId || null },
     inputBudget: maxInputImages(mode, cloud?.modelId) || 4,
   });
-  const conditioned = await conditionRequest(run, asset, 'image', capability);
+  let replayInputs = null;
+  let conditioned;
+  if (run.mode === 'exact_inputs' && typeof recordedConditioning?.authoredPrompt === 'string') {
+    replayInputs = await restoreRequestInputs(recordedConditioning);
+    if (replayInputs.error) throw exactInputError(`Exact-input reproduction refused: ${replayInputs.error}`);
+    const params = {
+      fableLoom: productionTag(run, asset),
+      prompt: recordedConditioning.authoredPrompt,
+      negativePrompt: recordedConditioning.authoredNegativePrompt,
+      modelId: requestedModel,
+      cloudModel: recordedConditioning.capability.modelId,
+      referenceImagePaths: replayInputs.refs,
+      referenceImageStrengths: replayInputs.strengths,
+      loraPaths: replayInputs.adapters,
+      loraScales: replayInputs.scales,
+      ...(replayInputs.init ? { initImagePath: replayInputs.init } : {}),
+      ...(replayInputs.initStrength != null ? { initImageStrength: replayInputs.initStrength } : {}),
+      ...(hasOwn(recordedConditioning, 'visualProfileOverride')
+        ? { visualProfileOverride: recordedConditioning.visualProfileOverride } : {}),
+    };
+    conditioned = await prepareFableLoomImageParams({ params, mode, settings });
+    if (typeof recordedConditioning.renderedPrompt === 'string' && mode === IMAGE_GEN_MODE.LOCAL) {
+      const names = [...conditioned.loraFilenames, ...conditioned.loraPaths];
+      const words = await readTriggerWordsByFilename(names);
+      const sent = weaveLoraTriggers(conditioned.prompt, names.map(name => words[basename(name)])).prompt;
+      if (sent !== recordedConditioning.renderedPrompt) throw exactInputError('Exact-input reproduction refused: the recorded adapter activation prompt changed.');
+    }
+  } else {
+    conditioned = await conditionRequest(run, asset, 'image', capability);
+  }
   if (run.mode === 'exact_inputs') assertExactConditioning(recordedConditioning, conditioned?.visualConditioning);
   const referenceImagePaths = conditioned?.referenceImagePaths || [];
-  const localInitImagePath = conditioned?.sourceImagePath || referenceImagePaths[0] || null;
+  const localInitImagePath = replayInputs ? replayInputs.init : conditioned?.sourceImagePath || referenceImagePaths[0] || null;
   const geometry = renderGeometry(run, recordedConditioning);
   const replayParameters = exactRenderParameters(run, recordedConditioning);
 
@@ -541,9 +579,9 @@ async function prepareImageJob(run, asset) {
       provider: mode,
       modelId: local.selectedModel.id,
       modelRevision: local.selectedModel.revision || null,
-      params: {
+      params: applyImageVisualProfile({
         pythonPath: local.pythonPath,
-        prompt: conditioned?.prompt || asset.prompt,
+        prompt: conditioned?.prompt ?? asset.prompt,
         ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
         negativePrompt: conditioned?.negativePrompt || '',
         modelId: local.selectedModel.id,
@@ -555,16 +593,18 @@ async function prepareImageJob(run, asset) {
         quantize: settings.imageGen?.local?.quantize ?? '8',
         seed: randomInt(0, 2_147_483_647),
         ...replayParameters,
-        ...(selectedIsEditOnly && localInitImagePath ? { initImagePath: localInitImagePath } : {}),
-        referenceImagePaths: selectedIsEditOnly ? referenceImagePaths.slice(1) : referenceImagePaths,
-        referenceImageStrengths: selectedIsEditOnly
+        ...((replayInputs || selectedIsEditOnly) && localInitImagePath ? { initImagePath: localInitImagePath } : {}),
+        ...(replayInputs?.initStrength != null ? { initImageStrength: replayInputs.initStrength } : {}),
+        referenceImagePaths: !replayInputs && selectedIsEditOnly ? referenceImagePaths.slice(1) : referenceImagePaths,
+        referenceImageStrengths: !replayInputs && selectedIsEditOnly
           ? (conditioned?.referenceImageStrengths || []).slice(1)
           : (conditioned?.referenceImageStrengths || []),
         loraFilenames: conditioned?.loraFilenames || [],
+        loraPaths: conditioned?.loraPaths || [],
         loraScales: conditioned?.loraScales || [],
         visualConditioning: conditioned?.visualConditioning || null,
         fableLoom: productionTag(run, asset),
-      },
+      }, conditioned?.visualProfile),
     };
   }
 
@@ -583,24 +623,26 @@ async function prepareImageJob(run, asset) {
     provider: mode,
     modelId: cloud.modelId,
     modelRevision: capability.modelRevision || null,
-    params: {
+    params: applyImageVisualProfile({
       mode,
       ...providerParams,
-      prompt: conditioned?.prompt || asset.prompt,
+      prompt: conditioned?.prompt ?? asset.prompt,
       ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
       negativePrompt: conditioned?.negativePrompt || '',
       width: geometry.width,
       height: geometry.height,
       aspectRatio: geometry.aspectRatio,
       ...replayParameters,
-      initImagePath: conditioned?.sourceImagePath || null,
+      initImagePath: replayInputs ? replayInputs.init : conditioned?.sourceImagePath || null,
+      ...(replayInputs?.initStrength != null ? { initImageStrength: replayInputs.initStrength } : {}),
       referenceImagePaths,
       referenceImageStrengths: conditioned?.referenceImageStrengths || [],
       loraFilenames: conditioned?.loraFilenames || [],
+      loraPaths: conditioned?.loraPaths || [],
       loraScales: conditioned?.loraScales || [],
       visualConditioning: conditioned?.visualConditioning || null,
       fableLoom: productionTag(run, asset),
-    },
+    }, conditioned?.visualProfile),
   };
 }
 
@@ -950,13 +992,14 @@ export async function planEpisodeProduction(loomId, episodeId, options = {}) {
     listVoiceProfiles(),
     listLoras(),
   ]);
+  const exactAdapters = mode === 'exact_inputs' ? await recordedAdapterFiles(episode) : [];
   const plan = buildEpisodeProductionPlan({
     loom,
     episode,
     universe,
     mode,
     localVoiceProfiles: voiceProfiles,
-    localLoras: loras,
+    localLoras: [...exactAdapters, ...loras],
     availableImageModels: getImageModels(),
     availableVideoModels: listVideoModels(),
     resolveAsset: resolveImageInputPath,
@@ -986,6 +1029,16 @@ export async function planEpisodeProduction(loomId, episodeId, options = {}) {
         ...Object.values(node.playbackAssets?.visualConditioningByAsset || {}),
       ].filter((manifest) => manifest && typeof manifest === 'object');
       for (const manifest of manifests) {
+        if (typeof manifest.authoredPrompt === 'string') {
+          if (typeof manifest.authoredNegativePrompt !== 'string') {
+            plan.exactInputIssues.push({ nodeId: node.id, errors: ['Recorded authored negative prompt is unavailable.'], warnings: [] });
+          }
+          const restored = await restoreRequestInputs(manifest);
+          if (restored.error) plan.exactInputIssues.push({ nodeId: node.id, errors: [restored.error], warnings: [] });
+          if (manifest.capability?.backend === IMAGE_GEN_MODE.LOCAL && typeof manifest.renderedPrompt !== 'string') {
+            plan.exactInputIssues.push({ nodeId: node.id, errors: ['Recorded local image has no executed prompt to verify.'], warnings: [] });
+          }
+        }
         const capability = manifest.capability || {};
         const key = `${node.id}:${capability.kind || 'media'}:${capability.backend || 'unknown'}:${capability.modelId || 'unknown'}`;
         let issue = null;

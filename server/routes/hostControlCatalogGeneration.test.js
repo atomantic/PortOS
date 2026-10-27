@@ -22,6 +22,7 @@ const effects = vi.hoisted(() => ({
   ingestFile: vi.fn(),
   ingestVoice: vi.fn(),
   ingestBrain: vi.fn(),
+  refineMedia: vi.fn(),
 }));
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-catalog-authority-') }));
@@ -47,6 +48,7 @@ vi.mock('../services/catalogDB.js', () => ({
 }));
 vi.mock('../services/catalogExtraction.js', () => ({ extractIngredientsForScrap: effects.extract }));
 vi.mock('../services/catalogPrune.js', () => ({ pruneCatalogBabble: effects.prune }));
+vi.mock('../services/catalogMediaRefinement.js', () => ({ refineCatalogMedia: effects.refineMedia }));
 vi.mock('../services/catalogIngestSources.js', () => ({
   ingestFromUrl: effects.ingestUrl, ingestFromFile: effects.ingestFile,
   ingestFromVoice: effects.ingestVoice, ingestFromBrain: effects.ingestBrain,
@@ -60,6 +62,7 @@ const scrapPath = '/api/catalog/scraps/example-scrap';
 const generation = (path, body, effect) => ({ path, body, effect });
 // Explicit CLI, TUI and API pins plus an unpinned request (inherited stage provider).
 const operations = [
+  generation('/api/catalog/ingredients/example/media/refine', { mediaKey: 'example.png', kind: 'reference', feedback: 'Correct the hair' }, effects.refineMedia),
   generation(`${scrapPath}/extract`, {}, effects.extract),
   generation(`${scrapPath}/extract`, { providerOverride: 'example-cli', modelOverride: 'example-model' }, effects.extract),
   generation(`${scrapPath}/extract`, { providerOverride: 'example-tui' }, effects.extract),
@@ -102,6 +105,7 @@ beforeEach(() => {
   effects.getScrap.mockResolvedValue({ id: 'example-scrap', rawText: 'Example text', parentScrapId: null });
   effects.createChunkedScrap.mockResolvedValue({ id: 'example-scrap' });
   effects.updateScrap.mockResolvedValue({ id: 'example-scrap' });
+  effects.refineMedia.mockResolvedValue({ jobId: 'example-job' });
   for (const effect of [effects.extract, effects.prune, effects.ingestUrl, effects.ingestFile,
     effects.ingestVoice, effects.ingestBrain]) effect.mockResolvedValue({ scrap: { id: 'example-scrap' }, draft: {} });
 });

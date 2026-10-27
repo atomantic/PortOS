@@ -124,13 +124,18 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
     }
     for (const [name, path] of [
       ['film-look', 'lib/filmLook.browser.test.js'],
+      ['animatic', 'services/musicVideo/animaticCapture.browser.test.js'],
+      ['greybox', 'routes/catalogGreyboxViewer.browser.test.js'],
       ['html', 'services/htmlComposition/index.test.js'],
       ['music', 'services/musicVideo/documentRender.browser.test.js'],
       ['suno', 'services/musicVideo/publish/sunoHook.browser.test.js'],
       ['cutover', 'services/databaseMaintenanceCutover.test.js'],
+      ['ownership-recheck', 'routes/cosAgentRoutes.ownershipResponse.test.js'],
       ['assembly', 'services/creativeDirector/videoAssembly.test.js'],
       ['process-audit-cleanup', '../scripts/persistentMindProcessAuditCleanup.test.js'],
       ['workspace-caches', '../scripts/workspaceCaches.test.js'],
+      ['candidate-policy', '../scripts/ciTestPolicy.test.js'],
+      ['shared-git-recovery', 'services/git.sharedRecovery.test.js'],
     ]) {
       put(path, `${common}test('${name}', async ({ task }) => {
         expect(task.file.projectName).toBe('capture');
@@ -154,7 +159,7 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const events = readFileSync(join(fixture, 'events'), 'utf8').trim().split('\n');
     expect(events.slice(0, 2).sort()).toEqual(['unit-a', 'unit-b']);
-    expect(events.slice(2).sort()).toEqual(['assembly', 'cutover', 'film-look', 'html', 'music', 'process-audit-cleanup', 'suno', 'workspace-caches']);
+    expect(events.slice(2).sort()).toEqual(['animatic', 'assembly', 'candidate-policy', 'cutover', 'film-look', 'greybox', 'html', 'music', 'ownership-recheck', 'process-audit-cleanup', 'shared-git-recovery', 'suno', 'workspace-caches']);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

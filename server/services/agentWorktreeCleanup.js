@@ -107,12 +107,8 @@ export async function cleanupAgentWorktree(agentId, success, options = {}) {
   // output buffer for the duration of the probes.
   const originalTask = options?.originalTask || null;
   run.then(
-    (warnings) => Promise.all([
-      auditRepoState(agentId, success, originalTask, warnings)
-        .catch(err => emitLog('warn', `🔎 Repo-state audit failed for ${agentId}: ${err.message}`, { agentId })),
-      auditMergeGate(agentId, originalTask)
-        .catch(err => emitLog('warn', `🚦 Merge-gate audit failed for ${agentId}: ${err.message}`, { agentId })),
-    ]),
+    (warnings) => auditRepoState(agentId, success, originalTask, warnings)
+      .catch(err => emitLog('warn', `🔎 Repo-state audit failed for ${agentId}: ${err.message}`, { agentId })),
     // A cleanup that threw has no end state to audit; `settled` still rejects.
     () => {}
   // Nothing awaits this chain, so a throw from the reporting itself would surface
@@ -145,19 +141,6 @@ async function auditRepoState(agentId, success, originalTask, warnings) {
     prExpected: isTruthyMeta(originalTask?.metadata?.openPR),
     cleanupWarnings: warnings || [],
   });
-}
-
-/**
- * Post-merge gate audit (#12549): did a claim run's merged PR hold the merge
- * admission lease and land on green checks? Detection only; it flags and files
- * one default-branch recovery task. Lazily imported like the repo-state audit.
- */
-async function auditMergeGate(agentId, originalTask) {
-  const { auditClaimMergeGate } = await import('./mergeGateAudit.js');
-  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
-  const agentState = await getAgentRecord(agentId).catch(() => null);
-  if (!agentState) return;
-  await auditClaimMergeGate({ agentId, task: originalTask, agentState });
 }
 
 // A disposition is selected once, after forge evidence is available. Merge is
@@ -213,6 +196,8 @@ async function worktreeCleanupContext(agentId, options) {
     worktreePath: metadata.workspacePath || join(PATHS.worktrees, agentId),
     publicationValidation: publicationHolds.get(agentId) || metadata.publicationValidation,
     runtimeVerificationRequested: agentState?.result?.taskOutcome?.recovery?.mode === 'runtime',
+    dependencyWaitRequested: agentState?.result?.taskOutcome?.recovery?.mode === 'dependency-wait',
+    startedAt: agentState?.startedAt, instanceId: metadata.instanceId,
     taskId: agentState?.taskId || normalized.originalTask?.id,
     securityScan: metadata.securityScan,
     securityScanControl: metadata.securityScanControl,
@@ -250,6 +235,19 @@ async function probeWorktreePr(context, success) {
 
 async function runCleanupAgentWorktree(agentId, success, options = {}) {
   const context = await worktreeCleanupContext(agentId, options);
+  if (context.dependencyWaitRequested) {
+    const { getTaskById } = await import('./cosTaskStore.js');
+    // Completion callers still hold the pre-finalize task snapshot. Only the
+    // fresh accepted wait can retain this exact investigator generation,
+    // including the interval between ready dispatch and successor claiming.
+    const held = context.taskId ? await getTaskById(context.taskId) : null;
+    const wait = held?.metadata?.investigationDependencyWait;
+    if (held?.taskType === 'internal' && isTruthyMeta(held.metadata?.blockedSystemRecovery)
+      && isTruthyMeta(held.metadata?.preserveOriginalBudget) && wait?.version === 1
+      && ['waiting', 'ready'].includes(wait.phase) && ['blocked', 'pending', 'in_progress'].includes(held.status)
+      && wait.sourceAgentId === agentId && wait.sourceStartedAt === context.startedAt
+      && wait.instanceId === context.instanceId) return [];
+  }
   if (context.runtimeVerificationRequested) {
     const { getTaskById } = await import('./cosTaskStore.js');
     const held = context.taskId ? await getTaskById(context.taskId) : null;
@@ -1058,6 +1056,37 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
 
   if (!held) return await recordTaskResumePointer({ task, agentId, agentMetadata: metadata });
 
+  // Cleanup may already have handed this exact deliverable to a durable
+  // review/merge coordinator. Releasing a second implementation retry races
+  // that coordinator for the same branch and spends another task budget.
+  const { getAllTasks } = await import('./cosTaskStore.js');
+  const queues = await getAllTasks();
+  const followUps = (queues.cos?.tasks || []).filter(candidate => candidate.id !== persisted.id
+    && isTruthyMeta(candidate.metadata?.reviewLoopFollowUp)
+    && candidate.metadata.sourceTaskId === persisted.id && candidate.metadata.sourceAgentId === agentId
+    && typeof metadata?.worktreeBranch === 'string' && !!git.parsePullRequestUrl(candidate.metadata.reviewLoopPRUrl)
+    && candidate.metadata.reviewLoopPRBranch === metadata.worktreeBranch
+    && candidate.metadata.app === persisted.metadata?.app && !leavesPrForHuman(candidate)
+    && ['pending', 'approved', 'in_progress', 'blocked', 'completed'].includes(candidate.status));
+  if (followUps.length > 1) throw new Error('Multiple delivery follow-up owners require reconciliation');
+  if (followUps.length === 1) {
+    const current = await getAgentRecord(agentId);
+    if (current?.status !== 'completed' || current.taskId !== persisted.id
+      || current.result?.executionSuccess !== true || current.result?.validationPassed === false) return {};
+    const { recordRepoStateVerification, updateAgent } = await import('./cosAgentLifecycle.js');
+    const recorded = await recordRepoStateVerification(agentId, { status: 'pending', reason: 'existing-delivery-follow-up',
+      followUpTaskId: followUps[0].id, checkedAt: new Date().toISOString() });
+    if (recorded !== true) throw new Error('Delivery follow-up receipt could not be recorded');
+    await updateAgent(agentId, { result: { ...current.result, cleanupPending: true } });
+    const result = await updateTask(persisted.id, { status: 'in_progress', metadata: {
+      ...clearedRetryHoldMetadata(), deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agentId,
+      deliveryFollowUpTaskId: followUps[0].id,
+    } }, task.taskType || persisted.taskType || 'user', { expectedStatus: 'in_progress',
+      expectedTask: { description: persisted.description, priority: persisted.priority, metadata: persisted.metadata } });
+    if (result?.error) throw new Error(result.error);
+    return {};
+  }
+
   // Fails open to "start clean" for the same reason `handleOrphanedTask` does:
   // requeueing the task matters far more than resuming it, and a throw here would
   // leave it held until the orphan sweep.
@@ -1212,7 +1241,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // The saved roster is never rewritten.
   let reviewerIdentityFaults = [];
   if (effectiveUsernames.length || effectiveOptionalReviewers.length) {
-    const { preflightReviewerIdentities } = await import('./reviewerIdentity.js');
+    const { preflightReviewerIdentities, preflightReviewerPrAuthor } = await import('./reviewerIdentity.js');
     const preflight = await preflightReviewerIdentities({
       usernames: effectiveUsernames,
       optionalReviewers: effectiveOptionalReviewers,
@@ -1225,12 +1254,20 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
         status: 409, code: 'REVIEWER_IDENTITY_NOT_FOUND', context: { reviewers: preflight.requiredMissing.map((e) => e.token) },
       });
     }
-    if (preflight.optionalMissing.length) {
-      const dropped = new Set(preflight.optionalMissing.map((e) => e.token.toLowerCase()));
-      reviewerIdentityFaults = preflight.optionalMissing.map(({ token, reason }) => ({ token, reason }));
+    const eligibility = isNonGithubForge ? { required: [], optional: [] } : await preflightReviewerPrAuthor({ usernames: effectiveUsernames, optionalReviewers: effectiveOptionalReviewers, pr: parsedPr });
+    if (eligibility.required.length) {
+      const detail = eligibility.required.map((e) => `@${e.token}: ${e.reason}`).join('; ');
+      throw new ServerError(`Required reviewer configuration fault — ${detail}. Fix it in Settings → Code Reviewers.`, {
+        status: 409, code: 'REVIEWER_IS_PR_AUTHOR', context: { reviewers: eligibility.required.map((e) => e.token) },
+      });
+    }
+    const optionalFaults = [...preflight.optionalMissing, ...eligibility.optional];
+    if (optionalFaults.length) {
+      const dropped = new Set(optionalFaults.map((e) => e.token.toLowerCase()));
+      reviewerIdentityFaults = optionalFaults.map(({ token, reason }) => ({ token, reason }));
       effectiveUsernames = effectiveUsernames.filter((u) => !dropped.has(u.toLowerCase()));
       effectiveOptionalReviewers = effectiveOptionalReviewers.filter((r) => !dropped.has(r.replace(/^@/, '').toLowerCase()));
-      console.log(`🚫 Optional reviewer(s) not found on the target forge, skipped for this run: ${reviewerIdentityFaults.map((f) => `@${f.token}`).join(', ')}`);
+      console.log(`🚫 Optional reviewer(s) unavailable for this run: ${reviewerIdentityFaults.map((f) => `@${f.token}`).join(', ')}`);
     }
   }
   // Per-reviewer iteration caps (`~max=<n>`) — forge-agnostic, threaded verbatim

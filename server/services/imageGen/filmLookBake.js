@@ -13,10 +13,11 @@
  * toggle and the copy files into every collection the source is in.
  */
 
-import { copyFile, mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { extname, join } from 'node:path';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { describeFilmLook, filmLookFilterMarkup, isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
 import { persistVariant } from './variants.js';
@@ -27,11 +28,34 @@ export const FILM_LOOK_SCRATCH_DIR = 'film-look-bakes';
 export const FILM_LOOK_BAKE_MAX_SIDE = 4096;
 const SOURCE_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 
+/** Follow film-only ancestry; cleaning before the first grade stays intact. */
+export async function readFilmLookSource(filename) {
+  const { assertGalleryFilename, readImageSidecar } = await import('./local.js');
+  const seen = new Set();
+  for (let depth = 0; depth < 32; depth++) {
+    assertGalleryFilename(filename);
+    if (seen.has(filename)) throw new ServerError('Film look source lineage contains a cycle', { status: 422, code: 'FILM_LOOK_LINEAGE' });
+    seen.add(filename);
+    const { metadata } = await readImageSidecar(filename);
+    if (typeof metadata.filmLookFrom === 'string' && metadata.filmLookFrom) {
+      if (metadata.regenerated || metadata.watermarkRemoved || metadata.cleanLevel) {
+        throw new ServerError('This image was edited after its film grade. Select the ungraded source to change the finish without discarding those edits.', { status: 422, code: 'FILM_LOOK_INTERVENING_EDIT' });
+      }
+      filename = metadata.filmLookFrom;
+      continue;
+    }
+    const exists = await stat(join(PATHS.images, filename)).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    if (!exists?.isFile()) throw new ServerError('Film look source image not found', { status: 404, code: 'NOT_FOUND' });
+    return { filename, path: `/data/images/${encodeURIComponent(filename)}`, metadata };
+  }
+  throw new ServerError('Film look source lineage is too deep', { status: 422, code: 'FILM_LOOK_LINEAGE' });
+}
+
 /** The one-image page a bake screenshots: the image at its own size, the look on it, frame 0. Pure. */
 function filmLookBakePage(look, { width, height, src }) {
   const built = filmLookFilterMarkup(normalizeFilmLook(look), { frame: 0, width, height });
   return `<!doctype html><html><head><meta charset="utf-8"><title>Film look</title>
-<style>html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden;background:#000}img{display:block;width:${width}px;height:${height}px;filter:${built.active ? built.css : 'none'}}</style>
+<style>html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden;background:${look.version === 2 ? 'transparent' : '#000'}}img{display:block;width:${width}px;height:${height}px;filter:${built.active ? built.css : 'none'}}</style>
 </head><body>${built.svg}<img src="${src}" alt=""></body></html>\n`;
 }
 
@@ -39,9 +63,14 @@ function filmLookBakePage(look, { width, height, src }) {
  * Bake `look` into a new copy of gallery image `filename`; resolves the
  * gallery-compatible record of the copy (persistVariant's shape).
  */
-export async function applyFilmLookBake({ filename, sourceMeta, look: input, signal }) {
+export async function applyFilmLookBake({ filename, sourceMeta, look: input, signal, onCleanupFailure }) {
   const look = normalizeFilmLook(input);
   if (!look || isFilmLookNeutral(look)) throw new ServerError('The film look has no effect; move a control before saving a copy', { status: 422, code: 'FILM_LOOK_NEUTRAL' });
+  if (look.version === 2 && sourceMeta.filmLookFrom) {
+    const source = await readFilmLookSource(filename);
+    filename = source.filename;
+    sourceMeta = source.metadata;
+  }
   const ext = extname(filename).toLowerCase();
   if (!SOURCE_EXT.has(ext)) throw new ServerError('Only PNG, JPEG and WebP images take a film look', { status: 422, code: 'FILM_LOOK_SOURCE_TYPE' });
   const sourcePath = join(PATHS.images, filename);
@@ -63,13 +92,21 @@ export async function applyFilmLookBake({ filename, sourceMeta, look: input, sig
   const scratch = join(PATHS.data, FILM_LOOK_SCRATCH_DIR, id);
   let page;
   let png;
+  let cleanupUncertain = false;
+  const recordCleanupFailure = () => {
+    if (cleanupUncertain) return;
+    cleanupUncertain = true;
+    maintenance.markCurrentUnsettled();
+    onCleanupFailure?.();
+  };
   try {
     await mkdir(scratch, { recursive: true });
     const src = `source${ext}`;
     await copyFile(sourcePath, join(scratch, src));
     await writeFile(join(scratch, 'index.html'), filmLookBakePage(look, { width, height, src }));
-    page = await openComposition(`${FILM_LOOK_SCRATCH_DIR}/${id}`, { signal, ownedBrowser: true });
+    page = await openComposition(`${FILM_LOOK_SCRATCH_DIR}/${id}`, { signal, ownedBrowser: true, onOwnerCleanupFailure: recordCleanupFailure });
     await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+    if (look.version === 2) await page.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
     // The resize relays out the page; the screenshot waits for the paint after it.
     await page.evaluate('new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     page.check();
@@ -78,8 +115,8 @@ export async function applyFilmLookBake({ filename, sourceMeta, look: input, sig
     await page.close({ verify: true });
     page = null;
   } finally {
-    if (page) await page.close().catch(() => {});
-    await rm(scratch, { recursive: true, force: true }).catch(() => {});
+    if (page) await page.close().catch(error => { recordCleanupFailure(); throw error; });
+    if (!cleanupUncertain) await rm(scratch, { recursive: true, force: true }).catch(error => { recordCleanupFailure(); throw error; });
   }
   const data = Buffer.from(png, 'base64');
 
@@ -98,6 +135,7 @@ export async function applyFilmLookBake({ filename, sourceMeta, look: input, sig
     ...sourceMetaForVariant
   } = sourceMeta;
   const lineage = { createdAt, cleanedFrom: groupRoot, filmLookFrom: filename, filmLook: look, filmLookWords: describeFilmLook(look) };
+  signal?.throwIfAborted();
   return persistVariant({
     sourceFilename: filename,
     outFilename,

@@ -14,6 +14,8 @@ import { assertCatalogIdentityWritable } from '../services/catalogDB/identityAcc
 import { createImageGalleryHandlers } from './imageGalleryRead.js';
 import { Router } from 'express';
 import { z } from 'zod';
+import { fableLoomMultipartUnsupported, prepareFableLoomImageParams } from '../services/imageGen/fableLoomParams.js';
+import { finishVisualProfileImage } from '../services/imageGen/finishVisualProfile.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
   validateRequest, modelDownloadQuerySchema, modelDownloadParamsSchema, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
@@ -21,7 +23,7 @@ import {
 import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
-import { maxInputImages, resolveCloudProviderConfig } from '../services/imageGen/cloudProviderConfig.js';
+import { resolveCloudProviderConfig } from '../services/imageGen/cloudProviderConfig.js';
 import setupRouter, { streamMossAction } from './imageGenSetup.js';
 import { usesMossSwift } from '../lib/imageRuntimeRemedies.js';
 import { downloadMossWeights, mossModelCacheStatus, verifyMossWeights, repairMossWeights } from '../services/imageGen/mossWeights.js';
@@ -31,9 +33,11 @@ import { getImageModels, requiredReposForModel } from '../lib/mediaModels.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded } from '../lib/fileUtils.js';
-import { prepareGenerateParams, resolveLocalImageModel, selectLocalImageModelFromSettings } from '../services/imageGen/prepareParams.js';
+import { prepareGenerateParams, resolveLocalImageModel } from '../services/imageGen/prepareParams.js';
+import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../lib/imageGenCapabilities.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
-import { applyFilmLookBake } from '../services/imageGen/filmLookBake.js';
+import { applyFilmLookBake, readFilmLookSource } from '../services/imageGen/filmLookBake.js';
+import { universeVisualProfileSchema } from '../lib/universeVisualProfileValidation.js';
 import { previewImagePrompt } from '../services/imageGen/promptPreview.js';
 import { filmLookBakeSchema } from '../lib/filmLookValidation.js';
 import { join, basename } from 'node:path';
@@ -53,12 +57,7 @@ import { getSettings } from '../services/settings.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 import { collectRemoteInputAssets } from '../services/federatedMedia/inputAssets.js';
 import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
-import { asFableLoomRenderSettings, inspectEpisodeProductionOrder } from '../lib/fableLoomProduction.js';
-import { attachNodeImage, getLoom } from '../services/fableLoom/records.js';
-import {
-  compileFableLoomVisualRequest, fableLoomImageCapabilities,
-} from '../services/fableLoom/visualConditioning.js';
-import { loraCompatKey } from '../lib/runners.js';
+import { attachNodeImage } from '../services/fableLoom/records.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { promptAdditionsSchema } from '../lib/modelInput.js';
 
@@ -110,7 +109,7 @@ async function enqueueLoggedImage(req, job) {
 // number of `referenceImageN` upload field names below.
 const MAX_PROMPT_LENGTH = 32000;
 const MAX_LORAS = 8;
-const MAX_REFERENCE_IMAGES = 16;
+const MAX_REFERENCE_IMAGES = IMAGE_REFERENCE_REQUEST_LIMIT;
 const updatePromptSchema = z.object({ prompt: z.string().max(MAX_PROMPT_LENGTH) });
 const galleryImageFilenameSchema = (label) => z.string().max(256)
   .regex(/^[^/\\]+\.(png|jpg|jpeg|webp)$/i, `${label} must be a basename ending in png/jpg/jpeg/webp`);
@@ -128,6 +127,7 @@ const generateSchema = z.object({
   // prompt arrives as `undefined`; default it to '' rather than rejecting.
   prompt: noNulPrompt.optional().default(''),
   negativePrompt: noNulPrompt.optional(),
+  visualProfileOverride: universeVisualProfileSchema.nullable().optional(),
   // Per-request backend override. If omitted, the dispatcher uses
   // `imageGen.mode` from settings.json.
   mode: z.enum(IMAGE_GEN_MODES).optional(),
@@ -399,6 +399,11 @@ router.post('/:filename/film-look', asyncHandler(async (req, res) => {
   res.json(await applyFilmLookBake({ filename, sourceMeta, look }));
 }));
 
+router.get('/:filename/film-look-source', asyncHandler(async (req, res) => {
+  const { filename, path } = await readFilmLookSource(req.params.filename);
+  res.json({ filename, path });
+}));
+
 // Visible-watermark removal — erases the Gemini / Nano-Banana bottom-right ✦.
 // Body is optional: with no fields the corner box is auto-sized to the
 // sparkle's typical footprint. `size` overrides the square side; `region`
@@ -491,6 +496,10 @@ router.post('/prompt-preview', asyncHandler(async (req, res) => {
 }));
 
 router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
+  if (typeof req.body?.fableLoom === 'string' && Object.keys(req.files || {}).length) {
+    await Promise.allSettled(Object.values(req.files).map(file => unlinkGuarded(file.path)));
+    throw fableLoomMultipartUnsupported();
+  }
   const data = validateRequest(generateSchema, coerceFormFields(req.body));
   if (data.catalogIngredientId) await assertCatalogIdentityWritable(data.catalogIngredientId);
   const { data: params, mode, settings, uploadedTempPaths } = await prepareGenerateParams({
@@ -499,79 +508,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     referenceImageFields: REFERENCE_IMAGE_FIELDS,
   });
 
-  // FableLoom is compiled server-side after the backend pin resolves. The
-  // browser's prompt/reference fields are hints only: stable scene bindings,
-  // approved assets and deterministic graph continuity own the final request.
-  if (params.fableLoom) {
-    const taggedLoom = await getLoom(params.fableLoom.loomId);
-    const taggedEpisode = taggedLoom?.episodes?.find((episode) => episode.id === params.fableLoom.episodeId);
-    const renderSettings = taggedLoom ? asFableLoomRenderSettings(taggedLoom.renderSettings) : null;
-    if (renderSettings) {
-      params.width = renderSettings.width;
-      params.height = renderSettings.height;
-      params.aspectRatio = renderSettings.aspectRatio;
-    }
-    if (taggedLoom && taggedEpisode) {
-      const episodeOrder = inspectEpisodeProductionOrder(taggedLoom, taggedEpisode);
-      if (!episodeOrder.ready) {
-        throw new ServerError(
-          `FableLoom storyboard production is out of order: ${episodeOrder.reason}`,
-          {
-            status: 409,
-            code: 'FABLELOOM_EPISODE_ORDER_BLOCKED',
-            context: { details: { episodeOrder } },
-          },
-        );
-      }
-    }
-    const selected = mode === IMAGE_GEN_MODE.LOCAL
-      ? selectLocalImageModelFromSettings(settings, params.modelId)
-      : null;
-    const cloud = selected ? null : resolveCloudProviderConfig(settings, mode, {
-      model: params.cloudModel, modelIsShippedDefault: params.cloudModelIsShippedDefault,
-    });
-    const model = selected
-      ? { ...selected, loraCompatKey: loraCompatKey(selected) }
-      : (cloud ? { id: cloud.modelId } : null);
-    const providerMode = params.mediaProviderPeerId ? 'federated' : mode;
-    const compiled = await compileFableLoomVisualRequest({
-      tag: params.fableLoom,
-      kind: 'image',
-      capability: fableLoomImageCapabilities({
-        mode: providerMode,
-        model,
-        // The backend's own input cap (per model for fal.ai), never above
-        // the form ceiling.
-        inputBudget: Math.min(maxInputImages(mode, cloud?.modelId) ?? MAX_REFERENCE_IMAGES, MAX_REFERENCE_IMAGES),
-      }),
-      authoredPrompt: params.prompt,
-      authoredNegativePrompt: params.negativePrompt,
-    });
-    if (compiled) {
-      params.prompt = compiled.prompt;
-      params.negativePrompt = compiled.negativePrompt;
-      // The compiler's canon blocks, listed beside what the scene's own request listed (#11317).
-      if (compiled.promptAdditions?.length) params.promptAdditions = [...(params.promptAdditions || []), ...compiled.promptAdditions];
-      params.referenceImagePaths = compiled.referenceImagePaths;
-      params.referenceImageStrengths = compiled.referenceImageStrengths;
-      params.loraFilenames = compiled.loraFilenames;
-      params.loraPaths = [];
-      params.loraScales = compiled.loraScales;
-      params.visualConditioning = compiled.visualConditioning ? {
-        ...compiled.visualConditioning,
-        render: {
-          provider: providerMode,
-          modelId: model?.id || null,
-          modelRevision: model?.revision || null,
-          parameters: {
-            width: params.width,
-            height: params.height,
-            ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
-          },
-        },
-      } : null;
-    }
-  }
+  await prepareFableLoomImageParams({ params, mode, settings });
 
   // Resolve an optional universe-collection target into a job tag the
   // completion hook understands. Done server-side so a base-style probe lands
@@ -742,7 +679,8 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
     await assertRevisionOpen(params.musicVideo.projectId, params.musicVideo.revisionId, { sceneId: params.musicVideo.sceneId, kind: 'image' });
   }
-  const result = await imageGen.generateImage(params);
+  let result = await imageGen.generateImage(params);
+  if (params.visualProfile && result?.filename) result = await finishVisualProfileImage({ result, profile: params.visualProfile, signal: new AbortController().signal });
   if (params.musicVideoProjectId && result?.filename) {
     const { fileIntoMusicVideoCollection } = await import('../services/musicVideoCollectionHook.js');
     await fileIntoMusicVideoCollection(params.musicVideoProjectId, [{ kind: 'image', ref: result.filename }]);

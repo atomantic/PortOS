@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 /** Server-observed checkout identity captured before a claim run completes.
  * A branch name/path/head can all be reused; private Git filesystem identity
  * distinguishes the completed checkout from a later manual checkout.
@@ -110,10 +111,68 @@ export function completedCheckoutReceiptValid(agent, receipt) {
     && seed.branch === receipt.branch && seed.path === receipt.path && same(seed.incarnation, receipt.incarnation)) === true;
 }
 
+/** One completed review task can retain its original physical generation even
+ * when a retry lost its terminal capture or explicit resume link. This proves
+ * only retirement by its later completed owner, never that the older run passed.
+ */
+export function sameTaskRetirementBinding(agent, successor, input) {
+  const a = agent?.metadata, b = successor?.metadata;
+  const eligible = item => item?.status === 'completed' && item.result?.executionSuccess === true
+    && item.result.validationPassed !== false && !item.result.executionInterruption
+    && !item.metadata?.executionInterruption && !item.metadata?.blocker
+    && item.result.taskOutcome?.recovery?.mode !== 'approval'
+    && item.metadata?.isWorktree === true && item.metadata.prCompletionPolicy === 'review-then-merge'
+    && !isTruthyMeta(item.metadata.reviewLoopLeaveOpen)
+    && item.metadata.reviewLoopMergeTarget?.url === input.prUrl
+    && item.metadata.reviewLoopMergeTarget.branch === input.branch
+    && resolve(item.metadata.sourceWorkspace || '') === resolve(input.repoPath)
+    && (!item.metadata.branchCompletionPolicy || (item.metadata.branchCompletionPolicy.prUrl === input.prUrl
+      && item.metadata.branchCompletionPolicy.branch === input.branch && item.metadata.branchCompletionPolicy.completion === 'review-then-merge'));
+  if (!eligible(agent) || !eligible(successor) || agent.id === successor.id || !agent.taskId || agent.taskId !== successor.taskId
+    || !a.instanceId || a.instanceId === 'unknown' || a.instanceId !== b.instanceId
+    || !(Date.parse(agent.completedAt) >= Date.parse(agent.startedAt))
+    || !(Date.parse(agent.completedAt) <= Date.parse(successor.startedAt))) return null;
+  const capture = owner => (Array.isArray(owner.metadata.completedCheckouts) ? owner.metadata.completedCheckouts : []).filter(row =>
+    completedCheckoutReceiptValid(owner, row) && checkoutSeedSchema.shape.incarnation.safeParse(row.incarnation).success
+    && resolve(row.repoPath || '') === resolve(input.repoPath) && row.branch === input.branch
+    && resolve(row.path || '') === resolve(owner.metadata.workspacePath || '')
+    && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation));
+  const current = capture(successor);
+  if (current.length !== 1 || current[0].head !== input.tip || resolve(current[0].path) !== resolve(input.checkoutPath)) return null;
+  const source = capture(agent);
+  if (source.length === 1) return { sourceCapture: source[0], successorCapture: current[0] };
+  if (!Array.isArray(a.completedCheckouts) || a.completedCheckouts.length !== 0
+    || a.checkoutCapture?.status !== 'pending' || a.checkoutCapture.unknown !== true
+    || !Array.isArray(a.checkoutCapture.targets) || a.checkoutCapture.targets.length !== 0 || current[0].version !== 2) return null;
+  const seed = owner => (Array.isArray(owner.metadata.checkoutSeeds) ? owner.metadata.checkoutSeeds : []).filter(row =>
+    checkoutSeedSchema.safeParse(row).success && row.agentId === owner.id && row.startedAt === owner.startedAt
+    && Date.parse(row.seededAt) >= Date.parse(owner.startedAt) && Date.parse(row.seededAt) <= Date.parse(owner.completedAt)
+    && resolve(row.repoPath) === resolve(input.repoPath) && row.branch === input.branch
+    && resolve(row.path) === resolve(owner.metadata.workspacePath) && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation));
+  const older = seed(agent), newer = seed(successor);
+  if (older.length !== 1 || newer.length !== 1 || newer[0].seededAt !== current[0].seededAt
+    || !isDeepStrictEqual(older[0].checkout, newer[0].checkout) || !isDeepStrictEqual(older[0].repository, newer[0].repository)) return null;
+  const dispatch = owner => {
+    const d = owner.metadata.completionTaskDispatch;
+    if (d?.taskId !== owner.taskId || !Array.isArray(d.expected) || d.expected.length !== 4
+      || d.expected.some(row => !Array.isArray(row) || row.length !== 2)) return null;
+    const m = new Map(d.expected), count = m.get('totalSpawnCount');
+    if (m.size !== 4 || m.get('claimedBy') !== owner.metadata.instanceId
+      || m.get('claimedAt') !== m.get('lastSpawnedAt')
+      || !(Date.parse(m.get('claimedAt')) >= Date.parse(owner.startedAt))
+      || !(Date.parse(m.get('claimedAt')) <= Date.parse(owner.completedAt))
+      || !((typeof count === 'number' || (typeof count === 'string' && /^\d+$/.test(count))) && Number.isSafeInteger(Number(count)) && Number(count) > 0)) return null;
+    return { type: d.taskType, count: Number(count), claimedAt: Date.parse(m.get('claimedAt')) };
+  };
+  const first = dispatch(agent), last = dispatch(successor);
+  if (!first || !last || first.type !== last.type || first.count > last.count || first.claimedAt >= last.claimedAt) return null;
+  return { sourceSeed: older[0], successorCapture: current[0] };
+}
+
 /** Read the final head only inside the pre-existing physical binding. No fetch
  * or branch-name discovery is allowed after terminal ingestion.
  */
-export async function captureSeededCompletionCheckouts(agent, { preterminal = false } = {}) {
+export async function captureSeededCompletionCheckouts(agent, { preterminal = false, retirement = null } = {}) {
   if (preterminal && !['running', 'paused'].includes(agent.status)) return null;
   const terminalAt = preterminal ? Date.now() : Date.parse(agent.completedAt);
   const bound = hasClaimCheckoutBindings(agent.metadata) ? agent.metadata.claimBranches : [agent.metadata?.worktreeBranch];
@@ -128,14 +187,18 @@ export async function captureSeededCompletionCheckouts(agent, { preterminal = fa
     const head = (await execGit(['rev-parse', '--verify', 'HEAD^{commit}'], seed.path, {
       env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_REPLACE_OBJECTS: '1' }, timeout: 5000,
     })).stdout.trim();
-    // A physical seed survives later commits in the same checkout. Only a head
-    // observed while this execution still owned it may authorize late capture.
+    // Normal replay requires the head observed during execution. Explicit
+    // retirement review can instead bind a currently merged head to the exact
+    // original seed; this is a current observation, never a backdated capture.
     const terminal = agent.metadata?.checkoutCapture?.targets?.find(row => row.agentId === agent.id
       && row.startedAt === agent.startedAt && row.repoPath === seed.repoPath && row.branch === seed.branch
       && row.path === seed.path && same(row.incarnation, seed.incarnation)
       && Number.isFinite(Date.parse(row.capturedAt)) && Date.parse(row.capturedAt) >= Date.parse(agent.startedAt)
       && Date.parse(row.capturedAt) <= terminalAt);
-    if (!preterminal && (!terminal || terminal.head !== head)) return null;
+    const reviewedCurrentHead = !terminal && retirement?.verifiedMergedHead === head
+      && retirement.head === head && retirement.repoPath === seed.repoPath
+      && retirement.branch === seed.branch && retirement.path === seed.path;
+    if (!preterminal && ((!terminal && !reviewedCurrentHead) || (terminal && terminal.head !== head))) return null;
     const target = { repoPath: seed.repoPath, branch: seed.branch, path: seed.path, head };
     const current = await readCompletedCheckoutIdentity(target);
     if (!current || !same(current.incarnation, seed.incarnation)) return null;

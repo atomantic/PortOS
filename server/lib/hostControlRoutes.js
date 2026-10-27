@@ -489,6 +489,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/agents/:id/relaunch',
   'POST /api/cos/agents/:id/btw',
   'POST /api/cos/agents/:id/security-scan',
+  'POST /api/cos/agents/:id/release-publication',
   'POST /api/cos/jobs',
   'PUT /api/cos/jobs/:id',
   // Toggle arms an existing job, shell jobs included, for its next run.
@@ -1076,6 +1077,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Greybox draft hands the place and the user's instruction to a caller-chosen
   // provider (possibly a tool-capable harness). Save and capture are data-only.
   'POST /api/catalog/ingredients/:id/greybox/draft',
+  'POST /api/catalog/ingredients/:id/refine',
+  'POST /api/catalog/ingredients/:id/media/refine',
 
   // Importer, Brain and analytics AI (#11036): caller text, stored reference
   // data and a caller-chosen provider reach a non-tool-free runner. Authorize

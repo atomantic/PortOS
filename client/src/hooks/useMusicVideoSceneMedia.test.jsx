@@ -89,7 +89,7 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
   afterEach(cleanup);
 
   // Uniquely catches a board render sent without the shot's cast guides, before or after they load.
-  it('refuses a frame render until the cast member\'s media loads, then sends the matching guide first', async () => {
+  it('refuses a frame render until the cast member\'s media loads, then sends only age-compatible guides', async () => {
     let resolveMedia;
     listCatalogIngredientMedia.mockReturnValue(new Promise((resolve) => { resolveMedia = resolve; }));
     const cast = {
@@ -110,7 +110,7 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
       { mediaKey: 'child.png', kind: 'reference', library: { variant: { age: 7 }, guide: true } },
     ]); });
     await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
-    expect(generateImage.mock.calls.at(-1)[0].referenceImageFiles).toEqual(['child.png', 'adult.png']);
+    expect(generateImage.mock.calls.at(-1)[0].referenceImageFiles).toEqual(['child.png']);
   });
 
   // Uniquely catches a failed reload on tab refocus wiping loaded guides, so renders go out without them.

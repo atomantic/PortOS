@@ -3,7 +3,8 @@ vi.mock('../musicVideo/productionReviewService.js', () => ({ assertMusicVideoSce
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { createHash } from 'node:crypto';
+import { join, sep } from 'path';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 
 // The queue persists to data/media-jobs.json. Steer it at a temp dir so each
@@ -28,11 +29,12 @@ vi.mock('../../lib/fileUtils.js', async () => {
     PATHS: new Proxy({}, {
       get(_, key) {
         if (key === 'data') return tempDataDir;
-        if (key === 'uploads' || key === 'videos') return join(tempDataDir, key);
+        if (['uploads', 'videos', 'images', 'loras'].includes(key)) return join(tempDataDir, key);
         return actual.PATHS[key];
       },
     }),
     atomicWrite: (...args) => atomicWriteSpy(...args),
+    resolveImageInputPath: (path) => typeof path === 'string' && path.startsWith(`${join(tempDataDir, 'images')}${sep}`) && existsSync(path) ? path : actual.resolveImageInputPath(path),
   };
 });
 
@@ -63,6 +65,7 @@ const stubs = {
   generateVideoFal: vi.fn(async () => ({ jobId: 'whatever' })),
   generateChainedVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImage: vi.fn(async () => ({ jobId: 'whatever' })),
+  finishVisualProfile: vi.fn(),
   generateImageCodex: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImageFal: vi.fn(async () => ({ jobId: 'whatever' })),
   generateAudio: vi.fn(async () => ({ jobId: 'whatever' })),
@@ -142,6 +145,7 @@ vi.mock('../videoGen/fal.js', () => ({
   cancel: (...args) => stubs.cancelVideo(...args),
 }));
 
+vi.mock('../imageGen/finishVisualProfile.js', () => ({ finishVisualProfileImage: (...args) => stubs.finishVisualProfile(...args) }));
 vi.mock('../imageGen/local.js', () => ({
   generateImage: (...args) => stubs.generateImage(...args),
   cancel: (...args) => stubs.cancelImage(...args),
@@ -383,6 +387,75 @@ describe('mediaJobQueue', () => {
       await flush();
       maintenance.resume({ id: hold.id, revision: hold.revision });
     }
+  });
+
+  it.each(['unchanged', 'unchanged-named', 'reference', 'adapter', 'canon-adapter', 'trigger'])('checks FableLoom %s inputs after queue delay and before provider dispatch', async (changed) => {
+    const images = join(tempDataDir, 'images');
+    const loras = join(tempDataDir, 'loras');
+    mkdirSync(images, { recursive: true });
+    mkdirSync(loras, { recursive: true });
+    const reference = join(images, 'reference.png');
+    const canonReference = join(images, 'canon.png');
+    const adapter = join(loras, 'example.safetensors');
+    const canonAdapter = join(loras, 'canon.safetensors');
+    writeFileSync(reference, 'original-reference');
+    writeFileSync(canonReference, 'canon-reference');
+    writeFileSync(adapter, 'original-adapter');
+    writeFileSync(canonAdapter, 'canon-adapter');
+    const namedAdapter = changed === 'unchanged-named';
+    const hash = value => createHash('sha256').update(value).digest('hex');
+    const params = {
+      mode: 'local', prompt: 'An authored view', negativePrompt: '',
+      fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
+      referenceImagePaths: [canonReference, reference], referenceImageStrengths: [1, 0.4],
+      loraFilenames: namedAdapter ? ['canon.safetensors', 'example.safetensors'] : ['canon.safetensors'],
+      loraPaths: namedAdapter ? [] : [adapter], loraScales: [0.8, 0.7],
+      visualConditioning: {
+        version: 1, capability: { kind: 'image', backend: 'local' },
+        authoredPrompt: 'An authored view', authoredNegativePrompt: '',
+        compiledPrompt: 'An authored view', compiledNegativePrompt: '', renderedPrompt: 'An authored view',
+        assets: [
+          { role: 'character-neutral', filename: 'canon.png' },
+          { role: 'request-reference', filename: 'reference.png', inputRoot: 'images', sha256: hash('original-reference') },
+        ],
+        referenceImageStrengths: [1, 0.4],
+        adapters: [
+          { source: 'Canon adapter', filename: 'canon.safetensors', sha256: hash('canon-adapter'), scale: 0.8 },
+          { source: 'Request adapter', relativePath: 'example.safetensors', filename: 'example.safetensors',
+            sha256: hash('original-adapter'), scale: 0.7 },
+        ],
+      },
+    };
+    const first = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'busy' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    const second = await mediaJobQueue.enqueueJob({ kind: 'image', params });
+    expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
+    if (changed === 'reference') writeFileSync(reference, 'changed-reference');
+    if (changed === 'adapter') writeFileSync(adapter, 'changed-adapter');
+    if (changed === 'canon-adapter') writeFileSync(canonAdapter, 'changed-canon-adapter');
+    if (changed === 'trigger') writeFileSync(`${adapter}.metadata.json`, JSON.stringify({ triggerWords: ['new-token'] }));
+    videoGenEvents.emit('completed', { generationId: first.jobId, filename: 'example.mp4' });
+    if (changed.startsWith('unchanged')) {
+      await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+      expect(stubs.generateImage).toHaveBeenCalledWith(expect.objectContaining({
+        referenceImagePaths: [canonReference, reference], referenceImageStrengths: [1, 0.4],
+        loraFilenames: params.loraFilenames, loraPaths: params.loraPaths, loraScales: [0.8, 0.7],
+      }));
+      imageGenEvents.emit('completed', { generationId: second.jobId, filename: 'example.png' });
+    } else {
+      await waitFor(() => mediaJobQueue.getJob(second.jobId)?.status === 'failed');
+      expect(mediaJobQueue.getJob(second.jobId).error).toContain('changed while queued');
+      expect(stubs.generateImage).not.toHaveBeenCalled();
+    }
+  });
+
+  it('continues to dispatch legacy FableLoom jobs without replay evidence', async () => {
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: {
+      mode: 'local', prompt: 'Legacy scene', fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
+    } });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    expect(stubs.generateImage).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Legacy scene' }));
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'legacy.png' });
   });
 
   it('enqueueJob returns jobId + queued status + position', async () => {
@@ -800,6 +873,188 @@ describe('mediaJobQueue', () => {
     videoGenEvents.emit('failed', { generationId: blocker.jobId, error: 'cleanup' });
     if (resolveBlocker) resolveBlocker();
     await flush();
+  });
+
+  it('keeps an image running through its finish and retains the ungraded reference', async () => {
+    let finish;
+    stubs.generateImageCodex.mockImplementation(async () => ({}));
+    stubs.finishVisualProfile.mockImplementation(({ result }) => new Promise(resolve => { finish = () => resolve({ ...result, finishedVariant: { filename: 'example-finished.png' } }); }));
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'Example', visualProfile: { version: 1 } } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'example-source.png' });
+    await waitFor(() => typeof finish === 'function');
+    expect(mediaJobQueue.getJob(jobId).status).toBe('running');
+    expect(mediaJobQueue.getJob(jobId).params.visualProfileSource.filename).toBe('example-source.png');
+    finish();
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'completed');
+    expect(mediaJobQueue.getJob(jobId).result).toMatchObject({ filename: 'example-source.png', finishedVariant: { filename: 'example-finished.png' } });
+  });
+
+  it('cancels the finish browser independently after the provider has settled', async () => {
+    stubs.generateImageCodex.mockImplementation(async () => ({}));
+    stubs.finishVisualProfile.mockImplementation(({ signal }) => new Promise((_resolve, reject) => { signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }));
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'Example', visualProfile: { version: 1 } } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'example-source.png' });
+    await waitFor(() => stubs.finishVisualProfile.mock.calls.length === 1);
+    expect((await mediaJobQueue.cancelJob(jobId)).ok).toBe(true);
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'canceled');
+    expect(stubs.cancelImageCodex).not.toHaveBeenCalled();
+    expect(mediaJobQueue.getJob(jobId).result.filename).toBe('example-source.png');
+  });
+
+  it.each(['local', 'remote', 'settled-remote'])('persists %s film-finish cancellation before acknowledging and honors it after restart', async route => {
+    let releaseFinish;
+    stubs.finishVisualProfile.mockImplementation(({ signal }) => new Promise((_resolve, reject) => {
+      releaseFinish = () => reject(signal.reason || new Error('fixture cleanup'));
+    }));
+    const generate = route === 'local' ? stubs.generateImageCodex : stubs.generateImageRemote;
+    generate.mockResolvedValue({});
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: {
+      mode: 'codex', prompt: 'Example', visualProfile: { version: 1 },
+      ...(route !== 'local' ? { remoteMedia: remoteImageMediaParams() } : {}),
+      ...(route === 'settled-remote' ? { visualProfileSource: { filename: 'example-source.png' } } : {}),
+    } });
+    if (route !== 'settled-remote') {
+      await waitFor(() => generate.mock.calls.length === 1);
+      imageGenEvents.emit('completed', { generationId: jobId, filename: 'example-source.png', remoteInputsDisposable: true });
+    }
+    await waitFor(() => typeof releaseFinish === 'function');
+    let interruptedSnapshot;
+    try {
+      expect(await mediaJobQueue.cancelJob(jobId)).toMatchObject({ ok: true, status: 'canceling' });
+      interruptedSnapshot = JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8'));
+      const saved = interruptedSnapshot.jobs.find(row => row.id === jobId);
+      expect(saved).toMatchObject({ status: 'running', cancelRequested: true,
+        params: { visualProfileSource: { filename: 'example-source.png' } } });
+      if (route !== 'local') expect(saved.params.remoteMedia.cancelRequested).toBe(true);
+    } finally {
+      releaseFinish();
+    }
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'canceled');
+    await importFresh();
+    // Restore the exact acknowledged snapshot to model process loss before the
+    // in-flight finish handler persisted its terminal cancellation.
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify(interruptedSnapshot));
+    stubs.finishVisualProfile.mockClear();
+    generate.mockClear();
+    if (route === 'remote') generate.mockImplementation(async params => {
+      imageGenEvents.emit('failed', { generationId: params.jobId, error: 'Canceled remotely', remoteInputsDisposable: true });
+    });
+    await mediaJobQueue.initMediaJobQueue();
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'canceled');
+    expect(stubs.finishVisualProfile).not.toHaveBeenCalled();
+    expect(mediaJobQueue.getJob(jobId).result).toMatchObject({ filename: 'example-source.png' });
+    if (route === 'remote') {
+      expect(generate).toHaveBeenCalledWith(expect.objectContaining({ jobId,
+        remoteMedia: expect.objectContaining({ reconcile: true, cancelRequested: true }) }));
+    } else {
+      expect(generate).not.toHaveBeenCalled();
+      const response = { write: vi.fn(), req: { on: vi.fn() }, writeHead: vi.fn(), end: vi.fn() };
+      mediaJobQueue.attachSseClient(jobId, response);
+      expect(response.write.mock.calls.flat().join('')).toContain('"type":"canceled"');
+    }
+  });
+
+  it('does not acknowledge film-finish cancellation when its snapshot cannot be written', async () => {
+    let releaseFinish;
+    stubs.generateImageCodex.mockResolvedValue({});
+    stubs.finishVisualProfile.mockImplementation(({ signal }) => new Promise((_resolve, reject) => {
+      releaseFinish = () => reject(signal.reason || new Error('fixture cleanup'));
+    }));
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: {
+      mode: 'codex', prompt: 'Example', visualProfile: { version: 1 },
+    } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'example-source.png' });
+    await waitFor(() => typeof releaseFinish === 'function');
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    atomicWriteSpy.mockRejectedValueOnce(new Error('synthetic storage failure'));
+    try {
+      await expect(mediaJobQueue.cancelJob(jobId)).rejects.toThrow('synthetic storage failure');
+    } finally {
+      atomicWriteSpy.mockImplementation(realWrite);
+      releaseFinish();
+    }
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'canceled');
+  });
+
+  it('aborts a stalled finish at its deadline and holds the lane until browser cleanup settles', async () => {
+    let releaseCleanup;
+    let aborted = false;
+    const cleanup = new Promise(resolve => { releaseCleanup = resolve; });
+    stubs.generateImage.mockImplementation(async () => ({}));
+    stubs.finishVisualProfile.mockImplementation(({ signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => {
+        aborted = true;
+        void cleanup.then(() => reject(signal.reason));
+      }, { once: true });
+    }));
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'local', prompt: 'First', visualProfile: { version: 1 } } });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    const next = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'local', prompt: 'Next' } });
+    vi.useFakeTimers();
+    try {
+      imageGenEvents.emit('completed', { generationId: first.jobId, filename: 'original.png' });
+      await vi.waitFor(() => expect(stubs.finishVisualProfile).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(mediaJobQueue.VISUAL_PROFILE_FINISH_TIMEOUT_MS);
+      expect(aborted).toBe(true);
+      expect(mediaJobQueue.getJob(first.jobId).status).toBe('running');
+      expect(mediaJobQueue.getJob(first.jobId).params.visualProfileSource.filename).toBe('original.png');
+      expect(mediaJobQueue.getJob(next.jobId).status).toBe('queued');
+      expect(stubs.generateImage).toHaveBeenCalledTimes(1);
+      releaseCleanup();
+      await vi.waitFor(() => expect(mediaJobQueue.getJob(first.jobId).status).toBe('failed'));
+      expect(mediaJobQueue.getJob(first.jobId)).toMatchObject({
+        result: { filename: 'original.png' }, error: expect.stringContaining('exceeded its 3-minute deadline'),
+      });
+      await vi.waitFor(() => expect(stubs.generateImage).toHaveBeenCalledTimes(2));
+      imageGenEvents.emit('completed', { generationId: next.jobId, filename: 'next.png' });
+    } finally {
+      releaseCleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it('retains maintenance ownership when the finish browser cleanup is unverified', async () => {
+    stubs.generateImage.mockImplementation(async () => ({}));
+    stubs.finishVisualProfile.mockImplementation(async ({ onCleanupFailure }) => {
+      onCleanupFailure();
+      throw new Error('Owned browser cleanup did not settle');
+    });
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'local', prompt: 'First', visualProfile: { version: 1 } } });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'original.png' });
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'failed');
+    await waitFor(() => maintenance.status().blockers.some(blocker => blocker.resource === jobId && blocker.unsettled));
+    expect(mediaJobQueue.getJob(jobId).result.filename).toBe('original.png');
+  });
+
+  it('retries a failed local finish from its durable source without another image provider call', async () => {
+    stubs.generateImageCodex.mockImplementation(async () => ({}));
+    stubs.finishVisualProfile.mockRejectedValueOnce(new Error('Browser unavailable')).mockImplementation(async ({ result }) => result);
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'Example', visualProfile: { version: 1 } } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'example-source.png' });
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'failed');
+    const failed = mediaJobQueue.getJob(jobId);
+    expect(failed.error).toContain('original image retained');
+    const retry = await mediaJobQueue.enqueueJob({ kind: 'image', params: failed.params });
+    await waitFor(() => mediaJobQueue.getJob(retry.jobId).status === 'completed');
+    expect(stubs.generateImageCodex).toHaveBeenCalledTimes(1);
+    expect(mediaJobQueue.getJob(retry.jobId).result.filename).toBe('example-source.png');
+  });
+
+  it('finishes a settled remote source locally without acquiring or retaining a peer reservation', async () => {
+    stubs.finishVisualProfile.mockImplementation(async ({ result }) => result);
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: {
+      remoteMedia: remoteImageMediaParams(), visualProfile: { version: 1 }, visualProfileSource: { filename: 'settled-source.png' },
+    } });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+    expect(mediaJobQueue.getJob(job.jobId).params.remotePeerReservation).not.toBe(true);
+    expect(stubs.finishVisualProfile).toHaveBeenCalledTimes(1);
+    expect(stubs.generateImageCodex).not.toHaveBeenCalled();
   });
 
   it('worker drains a queued video job and marks it completed on the gen completed event', async () => {

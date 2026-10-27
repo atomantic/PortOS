@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isAgentHandoff, isQueuedContinuation, agentHandoffReason, resolveTaskOutcome } from './agentOutcome.js';
+import { isAgentHandoff, isQueuedContinuation, agentHandoffReason, isTaskDeliveryComplete, resolveTaskOutcome } from './agentOutcome.js';
 
 // The record `resumeAgent` retires when Relaunch swaps providers mid-run: it
 // carries `success: false` and a summary in `error`, because the pause/requeue
@@ -118,5 +118,24 @@ describe('resolveTaskOutcome', () => {
     expect(resolveTaskOutcome({
       reported, success: true, validationPassed: false, noCommitDeclared: true,
     })).toEqual({ status: 'incomplete', reason: 'Delivery checks did not pass.' });
+  });
+});
+
+describe('isTaskDeliveryComplete', () => {
+  it('withholds delivery completion when release synchronization is unverified', () => {
+    const agent = {
+      result: { success: true, validationPassed: true, taskOutcome: { status: 'completed', reason: 'Everything delivered.' } },
+      metadata: { releaseSynchronization: { status: 'running', identity: 'a'.repeat(64) } },
+    };
+    expect(isTaskDeliveryComplete(agent)).toBe(false);
+
+    agent.metadata.releaseSynchronization.status = 'blocked';
+    expect(isTaskDeliveryComplete(agent)).toBe(false);
+
+    agent.metadata.releaseSynchronization.status = 'pending';
+    expect(isTaskDeliveryComplete(agent)).toBe(false);
+
+    agent.metadata.releaseSynchronization.status = 'verified';
+    expect(isTaskDeliveryComplete(agent)).toBe(true);
   });
 });

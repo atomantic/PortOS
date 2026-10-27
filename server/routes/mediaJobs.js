@@ -8,6 +8,9 @@ import { a2vLoraStageStrengthsSchema } from '../lib/videoLoraStageValidation.js'
 
 import { Router } from 'express';
 import { z } from 'zod';
+import { universeVisualProfileSchema } from '../lib/universeVisualProfileValidation.js';
+import { normalizeUniverseVisualProfile } from '../lib/universeVisualProfile.js';
+import { imageVisualProfileRevision } from '../services/imageGen/visualProfile.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { listJobs, listQueueJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJob, removeArchivedJob, runJobNow, listVideoHolds, resumeVideoHold, JOB_KINDS, JOB_STATUSES, MEDIA_QUEUE_SHUTTING_DOWN } from '../services/mediaJobQueue/index.js';
@@ -253,6 +256,8 @@ const emptyToUndef = (s) => {
 // so the sentinel can't collide with a legitimate level.
 const EFFORT_CLEAR_SENTINEL = 'default';
 const RETRY_OVERRIDE_SCHEMA = z.object({
+  visualProfile: universeVisualProfileSchema.optional(),
+  visualProfileSource: z.never().optional(),
   prompt: z.string().trim().min(1).max(8000).optional(),
   negativePrompt: z.string().trim().max(8000).optional(),
   model: z.string().max(200).optional().transform(emptyToUndef),
@@ -345,18 +350,18 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
       { status: 409, code: 'JOB_REMOTE_OUTCOME_UNCERTAIN' },
     );
   }
-  // Reject retry when the original job referenced a multipart-staged upload —
-  // the gen modules unlink those files on completion/failure, so re-enqueueing
-  // would either fail with a missing-file error or, worse, act on a stale path
-  // that's since been reused by a different upload.
-  if (hasTempUploadParam(job.params)) {
-    throw new ServerError(
-      'Job referenced an uploaded file that has since been cleaned up — re-submit the original request with the file attached instead of retrying',
-      { status: 409, code: 'JOB_RETRY_TEMP_UPLOAD' },
-    );
-  }
   const body = validateRequest(retryBodySchema, req.body ?? {});
   const rawOverrides = body.params ?? {};
+  if (Object.hasOwn(rawOverrides, 'visualProfileSource')) throw new ServerError('A saved finish source cannot be supplied by a retry request', { status: 400, code: 'VALIDATION_ERROR' });
+  if (Object.hasOwn(rawOverrides, 'visualProfile')) {
+    const profile = validateRequest(universeVisualProfileSchema, rawOverrides.visualProfile);
+    const next = normalizeUniverseVisualProfile(profile);
+    const previous = normalizeUniverseVisualProfile(job.params?.visualProfile);
+    if (JSON.stringify(next.generation) !== JSON.stringify(previous?.generation)) {
+      throw new ServerError('Photography direction changed. Submit a new image generation request; this retry preserves the saved source.', { status: 409, code: 'VISUAL_PROFILE_GENERATION_CHANGED' });
+    }
+    rawOverrides.visualProfile = next;
+  }
   // A `effort: 'default'` override is a clear-to-default signal, not a value to
   // merge — handled by deleting params.effort below so the render falls back to
   // the shipped CODEX_IMAGEGEN_DEFAULT_EFFORT. Exclude it from the merge set.
@@ -371,6 +376,8 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     ),
   );
   const params = { ...job.params, ...overrides };
+  if (params.visualProfile) params.visualProfileRevision = imageVisualProfileRevision(params.visualProfile);
+  if (Object.entries(overrides).some(([key, value]) => key !== 'visualProfile' && JSON.stringify(value) !== JSON.stringify(job.params?.[key]))) delete params.visualProfileSource;
   const priorSegments = job.kind === 'video' && !isRemoteMediaJob(job)
     ? videoSegmentReplayReceiptSchema.safeParse({ parentJobId: job.id, segments: job.videoExecutions })
     : null;
@@ -410,7 +417,20 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
   // Reset Codex effort to the shipped default: dropping the key lets codex.js's
   // fallback (CODEX_IMAGEGEN_DEFAULT_EFFORT) take over, which a merged sentinel
   // string could not do (it would fail the CODEX_EFFORT_LEVELS validation).
-  if (clearEffort) delete params.effort;
+  if (clearEffort) {
+    if (params.effort !== undefined) delete params.visualProfileSource;
+    delete params.effort;
+  }
+  // Reject retry when the original job referenced a multipart-staged upload —
+  // the gen modules unlink those files on completion/failure, so re-enqueueing
+  // would either fail with a missing-file error or, worse, act on a stale path
+  // that's since been reused by a different upload.
+  if (!params.visualProfileSource && hasTempUploadParam(job.params)) {
+    throw new ServerError(
+      'Job referenced an uploaded file that has since been cleaned up — re-submit the original request with the file attached instead of retrying',
+      { status: 409, code: 'JOB_RETRY_TEMP_UPLOAD' },
+    );
+  }
   // enqueueJob re-normalizes any job carrying a `remoteMedia` marker, so a
   // merged prompt/model override (which never reached the peer anyway — the
   // remote executor renders from `remoteMedia.request`) cannot restore a

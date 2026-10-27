@@ -131,6 +131,10 @@ describe('resolveModelRates', () => {
     expect(resolveModelRates('codex', 'gpt-6-sol').cacheReadPer1M).toBe(0.2);
   });
 
+  it('dates the GPT-6.1 Terra reference rates to their model-specific verification', () => {
+    expect(pricingAsOfForModel('gpt-6.1-terra')).toBe('2026-10-27');
+  });
+
   it('prices GPT-6 Astra at standard rates with derived cache tiers', () => {
     expect(resolveModelRates('codex', 'gpt-6-astra')).toMatchObject({
       rateModel: 'gpt-6-astra',

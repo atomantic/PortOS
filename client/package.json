@@ -14,7 +14,7 @@
     "lint": "biome lint --error-on-warnings src",
     "preview": "vite preview --configLoader runner",
     "test": "vitest run --configLoader runner",
-    "test:ci": "vitest run --bail=1 --silent=passed-only --reporter=default --reporter=github-actions --configLoader runner",
+    "test:ci": "node ../scripts/run-vitest-ci.js run --silent=passed-only --reporter=default --reporter=github-actions --configLoader runner",
     "test:watch": "vitest --configLoader runner"
   },
   "dependencies": {

@@ -2,6 +2,7 @@ import { auditWorkflow, newAuditMetadata, isLegacyDeepAudit } from '../lib/audit
 import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORGE_MAINTENANCE_REASON } from '../lib/forgeMaintenanceTasks.js';
 import { getSkipReason } from './cosTaskClaim.js';
 import { isDeepStrictEqual } from 'node:util';
+import { RELEASE_SYNC_FROZEN_METADATA_KEYS } from '../lib/releaseSynchronization.js';
 /**
  * CoS Task Store Module
  *
@@ -37,7 +38,7 @@ import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
 import { applyTaskListSave, countCompletedTasks, deleteStoredTask, getCompletedTaskIds, getStoredTask, loadTaskWorkingSet, pageCompletedTasks, readTaskListVersion } from './cosTaskRepository.js';
-import { planListSave, selectWorkingSet } from '../lib/cosTaskRows.js';
+import { planListSave, selectWorkingSet, storedForm } from '../lib/cosTaskRows.js';
 import { buildQueuedTask } from './cosTaskIntake.js';
 import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, classifyRecheckOutcome, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
 import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
@@ -511,10 +512,21 @@ export async function addTask(taskData, taskType = 'user', options = {}) {
   }
 }
 
-async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false }) {
+async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false, idempotencyKey = null }) {
   validateRequest(cosTaskTypeSchema, taskType);
   if (!raw && taskData.metadata) taskData = { ...taskData, metadata: newAuditMetadata(taskData.metadata) };
   return withStateLock(async () => {
+  // Durable dispatchers replay the same row, including old completed history.
+  // Ordinary clock-generated tasks retain uniqueTaskId's suffix behavior.
+  if (idempotencyKey !== null) {
+    if (!raw || !taskData.id || typeof idempotencyKey !== 'string' || !idempotencyKey) throw new Error('Idempotent task dispatch requires a raw task id and nonempty key');
+    const stored = await getStoredTask(taskData.id, taskType);
+    if (stored) {
+      if (stored.task.metadata?.idempotencyKey !== idempotencyKey) throw new Error('Idempotent task id belongs to a different dispatch');
+      return { ...stored.task, duplicate: true };
+    }
+    taskData = { ...taskData, metadata: { ...taskData.metadata, idempotencyKey } };
+  }
   const tasks = await readTaskFile(taskType);
 
   // One state lock covers BOTH queues: manual and autonomous producers
@@ -821,6 +833,14 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   }
 
   const current = tasks[taskIndex];
+  // These fields bind an immutable publication dispatch. Ordinary edits,
+  // retries and stale completion patches cannot revoke its durable owner.
+  if (current.metadata?.releaseSynchronization && updates.metadata) {
+    const nextMetadata = storedForm({ ...current, metadata: { ...current.metadata, ...updates.metadata } }, taskType).metadata;
+    if (RELEASE_SYNC_FROZEN_METADATA_KEYS.some(key => !isDeepStrictEqual(current.metadata[key], nextMetadata[key]))) {
+      return { error: 'Release synchronization dispatch ownership is immutable' };
+    }
+  }
   if (expectedTask && Object.entries(expectedTask).some(([key, value]) => !isDeepStrictEqual(current[key], value))) {
     return { statusChanged: true, task: current };
   }
@@ -867,12 +887,23 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   const previousStatus = tasks[taskIndex].status;
   const transition = resolveTaskStatusTransition(previousStatus, updates.status);
 
+  const dependencyWait = current.metadata?.investigationDependencyWait;
+  const dependencyReady = updates.metadata?.investigationDependencyWait;
+  const dependencyRelease = preserveRetryBudget && expectedStatus === 'blocked' && expectedTask && recoveryOwner
+    && current.metadata?.blockedCategory === 'internal-dependency' && updates.status === 'pending'
+    && dependencyWait?.version === 1 && dependencyWait.phase === 'waiting' && dependencyReady?.phase === 'ready'
+    && dependencyWait.sourceAgentId === recoveryOwner.id && dependencyWait.sourceStartedAt === recoveryOwner.startedAt
+    && ['sourceAgentId', 'sourceStartedAt', 'ownerAgentId', 'ownerStartedAt', 'ownerTaskId', 'instanceId', 'repoPath', 'prUrl']
+      .every(key => dependencyWait[key] === dependencyReady[key])
+    && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(dependencyReady.proof?.head || '')
+    && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(dependencyReady.proof?.mergeCommit || '');
+
   // Retire the metadata this transition releases. Ordered — see the table's note on
   // the `blockedCategory` clear feeding the resume-pointer check below.
   for (const [field, keys] of TRANSITION_METADATA_CLEARS) {
     if (!transition[field]) continue;
     for (const key of keys) {
-      if (runtimeRelease && ['failureCount', 'lastErrorCategory', 'lastFailureAt'].includes(key)) continue;
+      if ((runtimeRelease || dependencyRelease) && ['failureCount', 'lastErrorCategory', 'lastFailureAt'].includes(key)) continue;
       delete updatedMetadata[key];
     }
   }
@@ -1110,6 +1141,8 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() }
 export async function deleteTask(taskId, taskType = 'user') {
   validateRequest(cosTaskTypeSchema, taskType);
   return withStateLock(async () => {
+    const stored = await getStoredTask(taskId, taskType);
+    if (stored?.task.metadata?.releaseSynchronization) return { error: 'Release synchronization owns a durable publication obligation; retain its task history' };
     // One row delete, whether the task is in the working set or old history. It
     // bumps the queue version, which is what makes the next read reload.
     if (await deleteStoredTask(taskId, taskType) === 0) return { error: 'Task not found' };

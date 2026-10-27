@@ -571,7 +571,7 @@ export default function UniverseBuilder() {
               </button>
               {selectedId === 'universe-reality' && (confirmStarter ? (
                 <InlineConfirmRow
-                  question="Replace starter idea, logline, premise, style notes and positive/negative style with the latest shipped text? Characters, places, objects and images are kept."
+                  question="Replace starter idea, logline, premise, style notes, positive/negative style and visual profile with the latest shipped starter? Characters, places, objects and images are kept."
                   confirmText="Restore starter"
                   tone="warning"
                   autoFocus

@@ -29,8 +29,9 @@ describe('cos-runner spawn — Windows CLI shim resolve+wrap (#2243)', () => {
       /const\s*\{\s*command:\s*spawnCommand,\s*args:\s*finalSpawnArgs\s*\}\s*=\s*prepareCliSpawn\(\s*command,\s*deliveredArgs,\s*childEnv\s*\)/
     );
     expect(call, 'agent spawn must call prepareCliSpawn(command, deliveredArgs, childEnv)').not.toBeNull();
-    // The resolved pair must be what spawn() actually receives.
-    expect(RUNNER_SRC).toMatch(/spawn\(\s*spawnCommand,\s*finalSpawnArgs,/);
+    // The Windows Job wrapper receives the resolved CLI, then owns its spawn.
+    expect(RUNNER_SRC).toContain('prepareWindowsAgentLaunch(agentId, spawnCommand, finalSpawnArgs, { cwd, env: childEnv })');
+    expect(RUNNER_SRC).toMatch(/spawn\(launch.command,\s*launch.args,/);
   });
 
   it('resolves the command against the child env (childEnv) so a provider PATH override is honored', () => {
@@ -133,7 +134,7 @@ describe('cos-runner durable TUI ownership (#3202)', () => {
     const resolveIdx = RUNNER_SRC.indexOf('const executable = findCommandOnPath(command, { env: childEnv, cwd });');
     const prepareProbeIdx = RUNNER_SRC.indexOf("const versionProbe = prepareCliSpawn(executable, ['--version'], childEnv);");
     const probeIdx = RUNNER_SRC.indexOf('const runnable = await commandExists(versionProbe.command, versionProbe.args, {');
-    const spawnIdx = RUNNER_SRC.indexOf('pty.spawn(ptyCommand, ptyArgs');
+    const spawnIdx = RUNNER_SRC.indexOf('pty.spawn(tuiLaunch.command, tuiLaunch.args');
     expect(resolveIdx, 'runner must resolve the command against childEnv').toBeGreaterThan(childEnvIdx);
     expect(prepareProbeIdx, 'runner must prepare a Windows-safe version probe').toBeGreaterThan(resolveIdx);
     expect(probeIdx, 'runner must capability-check the prepared command').toBeGreaterThan(prepareProbeIdx);
@@ -162,7 +163,8 @@ describe('cos-runner durable TUI ownership (#3202)', () => {
   it('spawns the PTY through the shared Windows-safe CLI wrapper', () => {
     expect(RUNNER_SRC).toMatch(/app\.post\('\/spawn-tui'/);
     expect(RUNNER_SRC).toMatch(/prepareCliSpawn\(executable, args, childEnv\)/);
-    expect(RUNNER_SRC).toMatch(/pty\.spawn\(ptyCommand,\s*ptyArgs/);
+    expect(RUNNER_SRC).toContain('prepareWindowsAgentLaunch(agentId, ptyCommand, ptyArgs, { cwd, env: childEnv, pty: true })');
+    expect(RUNNER_SRC).toMatch(/pty\.spawn\(tuiLaunch.command,\s*tuiLaunch.args/);
     expect(RUNNER_SRC).toMatch(/io\.emit\('tui:output'/);
     expect(RUNNER_SRC).toMatch(/parseSentinelPayload\(validatedContents\)/);
     expect(RUNNER_SRC).toMatch(/emitToServer\('agent:completed'/);

@@ -173,7 +173,15 @@ function resolveReviewForge(reviewForgeCli, { prUrl = '', prNumber = '', prOwner
     // `gh pr edit --add-reviewer` wants the bare login, so the `@` is dropped.
     requestReviewersText: (usernames) => (glab
       ? `request ${usernames.map(u => `\`@${u}\``).join(', ')} as MR reviewer${usernames.length > 1 ? 's' : ''} using the GitLab project UI or API, then inspect \`glab mr view ${mrRef}\` for their review and address any findings; their approval gates the merge.`
-      : `request ${usernames.map(u => `\`@${u}\``).join(', ')} as PR reviewer${usernames.length > 1 ? 's' : ''} (\`gh pr edit ${prRef} --add-reviewer <user>\`, drop the \`@\`), then wait for their review (poll every 5–15s) and address any findings; their approval gates the merge.`),
+      : [
+        `Before requesting ${usernames.map(u => `\`@${u}\``).join(', ')}, read the live PR author and compare logins case-insensitively. An author match is a reviewer configuration fault: record an optional reviewer as unavailable, or leave the PR blocked for a required reviewer; never wait for that reviewer or substitute another.`,
+        'For each eligible reviewer, capture the current PR head and read back pending requested reviewers and completed reviews from GitHub, including the complete paginated review history with reviewer logins, review IDs, states and reviewed commits. If this baseline cannot be read, report the reviewer as unverified and apply optional/required semantics; do not request or wait on unverifiable history.',
+        'Reuse a non-dismissed completed review only when its reviewed commit is the current head or a verified comparison shows no material change to the PR changes it reviewed. Compare the PR changes, not base-only commits: base movement alone does not require a new review. If applicability cannot be established, do not claim the prior review covers the current changes.',
+        'Address findings from applicable reviews. For a required reviewer, only an applicable APPROVED review with no later undismissed CHANGES_REQUESTED from that reviewer satisfies the approval gate. A COMMENTED or CHANGES_REQUESTED review supplies findings but not approval: after addressing them, request a fresh review if no request is pending. For an optional reviewer, an applicable completed review can be used after addressing its findings; do not invent an approval requirement.',
+        `If a request is already pending, wait for it. Otherwise, when a review is still needed, snapshot the review IDs before requesting (\`gh pr edit ${prRef} --add-reviewer <user>\`, drop the \`@\`), then read back pending requested reviewers and completed reviews again.`,
+        'A pending request for that reviewer or a newly completed, non-dismissed review from that reviewer whose ID was absent from the snapshot and whose reviewed commit covers the current material changes verifies the request. An older review merely appearing in readback does not verify a fresh request. If neither is present, treat the request as failed, not as a pending review; apply optional/required semantics and do not wait for an impossible approval. If readback fails, report the request as unverified and apply optional/required semantics.',
+        'After a pending request, wait for its completed review (poll every 5–15s), check its applicability to the current material changes, and address findings; required approval gates the merge.',
+      ].join(' ')),
   };
 }
 
@@ -755,7 +763,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const prUrl = metadata.reviewLoopPRUrl || '';
   const prBranch = metadata.reviewLoopPRBranch || '';
   const completedTargetNote = !inline && !localOnly && !leaveOpen
-    ? '\n**Already merged on entry:** Verify the assigned PR/MR state before reviewing. If it is MERGED, this follow-up is a successful `no-action-needed` result: skip reviews, fixes, validation and publication. Preserve local corrections and name their existing follow-up issue; do not reopen this task for separate delivery or unavailable retirement inventory. Request safe reconciliation for retained checkouts, then write the completion sentinel.\n'
+    ? '\n**Already merged on entry:** Verify the assigned PR/MR state before reviewing. If it is MERGED, this follow-up is a successful `no-action-needed` result: skip reviews, fixes, validation and publication for that already-merged target. Before completing, follow the unnecessary dispatch investigation contract; a separate bounded repair still uses its normal delivery gates. Preserve local corrections and name their existing follow-up issue; do not reopen this task for separate delivery or unavailable retirement inventory. Request safe reconciliation for retained checkouts, then write the completion sentinel.\n'
     : '';
   const forkNote = completedTargetNote + buildForkBranchInstructions(prBranch, metadata.forkHead)
     + buildDefaultBranchHeadInstructions(prBranch, isTruthyMeta(metadata.headIsDefaultBranch));

@@ -22,36 +22,16 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
-async function delivered({ rebased = false, changed = false } = {}) {
-  const branch = 'feature/delivered';
-  await git('checkout', '-b', branch);
-  await writeFile(join(repo, 'feature.txt'), 'delivered feature\n');
-  await git('add', '.'); await git('commit', '-m', 'feature');
+async function historicalRow() {
   const head = await git('rev-parse', 'HEAD');
-  await git('checkout', 'main');
-  if (rebased) {
-    await writeFile(join(repo, 'unrelated.txt'), 'new base\n');
-    await git('add', '.'); await git('commit', '-m', 'advance base');
-    await git('checkout', '-b', 'feature/reviewed');
-    await writeFile(join(repo, 'feature.txt'), changed ? 'different work\n' : 'delivered feature\n');
-    await git('add', '.'); await git('commit', '-m', 'reviewed delivery');
-    await git('checkout', 'main');
-  }
-  const prHead = await git('rev-parse', rebased ? 'feature/reviewed' : branch);
-  await git('merge', '--squash', rebased ? 'feature/reviewed' : branch);
-  await git('commit', '-m', 'merged reviewed feature');
-  const mergeCommit = await git('rev-parse', 'HEAD');
-  await git('update-ref', '-d', `refs/heads/${branch}`, head);
-  if (rebased) await git('update-ref', '-d', 'refs/heads/feature/reviewed', prHead);
-  return { row: { path: join(root, 'old-checkout'), branch, head, reason: 'retirement-provenance-unverified',
-    createdAt: '2026-01-02T00:00:00.000Z' }, forge: { publishedBranch: branch, prHead, mergeCommit,
-    prUrl: 'https://github.com/example/project/pull/42' } };
+  return { row: { path: join(root, 'old-checkout'), branch: 'feature/absent', head,
+    reason: 'retirement-provenance-unverified', createdAt: '2026-01-02T00:00:00.000Z' }, mainHead: head };
 }
 
 describe('legacy retirement transition at the persisted reconciliation boundary', () => {
-  it.each(['squash', 'rebased', 'changed-patch', 'active-owner', 'human-handoff', 'foreign-owner', 'live-checkout', 'new-incident'])(
-    'reconciles historical delivery without asserting unrecorded removal: %s', async scenario => {
-      const { row, forge } = await delivered({ rebased: ['rebased', 'changed-patch'].includes(scenario), changed: scenario === 'changed-patch' });
+  it.each(['absent-history', 'active-owner', 'human-handoff', 'foreign-owner', 'live-checkout', 'unknown-ref', 'new-incident'])(
+    'reconciles local absence without asserting delivery or removal: %s', async scenario => {
+      const { row, mainHead } = await historicalRow();
       const outcome = { status: 'incomplete', retirementObligations: [row], remaining: [row], retired: [] };
       if (scenario !== 'new-incident') markLegacyRetirements(outcome);
       const owners = scenario === 'active-owner' ? [{ id: 'current-owner', status: 'running', metadata: { claimBranches: [row.branch] } }] : [];
@@ -63,14 +43,15 @@ describe('legacy retirement transition at the persisted reconciliation boundary'
         await mkdir(other); await execGit(['init'], other);
         owners.push({ id: 'foreign-owner', status: 'running', metadata: { sourceWorkspace: other, claimBranches: [row.branch] } });
       }
+      if (scenario === 'unknown-ref') row.branch = '../invalid-ref';
       if (scenario === 'live-checkout') { await mkdir(row.path); await writeFile(join(row.path, 'unfinished.txt'), 'new owner work\n'); }
-      const input = { repoPath: repo, outcome, agents: owners, trees: [], defaultHead: forge.mergeCommit };
-      const plans = await _planLegacyRetirementReconciliation(input, { readMergedDelivery: async () => forge });
-      const expected = ['squash', 'rebased', 'foreign-owner'].includes(scenario);
+      const input = { repoPath: repo, outcome, agents: owners, trees: [] };
+      const plans = await _planLegacyRetirementReconciliation(input);
+      const expected = ['absent-history', 'foreign-owner'].includes(scenario);
       expect(plans).toHaveLength(expected ? 1 : 0);
       if (!expected) return;
       expect(plans[0].removalVerified).toBe(false);
-      expect(plans[0].evidence.kind).toBe(scenario === 'rebased' ? 'merged-patch-equivalence' : 'reviewed-merged-continuation');
+      expect(plans[0].evidence).toEqual({ kind: 'current-local-absence', deliveryVerified: false, preservationVerified: false });
       const path = join(root, 'outcome.json');
       await save(path, applyLegacyRetirementResolutions(outcome, plans, '2026-01-03T00:00:00.000Z'));
       const restarted = JSON.parse(await readFile(path, 'utf8'));
@@ -79,34 +60,60 @@ describe('legacy retirement transition at the persisted reconciliation boundary'
       expect(restarted.retired).toEqual([]); // No manufactured service receipt.
       expect(restarted.legacyRetirementTransition.resolutions[0].observation).toEqual(row);
       expect(await _planLegacyRetirementReconciliation({ ...input, outcome: restarted })).toEqual([]);
-      expect(await git('rev-parse', 'main')).toBe(forge.mergeCommit);
+      expect(await git('rev-parse', 'main')).toBe(mainHead);
     });
 
   it('uses a unique real receipt to identify a malformed late row, retaining audit history', async () => {
-    const { row, forge } = await delivered();
+    const { row } = await historicalRow();
     const malformed = { branch: row.branch, head: row.branch, reason: row.reason, createdAt: row.createdAt };
     const receipt = { ...row, checkoutIdentity: 'a'.repeat(64), branchDeleted: true, archiveDir: null, retiredAt: '2026-01-01T00:00:00.000Z' };
     const outcome = { retirementObligations: [malformed], remaining: [malformed], retired: [receipt] };
     markLegacyRetirements(outcome);
-    const plans = await _planLegacyRetirementReconciliation({ repoPath: repo, outcome, agents: [], trees: [], defaultHead: forge.mergeCommit });
+    const plans = await _planLegacyRetirementReconciliation({ repoPath: repo, outcome, agents: [], trees: [] });
     expect(plans).toHaveLength(1);
-    expect(plans[0]).toMatchObject({ removalVerified: true, evidence: { kind: 'existing-service-receipt', receipt } });
+    expect(plans[0]).toMatchObject({ removalVerified: false, evidence: { kind: 'current-local-absence', preservationVerified: false } });
     // A newer reviewed head retired the same physical checkout after this
     // observation. Old intermediate heads are not separate lost checkouts.
     const intermediate = { ...row, head: 'c'.repeat(40), checkoutIdentity: receipt.checkoutIdentity,
       createdAt: '2025-12-31T00:00:00.000Z' };
     const progressed = { retirementObligations: [intermediate], remaining: [intermediate], retired: [receipt] };
     markLegacyRetirements(progressed);
-    expect(await _planLegacyRetirementReconciliation({ repoPath: repo, outcome: progressed, agents: [], trees: [], defaultHead: forge.mergeCommit }))
-      .toMatchObject([{ removalVerified: true, target: { head: receipt.head }, observation: intermediate }]);
+    expect(await _planLegacyRetirementReconciliation({ repoPath: repo, outcome: progressed, agents: [], trees: [] }))
+      .toMatchObject([{ removalVerified: false, observation: intermediate }]);
     const changed = { ...malformed, checkoutIdentity: 'b'.repeat(64) };
     const different = { retirementObligations: [changed], remaining: [changed], retired: [receipt] };
     markLegacyRetirements(different);
-    expect(await _planLegacyRetirementReconciliation({ repoPath: repo, outcome: different, agents: [], trees: [], defaultHead: forge.mergeCommit })).toEqual([]);
+    expect(await _planLegacyRetirementReconciliation({ repoPath: repo, outcome: different, agents: [], trees: [] }))
+      .toMatchObject([{ removalVerified: false, evidence: { kind: 'current-local-absence', preservationVerified: false } }]);
+  });
+
+  it('settles an absent ref after the migration but preserves recreated refs and unique checkout files', async () => {
+    const branch = 'feature/released';
+    const row = { branch, reason: 'retirement-provenance-unverified', createdAt: '2026-01-03T00:00:00.000Z' };
+    const outcome = { remaining: [row], retirementObligations: [row],
+      legacyRetirementTransition: { version: 1, observations: [], resolutions: [] } };
+    const input = { repoPath: repo, outcome, agents: [], trees: [] };
+    const plan = await _planLegacyRetirementReconciliation(input);
+    const saved = applyLegacyRetirementResolutions(outcome, plan, '2026-01-04T00:00:00.000Z');
+    expect(saved.remaining).toEqual([]);
+    expect(saved.retirementObligations).toEqual([]);
+    expect(saved.retired).toBeUndefined();
+    expect(saved.legacyRetirementTransition.resolutions).toMatchObject([
+      { observation: row, removalVerified: false, evidence: { deliveryVerified: false, preservationVerified: false } },
+    ]);
+    expect(await _planLegacyRetirementReconciliation({ ...input, outcome: JSON.parse(JSON.stringify(saved)) })).toEqual([]);
+    await git('branch', branch);
+    expect(await _planLegacyRetirementReconciliation(input)).toEqual([]);
+    await git('branch', '-d', branch);
+    const path = join(root, 'unique-work');
+    await mkdir(path); await writeFile(join(path, 'unique.txt'), 'keep me');
+    const held = { ...row, path };
+    expect(await _planLegacyRetirementReconciliation({ ...input, outcome: { ...outcome, remaining: [held], retirementObligations: [held] } })).toEqual([]);
+    expect(await readFile(join(path, 'unique.txt'), 'utf8')).toBe('keep me');
   });
 
   it('migration freezes only existing records, survives replay, and changes no task policy or worktree', async () => {
-    const { row } = await delivered();
+    const { row } = await historicalRow();
     const path = join(root, 'data/cos/task-schedule.json');
     await mkdir(join(root, 'data/cos'), { recursive: true });
     const schedule = { tasks: { 'claim-issue': { enabled: true, failureCount: 3 } }, executions: {
