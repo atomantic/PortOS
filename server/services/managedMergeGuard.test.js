@@ -63,7 +63,7 @@ const fakeCommands = String.raw`
         printf '%s\n' "$*" >> "$MUTATIONS"
         case "$*" in *--match-head-commit\ "$CI_VERIFIED_HEAD"*) ;; *) return 99 ;; esac
         case "$SCENARIO" in
-          unknown-ack|unreadable-after) return 1 ;;
+          unknown-ack|unreadable-after|provider-policy-denied) return 1 ;;
           queued) return 0 ;;
           lost-ack-merged) printf MERGED > "$PR_STATE"; return 1 ;;
           *) printf MERGED > "$PR_STATE" ;;
@@ -97,20 +97,20 @@ function runMerge(scenario, key = 'claim-issue', { registered = true, token = tr
 // Windows is covered by renderer guards; this execution contract requires bash,
 // matching managedMergePreservation.test.js's platform boundary.
 describe.skipIf(process.platform === 'win32')('generated claim merge mutation guard (#12273)', () => {
-  it.each(['plan-task', 'plan-task-claim', 'claim-issue'])('checks real rendered admission before a pinned %s merge', (key) => {
+  it.each(['plan-task', 'plan-task-claim', 'claim-issue'])('uses provider-enforced policy for a pinned %s merge', (key) => {
     const result = runMerge('success', key);
     expect(result.status, result.stderr).toBe(0);
     expect(result.mutations).toEqual([`pr merge https://github.com/example/base/pull/42 --merge --match-head-commit ${result.head}`]);
-    expect(result.events.slice(-5)).toEqual(['checks', 'admission', 'read', 'merge', 'read']);
+    expect(result.events.slice(-3)).toEqual(['read', 'merge', 'read']);
   });
 
-  it.each(['unreadable-before', 'malformed-state', 'changed-head', 'changed-after-admission', 'failed-checks', 'stale-admission', 'malformed-admission', 'transport-admission', 'unknown-capability'])('refuses %s before any mutation', (scenario) => {
+  it.each(['unreadable-before', 'malformed-state', 'changed-head', 'unknown-capability'])('refuses %s before any mutation', (scenario) => {
     const result = runMerge(scenario);
     expect(result.status).not.toBe(0);
     expect(result.mutations).toEqual([]);
   });
 
-  it.each(['unreadable-after', 'unknown-ack', 'queued'])('never falls back after %s', (scenario) => {
+  it.each(['unreadable-after', 'unknown-ack', 'queued', 'provider-policy-denied'])('never falls back after %s', (scenario) => {
     const result = runMerge(scenario);
     expect(result.status).not.toBe(0);
     expect(result.mutations).toHaveLength(1);
@@ -129,13 +129,19 @@ describe.skipIf(process.platform === 'win32')('generated claim merge mutation gu
     expect(result.mutations).toHaveLength(1);
     expect(result.mutations[0]).toContain('--squash --match-head-commit');
     expect(result.events.filter(event => event.startsWith('capability'))).toHaveLength(2);
-    expect(result.events.slice(-5)).toEqual(['checks', 'admission', 'read', 'merge', 'read']);
+    expect(result.events.slice(-3)).toEqual(['read', 'merge', 'read']);
   });
 
-  it.each([{ registered: false }, { token: false }])('preserves a claim with missing admission context %j', (context) => {
+  it.each([{ registered: false }, { token: false }])('does not require a PortOS certificate for an authorized provider merge %j', (context) => {
     const result = runMerge('success', 'claim-issue', context);
-    expect(result.status).not.toBe(0);
-    expect(result.mutations).toEqual([]);
-    if (context.registered === false) expect(result.completion).toContain('requires a registered parent agent ID');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.mutations).toHaveLength(1);
+    expect(result.events).not.toContain('admission');
+  });
+
+  it('lets the provider decide whether an optional check blocks merging', () => {
+    const result = runMerge('failed-checks');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.events).not.toContain('checks');
   });
 });

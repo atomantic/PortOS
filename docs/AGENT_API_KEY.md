@@ -57,6 +57,8 @@ curl -sS "$(jq -r .url ~/.portos/agent-key.json)/api/cos/tasks" \
 
 ## Outside-agent merge admission
 
+This is a legacy optional coordination API, not a second merge-eligibility gate. GitHub/GitLab repository rules and confirmed merged state are authoritative. New delivery workflows use the assigned repository and authorized forge account directly; they do not need this API, a local merge certificate, or another configuration switch. Clients that still call it retain the caller, target, and token checks described below. Local checkout ownership/content checks remain required for cleanup.
+
 An outside terminal agent uses `POST /api/cos/merge-admission/external`; it does
 not create a CoS agent record or borrow another run's `agentId`. The existing
 operator boundary applies: a verified session (including the agent key) when
