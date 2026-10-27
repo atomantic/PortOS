@@ -259,6 +259,23 @@ describe('MediaLightbox Escape cascade', () => {
     delete HTMLMediaElement.prototype.play;
   });
 
+  it('rates the item good or bad beside the star, and a tap on the active rating clears it', () => {
+    const onAnnotationChange = vi.fn();
+    const { rerender } = render(<MediaLightbox item={imageItem} onClose={() => {}} annotation={{}} onAnnotationChange={onAnnotationChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Bad' }));
+    expect(onAnnotationChange).toHaveBeenLastCalledWith({ rating: 'bad' });
+    rerender(<MediaLightbox item={imageItem} onClose={() => {}} annotation={{ rating: 'bad' }} onAnnotationChange={onAnnotationChange} />);
+    expect(screen.getByRole('button', { name: 'Bad' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Bad' }));
+    expect(onAnnotationChange).toHaveBeenLastCalledWith({ rating: null });
+    // A page with its own rating store takes the slot instead.
+    const onRate = vi.fn();
+    rerender(<MediaLightbox item={imageItem} onClose={() => {}} annotation={{ rating: 'bad' }} onAnnotationChange={onAnnotationChange} ratingControl={{ value: 'good', onRate }} />);
+    expect(screen.getByRole('button', { name: 'Good' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Bad' }));
+    expect(onRate).toHaveBeenCalledWith('bad');
+  });
+
   it('closes the lightbox when Escape is pressed with nothing else open', () => {
     const onClose = vi.fn();
     render(<MediaLightbox item={imageItem} onClose={onClose} />);

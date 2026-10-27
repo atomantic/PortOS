@@ -35,15 +35,15 @@ function RatingButtons({ media, busy, onRate, className = 'grid grid-cols-3 gap-
   );
 }
 
-// The reference's own controls inside the standard media viewer: rate it, make
-// it a render guide, make it the primary image, or remove it from this record
-// (the image itself stays in Media History).
-function PreviewActions({ media: m, busy, isGuide, guideFull, guideBlocked, onRate, onGuide, onSetPortrait, onDetach }) {
+// The reference's own controls inside the standard media viewer (its rating
+// takes the viewer's good/bad slot): make it a render guide, make it the
+// primary image, or remove it from this record (the image itself stays in
+// Media History).
+function PreviewActions({ media: m, busy, isGuide, guideFull, guideBlocked, onGuide, onSetPortrait, onDetach }) {
   const [arming, setArming] = useState(false);
   const btn = 'flex min-h-11 items-center justify-center gap-1.5 rounded border px-2 text-xs disabled:opacity-40';
   return (
-    <div className="space-y-1.5">
-      <RatingButtons media={m} busy={busy} onRate={onRate} />
+    <div>
       <div className="grid grid-cols-3 gap-1.5">
         <button type="button" disabled={busy || guideBlocked || (!isGuide && guideFull)} aria-pressed={isGuide} onClick={onGuide}
           title={!isGuide && guideFull ? `At most ${MAX_CAST_GUIDES} render guides` : 'Use as a render guide'}
@@ -121,7 +121,6 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
       const isGuide = m.library?.guide === true && !rejected.has(m.mediaKey);
       // The rated or removed image may leave the filtered list, so step on to a neighbor.
       return <PreviewActions key={key} media={m} busy={!!busyKey} isGuide={isGuide} guideFull={guideCount >= MAX_CAST_GUIDES} guideBlocked={rejected.has(m.mediaKey)}
-        onRate={async (status) => { if (await save(m, rateReview(m, status))) goTo(nextKey ?? prevKey); }}
         onGuide={() => save(m, { guide: !isGuide })}
         onSetPortrait={onSetPortrait}
         onDetach={onDetach ? async () => {
@@ -129,6 +128,20 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
           // A visual attached as both primary and reference leaves the record entirely.
           for (const a of groups.get(`image:${key}`) || [m]) await onDetach(a.mediaKey, a.kind);
         } : undefined} />;
+    },
+    rating: (key, { nextKey, prevKey, goTo }) => {
+      const m = tilesByKey.get(key);
+      if (!m || readOnly || m.readOnly) return null;
+      const status = m.library?.review?.status;
+      return {
+        value: ['good', 'bad'].includes(status) ? status : null,
+        busy: !!busyKey,
+        title: { good: 'Good reference', bad: 'Bad: kept out of render guides' },
+        // A rating can drop the image from the filtered list, so step on to a neighbor.
+        onRate: async (next) => {
+          if (await save(m, rateReview(m, next || status || 'unreviewed'))) goTo(nextKey ?? prevKey);
+        },
+      };
     },
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [sequenceKeys.join('|'), media, busyKey, readOnly, onSetPortrait, onDetach]);

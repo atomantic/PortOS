@@ -17,6 +17,7 @@ import MediaHistoryGrid from '../components/media/MediaHistoryGrid';
 import MediaPreview from '../components/media/MediaPreview';
 import VideoUpscaleDrawer from '../components/media/VideoUpscaleDrawer';
 import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
+import RatingFilterChips from '../components/media/RatingFilterChips';
 import { normalizeImage, normalizeMediaRow, normalizeVideo } from '../components/media/normalize';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
@@ -50,6 +51,7 @@ export default function MediaHistory() {
   const stitchJobsRef = useRef(new Set());
   const mounted = useMounted();
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [ratingFilter, setRatingFilter] = useState(null);
   const { annotations, updateAnnotation: saveAnnotation, getCardProps } = useMediaAnnotations();
   const [annotationSaves, setAnnotationSaves] = useState(0);
   const updateAnnotation = useCallback(async (...args) => {
@@ -57,12 +59,12 @@ export default function MediaHistory() {
     return saveAnnotation(...args).finally(() => setAnnotationSaves(n => n - 1));
   }, [saveAnnotation]);
   const toggleStar = useCallback(item => item?.key && updateAnnotation(item.key, { starred: !annotations[item.key]?.starred }), [annotations, updateAnnotation]);
-  const annotationRevision = favoritesOnly ? JSON.stringify(Object.entries(annotations).map(([key, value]) => [key, value.starred, value.updatedAt]).sort()) : '';
+  const annotationRevision = favoritesOnly || ratingFilter ? JSON.stringify(Object.entries(annotations).map(([key, value]) => [key, value.starred, value.rating, value.updatedAt]).sort()) : '';
   // Visible rows only, as compact cards (#8292): the full record — prompt,
   // negative prompt, settings — is read when a card is opened or handed to a
   // generator, never for the whole page. Search and counts stay server-side
   // over the full metadata.
-  const page = useGalleryPage({ kind: filter, q: query, starred: favoritesOnly, summary: true, hidden: false, compact: true }, { media: true, preserveLoadedOnRefresh: true, revision: annotationRevision, paused: favoritesOnly && annotationSaves > 0 });
+  const page = useGalleryPage({ kind: filter, q: query, starred: favoritesOnly, rating: ratingFilter || undefined, summary: true, hidden: false, compact: true }, { media: true, preserveLoadedOnRefresh: true, revision: annotationRevision, paused: (favoritesOnly || !!ratingFilter) && annotationSaves > 0 });
   const { loading, counts, refresh } = page;
   const items = useMemo(() => page.items.map(normalizeMediaRow), [page.items]);
   const setItems = useCallback(updater => page.setItems(previous => {
@@ -222,6 +224,7 @@ export default function MediaHistory() {
             </button>
           ))}
           <FavoritesFilterChip active={favoritesOnly} onToggle={() => setFavoritesOnly((v) => !v)} size="md" />
+          <RatingFilterChips value={ratingFilter} onChange={setRatingFilter} />
         </div>
         <div className="flex items-center gap-1">
           <Link to="/media/image" className="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-300 hover:text-white border border-port-border rounded hover:bg-port-border/50">
@@ -255,7 +258,7 @@ export default function MediaHistory() {
       </div>
 
       <MediaBatchImport onImported={item => {
-        if ((filter === 'all' || filter === item.kind) && !query && !favoritesOnly) {
+        if ((filter === 'all' || filter === item.kind) && !query && !favoritesOnly && !ratingFilter) {
           page.setItems(previous => [item, ...previous.filter(row => !(row.kind === item.kind && row.data.filename === item.data.filename))]);
         }
         refresh();
