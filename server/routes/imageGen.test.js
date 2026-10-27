@@ -41,7 +41,7 @@ import * as regen from '../services/imageGen/regen.js';
 import * as mediaSketches from '../services/mediaSketches.js';
 import { writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join as pathJoin } from 'path';
+import { basename, join as pathJoin } from 'path';
 
 const attachNodeImage = vi.hoisted(() => vi.fn(async () => ({})));
 const getLoom = vi.hoisted(() => vi.fn(async () => null));
@@ -429,7 +429,7 @@ describe('Image Gen Routes', () => {
       expect(preview.body.sentPrompt).toBe(sent.sentPrompt);
       expect(preview.body.sentNegativePrompt).toBe(sent.sentNegativePrompt);
       expect(preview.body.promptAdditions).toEqual(sent.promptAdditions);
-      expect(preview.body.referenceImages.map(item => item.filename)).toEqual([...(params.initImagePath ? [params.initImagePath] : []), ...params.referenceImagePaths].map(path => path.split('/').at(-1)));
+      expect(preview.body.referenceImages.map(item => item.filename)).toEqual([...(params.initImagePath ? [params.initImagePath] : []), ...params.referenceImagePaths].map(path => basename(path)));
       expect(params.authoredPrompt).toBe(body.prompt);
       expect(params.visualProfile ?? null).toEqual(expectedProfile);
       for (const field of ['lighting', 'optics', 'materials']) {
