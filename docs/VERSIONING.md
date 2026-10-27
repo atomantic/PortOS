@@ -224,6 +224,12 @@ the endpoint persists a publication-keyed outbox and registers exactly one
 successful response confirms that durable task ownership; the publishing
 coordinator then stops doing synchronization and may complete without waiting
 for another agent slot. Every terminal agent write repeats the ownership check.
+This is execution/publication completion, not end-to-end release completion.
+The registered continuation is eligible without a separate `release-sync`
+schedule; it remains subject to the normal owner, instance, pause, capacity and
+budget controls. While synchronization or cleanup is unfinished, another
+`do-release` preparation for that app waits on the existing continuation rather
+than selecting a version from a development branch that still has the old version.
 On a registration failure, retain the original receipt, branch/head/PR and
 checkout evidence and retry the same handoff; do not create another task or
 publish again. Interrupted handoffs resume through ordinary delivery recovery.
@@ -242,10 +248,10 @@ It records pending, running, blocked or verified synchronization separately from
 original publication timestamp and link. Transport failures retain successful
 revision-bound proof and durable retry times; conflicting owners remain blocked.
 
-Verification inspects the exact same-repository synchronization PR/head, its merged
-development ancestry (including the candidate head and published promotion),
-completed pre-PR local-review lifecycle, exact-head hosted approvals and checks
-green at merge, and server admission history or a coordinator merge receipt. The
+Verification inspects the exact same-repository synchronization PR/head and its
+merged development ancestry (including the candidate head and published promotion).
+GitHub's confirmed merge establishes delivery under its repository rules; PortOS
+does not recertify local review, CI timestamps or merge admission. The
 retirement service retains the continuation's private local-review receipt before
 removing its checkout; retirement refuses an uncollected receipt. Legacy or missing
 review evidence is a blocker, never a synthesized clean review. The historical

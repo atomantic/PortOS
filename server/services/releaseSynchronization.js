@@ -9,6 +9,7 @@ import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { RELEASE_SYNC_POLICY_KEYS, RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
+import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { storedForm } from '../lib/cosTaskRows.js';
 import { cosEvents } from './cosEvents.js';
 
@@ -41,6 +42,26 @@ async function readOutbox() {
     || entry.task.metadata.releaseSynchronization.identity !== key
     || (entry.synchronization?.status === 'verified' && RELEASE_SYNC_OBLIGATIONS.some(name => entry.obligations[name].status !== 'verified')))) refuse('Release synchronization outbox is unreadable');
   return parsed.data;
+}
+
+/** Continuations belong to an already authorized publication, not the schedule
+ * that generates new releases. Keep the existing immutable task binding, and
+ * serialize a subsequent release behind unfinished synchronization for its app.
+ */
+export async function releaseTaskDispatchDisposition(task) {
+  const type = currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType);
+  if (!['release-sync', 'do-release'].includes(type)) return null;
+  const outbox = await readOutbox();
+  if (type === 'do-release') {
+    return Object.values(outbox.publications).some(entry => entry.task.metadata.app === task.metadata?.app
+      && entry.synchronization?.status !== 'verified') ? 'wait-for-synchronization' : null;
+  }
+  const entry = outbox.publications[task.metadata?.releaseSynchronization?.identity];
+  if (!entry?.registeredAt || task.id !== entry.task.id) return null;
+  const expected = { ...entry.task.metadata,
+    idempotencyKey: createHash('sha256').update(JSON.stringify([entry.identity, entry.owner])).digest('hex') };
+  return RELEASE_SYNC_FROZEN_METADATA_KEYS.every(key => isDeepStrictEqual(task.metadata?.[key], expected[key]))
+    ? 'registered-continuation' : null;
 }
 
 // Never copy arbitrary agent/task metadata (credentials, old prompts, claims or

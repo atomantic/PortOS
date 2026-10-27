@@ -257,8 +257,9 @@ const AUTO_APPROVED_GATES = Object.freeze([
   {
     name: 'disabled-analysis-type',
     rejects: (task, hooks) => hooks.extraSkip(task),
-    onReject: async (task) => {
-      emitLog('info', `System task skipped — task type '${analysisTypeForTask(task)}' is disabled`, { taskId: task.id });
+    onReject: async (task, { detail }) => {
+      emitLog('info', typeof detail === 'string' ? `System task deferred — ${detail}`
+        : `System task skipped — task type '${analysisTypeForTask(task)}' is disabled`, { taskId: task.id });
     },
   },
   {
@@ -553,8 +554,14 @@ export async function resolveAutonomyBudget(state, runningAgentEntries) {
 // current schedule key, or they would read as disabled and never drain.
 const analysisTypeForTask = (task) => currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType);
 
-function isDisabledAnalysisType(task, taskSchedule) {
+async function isDisabledAnalysisType(task, taskSchedule) {
   const analysisType = analysisTypeForTask(task);
+  if (['release-sync', 'do-release'].includes(analysisType)) {
+    const { releaseTaskDispatchDisposition } = await import('./releaseSynchronization.js');
+    const disposition = await releaseTaskDispatchDisposition(task);
+    if (disposition === 'registered-continuation') return false;
+    if (disposition === 'wait-for-synchronization') return 'previous release is published; development synchronization and cleanup are unfinished';
+  }
   // The shared drain contract always supplies a schedule. If that contract is
   // ever violated, fail closed for scheduled analysis work without aborting the
   // rest of the evaluation cycle.
@@ -2584,6 +2591,14 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
 
   // Also protect requests queued before the target-scope gate was installed.
   if (requiresInstallWideTarget(taskType)) return skipped('install-wide-target');
+  // Cron and explicit on-demand preparation bypass Priority 2. They must join
+  // the same unfinished release instead of choosing a version from stale main.
+  if (currentTaskTypeName(taskType) === 'do-release') {
+    const { releaseTaskDispatchDisposition } = await import('./releaseSynchronization.js');
+    if (await releaseTaskDispatchDisposition({ metadata: { analysisType: 'do-release', app: app.id } })
+      === 'wait-for-synchronization') return skipped('release-synchronization', {
+      reason: 'The previous release is published but its development synchronization and cleanup are unfinished. Resume its existing continuation before preparing another release.' });
+  }
 
   // NOTE: `updateAppActivity` + the "Generating improvement task" log are
   // intentionally deferred until AFTER every gate returns non-null (see end
