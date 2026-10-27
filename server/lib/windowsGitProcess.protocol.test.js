@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { access, rm } from 'node:fs/promises';
+import { access, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./childProcess.js', () => ({ spawn: vi.fn() }));
@@ -81,9 +82,11 @@ describe.skipIf(process.platform !== 'win32')('Windows Git broker failure contai
     if (mode === 'git-lookup') findCommandOnPath.mockReturnValue(null);
     const cwd = '/synthetic-startup';
     const failure = await execGit(['status', 'synthetic-private-argument'], cwd).catch(error => error);
+    const progress = mode.startsWith('compiler-')
+      ? { compilerStage: 'unobserved', compilerElapsedMs: expect.any(Number) } : {};
     expect(failure).toBeInstanceOf(Error);
-    expect(failure).toMatchObject({ code: 'GIT_CONTAINMENT_UNAVAILABLE', ...metadata });
-    expect(Object.keys(failure).sort()).toEqual(['code', ...Object.keys(metadata)].sort());
+    expect(failure).toMatchObject({ code: 'GIT_CONTAINMENT_UNAVAILABLE', ...metadata, ...progress });
+    expect(Object.keys(failure).sort()).toEqual(['code', ...Object.keys(metadata), ...Object.keys(progress)].sort());
     expect(`${failure.message} ${JSON.stringify(failure)}`).not.toMatch(/synthetic|private|credentials|argv/);
     expect(requests).toEqual([]);
     expect(() => assertGitWorkSettled(cwd)).not.toThrow();
@@ -105,6 +108,48 @@ describe.skipIf(process.platform !== 'win32')('Windows Git broker failure contai
       });
       await expect(access(process[key].directory)).resolves.toBeUndefined();
     } else await globalThis.__portosGitSupervisorCleanup();
+  });
+
+  it.each(['add-type-start', 'add-type-complete'])('retains the observed %s phase through the public timeout boundary', async stage => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    startupFailure = 'compiler-timeout';
+    const outcome = execGit(['status'], '/synthetic-compiler-progress').catch(error => error);
+    await vi.waitFor(() => expect(compiler).not.toBeNull());
+    await writeFile(join(process[key].directory, 'compiler-progress.json'), JSON.stringify({
+      stage, elapsedMs: 73, startedAt: Date.now(),
+    }));
+    await vi.advanceTimersByTimeAsync(15000);
+    const failure = await outcome;
+    expect(failure).toMatchObject({ code: 'GIT_CONTAINMENT_UNAVAILABLE', startupPhase: 'compiler-timeout',
+      compilerStage: stage, compilerScriptMs: 73, compilerScriptStartMs: expect.any(Number), compilerElapsedMs: expect.any(Number) });
+    expect(Object.keys(failure).sort()).toEqual(['code', 'startupPhase', 'compilerStage', 'compilerScriptMs', 'compilerScriptStartMs', 'compilerElapsedMs'].sort());
+    expect(requests).toEqual([]);
+    await expect(globalThis.__portosGitSupervisorCleanup()).rejects.toMatchObject({
+      code: 'GIT_SETTLEMENT_HELD', settlementReasons: ['compiler-unconfirmed'],
+    });
+    await expect(access(process[key].directory)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    '{"stage":"synthetic-private-incomplete',
+    JSON.stringify({ stage: 'synthetic-private-stage', elapsedMs: 3, startedAt: 0 }),
+    'synthetic-private-output'.repeat(20),
+  ])('keeps an incomplete or invalid compiler receipt inconclusive and private', async receipt => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    startupFailure = 'compiler-timeout';
+    const outcome = execGit(['status'], '/synthetic-compiler-invalid-progress').catch(error => error);
+    await vi.waitFor(() => expect(compiler).not.toBeNull());
+    await writeFile(join(process[key].directory, 'compiler-progress.json'), receipt);
+    await vi.advanceTimersByTimeAsync(15000);
+    const failure = await outcome;
+    expect(failure).toMatchObject({ code: 'GIT_CONTAINMENT_UNAVAILABLE', startupPhase: 'compiler-timeout',
+      compilerStage: 'unconfirmed-progress', compilerElapsedMs: expect.any(Number) });
+    expect(Object.keys(failure).sort()).toEqual(['code', 'startupPhase', 'compilerStage', 'compilerElapsedMs'].sort());
+    expect(`${failure.message} ${JSON.stringify(failure)}`).not.toMatch(/synthetic|private|startedAt/);
+    expect(requests).toEqual([]);
+    await expect(globalThis.__portosGitSupervisorCleanup()).rejects.toMatchObject({
+      code: 'GIT_SETTLEMENT_HELD', settlementReasons: ['compiler-unconfirmed'],
+    });
   });
 
   it('distinguishes a settled native launch refusal from startup loss without retaining an obligation', async () => {

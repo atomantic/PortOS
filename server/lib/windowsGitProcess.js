@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { randomUUID } from 'node:crypto';
@@ -11,6 +11,9 @@ const compilerKey = Symbol.for('portos.windowsGitSupervisor');
 const startupPhases = new Set(['startup', 'compiler-setup', 'compiler-spawn', 'compiler-exit', 'compiler-timeout',
   'git-lookup', 'broker-spawn', 'broker-readiness', 'broker-exit', 'broker-transport', 'broker-protocol', 'native-launch']);
 const spawnErrorCodes = new Set(['ENOENT', 'EACCES', 'EPERM', 'EMFILE', 'ENFILE', 'ENOMEM', 'EAGAIN']);
+const compilerStages = ['powershell-ready', 'add-type-start', 'add-type-complete'];
+const compilerStageValues = new Set(['unobserved', 'unconfirmed-progress', ...compilerStages]);
+const boundedMilliseconds = value => Number.isInteger(value) && value >= 0 && value <= 120000;
 
 /** Only fixed categories and bounded numeric results may leave the startup boundary. */
 export function windowsGitFailureMetadata(error) {
@@ -23,7 +26,44 @@ export function windowsGitFailureMetadata(error) {
   if (['compiler-spawn', 'broker-spawn'].includes(error.startupPhase) && spawnErrorCodes.has(error.spawnErrorCode)) {
     result.spawnErrorCode = error.spawnErrorCode;
   }
+  if (error.startupPhase.startsWith('compiler-') && compilerStageValues.has(error.compilerStage)) {
+    result.compilerStage = error.compilerStage;
+    for (const field of ['compilerElapsedMs', 'compilerScriptStartMs', 'compilerScriptMs']) {
+      if (boundedMilliseconds(error[field])) result[field] = error[field];
+    }
+  }
   return result;
+}
+
+// One bounded receipt in the existing private compiler directory. Reading it
+// only on failure leaves stdio and launch ordering intact. A missing or partial
+// write is inconclusive; raw compiler text and absolute times never escape.
+function compilerProgress(directory) {
+  const file = join(directory, 'compiler-progress.json');
+  const started = performance.now();
+  const wallStarted = Date.now();
+  return {
+    file,
+    metadata() {
+      const result = { compilerStage: 'unobserved', compilerElapsedMs: Math.round(performance.now() - started) };
+      let bytes;
+      try { bytes = readFileSync(file); }
+      catch { return result; }
+      result.compilerStage = 'unconfirmed-progress';
+      if (bytes.length > 256) return result;
+      try {
+        const frame = JSON.parse(bytes.toString('utf8'));
+        if (Object.keys(frame).length !== 3 || !compilerStages.includes(frame.stage)
+          || !boundedMilliseconds(frame.elapsedMs) || !Number.isSafeInteger(frame.startedAt)) return result;
+        result.compilerStage = frame.stage;
+        result.compilerScriptMs = frame.elapsedMs;
+        const scriptStartMs = frame.startedAt - wallStarted;
+        // Wall-clock movement makes this interval inconclusive, not zero.
+        if (boundedMilliseconds(scriptStartMs)) result.compilerScriptStartMs = scriptStartMs;
+      } catch { /* a partial receipt is not a confirmed compiler phase */ }
+      return result;
+    },
+  };
 }
 
 // One private compiler result per Node process, including module reloads. Never
@@ -43,23 +83,25 @@ function supervisor() {
       await writeFile(source, await readFile(new URL('./windowsGitSupervisor.cs', import.meta.url)));
       const { windowsPowerShell51Path, findCommandOnPath } = await import('./processEnv.js');
       const quote = value => `'${value.replaceAll("'", "''")}'`;
-      const script = `$ErrorActionPreference='Stop'; Add-Type -Path ${quote(source)} -ReferencedAssemblies System.Web.Extensions -OutputAssembly ${quote(executable)} -OutputType ConsoleApplication`;
+      const progress = compilerProgress(directory);
+      const phase = stage => `try { [IO.File]::WriteAllText(${quote(progress.file)}, ('{"stage":"${stage}","elapsedMs":' + $portosCompilerClock.ElapsedMilliseconds + ',"startedAt":' + $portosCompilerStarted + '}')); } catch {};`;
+      const script = `$ErrorActionPreference='Stop'; try { $portosCompilerStarted=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); $portosCompilerClock=[Diagnostics.Stopwatch]::StartNew(); } catch {}; ${phase('powershell-ready')} ${phase('add-type-start')} Add-Type -Path ${quote(source)} -ReferencedAssemblies System.Web.Extensions -OutputAssembly ${quote(executable)} -OutputType ConsoleApplication; ${phase('add-type-complete')}`;
       await new Promise((resolve, reject) => {
         let compiler;
         try {
           compiler = spawn(windowsPowerShell51Path(),
             ['-NoProfile', '-NonInteractive', '-Command', script], { cwd: directory, stdio: 'ignore' });
-        } catch (error) { reject(unavailable('compiler-spawn', { spawnErrorCode: error.code })); return; }
+        } catch (error) { reject(unavailable('compiler-spawn', { spawnErrorCode: error.code, ...progress.metadata() })); return; }
         const timer = setTimeout(() => {
           // Killing PowerShell is not proof its compiler descendants released
           // the private inputs. Keep that resource obligation through teardown.
           state.held = true;
           state.holdReasons.add('compiler-unconfirmed');
           try { compiler.kill(); } catch { /* report unavailable without launching Git */ }
-          reject(unavailable('compiler-timeout'));
+          reject(unavailable('compiler-timeout', progress.metadata()));
         }, 15000);
-        compiler.once('error', error => { clearTimeout(timer); reject(unavailable('compiler-spawn', { spawnErrorCode: error.code })); });
-        compiler.once('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(unavailable('compiler-exit', { compilerExitCode: code })); });
+        compiler.once('error', error => { clearTimeout(timer); reject(unavailable('compiler-spawn', { spawnErrorCode: error.code, ...progress.metadata() })); });
+        compiler.once('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(unavailable('compiler-exit', { compilerExitCode: code, ...progress.metadata() })); });
       });
       return { directory, executable, state, findCommandOnPath };
     })().catch(error => { throw unavailable(error?.startupPhase ?? 'compiler-setup', error); });
