@@ -25,10 +25,13 @@ vi.mock('./branchCompletionPolicy.js', async () => ({
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { AsyncLocalStorage, AsyncResource } from 'node:async_hooks';
+import { currentGitMutationLifetime, withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 
 vi.mock('./agentWorktreeCleanup.js', () => ({ releaseRetryHold: vi.fn(async () => ({})) }));
-vi.mock('./releaseSynchronization.js', () => ({ recoverReleaseSynchronizationHandoffs: vi.fn(async () => {}) }));
-import { recoverReleaseSynchronizationHandoffs } from './releaseSynchronization.js';
+vi.mock('./releaseSynchronization.js', () => ({ recoverReleaseSynchronizationHandoffs: vi.fn(async () => {}),
+  verifyReleaseSynchronizationTask: vi.fn(async () => ({ status: 'verified' })) }));
+import { recoverReleaseSynchronizationHandoffs, verifyReleaseSynchronizationTask } from './releaseSynchronization.js';
 vi.mock('./repoCleanupRecovery.js', () => ({ inspectOrQueueCompletedReview: vi.fn(async () => ({ disposition: 'held', reason: 'delivery-ci-or-review-pending' })) }));
 vi.mock('./repoCleanupObservation.js', async original => ({ ...await original(), readCheckoutPathPresence: vi.fn(async () => false), readLocalBranchPresence: vi.fn(async () => false) }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: vi.fn(async () => ({ host: 'github.com', fullName: 'example/repo', isGithub: true })) }));
@@ -160,6 +163,30 @@ const observeCompletedTask = async task => {
   try { return await events.listeners('tasks:changed')[0]({ task }); }
   finally { unbind(); }
 };
+
+it('verifies a finished release outside the closed spawn Git lifetime while preserving caller context', async () => {
+  const caller = new AsyncLocalStorage();
+  const agent = { id: 'release-finished', taskId: 'release-sync-task', status: 'completed',
+    metadata: { taskAnalysisType: 'release-sync' }, result: { success: true } };
+  getAgentRecord.mockResolvedValue(agent);
+  verifyReleaseSynchronizationTask.mockImplementationOnce(async id => {
+    expect(id).toBe(agent.taskId);
+    expect(currentGitMutationLifetime()).toBeUndefined();
+    expect(caller.getStore()).toEqual({ operator: 'existing-caller' });
+    return { status: 'verified' };
+  });
+  await caller.run({ operator: 'existing-caller' }, async () => {
+    let afterExit, span;
+    await withGitMutationLifetime(async () => {
+      span = currentGitMutationLifetime();
+      afterExit = AsyncResource.bind(() => resumeAgentCompletionRetirement(agent.id));
+    });
+    expect(span.closed).toBe(true);
+    await afterExit();
+    expect(span.closed).toBe(true);
+  });
+  expect(verifyReleaseSynchronizationTask).toHaveBeenCalledOnce();
+});
 
 const run = (overrides = {}) => verifyAgentRepoState({
   agentId: 'agent-1',
