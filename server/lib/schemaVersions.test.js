@@ -27,7 +27,7 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // These are additive + version-gated so an older peer
     // cannot strip-then-LWW them.
     // v15 adds an optional place `greybox` layout; additive + version-gated.
-    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(16);
+    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(17);
   });
 
   it('declares pipeline collection layout versions', () => {
@@ -100,15 +100,15 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
 describe('buildPortosMeta', () => {
   it('rejects repair, timing, narrative event, lyric warning, title/ending/subject/tool metadata panel links and lyric visibility on older music-video peers', async () => {
     const meta = await buildPortosMeta();
-    expect(meta.schemaVersions.musicVideoProjects).toBe(27);
+    expect(meta.schemaVersions.musicVideoProjects).toBe(28);
     // Older builds re-normalize the newer fields away; the gate must stop that peer receiving them.
-    for (const receiverV of [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]) {
+    for (const receiverV of [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]) {
       expect(compareSchemaVersions(meta.schemaVersions, { ...meta.schemaVersions, musicVideoProjects: receiverV }).ahead)
-        .toContainEqual({ category: 'musicVideoProjects', senderV: 27, receiverV });
+        .toContainEqual({ category: 'musicVideoProjects', senderV: 28, receiverV });
     }
     const olderPeer = { ...meta.schemaVersions, musicVideoProjects: 24 };
     expect(scopeVersionDiff(compareSchemaVersions(meta.schemaVersions, olderPeer), RECORD_KIND_SCHEMA_CATEGORIES.musicVideoProject))
-      .toMatchObject({ compatible: false, ahead: [{ category: 'musicVideoProjects', senderV: 27, receiverV: 24 }] });
+      .toMatchObject({ compatible: false, ahead: [{ category: 'musicVideoProjects', senderV: 28, receiverV: 24 }] });
   });
 
   it('advertises lyric provenance to pause track transfers to caption-only peers', async () => {
@@ -129,14 +129,14 @@ describe('buildPortosMeta', () => {
   it('returns { portosVersion, schemaVersions } with the live registry', async () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
-    expect(meta.schemaVersions.universes).toBe(16);
+    expect(meta.schemaVersions.universes).toBe(17);
     expect(meta.schemaVersions.pipelineIssues).toBe(4);
     expect(meta.schemaVersions.pipelineSeries).toBe(14);
   });
 
   it('overrides merge into schemaVersions', async () => {
     const meta = await buildPortosMeta({ schemaVersions: { future: 1 } });
-    expect(meta.schemaVersions.universes).toBe(16);
+    expect(meta.schemaVersions.universes).toBe(17);
     expect(meta.schemaVersions.future).toBe(1);
   });
 });

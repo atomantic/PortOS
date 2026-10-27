@@ -93,10 +93,10 @@ describe('ShotFinalRender', () => {
     fireEvent.pointerUp(strength);
     const look = onChange.mock.calls[0][0].filmLook;
     // VHS at a fifth: effects scale down, the shaping values stay.
-    expect(look).toMatchObject({ preset: 'custom', bleed: 0.16, tapeNoise: 0.1, grainSize: 0.2, grainColor: true });
+    expect(look).toMatchObject({ preset: 'custom', bleed: 0.13, tracking: 0.06, grainSize: 0.15, grainColor: true });
     fireEvent.change(strength, { target: { value: '1' } });
     fireEvent.pointerUp(strength);
-    expect(onChange.mock.calls[1][0].filmLook).toMatchObject({ preset: 'vhs', bleed: 0.8 });
+    expect(onChange.mock.calls[1][0].filmLook).toMatchObject({ preset: 'vhs', bleed: 0.65 });
   });
 
   it('names the refusal when the cut cannot be planned, and stays away from other render styles', async () => {
