@@ -24,7 +24,7 @@ vi.mock('../media/PromptFromMedia', () => ({ PromptFromMediaModal: () => null })
 vi.mock('../pipeline/MediaJobThumb', () => ({ default: ({ onFilename }) => <button onClick={() => onFilename('refined.png')}>Complete refinement</button> }));
 const api = await import('../../services/apiCatalog');
 const { default: CatalogReferenceLibrary } = await import('./CatalogReferenceLibrary.jsx');
-const { CatalogImagePreviewProvider } = await import('./CatalogImagePreview.jsx');
+const { CatalogImagePreviewProvider } = await import('./CatalogImagePreviewProvider.jsx');
 
 const media = [
   { mediaKey: 'seven.png', kind: 'reference', library: { variant: { age: 7 }, guide: true, tags: ['vhs'] } },

@@ -1,5 +1,5 @@
 import { useId, useMemo, useState } from 'react';
-import { useCatalogPreviewSequence } from './CatalogImagePreview';
+import { useCatalogPreviewSequence } from './CatalogImagePreviewProvider';
 import { Ban, Compass, Star, ThumbsDown, ThumbsUp, Trash2 } from 'lucide-react';
 import CatalogMediaTile from './CatalogMediaTile';
 import CatalogReferenceReview from './CatalogReferenceReview';
