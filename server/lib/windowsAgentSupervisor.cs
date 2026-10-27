@@ -59,6 +59,17 @@ public static class WindowsAgentSupervisor
     [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr source, IntPtr targetProcess, out IntPtr target, uint access, bool inherit, uint options);
 
+    delegate bool ConsoleControl(uint kind);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetConsoleCtrlHandler(ConsoleControl handler, bool add);
+    static int stopRequested;
+    // Keep the delegate rooted. The child receives its own console event while
+    // the supervisor survives Ctrl+C/Break to settle the entire owned Job.
+    static readonly ConsoleControl consoleControl = kind => {
+        if (kind != 0 && kind != 1) return false;
+        Interlocked.Exchange(ref stopRequested, 1);
+        return true;
+    };
+
     static void WriteReceipt(string path, object receipt) {
         // A reader can observe either no receipt or the complete immutable proof.
         string temporary = path + ".pending";
@@ -78,6 +89,7 @@ public static class WindowsAgentSupervisor
             Require(args.Length == 1);
             var request = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(args[0]));
             string directory = Path.GetDirectoryName(args[0]);
+            if ((bool)request["pty"]) Require(SetConsoleCtrlHandler(consoleControl, true));
             job = CreateJobObject(IntPtr.Zero, null);
             Require(job != IntPtr.Zero);
             var limits = new ExtendedLimits();
@@ -123,7 +135,7 @@ public static class WindowsAgentSupervisor
                 }
                 // Cancellation addresses the retained Job handle, never a PID.
                 // The supervisor survives long enough to verify the job is empty.
-                if (!cancelling && File.Exists(Path.Combine(directory, "cancel"))) {
+                if (!cancelling && (Interlocked.CompareExchange(ref stopRequested, 0, 0) != 0 || File.Exists(Path.Combine(directory, "cancel")))) {
                     Require(TerminateJobObject(job, 1)); cancelling = true;
                 }
                 Thread.Sleep(25);

@@ -120,11 +120,11 @@ setTimeout(() => process.exit(3), 20000).unref();`);
       expect(() => process.kill(neighbor.pid, 0)).not.toThrow();
     } finally { killProcessTree(child); neighbor.kill(); await Promise.all([closed, neighborClosed]); }
   }, 30000);
-  it('preserves a ConPTY interaction and records tree settlement when the session is stopped', async () => {
+  it('preserves a ConPTY interaction and records tree settlement after Ctrl+C', async () => {
     const pty = await import('node-pty');
     await reserveWindowsAgentProcess(agent);
     const script = join(root, 'pty.cjs');
-    await writeFile(script, `process.stdout.write('EXAMPLE_READY\n'); process.stdin.on('data', () => process.stdout.write('EXAMPLE_INPUT\n')); setInterval(()=>{},1000);`);
+    await writeFile(script, String.raw`process.stdout.write('EXAMPLE_READY\n'); process.stdin.on('data', () => process.stdout.write('EXAMPLE_INPUT\n')); setInterval(()=>{},1000);`);
     const launch = prepareWindowsAgentLaunch(agent.id, process.execPath, [script], { cwd: root, env: process.env, pty: true });
     const child = watchWindowsAgentProcess(pty.spawn(launch.command, launch.args, { cwd: root, env: process.env, cols: 80, rows: 24 }), launch);
     const closed = new Promise(resolve => child.onExit(resolve));
@@ -134,9 +134,9 @@ setTimeout(() => process.exit(3), 20000).unref();`);
       await vi.waitFor(() => expect(output).toContain('EXAMPLE_READY'), { timeout: 15000 });
       child.write('example\r');
       await vi.waitFor(() => expect(output).toContain('EXAMPLE_INPUT'), { timeout: 5000 });
-      child.kill();
+      child.write('\x03');
       await closed;
-      expect(await readWindowsAgentSettlement(agent)).toMatchObject({ active: 0, exitCode: 1 });
+      expect(await readWindowsAgentSettlement(agent)).toMatchObject({ active: 0 });
     } finally { child.kill(); await closed; }
   }, 30000);
 
