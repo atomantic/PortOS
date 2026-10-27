@@ -41,7 +41,8 @@ import { createNewestWinsGuard } from '../lib/createNewestWinsGuard.js';
 const portraitGuard = createNewestWinsGuard();
 
 // Resolve the render onto the ingredient. Returns the kind attached
-// ('portrait' | 'reference'), 'duplicate' when the client already filed it,
+// ('portrait' | 'reference'), 'metadata-updated' when an existing row changes,
+// 'duplicate' when the client already filed it without a metadata change,
 // 'gone' when the target ingredient no longer exists, or throws on a real DB
 // error (caught by the factory).
 async function attachGeneratedImage({ ingredientId, kind, role, library, filename, queuedAt }) {
@@ -57,14 +58,15 @@ async function attachGeneratedImage({ ingredientId, kind, role, library, filenam
   // exact render (under any kind) — don't double-file it as a second kind.
   const existingRow = existing.find((m) => m.mediaKey === filename);
   if (existingRow) {
-    if (library && !existingRow.library?.derivedFrom) await updateMediaLibrary(ingredientId, filename, existingRow.kind, library);
+    const needsMetadata = library && !existingRow.library?.derivedFrom;
+    if (needsMetadata) await updateMediaLibrary(ingredientId, filename, existingRow.kind, library);
     // The mounted client won the optimistic attach for this render. If it
     // landed as the PORTRAIT, still record its queuedAt in the guard — otherwise
     // a later OLDER portrait render isn't seen as stale and would clobber this
     // newer one (the guard's mark normally happens on our own setPortraitMedia
     // write below, which this duplicate path skips).
     if (existingRow.kind === 'portrait') portraitGuard.mark(ingredientId, queuedAt);
-    return 'duplicate';
+    return needsMetadata ? 'metadata-updated' : 'duplicate';
   }
   const hasPortrait = existing.some((m) => m.kind === 'portrait');
   // A role-tagged render (a reference sheet, `sheet:<variant>`) is always a
@@ -112,7 +114,7 @@ const hook = createMediaJobImageHook({
     ingredientId, kind: tag.kind, role: tag.role, library: tag.library, filename, queuedAt,
   }),
   onAttached: ({ ingredientId, filename }, status) => {
-    if (status === 'portrait' || status === 'reference') {
+    if (status === 'portrait' || status === 'reference' || status === 'metadata-updated') {
       console.log(`🏷️ catalog ingredient ${ingredientId.slice(0, 8)} ← ${status} ${filename}`);
       catalogEvents.emit('primitive-changed', { ingredientId });
     }

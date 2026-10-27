@@ -13,6 +13,7 @@ const getIngredient = vi.fn(async () => ({ id: 'ing', deleted: false }));
 vi.mock('./catalogDB.js', () => ({ attachMedia, setPortraitMedia, listMediaForIngredient, getIngredient, updateMediaLibrary }));
 
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
+const { catalogEvents } = await import('./catalogEvents.js');
 const hook = await import('./catalogImageAttachHook.js');
 
 const completedImageJob = (params, filename = 'job-abc.png') => ({
@@ -76,6 +77,23 @@ describe('catalogImageAttachHook', () => {
     expect(attachMedia).toHaveBeenCalledWith('ing-refine', 'refined.png', 'reference', { role: 'refinement', library });
     expect(updateMediaLibrary).not.toHaveBeenCalled();
     expect(setPortraitMedia).not.toHaveBeenCalled();
+  });
+
+  it('notifies other views when an existing attachment gains refinement metadata', async () => {
+    const changed = vi.fn();
+    catalogEvents.on('primitive-changed', changed);
+    const library = { review: { status: 'unreviewed', feedback: 'Correct the hair' }, derivedFrom: { mediaKey: 'source.png', kind: 'reference' } };
+    listMediaForIngredient.mockResolvedValue([{ mediaKey: 'refined.png', kind: 'reference' }]);
+    mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-refine', library } }, 'refined.png'));
+    await hook.__testing.settled();
+    expect(updateMediaLibrary).toHaveBeenCalledWith('ing-refine', 'refined.png', 'reference', library);
+    expect(changed).toHaveBeenCalledOnce();
+    expect(changed).toHaveBeenCalledWith({ ingredientId: 'ing-refine' });
+    listMediaForIngredient.mockResolvedValue([{ mediaKey: 'refined.png', kind: 'reference', library }]);
+    mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-refine', library } }, 'refined.png'));
+    await hook.__testing.settled();
+    expect(changed).toHaveBeenCalledOnce();
+    catalogEvents.off('primitive-changed', changed);
   });
 
   // Uniquely catches a reference sheet taking the portrait slot of a record
