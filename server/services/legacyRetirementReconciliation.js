@@ -23,11 +23,14 @@ async function protectedOwner(agents, row, repoPath, identities) {
   };
   for (const agent of agents) {
     const m = agent.metadata || {};
-    const completion = (m.branchCompletionPolicy?.branch === row.branch ? m.branchCompletionPolicy.completion : null)
+    // Missing branch names are not an ownership match. Match the concrete
+    // branch/path before consulting that owner's optional completion policy.
+    if (!((typeof row.branch === 'string' && row.branch && branches(agent).includes(row.branch))
+      || samePath(m.workspacePath, row.path))) continue;
+    const completion = (row.branch && m.branchCompletionPolicy?.branch === row.branch ? m.branchCompletionPolicy.completion : null)
       || m.prCompletionPolicy || explicitPrCompletion({ type: m.taskType, metadata: { ...m, analysisType: m.taskAnalysisType } });
     const handoff = completion && ![PR_COMPLETIONS.REVIEW_THEN_MERGE, PR_COMPLETIONS.MERGE_ON_GREEN].includes(completion);
-    if (!(branches(agent).includes(row.branch) || samePath(m.workspacePath, row.path))
-      || !(agent.status !== 'completed' || handoff)) continue;
+    if (!(agent.status !== 'completed' || handoff)) continue;
     const source = m.sourceWorkspace || m.primaryCheckoutBaseline?.path;
     if (source && !samePath(source, repoPath)) {
       const [local, owner] = await Promise.all([identity(repoPath), identity(source)]);
