@@ -1057,7 +1057,13 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     await renderPage('/casting/cat-chr-hero/sheets');
     const references = await screen.findByRole('region', { name: 'Canonical reference images' });
     expect(within(references).getByAltText('Canonical reference 1')).toHaveAttribute('src', '/data/image-refs/canon.png');
-    expect(within(references).getByRole('link', { name: /Open canonical reference 1/ })).toHaveAttribute('href', '/data/image-refs/canon.png');
+    const enlargeBtn = within(references).getByRole('button', { name: 'Enlarge Canonical reference 1' });
+    expect(enlargeBtn).toBeInTheDocument();
+    fireEvent.click(enlargeBtn);
+    const dialog = await screen.findByRole('dialog', { name: 'Canonical reference 1' });
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close image preview' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(within(references).getByText('Will be sent to the model')).toBeInTheDocument();
     expect(within(references).getByText(/Not sent.*limit/)).toBeInTheDocument();
     expect(within(references).getByText(/Missing file/)).toBeInTheDocument();
