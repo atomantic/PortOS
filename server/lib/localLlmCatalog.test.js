@@ -218,6 +218,9 @@ describe('localLlmCatalog', () => {
       expect(ollama.find((m) => m.key === 'magistral-small-24b')?.id).toBe('magistral:24b');
       expect(ollama.find((m) => m.key === 'nemotron-3.5-lightning')?.id).toBe('nemotron-3.5-lightning:30b');
       expect(ollama.find((m) => m.key === 'nemotron-3.5-bolt')?.id).toBe('nemotron-3.5-bolt');
+      expect(ollama.find((m) => m.key === 'ministral-3-3b')?.id).toBe('ministral-3:3b');
+      expect(ollama.find((m) => m.key === 'gemma4-e2b')?.id).toBe('gemma4:e2b');
+      expect(ollama.find((m) => m.key === 'qwen3-32b')?.id).toBe('qwen3:32b');
     });
   });
 
@@ -252,6 +255,12 @@ describe('localLlmCatalog', () => {
         .toEqual({ targetId: 'lmstudio-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF', exact: true });
       expect(mapModelToBackend('ollama', 'nemotron-3.5-bolt', 'lmstudio'))
         .toEqual({ targetId: 'lmstudio-community/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'ministral-3:3b', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/Ministral-3-3B-Instruct-2512-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'gemma4:e2b', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/gemma-4-E2B-it-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'qwen3:32b', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/Qwen3-32B-GGUF', exact: true });
     });
 
     it('still maps models retired from the suggested-install catalog', () => {
