@@ -4,11 +4,14 @@
  */
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
+import { resolve } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { z } from 'zod';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { RELEASE_SYNC_POLICY_KEYS, RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
+import { RELEASE_SYNC_POLICY_KEYS, RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS,
+  effectiveReleaseSynchronization, publisherCandidateSeed } from '../lib/releaseSynchronization.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { storedForm } from '../lib/cosTaskRows.js';
 import { cosEvents } from './cosEvents.js';
@@ -54,7 +57,7 @@ export async function releaseTaskDispatchDisposition(task) {
   const outbox = await readOutbox();
   if (type === 'do-release') {
     return Object.values(outbox.publications).some(entry => entry.task.metadata.app === task.metadata?.app
-      && entry.synchronization?.status !== 'verified') ? 'wait-for-synchronization' : null;
+      && effectiveReleaseSynchronization(entry)?.status !== 'verified') ? 'wait-for-synchronization' : null;
   }
   const entry = outbox.publications[task.metadata?.releaseSynchronization?.identity];
   if (!entry?.registeredAt || task.id !== entry.task.id) return null;
@@ -72,7 +75,7 @@ export async function readReleaseSynchronizationRetention() {
   const outbox = await readOutbox();
   return Object.values(outbox.publications).map(entry => ({
     identity: entry.identity, owner: entry.owner, taskId: entry.task.id,
-    verified: entry.synchronization?.status === 'verified',
+    verified: effectiveReleaseSynchronization(entry)?.status === 'verified',
   }));
 }
 
@@ -144,7 +147,7 @@ async function registerEntry(entry) {
   entry.blocker = null;
   entry.retryAt = null;
   await saveReleaseSynchronization(entry);
-  return { taskId: saved.id, registeredAt: entry.registeredAt, synchronizationVerified: entry.synchronization?.status === 'verified' };
+  return { taskId: saved.id, registeredAt: entry.registeredAt, synchronizationVerified: effectiveReleaseSynchronization(entry)?.status === 'verified' };
 }
 
 async function retainFailure(entry, error) {
@@ -206,8 +209,8 @@ export async function recoverReleaseSynchronizationHandoffs(agents) {
       });
     }
     return Object.values(outbox.publications).filter(entry => entry.registeredAt
-      && entry.synchronization?.status !== 'verified'
-      && (!entry.synchronization?.retryAt || Date.parse(entry.synchronization.retryAt) <= Date.now()))
+      && effectiveReleaseSynchronization(entry)?.status !== 'verified'
+      && (!effectiveReleaseSynchronization(entry)?.retryAt || Date.parse(effectiveReleaseSynchronization(entry).retryAt) <= Date.now()))
       .sort((left, right) => (left.synchronization?.checkedAt || '').localeCompare(right.synchronization?.checkedAt || ''))
       .slice(0, 3).map(entry => entry.task.id);
   });
@@ -215,9 +218,11 @@ export async function recoverReleaseSynchronizationHandoffs(agents) {
 }
 
 async function verifyEntry(entry, agents) {
-  const result = agents.some(agent => agent.taskId === entry.task.id)
-    ? await (await import('./releaseSynchronizationEvidence.js')).inspectReleaseSynchronization(entry, agents)
-    : { status: 'pending', blocker: 'continuation-not-started', obligations: entry.obligations };
+  const result = !publisherCandidateSeed(entry)
+    ? { status: 'blocked', blocker: 'publisher-candidate-checkout-unverified', obligations: entry.obligations }
+    : agents.some(agent => agent.taskId === entry.task.id)
+      ? await (await import('./releaseSynchronizationEvidence.js')).inspectReleaseSynchronization(entry, agents)
+      : { status: 'pending', blocker: 'continuation-not-started', obligations: entry.obligations };
   const attempts = (entry.synchronization?.attempts || 0) + 1;
   const checkedAt = new Date().toISOString();
   entry.obligations = result.obligations;
@@ -257,8 +262,8 @@ export function verifyReleaseSynchronizationTask(taskId, { agents = null, respec
   return queue(async () => {
     const outbox = await readOutbox();
     const entry = Object.values(outbox.publications).find(value => value.task.id === taskId && value.registeredAt);
-    if (!entry || entry.synchronization?.status === 'verified') return entry?.synchronization || null;
-    if (respectRetryAt && entry.synchronization?.retryAt && Date.parse(entry.synchronization.retryAt) > Date.now()) return entry.synchronization;
+    if (!entry || effectiveReleaseSynchronization(entry)?.status === 'verified') return effectiveReleaseSynchronization(entry) || null;
+    if (respectRetryAt && effectiveReleaseSynchronization(entry)?.retryAt && Date.parse(effectiveReleaseSynchronization(entry).retryAt) > Date.now()) return effectiveReleaseSynchronization(entry);
     const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
     return verifyEntry(entry, agents || await readBranchCompletionPolicies({ repairIndex: false }));
   });
@@ -270,13 +275,24 @@ export function verifyReleaseSynchronizationTask(taskId, { agents = null, respec
 export function retainReleaseSynchronizationReview(release) {
   return queue(async () => {
     const outbox = await readOutbox();
-    const entries = Object.values(outbox.publications).filter(entry => entry.registeredAt && entry.synchronization?.status !== 'verified');
+    const entries = Object.values(outbox.publications).filter(entry => entry.registeredAt && effectiveReleaseSynchronization(entry)?.status !== 'verified');
     if (!entries.length) return true;
     const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
     const { retirementCheckoutIdentityFromPointer } = await import('../lib/retirementCheckoutObservation.js');
     const agents = await readBranchCompletionPolicies({ repairIndex: false });
     for (const entry of entries) {
-      const owns = agents.some(agent => agent.taskId === entry.task.id && agent.metadata?.checkoutSeeds?.some(seed =>
+      // Missing publisher proof means an old handoff never established which
+      // checkout generation it owned. Hold a matching candidate branch, and
+      // for older receipts without that branch hold the repository's checkouts
+      // rather than guessing ownership or deleting the unrecorded evidence.
+      const normalize = path => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
+      const [releaseRepo, ownerRepo] = release.repoPath
+        ? await Promise.all([realpath(release.repoPath).catch(() => null), realpath(entry.owner.workspace).catch(() => null)]) : [null, null];
+      const sameRepository = !releaseRepo || !ownerRepo || normalize(releaseRepo) === normalize(ownerRepo);
+      if (sameRepository && !publisherCandidateSeed(entry)
+        && (!entry.publication.candidateBranch || entry.publication.candidateBranch === release.branch)) return false;
+      const owns = agents.some(agent => (agent.taskId === entry.task.id
+        || (agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt)) && agent.metadata?.checkoutSeeds?.some(seed =>
         seed.branch === release.branch && seed.path === release.path
         && retirementCheckoutIdentityFromPointer(seed.incarnation?.pointer) === release.checkoutIdentity));
       if (!owns) continue;
@@ -286,6 +302,24 @@ export function retainReleaseSynchronizationReview(release) {
       if (review.status !== 'verified' || review.evidence?.prUrl !== retained?.prUrl
         || !retained?.checkouts?.some(row => row.branch === release.branch && row.path === release.path
           && row.head === release.head && row.checkoutIdentity === release.checkoutIdentity)) return false;
+      const publisherSeed = publisherCandidateSeed(entry);
+      if (publisherSeed && publisherSeed.branch === release.branch && publisherSeed.path === release.path
+        && retirementCheckoutIdentityFromPointer(publisherSeed.incarnation.pointer) === release.checkoutIdentity) {
+        // Capture private worktree review metadata while the exact publisher
+        // generation still exists. An absent optional review is recorded as
+        // absent; a mismatched or unreadable receipt never becomes a verdict.
+        const prUrl = `https://github.com/${entry.publication.repository}/pull/${entry.publication.promotionPrNumber}`;
+        const { localReviewLifecycle } = await import('../lib/localReviewLifecycle.js');
+        const { localReviewAttributionLabels } = await import('../lib/localReviewAttribution.js');
+        const lifecycle = await localReviewLifecycle(release.path, { base: 'release', prUrl });
+        if ((!lifecycle.reusable && !lifecycle.legacyPublished) || lifecycle.receipt?.status === 'review-blocked') return false;
+        const models = await localReviewAttributionLabels(release.path);
+        entry.obligations.retirement.evidence = { ...retained, publisherReview: {
+          branch: release.branch, path: release.path, head: release.head, checkoutIdentity: release.checkoutIdentity,
+          prUrl, receipt: lifecycle.receipt || null, models,
+        } };
+        await saveReleaseSynchronization(entry);
+      }
     }
     return true;
   });

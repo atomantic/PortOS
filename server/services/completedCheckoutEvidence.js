@@ -7,18 +7,18 @@ import { lstat, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
-import { z } from 'zod';
+import { checkoutSeedSchema } from '../lib/checkoutSeed.js';
+
+export { checkoutSeedSchema } from '../lib/checkoutSeed.js';
 
 const shortBranch = branch => branch?.replace(/^refs\/heads\//, '');
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export const hasClaimCheckoutBindings = meta => meta?.isWorktree !== true
   && (isTruthyMeta(meta?.claimPicksOwnBranch) || Array.isArray(meta?.claimBranches));
-const physicalIdentitySchema = z.object({ dev: z.string(), ino: z.string(), birthtimeNs: z.string() });
-export const checkoutSeedSchema = z.object({ version: z.literal(1), agentId: z.string(), startedAt: z.string().datetime(),
-  seededAt: z.string().datetime(), repoPath: z.string(), branch: z.string(), path: z.string(),
-  repository: physicalIdentitySchema, checkout: physicalIdentitySchema,
-  incarnation: z.object({ pointer: physicalIdentitySchema,
-    gitdir: z.object({ path: z.string(), dev: z.string(), ino: z.string(), birthtimeNs: z.string() }) }) });
+export const hasReleaseCandidateBinding = meta => meta?.isWorktree !== true && meta?.taskAnalysisType === 'do-release'
+  && meta.releaseCandidate?.version === 1 && typeof meta.releaseCandidate.branch === 'string';
+export const boundCheckoutBranches = meta => hasClaimCheckoutBindings(meta) ? meta.claimBranches
+  : hasReleaseCandidateBinding(meta) ? [meta.releaseCandidate.branch] : [meta?.worktreeBranch];
 
 const repoCommonByRepo = new Map();
 async function resolveRepoCommon(repository) {
@@ -72,7 +72,7 @@ export async function readCompletedCheckoutIdentity({ repoPath, branch, path, he
  */
 function runRepository(meta) {
   if (typeof meta?.sourceWorkspace === 'string' && meta.sourceWorkspace) return meta.sourceWorkspace;
-  return hasClaimCheckoutBindings(meta) && meta.isWorktree !== true
+  return (hasClaimCheckoutBindings(meta) || hasReleaseCandidateBinding(meta)) && meta.isWorktree !== true
     && typeof meta.workspacePath === 'string' && meta.workspacePath ? meta.workspacePath : null;
 }
 
@@ -175,7 +175,7 @@ export function sameTaskRetirementBinding(agent, successor, input) {
 export async function captureSeededCompletionCheckouts(agent, { preterminal = false, retirement = null } = {}) {
   if (preterminal && !['running', 'paused'].includes(agent.status)) return null;
   const terminalAt = preterminal ? Date.now() : Date.parse(agent.completedAt);
-  const bound = hasClaimCheckoutBindings(agent.metadata) ? agent.metadata.claimBranches : [agent.metadata?.worktreeBranch];
+  const bound = boundCheckoutBranches(agent.metadata);
   const seeds = agent.metadata?.checkoutSeeds?.filter(seed => Array.isArray(bound) && bound.includes(seed.branch));
   if (!Array.isArray(seeds) || !seeds.length) return null;
   const receipts = [];
@@ -200,7 +200,7 @@ export async function captureSeededCompletionCheckouts(agent, { preterminal = fa
       && retirement.branch === seed.branch && retirement.path === seed.path;
     if (!preterminal && ((!terminal && !reviewedCurrentHead) || (terminal && terminal.head !== head))) return null;
     const target = { repoPath: seed.repoPath, branch: seed.branch, path: seed.path, head };
-    const current = await readCompletedCheckoutIdentity(target);
+    const current = await readCompletedCheckoutIdentity({ ...target, allowLocked: hasReleaseCandidateBinding(agent.metadata) });
     if (!current || !same(current.incarnation, seed.incarnation)) return null;
     receipts.push({ version: 2, agentId: agent.id, startedAt: agent.startedAt, seededAt: seed.seededAt,
       capturedAt: new Date().toISOString(), ...current });
@@ -221,7 +221,8 @@ export async function captureCompletedCheckouts(agent, { success, strict = false
   const repoPath = runRepository(meta);
   if (!repoPath) return [];
   const claim = hasClaimCheckoutBindings(meta);
-  const branches = claim ? meta.claimBranches : meta.isWorktree === true && meta.worktreeBranch ? [meta.worktreeBranch] : null;
+  const releaseCandidate = hasReleaseCandidateBinding(meta);
+  const branches = claim || releaseCandidate ? boundCheckoutBranches(meta) : meta.isWorktree === true && meta.worktreeBranch ? [meta.worktreeBranch] : null;
   if (!Array.isArray(branches)) return [];
   const { listWorktrees } = await import('./worktreeManager.js');
   const trees = await listWorktrees(repoPath).catch(error => {
@@ -240,11 +241,11 @@ export async function captureCompletedCheckouts(agent, { success, strict = false
       if (!allowUncreated || holders.length > 1) { incomplete = true; unknown = true; }
       continue;
     }
-    if (!claim) {
+    if (!claim && !releaseCandidate) {
       const recordedPath = typeof meta.workspacePath === 'string' ? await realpath(meta.workspacePath).catch(() => null) : null;
       if (!recordedPath || await realpath(holders[0].path).catch(() => null) !== recordedPath) { incomplete = true; unknown = true; continue; }
     }
-    const target = { repoPath, branch, path: holders[0].path, head: holders[0].head, worktrees: trees };
+    const target = { repoPath, branch, path: holders[0].path, head: holders[0].head, worktrees: trees, allowLocked: releaseCandidate };
     const first = await readCompletedCheckoutIdentity(target).catch(() => null);
     if (!first) { incomplete = true; unknown = true; continue; }
     // The original preterminal generation is retained even if the independent

@@ -9,7 +9,7 @@ import { claimCheckoutOwner } from '../lib/claimContinuation.js';
 import { hasProcessCwdInside } from '../lib/processCwdProbe.js';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
-import { RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
+import { RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS, publisherCandidateSeed } from '../lib/releaseSynchronization.js';
 import { completedCheckoutReceiptValid, readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { execGh } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
@@ -75,6 +75,8 @@ async function checkoutTargets(entry, agents, liveAgents) {
 
 async function context(entry, agents) {
   const publisher = agents.find(agent => agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt);
+  const candidateSeed = publisherCandidateSeed(entry);
+  if (!candidateSeed) hold('publisher-candidate-checkout-unverified');
   if (!publisher || entry.checkouts.some(seed => !publisher.metadata?.checkoutSeeds?.some(current => isDeepStrictEqual(current, seed)))) hold('publisher-checkout-evidence-unavailable');
   if (ownersOf(entry, agents).filter(agent => agent.status !== 'completed').length > 1) hold('continuation-conflicting-live-owners');
   const task = await getTaskById(entry.task.id);
@@ -101,6 +103,9 @@ async function context(entry, agents) {
   const live = await readAgentsStateForSafetyCheck();
   if (!live.trusted || !live.agents || Array.isArray(live.agents)) hold('checkout-ownership-unreadable');
   const checkouts = await checkoutTargets(entry, agents, Object.values(live.agents));
+  if (!checkouts.some(row => row.agentId === publisher.id && row.branch === candidateSeed.branch
+    && row.path === candidateSeed.path && row.head === entry.publication.candidateHead
+    && row.checkoutIdentity === retirementCheckoutIdentityFromPointer(candidateSeed.incarnation.pointer))) hold('publisher-candidate-head-unverified');
   const syncCheckouts = checkouts.filter(row => ownersOf(entry, agents).some(agent => agent.id === row.agentId));
   if (!syncCheckouts.length) hold('continuation-checkout-unverified');
   const saved = entry.obligations.synchronizationPr.evidence;
@@ -212,7 +217,8 @@ export async function inspectReleaseSynchronization(entry, agents) {
     obligations.retirement = { status: 'pending' };
     obligations.processSettlement = { status: 'pending' };
   }
-  obligations.retirement.evidence = { ...obligations.retirement.evidence, ...binding, checkouts };
+  obligations.retirement.evidence = { ...obligations.retirement.evidence, ...binding, checkouts,
+    ...(entry.obligations.retirement.evidence?.publisherReview && { publisherReview: entry.obligations.retirement.evidence.publisherReview }) };
   await check('processSettlement', async () => {
     const owners = [...ownersOf(entry, agents), ...agents.filter(agent => agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt)];
     if (!owners.length || owners.some(agent => agent.status !== 'completed')) wait('release-owner-still-active');
@@ -252,6 +258,16 @@ export async function inspectReleaseSynchronization(entry, agents) {
   });
   await check('retirement', async () => {
     if (obligations.processSettlement.status !== 'verified') wait('retirement-awaits-process-settlement');
+    const seed = publisherCandidateSeed(entry);
+    const review = obligations.retirement.evidence?.publisherReview;
+    const publisherCheckout = checkouts.find(row => row.agentId === entry.owner.agentId && row.branch === seed.branch
+      && row.path === seed.path && row.head === entry.publication.candidateHead
+      && row.checkoutIdentity === retirementCheckoutIdentityFromPointer(seed.incarnation.pointer));
+    const publisherPrUrl = `https://github.com/${entry.publication.repository}/pull/${entry.publication.promotionPrNumber}`;
+    if (!publisherCheckout || !review || review.branch !== publisherCheckout.branch || review.path !== publisherCheckout.path
+      || review.head !== publisherCheckout.head || review.checkoutIdentity !== publisherCheckout.checkoutIdentity
+      || review.prUrl !== publisherPrUrl || !Array.isArray(review.models)
+      || (review.receipt !== null && (!review.receipt || review.receipt.prUrl !== publisherPrUrl))) hold('publisher-private-review-unretained');
     const outcome = await getBranchReconcileOutcome(ctx.app.id);
     const receipts = checkouts.map(row => matchingRetirementReceipts(outcome, row).find(receipt => receipt.archiveDir === null
       && receipt.checkoutIdentity === row.checkoutIdentity && Date.parse(receipt.retiredAt) >= Date.parse(row.createdAt)
@@ -267,7 +283,7 @@ export async function inspectReleaseSynchronization(entry, agents) {
     if (!Array.isArray(trees) || !trees.length || !(remote instanceof Map)) throw new Error('retirement-inventory-unreadable');
     if (checkouts.some(row => remote.has(row.branch) || trees.some(tree => tree.path === row.path
       || tree.branch?.replace(/^refs\/heads\//, '') === row.branch))) hold('retired-checkout-or-ref-present');
-    return { checkouts, receipts };
+    return { checkouts, receipts, publisherReview: review };
   });
   const verified = RELEASE_SYNC_OBLIGATIONS.every(key => obligations[key]?.status === 'verified');
   const blocked = RELEASE_SYNC_OBLIGATIONS.find(key => obligations[key]?.status === 'blocked');

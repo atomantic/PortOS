@@ -20,7 +20,7 @@ vi.mock('./cosState.js', () => ({
 }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() } }));
 
-const { updateClaimOwnership, checkReconcileOwnership, CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS } = await import('./cosClaimOwnership.js');
+const { updateClaimOwnership, updateReleaseCandidateOwnership, checkReconcileOwnership, CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS } = await import('./cosClaimOwnership.js');
 // Hold the same leaf fence cleanup uses while exercising binding through its public service.
 const { withClaimOwnershipLock, reserveCheckoutRetirementFence } = await import('./cosClaimOwnershipState.js');
 const { claimContinuationAdmission, claimBranchAdmission } = await import('../lib/claimContinuation.js');
@@ -104,6 +104,66 @@ describe('updateClaimOwnership', () => {
       .toEqual({ bound: false, reason: 'owner-not-running' });
     expect(store.state.agents['agent-epicrun'].metadata).toEqual(before.agents['agent-epicrun'].metadata);
   });
+});
+
+it('reserves a release branch before creation and captures its actual locked checkout generation', async () => {
+  const { mkdtemp, readFile, writeFile, rename, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { materializeGitRepo } = await import('../lib/gitTestRepo.js');
+  const { execGit } = await import('../lib/execGit.js');
+  const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
+  const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
+  const scratch = await mkdtemp(join(tmpdir(), 'portos-release-seed-'));
+  try {
+    const repo = join(scratch, 'repo');
+    const checkout = join(scratch, 'candidate');
+    await materializeGitRepo(repo);
+    const agentId = 'agent-epicrun';
+    const branch = `codex/release-${agentId}`;
+    store.state.agents[agentId] = { id: agentId, status: 'running', startedAt: new Date().toISOString(),
+      metadata: { taskAnalysisType: 'do-release', isWorktree: false, workspacePath: repo } };
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'candidate-reservation-missing' });
+    expect(await updateReleaseCandidateOwnership(agentId, 'reserve')).toEqual({ reserved: true, branch });
+    expect(claimCheckoutOwnerReason({ branchName: branch, sourceWorkspace: repo, agents: Object.values(store.state.agents) })).toBe('claim-owner-active');
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'checkout-seed-unavailable' });
+    await execGit(['worktree', 'add', '-b', branch, checkout, 'main'], repo);
+    await execGit(['worktree', 'lock', '--reason', 'Active release candidate', checkout], repo);
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: true, branch });
+    const seed = store.state.agents[agentId].metadata.checkoutSeeds[0];
+    expect(seed).toMatchObject({ agentId, branch, path: await (await import('node:fs/promises')).realpath(checkout) });
+    expect(await captureCompletedCheckouts(store.state.agents[agentId], { success: true, strict: true })).toMatchObject([{ branch, path: seed.path }]);
+    const pointer = join(checkout, '.git');
+    const contents = await readFile(pointer);
+    await rename(pointer, join(scratch, 'original-pointer'));
+    await writeFile(pointer, contents);
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'checkout-seed-unavailable' });
+    expect(store.state.agents[agentId].metadata.checkoutSeeds).toEqual([seed]);
+  } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
+it('does not adopt a release branch that already existed before reservation', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { materializeGitRepo } = await import('../lib/gitTestRepo.js');
+  const { execGit } = await import('../lib/execGit.js');
+  const scratch = await mkdtemp(join(tmpdir(), 'portos-release-collision-'));
+  try {
+    const repo = join(scratch, 'repo');
+    await materializeGitRepo(repo);
+    await execGit(['branch', 'codex/release-agent-epicrun', 'main'], repo);
+    store.state.agents['agent-epicrun'] = { id: 'agent-epicrun', status: 'running', startedAt: new Date().toISOString(),
+      metadata: { taskAnalysisType: 'do-release', isWorktree: false, workspacePath: repo } };
+    expect(await updateReleaseCandidateOwnership('agent-epicrun', 'reserve')).toEqual({ reserved: false, reason: 'candidate-branch-not-available' });
+    expect(store.state.agents['agent-epicrun'].metadata.releaseCandidate).toBeUndefined();
+  } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
+it('treats a malformed release reservation as unreadable ownership', async () => {
+  store.state.agents['agent-epicrun'].metadata.releaseCandidate = { branch: 'codex/release-agent-epicrun' };
+  expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch: 'claim/issue-101' }))
+    .toEqual({ bound: false, reason: 'ownership-unreadable' });
 });
 
 describe('claim ownership queued transaction deadlines', () => {

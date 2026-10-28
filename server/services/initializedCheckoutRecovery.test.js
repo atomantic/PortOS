@@ -180,6 +180,7 @@ beforeEach(async () => {
   });
   const deps = { root: () => root, fenced: work => work(), admission, native,
     context: async () => ({ repoPath: '/fixture/repo' }),
+    retainReleaseSynchronizationReview: vi.fn(async () => true),
     ownership: vi.fn(async () => ({ ok: true, policy: null })),
     forge: async () => ({ ...fixture.facts }),
     comparison: async (_ctx, _release, _url, _snapshot, policy, forge) => ({
@@ -259,11 +260,25 @@ describe('initialized checkout removal', () => {
     });
   });
 
-  it('leaves a locked checkout in place', async () => {
+  it('retains a locked release candidate with an initialized submodule', async () => {
     cleanGit();
-    const input = await reviewed();
-    input.release = { ...release, locked: true };
+    fixture.snapshot.modules = [{ path: 'lib/slashdo' }];
+    const candidate = { ...release, branch: 'codex/release-agent-test', locked: true,
+      lockReason: 'Active release candidate codex/release-agent-test' };
+    const preview = await fixture.service.review({ appId: 'app', release: candidate, prUrl });
+    expect(preview.ok).toBe(true);
+    expect(preview.review.snapshot.modules).toEqual([{ path: 'lib/slashdo' }]);
+    const input = { appId: 'app', release: candidate, review: { prUrl, digest: preview.review.digest } };
     expect(await fixture.service.retire(input)).toEqual({ ok: false, reason: 'checkout-locked' });
+    expect(fixture.deps.execGit).not.toHaveBeenCalled();
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
+  });
+
+  it('does not remove an initialized checkout before release synchronization retains its review', async () => {
+    cleanGit();
+    fixture.deps.retainReleaseSynchronizationReview.mockResolvedValue(false);
+    expect(await fixture.service.retire(await reviewed())).toEqual({ ok: false, reason: 'release-sync-local-review-unretained' });
     expect(fixture.deps.execGit).not.toHaveBeenCalled();
     expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
     expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();

@@ -1647,7 +1647,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
   if (branch === defaultBranch) return { ok: false, reason: 'protected-branch' };
 
   const { retainReleaseSynchronizationReview } = await import('./releaseSynchronization.js');
-  const retainedReview = await retainReleaseSynchronizationReview({ ...release,
+  const retainedReview = await retainReleaseSynchronizationReview({ ...release, repoPath,
     checkoutIdentity: release.checkoutIdentity || await readRetirementCheckoutIdentity(release.path) }).catch(() => false);
   if (!retainedReview) return { ok: false, reason: 'release-sync-local-review-unretained' };
 

@@ -24,7 +24,7 @@ import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir } from './cosAgentIndex.js';
-import { hasClaimCheckoutBindings, completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
+import { hasClaimCheckoutBindings, hasReleaseCandidateBinding, boundCheckoutBranches, completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
 import { isAgentHandoff } from '../lib/agentOutcome.js';
 import { collectProtectedCleanupOwners } from '../lib/taskRetryHold.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
@@ -108,6 +108,11 @@ export async function readProtectedCleanupOwners({ state = null, index = null, t
 
 export async function registerAgent(agentId, taskId, metadata = {}) {
   metadata = { ...metadata, releasePublication: null };
+  if (metadata.taskAnalysisType === 'do-release') {
+    // A task's supplied metadata is not a server-observed checkout reservation.
+    const { releaseCandidate: _candidate, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...trusted } = metadata;
+    metadata = trusted;
+  }
   return withStateLock(async () => {
     const state = await loadState();
 
@@ -165,6 +170,12 @@ export async function updateAgent(agentId, updates) {
     // and stale completion metadata cannot forge or revoke an observed release.
     if (updates.metadata && Object.hasOwn(updates.metadata, 'releasePublication')) {
       const { releasePublication: _publication, ...metadata } = updates.metadata;
+      updates = { ...updates, metadata };
+    }
+    if (current.metadata?.taskAnalysisType === 'do-release' && updates.metadata) {
+      // Only the ownership transaction and completion capture write these
+      // fields; generic updates cannot manufacture or revoke their evidence.
+      const { releaseCandidate: _candidate, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...metadata } = updates.metadata;
       updates = { ...updates, metadata };
     }
 
@@ -610,7 +621,7 @@ export async function retryCompletionCheckoutCapture(agentId, { retirement } = {
     const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
     const history = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
     if (!Array.isArray(owners) || !Array.isArray(history)) return false;
-    const bound = hasClaimCheckoutBindings(agent.metadata) ? agent.metadata.claimBranches : [agent.metadata?.worktreeBranch];
+    const bound = boundCheckoutBranches(agent.metadata);
     const seeds = (agent.metadata?.checkoutSeeds || []).filter(seed => Array.isArray(bound) && bound.includes(seed.branch));
     const targets = seeds.length ? seeds : pending.unknown === false ? pending.targets : null;
     if (!targets?.length) return false;
@@ -710,7 +721,7 @@ export async function completeAgent(agentId, result = {}) {
     }
     let completedCheckouts;
     let checkoutCapture;
-    if (hasClaimCheckoutBindings(agent.metadata) || agent.metadata?.isWorktree) {
+    if (hasClaimCheckoutBindings(agent.metadata) || hasReleaseCandidateBinding(agent.metadata) || agent.metadata?.isWorktree) {
       completedCheckouts = [];
       // Identity capture describes the owned physical checkout, not a passing
       // execution verdict. Failed/orphaned runs may already have delivered code.
