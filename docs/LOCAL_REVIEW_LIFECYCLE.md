@@ -41,7 +41,7 @@ After the phase finishes and all accepted findings/validation failures are fixed
 run `node <installation>/server/scripts/local-review-lifecycle.mjs complete <base> <status>`
 with `clean`, a qualifying `partial`, or availability-only `review-blocked`.
 Incomplete/dirty/findings are rejected. Save original phase state and model
-receipts alongside it. Before PR creation a same-completion-head retry reuses this completion. Initial publication must match `completedHead`, even when the actual inspection was earlier.
+receipts alongside it. Before PR creation a same-completion-head retry reuses this completion. Initial publication must match `completedHead`, even when the actual inspection was earlier. Publication guards use the validated receipt completion projection; a reusable v1 receipt supplies its original completion head even if the old phase state lacks `LOCAL_REMEDIATED_HEAD_SHA`, while inspection remains explicitly unknown.
 After successful creation or recovery, run
 `node <installation>/server/scripts/local-review-lifecycle.mjs publish <base> <PR_URL>`.
 Receipt-write failure blocks publication/merge until repaired from the completed

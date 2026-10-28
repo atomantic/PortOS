@@ -137,6 +137,9 @@ async function exerciseDelivery() {
     await commit();
     expect((await cli('check', 'main', pr)).reusable).toBe(true);
     expect(JSON.parse(await readFile(receiptPath, 'utf8'))).toEqual(legacy);
+    await writeFile(receiptPath, JSON.stringify({ ...legacy, prUrl: '', reviewedHead: await git('rev-parse', 'HEAD') }));
+    expect((await cli('check', 'main')).inspection).toMatchObject({ reviewedHead: null, inspectionProvenance: 'legacy-unknown' });
+    await cli('publish', 'main', pr);
     const malformed = { ...legacy, version: 2, completedHead: legacy.reviewedHead, reviewedHead: null, inspectionProvenance: 'recorded' };
     await writeFile(receiptPath, JSON.stringify(malformed));
     await expect(cli('check', 'main', pr)).rejects.toMatchObject({ code: 1 });

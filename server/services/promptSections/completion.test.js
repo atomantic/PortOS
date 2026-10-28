@@ -52,6 +52,22 @@ describe('review-enabled completion merge gate', () => {
     expect(claim).toContain('Keep each successful reviewer');
   });
 
+  it('executes publication guards against legacy and distinct-inspection completion receipts', () => {
+    const section = buildTuiCompletionSection({ willOpenPR: true, simplifyEnabled: false, mode: COMPLETION_MODES.TUI_SLASHDO_FREE,
+      rendersInlinePrLifecycle: true, localReviewSection: 'Local review', branchName: 'delivery', baseBranch: 'main',
+      reviewPolicy: resolveReviewPolicy({ reviewers: ['codex'] }, null, null) });
+    const command = section.split('\n').find(line => line.includes('LOCAL_REMEDIATED_HEAD_SHA=$(printf'));
+    const completedHead = 'b'.repeat(40);
+    for (const receipt of [{ version: 1, status: 'partial', reviewedHead: completedHead },
+      { version: 2, status: 'partial', completedHead, reviewedHead: 'a'.repeat(40) }]) {
+      const env = { ...process.env, LOCAL_OVERALL_STATUS: 'partial', LOCAL_REVIEW_RECEIPT_JSON: JSON.stringify({ reusable: true, receipt }) };
+      expect(execFileSync('bash', ['-c', command + '\nprintf %s "$LOCAL_REMEDIATED_HEAD_SHA"'], { env, encoding: 'utf8' })).toBe(completedHead);
+      env.LOCAL_REVIEW_RECEIPT_JSON = JSON.stringify({ reusable: false, receipt });
+      expect(() => execFileSync('bash', ['-c', command], { env, stdio: 'pipe' })).toThrow();
+    }
+    expect(section).not.toContain('if [ "$LOCAL_REVIEWED_HEAD_SHA" != "$CURRENT_HEAD_SHA" ]');
+  });
+
   it('allows provider auto-merge while retaining responsibility until confirmed delivery', () => {
     const section = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
     expect(section).toContain('Native provider auto-merge is allowed when the API accepts it');
