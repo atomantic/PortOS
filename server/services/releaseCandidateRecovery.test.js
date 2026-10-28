@@ -84,8 +84,8 @@ beforeEach(async () => {
   await git(['commit', '--allow-empty', '-m', `chore: pin release candidate\n\nRelease-Cut: ${cutoff}\nRelease-Base: ${cutoff}\nRelease-Previous-Tag: v1.2.2\nRelease-Previous-Commit: ${cutoff}`], checkout);
   head = await git(['rev-parse', 'HEAD'], checkout);
   reviewPath = await git(['rev-parse', '--path-format=absolute', '--git-path', 'portos-local-review-lifecycle'], checkout);
-  await writeFile(reviewPath, JSON.stringify({ version: 1, branch, origin: 'https://github.com/example/repo.git',
-    base: 'release', status: 'partial', reviewedHead: head, prUrl: '' }));
+  await writeFile(reviewPath, JSON.stringify({ version: 2, branch, origin: 'https://github.com/example/repo.git',
+    base: 'release', status: 'partial', completedHead: head, reviewedHead: cutoff, inspectionProvenance: 'recorded', prUrl: '' }));
   await writeFile(join(checkout, 'retained.txt'), 'Uncommitted work survives recovery.');
   const source = fixture.state.agents['agent-original'];
   const rows = await captureCompletedCheckouts(source, { success: true, strict: true });
@@ -131,6 +131,30 @@ test('transfers the seeded generation once across interruption/restart, retainin
   expect(await readFile(join(checkout, 'retained.txt'), 'utf8')).toBe('Uncommitted work survives recovery.');
 });
 
+test('retains legacy unknown inspection and current unavailable inspection without upgrading either receipt', async () => {
+  for (const receipt of [
+    { version: 1, reviewedHead: head },
+    { version: 2, completedHead: head, reviewedHead: null, inspectionProvenance: 'unavailable' },
+  ]) {
+    const bytes = JSON.stringify({ branch, origin: 'https://github.com/example/repo.git', base: 'release',
+      status: 'partial', prUrl: '', ...receipt });
+    await writeFile(reviewPath, bytes);
+    expect(await recover()).toMatchObject({ recovered: true });
+    expect(await readFile(reviewPath, 'utf8')).toBe(bytes);
+  }
+});
+
+test('refuses a v2 inspection outside its completion ancestry without changing private evidence', async () => {
+  const review = JSON.parse(await readFile(reviewPath, 'utf8'));
+  // Both commits are in the candidate history, but inspection cannot postdate
+  // the phase completion it purports to describe.
+  const bytes = JSON.stringify({ ...review, completedHead: cutoff, reviewedHead: head });
+  await writeFile(reviewPath, bytes);
+  expect(await recover()).toMatchObject({ recovered: false, reason: 'candidate-reviewed-head-conflict' });
+  expect(await readFile(reviewPath, 'utf8')).toBe(bytes);
+  expect(fixture.state.agents['agent-original'].metadata.releaseCandidateSuccessor).toBeUndefined();
+});
+
 test('accepts only an independently captured contemporaneous unseeded generation and does not backfill its seed', async () => {
   delete fixture.state.agents['agent-original'].metadata.checkoutSeeds;
   delete fixture.state.agents['agent-original'].metadata.releaseCandidate;
@@ -164,7 +188,7 @@ for (const [name, reason, change] of [
   ['release target moved', 'candidate-release-base-changed', () => { fixture.releaseBase = 'f'.repeat(40); }],
   ['unknown review receipt version', 'candidate-review-identity-conflict', async () => {
     const receipt = JSON.parse(await readFile(reviewPath, 'utf8'));
-    await writeFile(reviewPath, JSON.stringify({ ...receipt, version: 2 }));
+    await writeFile(reviewPath, JSON.stringify({ ...receipt, version: 3 }));
   }],
   ['ambiguous release owner', 'candidate-owner-ambiguous', () => {
     fixture.state.agents['agent-other'] = { ...structuredClone(fixture.state.agents['agent-successor']), id: 'agent-other',

@@ -165,9 +165,11 @@ and remain held with `candidate-process-proof-unavailable`, including when the
 original PID is absent or no process currently has the checkout as its cwd.
 Historical runs missing from the trusted registry, unseeded candidates without
 contemporaneous physical evidence, and unknown private review receipt versions
-also remain held. V1 review evidence is retained as historical evidence, never
-re-certified as a new review. These remaining recovery obligations are tracked
-in #13944.
+also remain held. V1 review evidence retains unknown inspection provenance; V2
+keeps its actual inspection separate from later completion. Both are validated
+with the shared receipt contract and preserved byte-for-byte, never re-certified
+as a new review. POSIX settlement support remains tracked in #13944; first
+reservation after a pre-reservation interruption is tracked in #14005.
 
 Resolve the previous **published** version tag and its peeled commit from the
 captured release history (not the latest tag on moving `main`). Verify the GitHub

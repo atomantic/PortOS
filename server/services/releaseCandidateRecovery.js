@@ -9,6 +9,7 @@ import { execGit } from '../lib/execGit.js';
 import { withCheckoutPublication } from '../lib/checkoutRetirementAdmission.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { releaseCandidateTransferSchema } from '../lib/releasePublication.js';
+import { localReviewReceiptEvidence } from '../lib/localReviewLifecycle.js';
 import { ownershipTransaction, checkoutRetirementFenceReason } from './cosClaimOwnership.js';
 import { captureCheckoutSeeds, captureSeededCompletionCheckouts, completedCheckoutReceiptValid, readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { readReleaseCandidate } from './releaseCandidateEvidence.js';
@@ -55,12 +56,18 @@ async function reviewSnapshot(checkout, pr, origin) {
     evidence.push({ name, bytes: bytes.length, sha256: digest(bytes) });
     if (name === 'portos-local-review-lifecycle') {
       const receipt = JSON.parse(bytes.toString('utf8'));
-      if (receipt.version !== 1 || receipt.branch !== checkout.branch || receipt.origin !== origin
-        || !['clean', 'partial', 'review-blocked'].includes(receipt.status)
-        || !/^[a-f0-9]{40}$/.test(receipt.reviewedHead || '') || !receipt.base
-        || typeof receipt.prUrl !== 'string' || (receipt.prUrl && receipt.prUrl !== pr?.url)) refuse('candidate-review-identity-conflict');
-      const ancestry = await execGit(['merge-base', '--is-ancestor', receipt.reviewedHead, checkout.head], checkout.path, { ignoreExitCode: true });
-      if (ancestry.exitCode !== 0) refuse('candidate-reviewed-head-conflict');
+      let inspection;
+      try { inspection = localReviewReceiptEvidence(receipt); }
+      catch { refuse('candidate-review-identity-conflict'); }
+      if (receipt.branch !== checkout.branch || receipt.origin !== origin
+        || (receipt.prUrl && receipt.prUrl !== pr?.url)) refuse('candidate-review-identity-conflict');
+      // V1's historical completion SHA is not proof of inspection. V2 keeps
+      // the actual inspection and later remediated completion distinct.
+      const heads = [inspection.reviewedHead, inspection.completedHead, checkout.head].filter(Boolean);
+      for (let index = 1; index < heads.length; index++) {
+        const ancestry = await execGit(['merge-base', '--is-ancestor', heads[index - 1], heads[index]], checkout.path, { ignoreExitCode: true });
+        if (ancestry.exitCode !== 0) refuse('candidate-reviewed-head-conflict');
+      }
     }
   }
   return { files: evidence, legacyPublished: Boolean(pr && !files.includes('portos-local-review-lifecycle')) };
