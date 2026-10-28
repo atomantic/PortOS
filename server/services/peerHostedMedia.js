@@ -31,6 +31,9 @@ const HOSTED_FILE = () => join(PATHS.data, 'peer-hosted-media.json');
 const SCHEMA_VERSION = 1;
 const queueWrite = createFileWriteQueue();
 const STREAM_TIMEOUT_MS = 30000;
+// A thumbnail is only a preview: fail promptly so the card can try the
+// original, while leaving large original-media streams their longer deadline.
+const THUMBNAIL_TIMEOUT_MS = 3000;
 
 // kind → { local dir thunk, peer static-mount prefix }. Only kinds a collection
 // can hold. Thumbnails are derived views of these two, resolved below.
@@ -234,18 +237,21 @@ export function hostedAssetFallback(mount) {
     if (!target) return next();
     const peer = await findHostPeer(target.peerId);
     if (!peer) return next();
-    await streamFromPeer(peer, target.url, req, res, target.drop).catch((err) => {
-      console.warn(`⚠️ peerHostedMedia: stream ${mount} from ${peer.name || 'peer'} failed: ${err.message}`);
+    const timeoutMs = mount === '/data/image-thumbnails' || mount === '/data/video-thumbnails'
+      ? THUMBNAIL_TIMEOUT_MS : STREAM_TIMEOUT_MS;
+    await streamFromPeer(peer, target.url, req, res, target.drop, timeoutMs).catch((err) => {
+      const reason = err?.name === 'AbortError' || err?.message === 'peer media stream idle timeout' ? 'timeout' : 'transport error';
+      console.warn(`⚠️ peerHostedMedia: stream ${mount} from peer failed (${reason})`);
       if (!res.headersSent) res.status(502).end();
       else res.destroy();
     });
   };
 }
 
-async function streamFromPeer(peer, path, req, res, drop) {
+async function streamFromPeer(peer, path, req, res, drop, timeoutMs) {
   const headers = {};
   if (isStr(req.headers.range)) headers.Range = req.headers.range;
-  const upstream = await withAbortTimeout(STREAM_TIMEOUT_MS, (signal) =>
+  const upstream = await withAbortTimeout(timeoutMs, (signal) =>
     peerStreamRequest(`${peerBaseUrl(peer)}${path}`, { signal, headers }, peer));
   if (upstream.status !== 200 && upstream.status !== 206) {
     upstream.stream.resume();
@@ -271,6 +277,6 @@ async function streamFromPeer(peer, path, req, res, drop) {
     return res.end();
   }
   // The header-wait timer is spent by now; bound a stalled body too.
-  upstream.stream.setTimeout?.(STREAM_TIMEOUT_MS, () => upstream.stream.destroy(new Error('peer media stream idle timeout')));
+  upstream.stream.setTimeout?.(timeoutMs, () => upstream.stream.destroy(new Error('peer media stream idle timeout')));
   await pipeline(upstream.stream, res);
 }
