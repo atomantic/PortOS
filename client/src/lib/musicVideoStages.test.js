@@ -700,6 +700,13 @@ describe('preview source order on Storyboard', () => {
     const doc = { ...board, composition: { mode: 'document', document: { directory: 'd' } } };
     expect(listPreviewSources(doc, { leadWith: 'storyboard' }).map((s) => s.id)).toEqual(['document', 'animatic', 'excerpt:aaaaaa']);
   });
+
+  // Uniquely catches the Song step opening the animatic, which hides the words when lyric overlays are off.
+  it('leads with the lyric timing playthrough on the Song step once words are timed', () => {
+    const song = { trackId: 't', audioAnalysis: { durationSec: 60 }, scenes: [{ sceneId: 's1' }], lyricCues: [{ id: 'c', text: 'hi', startSec: 1 }] };
+    expect(listPreviewSources(song, { leadWith: 'lyrics' }).map((s) => s.id)).toEqual(['lyrics', 'animatic']);
+    expect(listPreviewSources(song).map((s) => s.id)).toEqual(['animatic', 'lyrics']);
+  });
 });
 
 describe('preview source order on Final render', () => {
