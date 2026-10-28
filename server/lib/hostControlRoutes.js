@@ -1077,6 +1077,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Greybox draft hands the place and the user's instruction to a caller-chosen
   // provider (possibly a tool-capable harness). Save and capture are data-only.
   'POST /api/catalog/ingredients/:id/greybox/draft',
+  // New from prompt hands the user's prompt and the story's context to a
+  // caller-chosen provider (possibly a tool-capable harness). Joining is data-only.
+  'POST /api/catalog/stories/draft',
   'POST /api/catalog/ingredients/:id/refine',
   'POST /api/catalog/ingredients/:id/media/refine',
 

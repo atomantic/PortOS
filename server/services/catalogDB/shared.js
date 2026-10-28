@@ -285,6 +285,17 @@ export const CANONICAL_REFS_CTE = `canonical_refs AS MATERIALIZED (
 // set) reads as false, so NOT (inSet(…)) also matches the old NOT EXISTS.
 export const inSet = (expr, subquery) => `(${expr} IN (${subquery})) IS TRUE`;
 
+// `(board_id, cid)` for every catalog record a live storyboard panel uses as
+// cast, environment or object. A storyboard's story membership is these plus
+// its `storyboard` refs; panels hold bare ids, so this is read, never synced.
+export const STORYBOARD_PANEL_MEMBERS_SQL = `SELECT s.id AS board_id, catalog_canonical_ingredient_id(member.id) AS cid
+    FROM storyboards s
+    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.data->'beats', '[]'::jsonb)) beat
+    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(beat->'panels', '[]'::jsonb)) panel
+    CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(panel->'castIds', '[]'::jsonb)
+      || COALESCE(panel->'environmentIds', '[]'::jsonb) || COALESCE(panel->'objectIds', '[]'::jsonb)) member(id)
+   WHERE s.deleted = false`;
+
 // Predicates over CANONICAL_REFS_CTE (the statement must include it).
 // HAS_LIVE_HOMING_REF: at least one homing ref whose target still resolves.
 export const HAS_LIVE_HOMING_REF = inSet('id', `SELECT r.cid FROM canonical_refs r WHERE ${liveHomingTargetSql('r')}`);

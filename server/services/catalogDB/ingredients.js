@@ -30,6 +30,7 @@ import {
   HAS_ANY_HOMING_REF,
   HOMING_REF_KINDS_SQL,
   liveHomingTargetSql,
+  STORYBOARD_PANEL_MEMBERS_SQL,
 } from './shared.js';
 import { normalizeTags } from './tags.js';
 import { assertCatalogIdentityWritable, getCatalogIdentityAccessForIds } from './identityAccess.js';
@@ -492,6 +493,13 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
         WHERE (r.ref_kind = 'universe' AND r.ref_id = $${refIdx})
             OR (r.ref_kind = 'series' AND r.ref_id IN (
                   SELECT id FROM pipeline_series WHERE universe_id = $${refIdx} AND deleted = false))`));
+      params.push(refId);
+    } else if (refKind === 'storyboard' && refId) {
+      // A storyboard story is its `storyboard` refs plus the records its panels use.
+      const refIdx = idx++;
+      needsRefs = true;
+      conditions.push(inSet('id', `SELECT r.cid FROM canonical_refs r WHERE r.ref_kind = 'storyboard' AND r.ref_id = $${refIdx}
+        UNION SELECT pm.cid FROM (${STORYBOARD_PANEL_MEMBERS_SQL}) pm WHERE pm.board_id = $${refIdx}`));
       params.push(refId);
     } else if (refKind && refId) {
       needsRefs = true;

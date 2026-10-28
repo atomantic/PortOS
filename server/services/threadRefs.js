@@ -63,6 +63,7 @@ const DB_REF_TABLES = Object.freeze({
   'writers-room': { table: 'writers_room_works', titleExpr: 'title', liveClause: 'deleted = FALSE' },
   work: { table: 'writers_room_works', titleExpr: 'title', liveClause: 'deleted = FALSE' },
   fableloom: { table: 'fableloom_stories', titleExpr: 'name', liveClause: 'deleted = FALSE' },
+  storyboard: { table: 'storyboards', titleExpr: 'name', liveClause: 'deleted = FALSE' },
   'voice-profile': { table: 'voice_profiles', titleExpr: "data->>'name'", liveClause: "approval_status <> 'retired'" },
   'creative-director': { table: 'creative_director_projects', titleExpr: "NULLIF(data->>'title', '')", liveClause: 'deleted = FALSE' },
   'music-video': { table: 'music_video_projects', titleExpr: "NULLIF(data->>'name', '')", liveClause: 'deleted = FALSE' },
