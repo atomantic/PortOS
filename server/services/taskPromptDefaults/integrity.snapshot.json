@@ -62,7 +62,7 @@
     "typing": "bd7cb874b2784395280b116369c7e7ac",
     "ui-bugs": "06baf650e41fce12aaa59c66030c0357",
     "ui-lifecycle": "d156882c73593a54c0fd5754eb4c6fa0",
-    "upgrade-rehearsal": "9fddc216c6de8385d4d1dda42fd70cb9",
+    "upgrade-rehearsal": "a86ee94bf5e13362e67380fae3dfe4d2",
     "user-action-review": "28c1b49e5ca806568077f56fe982ce08",
     "ux": "7a717ced5a1c8df4d76c1f6987747792",
     "workflow-recovery": "628d2ec51c3cd3d8bbd76eacb212dada"
@@ -127,7 +127,7 @@
     "typing": 3,
     "ui-bugs": 4,
     "ui-lifecycle": 3,
-    "upgrade-rehearsal": 3,
+    "upgrade-rehearsal": 5,
     "user-action-review": 3,
     "ux": 9,
     "workflow-recovery": 1
@@ -556,7 +556,9 @@
     ],
     "upgrade-rehearsal": [
       "ef9d54fa653d6639abd4707b4f392d8d",
-      "e53a4cb57cdc7b5876d709bcd8a68132"
+      "e53a4cb57cdc7b5876d709bcd8a68132",
+      "9fddc216c6de8385d4d1dda42fd70cb9",
+      "eed59316cc30bbaf033869065cd0889b"
     ],
     "user-action-review": [
       "945a716d446d26a03e2805d28bd1ae16",
