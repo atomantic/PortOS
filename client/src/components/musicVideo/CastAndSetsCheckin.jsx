@@ -1,6 +1,8 @@
 import useMusicVideoGreyboxPlaces from '../../hooks/useMusicVideoGreyboxPlaces.js';
 import SceneGreyboxReference from './SceneGreyboxReference.jsx';
-import { CheckCircle2, Eye, Play, RotateCcw, SkipForward, Users } from 'lucide-react';
+import { useState } from 'react';
+import { CheckCircle2, Eye, Play, RotateCcw, SkipForward, Trash2, Users } from 'lucide-react';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import LlmRouteNote from './LlmRouteNote.jsx';
 import Pill from '../ui/Pill.jsx';
 import { staleApprovalText } from '../../lib/musicVideoStages.js';
@@ -43,7 +45,8 @@ function statusLine(stage) {
  * right under that line (#10141).
  * A sheet in review (or approved) takes plain-text feedback below the actions.
  */
-export default function CastAndSetsCheckin({ id, project, stale = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onEditDirection, onApplyFeedback, onRemoveFeedback, onResume, onRebuild, onReconfirm, onRevert, onSkip }) {
+export default function CastAndSetsCheckin({ id, project, stale = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onRegenerateImages, onEditDirection, onApplyFeedback, onRemoveFeedback, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard }) {
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const greyboxPlaces = useMusicVideoGreyboxPlaces(project);
   const stage = project.castAndSets;
   if (!stage) return null;
@@ -79,7 +82,9 @@ export default function CastAndSetsCheckin({ id, project, stale = null, busy, on
         </div>
       ))}
       {stage.greyboxPending && <p role="status" className="text-xs text-port-warning">Greybox selection saved. Regenerate to render the set plates with it.</p>}
-      <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview} />
+      <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview}
+        actions={!working && stage.direction && stage.status !== 'skipped' && onRegenerateImages && onEditDirection
+          ? { busy, onRegenerate: onRegenerateImages, onEdit: onEditDirection } : null} />
       <div className="flex flex-wrap gap-2">
         {sheet && (
           <button type="button" onClick={() => onOpenSheet(sheet.id)} className={`${buttonClass} border border-port-border`}>
@@ -111,6 +116,16 @@ export default function CastAndSetsCheckin({ id, project, stale = null, busy, on
             <RotateCcw size={14} aria-hidden="true" /> Rebuild
           </button>
         )}
+        {onDiscard && !working && stage.status !== 'approved' && (confirmDiscard ? (
+          <ConfirmButtonPair prompt="Clear every cast and set image from this check-in?" confirmText="Start over" busy={busy} responsiveTouchTargets
+            ariaLabel="Start Cast & Sets over" confirmAriaLabel="Start Cast & Sets over" onConfirm={async () => { if (await onDiscard()) setConfirmDiscard(false); }} onCancel={() => setConfirmDiscard(false)} />
+        ) : (
+          <button type="button" disabled={busy} onClick={() => setConfirmDiscard(true)}
+            title="Clear this check-in so you can set up the story and guides first; the images stay in your gallery"
+            className={`${buttonClass} border border-port-border`}>
+            <Trash2 size={14} aria-hidden="true" /> Start over
+          </button>
+        ))}
         {!working && !['approved', 'skipped'].includes(stage.status) && (
           <button type="button" disabled={busy} onClick={onSkip} className={`${buttonClass} text-port-text-muted`}>
             <SkipForward size={14} aria-hidden="true" /> Skip check-in

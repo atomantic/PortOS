@@ -353,7 +353,7 @@ describe('Cast & Sets check-in', () => {
     expect(artifact).toMatchObject({ kind: 'cast-sets', status: 'pending', version: 1 });
     const html = readFileSync(join(ROOT(), artifact.file), 'utf8');
     expect(html).toContain('Keeper');
-    expect(html).toContain('data:image/png;base64,');
+    expect(html).toContain('data:image/jpeg;base64,');
     // Nothing is applied before the director approves.
     expect(reviewing.visualSpec.references.map((r) => r.imageId)).toEqual(['user-ref.png']);
 
@@ -874,21 +874,66 @@ describe('Cast & Sets procedural check-in', () => {
     expect(unknown.status).toBe(422);
     const invalid = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ sets: [{ id: 'river', imageRole: 'wallpaper' }] });
     expect(invalid.status).toBe(400);
+    expect(sheet()).toContain('Reusable code definitions');
+    // An approved sheet re-opens for the edit and comes back for review.
     await service.approveCastAndSets(project.id);
     const approved = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ world: { camera: 'x' } });
-    expect(approved.status).toBe(409);
-    expect((await current(project.id)).castAndSets.direction.world.camera).toBe('locked off, no push');
-    expect(sheet()).toContain('Reusable code definitions');
+    expect(approved.status).toBe(202);
+    await runTo(project.id, 'review');
+    expect((await current(project.id)).castAndSets.direction.world.camera).toBe('x');
   });
+});
 
-  it('refuses to edit a photographic direction', async () => {
-    runPrompt.mockResolvedValue({ text: JSON.stringify(DIRECTION) });
+describe('Cast & Sets per-item actions', () => {
+  const STORY_DIRECTION = {
+    ...DIRECTION,
+    protagonist: { ...DIRECTION.protagonist, expressions: ['grief held in: eyes closed, head bowed', 'carefree: eyes closed, chin up'],
+      forms: [{ id: 'age-7', label: 'Age 7', age: '7', description: 'a small girl with the same eyes', hair: 'pigtails', wardrobe: 'a plaid dress' }] },
+    cast: [{ id: 'dad', name: 'Dad', role: 'father', description: 'a gentle man in his fifties', face: 'kind eyes' }],
+  };
+
+  it('reads the story, draws moods and other ages, then edits, removes and re-renders single items', async () => {
+    runPrompt.mockResolvedValue({ text: JSON.stringify(STORY_DIRECTION) });
     const project = await seed();
+    await projects.mutateProjectRecord(project.id, (c) => ({ project: { ...c, storySummary: 'Example: a lighthouse keeper remembers her father.',
+      productionReview: { ...c.productionReview, draft: { cast: 'Keeper at 7 and at 40.' } } } }));
     await service.startCastAndSets(project.id);
     await runTo(project.id, 'review');
-    const res = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ world: { camera: 'x' } });
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('CAST_SETS_NOT_PROCEDURAL');
+    const sent = runPrompt.mock.calls[0][0].prompt;
+    expect(sent).toContain('Example: a lighthouse keeper remembers her father.');
+    expect(sent).toContain('Cast guide:\nKeeper at 7 and at 40.');
+    expect(sent).toContain('Nobody sings or mouths the words on camera');
+    let saved = await current(project.id);
+    expect(saved.castAndSets.plan['form:age-7']).toMatchObject({ kind: 'form', deps: ['character'], refKeys: ['character'] });
+    expect(saved.castAndSets.plan.expressions.prompt).toContain('1) grief held in: eyes closed, head bowed; 2) carefree: eyes closed, chin up');
+    expect(saved.castAndSets.plan.expressions.prompt).not.toContain('singing full-voice');
+    expect(saved.castAndSets.plan.expressions.prompt).toContain('nobody is singing or speaking');
+
+    // One image again: only it (and nothing else) re-renders; open notes stay open.
+    const before = jobs.length;
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({ keys: ['set:roof'] })).status).toBe(202);
+    await runTo(project.id, 'review');
+    expect(jobs.slice(before).map(keyOf)).toEqual(['set:roof']);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({ keys: ['set:nowhere'] })).status).toBe(422);
+
+    // Edit a cast member, remove a set and a test: only the touched images re-render.
+    const edited = jobs.length;
+    const res = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({
+      cast: [{ id: 'dad', wardrobe: 'a navy pea coat' }], sets: [{ id: 'roof', remove: true }], tests: [{ index: 2, remove: true }],
+    });
+    expect(res.status).toBe(202);
+    await runTo(project.id, 'review');
+    saved = await current(project.id);
+    expect(saved.castAndSets.direction.sets.map((s) => s.id)).toEqual(['lab', 'harbor']);
+    expect(saved.castAndSets.direction.tests).toHaveLength(1);
+    expect(saved.castAndSets.plan['set:roof']).toBeUndefined();
+    expect(saved.castAndSets.plan['test:2']).toBeUndefined();
+    expect(jobs.slice(edited).map(keyOf)).toEqual(['cast:dad']);
+    expect(saved.castAndSets.notesApplied[0].text).toMatch(/cast Dad, Cliff removed, tests/);
+
+    // Start over throws the sheet away; the next build starts fresh.
+    expect((await request(app).delete(`/api/music-video/${project.id}/cast-and-sets`)).status).toBe(200);
+    expect((await current(project.id)).castAndSets).toBeUndefined();
   });
 });
 
@@ -1047,10 +1092,10 @@ it('waits for held image embedding and the persisted sheet before assembly settl
   const release = Promise.withResolvers();
   heldWorkReleases.add(release.resolve);
   service.__setCastAndSetsDepsForTests(testDeps({
-    readImage: async path => {
+    sheetImage: async path => {
       entered.resolve();
       await release.promise;
-      return readFileSync(path);
+      return { mime: 'image/png', bytes: readFileSync(path) };
     },
   }));
   const project = await seed();

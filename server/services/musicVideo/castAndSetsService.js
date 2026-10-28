@@ -1,5 +1,5 @@
 import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
-import { castAndSetsApprovalInputs, castAndSetsApprovalValues, productionFeedbackContext, seedArtDraft } from './productionReview.js';
+import { castAndSetsApprovalInputs, castAndSetsApprovalValues, directorArtGuides, productionFeedbackContext, seedArtDraft } from './productionReview.js';
 import { withMusicVideoStyle } from './styleReferences.js';
 /**
  * Music Video — Cast & Sets check-in orchestrator.
@@ -41,6 +41,7 @@ import { requireProject } from './requireProject.js';
 import { musicVideoEvents } from './events.js';
 import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
 import {
+  CAST_SETS_WORKING,
   allCastAndSetsImagesDone,
   assertCastAndSetsApprovable,
   castAndSetsCheckinMode,
@@ -96,7 +97,7 @@ const defaults = {
   loadBoard: async (id) => (await import('../moodBoard/index.js')).getBoard(id),
   boardItemImage: async () => (await import('../moodBoard/logic.js')).boardItemLocalImage,
   loadTrack: async (id) => (await import('../tracks/index.js')).getTrack(id),
-  readImage: (path) => readFile(path),
+  sheetImage: (path) => sheetImage(path),
   imageParams: (settings, route, common) => imageJobParams(settings, route, common),
   resolveRoute: null,
 };
@@ -192,7 +193,7 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   // Standing sheet feedback rides on every direction call, a fresh rebuild included.
   const feedback = stage?.feedback || [];
   const standing = feedback.length > 0;
-  const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium, feedback }) + productionFeedbackContext(project);
+  const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium, feedback, guides: directorArtGuides(project) }) + productionFeedbackContext(project);
   let text;
   try {
     ({ text } = await deps.runPrompt({ provider, model: selectedModel, ...effortArg(route), prompt, source: 'music-video-cast-sets' }));
@@ -484,9 +485,13 @@ async function advanceOnce(projectId) {
   if (keys.length) publish(projectId, await requireProject(projectId));
 }
 
+// An unexpected error (not a ServerError the stage raised on purpose) logs its
+// top frames, so a failure like a stack overflow names where it happened.
+const where = (err) => (err instanceof ServerError || !err?.stack ? '' : ` at ${err.stack.split('\n').slice(1, 4).map((l) => l.trim()).join(' < ')}`);
+
 function inBackground(label, projectId, fn) {
   const work = Promise.resolve().then(fn).catch(async (err) => {
-    console.error(`❌ Music Video Cast & Sets ${short(projectId)} ${label} failed: ${err.message}`);
+    console.error(`❌ Music Video Cast & Sets ${short(projectId)} ${label} failed: ${err.message}${where(err)}`);
     await fail(projectId, `${label} failed: ${err.message}`).catch((recordErr) => console.error(`❌ Music Video Cast & Sets ${projectId} ${label} failed and its failure could not be recorded: ${recordErr.message}`));
   }).finally(() => backgroundWork.delete(work));
   backgroundWork.add(work);
@@ -495,15 +500,27 @@ function inBackground(label, projectId, fn) {
 // ---- sheet ----------------------------------------------------------------------------
 
 const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
+// The sheet carries a viewing copy of each image, not the full render: fifteen
+// full PNGs made a 54 MB page that phones choke on. The gallery keeps the original.
+const SHEET_IMAGE_WIDTH = 1280;
+
+async function sheetImage(path) {
+  const sharp = (await import('sharp')).default;
+  const bytes = await sharp(path).resize({ width: SHEET_IMAGE_WIDTH, withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+  return { mime: 'image/jpeg', bytes };
+}
 
 async function embeddedImages(stage) {
   const out = {};
   for (const [key, img] of Object.entries(stage.images || {})) {
     const path = img.imageId ? resolveGalleryImage(img.imageId, { mustExist: false }) : null;
-    const mime = path ? MIME[extname(path).toLowerCase()] : null;
-    if (!path || !mime) continue;
-    const bytes = await deps.readImage(path).catch(() => null);
-    if (bytes) out[key] = `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`;
+    if (!path || !MIME[extname(path).toLowerCase()]) continue;
+    const copy = await deps.sheetImage(path).catch(async (err) => {
+      console.log(`⏭️ Music Video Cast & Sets sheet keeps ${basename(path)} at full size: ${err.message}`);
+      const bytes = await readFile(path).catch(() => null);
+      return bytes ? { mime: MIME[extname(path).toLowerCase()], bytes } : null;
+    });
+    if (copy) out[key] = `data:${copy.mime};base64,${Buffer.from(copy.bytes).toString('base64')}`;
   }
   return out;
 }
@@ -656,14 +673,18 @@ export async function startCastAndSets(projectId, { providerId, model, effort, p
  * note revises the direction, and only images whose prompt changed re-render.
  * The consumed notes are resolved on the sheet. Returns `{ project, stage }`.
  */
-export async function regenerateCastAndSets(projectId, { notes = null, providerId, model, effort } = {}) {
+export async function regenerateCastAndSets(projectId, { notes = null, keys = null, providerId, model, effort } = {}) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   if (!stage?.direction) throw new ServerError('There is no Cast & Sets sheet to regenerate yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
+  const unknownKeys = (keys || []).filter((key) => !stage.plan?.[key]);
+  if (unknownKeys.length) throw new ServerError(`No image on this sheet is called ${unknownKeys.join(', ')}`, { status: 422, code: 'CAST_SETS_UNKNOWN_IMAGE' });
   const artifact = stage.artifactId ? (() => { try { return findDevArtifact(project, stage.artifactId); } catch { return null; } })() : null;
-  const reviewNotes = (project.productionReview?.feedback || []).filter(n => n.stage === 'art' && !n.resolvedAt)
+  // Re-rendering chosen images (`keys`) is another take of just those: open sheet notes stay open.
+  const reviewNotes = keys?.length ? [] : (project.productionReview?.feedback || []).filter(n => n.stage === 'art' && !n.resolvedAt)
     .map(n => ({ target: `production-review:${n.target}`, text: n.text }));
-  const source = [...(Array.isArray(notes) ? notes : (artifact?.notes || []).filter((n) => !n.resolvedAt)), ...reviewNotes];
+  const sheetNotes = keys?.length ? [] : (artifact?.notes || []).filter((n) => !n.resolvedAt);
+  const source = [...(Array.isArray(notes) ? notes : sheetNotes), ...reviewNotes];
   const imageNotes = {};
   const directionNotes = [];
   for (const note of source) {
@@ -681,11 +702,12 @@ export async function regenerateCastAndSets(projectId, { notes = null, providerI
     if (artifact && consumed.size) next = resolveDevArtifactNotes(next, artifact.id, (n) => consumed.has(n.id)).project;
     return { project: next, stage: next.castAndSets };
   });
-  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} regenerating r${out.stage.revision} (${source.length} note(s)${redirect ? ', new direction' : ''})`);
+  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} regenerating r${out.stage.revision} (${keys?.length ? `${keys.length} image(s), ` : ''}${source.length} note(s)${redirect ? ', new direction' : ''})`);
   publish(projectId, out.project);
-  // With no notes the director asks for another take: every image re-renders
-  // from the current direction.
-  const forceKeys = source.length ? Object.keys(imageNotes) : Object.keys(stage.plan || {});
+  // With no notes the director asks for another take: of the images they
+  // picked, else of every image, from the current direction.
+  const forceKeys = keys?.length ? [...new Set([...keys, ...Object.keys(imageNotes)])]
+    : source.length ? Object.keys(imageNotes) : Object.keys(stage.plan || {});
   inBackground('The regeneration', projectId, () => (redirect
     ? runDirection(projectId, { providerId, model, effort, notes: directionNotes, forceKeys })
     : writePlan(projectId, { forceKeys })));
@@ -731,12 +753,15 @@ export async function removeCastAndSetsFeedbackEntry(projectId, feedbackId) {
 }
 
 /**
- * Save the director's direct edits to a procedural direction (construction,
- * palette, expressions, movement, world rules, per-set image role) through the
- * revision path: the stage re-opens as a new revision, the edited direction is
- * persisted in the same write, and only images whose prompt changed re-render
- * before the sheet is re-assembled. No direction (text) provider call is made;
- * a changed image prompt is the director's save acting on the image queue.
+ * Save the director's direct edits to the direction (a protagonist field, the
+ * moods, the other ages, the looks, a cast member, a set, a test; edits or
+ * removals, see applyCastAndSetsDirectionEdits) through the revision path: the
+ * stage re-opens as a new revision, the edited direction is persisted in the
+ * same write, and only images whose prompt changed re-render before the sheet
+ * is re-assembled; a removed item's image leaves the sheet (it stays in the
+ * gallery). Works on a sheet in review, an approved one (it goes back to
+ * review) and a failed one. No direction (text) provider call is made; a
+ * changed image prompt is the director's save acting on the image queue.
  * Returns `{ project, stage }`.
  */
 export async function editCastAndSetsDirection(projectId, edits) {
@@ -757,7 +782,7 @@ export async function editCastAndSetsDirection(projectId, edits) {
   const out = await mutateProjectRecord(projectId, (current) => {
     const stage = current.castAndSets;
     if (!stage?.direction) throw new ServerError('There is no Cast & Sets direction to edit yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
-    assertCastAndSetsApprovable(current);
+    if (stage.status === 'skipped') throw new ServerError('The Cast & Sets check-in was skipped — rebuild it first', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
     const edited = applyCastAndSetsDirectionEdits(stage.direction, edits, { sections });
     if (!edited.changed.length) throw new ServerError('Nothing changed — edit a field first', { status: 422, code: 'CAST_SETS_NO_EDITS' });
     changed = edited.changed;
@@ -770,6 +795,32 @@ export async function editCastAndSetsDirection(projectId, edits) {
   publish(projectId, out.project);
   inBackground('The direction edit', projectId, () => writePlan(projectId));
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
+}
+
+/**
+ * Throw the check-in away so it can be built again from the story (Start
+ * over). Refused while it is working in this process, once approved (Rebuild
+ * keeps an approved sheet's history), and while a production run owns it.
+ * The rendered images stay in the gallery and an assembled sheet stays in the
+ * development artifacts. Returns `{ project }`.
+ */
+export async function discardCastAndSets(projectId) {
+  await requireProject(projectId);
+  const out = await mutateProjectRecord(projectId, (current) => {
+    const stage = current.castAndSets;
+    if (!stage) throw new ServerError('This project has no Cast & Sets check-in', { status: 404, code: 'NOT_FOUND' });
+    if (CAST_SETS_WORKING.includes(stage.status) && stage.processId === PROCESS_ID) throw new ServerError('The Cast & Sets check-in is still being prepared — wait for it to stop', { status: 409, code: 'CAST_SETS_IN_PROGRESS' });
+    if (stage.status === 'approved') throw new ServerError('An approved check-in is rebuilt, not thrown away', { status: 409, code: 'CAST_SETS_APPROVED' });
+    if (stage.productionRunId && (current.productionRuns || []).find((r) => r.id === stage.productionRunId)?.status === 'running') {
+      throw new ServerError('A production run is waiting on this check-in — stop the run first', { status: 409, code: 'CAST_SETS_IN_PRODUCTION' });
+    }
+    const runKnown = (current.productionRuns || []).some((r) => r.id === stage.productionRunId);
+    const { castAndSets: _discarded, ...rest } = runKnown ? refundUnusedCheckinSteps(current) : current;
+    return { project: { ...rest, updatedAt: new Date().toISOString() } };
+  });
+  console.log(`🗑️ Music Video Cast & Sets ${short(projectId)} discarded`);
+  publish(projectId, out.project);
+  return { project: out.project };
 }
 
 /** Resume an interrupted (restart) or failed stage in this process. */
@@ -814,7 +865,7 @@ export async function onCastAndSetsImageSettled({ projectId, key, jobId = null, 
   if (!out.changed) return false;
   publish(projectId, out.project);
   if (out.stage?.processId === PROCESS_ID && out.stage.status === 'imaging') {
-    advance(projectId).catch((err) => console.error(`❌ Music Video Cast & Sets ${short(projectId)} could not continue: ${err.message}`));
+    advance(projectId).catch((err) => console.error(`❌ Music Video Cast & Sets ${short(projectId)} could not continue: ${err.message}${where(err)}`));
   }
   return true;
 }

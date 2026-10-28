@@ -114,6 +114,19 @@ export function seedArtDraft(project, stage = project.castAndSets) {
 }
 
 /**
+ * The art-direction guides the director wrote (or accepted from a story
+ * draft): cast, environments, visual language. A field still holding the text
+ * a Cast & Sets approval seeded is the sheet's own echo, so it is left out.
+ */
+export function directorArtGuides(project) {
+  const draft = project?.productionReview?.draft || {};
+  const seeded = project?.productionReview?.seededDraft || {};
+  return Object.fromEntries(['cast', 'environments', 'visualLanguage']
+    .filter((key) => text(draft[key]) && seeded[key] !== hash(draft[key]))
+    .map((key) => [key, draft[key].trim()]));
+}
+
+/**
  * What one Board shot renders from: its prompts and direction, its span and
  * lyric, its selected frames and performance setup, and its storyboard row.
  * Automation may not change any of it on a locked shot (preserveAutomatedShotLocks).

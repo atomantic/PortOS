@@ -13,6 +13,7 @@ import {
   approveMusicVideoCastAndSets,
   reconfirmMusicVideoCastAndSets,
   skipMusicVideoCastAndSets,
+  discardMusicVideoCastAndSets,
 } from '../services/apiMusicVideo.js';
 
 // Where a stage stops needing the server: the autopilot continues past an
@@ -36,7 +37,7 @@ const reachedCheckpoint = (stage) => CHECKPOINTS.has(stage?.status) || stage?.in
  * `interrupted` by a restart), or null when it could not start or the wait was
  * abandoned with `cancelWait()` (the kickoff's Cancel).
  *
- * Returns `{ busy, start, regenerate, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, runToCheckpoint, cancelWait }`.
+ * Returns `{ busy, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, runToCheckpoint, cancelWait }`.
  */
 export default function useMusicVideoCastAndSets({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
@@ -118,6 +119,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
 
   const start = () => call(() => startMusicVideoCastAndSets(projectId, {}, { silent: true }));
   const regenerate = (notes) => call(() => regenerateMusicVideoCastAndSets(projectId, notes ? { notes } : {}, { silent: true }), 'Regenerating with your notes');
+  const regenerateImages = (keys) => call(() => regenerateMusicVideoCastAndSets(projectId, { keys }, { silent: true }), keys.length === 1 ? 'Re-rendering that image' : 'Re-rendering those images');
   const editDirection = (edits) => call(() => editMusicVideoCastAndSetsDirection(projectId, edits, { silent: true }), edits.sets?.some((set) => Object.hasOwn(set, 'setReference')) ? 'Greybox selection saved — regenerate to apply it' : 'Direction saved — re-rendering what changed');
   const applyFeedback = ({ text, target = null }) => call(() => applyMusicVideoCastAndSetsFeedback(projectId, { text, ...(target ? { target } : {}) }, { silent: true }), 'Applying your feedback');
   const removeFeedback = (feedbackId) => call(() => removeMusicVideoCastAndSetsFeedback(projectId, feedbackId, { silent: true }));
@@ -125,6 +127,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
   const approve = () => call(() => approveMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets approved');
   const reconfirm = () => call(() => reconfirmMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets kept approved');
   const skip = () => call(() => skipMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets check-in skipped');
+  const discard = () => call(() => discardMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets cleared — build it again when your story and guides are ready');
 
   const runToCheckpoint = (target) => {
     if (!target?.id) return Promise.resolve(null);
@@ -153,5 +156,5 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     w.resolve(null);
   };
 
-  return { busy, start, regenerate, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, runToCheckpoint, cancelWait };
+  return { busy, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, runToCheckpoint, cancelWait };
 }
