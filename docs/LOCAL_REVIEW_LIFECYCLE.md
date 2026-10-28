@@ -3,7 +3,7 @@
 The orchestrator owns these receipts; reviewers must not receive or write them.
 They are private Git worktree evidence, never committed, synced or copied into
 PR bodies. The installation's `server/scripts/local-review-lifecycle.mjs` records
-branch, origin, base, aggregate status, historical reviewed head and PR/MR URL.
+branch, origin, base, aggregate status, completion head, actual historical inspection head (when available), and PR/MR URL. Version 2 receipts keep `completedHead` distinct from `reviewedHead`; `inspectionProvenance` is `recorded` or `unavailable`. Version 1 receipts remain unchanged and readable, but their `reviewedHead` is only a completion head: `check` reports `inspectionProvenance: legacy-unknown` in its `inspection` projection. Never infer inspection or approval from that old field.
 It never changes reviewer-model attribution or treats a later commit as reviewed.
 
 Before resetting review state or calling a reviewer, resolve the existing open
@@ -41,7 +41,7 @@ After the phase finishes and all accepted findings/validation failures are fixed
 run `node <installation>/server/scripts/local-review-lifecycle.mjs complete <base> <status>`
 with `clean`, a qualifying `partial`, or availability-only `review-blocked`.
 Incomplete/dirty/findings are rejected. Save original phase state and model
-receipts alongside it. Before PR creation a same-head retry reuses this completion.
+receipts alongside it. Before PR creation a same-completion-head retry reuses this completion. Initial publication must match `completedHead`, even when the actual inspection was earlier.
 After successful creation or recovery, run
 `node <installation>/server/scripts/local-review-lifecycle.mjs publish <base> <PR_URL>`.
 Receipt-write failure blocks publication/merge until repaired from the completed
@@ -84,12 +84,13 @@ If a stop fired, retain that reviewer's `LOCAL_REVIEWER_COMMITS` in
 clean zero-change pass; `on-findings` requires a clean pass that added commits;
 `partial` already records a qualifying configured short-circuit.
 
-After remediation, record `LOCAL_REVIEWED_HEAD_SHA=$(git rev-parse HEAD)` and
-persist all fields together (reload existing state across shell calls):
+Before every reviewer call, capture its exact input HEAD. After a validated clean/findings response, persist that captured SHA as `LOCAL_REVIEWED_HEAD_SHA`; retain it through remediation. Failed/unavailable attempts do not update it. If no reviewer produced a validated result, explicitly persist an empty value, which records unavailable inspection rather than inventing a reviewed commit.
+
+After remediation, record `LOCAL_REMEDIATED_HEAD_SHA=$(git rev-parse HEAD)` and persist all fields together (reload existing state across shell calls). Completion validates the aggregate status, exact remediation head, and that the actual inspection SHA exists in its history. A supplied clean `portos-review-status` inspection head must agree; malformed/duplicate evidence is refused without replacing existing proof:
 
 ```bash
 LOCAL_REVIEW_STATE_FILE="$(git rev-parse --git-path portos-local-review-state)"
-printf 'LOCAL_PHASE_START_SHA=%s\nLOCAL_OVERALL_STATUS=%s\nLOCAL_STOP_TRIGGERED=%s\nLOCAL_STOP_INDEX=%s\nLOCAL_STOP_REVIEW_COMMITS=%s\nLOCAL_PHASE_COMMITS=%s\nLOCAL_REVIEWED_HEAD_SHA=%s\n' "$LOCAL_PHASE_START_SHA" "$LOCAL_OVERALL_STATUS" "$LOCAL_STOP_TRIGGERED" "$LOCAL_STOP_INDEX" "$LOCAL_STOP_REVIEW_COMMITS" "$LOCAL_PHASE_COMMITS" "$LOCAL_REVIEWED_HEAD_SHA" > "$LOCAL_REVIEW_STATE_FILE"
+printf 'LOCAL_PHASE_START_SHA=%s\nLOCAL_OVERALL_STATUS=%s\nLOCAL_STOP_TRIGGERED=%s\nLOCAL_STOP_INDEX=%s\nLOCAL_STOP_REVIEW_COMMITS=%s\nLOCAL_PHASE_COMMITS=%s\nLOCAL_REVIEWED_HEAD_SHA=%s\nLOCAL_REMEDIATED_HEAD_SHA=%s\n' "$LOCAL_PHASE_START_SHA" "$LOCAL_OVERALL_STATUS" "$LOCAL_STOP_TRIGGERED" "$LOCAL_STOP_INDEX" "$LOCAL_STOP_REVIEW_COMMITS" "$LOCAL_PHASE_COMMITS" "$LOCAL_REVIEWED_HEAD_SHA" "$LOCAL_REMEDIATED_HEAD_SHA" > "$LOCAL_REVIEW_STATE_FILE"
 ```
 
 A failed write blocks publication. Then use the `complete` command above with

@@ -111,3 +111,12 @@ it('preserves a lifecycle recording an earlier revision without claiming inspect
   const proof = await inspectLegacyPublisher(entry, [publisher]);
   expect(proof.evidence).toMatchObject({ review: { reviewedHead: 'e'.repeat(40) }, candidateInspection: 'unverified' });
 });
+
+it('retains distinct v2 completion and inspection facts during archived publisher recovery', async () => {
+  f.archive.lifecycle = { ...f.archive.lifecycle, version: 2, completedHead: capture.head,
+    reviewedHead: 'e'.repeat(40), inspectionProvenance: 'recorded', status: 'partial' };
+  const proof = await inspectLegacyPublisher(entry, [publisher]);
+  expect(proof.evidence.review).toMatchObject({ version: 2, completedHead: capture.head,
+    reviewedHead: 'e'.repeat(40), inspectionProvenance: 'recorded' });
+  expect(proof.evidence.candidateInspection).toBe('unverified');
+});

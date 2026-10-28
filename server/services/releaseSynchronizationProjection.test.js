@@ -115,6 +115,14 @@ describe('releaseSynchronizationProjection', () => {
     });
   });
 
+  it('projects the completed publication head rather than an earlier actual inspection', () => {
+    const completedHead = 'e'.repeat(40);
+    const local = { ...entry, obligations: { localReview: { evidence: { receipt: { version: 2, completedHead, reviewedHead: 'f'.repeat(40) } } } } };
+    expect(projectTaskReleaseMilestones({ id: 'example', metadata: {} }, local).metadata.releaseSynchronization.headSha).toBe(completedHead);
+    local.obligations.localReview.evidence.receipt = { version: 1, reviewedHead: completedHead };
+    expect(projectTaskReleaseMilestones({ id: 'example', metadata: {} }, local).metadata.releaseSynchronization.headSha).toBe(completedHead);
+  });
+
   it('projects release publication and synchronization onto agents', () => {
     const publisher = { id: 'publisher-agent-1', metadata: { releasePublication: publication } };
     const projectedPublisher = projectAgentReleaseMilestones(publisher, outbox);

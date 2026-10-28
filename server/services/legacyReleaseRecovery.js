@@ -9,6 +9,7 @@ import { checkoutSeedSchema } from '../lib/checkoutSeed.js';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
 import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
+import { localReviewReceiptEvidence } from '../lib/localReviewLifecycle.js';
 import { legacyRecoveryDigest, legacyPublisherRecovery } from '../lib/releaseSynchronization.js';
 
 const hold = reason => { throw Object.assign(new Error(reason), { code: reason }); };
@@ -101,13 +102,15 @@ export async function inspectLegacyPublisher(entry, agents, { unlocked = false, 
   if (archiveProof === archived && pathPresent === true) await archived.recheckCurrent();
   const review = archived.lifecycle;
   const origin = (await execGit(['remote', 'get-url', 'origin'], capture.repoPath)).stdout.trim();
-  if (review?.version !== 1 || review.branch !== capture.branch || review.origin !== origin || review.base !== 'release'
-    || review.prUrl !== prUrl || !/^[a-f0-9]{40}$/.test(review.reviewedHead || '') || !['clean', 'partial'].includes(review.status)) hold('legacy-review-lifecycle-unverified');
+  let lifecycleEvidence;
+  try { lifecycleEvidence = localReviewReceiptEvidence(review); } catch { hold('legacy-review-lifecycle-unverified'); }
+  if (review.branch !== capture.branch || review.origin !== origin || review.base !== 'release'
+    || review.prUrl !== prUrl || !['clean', 'partial'].includes(review.status)) hold('legacy-review-lifecycle-unverified');
   if (!await archived.recheck()) hold('legacy-archive-changed');
   const evidence = { identity: entry.identity, owner: entry.owner, capture, prUrl,
     forge: { repository: forge.repository, prUrl, prHead: forge.prHead, mergeCommit: forge.mergeCommit },
     review: { version: review.version, branch: review.branch, base: review.base, prUrl: review.prUrl,
-      status: review.status, reviewedHead: review.reviewedHead }, candidateInspection: 'unverified',
+      status: review.status, reviewedHead: review.reviewedHead, ...(review.version === 2 && { completedHead: lifecycleEvidence.completedHead, inspectionProvenance: lifecycleEvidence.inspectionProvenance }) }, candidateInspection: 'unverified',
     archive: { archiveDir: archived.archiveDir, archivedAt: archived.archivedAt, evidenceDigest: archived.evidenceDigest }, mode,
     ...(mode === 'present' ? { preservation } : { retirement }) };
   return { evidence, digest: legacyRecoveryDigest(evidence), recheck: archived.recheck, retirement, archiveProof: archived };
