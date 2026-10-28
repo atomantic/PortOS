@@ -1,15 +1,19 @@
 import { EventEmitter } from 'node:events';
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies } from '../lib/mockPathsDataRoot.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-telegram-authority-') }));
-afterAll(cleanupTempDataRoots);
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
+afterAll(async () => {
+  try { await owned.drain(); } finally { cleanupTempDataRoots(); }
+});
 
 const auth = vi.hoisted(() => ({ enabled: false }));
 vi.mock('../services/auth.js', async (importOriginal) => ({
@@ -101,7 +105,8 @@ const mutatingOperations = [
 ];
 
 describe('Telegram bot, bridge and settings operator authority (#11431)', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await owned.drain();
     vi.clearAllMocks();
     auth.enabled = false;
     currentSettings = {
@@ -110,7 +115,7 @@ describe('Telegram bot, bridge and settings operator authority (#11431)', () => 
     };
   });
 
-  it.each([
+  for (const [name, enabled, address, headers, status, code] of [
     ['remote without auth', false, '192.0.2.10', {}, 403, 'HOST_CONTROL_FORBIDDEN'],
     ['forwarded remote without auth', false, '127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }, 403, 'HOST_CONTROL_FORBIDDEN'],
     ['anonymous with auth', true, '192.0.2.10', {}, 401, 'AUTH_REQUIRED'],
@@ -119,7 +124,7 @@ describe('Telegram bot, bridge and settings operator authority (#11431)', () => 
       [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
       [PEER_INSTANCE_HEADER]: 'example-instance',
     }, 403, 'PEER_SCOPE_FORBIDDEN'],
-  ])('refuses %s for all mutating Telegram routes', async (_name, enabled, address, headers, status, code) => {
+  ]) it(`refuses ${name} for all mutating Telegram routes`, async () => {
     auth.enabled = enabled;
     const app = appFor(address);
 
@@ -159,11 +164,11 @@ describe('Telegram bot, bridge and settings operator authority (#11431)', () => 
     expect(telegramEffects.sendMessage).not.toHaveBeenCalled();
   });
 
-  it.each([
+  for (const [principal, address] of [
     ['local', '127.0.0.1'],
     ['operator session', '192.0.2.10'],
     ['delegated agent', '127.0.0.1'],
-  ])('preserves %s Telegram operations', async (principal, address) => {
+  ]) it(`preserves ${principal} Telegram operations`, async () => {
     const headers = {};
     if (principal !== 'local') {
       const session = await createSession({ label: principal === 'delegated agent' ? 'agent' : 'operator' });
