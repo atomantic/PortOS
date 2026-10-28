@@ -98,6 +98,10 @@ async function exerciseDelivery() {
     await git('checkout', '-qb', 'optional-unavailable-delivery');
     await phase('clean', '');
     expect(await cli('complete', 'main', 'clean')).toMatchObject({ reviewedHead: null, inspectionProvenance: 'unavailable' });
+    const optionalPhasePath = join(cwd, '.git/portos-local-review-state');
+    await writeFile(optionalPhasePath, (await readFile(optionalPhasePath, 'utf8')).replace('LOCAL_STOP_TRIGGERED=false', 'LOCAL_STOP_TRIGGERED=true')
+      .replace('LOCAL_STOP_INDEX=-1', 'LOCAL_STOP_INDEX=0').replace('LOCAL_STOP_REVIEW_COMMITS=-1', 'LOCAL_STOP_REVIEW_COMMITS=0'));
+    await expect(cli('complete', 'main', 'clean')).rejects.toMatchObject({ code: 1 });
 
     await git('checkout', '-qb', 'partial-delivery');
     const inspected = await git('rev-parse', 'HEAD');

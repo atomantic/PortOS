@@ -79,7 +79,7 @@ async function inspectionEvidence(ctx, status) {
     throw new Error('Local review phase commit count does not match completion');
   }
   const reviewedHead = phase.LOCAL_REVIEWED_HEAD_SHA || null;
-  if (status === 'partial' && reviewedHead === null) throw new Error('Partial local review has no actual inspection');
+  if (phase.LOCAL_STOP_TRIGGERED === 'true' && reviewedHead === null) throw new Error('Local review stop has no actual inspection');
   if (reviewedHead !== null) {
     if (!SHA.test(reviewedHead)) throw new Error('Invalid local review inspection head');
     await ctx.git(['merge-base', '--is-ancestor', reviewedHead, ctx.head]);
