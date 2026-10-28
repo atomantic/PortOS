@@ -1,6 +1,7 @@
 import { normalizeTaskOutcome } from '../lib/agentOutcome.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { resolveUndeliveredTaskUpdate } from './agentErrorAnalysis.js';
+import { hasUndercountedDispatch } from './agentCompletionTaskHandoff.js';
 
 /** Adopt old outcome blocks once, retaining the original task, budget and checkout.
  * Manual holds, provider safety refusals and live owners are never revived here.
@@ -22,7 +23,8 @@ export async function recoverLegacyDeliveryBlocks(agents, deps = {}) {
     const owner = owners.filter(agent => agent.status === 'completed')
       .sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''))[0];
     if (!owner?.id || owner.result?.taskOutcome?.reason !== outcome.reason
-      || owner.result?.taskOutcome?.status !== outcome.status || owner.metadata?.executionInterruption || owner.result?.executionInterruption || isPrivateSecurityTask(owner)) continue;
+      || owner.result?.taskOutcome?.status !== outcome.status || owner.metadata?.executionInterruption || owner.result?.executionInterruption
+      || isPrivateSecurityTask(owner) || hasUndercountedDispatch(task, owner)) continue;
     const planned = resolveUndeliveredTaskUpdate(task, outcome, owner.id);
     const result = await update(task.id, { ...planned, metadata: { ...planned.metadata, legacyDeliveryRecovery: owner.id } }, task.taskType || 'user', {
       expectedStatus: 'blocked', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },

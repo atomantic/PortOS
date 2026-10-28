@@ -162,6 +162,21 @@ describe('blocked system recovery persisted workflow', () => {
     expect(created).toBe(1);
   });
 
+  it.each([[2, '1'], ['2', 1]])('holds a blocked task when its local owner receipt charged %s but its record retained %s', async (charged, retained) => {
+    const queues = await read();
+    queues.cos.tasks[0].metadata.deliveryDecisionAgentId = 'agent-original';
+    queues.cos.tasks[0].metadata.totalSpawnCount = retained;
+    await write(queues);
+    identity.agent = { id: 'agent-original', status: 'completed', taskId: 'system-original', metadata: {
+      instanceId: 'fixture-local', completionTaskDispatch: { taskId: 'system-original', taskType: 'internal',
+        expected: [['claimedBy', 'fixture-local'], ['claimedAt', 'claimed'], ['lastSpawnedAt', 'spawned'], ['totalSpawnCount', charged]] } } };
+    const recovery = factory(true);
+    expect(await recovery.recover('system-original')).toEqual({ handled: false, reason: 'spawn-budget-reconciliation-required' });
+    expect(await recovery.recover('system-original')).toEqual({ handled: false, reason: 'spawn-budget-reconciliation-required' });
+    expect(await read()).toEqual(queues);
+    expect(created).toBe(0);
+  });
+
   it('lets a user/owner transition win before creation', async () => {
     race = true;
     expect(await factory().recover('system-original')).toMatchObject({ handled: false, reason: 'task-changed' });
