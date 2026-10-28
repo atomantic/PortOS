@@ -27,7 +27,7 @@
  * middleware translates it to a 4xx response.
  */
 
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { applyImageVisualProfile } from './visualProfile.js';
 import { musicVideoStyleImages, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
@@ -136,6 +136,16 @@ export function selectLocalImageModelFromSettings(settings, modelId, allModels =
 export const previewUploadLabel = (index) => `(uploaded image ${index + 1})`;
 
 export async function prepareGenerateParams({ data, files, referenceImageFields, preview = false }) {
+  if (data.quickEdit) {
+    const authoredPrompt = data.prompt;
+    const prefix = 'Edit the reference image: ';
+    const preservation = '. Keep everything else exactly as it is: composition, framing, subject, lighting, color and film look.';
+    data = { ...data, authoredPrompt, prompt: `${prefix}${authoredPrompt}${preservation}`,
+      promptAdditions: [...(data.promptAdditions || []),
+        { id: 'quick-edit-prefix', label: 'Reference edit instruction', text: prefix },
+        { id: 'quick-edit-preservation', label: 'Preserve the rest', text: preservation }],
+    };
+  }
   let profile = data.visualProfileOverride;
   if (profile === undefined && !data.musicVideo && data.universeRun?.universeId) {
     const { getUniverseVisualProfile } = await import('../universeBuilder/crud.js');
@@ -548,4 +558,13 @@ export function resolveLocalImageModel(settings, params) {
     );
   }
   return { pythonPath, selectedModel };
+}
+
+/** Bind the reviewed composition and provider defaults, independently of reference bytes. */
+export function quickEditCompositionDigest({ params, mode, settings }) {
+  const keys = ['prompt', 'negativePrompt', 'promptAdditions', 'width', 'height', 'modelId', 'cloudModel', 'effort', 'initImagePath', 'referenceImagePaths', 'referenceImageStrengths', 'mediaProviderPeerId', 'visualProfileRevision'];
+  return createHash('sha256').update(JSON.stringify({
+    mode, imageGen: settings.imageGen,
+    input: Object.fromEntries(keys.map(key => [key, params[key]])),
+  })).digest('hex');
 }
