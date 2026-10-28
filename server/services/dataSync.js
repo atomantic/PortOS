@@ -938,14 +938,17 @@ async function getVideoHistorySnapshot() {
 // This separate inventory describes only bytes on this machine, never the
 // unioned history or files streamed from another peer. It is refreshed even
 // when history is unchanged and is absent on older peers.
-export async function getVideoHistoryInventory() {
-  const { data } = await getVideoHistorySnapshot();
+export async function getVideoHistoryInventory(category = 'videoHistory') {
+  const { data } = category === 'mediaCollections' ? await getMediaCollectionsSnapshot() : await getVideoHistorySnapshot();
+  const references = category === 'mediaCollections'
+    ? data.collections.filter((c) => !c.deleted).flatMap((c) => referenceCollectionAssetManifest(c).filter((asset) => asset.kind === 'video').map((asset) => asset.filename))
+    : data.videos.map((row) => row.filename);
   const names = await readdir(PATHS.videos, { withFileTypes: true }).catch((err) => {
     if (err.code === 'ENOENT') return [];
     throw err;
   });
   const local = new Set(names.filter((entry) => entry.isFile()).map((entry) => entry.name));
-  const checked = [...new Set(data.videos.map((row) => row.filename).filter((name) =>
+  const checked = [...new Set(references.filter((name) =>
     typeof name === 'string' && sanitizeAssetFilename(name) === name))];
   const filenames = checked.filter((name) => local.has(name));
   return { version: 1, filenames, checked, portosMeta: await buildPortosMeta() };
@@ -1385,11 +1388,10 @@ export async function applyRemote(category, remoteData, options = {}) {
       },
     };
   }
-  if (category === 'videoHistory' && options.inventory === true) {
+  if ((category === 'videoHistory' || category === 'mediaCollections') && options.inventory === true) {
     const peer = (await getPeers()).find((p) => p.instanceId === source.peerId && p.enabled !== false && p.mediaSyncMode === 'host');
     if (peer && remoteData?.version === 1 && Array.isArray(remoteData.filenames) && Array.isArray(remoteData.checked)) {
-      const { data } = await getVideoHistorySnapshot();
-      await reconcileHostedVideos(peer.instanceId, remoteData.filenames, remoteData.checked, data.videos.map((row) => row.filename));
+      await reconcileHostedVideos(peer.instanceId, remoteData.filenames, remoteData.checked);
     }
     return { applied: false, count: 0 };
   }

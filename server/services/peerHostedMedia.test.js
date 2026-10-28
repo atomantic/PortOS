@@ -103,6 +103,20 @@ describe('takeHostedAssets', () => {
 });
 
 describe('static-mount fallback', () => {
+  it('does not erase newer evidence when an older request returns 404', async () => {
+    await markHosted(PEER.instanceId, [{ kind: 'video', filename: 'race.mp4' }]);
+    let finish;
+    let started;
+    const startedPromise = new Promise((resolve) => { started = resolve; });
+    streamRequest.mockImplementation(() => new Promise((resolve) => { finish = resolve; started(); }));
+    const response = request(app).get('/data/videos/race.mp4').then((res) => res);
+    await startedPromise;
+    await markHosted(PEER.instanceId, [{ kind: 'video', filename: 'race.mp4' }]);
+    finish(upstream('', 404));
+    expect((await response).status).toBe(404);
+    expect((await resolveMediaLocations([{ kind: 'video', ref: 'race.mp4' }]))[0]).toMatchObject({ hostPeerId: PEER.instanceId });
+  });
+
   it('streams a peer-hosted image through the unchanged local URL', async () => {
     await markHosted(PEER.instanceId, [{ kind: 'image', filename: 'remote.png' }]);
     streamRequest.mockResolvedValue(upstream('REMOTEBYTES'));

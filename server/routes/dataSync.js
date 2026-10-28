@@ -129,9 +129,11 @@ const slotsOf = (req) => {
   return ids.length > 0 ? ids : undefined;
 };
 
-router.get('/videoHistory/inventory', asyncHandler(async (req, res) => {
-  await authorizeSyncPull(req, 'videoHistory');
-  res.json(await dataSync.getVideoHistoryInventory());
+router.get('/:category/video-inventory', asyncHandler(async (req, res) => {
+  const category = validateRequest(categoryParam, req.params.category);
+  if (category !== 'videoHistory' && category !== 'mediaCollections') throw new ServerError('Category has no video inventory', { status: 404 });
+  await authorizeSyncPull(req, category);
+  res.json(await dataSync.getVideoHistoryInventory(category));
 }));
 
 // GET /api/sync/:category/manifest — the category's per-slot version map.

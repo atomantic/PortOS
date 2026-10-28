@@ -28,6 +28,7 @@ import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { isManifestEnvelope, diffManifestSlots, MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 
 const CURSORS_FILE = dataPath('instances_sync_cursors.json');
 const SYNC_INTERVAL_MS = 60000;
@@ -150,6 +151,28 @@ async function fetchPeer(peer, path) {
     .catch(() => null);
   if (!res?.ok) return null;
   return readPeerBody(res, 'json', { maxBytes }).catch(handlePeerBodyError);
+}
+
+// Older peers lack the inventory route. A successful HEAD with no remote-media
+// marker proves their static mount served local bytes, rather than proxying a
+// third peer. Failure is inconclusive and never removes an existing host.
+async function fetchVideoInventory(peer, category) {
+  const path = `/api/sync/${category}/video-inventory`;
+  const response = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(`${peerBaseUrl(peer)}${path}`, { signal }, peer)).catch(() => null);
+  if (!response) return null;
+  if (response.status !== 404) {
+    if (!response.ok) return null;
+    return readPeerBody(response, 'json', { maxBytes: PEER_BODY_DEFAULT_MAX_BYTES }).catch(() => null);
+  }
+  const { checked } = await dataSync.getVideoHistoryInventory(category);
+  const found = await mapWithConcurrency(checked, 4, async (filename) => {
+    const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(
+      `${peerBaseUrl(peer)}/data/videos/${encodeURIComponent(filename)}`, { method: 'HEAD', signal }, peer,
+    )).catch(() => null);
+    return res?.ok && res.headers?.get('x-portos-media-location') !== 'remote' ? filename : null;
+  });
+  const filenames = found.filter(Boolean);
+  return { version: 1, filenames, checked: filenames };
 }
 
 /**
@@ -575,8 +598,8 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   if (gap && !schemaGapMayHaveCleared(gap, peer, checksumRes.checksum)) {
     return { totalApplied: 0, checksum: null, blockedBySchema: gap };
   }
-  if (category === 'videoHistory' && peer.mediaSyncMode === 'host') {
-    const inventory = await fetchPeer(peer, '/api/sync/videoHistory/inventory').catch(() => null);
+  if ((category === 'videoHistory' || category === 'mediaCollections') && peer.mediaSyncMode === 'host') {
+    const inventory = await fetchVideoInventory(peer, category).catch(() => null);
     if (inventory) await dataSync.applyRemote(category, inventory, { peerId, portosMeta: inventory.portosMeta, inventory: true });
   }
   if (!gap && lastChecksum && lastChecksum === checksumRes.checksum) {

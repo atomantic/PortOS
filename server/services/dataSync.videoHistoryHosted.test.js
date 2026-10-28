@@ -58,6 +58,27 @@ describe('video history peer ownership', () => {
     expect(await location()).toEqual({ location: 'missing' });
   });
 
+  it('retains a confirmed alternate and switches to it when the first host deletes the file', async () => {
+    await dataSync.applyRemote('videoHistory', { videos: [row] }, { peerId: 'a' });
+    await inventory('b', ['v1.mp4']);
+    await inventory('c', ['v1.mp4']);
+    expect(await location()).toMatchObject({ hostPeerId: 'b' });
+    await inventory('b', []);
+    expect(await location()).toMatchObject({ hostPeerId: 'c' });
+    await inventory('c', []);
+    expect(await location()).toEqual({ location: 'missing' });
+  });
+
+  it('reconciles collection-only video ownership through the collection category', async () => {
+    const collection = { id: 'collection-only', name: 'Clips', items: [{ kind: 'video', ref: 'v1', addedAt: '2026-05-22T00:00:00Z' }], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z' };
+    await dataSync.applyRemote('mediaCollections', { collections: [collection] }, { peerId: 'a' });
+    expect(await location()).toEqual({ location: 'missing' });
+    const result = await dataSync.getVideoHistoryInventory('mediaCollections');
+    expect(result.checked).toContain('v1.mp4');
+    await dataSync.applyRemote('mediaCollections', { version: 1, filenames: ['v1.mp4'], checked: ['v1.mp4'] }, { peerId: 'b', inventory: true });
+    expect(await location()).toMatchObject({ hostPeerId: 'b' });
+  });
+
   it('ignores malformed, disabled and copy-mode inventories and preserves local bytes', async () => {
     await dataSync.applyRemote('videoHistory', { videos: [row] }, { peerId: 'a' });
     await inventory('b', ['v1.mp4']);

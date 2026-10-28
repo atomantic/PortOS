@@ -430,11 +430,11 @@ describe('video history inventory authorization', () => {
   });
 
   it('uses the same peer/category gate as history snapshots', async () => {
-    const allowed = await request(buildApp()).get('/api/sync/videoHistory/inventory').set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+    const allowed = await request(buildApp()).get('/api/sync/videoHistory/video-inventory').set(PEER_INSTANCE_ID_HEADER, PEER_ID);
     expect(allowed.status).toBe(200);
     expect(allowed.body.filenames).toEqual(['v.mp4']);
     setPeers(allowedPeer({ fullSync: false, syncCategories: { videoHistory: false } }));
-    const denied = await request(buildApp()).get('/api/sync/videoHistory/inventory').set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+    const denied = await request(buildApp()).get('/api/sync/videoHistory/video-inventory').set(PEER_INSTANCE_ID_HEADER, PEER_ID);
     expect(denied.status).toBe(403);
     expect(getVideoHistoryInventory).toHaveBeenCalledTimes(1);
   });

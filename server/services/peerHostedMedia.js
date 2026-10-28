@@ -17,6 +17,7 @@
 import { join, extname, basename } from 'path';
 import { existsSync } from 'fs';
 import { pipeline } from 'stream/promises';
+import { randomUUID } from 'crypto';
 import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -45,6 +46,9 @@ const KIND_PREFIX = { image: '/data/images', video: '/data/videos' };
 const VIDEO_EXTS = ['.mp4', '.webm', '.mov', '.m4v', '.ogv'];
 
 export const hostedKey = (kind, filename) => `${kind}:${filename}`;
+const hostsOf = (entry) => Array.isArray(entry?.hosts) ? entry.hosts : (entry?.peerId ? [{ peerId: entry.peerId, at: entry.at, revision: entry.revision }] : []);
+const hostEntry = (hosts) => ({ peerId: hosts[0].peerId, at: hosts[0].at, revision: hosts[0].revision, hosts });
+
 
 // STRICT: an unreadable index must never be written back as an empty one that
 // wipes every entry (absent file → real empty). Rendering-side readers use
@@ -74,8 +78,11 @@ export function markHosted(peerInstanceId, assets) {
       if (!dir || !filename) continue;
       if (existsSync(join(dir, filename))) continue;
       const key = hostedKey(asset.kind, filename);
-      if (entries[key]?.peerId === peerInstanceId) continue;
-      entries[key] = { peerId: peerInstanceId, at };
+      const hosts = hostsOf(entries[key]);
+      const index = hosts.findIndex((host) => host.peerId === peerInstanceId);
+      if (index >= 0) hosts[index] = { peerId: peerInstanceId, at, revision: randomUUID() };
+      else hosts.push({ peerId: peerInstanceId, at, revision: randomUUID() });
+      entries[key] = hostEntry(hosts);
       changed++;
     }
     if (changed > 0) await writeEntries(entries);
@@ -84,7 +91,7 @@ export function markHosted(peerInstanceId, assets) {
 }
 
 /** Reconcile one peer's authoritative video inventory, without touching other hosts. */
-export function reconcileHostedVideos(peerInstanceId, filenames, checked, historyFilenames) {
+export function reconcileHostedVideos(peerInstanceId, filenames, checked) {
   if (!isStr(peerInstanceId) || !Array.isArray(filenames) || !Array.isArray(checked) ||
       [...filenames, ...checked].some((name) => !isStr(name) || sanitizeAssetFilename(name) !== name)) return Promise.resolve();
   return queueWrite(async () => {
@@ -92,19 +99,26 @@ export function reconcileHostedVideos(peerInstanceId, filenames, checked, histor
     const present = new Set(filenames);
     const examined = new Set(checked);
     if (filenames.some((name) => !examined.has(name))) return;
-    const history = new Set(historyFilenames);
     let changed = false;
     for (const [key, entry] of Object.entries(entries)) {
-      if (key.startsWith('video:') && history.has(key.slice(6)) && examined.has(key.slice(6)) && entry?.peerId === peerInstanceId && !present.has(key.slice(6))) {
-        delete entries[key];
+      if (key.startsWith('video:') && examined.has(key.slice(6)) && !present.has(key.slice(6))) {
+        const hosts = hostsOf(entry);
+        const remaining = hosts.filter((host) => host.peerId !== peerInstanceId);
+        if (remaining.length === hosts.length) continue;
+        if (remaining.length) entries[key] = hostEntry(remaining);
+        else delete entries[key];
         changed = true;
       }
     }
     for (const filename of present) {
       if (existsSync(join(PATHS.videos, filename))) continue;
       const key = hostedKey('video', filename);
-      if (entries[key]?.peerId === peerInstanceId) continue;
-      entries[key] = { peerId: peerInstanceId, at: new Date().toISOString() };
+      const hosts = Array.isArray(entries[key]?.hosts) ? hostsOf(entries[key]) : [];
+      const index = hosts.findIndex((host) => host.peerId === peerInstanceId);
+      const evidence = { peerId: peerInstanceId, at: new Date().toISOString(), revision: randomUUID() };
+      if (index >= 0) hosts[index] = evidence;
+      else hosts.push(evidence);
+      entries[key] = hostEntry(hosts);
       changed = true;
     }
     if (changed) await writeEntries(entries);
@@ -134,11 +148,16 @@ export async function takeHostedAssets(peerInstanceId, missingAssets, collection
   return remaining;
 }
 
-function forgetHosted(kind, filename, peerId) {
+function forgetHosted(kind, filename, peerId, revision) {
   return queueWrite(async () => {
     const entries = await readEntries();
     const key = hostedKey(kind, filename);
-    if (entries[key]?.peerId === peerId) { delete entries[key]; await writeEntries(entries); }
+    const hosts = hostsOf(entries[key]);
+    const remaining = hosts.filter((host) => host.peerId !== peerId || host.revision !== revision);
+    if (remaining.length === hosts.length) return;
+    if (remaining.length) entries[key] = hostEntry(remaining);
+    else delete entries[key];
+    await writeEntries(entries);
   }).catch(() => {});
 }
 
@@ -222,11 +241,11 @@ async function resolveHostedRequest(mount, filename) {
   if (!safe) return null;
   if (mount === '/data/images') {
     const hosted = await lookupHosted('image', safe);
-    return hosted && { peerId: hosted.peerId, url: `${KIND_PREFIX.image}/${encodeURIComponent(safe)}`, drop: { kind: 'image', filename: safe } };
+    return hosted && { peerId: hosted.peerId, url: `${KIND_PREFIX.image}/${encodeURIComponent(safe)}`, drop: { kind: 'image', filename: safe, revision: hosted.revision } };
   }
   if (mount === '/data/videos') {
     const hosted = await lookupHosted('video', safe);
-    return hosted && { peerId: hosted.peerId, url: `${KIND_PREFIX.video}/${encodeURIComponent(safe)}`, drop: { kind: 'video', filename: safe } };
+    return hosted && { peerId: hosted.peerId, url: `${KIND_PREFIX.video}/${encodeURIComponent(safe)}`, drop: { kind: 'video', filename: safe, revision: hosted.revision } };
   }
   if (mount === '/data/image-thumbnails') {
     // `<stem>.webp` is derived from `<stem>.png`; the peer serves its own
@@ -292,7 +311,7 @@ async function streamFromPeer(peer, path, req, res, drop, timeoutMs) {
     upstream.stream.destroy();
     // The peer no longer has it (deleted, or a snapshot referenced bytes it never
     // held): forget the entry so the collection stops advertising it as hosted.
-    if (upstream.status === 404 && drop) await forgetHosted(drop.kind, drop.filename, peer.instanceId);
+    if (upstream.status === 404 && drop) await forgetHosted(drop.kind, drop.filename, peer.instanceId, drop.revision);
     res.status(upstream.status === 404 ? 404 : 502).end();
     return;
   }
