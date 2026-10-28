@@ -23,7 +23,11 @@ const { listSubjectsMock, runScanPassMock, runOptOutPassMock, scheduleMock, getS
 vi.mock('./privacySubjects.js', () => ({ listSubjects: listSubjectsMock }));
 vi.mock('./privacyScan.js', () => ({ runScanPass: runScanPassMock }));
 vi.mock('./privacyOptOut.js', () => ({ runOptOutPass: runOptOutPassMock }));
-vi.mock('./eventScheduler.js', () => ({ schedule: scheduleMock, cancel: vi.fn(), parseCronToNextRun: vi.fn(), parseCronToPrevRun: prevRunMock }));
+vi.mock('./eventScheduler.js', async (importOriginal) => {
+  const real = await importOriginal();
+  scheduleMock.mockImplementation((config) => config.type === 'once' ? real.schedule(config) : undefined);
+  return { schedule: scheduleMock, cancel: vi.fn(real.cancel), parseCronToNextRun: vi.fn(), parseCronToPrevRun: prevRunMock };
+});
 vi.mock('./settings.js', () => ({ getSettings: getSettingsMock, updateSettingsWith: updateSettingsWithMock }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn(async () => 'UTC') }));
 

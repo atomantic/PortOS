@@ -21,16 +21,15 @@ import { runOptOutPass } from './privacyOptOut.js';
 import { listSubjects } from './privacySubjects.js';
 
 const EVENT_ID = 'privacy-recheck';
+const CATCHUP_EVENT_ID = 'privacy-recheck-missed-slot-catchup';
 const DEFAULT_CRON = '0 4 * * 0'; // weekly, Sun 4am
 
 // Boot delay before a missed-slot catch-up runs, mirroring backupScheduler.js
 // (#8456): stays clear of boot-time migrations and store warm-up.
 const CATCHUP_BOOT_DELAY_MS = 5 * 60_000;
 
-// At most one catch-up evaluation per process boot, and its pending timer so
-// stopPrivacyRecheckScheduler() can cancel it.
+// At most one catch-up evaluation per process boot.
 let catchUpEvaluated = false;
-let catchUpTimer = null;
 
 const toMs = (iso) => {
   const ms = iso ? new Date(iso).getTime() : NaN;
@@ -64,12 +63,13 @@ function maybeCatchUpMissedSlot(recheck, cronExpression, timezone) {
   if (Number.isFinite(lastRunMs) ? lastRunMs >= prevRunMs : !(enabledAtMs < prevRunMs)) return;
 
   console.log(`🛡️ Privacy recheck scheduler: missed slot ${prevRun.toISOString()} — catching up in ${Math.round(CATCHUP_BOOT_DELAY_MS / 60_000)}m`);
-  catchUpTimer = setTimeout(() => {
-    catchUpTimer = null;
-    runIfEnabled('missed-slot catch-up').catch((err) =>
-      console.error(`❌ Privacy recheck catch-up failed: ${err.message}`));
-  }, CATCHUP_BOOT_DELAY_MS);
-  catchUpTimer.unref?.();
+  schedule({
+    id: CATCHUP_EVENT_ID,
+    type: 'once',
+    delayMs: CATCHUP_BOOT_DELAY_MS,
+    handler: () => runIfEnabled('missed-slot catch-up'),
+    metadata: { source: 'privacyRecheckScheduler' },
+  });
 }
 
 /**
@@ -146,10 +146,7 @@ async function runScheduledRecheck() {
 
 export function stopPrivacyRecheckScheduler() {
   cancel(EVENT_ID);
-  if (catchUpTimer) {
-    clearTimeout(catchUpTimer);
-    catchUpTimer = null;
-  }
+  cancel(CATCHUP_EVENT_ID);
   console.log('🛡️ Privacy recheck scheduler: stopped');
 }
 
