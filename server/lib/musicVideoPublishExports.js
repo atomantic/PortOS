@@ -1,5 +1,5 @@
 /** Measured publish-kit export presentation, including kits predating dimension metadata. */
-export function publishExportDimensions(asset) {
+function publishExportDimensions(asset) {
   return Number.isInteger(asset?.width) && asset.width > 0 && Number.isInteger(asset?.height) && asset.height > 0
     ? `${asset.width} × ${asset.height}` : 'dimensions unknown';
 }
