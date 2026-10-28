@@ -1768,7 +1768,7 @@ describe('claim-swarm completion', () => {
     expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', expect.objectContaining({
       branch: 'claim/issue-11', status: 'blocked', reason: 'claim-owner-ambiguous', owners: ['agent-a', 'agent-bb'] }));
   });
-  it.each(['bound-elsewhere', 'bound-here', 'completed', 'racing-bind'])('rechecks the recorded hold when its picker changes ownership: %s', async scenario => {
+  it.each(['bound-elsewhere', 'bound-here', 'completed', 'pending-only-completed', 'racing-bind'])('rechecks the recorded hold when its picker changes ownership: %s', async scenario => {
     const branch = 'claim/issue-11';
     const capture = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
       repoPath: '/repo', branch, path: WORKTREE, head: HEAD,
@@ -1777,7 +1777,8 @@ describe('claim-swarm completion', () => {
       claimBranches: [branch], completedCheckouts: [capture], checkoutCapture: { status: 'captured' },
       repoStateVerification: { status: 'pending' }, completionCleanup: { status: 'completed' } }),
     id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT, result: { success: false, cleanupPending: true } };
-    const owner = { id: 'picker', status: 'running', workspacePath: '/repo', metadata: { claimPicksOwnBranch: true } };
+    const owner = { id: 'picker', status: 'running', workspacePath: '/repo', metadata:
+      scenario === 'pending-only-completed' ? { claimSelectionPending: true } : { claimPicksOwnBranch: true } };
     const pendingTask = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
       deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: state.id } };
     getTaskById.mockResolvedValue(pendingTask);
@@ -1816,10 +1817,11 @@ describe('claim-swarm completion', () => {
         expect(state.metadata.cleanupOutcomes[branch].path).toBe(WORKTREE);
       }
       const previousOwner = structuredClone(owner);
-      if (scenario === 'completed') owner.status = 'completed';
+      if (scenario === 'completed' || scenario === 'pending-only-completed') owner.status = 'completed';
       else owner.metadata.claimBranches = [scenario === 'bound-here' ? branch : 'claim/issue-12'];
-      const event = scenario === 'completed' ? 'agent:completed' : 'claim:ownership-changed';
-      const wake = events.listeners(event)[0](scenario === 'completed' ? owner : { agentId: owner.id });
+      const completed = scenario === 'completed' || scenario === 'pending-only-completed';
+      const event = completed ? 'agent:completed' : 'claim:ownership-changed';
+      const wake = events.listeners(event)[0](completed ? owner : { agentId: owner.id });
       if (scenario === 'racing-bind') {
         releaseOwnerRead([previousOwner]);
         expect((await initial).branches[0].skipReason).toBe('claim-owner-ambiguous');

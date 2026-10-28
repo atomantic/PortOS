@@ -869,7 +869,8 @@ export function bindCompletionRetirementEvents(events) {
   };
   const onClaimOwnerCompleted = agent => {
     const meta = agent?.metadata;
-    if (!meta?.isWorktree && !meta?.claimBranch && !meta?.claimPicksOwnBranch && !meta?.claimBranches?.length
+    if (!meta?.isWorktree && !agent?.claimBranch && !meta?.claimBranch && !agent?.claimPicksOwnBranch && !meta?.claimPicksOwnBranch
+      && !agent?.claimSelectionPending && !meta?.claimSelectionPending && !agent?.claimBranches?.length && !meta?.claimBranches?.length
       && !meta?.reconcileReservations?.length && !meta?.releaseCandidate) return;
     return onClaimOwnership(agent);
   };
