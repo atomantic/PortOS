@@ -839,6 +839,35 @@ describe('prepareVideoGenParams — Omni reference inputs', () => {
     expect(prepared.uploadedTempPaths).toEqual(prepared.referenceAudioPaths);
   });
 
+  it('preserves mixed reference order and transfers only staged voices to the job', async () => {
+    const ids = [1, 2].map((n) => `0000000${n}-0000-4000-8000-000000000000`);
+    loadHistory.mockResolvedValue(ids.map((id, i) => ({ id, filename: `c${i}.mp4` })));
+    const prepared = await prepare(omniBody({ referenceImageFiles: ['b.png', 'a.png'], referenceVideoIds: ids }), {
+      referenceAudio0: upload('referenceAudio0', 'one.wav'),
+      referenceAudio1: upload('referenceAudio1', 'two.wav'),
+    });
+    expect(prepared.referenceImagePaths.map(posix)).toEqual(['/mock/images/b.png', '/mock/images/a.png']);
+    expect(prepared.referenceVideoPaths.map(posix)).toEqual(['/mock/videos/c0.mp4', '/mock/videos/c1.mp4']);
+    expect(prepared.referenceAudioPaths).toEqual(copyFileMock.mock.calls.map(([, destination]) => destination));
+    expect(prepared.referenceAudioPaths).toHaveLength(2);
+    expect(prepared.uploadedTempPaths).toEqual(prepared.referenceAudioPaths);
+    expect(unlinkedDurablePaths()).toEqual([]);
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it('rolls back staged voices on a later reference conflict and preserves source media', async () => {
+    const id = '00000001-0000-4000-8000-000000000000';
+    loadHistory.mockResolvedValue([{ id, filename: 'clip.mp4' }]);
+    await expect(prepare(omniBody({ chunks: 2, referenceImageFiles: ['a.png'], referenceVideoIds: [id] }), {
+      referenceAudio0: upload('referenceAudio0', 'voice.wav'),
+    })).rejects.toMatchObject({ status: 400, code: 'VIDEO_REFERENCE_CHUNKS_CONFLICT' });
+    const staged = copyFileMock.mock.calls.map(([, destination]) => posix(destination));
+    expect(staged).toHaveLength(1);
+    expect([...new Set(unlinkedDurablePaths())]).toEqual(staged);
+    expect(unlinkMock.mock.calls.map(([path]) => posix(path))).not.toContain('/mock/images/a.png');
+    expect(unlinkMock.mock.calls.map(([path]) => posix(path))).not.toContain('/mock/videos/clip.mp4');
+  });
+
   it('rejects references past the per-kind ceiling and rolls back staged voices', async () => {
     await expect(prepare(omniBody({ referenceImageFiles: Array.from({ length: 9 }, (_, i) => `r${i}.png`) })))
       .rejects.toMatchObject({ status: 400, code: 'VIDEO_REFERENCE_IMAGES_UNSUPPORTED' });
