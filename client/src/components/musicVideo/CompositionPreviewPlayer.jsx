@@ -3,6 +3,7 @@ import { Pause, Play } from 'lucide-react';
 import { normalizeTitleCard, titleCardVisible, titleCardWindows } from '../../../../server/lib/musicVideoTitleCard.js';
 import useMounted from '../../hooks/useMounted.js';
 import useGeneratedPreview from '../../hooks/useGeneratedPreview.js';
+import { hashString } from '../../utils/hashString.js';
 import ShotStepper, { shotSteps } from './ShotStepper.jsx';
 import FrameStepper from './FrameStepper.jsx';
 
@@ -10,7 +11,8 @@ const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border 
 
 // What the lyric playthrough page is built from: the song length, the word times,
 // the sheet's sections, the shots' timing and text zones, and the title card's spot. A change rebuilds it.
-export const playthroughVersion = (project) => JSON.stringify([
+// Hashed: the preview socket caps `revision` at 500 characters and a whole song's word times run far past it.
+const playthroughKey = (project) => JSON.stringify([
   project.audioAnalysis?.durationSec ?? null,
   (project.lyricCues || []).map((cue) => [cue.text, cue.startSec, cue.endSec, (cue.words || []).map((w) => [w.startSec, w.endSec])]),
   (project.lyricMarkers || []).map((m) => [m.type, m.label, m.line]),
@@ -18,6 +20,10 @@ export const playthroughVersion = (project) => JSON.stringify([
   // The lyrics step off the title card's corner while it shows.
   titleCardVisible(project.titleCard) ? [project.titleCard.position, titleCardWindows(project.titleCard)] : null,
 ]);
+export const playthroughVersion = (project) => {
+  const key = playthroughKey(project);
+  return `pt-${key.length.toString(36)}-${hashString(key).toString(36)}`;
+};
 
 /** The lyric line sung at song time `t`, from the project's timed cues. */
 const lyricAt = (cues, t) => {
