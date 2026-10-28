@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   withTransaction: vi.fn(),
 }));
 
+vi.mock('./universeBuilder.js', () => ({ updateUniverse: async (_id, mutate) => mocks.withTransaction((client) => mutate({}, { client })) }));
+vi.mock('./catalogPrimitives.js', () => ({ canonEntryFor: vi.fn() }));
+
 vi.mock('../lib/db.js', () => ({
   withTransaction: mocks.withTransaction,
 }));

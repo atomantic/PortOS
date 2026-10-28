@@ -26,6 +26,13 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import { checkHealth, ensureSchema, close, query, withTransaction, POOL_CONFIG } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
+// Universe canon writes use the same disposable PostgreSQL as catalog rows.
+vi.mock('../lib/pgFileFacade.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, isFileBackend: () => false,
+    createPgFileFacade: (options) => actual.createPgFileFacade({ ...options, isFile: () => false }) };
+});
+
 // Mock embeddings — the bulk-import + restore routes call these; we don't want a
 // network round-trip and the assertions never inspect the vector.
 vi.mock('../services/embeddings.js', () => ({
@@ -713,7 +720,7 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
   it('replays a lost response and concurrent commits without duplicating the batch, and rejects changed input', async () => {
     const scrap = await catalogDB.createScrap({ rawText: 'Example receipt source' });
     createdScrapIds.add(scrap.id);
-    await query('INSERT INTO universes (id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING', [UNI, 'Example Universe']);
+    await query(`INSERT INTO universes (id, name, data) VALUES ($1, $2, jsonb_build_object('id', $1::text, 'name', $2::text)) ON CONFLICT DO NOTHING`, [UNI, 'Example Universe']);
     const operationKey = randomUUID();
     receiptKeys.add(operationKey);
     const body = {
@@ -778,7 +785,7 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
   });
 
   it('links every committed ingredient to the universe with the type-derived role, and clusters the batch with related-to edges', async () => {
-    await query('INSERT INTO universes (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [UNI, `Commit Universe ${NONCE}`]);
+    await query(`INSERT INTO universes (id, name, data) VALUES ($1, $2, jsonb_build_object('id', $1::text, 'name', $2::text)) ON CONFLICT (id) DO NOTHING`, [UNI, `Commit Universe ${NONCE}`]);
     const scrap = await catalogDB.createScrap({ rawText: `Commit binding source ${NONCE}` });
     createdScrapIds.add(scrap.id);
 
@@ -971,7 +978,7 @@ describe.skipIf(!runDb)('GET /api/catalog/facets + ingredient filters (#1762)', 
   });
 
   it('returns the facets envelope with universe membership + bucket counts', async () => {
-    await query('INSERT INTO universes (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [UNI, `Route Universe ${NONCE}`]);
+    await query(`INSERT INTO universes (id, name, data) VALUES ($1, $2, jsonb_build_object('id', $1::text, 'name', $2::text)) ON CONFLICT (id) DO NOTHING`, [UNI, `Route Universe ${NONCE}`]);
     const linked = await catalogDB.createIngredient({ type: 'character', name: `Route Linked ${NONCE}`, tags: [`rt-${NONCE}`] });
     const raw = await catalogDB.createIngredient({ type: 'idea', name: `Route Raw ${NONCE}` });
     createdIngredientIds.add(linked.id);

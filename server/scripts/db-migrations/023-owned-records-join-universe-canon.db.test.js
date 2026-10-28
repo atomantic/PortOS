@@ -85,4 +85,18 @@ describe.skipIf(!runDb)('db-migration 023 — owned records join their universe 
     expect(again.data.places).toHaveLength(1);
     expect(again.data.updatedAt).toBe(after.data.updatedAt);
   });
+  it('locks the universe while replacing its canon data', async () => {
+    await seed('concurrent');
+    await withTransaction(async (client) => up({ query: async (sql, params) => {
+      const result = await client.query(sql, params);
+      if (sql.startsWith('SELECT id, data, updated_at FROM universes')) {
+        await expect(withTransaction(async (other) => {
+          await other.query("SET LOCAL lock_timeout = '100ms'");
+          await other.query("UPDATE universes SET name = 'Concurrent edit' WHERE id = $1", [universeId]);
+        })).rejects.toMatchObject({ code: '55P03' });
+      }
+      return result;
+    } }));
+  });
+
 });
