@@ -95,6 +95,7 @@ function MediaCard({
 }) {
   const { kind, prompt, modelId, previewUrl, thumbnailUrl, downloadUrl } = item;
   const isVideo = kind === 'video';
+  const videoPreviewUrl = isVideo && item.filename ? downloadUrl : undefined;
   const handleTileClick = onClick || (() => onPreview?.(item));
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // Send actions come before Draw so the image-gen card (no annotate handler)
@@ -157,9 +158,9 @@ function MediaCard({
           disabled={disabled}
           className="block w-full h-full disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {previewUrl || (isVideo && downloadUrl) ? (
+          {previewUrl || videoPreviewUrl ? (
             <MediaImage src={thumbnailUrl || previewUrl} fallbackSrc={kind === 'image' ? previewUrl : undefined}
-              fallbackVideoSrc={isVideo ? downloadUrl : undefined} assetSrc={isVideo ? downloadUrl : previewUrl}
+              fallbackVideoSrc={videoPreviewUrl} assetSrc={isVideo ? videoPreviewUrl : previewUrl}
               alt={prompt} className="w-full h-full object-cover" loading="lazy" />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-gray-600">

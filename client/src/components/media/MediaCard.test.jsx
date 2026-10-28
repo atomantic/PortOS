@@ -120,6 +120,13 @@ describe('MediaCard', () => {
     expect(container.querySelector('video')).toHaveAttribute('src', '/data/videos/clip.mp4#t=0.001');
   });
 
+  it('does not request a video for a legacy history row with no filename', () => {
+    const item = normalizeVideo({ id: 'legacy', prompt: 'legacy clip' });
+    const { container } = render(<MediaCard item={item} showCollectionMenu={false} />);
+    expect(container.querySelector('video')).toBeNull();
+    expect(screen.queryByText(/Syncing/i)).not.toBeInTheDocument();
+  });
+
   it('arms an inline confirm row before deleting instead of deleting on first click', () => {
     const onDelete = vi.fn();
     render(<MediaCard item={imageItem} onDelete={onDelete} showCollectionMenu={false} showMoodBoardMenu={false} />);
