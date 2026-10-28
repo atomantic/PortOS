@@ -18,6 +18,7 @@
  */
 import { resolve } from 'path';
 import { bindClaimBranch, releaseClaimBranch, reserveReconcileBranch, reconcileAssignedTarget, reconcileMergeTarget, claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 import { withClaimOwnershipLock, readClaimOwnershipAgents, checkoutRetirementFenceReason } from './cosClaimOwnershipState.js';
 
@@ -103,11 +104,20 @@ async function ownershipTransaction(operation, done, work) {
 export async function updateClaimOwnership({ agentId, action, branch }) {
   const done = action === 'bind' ? 'bound' : 'released';
   const { cosEvents } = await import('./cosEvents.js');
-  return ownershipTransaction(action === 'bind' ? 'bind' : 'release', done, async (state, save) => {
+  let wakeRecovery = false;
+  let repository;
+  const result = await ownershipTransaction(action === 'bind' ? 'bind' : 'release', done, async (state, save) => {
     const agent = state.agents?.[agentId];
     if (!agent || agent.id !== agentId) return { [done]: false, reason: 'owner-unknown' };
     const repoPath = agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agent.workspacePath || agent.metadata?.workspacePath;
     if (!repoPath) return { [done]: false, reason: 'ownership-unreadable' };
+    repository = repoPath;
+    const meta = agent.metadata || {};
+    const released = meta.claimReleasedBranches ?? agent.claimReleasedBranches ?? [];
+    const bound = meta.claimBranches ?? agent.claimBranches ?? [];
+    wakeRecovery = action === 'release' ? !released.includes(branch)
+      : isTruthyMeta(agent.claimSelectionPending ?? meta.claimSelectionPending)
+        || (isTruthyMeta(agent.claimPicksOwnBranch ?? meta.claimPicksOwnBranch) && !bound.length && !released.length);
     // Binding a checkout that is mid-archive would hand it to a run that the
     // retirement then removes; releasing a branch never needs the fence.
     const fenced = action === 'bind' && checkoutRetirementFenceReason({ repoPath, branch });
@@ -131,6 +141,10 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
       throw error;
     });
   });
+  // Wake completion recovery only after the ownership transaction releases its
+  // locks. A picker settling its selection can unblock unrelated old claims.
+  if (result[done] && wakeRecovery) cosEvents.emit('claim:ownership-changed', { agentId, repository });
+  return result;
 }
 
 /** Reserve a new scheduled release candidate before its branch or checkout

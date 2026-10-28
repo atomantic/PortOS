@@ -99,7 +99,7 @@ import { retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, r
 import { readCompletionData } from './agentCompletionData.js';
 import { recordCompletionCleanup, recordInheritedCheckoutRetirement, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion } from './cosAgentLifecycle.js';
 import { replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
-import { resumeAgentCompletionRetirement, verifyAgentRepoState, sweepRepoStateVerifications, bindCompletionRetirementEvents, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
+import { resumeAgentCompletionRetirement, resumeDeferredRepoStateVerifications, verifyAgentRepoState, sweepRepoStateVerifications, bindCompletionRetirementEvents, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
@@ -229,7 +229,7 @@ const run = (overrides = {}) => verifyAgentRepoState({
   ...overrides,
 });
 
-it.each(['all-merged', 'one-open'])('wakes a cleanup-held swarm only after independent delivery proof: %s', async scenario => {
+it.each(['all-merged', 'all-retired', 'one-open'])('wakes a cleanup-held swarm only after independent delivery proof: %s', async scenario => {
   const start = CREATED_AT;
   const branches = ['claim/issue-1', 'claim/issue-2'];
   const heads = ['a'.repeat(40), 'b'.repeat(40)];
@@ -269,14 +269,34 @@ it.each(['all-merged', 'one-open'])('wakes a cleanup-held swarm only after indep
     agent.metadata.swarmCleanupDelivery = proof;
     return true;
   });
+  if (scenario === 'all-retired') {
+    recordBranchReconcileOutcome.mockImplementation(async (_app, input) => ({
+      retirementObligations: input.retirementObligations?.map(row => ({ ...row, createdAt: CREATED_AT })) || [],
+    }));
+    prepareInventoriedCheckoutRetirement.mockImplementation(async ({ release }) => ({ ok: true, review: { digest: 'a'.repeat(64),
+      forge: { prHead: release.head }, comparison: { disposition: 'integrated', localPatch: '', difference: '' } } }));
+    updateTask.mockImplementation(async (_id, patch) => {
+      originalTask.status = patch.status;
+      Object.assign(originalTask.metadata, patch.metadata);
+      return originalTask;
+    });
+    recordRepoStateVerification.mockImplementation(async (_id, verification) => {
+      agent.metadata.repoStateVerification = verification;
+      agent.metadata.cleanupOutcome = { status: 'verified', unresolved: 0, committedIntegrationVerified: true };
+      agent.result = { ...agent.result, success: true, cleanupPending: false, deferredDeliveryOutcome: outcome, taskOutcome: { status: 'completed' } };
+      return true;
+    });
+  }
   const emitted = vi.spyOn(cosEvents, 'emit');
   try {
     const result = await run({ agentId: agent.id, task: originalTask, agentState: agent, success: false });
-    expect(result.verified).toBe(false);
-    expect(originalTask.status).toBe('in_progress');
-    if (scenario === 'all-merged') {
+    expect(result.verified).toBe(scenario === 'all-retired');
+    expect(originalTask.status).toBe(scenario === 'all-retired' ? 'completed' : 'in_progress');
+    if (scenario !== 'one-open') {
       expect(recordSwarmCleanupDelivery).toHaveBeenCalledWith(agent.id, agent, expect.objectContaining({ version: 1 }));
       expect(emitted).toHaveBeenCalledWith('swarm:cleanup-delivery-verified', { agentId: agent.id });
+      const notification = emitted.mock.calls.findIndex(([event]) => event === 'swarm:cleanup-delivery-verified');
+      expect(emitted.mock.invocationCallOrder[notification]).toBeGreaterThan(listWorktrees.mock.invocationCallOrder.at(-1));
     } else {
       expect(recordSwarmCleanupDelivery).not.toHaveBeenCalled();
       expect(emitted).not.toHaveBeenCalledWith('swarm:cleanup-delivery-verified', expect.anything());
@@ -1748,6 +1768,74 @@ describe('claim-swarm completion', () => {
     expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', expect.objectContaining({
       branch: 'claim/issue-11', status: 'blocked', reason: 'claim-owner-ambiguous', owners: ['agent-a', 'agent-bb'] }));
   });
+  it.each(['bound-elsewhere', 'bound-here', 'completed', 'racing-bind'])('rechecks the recorded hold when its picker changes ownership: %s', async scenario => {
+    const branch = 'claim/issue-11';
+    const capture = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
+      repoPath: '/repo', branch, path: WORKTREE, head: HEAD,
+      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const state = { ...agentState({ isWorktree: false, worktreeBranch: null, workspacePath: '/repo',
+      claimBranches: [branch], completedCheckouts: [capture], checkoutCapture: { status: 'captured' },
+      repoStateVerification: { status: 'pending' }, completionCleanup: { status: 'completed' } }),
+    id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT, result: { success: false, cleanupPending: true } };
+    const owner = { id: 'picker', status: 'running', workspacePath: '/repo', metadata: { claimPicksOwnBranch: true } };
+    const pendingTask = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: state.id } };
+    getTaskById.mockResolvedValue(pendingTask);
+    getAgentRecord.mockResolvedValue(state);
+    readBranchCompletionPolicies.mockResolvedValue([state]);
+    readClaimOwnershipAgents.mockImplementation(async () => [owner]);
+    recordCleanupOutcome.mockImplementation(async (_id, row) => {
+      state.metadata.cleanupOutcomes = { [row.branch]: row };
+      return true;
+    });
+    listWorktrees.mockResolvedValue([{ ...RELEASE, branch }]);
+    readCompletedCheckoutIdentity.mockResolvedValue(capture);
+    recordBranchReconcileOutcome.mockImplementation(async (_app, input) => ({
+      retirementObligations: input.retirementObligations?.map(row => ({ ...row, createdAt: CREATED_AT })) || [],
+    }));
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/11', detail: 'MERGED' });
+    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { digest: 'a'.repeat(64),
+      forge: { prHead: HEAD }, comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    const events = new EventEmitter();
+    const unbind = bindCompletionRetirementEvents(events);
+    try {
+      let releaseOwnerRead;
+      let readStarted;
+      const entered = new Promise(resolve => { readStarted = resolve; });
+      if (scenario === 'racing-bind') readClaimOwnershipAgents.mockImplementationOnce(() => {
+        readStarted();
+        return new Promise(resolve => { releaseOwnerRead = resolve; });
+      });
+      const initial = run({ agentState: state, task: pendingTask, success: false });
+      if (scenario === 'racing-bind') await entered;
+      else {
+        expect((await initial).branches[0].skipReason).toBe('claim-owner-ambiguous');
+        expect(state.metadata.cleanupOutcomes[branch].owners).toEqual(['picker']);
+        expect(state.metadata.cleanupOutcomes[branch].path).toBe(WORKTREE);
+      }
+      const previousOwner = structuredClone(owner);
+      if (scenario === 'completed') owner.status = 'completed';
+      else owner.metadata.claimBranches = [scenario === 'bound-here' ? branch : 'claim/issue-12'];
+      const event = scenario === 'completed' ? 'agent:completed' : 'claim:ownership-changed';
+      const wake = events.listeners(event)[0](scenario === 'completed' ? owner : { agentId: owner.id });
+      if (scenario === 'racing-bind') {
+        releaseOwnerRead([previousOwner]);
+        expect((await initial).branches[0].skipReason).toBe('claim-owner-ambiguous');
+      }
+      await wake;
+    } finally { unbind(); }
+    if (scenario === 'bound-here') {
+      expect(state.metadata.cleanupOutcomes[branch]).toMatchObject({ status: 'blocked', reason: 'claim-owner-active', owners: ['picker'] });
+      expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+      expect(updateTask).not.toHaveBeenCalled();
+    } else {
+      expect(state.metadata.cleanupOutcomes[branch]).toMatchObject({ status: 'verified', reason: 'retirement-receipt-verified' });
+      expect(retireInventoriedCheckout).toHaveBeenCalledOnce();
+      expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), expect.anything(), expect.anything());
+    }
+  });
   it('does not infer branches from output or override manual handoffs and failed retries', async () => {
     const state = agentState({ isWorktree: false, worktreeBranch: null, claimPicksOwnBranch: true, claimBranches: ['claim/issue-11'] });
     findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'OPEN', url: 'https://github.com/example/repo/pull/11' });
@@ -1870,6 +1958,19 @@ describe('durable completion replay', () => {
     expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 1 });
     const { recordCompletionCleanup } = await import('./cosAgentLifecycle.js');
     expect(recordCompletionCleanup).toHaveBeenCalledWith('agent-1', prior.startedAt, expect.objectContaining({ replayAttempts: 6, retryAt: expect.any(String) }));
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('rechecks an ownership hold once after restart even when its prior retry is backed off', async () => {
+    const prior = archived();
+    prior.metadata.repoStateVerification.reasons = ['claim-owner-ambiguous'];
+    prior.metadata.completionCleanup = { status: 'completed', replayAttempts: 5, retryAt: new Date(Date.now() + 60_000).toISOString() };
+    readBranchCompletionPolicies.mockResolvedValue([prior]);
+    getTaskById.mockResolvedValue(task());
+    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 0 });
+    expect(await resumeDeferredRepoStateVerifications(async () => null)).toMatchObject({ checked: 1, pendingAtStart: 1 });
+    expect(recordCompletionCleanup).toHaveBeenCalledWith('agent-1', prior.startedAt, expect.objectContaining({ replayAttempts: 6 }));
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();
   });
 

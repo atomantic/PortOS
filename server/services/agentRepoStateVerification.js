@@ -279,8 +279,9 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
  * @returns {Promise<{verified: boolean, skipReason: string|null, issues: Array<{code: string, message: string}>, observed: object|null, recoveryTaskId: string|null}>}
  */
 const verificationRuns = new Map();
+const CLAIM_OWNER_HOLDS = new Set(['claim-owner-active', 'claim-owner-ambiguous']);
 
-async function notifyDeliveredSwarmCleanup(agentId) {
+async function notifyDeliveredSwarmCleanup(agentId, { notify = true } = {}) {
   const [{ getAgentRecord }, { getTaskById }, { getInstanceId }, contract] = await Promise.all([
     import('./cosAgentLifecycle.js'), import('./cosTaskStore.js'), import('./instanceIdentity.js'), import('./swarmCleanupDelivery.js'),
   ]);
@@ -294,7 +295,7 @@ async function notifyDeliveredSwarmCleanup(agentId) {
     if (!await recordSwarmCleanupDelivery(agentId, agent, proof)) return;
     agent = await getAgentRecord(agentId);
   }
-  if (contract.cleanupRefillSourceMatches(task, agent, instance) && !agent.metadata.swarmCleanupDelivery.continuationIssued) {
+  if (notify && contract.cleanupRefillSourceMatches(task, agent, instance) && !agent.metadata.swarmCleanupDelivery.continuationIssued) {
     cosEvents.emit('swarm:cleanup-delivery-verified', { agentId });
   }
 }
@@ -397,7 +398,9 @@ export async function verifyAgentRepoState(input) {
   };
   const run = withDeliveryActivity(input.agentId, 'Checking delivery and repository preservation', async () => {
     if (swarmCleanup) {
-      await notifyDeliveredSwarmCleanup(input.agentId).catch(error => {
+      // Persist delivery proof before cleanup can settle the task, but let the
+      // first retirement pass finish before a new picker enters the repository.
+      await notifyDeliveredSwarmCleanup(input.agentId, { notify: false }).catch(error => {
         emitLog('warn', `Swarm delivery verification deferred: ${error.message}`, { agentId: input.agentId });
       });
     }
@@ -465,7 +468,7 @@ export async function verifyAgentRepoState(input) {
       await recordRepoStateVerification(input.agentId, { status: settled ? 'completed' : 'pending',
         checkedAt: new Date().toISOString(), reasons: [...new Set(outcomes.map(item => item.skipReason).filter(Boolean))] });
     }
-    if (swarmCleanup && !result.verified) {
+    if (swarmCleanup) {
       await notifyDeliveredSwarmCleanup(input.agentId).catch(error => {
         emitLog('warn', `Swarm delivery verification deferred: ${error.message}`, { agentId: input.agentId });
       });
@@ -773,6 +776,44 @@ async function resumeCompletedDeliveryParent(task, seedContext) {
   });
 }
 
+// A possible claim owner may bind a different branch (or finish) just after a
+// completion pass records its hold. Retry only records that named that owner;
+// the ordinary ownership and retirement gates still make the final decision.
+const claimOwnershipWakes = new Map();
+function wakeClaimOwnershipHolds(ownerId, repository) {
+  const existing = claimOwnershipWakes.get(ownerId);
+  if (existing) { existing.dirty = true; return existing.promise; }
+  const wake = { dirty: true };
+  claimOwnershipWakes.set(ownerId, wake);
+  wake.promise = (async () => {
+    while (wake.dirty) {
+      wake.dirty = false;
+      const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+      const agents = await readBranchCompletionPolicies({ repairIndex: false });
+      const namesOwner = agent => Object.values(agent.metadata?.cleanupOutcomes || {}).some(row =>
+        CLAIM_OWNER_HOLDS.has(row?.reason) && Array.isArray(row?.owners) && row.owners.includes(ownerId));
+      const sameRepo = agent => {
+        const path = agent.metadata?.sourceWorkspace || agent.metadata?.workspacePath;
+        if (typeof repository !== 'string' || !repository || typeof path !== 'string' || !path) return true;
+        const normalize = value => process.platform === 'win32' ? resolve(value).toLowerCase() : resolve(value);
+        return normalize(repository) === normalize(path);
+      };
+      const candidates = agents.filter(agent => agent.status === 'completed' && agent.metadata?.repoStateVerification?.status === 'pending'
+        && (namesOwner(agent) || (sameRepo(agent) && verificationRuns.has(agent.id || agent.agentId))));
+      const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+      for (const agent of candidates) {
+        const id = agent.id || agent.agentId;
+        // A pass may have read the old owner before this event and not yet
+        // persisted its hold. Wait only for that candidate, then reread it.
+        await verificationRuns.get(id)?.catch(() => {});
+        const current = await getAgentRecord(id);
+        if (current?.metadata?.repoStateVerification?.status === 'pending' && namesOwner(current)) await resumeAgentCompletionRetirement(id);
+      }
+    }
+  })().finally(() => claimOwnershipWakes.delete(ownerId));
+  return wake.promise;
+}
+
 /** Bind the deterministic receipt handoff, including duplicate completion replay. */
 export function bindCompletionRetirementEvents(events) {
   const onChange = data => {
@@ -819,13 +860,30 @@ export function bindCompletionRetirementEvents(events) {
     return resumeAgentCompletionRetirement(data.agentId)
       .catch(error => emitLog('warn', `Completion deferred after checkout capture: ${error.message}`, { agentId: data.agentId }));
   };
+  const onClaimOwnership = data => {
+    const ownerId = data?.agentId || data?.id;
+    if (typeof ownerId !== 'string' || !ownerId) return;
+    const repository = data?.repository || data?.sourceWorkspace || data?.metadata?.sourceWorkspace || data?.workspacePath || data?.metadata?.workspacePath;
+    return wakeClaimOwnershipHolds(ownerId, repository)
+      .catch(error => emitLog('warn', `Completion deferred after claim ownership changed: ${error.message}`, { agentId: ownerId }));
+  };
+  const onClaimOwnerCompleted = agent => {
+    const meta = agent?.metadata;
+    if (!meta?.isWorktree && !meta?.claimBranch && !meta?.claimPicksOwnBranch && !meta?.claimBranches?.length
+      && !meta?.reconcileReservations?.length && !meta?.releaseCandidate) return;
+    return onClaimOwnership(agent);
+  };
   events.on('tasks:changed', onChange);
   events.on('checkout:retired', onReceipt);
   events.on('agent:checkout-captured', onCapture);
+  events.on('claim:ownership-changed', onClaimOwnership);
+  events.on('agent:completed', onClaimOwnerCompleted);
   return () => {
     events.off('tasks:changed', onChange);
     events.off('checkout:retired', onReceipt);
     events.off('agent:checkout-captured', onCapture);
+    events.off('claim:ownership-changed', onClaimOwnership);
+    events.off('agent:completed', onClaimOwnerCompleted);
   };
 }
 
@@ -857,7 +915,7 @@ export function resumeDeferredRepoStateVerifications(blocked) {
       while (true) {
         const reason = await blocked();
         if (reason) return { checked, pendingAtStart, skipReason: reason };
-        const result = await resumeCompletionAudits({ onlyAgentIds: remaining, skipPrelude: remaining !== undefined });
+        const result = await resumeCompletionAudits({ onlyAgentIds: remaining, skipPrelude: remaining !== undefined, recheckClaimHolds: true });
         if (!remaining) {
           pendingAtStart = result.pendingAtStart;
           remaining = new Set(result.pendingAgentIds);
@@ -913,7 +971,7 @@ async function reconcileReleasedSelectionHistory(agents) {
   }
 }
 
-async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false } = {}) {
+async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false, recheckClaimHolds = false } = {}) {
   const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
   const { getTaskById } = await import('./cosTaskStore.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
@@ -1024,7 +1082,10 @@ async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false } = {}
     agent.metadata.completionCleanup?.lastAttemptAt].filter(value => typeof value === 'string').sort().at(-1) || '';
   const pending = agents.filter(agent => agent.status === 'completed' && (agent.metadata?.repoStateVerification?.status === 'pending'
     || agent.metadata?.completionCleanup?.status === 'pending'))
-    .filter(agent => !agent.metadata.completionCleanup?.retryAt || Date.parse(agent.metadata.completionCleanup.retryAt) <= Date.now())
+    .filter(agent => !agent.metadata.completionCleanup?.retryAt || Date.parse(agent.metadata.completionCleanup.retryAt) <= Date.now()
+      || (recheckClaimHolds && agent.metadata.repoStateVerification?.status === 'pending'
+        && Array.isArray(agent.metadata.repoStateVerification.reasons)
+        && agent.metadata.repoStateVerification.reasons.some(reason => CLAIM_OWNER_HOLDS.has(reason))))
     .filter(agent => !onlyAgentIds || onlyAgentIds.has(agent.id || agent.agentId))
     .sort((a, b) => lastAttempt(a).localeCompare(lastAttempt(b)));
   let checked = 0;
@@ -1108,24 +1169,27 @@ async function verifyRunBranches(input) {
   const sourceWorkspace = meta.sourceWorkspace || meta.workspacePath;
   const trees = sourceWorkspace ? await listWorktrees(sourceWorkspace).catch(() => null) : null;
   if (!trees) return skipped(REPO_STATE_SKIPS.GATE_UNREADABLE);
-  const holdBranch = async (branch, reason, extra) => {
+  const holdBranch = async (branch, reason, extra, path) => {
     // Per-branch swarm results carry no observation; a held branch was never probed.
-    const { observed: _unprobed, ...held } = await branchLedger(input.agentId, { branch }).blockWith(reason, { record: extra });
+    const { observed: _unprobed, ...held } = await branchLedger(input.agentId, { branch, ...(path && { path }) }).blockWith(reason, { record: extra });
     return { branch, ...held };
   };
   const results = [];
   for (const branch of branches) {
+    const captures = (meta.completedCheckouts || []).filter(row => row?.branch === branch && completedCheckoutReceiptValid(input.agentState, row)
+      && typeof row.path === 'string' && row.path && typeof row.repoPath === 'string' && resolve(row.repoPath) === resolve(sourceWorkspace)
+      && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer));
+    const original = meta.completedCheckouts?.find(row => row.branch === branch);
     const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
     const { claimCheckoutOwner } = await import('../lib/claimContinuation.js');
     const agents = await readClaimOwnershipAgents().catch(() => null);
     const owner = claimCheckoutOwner({ branchName: branch, sourceWorkspace, agents });
     if (owner) {
-      results.push(await holdBranch(branch, owner.reason, { owners: owner.owners }));
+      results.push(await holdBranch(branch, owner.reason, { owners: owner.owners }, captures.length === 1 ? captures[0].path : null));
       continue;
     }
     // A current branch holder is not evidence of the old claim's checkout.
     // Only the server's completion capture names its original incarnation.
-    const original = meta.completedCheckouts?.find(row => row.branch === branch);
     // With no checkout and no local ref left, there is no incarnation to confuse:
     // only the delivery evidence remains to settle.
     const absent = !original?.path && !trees.some(tree => tree.branch?.replace(/^refs\/heads\//, '') === branch)
