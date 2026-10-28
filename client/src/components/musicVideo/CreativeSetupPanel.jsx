@@ -188,7 +188,8 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
     {!editing && subjects.length > 0 && <VideoCastLinksDisclosure
       summary={`Catalog links (${formatCount(subjects.filter((s) => s.ingredientId).length)} of ${formatCount(subjects.length)} linked)`}
       summaryClassName="min-h-[44px] flex items-center cursor-pointer text-xs text-port-accent"
-      projectId={project.id} onLinked={onCastLinked} idPrefix={idFor('link')} />}
+      defaultOpen={subjects.some((s) => !s.ingredientId && !s.localOnly)}
+      projectId={project.id} universeId={project.concept?.universeId || null} onLinked={onCastLinked} idPrefix={idFor('link')} />}
     {!editing && project.productionPolicy?.strategy === 'code-first' && <p className="text-xs text-port-text-muted">Code-first plan · generated video allowance {formatCount(project.productionPolicy.maxGeneratedVideoPercent, { maximumFractionDigits: 3 })}% of final song time</p>}
     {!editing && conflict && <div role="status" className="rounded border border-port-warning/60 p-2 space-y-1">
       <p className="text-xs text-port-warning">{conflict.message}</p>

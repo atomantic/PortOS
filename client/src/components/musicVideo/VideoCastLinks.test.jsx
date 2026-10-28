@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import VideoCastLinks from './VideoCastLinks.jsx';
-import { linkVideoSubjects, listVideoSubjectLinks } from '../../services/api';
+import { linkVideoSubjects, listCatalogIngredientsByIds, listVideoSubjectLinks, updateCatalogIngredient } from '../../services/api';
 
-vi.mock('../../services/api', () => ({ listVideoSubjectLinks: vi.fn(), linkVideoSubjects: vi.fn() }));
+vi.mock('../../services/api', () => ({ listVideoSubjectLinks: vi.fn(), linkVideoSubjects: vi.fn(), listCatalogIngredientsByIds: vi.fn(), updateCatalogIngredient: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('../IngredientPicker.jsx', () => ({
   default: ({ open: isOpen, type, onSelect }) => (isOpen ? (
@@ -57,5 +57,26 @@ describe('linking a music video’s cast to the catalog', () => {
     fireEvent.change(screen.getByLabelText('Age or look for Stranger'), { target: { value: 'old' } });
     fireEvent.click(screen.getByRole('button', { name: 'Link' }));
     await waitFor(() => expect(linkVideoSubjects).toHaveBeenCalledWith('mv-1', [{ subjectId: 'mvc-c', ingredientId: 'cat-chr-2', formId: 'old' }], { silent: true }));
+  });
+
+  // Uniquely catches a linked subject and its catalog record disagreeing with no warning or one-tap fix either way.
+  it('flags a description that differs from the catalog and fixes either side', async () => {
+    const linked = { id: 'mvc-a', kind: 'character', name: 'Example Lead (17)', description: 'Short red hair.', ingredientId: 'cat-chr-1',
+      castForm: { id: 'teen', label: 'Teen', age: 17 },
+      linked: { id: 'cat-chr-1', name: 'Example Lead', forms: [{ id: 'teen', label: 'Teen' }], appearance: { field: 'form', formId: 'teen', text: 'Long black braids.' } } };
+    listVideoSubjectLinks.mockResolvedValue({ subjects: [linked] });
+    listCatalogIngredientsByIds.mockResolvedValue([{ id: 'cat-chr-1', payload: { physicalDescription: 'Adult.', forms: [{ id: 'teen', label: 'Teen', age: '17', description: 'Long black braids.' }] } }]);
+    updateCatalogIngredient.mockResolvedValue({ id: 'cat-chr-1' });
+    render(<MemoryRouter><VideoCastLinks projectId="mv-1" universeId="u-1" /></MemoryRouter>);
+    expect(await screen.findByText('Description differs from Example Lead · Teen in the catalog')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Casting' })).toHaveAttribute('href', '/casting?scope=u-1&story=music-video%3Amv-1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use the catalog description for Example Lead (17)' }));
+    await waitFor(() => expect(linkVideoSubjects).toHaveBeenCalledWith('mv-1', [{ subjectId: 'mvc-a', ingredientId: 'cat-chr-1', formId: 'teen', useCatalogText: true }], { silent: true }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Update the catalog from Example Lead (17)' }));
+    await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledWith('cat-chr-1', { payload: {
+      physicalDescription: 'Adult.', forms: [{ id: 'teen', label: 'Teen', age: '17', description: 'Short red hair.' }],
+    } }, { silent: true }));
   });
 });
