@@ -96,6 +96,7 @@ beforeEach(async () => {
   const native = vi.fn(async input => {
     if (input.command === 'lock') return { assertHeld: () => {}, release: async () => {} };
     if (input.command === 'inspect') {
+      if (fixture.lockState != null && Boolean(input.expectUnlocked) === fixture.lockState) throw new Error('release-lock-changed');
       if (fixture.inspectRefusal) throw new Error(fixture.inspectRefusal);
       if (fixture.ownershipRefusal && input.requireOwnership) throw new Error(fixture.ownershipRefusal);
       return { ...fixture.snapshot };
@@ -339,7 +340,7 @@ describe('initialized checkout removal', () => {
     },
   );
 
-  it.each(['locked-unlock-intent', 'locked-unlocked', 'locked-removal-intent', 'locked-branch-retired'])(
+  it.each(['locked-unlock-intent', 'locked-unlocked', 'locked-removal-intent', 'locked-removed', 'locked-branch-retired'])(
     'holds the exact transaction after interruption at %s and repeated recovery', async phase => {
       const path = join(root, 'candidate');
       await mkdir(path);
@@ -349,11 +350,17 @@ describe('initialized checkout removal', () => {
       fixture.snapshot.modules = [{ path: 'lib/slashdo' }];
       fixture.snapshot.lockTransitionFingerprint = 'f'.repeat(64);
       fixture.snapshot.privateGitDir = join(root, 'absent-administration');
+      fixture.lockState = true;
       fixture.deps.execGit.mockImplementation(async args => {
+        if (args[0] === 'worktree' && args[1] === 'unlock') fixture.lockState = false;
+        if (args[0] === 'worktree' && args[1] === 'lock') fixture.lockState = true;
         if (args[0] === 'worktree' && args[1] === 'remove') await rm(path, { recursive: true });
-        return { exitCode: 0, stdout: '' };
+        return { exitCode: args[0] === 'show-ref' ? 1 : 0, stdout: '' };
       });
-      fixture.deps.deleteRef.mockResolvedValue(true);
+      fixture.deps.deleteRef.mockImplementation(async (_repo, _branch, _head, options) => {
+        await options.beforeMutation?.(); return true;
+      });
+      fixture.deps.getOutcome = async () => ({ retired: [] });
       const preview = await fixture.service.review({ appId: 'app', release: candidate, prUrl });
       fixture.interruptPhase = phase;
       const result = await fixture.service.retire({ appId: 'app', release: candidate,
@@ -363,14 +370,18 @@ describe('initialized checkout removal', () => {
       const discovery = await fixture.service.discover();
       const row = discovery.transactions.find(value => value.transactionId === result.transactionId);
       expect(row).toMatchObject({ phase, release: candidate, settled: false });
-      for (let i = 0; i < 2; i++) {
-        const recovery = await fixture.service.recoverAutomatically({ appId: 'app', transactionId: row.transactionId,
-          journalDigest: row.journalDigest }, { blocked: async () => null });
-        expect(recovery).toMatchObject({ ok: false, reason: 'locked-retirement-recovery-held' });
+      const recovery = await fixture.service.recoverAutomatically({ appId: 'app', transactionId: row.transactionId,
+        journalDigest: row.journalDigest }, { blocked: async () => null });
+      if (['locked-removed', 'locked-branch-retired'].includes(phase)) {
+        expect(recovery).toMatchObject({ ok: true, receiptRecorded: true });
+        expect(fixture.cut).toBeNull();
+      } else {
+        expect(recovery).toMatchObject({ ok: true, restored: true });
+        expect(fixture.lockState).toBe(true);
+        expect(fixture.cut).toBeNull();
+        expect(await readFile(join(path, 'fixture-bytes'), 'utf8')).toBe('private fixture');
       }
-      expect(fixture.cut?.owner.id).toBe(result.transactionId);
-      if (phase !== 'locked-branch-retired') expect(await readFile(join(path, 'fixture-bytes'), 'utf8')).toBe('private fixture');
-      expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
+      expect(fixture.deps.recordRetirement).toHaveBeenCalledTimes(['locked-removed', 'locked-branch-retired'].includes(phase) ? 1 : 0);
     },
   );
 
