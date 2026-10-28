@@ -43,7 +43,27 @@ async function readReceipt(exec, operationKey, fingerprint) {
 // authority when two requests race before either has a committed receipt.
 export async function getScrapCommitReceipt(input) {
   if (!input.operationKey) return null;
-  return readReceipt(query, input.operationKey, commitFingerprint(input));
+  const ingredients = await readReceipt(query, input.operationKey, commitFingerprint(input));
+  if (ingredients) await joinScrapCanon(ingredients, input.universeRef, input.role);
+  return ingredients;
+}
+
+// Run after the DB transaction, including receipt replay, so an interrupted
+// projection heals without creating another ingredient. Only a still-live canon
+// ref authorizes the join: replay must not restore a removed membership.
+async function joinScrapCanon(ingredients, universeRef, role) {
+  if (!universeRef) return;
+  for (const ingredient of ingredients) {
+    if (!['character', 'place', 'object'].includes(ingredient.type)) continue;
+    const canonRole = `canon-${ingredient.type}`;
+    if (role && role !== canonRole) continue;
+    const { rows } = await query(`SELECT 1 FROM catalog_ingredient_refs
+      WHERE ingredient_id = $1 AND ref_kind = 'universe' AND ref_id = $2
+        AND role = $3 AND deleted = false`, [ingredient.id, universeRef, canonRole]);
+    if (!rows.length) continue;
+    const { addPrimitiveToUniverse } = await import('../catalogPrimitives.js');
+    await addPrimitiveToUniverse(ingredient.id, universeRef, canonRole);
+  }
 }
 
 /**
@@ -63,7 +83,7 @@ export async function commitScrap({ scrapId, accepted = [], embeds = [], univers
   const fingerprint = operationKey
     ? commitFingerprint({ scrapId, accepted, universeRef, role, relationships })
     : null;
-  return withTransaction(async (client) => {
+  const ingredients = await withTransaction(async (client) => {
     if (operationKey) {
       // A competing INSERT waits for the owner to commit or roll back. The
       // following SELECT gets a fresh READ COMMITTED snapshot of its receipt.
@@ -136,4 +156,6 @@ export async function commitScrap({ scrapId, accepted = [], embeds = [], univers
     }
     return created;
   });
+  await joinScrapCanon(ingredients, universeRef, role);
+  return ingredients;
 }

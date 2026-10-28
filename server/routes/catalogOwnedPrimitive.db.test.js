@@ -78,10 +78,12 @@ app.use(errorMiddleware);
 const ingredientIds = new Set();
 const universeIds = new Set();
 const receiptKeys = new Set();
+const scrapIds = new Set();
 
 afterAll(async () => {
   if (ready) {
     if (receiptKeys.size) await query('DELETE FROM catalog_commit_receipts WHERE operation_key = ANY($1::uuid[])', [[...receiptKeys]]);
+    for (const id of scrapIds) await catalogDB.deleteScrap(id, { hard: true });
     for (const id of ingredientIds) await catalogDB.deleteIngredient(id, { hard: true }).catch(() => {});
     if (universeIds.size) await query('DELETE FROM universes WHERE id = ANY($1)', [[...universeIds]]);
     await close();
@@ -276,5 +278,55 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients inside a universe', () =>
     expect(res.status).toBe(201);
     ingredientIds.add(res.body.id);
     expect(res.body.payload.locked).toBe(false);
+  });
+});
+
+// Regression: scrap refs alone were invisible to universe canon pickers.
+describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit universe canon', () => {
+  it('projects each bible type once, heals an interrupted projection on replay, and preserves removals', async () => {
+    const universe = await makeUniverse();
+    const scrap = await catalogDB.createScrap({ rawText: 'Ada carries a lantern through the harbor.' });
+    scrapIds.add(scrap.id);
+    const body = { operationKey: randomUUID(), universeRef: universe.id,
+      accepted: ['character', 'place', 'object'].map((type) => ({ type, name: `Example ${type}`, payload: {} })) };
+    receiptKeys.add(body.operationKey);
+    const commit = () => request(app).post(`/api/catalog/scraps/${scrap.id}/commit`).send(body);
+    const first = await commit();
+    expect(first.status).toBe(201);
+    for (const ingredient of first.body.ingredients) ingredientIds.add(ingredient.id);
+    const fields = { character: 'characters', place: 'places', object: 'objects' };
+    const assertCanon = async () => {
+      const saved = await getUniverse(universe.id);
+      for (const ingredient of first.body.ingredients) {
+        expect(saved[fields[ingredient.type]].filter((entry) => entry.ingredientId === ingredient.id))
+          .toMatchObject([{ ingredientId: ingredient.id, locked: false }]);
+        expect(saved[fields[ingredient.type]]).toHaveLength(1);
+      }
+    };
+    await assertCanon();
+    // Simulate the durable receipt surviving a crash before projection.
+    await query("UPDATE universes SET data = data || '{\"objects\":[]}'::jsonb WHERE id = $1", [universe.id]);
+    const replay = await commit();
+    expect(replay.status).toBe(201);
+    expect(replay.body.ingredients.map((i) => i.id)).toEqual(first.body.ingredients.map((i) => i.id));
+    await assertCanon();
+    const character = first.body.ingredients.find((i) => i.type === 'character');
+    const removed = await request(app).delete(`/api/catalog/ingredients/${character.id}/link`)
+      .send({ refKind: 'universe', refId: universe.id, role: 'canon-character' });
+    expect(removed.status).toBe(204);
+    expect((await commit()).status).toBe(201);
+    expect((await getUniverse(universe.id)).characters).toEqual([]);
+  });
+
+  it('keeps a caller-selected non-canon role out of the canon lists', async () => {
+    const universe = await makeUniverse();
+    const scrap = await catalogDB.createScrap({ rawText: 'A background character.' });
+    scrapIds.add(scrap.id);
+    const response = await request(app).post(`/api/catalog/scraps/${scrap.id}/commit`).send({
+      universeRef: universe.id, role: 'reference', accepted: [{ type: 'character', name: 'Background', payload: {} }],
+    });
+    expect(response.status).toBe(201);
+    for (const ingredient of response.body.ingredients) ingredientIds.add(ingredient.id);
+    expect((await getUniverse(universe.id)).characters).toEqual([]);
   });
 });
