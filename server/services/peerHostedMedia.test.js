@@ -6,9 +6,10 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import express from 'express';
 import { Readable } from 'stream';
+import { get } from 'node:http';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { request } from '../lib/testHelper.js';
+import { closeLoopbackServer, request, startLoopbackServer } from '../lib/testHelper.js';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 const tempRoot = createTempDataRoot('portos-peer-hosted-media-');
@@ -23,6 +24,7 @@ vi.mock('./instances.js', () => ({ getPeers: (...args) => getPeers(...args) }));
 
 const streamRequest = vi.fn();
 vi.mock('../lib/peerHttpClient.js', () => ({ peerStreamRequest: (...args) => streamRequest(...args) }));
+const { peerStreamRequest: realPeerStreamRequest } = await vi.importActual('../lib/peerHttpClient.js');
 
 const { markHosted, unmarkHosted, takeHostedAssets, resolveMediaLocations } = await import('./peerHostedMedia.js');
 const { mountAssetRoutes } = await import('./assetMounts.js');
@@ -151,6 +153,115 @@ describe('static-mount fallback', () => {
     expect(streamRequest).not.toHaveBeenCalled();
   });
 
+  it('times out stalled posters without losing their host, while a slow original can still stream a range', async () => {
+    let posterArrived;
+    let imageArrived;
+    let videoArrived;
+    let bodyTimeoutArmed;
+    let videoResponse;
+    let errorStream;
+    const posterRequest = new Promise(resolve => { posterArrived = resolve; });
+    const imageRequest = new Promise(resolve => { imageArrived = resolve; });
+    const videoRequest = new Promise(resolve => { videoArrived = resolve; });
+    const bodyTimeout = new Promise(resolve => { bodyTimeoutArmed = resolve; });
+    const peerApp = express();
+    peerApp.get('/data/video-thumbnails/:name', (req, res) => {
+      if (req.params.name === 'stall-body.jpg') res.status(200).type('jpeg').flushHeaders(); // no body
+      else if (req.params.name === 'error-body.jpg') res.status(403).flushHeaders(); // no body
+      else posterArrived(); // no headers
+    });
+    peerApp.get('/data/image-thumbnails/:name', () => imageArrived()); // no headers
+    peerApp.get('/data/videos/:name', (req, res) => {
+      videoResponse = { req, res };
+      videoArrived();
+    });
+    const peerServer = await startLoopbackServer(peerApp);
+    const localServer = await startLoopbackServer(app);
+    const peer = { ...PEER, host: undefined, address: '127.0.0.1', port: peerServer.address().port };
+    getPeers.mockResolvedValue([peer]);
+    streamRequest.mockImplementation(async (...args) => {
+      const upstream = await realPeerStreamRequest(...args);
+      if (args[0].endsWith('/error-body.jpg')) errorStream = upstream.stream;
+      if (args[0].endsWith('/stall-body.jpg')) {
+        // Drive the socket's idle callback with the fake clock; the real stream
+        // and HTTP connections still exercise pipeline destruction.
+        upstream.stream.setTimeout = (ms, callback) => {
+          setTimeout(callback, ms);
+          bodyTimeoutArmed();
+          return upstream.stream;
+        };
+      }
+      return upstream;
+    });
+    await markHosted(peer.instanceId, [{ kind: 'video', filename: 'stall.mp4' }, { kind: 'image', filename: 'stall.png' }]);
+    await saveHistory([
+      { id: 'stall', filename: 'stall.mp4', thumbnail: 'stall-poster.jpg' },
+      { id: 'body', filename: 'stall.mp4', thumbnail: 'stall-body.jpg' },
+      { id: 'error-body', filename: 'stall.mp4', thumbnail: 'error-body.jpg' },
+    ]);
+
+    const localGet = (path, headers = {}) => new Promise((resolve, reject) => {
+      get({ host: '127.0.0.1', port: localServer.address().port, path, headers }, res => {
+        const chunks = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString() }));
+        res.on('aborted', () => reject(new Error('response aborted')));
+        res.on('error', reject);
+      }).on('error', reject);
+    });
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let posterSettled = false;
+      const poster = localGet('/data/video-thumbnails/stall-poster.jpg').finally(() => { posterSettled = true; });
+      await posterRequest;
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(posterSettled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await poster).status).toBe(502);
+      expect((await resolveMediaLocations([{ kind: 'video', ref: 'stall.mp4' }]))[0].location).toBe('remote');
+
+      const image = localGet('/data/image-thumbnails/stall.webp');
+      await imageRequest;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect((await image).status).toBe(502);
+      expect((await resolveMediaLocations([{ kind: 'image', ref: 'stall.png' }]))[0].location).toBe('remote');
+
+      let bodySettled = false;
+      const body = localGet('/data/video-thumbnails/stall-body.jpg')
+        .then(response => response.status, () => 'disconnected')
+        .finally(() => { bodySettled = true; });
+      await bodyTimeout;
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(bodySettled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect([502, 'disconnected']).toContain(await body);
+      expect((await resolveMediaLocations([{ kind: 'video', ref: 'stall.mp4' }]))[0].location).toBe('remote');
+      expect(warn).not.toHaveBeenCalled();
+
+      // Error status is forwarded immediately; its unused body must not hold
+      // the peer connection open forever if the peer never finishes sending it.
+      expect((await localGet('/data/video-thumbnails/error-body.jpg')).status).toBe(502);
+      expect(errorStream.destroyed).toBe(true);
+
+      const video = localGet('/data/videos/stall.mp4', { Range: 'bytes=0-3' });
+      await videoRequest;
+      await vi.advanceTimersByTimeAsync(5000); // longer than the thumbnail deadline
+      expect(videoResponse.req.headers.range).toBe('bytes=0-3');
+      videoResponse.res.status(206).set({ 'Content-Type': 'video/mp4', 'Content-Range': 'bytes 0-3/100' }).end('PART');
+      const result = await video;
+      expect(result).toMatchObject({ status: 206, body: 'PART' });
+      expect(result.headers['content-range']).toBe('bytes 0-3/100');
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+      peerServer.closeAllConnections();
+      localServer.closeAllConnections();
+      await Promise.all([closeLoopbackServer(peerServer), closeLoopbackServer(localServer)]);
+    }
+  });
+
   it('404s a file nobody hosts', async () => {
     const res = await request(app).get('/data/images/unknown.png');
     expect(res.status).toBe(404);
@@ -159,9 +270,15 @@ describe('static-mount fallback', () => {
 
   it('answers 502 when the host peer is unreachable', async () => {
     await markHosted(PEER.instanceId, [{ kind: 'image', filename: 'offline.png' }]);
-    streamRequest.mockRejectedValue(new Error('ECONNREFUSED'));
-    const res = await request(app).get('/data/images/offline.png');
-    expect(res.status).toBe(502);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      streamRequest.mockRejectedValue(new Error('ECONNREFUSED peer.example.com'));
+      const res = await request(app).get('/data/images/offline.png');
+      expect(res.status).toBe(502);
+      expect(warn).toHaveBeenCalledWith('⚠️ peerHostedMedia: stream /data/images from peer failed (transport error)');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('never streams from a disabled peer', async () => {
