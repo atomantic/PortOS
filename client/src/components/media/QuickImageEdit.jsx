@@ -9,7 +9,7 @@ import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 // user's instruction is the whole prompt, wrapped so the model reworks the
 // reference instead of inventing a new picture.
 export const quickEditPrompt = (instruction) =>
-  `Edit the reference image: ${instruction.trim()}. Keep everything else exactly as it is: composition, framing, subject, lighting, color and film look.`;
+  `Edit the reference image: ${instruction}. Keep everything else exactly as it is: composition, framing, subject, lighting, color and film look.`;
 
 /**
  * One-step "change this about the image" action: sends the image as the

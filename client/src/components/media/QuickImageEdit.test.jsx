@@ -34,6 +34,17 @@ describe('QuickImageEdit', () => {
     expect(body.modelId).toBeUndefined();
   });
 
+  it('preserves the instruction whitespace in the sent prompt', async () => {
+    generateImage.mockResolvedValue({ position: 1 });
+    render(<QuickImageEdit item={{ filename: 'a.png' }} />);
+    fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: '  red coat  ' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /edit/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: 'Edit the reference image:   red coat  . Keep everything else exactly as it is: composition, framing, subject, lighting, color and film look.',
+    }), { silent: true }));
+  });
+
   it('stays open and does not finish when the render is refused', async () => {
     generateImage.mockImplementation(() => Promise.reject(new Error('nope')));
     const onDone = vi.fn();
