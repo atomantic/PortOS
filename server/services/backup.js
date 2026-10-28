@@ -389,6 +389,7 @@ const DEFAULT_STATE = {
   lastSnapshotId: null,
   filesChanged: 0,
   pgBackup: null,
+  restoreWarning: null,
   error: null
 };
 
@@ -691,7 +692,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     releaseActiveSnapshot();
     setBackupRunning(false, 'failure');
     const failureState = {
-      lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null,
+      lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null, restoreWarning: null,
       ...(previousState ?? {}),
     };
     await saveState(failureState, (cause) => {
@@ -771,6 +772,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     // no durable asset owner remains outside admission.
     const assetConsistency = backupAssetConsistency();
     let pgResult;
+    let restoreWarning = null;
     try {
       const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
       changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags, { allowVanishedSources: true });
@@ -783,6 +785,12 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
         allowMissingDump: pgResult.status === 'skipped' || pgResult.status === 'failed',
         assetConsistency,
       });
+      if (!usesFileEscapeHatch()) {
+        const domains = await legacyDbMetadataDomains(dataDestDir, Object.keys(manifest.files));
+        if (domains.length) {
+          restoreWarning = { code: 'BACKUP_LEGACY_DB_METADATA', domains, message: legacyDbMetadataMessage(domains) };
+        }
+      }
     } finally {
       releaseSnapshotCut();
     }
@@ -793,7 +801,9 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     await removeMarker(failedMarkerPath(snapshotDir), 'failed');
     await removeMarker(markerPath(snapshotDir), 'snapshot');
 
-    const status = backupStatusForPg(pgResult);
+    const status = restoreWarning ? 'degraded' : backupStatusForPg(pgResult);
+    const error = [pgResult.status === 'failed' ? `DB dump ${pgResult.reason}` : null, restoreWarning?.message]
+      .filter(Boolean).join(' ') || null;
     const lastRun = new Date().toISOString();
     // Read durable status: getState() projects this attempt as running.
     const state = await readJSONFile(STATE_PATH, DEFAULT_STATE, { strict: true });
@@ -809,14 +819,15 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       filesChanged: changedFiles.length,
       pgBackup: pgResult,
       assetConsistency,
-      error: pgResult.status === 'failed' ? `DB dump ${pgResult.reason}` : null
+      restoreWarning,
+      error
     });
 
     await removeMarker(parentMarker, 'reservation');
     // A crash before the reservation clears must still leave the slot due.
     if (status === 'ok') await saveState({ lastSuccessfulRun: lastRun });
 
-    if (io) io.emit('backup:completed', { snapshotId, filesChanged: changedFiles.length, status, pgBackup: pgResult });
+    if (io) io.emit('backup:completed', { snapshotId, filesChanged: changedFiles.length, status, pgBackup: pgResult, restoreWarning, error });
 
     // Loud-on-failure: surface a degraded DB dump as a warning toast, even on
     // unattended scheduled runs (which pass io=null) via the module-level io.
@@ -831,7 +842,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       }
     }
 
-    const result = complete({ snapshotId, filesChanged: changedFiles.length, status, lastRun, manifest, pgBackup: pgResult, assetConsistency });
+    const result = complete({ snapshotId, filesChanged: changedFiles.length, status, lastRun, manifest, pgBackup: pgResult, assetConsistency, restoreWarning, error });
 
     // Prune only after the snapshot markers are cleared and `complete()` has
     // released `activeSnapshotId` — pruning any
@@ -842,8 +853,8 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     // here, so this run's own snapshot is never pruned as failed or in-progress.
     // Retention failures must not fail an otherwise-successful backup.
     let pruned = { pruned: 0 };
-    if (pgResult.status === 'failed') {
-      console.warn(`⚠️ Backup retention skipped: DB dump ${pgResult.reason} — keeping older snapshots`);
+    if (status === 'degraded') {
+      console.log('💾 Backup retention skipped: degraded snapshot — keeping older snapshots');
     } else {
       pruned = await pruneOldSnapshots(destPath, retentionCount).catch(err => {
         console.error(`❌ Backup retention prune failed: ${err.message}`);
@@ -1760,21 +1771,30 @@ const LEGACY_DB_METADATA = [
   ['creative-director', /^creative-director-projects\.json$/],
 ];
 
+async function legacyDbMetadataDomains(srcDir, paths) {
+  // Manifest paths use native separators; restore inventory uses forward slashes.
+  paths = paths.map(path => path.replaceAll('\\', '/'));
+  const domains = new Set(LEGACY_DB_METADATA
+    .filter(([, pattern]) => paths.some(path => pattern.test(path)))
+    .map(([domain]) => domain));
+  if (paths.includes('universes/index.json')) {
+    const index = await readJSONFileStrict(join(srcDir, 'universes', 'index.json'), null, { logError: false });
+    if (!index.ok || index.value?.config?.runs !== undefined) domains.add('universes');
+  }
+  return [...domains];
+}
+
+const legacyDbMetadataMessage = domains => `Historical file metadata for ${domains.join(', ')} cannot restore database-primary records. Convert this backup in a disposable offline upgrade install, verify its records, then restore a current-format file/database backup (docs/BACKUP.md).`;
+
 async function assertRestoreStorageCompatible(srcDir, inventory, snapshotId) {
   // Match dumpPostgres: an uninitialized backend still requires PostgreSQL.
   if (usesFileEscapeHatch()) return;
   if (!inventory) throw snapshotFileIntegrityError(snapshotId);
-  const domains = new Set(LEGACY_DB_METADATA
-    .filter(([, pattern]) => inventory.paths.some(path => pattern.test(path)))
-    .map(([domain]) => domain));
-  if (inventory.paths.includes('universes/index.json')) {
-    const index = await readJSONFileStrict(join(srcDir, 'universes', 'index.json'), null, { logError: false });
-    if (!index.ok || index.value?.config?.runs !== undefined) domains.add('universes');
-  }
-  if (domains.size) {
+  const domains = await legacyDbMetadataDomains(srcDir, inventory.paths);
+  if (domains.length) {
     throw new ServerError(
-      `Historical file metadata for ${[...domains].join(', ')} cannot restore database-primary records. Convert this backup in a disposable offline upgrade install, verify its records, then restore a current-format file/database backup (docs/BACKUP.md).`,
-      { status: 409, code: 'BACKUP_LEGACY_DB_METADATA', context: { domains: [...domains] } },
+      legacyDbMetadataMessage(domains),
+      { status: 409, code: 'BACKUP_LEGACY_DB_METADATA', context: { domains } },
     );
   }
 }
