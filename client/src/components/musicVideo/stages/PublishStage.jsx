@@ -1,3 +1,4 @@
+import FestivalPacketPanel from '../FestivalPacketPanel.jsx';
 import PublishKitPanel from '../PublishKitPanel.jsx';
 import PublishPostingPanel from '../PublishPostingPanel.jsx';
 import PublishPlatformsPanel from '../PublishPlatformsPanel.jsx';
@@ -19,6 +20,7 @@ export default function PublishStage({ board }) {
       <PublishKitPanel project={project} publishKit={publishKit} enabledTargets={publishing?.enabledTargets} />
       {publishing && <PublishPostingPanel project={project} publishing={publishing} excerpts={excerpts} />}
       {publishing && <PublishCrossLinksPanel project={project} publishing={publishing} />}
+      <FestivalPacketPanel project={project} />
       <PromotionPlanPanel project={project} />
     </fieldset>
   );

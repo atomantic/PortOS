@@ -13,6 +13,7 @@ import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
 import storyRoutes from './musicVideoStory.js';
+import festivalPacketRoutes from './musicVideoFestivalPacket.js';
 import { musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { presentMusicVideoDependencies } from '../lib/musicVideoDependencies.js';
@@ -484,6 +485,7 @@ router.post('/:id/plan', asyncHandler(async (req, res) => {
 }));
 
 router.use('/', storyRoutes);
+router.use('/', festivalPacketRoutes);
 
 // --- Pre-production treatment (#8980) ---
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to

@@ -1238,6 +1238,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/scenes/:sceneId/continue-from-previous',
   'POST /api/music-video/:id/scenes/:sceneId/performance-repair',
   'POST /api/music-video/:id/sharing-copy',
+  // Festival preview probes the selected master with ffprobe. Packet CRUD only stores text.
+  'POST /api/music-video/:id/festival-packet/preview',
   'POST /api/music-video/:id/vocal-stem',
   // Song prepare and choosing a revised song also run Demucs separation and
   // lyric alignment in Python.

@@ -1,3 +1,4 @@
+import { festivalPacketSchema } from '../../lib/musicVideoFestivalPacket.js';
 import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video — pure record transforms (issue #1760, Phase 1).
@@ -113,6 +114,7 @@ export function buildProjectRecord(input, { id, now }) {
   return {
     id,
     name,
+    ...(input.festivalPacket ? { festivalPacket: festivalPacketSchema.parse(input.festivalPacket) } : {}),
     version: 1,
     parentProjectId: null,
     rootProjectId: null,
@@ -359,6 +361,7 @@ export function applyProjectPatch(project, patch) {
   // `visualSpec` patch merges per sub-field the same way (#8965).
   const timedPatch = {
     ...patch,
+    ...('festivalPacket' in patch ? { festivalPacket: patch.festivalPacket === null ? null : festivalPacketSchema.parse(patch.festivalPacket) } : {}),
     ...(patch.productionPolicy ? { productionPolicy: normalizeMusicVideoProductionPolicy(patch.productionPolicy, project.productionPolicy) } : {}),
     ...(patch.visualSpec ? { visualSpec: normalizeVisualSpec(patch.visualSpec, project.visualSpec) } : {}),
     // Automation brief merges per sub-field; null clears it.
@@ -1036,6 +1039,8 @@ export function mergeProjectRecord(local, remoteRaw) {
   // Key-presence checks preserve an intentional local empty/null value instead
   // of confusing it with a missing field.
   remote = { ...remote };
+  // Pre-packet peers can omit the optional field; absence must not erase edits.
+  if (!Object.hasOwn(remote, 'festivalPacket') && Object.hasOwn(local, 'festivalPacket')) remote.festivalPacket = local.festivalPacket;
   if (Object.hasOwn(local, 'imageMode')) remote.imageMode = local.imageMode;
   if (Object.hasOwn(local, 'imageModelId')) remote.imageModelId = local.imageModelId;
   // #9066: this install's production-run checkpoint survives a newer remote.

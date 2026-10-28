@@ -905,6 +905,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/music-video/:id/story/beats', RECORDS],
   ['POST /api/music-video/:id/story/propose', HANDLER_GATED],
   ['PUT /api/music-video/:id/story/summary', RECORDS],
+  ['PUT /api/music-video/:id/festival-packet', RECORDS],
   ['PATCH /api/music-video/:id/treatment', RECORDS],
   ['POST /api/music-video/:id/treatment/apply', RECORDS],
   ['POST /api/music-video/:id/treatment/proofs/:proofId/review', RECORDS],
