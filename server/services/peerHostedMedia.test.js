@@ -159,6 +159,7 @@ describe('static-mount fallback', () => {
     let videoArrived;
     let bodyTimeoutArmed;
     let videoResponse;
+    let errorStream;
     const posterRequest = new Promise(resolve => { posterArrived = resolve; });
     const imageRequest = new Promise(resolve => { imageArrived = resolve; });
     const videoRequest = new Promise(resolve => { videoArrived = resolve; });
@@ -166,6 +167,7 @@ describe('static-mount fallback', () => {
     const peerApp = express();
     peerApp.get('/data/video-thumbnails/:name', (req, res) => {
       if (req.params.name === 'stall-body.jpg') res.status(200).type('jpeg').flushHeaders(); // no body
+      else if (req.params.name === 'error-body.jpg') res.status(403).flushHeaders(); // no body
       else posterArrived(); // no headers
     });
     peerApp.get('/data/image-thumbnails/:name', () => imageArrived()); // no headers
@@ -179,6 +181,7 @@ describe('static-mount fallback', () => {
     getPeers.mockResolvedValue([peer]);
     streamRequest.mockImplementation(async (...args) => {
       const upstream = await realPeerStreamRequest(...args);
+      if (args[0].endsWith('/error-body.jpg')) errorStream = upstream.stream;
       if (args[0].endsWith('/stall-body.jpg')) {
         // Drive the socket's idle callback with the fake clock; the real stream
         // and HTTP connections still exercise pipeline destruction.
@@ -194,6 +197,7 @@ describe('static-mount fallback', () => {
     await saveHistory([
       { id: 'stall', filename: 'stall.mp4', thumbnail: 'stall-poster.jpg' },
       { id: 'body', filename: 'stall.mp4', thumbnail: 'stall-body.jpg' },
+      { id: 'error-body', filename: 'stall.mp4', thumbnail: 'error-body.jpg' },
     ]);
 
     const localGet = (path, headers = {}) => new Promise((resolve, reject) => {
@@ -235,6 +239,11 @@ describe('static-mount fallback', () => {
       expect([502, 'disconnected']).toContain(await body);
       expect((await resolveMediaLocations([{ kind: 'video', ref: 'stall.mp4' }]))[0].location).toBe('remote');
       expect(warn).not.toHaveBeenCalled();
+
+      // Error status is forwarded immediately; its unused body must not hold
+      // the peer connection open forever if the peer never finishes sending it.
+      expect((await localGet('/data/video-thumbnails/error-body.jpg')).status).toBe(502);
+      expect(errorStream.destroyed).toBe(true);
 
       const video = localGet('/data/videos/stall.mp4', { Range: 'bytes=0-3' });
       await videoRequest;

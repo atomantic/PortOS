@@ -255,7 +255,9 @@ async function streamFromPeer(peer, path, req, res, drop, timeoutMs) {
   const upstream = await withAbortTimeout(timeoutMs, (signal) =>
     peerStreamRequest(`${peerBaseUrl(peer)}${path}`, { signal, headers }, peer));
   if (upstream.status !== 200 && upstream.status !== 206) {
-    upstream.stream.resume();
+    // The error body is unused; do not keep a socket open for a peer that
+    // never finishes it (or sends an unbounded body).
+    upstream.stream.destroy();
     // The peer no longer has it (deleted, or a snapshot referenced bytes it never
     // held): forget the entry so the collection stops advertising it as hosted.
     if (upstream.status === 404 && drop) await forgetHosted(drop.kind, drop.filename);
