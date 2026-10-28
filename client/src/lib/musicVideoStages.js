@@ -215,7 +215,11 @@ export function listPreviewSources(project, { finalVideoSrc = null, leadWith = '
   // The aligned words over a plain frame, for checking timing before there is any picture.
   if (projectHasAudio(project) && project.audioAnalysis
     && (project.lyricCues || []).some((cue) => typeof cue.startSec === 'number' && isNonBlankStr(cue.text))) {
-    sources.push({ id: 'lyrics', kind: 'lyrics', label: 'Lyric timing' });
+    const lyrics = { id: 'lyrics', kind: 'lyrics', label: 'Lyric timing' };
+    // On Song the words are being checked: lead with them. The animatic and renders
+    // follow the lyric overlay setting, so with overlays off they show no words.
+    if (leadWith === 'lyrics') sources.unshift(lyrics);
+    else sources.push(lyrics);
   }
   return sources;
 }
