@@ -295,11 +295,11 @@ export async function previewCatalogSheet(id, options = {}) {
       ...options, variant: target.variant.id,
     });
   }
-  const { params, visualDirection, referenceImages, editBase } = await buildCatalogSheet(target, options);
+  const { params, settings, visualDirection, referenceImages, editBase } = await buildCatalogSheet(target, options);
+  const { previewPreparedImagePrompt } = await import('./imageGen/promptPreview.js');
   return {
-    sentPrompt: params.prompt,
-    ...(params.negativePrompt ? { sentNegativePrompt: params.negativePrompt } : {}),
-    promptAdditions: params.promptAdditions || [],
+    promptAdditions: [],
+    ...await previewPreparedImagePrompt({ params, settings }),
     ...(target.ingredient.type === 'character' ? { referenceImages } : {}),
     ...(editBase ? { editBase } : {}),
     ...(visualDirection ? { visualDirection } : {}),
