@@ -285,6 +285,8 @@ export const catalogVideoSubjectLinksSchema = z.object({
     subjectId: z.string().trim().min(1).max(64),
     ingredientId: z.string().trim().min(1).max(128).nullable(),
     formId: z.string().regex(FORM_ID_PATTERN).optional(),
+    // Replace the subject's description with the catalog's appearance text.
+    useCatalogText: z.boolean().optional(),
   }).strict()).min(1).max(24),
 }).strict();
 export const catalogStoryDraftSchema = z.object({

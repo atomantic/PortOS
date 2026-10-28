@@ -2,12 +2,25 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import IngredientPicker from '../IngredientPicker.jsx';
 import toast from '../ui/Toast';
-import { linkVideoSubjects, listVideoSubjectLinks } from '../../services/api';
+import { linkVideoSubjects, listCatalogIngredientsByIds, listVideoSubjectLinks, updateCatalogIngredient } from '../../services/api';
+import { formatCount } from '../../utils/formatters';
 import { ingredientPath } from '../../lib/creativeLibraries.js';
 
 const buttonClass = 'min-h-[44px] rounded border border-port-border px-3 text-xs text-port-accent hover:bg-port-accent/10 disabled:opacity-50';
 const selectClass = 'min-h-[44px] min-w-0 max-w-full rounded border border-port-border bg-port-bg px-2 text-xs';
 const KIND_LABEL = { character: 'cast', place: 'environment', object: 'object' };
+const PRIMARY_KEY = { character: 'physicalDescription', place: 'description', object: 'description' };
+const SUBJECT_DESCRIPTION_MAX = 1000;
+const CATALOG_PAGES = [['/casting', 'Casting'], ['/environments', 'Environments'], ['/objects', 'Objects']];
+const sameText = (a, b) => String(a || '').trim().replace(/\s+/g, ' ') === String(b || '').trim().replace(/\s+/g, ' ');
+
+// The linked record's description with this subject's one written in its place.
+const payloadWithAppearance = (record, kind, appearance, text) => {
+  const payload = { ...(record.payload || {}) };
+  if (appearance.field === 'form') payload.forms = (payload.forms || []).map((f) => (f.id === appearance.formId ? { ...f, description: text } : f));
+  else payload[PRIMARY_KEY[kind]] = text;
+  return payload;
+};
 
 const recordForms = (ingredient) => (Array.isArray(ingredient?.payload?.forms) ? ingredient.payload.forms : [])
   .filter((f) => f?.id).map((f) => ({ id: f.id, label: f.label || f.age || f.id }));
@@ -16,9 +29,10 @@ const recordForms = (ingredient) => (Array.isArray(ingredient?.payload?.forms) ?
  * A music video's subjects and the catalog record each one is. An unlinked
  * subject named for an existing record ("Nora (17)") offers that record and
  * age in one tap; any other record can be picked. Linking keeps the subject's
- * own name and description. `type` limits it to one kind.
+ * own name and description; when the description differs from the catalog's,
+ * either side can take the other's. `type` limits it to one kind.
  */
-export default function VideoCastLinks({ projectId, type, onLinked, idPrefix = 'video-cast' }) {
+export default function VideoCastLinks({ projectId, type, universeId = null, onLinked, idPrefix = 'video-cast' }) {
   const [subjects, setSubjects] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -43,6 +57,17 @@ export default function VideoCastLinks({ projectId, type, onLinked, idPrefix = '
     setBusy(false);
   };
 
+  // "Update catalog": the record (or its linked age) takes this video's description.
+  const updateCatalog = async (subject) => {
+    setBusy(true);
+    const record = await listCatalogIngredientsByIds([subject.linked.id], { silent: true }).then((items) => items[0] || null, () => null);
+    const saved = record && await updateCatalogIngredient(record.id, { payload: payloadWithAppearance(record, subject.kind, subject.linked.appearance, subject.description || '') }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Could not update the catalog'); return null; });
+    if (!record) toast.error(`${subject.linked.name} could not be loaded`);
+    if (saved) await load();
+    setBusy(false);
+  };
+
   if (error) return <p role="alert" className="text-xs text-port-error">{error}</p>;
   if (!subjects) return <p className="text-xs text-port-text-muted">Loading the video’s cast…</p>;
   if (!subjects.length) return <p className="text-xs text-port-text-muted">This video has no {type ? `${KIND_LABEL[type]} ` : ''}subjects yet.</p>;
@@ -50,8 +75,17 @@ export default function VideoCastLinks({ projectId, type, onLinked, idPrefix = '
   const suggested = subjects.filter((s) => !s.ingredientId && s.suggestion);
   const pickSubject = subjects.find((s) => s.id === pickFor) || null;
 
+  // From the video page: the same story filter in the catalog pages.
+  const storyQuery = universeId ? new URLSearchParams({ scope: universeId, story: `music-video:${projectId}` }).toString() : '';
+
   return (
     <div className="space-y-2 min-w-0">
+      {storyQuery && (
+        <p className="flex flex-wrap gap-x-3 text-xs">
+          <span className="text-port-text-muted">See this video in</span>
+          {CATALOG_PAGES.map(([path, label]) => <Link key={path} className="text-port-accent" to={`${path}?${storyQuery}`}>{label}</Link>)}
+        </p>
+      )}
       {suggested.length > 1 && (
         <button type="button" disabled={busy} className={buttonClass}
           onClick={() => link(suggested.map((s) => ({ subjectId: s.id, ingredientId: s.suggestion.ingredientId, ...(s.suggestion.formId ? { formId: s.suggestion.formId } : {}) })))}>
@@ -78,6 +112,25 @@ export default function VideoCastLinks({ projectId, type, onLinked, idPrefix = '
                 <button type="button" disabled={busy} className={buttonClass} aria-label={`Unlink ${subject.name}`}
                   onClick={() => link([{ subjectId: subject.id, ingredientId: null }])}>Unlink</button>
               </>}
+              {subject.ingredientId && subject.linked?.appearance && !sameText(subject.description, subject.linked.appearance.text) && (() => {
+                const catalogText = subject.linked.appearance.text.trim();
+                const tooLong = catalogText.length > SUBJECT_DESCRIPTION_MAX;
+                const where = subject.castForm?.label ? `${subject.linked.name} · ${subject.castForm.label}` : subject.linked.name;
+                return (
+                  <div role="status" className="w-full space-y-1 rounded border border-port-warning/60 p-2">
+                    <p className="text-xs text-port-warning">Description differs from {where} in the catalog</p>
+                    <p className="line-clamp-3 text-xs"><span className="text-port-text-muted">Video: </span>{subject.description?.trim() || 'none'}</p>
+                    <p className="line-clamp-3 text-xs"><span className="text-port-text-muted">Catalog: </span>{catalogText || 'none'}</p>
+                    {tooLong && <p className="text-xs text-port-text-muted">The catalog’s is {formatCount(catalogText.length)} characters; a video subject holds {formatCount(SUBJECT_DESCRIPTION_MAX)}.</p>}
+                    <div className="flex flex-wrap gap-2">
+                      {catalogText && <button type="button" disabled={busy || tooLong} className={buttonClass} aria-label={`Use the catalog description for ${subject.name}`}
+                        onClick={() => link([{ subjectId: subject.id, ingredientId: subject.linked.id, ...(subject.castForm?.id ? { formId: subject.castForm.id } : {}), useCatalogText: true }])}>Use catalog</button>}
+                      {subject.description?.trim() && <button type="button" disabled={busy} className={buttonClass} aria-label={`Update the catalog from ${subject.name}`}
+                        onClick={() => updateCatalog(subject)}>Update catalog</button>}
+                    </div>
+                  </div>
+                );
+              })()}
               {subject.ingredientId && !subject.linked && <span className="text-xs text-port-warning">Its catalog record is gone</span>}
               {(!subject.ingredientId || !subject.linked) && !isStaged && <>
                 {subject.suggestion && (
@@ -121,11 +174,11 @@ export default function VideoCastLinks({ projectId, type, onLinked, idPrefix = '
   );
 }
 
-/** Collapsed by default; the cast loads only once it is opened. */
-export function VideoCastLinksDisclosure({ summary, summaryClassName, ...props }) {
-  const [open, setOpen] = useState(false);
+/** Collapsed unless `defaultOpen`; the cast loads only once it is opened. */
+export function VideoCastLinksDisclosure({ summary, summaryClassName, defaultOpen = false, ...props }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <details className="w-full" onToggle={(e) => setOpen(e.currentTarget.open)}>
+    <details className="w-full" open={defaultOpen || undefined} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary className={summaryClassName}>{summary}</summary>
       {open && <VideoCastLinks {...props} />}
     </details>

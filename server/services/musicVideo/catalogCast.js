@@ -21,6 +21,7 @@ const PRIMARY_KEY = { character: 'physicalDescription', place: 'description', ob
 const UNIVERSE_FIELD = { character: 'characters', place: 'places', object: 'objects' };
 const REFERENCE_ROLE = { character: 'character', place: 'set', object: 'prop' };
 const MAX_VIDEO_SUBJECTS = 24;
+const SUBJECT_DESCRIPTION_MAX = 1000;
 
 function musicVideoCastIngredientId(projectId, subject) {
   const seed = `music-video:${projectId}:${subject.kind}:${subject.id}`;
@@ -268,6 +269,15 @@ function formForQualifier(record, qualifier) {
 const formOptions = (record) => (Array.isArray(record?.payload?.forms) ? record.payload.forms : [])
   .filter((f) => f?.id).map((f) => ({ id: f.id, label: f.label || f.age || f.id }));
 
+// The catalog's appearance text for what a subject shows: its linked age
+// form's description when it shows one, else the record's own.
+function catalogAppearance(record, formId) {
+  const payload = record?.payload || {};
+  const form = formId ? (Array.isArray(payload.forms) ? payload.forms : []).find((f) => f?.id === formId) : null;
+  if (form) return { field: 'form', formId: form.id, text: String(form.description || '') };
+  return { field: 'record', text: String(payload[PRIMARY_KEY[record?.type]] || payload.description || '') };
+}
+
 // The subject's snapshot of the age form it shows; `age` is a whole number only when the form states one.
 function castFormSnapshot(form) {
   if (!form?.id) return undefined;
@@ -298,7 +308,7 @@ export async function listVideoSubjectLinks(projectId, { type } = {}, deps = nul
     if (subject.ingredientId) {
       if (!records.has(subject.ingredientId)) records.set(subject.ingredientId, await d.catalogDB.getIngredient(subject.ingredientId));
       const record = records.get(subject.ingredientId);
-      out.push({ ...subject, linked: record && !record.deleted ? { id: record.id, name: record.name, forms: formOptions(record) } : null, suggestion: null });
+      out.push({ ...subject, linked: record && !record.deleted ? { id: record.id, name: record.name, forms: formOptions(record), appearance: catalogAppearance(record, subject.castForm?.id) } : null, suggestion: null });
       continue;
     }
     const { base, qualifier } = subjectNameParts(subject.name);
@@ -335,7 +345,15 @@ export async function linkVideoSubjects(projectId, links, deps = null) {
     if (record.type !== subject.kind) throw new ServerError(`${record.name} is a ${record.type}, not a ${subject.kind}.`, { status: 400, code: 'SUBJECT_KIND_MISMATCH' });
     const form = link.formId ? (record.payload?.forms || []).find((f) => f.id === link.formId) : null;
     if (link.formId && !form) throw new ServerError(`${record.name} has no such age or look.`, { status: 400, code: 'FORM_NOT_FOUND' });
-    stamps.set(subject.id, { ingredientId: record.id, castForm: castFormSnapshot(form) });
+    // "Use catalog": the subject's description becomes the catalog's, refused rather than cut when too long.
+    let description;
+    if (link.useCatalogText) {
+      description = catalogAppearance(record, form?.id).text.trim();
+      if (description.length > SUBJECT_DESCRIPTION_MAX) {
+        throw new ServerError(`${record.name}'s catalog description is ${description.length} characters; a video subject holds ${SUBJECT_DESCRIPTION_MAX}. Shorten it in the catalog first.`, { status: 400, code: 'DESCRIPTION_TOO_LONG' });
+      }
+    }
+    stamps.set(subject.id, { ingredientId: record.id, castForm: castFormSnapshot(form), description });
   }
   if (!stamps.size) return { project, linked: 0, unlinked: 0 };
   const { project: saved } = await d.mutateProjectRecord(projectId, (current) => ({
@@ -347,7 +365,8 @@ export async function linkVideoSubjects(projectId, links, deps = null) {
           if (!stamps.has(s.id)) return s;
           const { ingredientId: _ingredientId, castForm: _castForm, localOnly: _localOnly, ...rest } = s;
           const stamp = stamps.get(s.id);
-          return stamp ? { ...rest, ingredientId: stamp.ingredientId, ...(stamp.castForm ? { castForm: stamp.castForm } : {}) } : rest;
+          if (!stamp) return rest;
+          return { ...rest, ...(stamp.description !== undefined ? { description: stamp.description } : {}), ingredientId: stamp.ingredientId, ...(stamp.castForm ? { castForm: stamp.castForm } : {}) };
         }),
       },
     },
@@ -378,10 +397,11 @@ export async function addCatalogRecordToVideo(projectId, ingredientId, deps = nu
     return { project: saved, added: false, linked };
   }
   if (subjects.length >= MAX_VIDEO_SUBJECTS) throw new ServerError(`A music video holds at most ${MAX_VIDEO_SUBJECTS} cast, sets and props.`, { status: 409, code: 'SUBJECT_LIMIT' });
-  const payload = record.payload || {};
+  const appearance = catalogAppearance(record).text.trim();
   const subject = {
     id: `mvc-${randomUUID()}`, kind: record.type, name: trimTo(record.name, 120),
-    description: trimTo(payload[PRIMARY_KEY[record.type]] || payload.description || '', 1000),
+    // Copied only when it fits; a longer one is never cut, the link shows it differs.
+    description: appearance.length <= SUBJECT_DESCRIPTION_MAX ? appearance : '',
     ...(record.type === 'character' ? { role: subjects.some((s) => s.kind === 'character') ? 'supporting' : 'protagonist' } : {}),
     ingredientId: record.id,
   };
