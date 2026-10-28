@@ -19,6 +19,7 @@ export const BROWSER_SUITES = [
   'server/services/musicVideo/documentTemplates/layered/engine.overlay.browser.test.js',
   'server/services/musicVideo/documentTemplates/shared/lyricType.browser.test.js',
   'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js',
+  'server/services/musicVideo/lyricPlaythrough.browser.test.js',
   'server/services/musicVideo/publish/linkedin.browser.test.js',
   'server/services/musicVideo/publish/sunoHook.browser.test.js',
 ];

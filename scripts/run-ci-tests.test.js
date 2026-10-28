@@ -404,7 +404,8 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
       expect(new Set(slices.flat()).size).toBe(expected.length);
       selections[profile] = slices;
     }
-    expect(selections.full.map(files => files.length)).toEqual([10, 10]);
+    const [firstCount, secondCount] = selections.full.map(files => files.length);
+    expect(Math.abs(firstCount - secondCount)).toBeLessThanOrEqual(1);
     const owner = file => selections.full.findIndex(files => files.includes(file));
     expect(owner('services/musicVideo/documentRender.browser.test.js')).not.toBe(owner('services/htmlComposition/index.test.js'));
     for (const [index, files] of selections.smoke.entries()) for (const file of files) expect(owner(file)).toBe(index);
@@ -422,7 +423,7 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
     expect(seed.stdout).toMatch(/recorded \d+ green entries/);
     const reused = run(1, { memo });
     expect(reused.status, reused.stderr).toBe(0);
-    expect(reused.stdout).toContain('skipped 10 of 10 selected files');
+    expect(reused.stdout).toContain(`skipped ${firstCount} of ${firstCount} selected files`);
     expect(reused.reported).toBeNull();
     const fresh = run(2, { memo: join(fixture, 'empty-second-shard-memo') });
     expect(fresh.status, fresh.stderr).toBe(0);
