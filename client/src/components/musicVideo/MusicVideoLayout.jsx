@@ -140,7 +140,7 @@ export default function MusicVideoLayout({
   const headerRef = useRef(null);
   const rootRef = useRef(null);
   const dockRef = useRef(null);
-  // On a step reviewed by watching (Storyboard, Make, Final render) the player is the main
+  // On a step reviewed by watching (Shots, Final render) the player is the main
   // element: full width at the top of the step with the approval beside it, not a side column.
   const sideDock = !!dock && !playerFirst;
   const expandedDock = sideDock && previewExpanded;

@@ -2871,18 +2871,28 @@ describe('MusicVideo stage tabs (#9243)', () => {
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], startSec: 0 }] }]);
     const scrolled = [];
     const scroll = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(function record() { scrolled.push(this.id); });
-    renderAt('/music-video/mv-1/board');
+    renderAt('/music-video/mv-1/cast-sets');
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
     const dock = screen.getByRole('complementary', { name: 'Preview' });
     fireEvent.click(within(dock).getByRole('button', { name: 'Edit shot' }));
     await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/music-video/mv-1/produce/scene/s1'));
     expect(selectedTab()).toHaveAccessibleName(STAGE_TABS.produce);
     await waitFor(() => expect(scrolled).toContain('scene-s1'));
-    // Already open, the card still comes back into view.
+    // Already open, the card still comes back into view (Shots leads with the player, so the dock moved).
     scrolled.length = 0;
-    fireEvent.click(within(dock).getByRole('button', { name: 'Edit shot' }));
+    fireEvent.click(within(screen.getByRole('complementary', { name: 'Preview' })).getByRole('button', { name: 'Edit shot' }));
     await waitFor(() => expect(scrolled).toContain('scene-s1'));
     scroll.mockRestore();
+  });
+
+  // Uniquely catches the player coming back on Plan, which is checked by reading; watching is on Shots.
+  it('opens Plan without a preview', async () => {
+    listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
+    renderAt('/music-video/mv-1/board');
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    expect(screen.queryByRole('complementary', { name: 'Preview' })).toBeNull();
+    await openStage('produce');
+    expect(screen.getByRole('complementary', { name: 'Preview' })).toBeInTheDocument();
   });
 
   it('opens Story without a preview and keeps a rough draft across stage navigation', async () => {
@@ -3224,7 +3234,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
       // Every finished draft stays reachable from the dock's source picker.
       fireEvent.change(screen.getByLabelText('Preview source'), { target: { value: 'excerpt:mve-1' } });
       await waitFor(() => expect(screen.getByLabelText('Draft excerpt preview').getAttribute('src')).toBe('/data/videos/excerpt-old.mp4'));
-      await openStage('board', false);
+      await openStage('cast-sets', false);
       await waitFor(() => expect(screen.getByLabelText('Preview source')).toHaveValue('excerpt:mve-1'));
     });
 
@@ -3272,7 +3282,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
       expect(final.getAttribute('src')).toBe('/data/videos/final.mp4');
       fireEvent.change(screen.getByLabelText('Preview source'), { target: { value: 'excerpt:mve-1' } });
       await waitFor(() => expect(screen.getByLabelText('Draft excerpt preview').getAttribute('src')).toBe('/data/videos/excerpt-old.mp4'));
-      await openStage('board', false);
+      await openStage('cast-sets', false);
       expect(screen.getByLabelText('Draft excerpt preview').getAttribute('src')).toBe('/data/videos/excerpt-old.mp4');
       expect(screen.queryByLabelText('Final render preview')).toBeNull();
     });

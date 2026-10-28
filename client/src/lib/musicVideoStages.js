@@ -1017,8 +1017,8 @@ function boardChecklist({ project, readiness, scenes, draft }) {
   const feedback = feedbackItem(project, 'storyboard', readiness);
   const problems = [...storyboardProblemItems(readiness, scenes), ...(feedback ? [feedback] : [])];
   return [
-    { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Plan the shots from the header, or add scenes by hand.',
-      action: planned ? null : { label: 'Open the treatment', anchor: 'mv-board-treatment' } },
+    { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Run AI Plan under Planning tools, or add shots by hand on Shots.',
+      action: planned ? null : { label: 'Open planning tools', anchor: 'mv-board-plan' } },
     ...problems,
   ];
 }
