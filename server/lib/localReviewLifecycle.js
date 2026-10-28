@@ -66,10 +66,24 @@ async function inspectionEvidence(ctx, status) {
   const phase = await phaseRecord(ctx, 'portos-local-review-state');
   if (phase.LOCAL_OVERALL_STATUS !== status || phase.LOCAL_REMEDIATED_HEAD_SHA !== ctx.head
       || !Object.hasOwn(phase, 'LOCAL_REVIEWED_HEAD_SHA')) throw new Error('Local review phase does not match completion');
+  const count = /^(0|[1-9]\d*)$/;
+  if (!SHA.test(phase.LOCAL_PHASE_START_SHA) || !count.test(phase.LOCAL_PHASE_COMMITS)
+      || !['true', 'false'].includes(phase.LOCAL_STOP_TRIGGERED)
+      || (phase.LOCAL_STOP_TRIGGERED === 'true'
+        ? !count.test(phase.LOCAL_STOP_INDEX) || !count.test(phase.LOCAL_STOP_REVIEW_COMMITS)
+          || Number(phase.LOCAL_STOP_REVIEW_COMMITS) > Number(phase.LOCAL_PHASE_COMMITS)
+        : phase.LOCAL_STOP_INDEX !== '-1' || phase.LOCAL_STOP_REVIEW_COMMITS !== '-1')
+      || (status === 'partial' && phase.LOCAL_STOP_TRIGGERED !== 'true')) throw new Error('Invalid local review stop evidence');
+  await ctx.git(['merge-base', '--is-ancestor', phase.LOCAL_PHASE_START_SHA, ctx.head]);
+  if (await ctx.git(['rev-list', '--count', `${phase.LOCAL_PHASE_START_SHA}..${ctx.head}`]) !== phase.LOCAL_PHASE_COMMITS) {
+    throw new Error('Local review phase commit count does not match completion');
+  }
   const reviewedHead = phase.LOCAL_REVIEWED_HEAD_SHA || null;
+  if (status === 'partial' && reviewedHead === null) throw new Error('Partial local review has no actual inspection');
   if (reviewedHead !== null) {
     if (!SHA.test(reviewedHead)) throw new Error('Invalid local review inspection head');
     await ctx.git(['merge-base', '--is-ancestor', reviewedHead, ctx.head]);
+    await ctx.git(['merge-base', '--is-ancestor', phase.LOCAL_PHASE_START_SHA, reviewedHead]);
   }
   const review = await phaseRecord(ctx, 'portos-review-status', true);
   if (review && (!['clean', 'optional-inconclusive', 'review-blocked'].includes(review.REVIEW_STATUS)

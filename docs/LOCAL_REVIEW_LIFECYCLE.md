@@ -71,7 +71,7 @@ obligation to fix findings. Spending it ends that reviewer's loop with `partial`
 status; it neither requires another cycle nor prevents publication. Each accepted
 finding is still fixed, or rejected/tracked with concrete rationale. Disclose the
 rounds each reviewer ran, the revision it last reviewed and what remained in the
-PR/MR body, without claiming approval the reviewer did not give. Only a required
+PR/MR body, without claiming approval the reviewer did not give. The stop-mode gate uses the completed head to bind the configured short-circuit; it does not claim that remediation commits were inspected. Only a required
 reviewer's unavailability (`review-blocked`) holds the merge; an exhausted or
 unavailable optional reviewer adds no local merge hold. Remote merge eligibility
 stays with the hosting provider's required checks and reviews.
@@ -84,9 +84,9 @@ If a stop fired, retain that reviewer's `LOCAL_REVIEWER_COMMITS` in
 clean zero-change pass; `on-findings` requires a clean pass that added commits;
 `partial` already records a qualifying configured short-circuit.
 
-Before every reviewer call, capture its exact input HEAD. After a validated clean/findings response, persist that captured SHA as `LOCAL_REVIEWED_HEAD_SHA`; retain it through remediation. Failed/unavailable attempts do not update it. If no reviewer produced a validated result, explicitly persist an empty value, which records unavailable inspection rather than inventing a reviewed commit.
+Before every reviewer call, capture its exact input HEAD. After a validated clean/findings response, persist that captured SHA as `LOCAL_REVIEWED_HEAD_SHA`; retain it through remediation. Failed/unavailable attempts do not update it. If no reviewer produced a validated result, explicitly persist an empty value, which records unavailable inspection rather than inventing a reviewed commit. This is valid for availability-only `review-blocked`, or `clean` when only optional availability/inconclusive outcomes remain; `partial` requires an actual inspection.
 
-After remediation, record `LOCAL_REMEDIATED_HEAD_SHA=$(git rev-parse HEAD)` and persist all fields together (reload existing state across shell calls). Completion validates the aggregate status, exact remediation head, and that the actual inspection SHA exists in its history. A supplied clean `portos-review-status` inspection head must agree; malformed/duplicate evidence is refused without replacing existing proof:
+After remediation, record `LOCAL_REMEDIATED_HEAD_SHA=$(git rev-parse HEAD)` and persist all fields together (reload existing state across shell calls). Completion validates the aggregate status, exact remediation head, phase start/history and commit counts, coherent stop fields (including an explicit triggered stop for `partial`), and that the actual inspection SHA lies within the phase history. A supplied clean `portos-review-status` inspection head must agree; malformed/duplicate evidence is refused without replacing existing proof:
 
 ```bash
 LOCAL_REVIEW_STATE_FILE="$(git rev-parse --git-path portos-local-review-state)"

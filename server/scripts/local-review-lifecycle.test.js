@@ -35,7 +35,12 @@ async function exerciseDelivery() {
       throw error;
     }
   };
-  const phase = async (status, reviewedHead) => writeFile(join(cwd, '.git/portos-local-review-state'), `LOCAL_OVERALL_STATUS=${status}\nLOCAL_REVIEWED_HEAD_SHA=${reviewedHead ?? await git('rev-parse', 'HEAD')}\nLOCAL_REMEDIATED_HEAD_SHA=${await git('rev-parse', 'HEAD')}\n`);
+  const phase = async (status, reviewedHead) => {
+    const head = await git('rev-parse', 'HEAD');
+    const start = await git('rev-list', '--max-parents=0', 'HEAD');
+    const commits = await git('rev-list', '--count', `${start}..${head}`);
+    await writeFile(join(cwd, '.git/portos-local-review-state'), `LOCAL_PHASE_START_SHA=${start}\nLOCAL_PHASE_COMMITS=${commits}\nLOCAL_STOP_TRIGGERED=${status === 'partial'}\nLOCAL_STOP_INDEX=${status === 'partial' ? 0 : -1}\nLOCAL_STOP_REVIEW_COMMITS=${status === 'partial' ? commits : -1}\nLOCAL_OVERALL_STATUS=${status}\nLOCAL_REVIEWED_HEAD_SHA=${reviewedHead ?? head}\nLOCAL_REMEDIATED_HEAD_SHA=${head}\n`);
+  };
   const commit = () => git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'change');
   const pr = 'https://github.com/example/repo/pull/1';
   try {
@@ -90,11 +95,24 @@ async function exerciseDelivery() {
     expect((await run('check', 'main', pr.replace('/1', '/2'))).receipt.status).toBe('clean');
     expect(await readFile(join(cwd, '.git/portos-local-review-lifecycle'), 'utf8')).not.toContain('findings');
 
+    await git('checkout', '-qb', 'optional-unavailable-delivery');
+    await phase('clean', '');
+    expect(await cli('complete', 'main', 'clean')).toMatchObject({ reviewedHead: null, inspectionProvenance: 'unavailable' });
+
     await git('checkout', '-qb', 'partial-delivery');
     const inspected = await git('rev-parse', 'HEAD');
     await commit();
     const remediated = await git('rev-parse', 'HEAD');
     await phase('partial', inspected);
+    const phasePath = join(cwd, '.git/portos-local-review-state');
+    const validPartial = await readFile(phasePath, 'utf8');
+    await writeFile(phasePath, validPartial.replace(`LOCAL_REVIEWED_HEAD_SHA=${inspected}`, 'LOCAL_REVIEWED_HEAD_SHA='));
+    await expect(cli('complete', 'main', 'partial')).rejects.toMatchObject({ code: 1 });
+    await writeFile(phasePath, validPartial.replace('LOCAL_STOP_TRIGGERED=true', 'LOCAL_STOP_TRIGGERED=false'));
+    await expect(cli('complete', 'main', 'partial')).rejects.toMatchObject({ code: 1 });
+    await writeFile(phasePath, validPartial.replace(/LOCAL_PHASE_COMMITS=\d+/, 'LOCAL_PHASE_COMMITS=999'));
+    await expect(cli('complete', 'main', 'partial')).rejects.toMatchObject({ code: 1 });
+    await writeFile(phasePath, validPartial);
     const partial = await cli('complete', 'main', 'partial');
     expect(partial).toMatchObject({ completedHead: remediated, reviewedHead: inspected, inspectionProvenance: 'recorded' });
     // Creation interrupted after completion can resume, but new commits cannot be silently published.
