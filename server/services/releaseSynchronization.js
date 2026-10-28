@@ -4,9 +4,10 @@
  */
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
-import { resolve } from 'node:path';
-import { realpath } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { lstat, readFile, realpath } from 'node:fs/promises';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
+import { checkoutSeedSchema } from '../lib/checkoutSeed.js';
 import { z } from 'zod';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -275,8 +276,8 @@ export function verifyReleaseSynchronizationTask(taskId, { agents = null, respec
   });
 }
 
-/** A vanished workspace cannot be matched by path. A fresh exact promotion PR
- * can still exclude unrelated branch names; an unavailable PR keeps the hold. */
+/** A fresh exact promotion PR identifies the remote candidate. A different
+ * local branch alone does not identify a different physical checkout. */
 async function legacyPromotionBranch(entry, repoPath) {
   if (entry.publication.candidateBranch) return entry.publication.candidateBranch;
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(entry.publication.repository || '')
@@ -292,6 +293,68 @@ async function legacyPromotionBranch(entry, repoPath) {
   return pr.head.ref;
 }
 
+const samePath = (a, b) => typeof a === 'string' && typeof b === 'string'
+  && (process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b));
+
+/** The missing publisher seed cannot be reconstructed from a branch name.
+ * An independently seeded, completed checkout whose entire physical generation
+ * was created after publication cannot be the original publisher checkout.
+ * Recheck the physical binding as well as the server-owned records. */
+async function independentLegacyCheckout(entry, release, agents) {
+  const published = Date.parse(entry.publication.publishedAt);
+  if (!Number.isFinite(published) || !release.repoPath || !release.path || !release.branch || !release.head || !release.checkoutIdentity) return null;
+  // Forge timestamps may have only second precision; require a full second of
+  // separation and reject filesystem times later than the recorded seed.
+  const afterPublication = (value, seeded) => typeof value === 'string' && /^\d+$/.test(value)
+    && BigInt(value) > BigInt(published + 1000) * 1000000n
+    && BigInt(value) < BigInt(seeded + 1) * 1000000n;
+  const { completedCheckoutReceiptValid } = await import('./completedCheckoutEvidence.js');
+  const bindings = [];
+  for (const agent of agents) {
+    if (agent.status !== 'completed' || agent.id === entry.owner.agentId || !agent.taskId || agent.taskId === entry.owner.taskId
+      || !(Date.parse(agent.startedAt) > published) || !(Date.parse(agent.completedAt) >= Date.parse(agent.startedAt))
+      || !samePath(agent.metadata?.workspacePath, release.path)) continue;
+    const seeds = (agent.metadata?.checkoutSeeds || []).filter(seed => checkoutSeedSchema.safeParse(seed).success
+      && seed.agentId === agent.id && seed.startedAt === agent.startedAt
+      && Date.parse(seed.seededAt) >= Date.parse(agent.startedAt) && Date.parse(seed.seededAt) <= Date.parse(agent.completedAt)
+      && samePath(seed.repoPath, release.repoPath) && samePath(seed.path, release.path) && seed.branch === release.branch
+      && retirementCheckoutIdentityFromPointer(seed.incarnation.pointer) === release.checkoutIdentity
+      && [seed.checkout, seed.incarnation.pointer, seed.incarnation.gitdir].every(row => afterPublication(row.birthtimeNs, Date.parse(seed.seededAt))));
+    for (const seed of seeds) {
+      const receipts = (agent.metadata?.completedCheckouts || []).filter(receipt => completedCheckoutReceiptValid(agent, receipt)
+        && samePath(receipt.repoPath, seed.repoPath) && samePath(receipt.path, seed.path) && receipt.branch === seed.branch
+        && receipt.head === release.head && isDeepStrictEqual(receipt.incarnation, seed.incarnation));
+      if (receipts.length === 1) bindings.push({ agentId: agent.id, taskId: agent.taskId, startedAt: agent.startedAt,
+        completedAt: agent.completedAt, seed, receipt: receipts[0] });
+    }
+  }
+  if (bindings.length !== 1) return null;
+  const binding = bindings[0], seed = binding.seed;
+  const identity = async (path, directory) => {
+    const stat = await lstat(path, { bigint: true });
+    if (!(directory ? stat.isDirectory() : stat.isFile())) return null;
+    return { dev: String(stat.dev), ino: String(stat.ino), birthtimeNs: String(stat.birthtimeNs) };
+  };
+  const gitdir = seed.incarnation.gitdir;
+  const pointerText = await readFile(join(release.path, '.git'), 'utf8').catch(() => null);
+  const pointerPath = /^gitdir: (.+)\s*$/i.exec(pointerText || '')?.[1]?.trim();
+  const currentGitdir = pointerPath && await realpath(resolve(release.path, pointerPath)).catch(() => null);
+  if (!currentGitdir || !samePath(currentGitdir, gitdir.path)) return null;
+  const observed = await Promise.all([
+    identity(release.path, true), identity(join(release.path, '.git'), false), identity(gitdir.path, true),
+  ]).catch(() => []);
+  if (!isDeepStrictEqual(observed, [seed.checkout, seed.incarnation.pointer,
+    { dev: gitdir.dev, ino: gitdir.ino, birthtimeNs: gitdir.birthtimeNs }])) return null;
+  return binding;
+}
+
+const exclusionKey = entry => `legacy-exclusion:${entry.identity}`;
+const exclusionProof = (entry, release, candidate, binding) => ({
+  publication: entry.publication, owner: entry.owner,
+  release: { repoPath: release.repoPath, path: release.path, branch: release.branch, head: release.head, checkoutIdentity: release.checkoutIdentity },
+  candidate, binding,
+});
+
 /** Retirement runs this outside its ownership fence. The ordinary retirement
  * transaction still rechecks the exact generation and all removal authority.
  */
@@ -303,16 +366,13 @@ export function retainReleaseSynchronizationReview(release) {
     const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
     const agents = await readBranchCompletionPolicies({ repairIndex: false });
     for (const entry of entries) {
-      // Missing publisher proof means an old handoff never established which
-      // checkout generation it owned. Hold a matching candidate branch, and
-      // for older receipts without that branch hold the repository's checkouts
-      // rather than guessing ownership or deleting the unrecorded evidence.
-      const normalize = path => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
+      // A branch name alone cannot exclude a locally aliased publisher checkout.
       const [releaseRepo, ownerRepo] = release.repoPath
         ? await Promise.all([realpath(release.repoPath).catch(() => null), realpath(entry.owner.workspace).catch(() => null)]) : [null, null];
-      let sameRepository = !releaseRepo || !ownerRepo || normalize(releaseRepo) === normalize(ownerRepo);
-      if (releaseRepo && !ownerRepo && !publisherCandidateSeed(entry)) {
-        const candidate = await legacyPromotionBranch(entry, releaseRepo).catch(() => null);
+      let sameRepository = !releaseRepo || !ownerRepo || samePath(releaseRepo, ownerRepo);
+      if (sameRepository && releaseRepo && !entry.publication.candidateBranch && release.branch && !publisherCandidateSeed(entry)) {
+        const binding = await independentLegacyCheckout(entry, release, agents);
+        const candidate = binding && await legacyPromotionBranch(entry, releaseRepo).catch(() => null);
         if (candidate && candidate !== release.branch) sameRepository = false;
       }
       if (sameRepository && !publisherCandidateSeed(entry)
@@ -450,8 +510,10 @@ export async function prepareLegacyReleaseRetirement(release) {
   const outbox = await readOutbox();
   const entries = Object.values(outbox.publications).filter(entry => {
     const legacy = legacyPublisherRecovery(entry), target = publisherCandidateTarget(entry);
-    return legacy?.evidence.mode === 'present' && target?.path === release.path && target.branch === release.branch
-      && target.head === release.head && target.checkoutIdentity === release.checkoutIdentity;
+    return (legacy?.evidence.mode === 'present' && target?.path === release.path && target.branch === release.branch
+      && target.head === release.head && target.checkoutIdentity === release.checkoutIdentity)
+      || (entry.registeredAt && !publisherCandidateSeed(entry) && !entry.publication.candidateBranch
+        && effectiveReleaseSynchronization(entry)?.status !== 'verified');
   });
   const proofs = new Map();
   if (!entries.length) return proofs;
@@ -460,9 +522,18 @@ export async function prepareLegacyReleaseRetirement(release) {
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
   for (const entry of entries) {
     const legacy = legacyPublisherRecovery(entry);
-    const proof = await inspectLegacyPublisher(entry, agents);
-    if (proof.digest !== legacy.digest || proof.retirement || !await proof.recheck() || !proof.archiveProof) throw new Error('legacy-release-recovery-changed');
-    proofs.set(entry.identity, proof.archiveProof);
+    const target = publisherCandidateTarget(entry);
+    if (legacy?.evidence.mode === 'present' && target?.path === release.path && target.branch === release.branch
+      && target.head === release.head && target.checkoutIdentity === release.checkoutIdentity) {
+      const proof = await inspectLegacyPublisher(entry, agents);
+      if (proof.digest !== legacy.digest || proof.retirement || !await proof.recheck() || !proof.archiveProof) throw new Error('legacy-release-recovery-changed');
+      proofs.set(entry.identity, proof.archiveProof);
+    }
+    if (!entry.publication.candidateBranch && release.repoPath) {
+      const binding = await independentLegacyCheckout(entry, release, agents);
+      const candidate = binding && await legacyPromotionBranch(entry, release.repoPath).catch(() => null);
+      if (candidate && candidate !== release.branch) proofs.set(exclusionKey(entry), exclusionProof(entry, release, candidate, binding));
+    }
   }
   return proofs;
 }
@@ -482,13 +553,15 @@ export async function validateLegacyReleaseRetirement(release, { unlocked = fals
     if (entry.publication.candidateBranch && entry.publication.candidateBranch !== release.branch) continue;
     const [ownerRepo, targetRepo] = await Promise.all([realpath(entry.owner.workspace).catch(() => null), realpath(release.repoPath).catch(() => null)]);
     if (!targetRepo) return false;
-    if (!ownerRepo) {
-      const candidate = await legacyPromotionBranch(entry, targetRepo).catch(() => null);
-      if (candidate && candidate !== release.branch) continue;
-      return false;
-    }
-    const sameRepository = process.platform === 'win32' ? resolve(ownerRepo).toLowerCase() === resolve(targetRepo).toLowerCase() : resolve(ownerRepo) === resolve(targetRepo);
+    const sameRepository = !ownerRepo || samePath(ownerRepo, targetRepo);
     if (!sameRepository) continue;
+    if (!entry.publication.candidateBranch && release.branch) {
+      const prior = archiveProofs.get(exclusionKey(entry));
+      const binding = prior && await independentLegacyCheckout(entry, release, agents);
+      if (binding && prior.candidate && prior.candidate !== release.branch
+        && isDeepStrictEqual(prior, exclusionProof(entry, release, prior.candidate, binding))) continue;
+    }
+    if (!ownerRepo) return false;
     const legacy = legacyPublisherRecovery(entry), target = publisherCandidateTarget(entry);
     if (!legacy || legacy.evidence.mode !== 'present' || !target || target.path !== release.path || target.branch !== release.branch
       || target.head !== release.head || target.checkoutIdentity !== release.checkoutIdentity
