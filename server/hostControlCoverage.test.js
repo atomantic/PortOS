@@ -275,6 +275,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['PATCH /api/catalog/scraps/:id', RECORDS],
   ['POST /api/catalog/scraps/:id/commit', RECORDS],
   ['POST /api/catalog/stories/:kind/:id/members', RECORDS],
+  ['POST /api/catalog/stories/music-video/:id/subjects/link', RECORDS],
   ['POST /api/catalog/types', RECORDS],
   ['DELETE /api/catalog/types/:id', REMOVES_RECORD],
   ['PATCH /api/catalog/types/:id', RECORDS],

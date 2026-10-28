@@ -6,6 +6,8 @@ const { checkHealth, ensureSchema, close, query } = await import('../lib/db.js')
 const { requireDbOrSkip } = await import('../lib/dbTestGate.js');
 const { listIngredients } = await import('./catalogDB/ingredients.js');
 const { listCatalogStories, joinStory, draftStoryMember, __setStoryDepsForTests } = await import('./catalogStories.js');
+const catalogDB = await import('./catalogDB.js');
+const { listVideoSubjectLinks, linkVideoSubjects, addCatalogRecordToVideo } = await import('./musicVideo/catalogCast.js');
 const health = await checkHealth().catch(error => ({ connected: false, error: error.message }));
 const ready = requireDbOrSkip('services/catalogStories.db.test', health.connected, health.error);
 if (ready) await ensureSchema();
@@ -29,7 +31,7 @@ beforeAll(async () => {
   if (!ready) return;
   await query('INSERT INTO universes (id, name, data) VALUES ($1, $2, $3::jsonb)', [ids.universe, 'Example world', toPgJson({ logline: 'A city that never sleeps.' })]);
   await query(`INSERT INTO catalog_ingredients (id, type, name, payload) VALUES
-    ($1, 'character', 'Example Lead', '{"physicalDescription":"Tall, red jacket."}'::jsonb),
+    ($1, 'character', 'Example Lead', '{"physicalDescription":"Tall, red jacket.","forms":[{"id":"teen","label":"Teen","age":"17"},{"id":"kid","label":"Kid","age":"7"}]}'::jsonb),
     ($2, 'character', 'Example Friend', '{}'::jsonb), ($3, 'place', 'Example Rink', '{}'::jsonb)`, [ids.lead, ids.friend, ids.rink]);
   await query(`INSERT INTO catalog_ingredient_refs (ingredient_id, ref_kind, ref_id, role) VALUES
     ($1, 'universe', $3, 'owner'), ($2, 'universe', $3, 'owner')`, [ids.lead, ids.friend, ids.universe]);
@@ -53,7 +55,7 @@ describe.skipIf(!ready)('catalog stories', () => {
   it('lists storyboards, videos and series with per-type members, placing a universe-less board by its cast', async () => {
     const stories = await ours('character');
     expect(stories.map((s) => [s.kind, s.name, s.count, s.universeIds, s.joinable]).sort()).toEqual([
-      ['music-video', 'Example Video', 0, [ids.universe], false],
+      ['music-video', 'Example Video', 0, [ids.universe], true],
       ['series', 'Example Series', 0, [ids.universe], true],
       ['storyboard', 'Example Story', 1, [ids.universe], true],
     ].sort());
@@ -68,9 +70,59 @@ describe.skipIf(!ready)('catalog stories', () => {
     expect((await ours('character')).find((s) => s.kind === 'storyboard').count).toBe(2);
   });
 
-  it('refuses to join a music video outside its Creative setup and a missing story', async () => {
-    await expect(joinStory('music-video', ids.video, ids.friend)).rejects.toMatchObject({ status: 409, code: 'STORY_JOIN_IN_VIDEO' });
+  it('refuses a missing story', async () => {
     await expect(joinStory('storyboard', `${ids.board}-gone`, ids.friend)).rejects.toMatchObject({ status: 404 });
+  });
+
+  // A video's subjects live in its project record; the catalog side is real.
+  const videoDeps = (subjects) => {
+    let project = { id: ids.video, name: 'Example Video', concept: { universeId: ids.universe, subjects } };
+    return {
+      catalogDB,
+      get project() { return project; },
+      getProject: async () => project,
+      mutateProjectRecord: async (_id, transform) => { project = (await transform(project)).project; return { project }; },
+      queueProjectCatalogLinkSync: vi.fn(async () => null),
+    };
+  };
+
+  it('suggests the same-named record and the age form a subject names, then links it', async () => {
+    const d = videoDeps([
+      { id: 'mvc-a', kind: 'character', name: 'Example Lead (17)' },
+      { id: 'mvc-b', kind: 'character', name: 'Example Lead' },
+      { id: 'mvc-c', kind: 'character', name: 'Nobody Known' },
+      { id: 'mvc-d', kind: 'place', name: 'Example Rink' },
+    ]);
+    const { subjects } = await listVideoSubjectLinks(ids.video, { type: 'character' }, d);
+    expect(subjects.map((s) => [s.id, s.suggestion?.ingredientId ?? null, s.suggestion?.formId ?? null])).toEqual([
+      ['mvc-a', ids.lead, 'teen'], ['mvc-b', ids.lead, null], ['mvc-c', null, null],
+    ]);
+    const res = await linkVideoSubjects(ids.video, [{ subjectId: 'mvc-a', ingredientId: ids.lead, formId: 'teen' }, { subjectId: 'mvc-b', ingredientId: ids.lead }], d);
+    expect(res).toMatchObject({ linked: 2, unlinked: 0 });
+    expect(d.project.concept.subjects[0]).toMatchObject({ name: 'Example Lead (17)', ingredientId: ids.lead, castForm: { id: 'teen', label: 'Teen', age: 17 } });
+    expect(d.project.concept.subjects[1].castForm).toBeUndefined();
+    expect(d.queueProjectCatalogLinkSync).toHaveBeenCalledWith(ids.video);
+    const after = await listVideoSubjectLinks(ids.video, {}, d);
+    expect(after.subjects[0].linked).toMatchObject({ id: ids.lead, forms: [{ id: 'teen', label: 'Teen' }, { id: 'kid', label: 'Kid' }] });
+
+    await linkVideoSubjects(ids.video, [{ subjectId: 'mvc-a', ingredientId: null }], d);
+    expect(d.project.concept.subjects[0]).not.toHaveProperty('ingredientId');
+    expect(d.project.concept.subjects[0]).not.toHaveProperty('castForm');
+  });
+
+  it('refuses a record of another kind or an age it does not have', async () => {
+    const d = videoDeps([{ id: 'mvc-a', kind: 'character', name: 'Example Lead' }]);
+    await expect(linkVideoSubjects(ids.video, [{ subjectId: 'mvc-a', ingredientId: ids.rink }], d)).rejects.toMatchObject({ status: 400, code: 'SUBJECT_KIND_MISMATCH' });
+    await expect(linkVideoSubjects(ids.video, [{ subjectId: 'mvc-a', ingredientId: ids.lead, formId: 'elder' }], d)).rejects.toMatchObject({ status: 400, code: 'FORM_NOT_FOUND' });
+  });
+
+  it('casts a record from the catalog side: links the subject named for it, else adds one', async () => {
+    const d = videoDeps([{ id: 'mvc-a', kind: 'character', name: 'Example Lead (adult)' }]);
+    await expect(addCatalogRecordToVideo(ids.video, ids.lead, d)).resolves.toMatchObject({ added: false, linked: 1 });
+    expect(d.project.concept.subjects).toHaveLength(1);
+    await expect(addCatalogRecordToVideo(ids.video, ids.lead, d)).resolves.toMatchObject({ added: false, linked: 0 });
+    await expect(addCatalogRecordToVideo(ids.video, ids.friend, d)).resolves.toMatchObject({ added: true });
+    expect(d.project.concept.subjects[1]).toMatchObject({ kind: 'character', name: 'Example Friend', role: 'supporting', ingredientId: ids.friend });
   });
 
   it('drafts with the universe, story and its cast as visible additions and the request as written', async () => {

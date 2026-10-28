@@ -787,7 +787,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // saved and flagged instead of refused. A v28 strict cue schema rejects the
   // field and its normalizer drops it. Optional, no backfill.
   // v30 = the director's rough story summary, retained across project sync.
-  musicVideoProjects: 30,
+  // v31 = a creative-setup subject's catalog age form (`concept.subjects[].castForm`),
+  // which a v30 strict subject schema rejects with a 400. Optional, no backfill.
+  musicVideoProjects: 31,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

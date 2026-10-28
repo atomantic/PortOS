@@ -1624,6 +1624,7 @@ function ProjectWorkspace({
     saveCreativeSetup: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
       patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec, productionPolicy: project.productionPolicy });
     }),
+    applyCastLinks: ({ concept, updatedAt }) => patchProject(selected.id, { concept, ...(updatedAt ? { updatedAt } : {}) }),
     setCreativeSetupPending,
     setStyleReferencesPending,
     saveStyleReferences: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
