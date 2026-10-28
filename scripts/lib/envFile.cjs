@@ -39,14 +39,20 @@ function parseEnvContent(content) {
 }
 
 /**
- * Parse a .env file. Returns {} when the file is missing or unreadable.
+ * Parse a .env file. Only a missing file uses first-install defaults; other
+ * read failures must stop callers before they target a different database.
  *
  * @param {string} filePath - absolute path to the .env file
  * @returns {Record<string, string>}
  */
 function parseEnvFile(filePath) {
   let content = '';
-  try { content = readFileSync(filePath, 'utf8'); } catch { return {}; }
+  try {
+    content = readFileSync(filePath, 'utf8');
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    return {};
+  }
   return parseEnvContent(content);
 }
 
