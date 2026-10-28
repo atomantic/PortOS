@@ -1594,9 +1594,11 @@ function InstancesContent() {
   const [snapshotLoaded, setSnapshotLoaded] = useState(false);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const snapshotRequest = useRef(0);
+  const peerEventRevision = useRef(0);
 
   const fetchData = useCallback(async () => {
     const request = ++snapshotRequest.current;
+    const peerRevision = peerEventRevision.current;
     setSnapshotLoading(true);
     const data = await getInstances({ silent: true }).catch(() => null);
     if (request !== snapshotRequest.current) return;
@@ -1604,7 +1606,9 @@ function InstancesContent() {
     setSnapshotError(!data);
     if (data) {
       setSelf(data.self);
-      setPeers(data.peers);
+      // Peer events can be newer than this read; the other snapshot fields
+      // still belong to the latest request and must settle independently.
+      if (peerRevision === peerEventRevision.current) setPeers(data.peers);
       setSyncStatus(data.syncStatus ?? null);
       setSnapshotLoaded(true);
     }
@@ -1627,6 +1631,7 @@ function InstancesContent() {
     ]).finally(() => { if (active) setLoading(false); });
 
     const handlePeersUpdated = (updatedPeers) => {
+      peerEventRevision.current += 1;
       setPeers(updatedPeers);
     };
     socket.on('instances:peers:updated', handlePeersUpdated);

@@ -480,6 +480,70 @@ describe('Instances page connection drawers', () => {
     expect(api.updateSettings).not.toHaveBeenCalled();
   });
 
+  // A late reconnect snapshot must settle self/sync/error state without
+  // undoing peer changes delivered after that request began.
+  it('keeps newer peer events while settling the other snapshot fields', async () => {
+    api.getInstances.mockRejectedValueOnce(new Error('Unavailable'));
+    renderUI(<MemoryRouter><Instances /></MemoryRouter>);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Instance snapshot unavailable');
+    const updatePeers = socket.on.mock.calls.find(([event]) => event === 'instances:peers:updated')[1];
+    const reconnect = socket.on.mock.calls.find(([event]) => event === 'connect')[1];
+    const pending = Promise.withResolvers();
+    api.getInstances.mockReturnValueOnce(pending.promise);
+    act(() => reconnect());
+    const livePeer = { ...peer, enabled: false, instanceId: 'remote-office', syncCategories: { brain: true } };
+    act(() => updatePeers([livePeer]));
+    expect(screen.getByRole('button', { name: 'OFF, enable polling' })).toBeInTheDocument();
+    await act(async () => pending.resolve({
+      self: { name: 'Recovered home' }, peers: [peer],
+      syncStatus: { cursors: { 'remote-office': { lastSyncError: 'Example sync failure' } } },
+    }));
+    expect(screen.getByRole('button', { name: 'OFF, enable polling' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'ON, disable polling' })).not.toBeInTheDocument();
+    expect(screen.getByText('Recovered home')).toBeInTheDocument();
+    expect(screen.getByText('Last sync failed: Example sync failure')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    const removed = Promise.withResolvers();
+    api.getInstances.mockReturnValueOnce(removed.promise);
+    act(() => reconnect());
+    act(() => updatePeers([]));
+    await act(async () => removed.resolve({ self: { name: 'Recovered home' }, peers: [peer] }));
+    expect(screen.getByText('No peers registered yet')).toBeInTheDocument();
+
+    // A subsequent read started after those events can update peers normally.
+    await act(async () => reconnect());
+    expect(screen.getByRole('button', { name: 'ON, disable polling' })).toBeInTheDocument();
+    expect(screen.queryByText('Last sync failed: Example sync failure')).not.toBeInTheDocument();
+  });
+
+  it('keeps the latest snapshot and releases reconnect/event listeners on unmount', async () => {
+    const first = Promise.withResolvers();
+    const second = Promise.withResolvers();
+    api.getInstances.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const view = renderUI(<MemoryRouter><Instances /></MemoryRouter>);
+    expect(screen.getByRole('status', { name: 'Loading instances' })).toBeInTheDocument();
+    const reconnect = socket.on.mock.calls.find(([event]) => event === 'connect')[1];
+    const updatePeers = socket.on.mock.calls.find(([event]) => event === 'instances:peers:updated')[1];
+    act(() => reconnect());
+    await act(async () => second.resolve({ self: { name: 'Latest home' }, peers: [] }));
+    await act(async () => first.resolve({ self: { name: 'Stale home' }, peers: [peer] }));
+    expect(screen.getByText('Latest home')).toBeInTheDocument();
+    expect(screen.getByText('No peers registered yet')).toBeInTheDocument();
+    const afterUnmount = Promise.withResolvers();
+    api.getInstances.mockReturnValueOnce(afterUnmount.promise);
+    act(() => reconnect());
+    view.unmount();
+    expect(socket.off).toHaveBeenCalledWith('instances:peers:updated', updatePeers);
+    expect(socket.off).toHaveBeenCalledWith('connect', reconnect);
+    expect(socket.emit).toHaveBeenCalledWith('instances:unsubscribe');
+    const calls = api.getInstances.mock.calls.length;
+    act(() => reconnect());
+    expect(api.getInstances).toHaveBeenCalledTimes(calls);
+    await act(async () => afterUnmount.resolve({ self: { name: 'Unmounted home' }, peers: [peer] }));
+    expect(screen.queryByText('Unmounted home')).not.toBeInTheDocument();
+  });
+
   // #8110: the server rebuilds an empty per-socket subscriber Set on every
   // reconnect (restart, self-update, sleep, a network blip). Without a
   // reconnect-driven re-subscribe, peer updates and sync progress go silent
