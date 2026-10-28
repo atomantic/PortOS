@@ -142,6 +142,8 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
               return React.createElement(React.Fragment, null,
                 React.createElement('button', { id: 'opener', onClick: () => setItem(video) }, 'Open video'),
                 React.createElement('div', { id: 'cards', className: 'grid grid-cols-2 md:grid-cols-4 gap-4 p-4' }, images.map(image => React.createElement(MediaCard, { key: image.key, item: image, onRemix: noop, onSendToImage: noop, onSendToVideo: noop, onSendTo3d: noop, onAnnotate: noop, onToggleStar: noop, onDelete: noop }))),
+                new URLSearchParams(location.search).has('missingPoster') && React.createElement('div', { id: 'fallback-card', style: { width: 250 } },
+                  React.createElement(MediaCard, { item: { ...video, previewUrl: '/data/video-thumbnails/unavailable.jpg' }, showCollectionMenu: false, showMoodBoardMenu: false })),
                 React.createElement('button', { id: 'gallery', onClick: () => showImage(0) }, 'Open image gallery'),
                 React.createElement(MediaLightbox, { item, onClose: () => setItem(null),
                   hasPrevious: item?.kind === 'image' && index > 0,
@@ -169,6 +171,28 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
     ({ browser, origin } = fixture);
   }, BROWSER_FIXTURE_STARTUP_MS);
   afterAll(() => fixture?.close());
+
+  it('decodes a video frame in a card when an older host refuses its poster', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.route('**/data/video-thumbnails/unavailable.jpg', route => route.fulfill({ status: 403 }));
+      await page.goto(`${origin}lightbox-test?missingPoster=1`);
+      const video = page.locator('#fallback-card video');
+      await waitForVideoData(video);
+      const pixel = await video.evaluate(element => {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext('2d');
+        context.drawImage(element, 0, 0, 1, 1);
+        return [...context.getImageData(0, 0, 1, 1).data];
+      });
+      expect(pixel[2]).toBeGreaterThan(100);
+      expect(pixel[3]).toBe(255);
+      expect(await page.locator('#fallback-card').getByText('Syncing').count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
 
   it.each([false, true])('includes native controls in both directions (fullscreen=%s)', async fullScreen => {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });

@@ -96,6 +96,37 @@ describe('MediaCard', () => {
     );
   });
 
+  it('previews a hosted video when its poster is unavailable and retries after the video arrives', () => {
+    const item = normalizeVideo({ id: 'clip', filename: 'clip.mp4', thumbnail: 'custom-poster.jpg', prompt: 'remote clip' });
+    const { container } = render(<MediaCard item={item} showCollectionMenu={false} />);
+
+    fireEvent.error(screen.getByAltText('remote clip'));
+    const video = container.querySelector('video');
+    expect(video).toHaveAttribute('src', '/data/videos/clip.mp4#t=0.001');
+    expect(video).toHaveAttribute('preload', 'metadata');
+    expect(screen.queryByText(/Syncing/i)).not.toBeInTheDocument();
+
+    fireEvent.error(video);
+    expect(screen.getByText(/Syncing/i)).toBeInTheDocument();
+    act(() => emitAssetArrived({ filename: 'clip.mp4', kind: 'video' }));
+    expect(screen.getByAltText('remote clip')).toHaveAttribute('src', '/data/video-thumbnails/custom-poster.jpg?_t=1');
+    fireEvent.error(screen.getByAltText('remote clip'));
+    expect(container.querySelector('video')).toHaveAttribute('src', '/data/videos/clip.mp4?_t=1#t=0.001');
+  });
+
+  it('previews a video without a poster', () => {
+    const item = normalizeVideo({ id: 'clip', filename: 'clip.mp4', prompt: 'remote clip' });
+    const { container } = render(<MediaCard item={item} showCollectionMenu={false} />);
+    expect(container.querySelector('video')).toHaveAttribute('src', '/data/videos/clip.mp4#t=0.001');
+  });
+
+  it('does not request a video for a legacy history row with no filename', () => {
+    const item = normalizeVideo({ id: 'legacy', prompt: 'legacy clip' });
+    const { container } = render(<MediaCard item={item} showCollectionMenu={false} />);
+    expect(container.querySelector('video')).toBeNull();
+    expect(screen.queryByText(/Syncing/i)).not.toBeInTheDocument();
+  });
+
   it('arms an inline confirm row before deleting instead of deleting on first click', () => {
     const onDelete = vi.fn();
     render(<MediaCard item={imageItem} onDelete={onDelete} showCollectionMenu={false} showMoodBoardMenu={false} />);

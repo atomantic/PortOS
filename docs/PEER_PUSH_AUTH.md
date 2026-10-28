@@ -63,9 +63,9 @@ because it is not the password. A disabled peer's token is refused.
 ### Peer API surface
 
 `PEER_API_SURFACE` in `server/lib/apiAccessPolicy.js` is the contract; this
-table mirrors it. `server/lib/apiAccessPolicy.test.js` scans every
-`peerFetch` call site and fails when this version calls a peer path the list
-does not admit.
+table mirrors it. `server/lib/apiAccessPolicy.test.js` scans `peerFetch` and
+`peerStreamRequest` call sites and fails when this version calls a peer path
+the list does not admit.
 
 | Methods | Path | Used by |
 |---------|------|---------|
@@ -81,7 +81,7 @@ does not admit.
 | GET | `/api/providers/fleet-host` | Fleet LLM host discovery |
 | POST | `/api/providers/fleet-host/key` | Fleet LLM host key |
 | any | `/api/eidoverse/travel/federation/*` | Eidoverse guest travel |
-| GET | `/data/{images,image-refs,videos,music,audio,writers-room/works}/*` | Asset pulls |
+| GET | `/data/{images,image-thumbnails,image-refs,videos,video-thumbnails,music,audio,models,writers-room/works}/*` | Asset pulls and hosted previews |
 
 GET includes HEAD. Paths with `.`/`..`/empty segments or encoded separators
 are refused. Brain, memory, catalog and `/api/sync/*` reads also check this

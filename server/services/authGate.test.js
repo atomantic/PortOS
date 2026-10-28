@@ -1193,6 +1193,7 @@ describe('paired peer credential (#8356)', () => {
     app.post('/api/peer-sync/push', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.get('/api/federation/media/v1/status', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.post('/api/providers/fleet-host/key', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.all(['/data/image-thumbnails/:name', '/data/video-thumbnails/:name'], (req, res) => res.json({ auth: req.portosAuthContext }));
     app.post('/api/commands/execute', requireHostControl, (_req, res) => res.json({ ran: true }));
     return app;
   };
@@ -1263,6 +1264,22 @@ describe('paired peer credential (#8356)', () => {
     expect(asset.status).toBe(403);
     expect(asset.text).toBe('Forbidden');
     expect(warn.mock.calls.some(([line]) => line.includes('POST /api/cos/tasks'))).toBe(true);
+  });
+
+  it('allows paired peers to read thumbnails while keeping writes and anonymous reads gated', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'example-password' });
+    writePeers([pairedPeer()]);
+    const app = await buildApp();
+    const headers = await peerHeaders();
+    for (const path of ['/data/image-thumbnails/example.webp', '/data/video-thumbnails/example.jpg']) {
+      const read = await withHeaders(request(app).get(path), headers);
+      expect(read.status).toBe(200);
+      expect(read.body.auth.method).toBe('peer');
+      expect((await withHeaders(request(app).head(path), headers)).status).toBe(200);
+      expect((await withHeaders(request(app).post(path), headers)).status).toBe(403);
+      expect((await request(app).get(path)).status).toBe(401);
+    }
   });
 
   it('still identifies a paired peer on the federation surface after the instance password is removed', async () => {
