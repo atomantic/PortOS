@@ -3915,6 +3915,19 @@ describe('taskSchedule', () => {
         expect(await recordTaskTypeSuccess('security', 'app-1')).toBe(false)
       })
 
+      it('a delayed cleanup success clears older failures but preserves newer or undated failures', async () => {
+        const record = lastFailureAt => ({ lastRun: null, count: 0, consecutiveFailures: 2, lastFailureAt })
+        const schedule = lastFailureAt => ({ tasks: { security: { type: 'rotation', enabled: true } },
+          executions: { 'task:security': { lastRun: null, count: 0, perApp: { 'app-1': record(lastFailureAt) } } } })
+        const notAfter = '2026-10-28T10:00:00.000Z'
+        mockSchedule(schedule('2026-10-28T09:00:00.000Z'))
+        expect(await recordTaskTypeSuccess('security', 'app-1', { notAfter })).toBe(true)
+        mockSchedule(schedule('2026-10-28T11:00:00.000Z'))
+        expect(await recordTaskTypeSuccess('security', 'app-1', { notAfter })).toBe(false)
+        mockSchedule(schedule(undefined))
+        expect(await recordTaskTypeSuccess('security', 'app-1', { notAfter })).toBe(false)
+      })
+
       it('clearTaskTypeFailurePark(appId=null) clears ONLY the global record, not other apps', async () => {
         mockSchedule({
           tasks: { security: { type: 'rotation', enabled: true } },

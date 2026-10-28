@@ -142,9 +142,17 @@ export async function recordTaskTypeFailure(taskType, appId = null, { errorCateg
  * Record a task-type SUCCESS: reset the consecutive-failure ledger (and any
  * auto-park) for this type. No-op (no write) when the ledger is already clean.
  */
-export async function recordTaskTypeSuccess(taskType, appId = null) {
+export async function recordTaskTypeSuccess(taskType, appId = null, { notAfter = null } = {}) {
   const { didChange, wasParked } = await updateSchedule(async (schedule) => {
     const record = resolveExecutionRecord(schedule, taskType, appId);
+    // A delayed success must not clear a failure from a newer execution.
+    if (notAfter !== null && record && FAILURE_LEDGER_FIELDS.some(field => record[field] !== undefined)) {
+      const cutoff = Date.parse(notAfter);
+      const failureAt = Date.parse(record.lastFailureAt);
+      if (!Number.isFinite(cutoff) || !Number.isFinite(failureAt) || failureAt > cutoff) {
+        return { result: { didChange: false, wasParked: false }, changed: false };
+      }
+    }
     const wasParked = !!record?.failureParkedAt;
     if (!clearFailureLedgerFields(record)) {
       return { result: { didChange: false, wasParked: false }, changed: false };

@@ -1567,7 +1567,7 @@ async function sidelineFailedAgentProvider({ providerId, verdict, terminatedByUs
   }
 }
 
-async function recordScheduledAgentOutcome({ agentId, task, verdict, terminatedByUser, hookResult, cleanupPending = false }) {
+async function recordScheduledAgentOutcome({ agentId, task, verdict, terminatedByUser, hookResult, completedAt = null }) {
   // Type-level consecutive-failure ledger (#2616): feed the per-type
   // backoff/auto-park in taskSchedule. Only SCHEDULED task types carry
   // `metadata.analysisType`; user/ad-hoc tasks don't participate — so this gate
@@ -1578,10 +1578,6 @@ async function recordScheduledAgentOutcome({ agentId, task, verdict, terminatedB
   // types back off" are genuinely different questions. The pure
   // resolveTypeFailureSignal decides success vs failure vs skip — including the
   // exit-0-but-unparseable-output case that must count as a failure.
-  // Cleanup is a durable, still-pending delivery obligation, not a provider
-  // failure. Counting it here eventually failure-parks an otherwise progressing
-  // perpetual drain before the independent delivery/retirement verifier runs.
-  if (cleanupPending) return;
   const scheduledType = task?.metadata?.analysisType || null;
   if (scheduledType) {
     const signal = resolveTypeFailureSignal({
@@ -1595,7 +1591,8 @@ async function recordScheduledAgentOutcome({ agentId, task, verdict, terminatedB
       const { recordTaskTypeFailure, recordTaskTypeSuccess } = await import('./taskSchedule.js');
       const ledgerUpdate = signal.record === 'failure'
         ? recordTaskTypeFailure(scheduledType, ledgerAppId, { errorCategory: signal.category })
-        : recordTaskTypeSuccess(scheduledType, ledgerAppId);
+        : completedAt !== null ? recordTaskTypeSuccess(scheduledType, ledgerAppId, { notAfter: completedAt })
+          : recordTaskTypeSuccess(scheduledType, ledgerAppId);
       await ledgerUpdate.catch(err => {
         emitLog('warn', `⚠️ Task-type ledger update failed for ${scheduledType}: ${err.message}`, { taskType: scheduledType, agentId });
       });
@@ -2130,7 +2127,11 @@ async function finalizeAgentInCompletionContext({
 
   await sidelineFailedAgentProvider({ providerId, verdict, terminatedByUser });
 
-  await recordScheduledAgentOutcome({ agentId, task, verdict: deliveryVerdict, terminatedByUser, hookResult, cleanupPending: capturePending });
+  // Pending physical cleanup is a separate obligation. Record the validated
+  // execution verdict now, with a timestamp fence against a newer failure.
+  const cleanupExecution = capturePending && executionSuccess && validationPassed !== false;
+  await recordScheduledAgentOutcome({ agentId, task, verdict: cleanupExecution ? verdict : deliveryVerdict,
+    terminatedByUser, hookResult, completedAt: cleanupExecution ? completedAgent.completedAt || '' : null });
 
   await processAgentCompletion(agentId, task, deliverySuccess, outputBuffer);
 
