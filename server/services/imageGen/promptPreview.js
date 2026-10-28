@@ -8,6 +8,7 @@
 import { basename, join } from 'node:path';
 import { fableLoomMultipartUnsupported, prepareFableLoomImageParams } from './fableLoomParams.js';
 import { tmpdir } from 'node:os';
+import { getRunwayImageModel, RUNWAY_IMAGE_DEFAULT_MODEL } from '../../lib/runwayImageModels.js';
 import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 import { FAL_IMAGE_DEFAULT_MODEL, falImageFamily } from '../../lib/falImageModels.js';
@@ -15,7 +16,7 @@ import { maxInputImages, resolveCloudProviderConfig } from './cloudProviderConfi
 import { resolveInputImages } from './inputImages.js';
 import { reviewedReferencePreview } from './reviewedReference.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { prepareGenerateParams, previewUploadLabel, resolveLocalImageModel, selectLocalImageModelFromSettings } from './prepareParams.js';
+import { prepareGenerateParams, quickEditCompositionDigest, previewUploadLabel, resolveLocalImageModel, selectLocalImageModelFromSettings } from './prepareParams.js';
 import { codexSentPrompt } from './codex.js';
 import { grokSentPrompt } from './grok.js';
 import { agySentPrompt } from './agy.js';
@@ -59,6 +60,10 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
   }
   const envelope = {
     mode,
+    ...(params.quickEdit ? {
+      reviewedPromptDigest: quickEditCompositionDigest({ params, mode, settings }),
+      referenceImages: (params.referenceImagePaths || []).map((path, index) => ({ filename: basename(path), status: 'included', source: `Input image ${index + 1} · Reference for this edit` })),
+    } : {}),
     ...(reviewReference ? await reviewedReferencePreview(params.referenceImagePaths[0]) : {}),
     ...(params.fableLoom ? {
       authoredPrompt: params.authoredPrompt,
@@ -77,7 +82,7 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
       } : {}),
     } : {}),
   };
-  return previewPreparedImagePrompt({ params, mode, settings, envelope });
+  return params.quickEdit ? previewQuickImageEdit({ params, mode, settings, envelope }) : previewPreparedImagePrompt({ params, mode, settings, envelope });
 }
 
 /** Apply the render backend's prompt builder to an already-prepared request. */
@@ -126,4 +131,17 @@ export async function previewPreparedImagePrompt({ params, mode = params.mode, s
     ...(params.mediaProviderPeerId ? { remote: true } : {}),
     ...sentPromptRecord({ sentPrompt: common.prompt, sentNegativePrompt: common.negativePrompt, carried }),
   };
+}
+
+/** Quick edits validate the complete composed text before queue admission as well as preview. */
+export async function previewQuickImageEdit(context) {
+  const record = await previewPreparedImagePrompt(context);
+  const { params, mode, settings } = context;
+  const cloud = mode === IMAGE_GEN_MODE.RUNWAY && !params.mediaProviderPeerId
+    ? resolveCloudProviderConfig(settings, mode, { model: params.cloudModel || params.model }) : null;
+  const limit = cloud ? getRunwayImageModel(cloud.providerParams.model || RUNWAY_IMAGE_DEFAULT_MODEL)?.promptMaxChars ?? 32000 : 32000;
+  if (record.sentPrompt.length > limit) {
+    throw new ServerError(`Complete edit prompt is ${record.sentPrompt.length}/${limit} characters. Shorten your instruction; nothing was submitted or truncated.`, { status: 400, code: 'IMAGE_PROMPT_TOO_LONG' });
+  }
+  return record;
 }

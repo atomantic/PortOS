@@ -228,6 +228,44 @@ describe('Image Gen Routes', () => {
     vi.clearAllMocks();
   });
 
+  it('binds quick-edit preview to provider defaults and persists the exact composition without changing authored text', async () => {
+    await fileUtils.ensureDir(fileUtils.PATHS.images);
+    await writeFile(pathJoin(fileUtils.PATHS.images, 'quick-edit-prompt.png'), 'reviewed bytes');
+    const body = { prompt: '  Make the coat red.  ', quickEdit: true, referenceImageFiles: ['quick-edit-prompt.png'] };
+    const settings = { imageGen: { mode: 'codex', codex: { enabled: true } } };
+    getSettings.mockResolvedValue(settings);
+    const preview = await request(app).post('/api/image-gen/prompt-preview').send({ ...body, reviewReference: true });
+    expect(preview.status).toBe(200);
+    expect(preview.body.sentPrompt).toContain('Edit the reference image:   Make the coat red.  . Keep everything else');
+    expect(preview.body.promptAdditions.map(a => a.id)).toEqual(['quick-edit-prefix', 'quick-edit-preservation', 'agent-instructions']);
+    const reviewed = { ...body, reviewedReferenceDigest: preview.body.reviewedReferenceDigest, reviewedPromptDigest: preview.body.reviewedPromptDigest };
+    getSettings.mockResolvedValue({ imageGen: { ...settings.imageGen, codex: { enabled: true, model: 'changed-model' } } });
+    const stale = await request(app).post('/api/image-gen/generate').send(reviewed);
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('REVIEWED_PROMPT_CHANGED');
+    expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    getSettings.mockResolvedValue(settings);
+    const sent = await request(app).post('/api/image-gen/generate').send(reviewed);
+    expect(sent.status).toBe(200);
+    const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
+    expect(params.authoredPrompt).toBe(body.prompt);
+    expect(params.sentPrompt).toBe(preview.body.sentPrompt);
+    expect(params.promptAdditions).toEqual(preview.body.promptAdditions.slice(0, 2));
+    getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
+  });
+
+  it('refuses complete quick-edit prompts over the limit with a count before queue admission', async () => {
+    await fileUtils.ensureDir(fileUtils.PATHS.images);
+    await writeFile(pathJoin(fileUtils.PATHS.images, 'quick-edit-limit.png'), 'reviewed bytes');
+    getSettings.mockResolvedValueOnce({ imageGen: { mode: 'codex', codex: { enabled: true } } });
+    const response = await request(app).post('/api/image-gen/prompt-preview').send({
+      prompt: 'x'.repeat(31999), quickEdit: true, referenceImageFiles: ['quick-edit-limit.png'], reviewReference: true,
+    });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/\d+\/32000 characters/);
+    expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+  });
+
   it('rejects a reference replaced after preview before admitting a quick edit', async () => {
     await fileUtils.ensureDir(fileUtils.PATHS.images);
     const path = pathJoin(fileUtils.PATHS.images, 'quick-edit-reviewed.png');

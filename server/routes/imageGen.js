@@ -33,12 +33,12 @@ import { getImageModels, requiredReposForModel } from '../lib/mediaModels.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded } from '../lib/fileUtils.js';
-import { prepareGenerateParams, resolveLocalImageModel } from '../services/imageGen/prepareParams.js';
+import { prepareGenerateParams, quickEditCompositionDigest, resolveLocalImageModel } from '../services/imageGen/prepareParams.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../lib/imageGenCapabilities.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { applyFilmLookBake, readFilmLookSource } from '../services/imageGen/filmLookBake.js';
 import { universeVisualProfileSchema } from '../lib/universeVisualProfileValidation.js';
-import { previewImagePrompt } from '../services/imageGen/promptPreview.js';
+import { previewImagePrompt, previewQuickImageEdit } from '../services/imageGen/promptPreview.js';
 import { assertReviewedReference } from '../services/imageGen/reviewedReference.js';
 import { filmLookBakeSchema } from '../lib/filmLookValidation.js';
 import { join, basename } from 'node:path';
@@ -123,6 +123,8 @@ const noNulPrompt = z.string().max(MAX_PROMPT_LENGTH)
 
 const generateSchema = z.object({
   promptAdditions: promptAdditionsSchema,
+  quickEdit: z.boolean().optional(),
+  reviewedPromptDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   // Empty prompt allowed — i2i / edit / unconditional generation don't require
   // one. The multipart FormData builder drops empty-string fields, so an empty
   // prompt arrives as `undefined`; default it to '' rather than rejecting.
@@ -512,6 +514,15 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   });
 
   await prepareFableLoomImageParams({ params, mode, settings });
+
+  if (data.quickEdit && (!data.reviewedReferenceDigest || data.reviewedPromptDigest !== quickEditCompositionDigest({ params, mode, settings }))) {
+    throw new ServerError('Image settings or prompt changed. Review the refreshed full prompt before editing.', { status: 409, code: 'REVIEWED_PROMPT_CHANGED' });
+  }
+
+  if (data.quickEdit) {
+    const sent = await previewQuickImageEdit({ params, mode, settings });
+    params.sentPrompt = sent.sentPrompt;
+  }
 
   if (data.reviewedReferenceDigest) {
     if (params.initImagePath || params.referenceImagePaths?.length !== 1 || (!params.mediaProviderPeerId && mode === IMAGE_GEN_MODE.EXTERNAL)) {

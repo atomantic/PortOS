@@ -138,6 +138,7 @@ vi.mock('../services/apiImageVideo', () => ({
   // Echo the request as the "sent" prompt, with its declared additions as chips.
   previewImagePrompt: vi.fn(async (body) => ({
     sentPrompt: body.prompt,
+    ...(body.quickEdit ? { reviewedPromptDigest: 'b'.repeat(64) } : {}),
     ...(body.reviewReference ? { reviewedReferenceDigest: 'a'.repeat(64), reviewedReferenceImage: 'data:image/png;base64,eA==' } : {}),
     ...(body.negativePrompt ? { sentNegativePrompt: body.negativePrompt } : {}),
     promptAdditions: body.promptAdditions || [],
@@ -1782,6 +1783,10 @@ it('adds a card with rendering animation placeholder when editing an image from 
       catalogIngredientId: 'cat-chr-1',
       catalogMediaKind: 'reference',
       referenceImageFiles: ['one.png'],
+      prompt: 'make the jacket red',
+      quickEdit: true,
+      reviewedReferenceDigest: 'a'.repeat(64),
+      reviewedPromptDigest: 'b'.repeat(64),
     }),
     { silent: true },
   ));
