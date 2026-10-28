@@ -154,13 +154,14 @@ export async function waitForHealthy({
   }
 }
 
-async function runCli() {
-  const apiPort = Number(process.env.PORT) || PORTS.API;
+export async function runCli({ probe = probeHealth } = {}) {
+  // PM2 sets PORT explicitly; an unrelated shell PORT does not change its listener.
+  const apiPort = PORTS.API;
   const mirrorPort = resolveHttpMirrorPortForRoot(ROOT);
   const timeoutMs = parseTimeoutMs(process.env.PORTOS_HEALTH_WAIT_MS);
   const urls = healthProbeUrls({ apiPort, mirrorPort });
 
-  const result = await waitForHealthy({ urls, timeoutMs });
+  const result = await waitForHealthy({ urls, timeoutMs, probe });
   if (result.healthy) {
     console.log(`✅ PortOS is serving ${HEALTH_PATH} (${result.url})`);
     return 0;
