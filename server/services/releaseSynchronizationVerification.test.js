@@ -204,6 +204,9 @@ it('revalidates an explicitly reviewed legacy receipt and independently verifies
   const recovery = await acceptLegacyReleaseRecovery(id, review.digest);
   expect(await acceptLegacyReleaseRecovery(id, review.digest)).toEqual(recovery);
   const saved = await getReleaseSynchronization(id);
+  const blocked = { ...saved, synchronization: { ...saved.synchronization, status: 'blocked', blocker: 'legacy-archive-changed' } };
+  expect(projectTaskReleaseMilestones({ id: legacyTask, metadata: {} }, blocked).metadata.releaseSynchronization.nextAction)
+    .toContain('retained recovery evidence');
   await expect(saveReleaseSynchronization({ ...saved, legacyRecovery: { ...recovery, digest: '0'.repeat(64) } })).rejects.toThrow('immutable ownership');
   await expect(saveReleaseSynchronization({ ...saved, legacyRecovery: undefined })).rejects.toThrow('immutable ownership');
   expect((await getReleaseSynchronization(id)).publication).toEqual(legacyPublication);
@@ -236,6 +239,8 @@ it('requires the same preserved generation and settled owners again at retiremen
   await acceptLegacyReleaseRecovery(id, f.legacyProof.digest);
   f.present = true;
   expect((await verifyReleaseSynchronizationTask(legacyTask)).status).toBe('blocked');
+  expect(projectTaskReleaseMilestones({ id: legacyTask, metadata: {} }, await getReleaseSynchronization(id))
+    .metadata.releaseSynchronization.nextAction).toContain('exact checkout retirement review');
   const release = { repoPath: capture.repoPath, path: capture.path, branch: capture.branch, head: capture.head,
     checkoutIdentity: retirementCheckoutIdentityFromPointer(capture.incarnation.pointer) };
   expect(await retainReleaseSynchronizationReview(release)).toBe(true);

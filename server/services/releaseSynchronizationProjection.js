@@ -23,8 +23,10 @@ function buildReleaseSynchronizationPayload(entry) {
     prUrl: syncPr,
     headSha: syncHead,
     blocker: synchronization?.blocker || null,
-    ...(synchronization?.status === 'blocked' && entry.legacyRecovery?.evidence?.mode === 'present' && {
-      nextAction: 'Use the exact checkout retirement review and retirement service; keep the checkout and existing preservation evidence if any check refuses.',
+    ...(synchronization?.status === 'blocked' && entry.legacyRecovery && {
+      nextAction: entry.legacyRecovery.evidence?.mode === 'present'
+        ? 'Inspect the blocker and retained evidence. After other obligations are verified, use the exact checkout retirement review; keep the checkout if any check refuses.'
+        : 'Inspect the blocker and retained recovery evidence, then retry synchronization verification after resolving it.',
     }),
     ...(synchronization?.status === 'blocked' && synchronization.blocker === 'publisher-candidate-checkout-unverified' && {
       nextAction: 'Keep the candidate checkout and private review evidence in place. Inspect the original publisher run, promotion PR, and checkout inventory; use the legacy recovery review when the original generation and preservation evidence survive.',
