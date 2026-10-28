@@ -72,6 +72,7 @@ import { filterLibraryMedia, pickGuideMedia, parseLibraryMediaKey, inferAgeFromT
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { previewCatalogCastImport, commitCatalogCastImport } from '../services/musicVideo/catalogCast.js';
 import { draftStoryMember, joinStory, listCatalogStories } from '../services/catalogStories.js';
+import { fileCatalogImagesIntoUniverses } from '../services/catalogUniverseFiling.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
 import catalogIdentityRouter from './catalogIdentity.js';
@@ -1103,6 +1104,18 @@ router.get('/import/music-videos', asyncHandler(async (req, res) => {
 router.post('/import/music-videos', asyncHandler(async (req, res) => {
   const { selections } = validateRequest(catalogMusicVideoImportSchema, req.body || {});
   res.json(await commitCatalogCastImport(selections));
+}));
+
+// Universe collection integrity: every image on a record that belongs to a
+// universe (directly or through a story in it) sits in that universe's
+// collection. GET reports what is missing; POST files it. Never removes, and
+// skips images the user took out of the collection.
+router.get('/universe-filing', asyncHandler(async (req, res) => {
+  res.json(await fileCatalogImagesIntoUniverses({ dryRun: true }));
+}));
+
+router.post('/universe-filing', asyncHandler(async (req, res) => {
+  res.json(await fileCatalogImagesIntoUniverses());
 }));
 
 // --- User-defined ingredient types --------------------------------------

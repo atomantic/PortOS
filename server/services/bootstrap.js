@@ -153,6 +153,7 @@ import { initSharing, quiesceSharingForExit, drainPeerSyncOperations } from './s
 import { initMortalLoomStore } from './mortalLoomStore.js';
 import { initUniverseBuilderCollectionHook } from './universeBuilderCollectionHook.js';
 import { initCatalogImageAttachHook } from './catalogImageAttachHook.js';
+import { initCatalogUniverseFiling } from './catalogUniverseFiling.js';
 import { initWritersRoomSceneImageHook } from './writersRoomSceneImageHook.js';
 import { startHostedSessionSweep, stopHostedSessionSweep } from './fableLoom/hostedSession.js';
 import { initFableLoomSceneImageHook } from './fableLoomSceneImageHook.js';
@@ -711,6 +712,9 @@ const initMediaJobDependentHooks = () => {
   // ingredient on completion, even if the editor page unmounted mid-render
   // (#1359).
   initCatalogImageAttachHook();
+  // Files catalog record images into their universes' collections as they
+  // attach or the record joins a universe/story. It only listens.
+  initCatalogUniverseFiling();
   // Writers-Room scene-image hook — durably files a queued storyboard render
   // onto its analysis snapshot + work collection on completion (#1363).
   initWritersRoomSceneImageHook();
