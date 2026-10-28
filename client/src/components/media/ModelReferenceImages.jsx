@@ -1,11 +1,22 @@
 import CatalogImagePreview from '../catalog/CatalogImagePreview';
 
-export default function ModelReferenceImages({ images, onOpenPreview }) {
+// `editBase` (from the server preview) is the record's portrait: either the
+// image the render edits (also listed in `images` with role 'edit-base') or,
+// on a backend that cannot edit, a fallback with the reason it is not used so.
+export default function ModelReferenceImages({ images, editBase, onOpenPreview }) {
   if (!Array.isArray(images)) return null;
+  const editing = images.some((image) => image.role === 'edit-base');
   return (
     <section aria-label="Canonical reference images" className="space-y-2">
       <h3 className="text-xs font-semibold text-gray-300">Canonical reference images</h3>
-      <p className="text-xs text-gray-500">Render guides take priority; otherwise the portrait and canon images supply likeness.</p>
+      <p className="text-xs text-gray-500">
+        {editing
+          ? 'The render edits the portrait; the other images guide likeness.'
+          : 'Render guides take priority; otherwise the portrait and canon images supply likeness.'}
+      </p>
+      {editBase?.status === 'fallback' && (
+        <p role="status" className="text-xs text-port-warning">Not editing from the portrait: {editBase.reason}</p>
+      )}
       {images.length === 0 ? (
         <p className="text-xs text-port-warning">No canonical reference images will be sent. This sheet will be generated from text only.</p>
       ) : (
@@ -37,6 +48,7 @@ export default function ModelReferenceImages({ images, onOpenPreview }) {
               <figcaption className="text-[11px] break-words">
                 <span className="block text-gray-300">{image.filename}</span>
                 <span className="block text-gray-500">{image.source}</span>
+                {image.role === 'edit-base' && <span className="block font-medium text-port-accent">Edit base — the render starts from this image</span>}
                 {typeof image.strength === 'number' && <span className="block text-gray-500">Strength {image.strength}</span>}
                 <span className={image.status === 'included' ? 'text-port-success' : 'text-port-warning'}>
                   {image.status === 'included' ? 'Will be sent to the model'

@@ -31,7 +31,7 @@ import { getBoard } from './moodBoard/db.js';
 import { recordRenderPin } from '../lib/renderTargets.js';
 import { shortId } from '../lib/fileUtils.js';
 import { getIngredient, getIngredientIdentityIds, listLiveRefsForIngredient, listMediaForIngredient } from './catalogDB.js';
-import { characterSheetReferenceCandidates } from '../lib/characterSheetReferences.js';
+import { characterSheetEditBase, characterSheetReferenceCandidates } from '../lib/characterSheetReferences.js';
 import { catalogUniverseContext } from '../lib/catalogUniverseContext.js';
 import { getUniverse } from './universeBuilder.js';
 import { enqueueJob } from './mediaJobQueue/index.js';
@@ -133,7 +133,7 @@ function lookVariantFor(ingredient, payload, wardrobeId) {
   return {
     id: CATALOG_LOOK_VARIANT_ID,
     label: 'Look',
-    build: (universe, entry, direction) => buildCharacterLookPrompt(universe, entry, wardrobe, direction),
+    build: (universe, entry, direction, layout) => buildCharacterLookPrompt(universe, entry, wardrobe, direction, layout),
     negativesLabel: 'Look negatives',
     role: `look:${wardrobe.id}`,
   };
@@ -259,11 +259,15 @@ async function buildCatalogSheet(target, options) {
   const entry = { ...payload, name: ingredient.name };
   // Other sheets retain their default style; looks require explicit direction.
   const direction = variant.id === CATALOG_LOOK_VARIANT_ID ? await lookDirection(universe, options) : null;
-  const built = variant.build(universe || {}, entry, direction);
-  if (direction?.negatives) built.negativePrompt += `, ${direction.negatives}`;
+  const build = (layout) => {
+    const built = variant.build(universe || {}, entry, direction, layout);
+    if (direction?.negatives) built.negativePrompt += `, ${direction.negatives}`;
+    return built;
+  };
   const universeStyle = universe ? universeAestheticLine(universe) : '';
+  const media = ingredient.type === 'character' ? await listMediaForIngredient(ingredient.id) : [];
   const result = await buildSheetRenderParams({
-    built,
+    built: build,
     options,
     visualProfile: direction ? direction.profile : (options.visualProfileOverride === undefined ? universe?.visualProfile : options.visualProfileOverride),
     styleLine: direction ? '' : universeStyle || variant.defaultStyle,
@@ -272,9 +276,8 @@ async function buildCatalogSheet(target, options) {
       : { id: 'sheet-default-style', label: 'Default sheet style' },
     negativesLabel: variant.negativesLabel,
     renderPin: universe ? recordRenderPin(universe) : {},
-    referenceCandidates: ingredient.type === 'character'
-      ? characterSheetReferenceCandidates(payload, await listMediaForIngredient(ingredient.id), options)
-      : [],
+    referenceCandidates: ingredient.type === 'character' ? characterSheetReferenceCandidates(payload, media, options) : [],
+    editBaseCandidate: ingredient.type === 'character' ? characterSheetEditBase(payload, media, options) : null,
     sharedIdentity: ingredient.type === 'character' ? payload.visualIdentity : '',
   });
   if (direction) result.params.promptAdditions = [...direction.additions, ...(result.params.promptAdditions || [])];
@@ -289,12 +292,13 @@ export async function previewCatalogSheet(id, options = {}) {
       ...options, variant: target.variant.id,
     });
   }
-  const { params, visualDirection, referenceImages } = await buildCatalogSheet(target, options);
+  const { params, visualDirection, referenceImages, editBase } = await buildCatalogSheet(target, options);
   return {
     sentPrompt: params.prompt,
     ...(params.negativePrompt ? { sentNegativePrompt: params.negativePrompt } : {}),
     promptAdditions: params.promptAdditions || [],
     ...(target.ingredient.type === 'character' ? { referenceImages } : {}),
+    ...(editBase ? { editBase } : {}),
     ...(visualDirection ? { visualDirection } : {}),
   };
 }
@@ -315,7 +319,7 @@ export async function renderCatalogSheet(id, options = {}) {
     const result = await renderCharacterReferenceSheet(universeId, entryId, { ...options, variant: target.variant.id });
     return { ...result, delegatedTo: 'universe', universeId, entryId };
   }
-  const { params, modelId, activeMode, visualDirection, referenceImages } = await buildCatalogSheet(target, options);
+  const { params, modelId, activeMode, visualDirection, referenceImages, editBase } = await buildCatalogSheet(target, options);
   assertSheetReferencesAvailable(referenceImages);
   if (visualDirection && !visualDirection.ready) {
     throw new ServerError(`Define the look’s visual direction before rendering: ${visualDirection.missing.join(', ')}`, { status: 400, code: 'LOOK_VISUAL_DIRECTION_REQUIRED' });
@@ -323,9 +327,11 @@ export async function renderCatalogSheet(id, options = {}) {
   const role = target.variant.role || `sheet:${target.variant.id}`;
   params.catalogAttach = { ingredientId: id, kind: 'reference', role };
   const queued = await enqueueJob({ kind: 'image', params });
-  console.log(`🎨 Catalog ${target.variant.label} render — ingredient=${shortId(id)} job=${shortId(queued.jobId)} mode=${activeMode} model=${modelId}`);
+  const base = editBase?.status === 'included' ? 'portrait-edit' : editBase?.status === 'fallback' ? 'portrait-reference-fallback' : 'generate';
+  console.log(`🎨 Catalog ${target.variant.label} render — ingredient=${shortId(id)} job=${shortId(queued.jobId)} mode=${activeMode} model=${modelId} source=${base}`);
   return {
     jobId: queued.jobId,
+    ...(editBase ? { editBase } : {}),
     generationId: queued.jobId,
     variant: target.variant.id,
     role,

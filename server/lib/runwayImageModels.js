@@ -50,6 +50,9 @@ export const RUNWAY_IMAGE_RESOLUTIONS = Object.freeze([...new Set(RUNWAY_IMAGE_M
 export const RUNWAY_IMAGE_MODEL_IDS = Object.freeze(RUNWAY_IMAGE_MODELS.map((row) => row.id));
 export const getRunwayImageModel = (id) => RUNWAY_IMAGE_MODELS.find((row) => row.id === id) || null;
 
+/** FIBO Edit with a single reference keeps the source framing. */
+export const runwayImagePreservesSourceFrame = (modelId, referenceCount) => modelId === 'bria_fibo_edit_1_5' && referenceCount === 1;
+
 /** Preserve caller framing using the closest supported canvas at the chosen tier. */
 function runwayImageRatio(model, { width, height, resolution, ratio } = {}) {
   const ratios = model.ratios[resolution || model.defaultResolution];
@@ -93,7 +96,7 @@ export function buildRunwayImageRequest({ modelId = RUNWAY_IMAGE_DEFAULT_MODEL, 
     throw refuse('Runway reference images require a URI and unique 3–16 character tags');
   }
   if (model.seed && seed != null && seed !== -1 && (!Number.isInteger(Number(seed)) || Number(seed) < 0 || Number(seed) > model.seedMax)) throw refuse(`Runway seed must be a nonnegative 32-bit integer no greater than ${model.seedMax}`);
-  const preservesSourceFrame = modelId === 'bria_fibo_edit_1_5' && referenceImages.length === 1;
+  const preservesSourceFrame = runwayImagePreservesSourceFrame(modelId, referenceImages.length);
   if (preservesSourceFrame && (size.ratio || (size.resolution && size.resolution !== 'auto'))) throw refuse('FIBO Edit needs at least two references to choose a canvas; one reference keeps its source framing');
   const ratio = preservesSourceFrame ? null : runwayImageRatio(model, size);
   const resolution = size.resolution || model.defaultResolution;
