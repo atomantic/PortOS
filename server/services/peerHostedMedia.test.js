@@ -103,6 +103,23 @@ describe('takeHostedAssets', () => {
 });
 
 describe('static-mount fallback', () => {
+  it('streams from a verified alternative when the first host is disabled or returns 404', async () => {
+    const other = { ...PEER, instanceId: 'other', host: 'other.example.com' };
+    await markHosted(PEER.instanceId, [{ kind: 'video', filename: 'alternate.mp4' }]);
+    await markHosted(other.instanceId, [{ kind: 'video', filename: 'alternate.mp4' }]);
+    getPeers.mockResolvedValue([{ ...PEER, enabled: false }, other]);
+    streamRequest.mockImplementation(async (_url, _options, peer) => upstream(peer.instanceId === 'other' ? 'ALTERNATE' : '', peer.instanceId === 'other' ? 200 : 404));
+    expect((await request(app).get('/data/videos/alternate.mp4')).status).toBe(200);
+    expect(streamRequest).toHaveBeenCalledTimes(1);
+    getPeers.mockResolvedValue([PEER, other]);
+    streamRequest.mockClear();
+    const res = await request(app).get('/data/videos/alternate.mp4');
+    expect(res.status).toBe(200);
+    expect(res.body.toString()).toBe('ALTERNATE');
+    expect(streamRequest).toHaveBeenCalledTimes(2);
+    expect((await resolveMediaLocations([{ kind: 'video', ref: 'alternate.mp4' }]))[0].hostPeerId).toBe('other');
+  });
+
   it('does not erase newer evidence when an older request returns 404', async () => {
     await markHosted(PEER.instanceId, [{ kind: 'video', filename: 'race.mp4' }]);
     let finish;

@@ -69,6 +69,15 @@ describe('video history peer ownership', () => {
     expect(await location()).toEqual({ location: 'missing' });
   });
 
+  it('prioritizes new evidence while retaining a legacy host as fallback', async () => {
+    await dataSync.applyRemote('videoHistory', { videos: [row] });
+    writeFileSync(join(PATHS.data, 'peer-hosted-media.json'), JSON.stringify({ version: 1, entries: { 'video:v1.mp4': { peerId: 'a', at: 'old' } } }));
+    await inventory('b', ['v1.mp4']);
+    expect(await location()).toMatchObject({ hostPeerId: 'b' });
+    await inventory('b', []);
+    expect(await location()).toMatchObject({ hostPeerId: 'a' });
+  });
+
   it('reconciles collection-only video ownership through the collection category', async () => {
     const collection = { id: 'collection-only', name: 'Clips', items: [{ kind: 'video', ref: 'v1', addedAt: '2026-05-22T00:00:00Z' }], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z' };
     await dataSync.applyRemote('mediaCollections', { collections: [collection] }, { peerId: 'a' });
