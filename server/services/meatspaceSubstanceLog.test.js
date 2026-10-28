@@ -116,4 +116,22 @@ describe.each(cases)('$name event log', ({ key, items, total, result, input, upd
     expect(await buttons.remove(0)).toEqual({ ...buttons.input, name: 'Renamed' });
     expect(buttonsStore).toEqual({ [buttons.field]: [] });
   });
+
+  it('serializes overlapping button edits so none is lost', async () => {
+    let buttonsStore = { [buttons.field]: [{ ...buttons.input, name: 'Existing' }] };
+    readJSONFile.mockImplementation(async path => {
+      const snapshot = structuredClone(String(path).endsWith('daily-log.json') ? store : buttonsStore);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return snapshot;
+    });
+    atomicWrite.mockImplementation(async (path, data) => {
+      if (!String(path).endsWith('daily-log.json')) buttonsStore = structuredClone(data);
+    });
+    await Promise.all([
+      buttons.add({ ...buttons.input, name: 'P' }),
+      buttons.add({ ...buttons.input, name: 'Q' }),
+      buttons.remove(0)
+    ]);
+    expect(buttonsStore[buttons.field].map(b => b.name).sort()).toEqual(['P', 'Q']);
+  });
 });
