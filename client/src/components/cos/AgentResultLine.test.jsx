@@ -282,11 +282,12 @@ it('keeps publication unchanged while synchronization moves through pending, run
     ...agent,
     metadata: {
       ...agent.metadata,
-      releaseSynchronization: { status: 'blocked', identity, prUrl, headSha, blocker: 'head-ci-not-green-at-merge' },
+      releaseSynchronization: { status: 'blocked', identity, prUrl, headSha, blocker: 'head-ci-not-green-at-merge', nextAction: 'Inspect the original evidence.' },
     },
   }} />);
   expect(screen.getByText('Published — synchronization blocked')).toBeInTheDocument();
   expect(screen.getByText('Blocker: head-ci-not-green-at-merge')).toBeInTheDocument();
+  expect(screen.getByText('Next action: Inspect the original evidence.')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'v2.0.0' })).toHaveAttribute('href', publication.releaseUrl);
   expect(view.container.querySelector('time')).toHaveAttribute('datetime', publication.publishedAt);
   expect(screen.getByText(`Release sync: ${identity}`)).toBeInTheDocument();

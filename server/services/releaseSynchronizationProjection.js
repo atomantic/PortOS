@@ -23,6 +23,9 @@ function buildReleaseSynchronizationPayload(entry) {
     prUrl: syncPr,
     headSha: syncHead,
     blocker: synchronization?.blocker || null,
+    ...(synchronization?.status === 'blocked' && synchronization.blocker === 'publisher-candidate-checkout-unverified' && {
+      nextAction: 'Keep the candidate checkout and private review evidence in place. Inspect the original publisher run, promotion PR, and checkout inventory; missing ownership or preservation evidence requires recovery before retirement.',
+    }),
     verifiedAt: synchronization?.verifiedAt || null,
     checkedAt: synchronization?.checkedAt || null,
     retryAt: synchronization?.retryAt || null,

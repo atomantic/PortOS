@@ -153,7 +153,8 @@ it('reopens an old verified synchronization without a publisher seed and retains
   f.agents = [publisher, { ...f.agents[1], taskId: legacyTask }];
   const projected = projectTaskReleaseMilestones({ id: legacyTask, metadata: {} }, old);
   expect(projected.metadata.releasePublication).toEqual(old.publication);
-  expect(projected.metadata.releaseSynchronization).toMatchObject({ status: 'blocked', blocker: 'publisher-candidate-checkout-unverified', verifiedAt: null });
+  expect(projected.metadata.releaseSynchronization).toMatchObject({ status: 'blocked', blocker: 'publisher-candidate-checkout-unverified', verifiedAt: null,
+    nextAction: expect.stringContaining('Keep the candidate checkout and private review evidence in place') });
   expect(await releaseTaskDispatchDisposition({ metadata: { analysisType: 'do-release', app: 'example-app' } })).toBe('wait-for-synchronization');
   expect(await retainReleaseSynchronizationReview({ repoPath: '/example/repo', branch: 'some-unknown-branch', path: '/example/publisher-checkout', head: publication.candidateHead })).toBe(false);
   expect(await verifyReleaseSynchronizationTask(legacyTask)).toMatchObject({ status: 'blocked', blocker: 'publisher-candidate-checkout-unverified' });
