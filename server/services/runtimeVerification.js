@@ -154,10 +154,12 @@ export async function sweepRuntimeVerifications() {
       // finalization, resetting budgets or declaring checkout retirement complete.
       if (m.runtimeVerificationReadyAgentId !== p.agentId) {
         const { releaseRetryHold } = await import('./agentWorktreeCleanup.js');
-        await releaseRetryHold({ agentId: p.agentId, task: { ...task, taskType }, success: false, agentMetadata: owner.metadata })
+        await releaseRetryHold({ agentId: p.agentId, task: { ...task, taskType }, success: false, agentMetadata: owner.metadata,
+          recoveryOwner: { id: owner.id, startedAt: owner.startedAt, requireInactive: true } })
           .catch(async () => {
             await updateTask(task.id, { metadata: { blockedReason: 'Runtime prerequisite retained: original checkout resume evidence is unavailable.' } }, taskType,
-              { expectedStatus: 'blocked', expectedMetadata: { runtimeVerificationId: m.runtimeVerificationId, deliveryDecisionAgentId: p.agentId } });
+              { expectedStatus: 'blocked', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+                recoveryOwner: { id: owner.id, startedAt: owner.startedAt, requireInactive: true } });
           });
         continue;
       }
