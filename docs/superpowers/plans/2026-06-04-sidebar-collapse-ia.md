@@ -815,7 +815,7 @@ git commit -m "feat([issue-713]): render Pinned + Recent sections and pin toggle
 
 - [ ] **Step 1: Start the dev server and verify behavior**
 
-Run: `cd /Users/antic/github.com/atomantic/PortOS/data/cos/worktrees/claim-issue-713 && npm run dev` (or `npm start`).
+Run: `cd <repo-root>/data/cos/worktrees/claim-issue-713 && npm run dev` (or `npm start`).
 
 Manually verify in the browser:
 1. Sidebar shows ~11 primary entries + a "More" group (Identity, POST). No Comms/Wiki/System/MeatSpace/Digital Twin top-level groups.

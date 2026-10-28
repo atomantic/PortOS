@@ -129,7 +129,7 @@ describe('mediaPromptRefiner', () => {
       id: 'codex', type: 'cli', enabled: true,
     });
     const codexOutput = `OpenAI Codex CLI v2.1.0
-[workdir, /Users/antic/github.com/atomantic/PortOS]
+[workdir, /Users/exampleuser/portos]
 [model, gpt-5]
 [session, abc-123]
 
