@@ -2456,6 +2456,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   it('refuses changed, dropped and ambiguous captured completed resume lineage before retirement', async () => {
     const { c, base, rewritten, row } = await rewrittenResumeCheckout();
+    const unchanged = structuredClone(injected.policies);
     // A changed patch and an additional dropped patch must not be mistaken for
     // a rebase, even with the exact same trusted resume/physical lineage.
     const rejected = await receiptTiming.run('rejected-history-fixture', async () => {
@@ -2480,10 +2481,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       expect(await receiptTiming.run('lineage-refusal', () => c.prepare())).toMatchObject({ ok: false, reason: 'retirement-policy-not-legacy-completed' });
       expect(await registered(c.path)).toBe(true);
     }
+    row.head = rewritten;
+    expect(injected.policies).toEqual(unchanged);
   });
 
   it('preserves authority holds for captured completed resume lineage before retirement', async () => {
     const { c, attempts, row } = await rewrittenResumeCheckout();
+    const unchanged = structuredClone(attempts);
     // These holds must survive the real rewritten-delivery fallback as well
     // as ordinary exact-head policy admission.
     for (const [target, key, value] of [[attempts[0], 'taskId', 'other-task'], [attempts[0], 'status', 'running'],
@@ -2496,10 +2500,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       expect(await registered(c.path)).toBe(true);
       target[key] = prior;
     }
+    expect(injected.policies).toEqual(unchanged);
   });
 
   it('binds explicit original policies to captured completed resume lineage before retirement', async () => {
     const { c, attempts, rewritten } = await rewrittenResumeCheckout();
+    const unchanged = structuredClone(attempts);
     // An explicit original-head policy must bind the captured old head, rather
     // than being replaced with the rewritten tip to make the review pass.
     attempts[0].metadata.branchCompletionPolicy = { branch: c.release.branch, completion: 'review-then-merge',
@@ -2508,6 +2514,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     attempts[0].metadata.branchCompletionPolicy.tip = rewritten;
     const boundPolicy = await receiptTiming.run('lineage-verification', () => c.prepare());
     expect(boundPolicy, JSON.stringify(boundPolicy)).toMatchObject({ ok: true });
+    delete attempts[0].metadata.branchCompletionPolicy;
+    expect(injected.policies).toEqual(unchanged);
   });
 
   it('proves rewritten delivery only for the captured completed resume lineage before retirement', async () => {
