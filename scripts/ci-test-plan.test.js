@@ -42,6 +42,11 @@ import {
   WINDOWS_RISK_RULES,
 } from './ci-test-plan.js';
 
+// The planner logs its attestation verdict to stderr. Capture it so a spawn
+// adds nothing to the run's output; a failing spawn still reports it on the
+// thrown error.
+const PLANNER_STDIO = ['ignore', 'pipe', 'pipe'];
+
 const TRACKED = [
   'server/lib/index.js',
   'server/lib/index.test.js',
@@ -163,7 +168,7 @@ it('preserves Git-quoted source and contract paths through the planner CLI', () 
   };
   const plan = (base) => JSON.parse(execFileSync(process.execPath, [planner], {
     cwd: root,
-    encoding: 'utf8',
+    encoding: 'utf8', stdio: PLANNER_STDIO,
     env: { ...process.env, CI_BASE_SHA: base, CI_BASE_REF: 'main', CI_FORCE_FULL: 'false', GITHUB_OUTPUT: '' },
   }));
   try {
@@ -344,7 +349,7 @@ it('carries transitive browser re-exports through the planner CLI and fails clos
   const serverOnly = 'server/lib/privateOnly.js';
   const plan = (changedFiles) => JSON.parse(execFileSync(process.execPath, [planner], {
     cwd: root,
-    encoding: 'utf8',
+    encoding: 'utf8', stdio: PLANNER_STDIO,
     env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: 'false',
       CI_CHANGED_FILES: JSON.stringify(changedFiles), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
   }));
@@ -395,7 +400,7 @@ it('projects test-only shared re-exports and retains unresolved consumers withou
   const consumer = 'client/src/test/lifecycle.test.js';
   const unrelated = 'client/src/test/unrelated.test.js';
   const plan = (source) => JSON.parse(execFileSync(process.execPath, [planner], {
-    cwd: root, encoding: 'utf8',
+    cwd: root, encoding: 'utf8', stdio: PLANNER_STDIO,
     env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: 'false',
       CI_CHANGED_FILES: JSON.stringify([source]), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
   }));
@@ -581,7 +586,7 @@ it('follows DB-only deferred dependencies through the pre-install CLI and preser
   const contract = 'server/routes/decks.db.test.js';
   const plan = (changedFiles) => JSON.parse(execFileSync(process.execPath, [planner], {
     cwd: root,
-    encoding: 'utf8',
+    encoding: 'utf8', stdio: PLANNER_STDIO,
     env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: 'false',
       CI_CHANGED_FILES: JSON.stringify(changedFiles), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
   }));
@@ -1831,7 +1836,7 @@ it('projects transitive browser consumers through the planner CLI without replac
   const [staticSuite, deferredSuite, independentSuite] = BROWSER_SUITES;
   const plan = (changedFiles, forceFull = false) => JSON.parse(execFileSync(process.execPath, [planner], {
     cwd: root,
-    encoding: 'utf8',
+    encoding: 'utf8', stdio: PLANNER_STDIO,
     env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: String(forceFull),
       CI_CHANGED_FILES: JSON.stringify(changedFiles), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
   }));
@@ -2508,7 +2513,7 @@ describe('pregate attestation', () => {
       writeFileSync(join(bin, 'gh'), `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/gh.js" "$@"\n`, { mode: 0o755 });
       const statuses = JSON.stringify([status({ description: encode(['scan', 'lint', 'server', 'smoke', 'client', 'build'], headTree) })]);
       const plan = (env) => JSON.parse(execFileSync(process.execPath, [planner], {
-        cwd: root, encoding: 'utf8',
+        cwd: root, encoding: 'utf8', stdio: PLANNER_STDIO,
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_GH_STATUSES: statuses, CI_BASE_SHA: base, GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '', ...prEnv, CI_PR_HEAD_SHA: head, ...env },
       }));
 
