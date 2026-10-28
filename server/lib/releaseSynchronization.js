@@ -31,7 +31,7 @@ export function publisherCandidateSeed(entry) {
   return matches.length === 1 ? matches[0] : null;
 }
 
-export function publisherReviewRetained(entry) {
+function publisherReviewRetained(entry) {
   const seed = publisherCandidateSeed(entry);
   const review = entry?.obligations?.retirement?.evidence?.publisherReview;
   if (!seed || !review) return false;
