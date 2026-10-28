@@ -30,7 +30,11 @@ export function resolveHttpMirrorPortForRoot(root) {
  */
 export function upsertEnvKey(filePath, key, value) {
   let content = '';
-  try { content = readFileSync(filePath, 'utf8'); } catch { /* no .env yet */ }
+  try {
+    content = readFileSync(filePath, 'utf8');
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pattern = new RegExp(`^${escaped}=.*`, 'm');
   if (pattern.test(content)) {
