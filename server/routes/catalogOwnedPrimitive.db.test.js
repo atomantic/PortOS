@@ -16,7 +16,17 @@ import { mockNoPeerSync, mockNoPeers, mockPathsDataRoot } from '../lib/mockPaths
 
 const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-owned-primitive-' });
 const refFault = vi.hoisted(() => ({ failCanonLink: false }));
+const dbFault = vi.hoisted(() => ({ forbidUniversePoolRead: false }));
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
+vi.mock('../lib/db.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, query: async (sql, ...args) => {
+    if (dbFault.forbidUniversePoolRead && /SELECT data FROM universes WHERE id = \$1/.test(sql)) {
+      throw new Error('Universe read attempted to acquire a second pool connection');
+    }
+    return actual.query(sql, ...args);
+  } };
+});
 vi.mock('../lib/pgFileFacade.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, isFileBackend: () => false,
@@ -212,6 +222,19 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients inside a universe', () =>
     expect((await getUniverse(universe.id)).characters).toEqual([]);
     expect((await query('SELECT operation_key FROM catalog_commit_receipts WHERE operation_key = $1', [operationKey])).rows).toEqual([]);
     expect(getUniverseMutationEpoch()).toBe(beforeEpoch);
+  });
+
+  it('creates without acquiring a second connection to read the universe inside its transaction', async () => {
+    const universe = await makeUniverse();
+    const name = `Pool-safe character ${randomUUID()}`;
+    dbFault.forbidUniversePoolRead = true;
+    const response = await Promise.resolve(request(app).post('/api/catalog/ingredients')
+      .send({ type: 'character', name, payload: {}, universeId: universe.id }))
+      .finally(() => { dbFault.forbidUniversePoolRead = false; });
+    const { rows } = await query('SELECT id FROM catalog_ingredients WHERE name = $1', [name]);
+    for (const row of rows) ingredientIds.add(row.id);
+    expect(response.status).toBe(201);
+    expect((await getUniverse(universe.id)).characters).toMatchObject([{ ingredientId: response.body.id }]);
   });
 
   it('keeps an explicit lock the creator asked for', async () => {

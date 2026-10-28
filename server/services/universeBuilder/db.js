@@ -32,8 +32,9 @@ const RUN_CAP = 200;
 // --- Universe records ---
 
 /** Raw on-disk-equivalent record (the `data` JSONB), or null. No sanitize. */
-export async function readRaw(id) {
-  const { rows } = await query(`SELECT data FROM universes WHERE id = $1`, [id]);
+export async function readRaw(id, { client } = {}) {
+  const exec = client ? client.query.bind(client) : query;
+  const { rows } = await exec(`SELECT data FROM universes WHERE id = $1`, [id]);
   return rows[0]?.data ?? null;
 }
 

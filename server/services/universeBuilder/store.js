@@ -244,6 +244,7 @@ function createFacade({ dir, sanitizeRecord }) {
     type: 'universes',
     _setSanitizer: (fn) => { if (typeof fn === 'function') sanitizer = fn; },
     getBackendName,
+    prepare: async () => { await getBackend(); },
 
     // Reads
     listIds: async () => (await getBackend()).listIds(),
@@ -255,8 +256,8 @@ function createFacade({ dir, sanitizeRecord }) {
     listSummaries: async () => (await getBackend()).listSummaries(),
     listStyles: async () => (await getBackend()).listStyles(),
     loadOneRaw: async (id) => (await getBackend()).readRaw(id),
-    loadOne: async (id) => {
-      const raw = await (await getBackend()).readRaw(id);
+    loadOne: async (id, { client } = {}) => {
+      const raw = await (await getBackend()).readRaw(id, { client });
       return raw ? sanitizer(raw) : null;
     },
 

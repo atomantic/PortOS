@@ -465,7 +465,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
   } = options;
   const s = store();
   const write = async (client = null) => {
-    const cur = await s.loadOne(id);
+    const cur = await s.loadOne(id, { client });
     if (!cur) throw codedError(`Universe not found: ${id}`, ERR_NOT_FOUND);
     if (cur.deleted) throw codedError(`Universe not found: ${id}`, ERR_NOT_FOUND);
 
@@ -707,6 +707,9 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
     };
   };
   const { merged, nameChanged, skipped, removedCharacterIds, prevEphemeral, nextEphemeral } = await s.queueRecordWrite(id, async () => {
+    // Backend selection can itself use the pool; finish it before checking out
+    // a transaction client, then use that client for both the read and write.
+    if (transactional) await s.prepare();
     const result = transactional
       ? await (await import('../../lib/db.js')).withTransaction(write)
       : await write();
