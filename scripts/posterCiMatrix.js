@@ -8,10 +8,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { planTestMemo, writeSelectionFile } from './lib/testMemoRunner.js';
 import { resolveTestChrome } from './lib/testChrome.js';
+import { spawnNpm } from './run-ci-tests.js';
 
 import { POSTER } from './posterCiMatrixConfig.js';
 
-function main() {
+async function main() {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..');
   const server = join(root, 'server');
   const git = () => spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim();
@@ -35,15 +36,18 @@ function main() {
       if (git() !== revision) throw Error('Revision changed during matrix');
       console.log(`Matrix run ${round + 1}: ${placement}`);
       const start = Date.now();
-      const result = spawnSync(process.execPath, [join(root, 'scripts/run-vitest-ci.js'), 'run', '--silent=passed-only', '--reporter=default', '--reporter=github-actions', '--configLoader', 'runner', '--config', config], {
-        cwd: server, stdio: 'inherit', env: { ...process.env, CHROME_PATH: chrome, POSTER_MATRIX_PLACEMENT: placement, PORTOS_TEST_MEMO: 'off', PORTOS_CI_TEST_SELECTION: selection.path },
+      Object.assign(process.env, { CHROME_PATH: chrome, POSTER_MATRIX_PLACEMENT: placement, PORTOS_TEST_MEMO: 'off', PORTOS_CI_TEST_SELECTION: selection.path });
+      let initialFailed = false;
+      const status = await spawnNpm('server', 'test:ci', [`--config=${config}`], `poster matrix ${round + 1}`, {
+        onResult: result => { if (result.status !== 0 || result.error) initialFailed = true; },
       });
-      console.log(`Matrix run ${round + 1}: placement=${placement} status=${result.status ?? 'unavailable'} elapsedMs=${Date.now() - start}`);
-      if (result.error || result.status !== 0) { process.exitCode = 1; break; }
+      console.log(`Matrix run ${round + 1}: placement=${placement} status=${status} elapsedMs=${Date.now() - start}`);
+      // Preserve the CI crash retry, but do not treat a recovered crash as a clean comparison.
+      if (initialFailed || status !== 0) { process.exitCode = 1; break; }
     }
   } finally {
     rmSync(scratch, { recursive: true, force: true });
     rmSync(selection.dir, { recursive: true, force: true });
   }
 }
-if (isDirectlyInvoked(import.meta.url)) main();
+if (isDirectlyInvoked(import.meta.url)) await main();
