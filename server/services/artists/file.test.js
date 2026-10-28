@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { SUBMISSION_FIELDS } from '../../lib/artistLimits.js';
 
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'artists-file-test-'));
 const writeCounter = vi.hoisted(() => ({ baseHash: 0 }));
@@ -46,6 +47,7 @@ const journalEntries = () => cj.conflictJournalStore().loadAll();
 const artist = (id, extra = {}) => ({
   id, name: id, genre: '', bio: '', musicalStyle: '', physicalDescription: '',
   portraitStyle: '', portraitImageUrl: '',
+  ...Object.fromEntries(SUBMISSION_FIELDS.map((key) => [key, ''])),
   createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
   deleted: false, deletedAt: null, ...extra,
 });

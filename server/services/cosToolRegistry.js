@@ -347,6 +347,23 @@ const userActionsQueryTool = Object.freeze({
   adapter: { kind: 'user-actions' },
 });
 
+const artistProfileInputSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+}).strict();
+
+// Read-only press & submission profile for agents filling festival, distributor
+// or EPK forms (e.g. Claude Desktop over the agent-context MCP). The text is the
+// artist's own curation; the tool never drafts or fills gaps.
+const artistProfileTool = Object.freeze({
+  type: 'portos_tool', name: 'music.artist-profile', version: COS_TOOL_SCHEMA_VERSION,
+  providerName: 'music_artist_profile', aliases: ['music_artist_profile'],
+  description: 'Read the artist-curated press & submission profile (bios in several lengths, credit name, statements, AI process statement, platform links, notes) for filling festival or distributor forms. Fields listed under missing are not filled in: leave them for the artist, never invent them.',
+  input_schema: zodToOpenApiSchema(artistProfileInputSchema),
+  output_schema: objectOutputSchema,
+  policy: { scopes: ['agent', 'ui'], requiredCapabilities: ['readPortos'], sideEffect: 'read', idempotent: true, async: false, confirmation: 'none' },
+  adapter: { kind: 'artist-profile' },
+});
+
 const maintenanceRefreshTool = Object.freeze({
   type: 'portos_tool', name: 'maintenance.refresh', version: COS_TOOL_SCHEMA_VERSION,
   providerName: 'maintenance_refresh', aliases: ['maintenance_refresh'],
@@ -612,7 +629,7 @@ const reportTools = [
   policy: { scopes: ['mind'], requiredCapabilities: ['auditReports', 'readPortos'], sideEffect: 'write', idempotent: true, async: false, confirmation: 'capability-grant' },
   adapter: { kind: name },
 }));
-const staticToolCatalog = [...sandboxTools, ...reportTools, toolsActivateTool, toolsDeactivateTool, ...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindChooseNameTool, userActionsQueryTool, maintenanceRefreshTool, ...eidoverseTools];
+const staticToolCatalog = [...sandboxTools, ...reportTools, toolsActivateTool, toolsDeactivateTool, ...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindChooseNameTool, userActionsQueryTool, artistProfileTool, maintenanceRefreshTool, ...eidoverseTools];
 const toolCatalog = (intent) => [...staticToolCatalog, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
@@ -1090,6 +1107,17 @@ const readDevelopmentMaintenance = async () => {
   return readPersistentMindMaintenanceContext();
 };
 
+const readArtistProfiles = async (tool, args) => {
+  const { name } = artistProfileInputSchema.parse(args ?? {});
+  const { listArtists, buildSubmissionProfile } = await import('./artists/index.js');
+  const wanted = name?.toLowerCase();
+  const artists = (await listArtists()).filter((artist) => !wanted || artist.name.toLowerCase() === wanted);
+  return {
+    artists: artists.map(buildSubmissionProfile),
+    ...(wanted && !artists.length ? { note: `No artist named "${name}" — add one under Create > Music > Artists.` } : {}),
+  };
+};
+
 const listUserActionEvents = async (tool, args) => {
   const [{ listUserActions }, { scrubSecretTokens, scrubSecretTokensDeep }] = await Promise.all([
     import('./userActions.js'),
@@ -1277,6 +1305,7 @@ const ADAPTER_HANDLERS = {
   'persistent-mind-maintenance': runMindMaintenance,
   'development-maintenance': readDevelopmentMaintenance,
   'user-actions': listUserActionEvents,
+  'artist-profile': readArtistProfiles,
   'eidoverse-travel': runEidoverseTravelTool,
   'eidoverse-foundations': runEidoverseFoundationsTool,
   'eidoverse-observe': observeEidoverse,
