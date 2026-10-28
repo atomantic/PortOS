@@ -36,6 +36,7 @@ describe.skipIf(!chrome)('catalog image composer layering', () => {
           load(id) {
             if (id.endsWith('/src/services/apiSystem.js')) return 'export async function getSystemBuild() { return { commit: null }; } export async function generateImage(body) { window.renderedBody = body; return { filename: "synthetic.png" }; }';
             if (id.endsWith('/src/services/apiUniverseBuilder.js')) return 'export async function getUniverse() { return { id: "synthetic-world", influences: { embrace: ["Analog photography"] } }; }';
+            if (id.endsWith('/src/services/apiCatalog.js')) return 'export async function getCatalogFamilyContext() { return { additions: [], images: [], imagesAddition: null }; }';
             if (id.endsWith('/src/services/apiImageVideo.js')) return 'export async function previewImagePrompt(body) { return { sentPrompt: body.prompt, promptAdditions: body.promptAdditions }; } export async function listMediaGalleryPage() { return { items: [] }; }';
             if (id.endsWith('/src/components/pipeline/MediaJobThumb.jsx')) return 'export default function MediaJobThumb() { return null; }';
             if (id !== '\0composer-fixture.jsx') return;

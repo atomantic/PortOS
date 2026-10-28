@@ -28,6 +28,7 @@ vi.mock('../services/catalogDB.js', () => ({
   getIngredientIdentityIds: async id => [id],
   listLiveRefsForIngredient: (...args) => mocks.listLiveRefsForIngredient(...args),
   listMediaForIngredient: (...args) => mocks.listMediaForIngredient(...args),
+  listRelationsForIngredient: async () => ({ outbound: [], inbound: [] }),
 }));
 vi.mock('../lib/pathSafety.js', async (importOriginal) => ({
   ...(await importOriginal()),
