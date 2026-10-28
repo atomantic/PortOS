@@ -31,6 +31,11 @@ const ENQUEUE_ROWS = [
   { scope: 'always', active: (c) => c.remixHandoffPending },
   { scope: 'always', active: (c) => c.promptOverLimit },
   { scope: 'remote', active: (c) => !!c.remoteBlocked, reason: (c) => c.remoteBlocked },
+  {
+    scope: 'local', active: (c) => !!c.modelContextUnavailable,
+    reason: (c) => c.modelContextUnavailable,
+    optionsHint: (c) => c.modelContextUnavailable,
+  },
   { scope: 'local', active: (c) => c.notConnected },
   { scope: 'local', active: (c) => c.byovGateBlocked, reason: byovReason },
   {
