@@ -384,6 +384,7 @@ const MANIFEST_ABSENT = Symbol('manifest-absent');
 
 const DEFAULT_STATE = {
   lastRun: null,
+  lastSuccessfulRun: null,
   status: 'never',
   lastSnapshotId: null,
   filesChanged: 0,
@@ -650,7 +651,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
 
   let changedFiles = [];
   let manifest;
-  let previousSnapshotId;
+  let previousState;
 
   const removeMarker = (path, marker) => unlink(path).catch(cause => {
     if (cause.code === 'ENOENT') return;
@@ -691,7 +692,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     setBackupRunning(false, 'failure');
     const failureState = {
       lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null,
-      ...(previousSnapshotId !== undefined ? { lastSnapshotId: previousSnapshotId } : {}),
+      ...(previousState ?? {}),
     };
     await saveState(failureState, (cause) => {
       const code = ['EACCES', 'EPERM', 'EIO', 'ENOSPC', 'EROFS', 'ENOENT', 'EMFILE', 'ENFILE'].includes(cause.code) ? cause.code : 'UNKNOWN';
@@ -794,7 +795,13 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
 
     const status = backupStatusForPg(pgResult);
     const lastRun = new Date().toISOString();
-    previousSnapshotId = (await getState()).lastSnapshotId;
+    // Read durable status: getState() projects this attempt as running.
+    const state = await readJSONFile(STATE_PATH, DEFAULT_STATE, { strict: true });
+    previousState = {
+      lastSnapshotId: state.lastSnapshotId,
+      lastSuccessfulRun: Object.hasOwn(state, 'lastSuccessfulRun')
+        ? state.lastSuccessfulRun : (state.status === 'ok' ? state.lastRun : null),
+    };
     await saveState({
       lastRun,
       lastSnapshotId: snapshotId,
@@ -806,6 +813,8 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     });
 
     await removeMarker(parentMarker, 'reservation');
+    // A crash before the reservation clears must still leave the slot due.
+    if (status === 'ok') await saveState({ lastSuccessfulRun: lastRun });
 
     if (io) io.emit('backup:completed', { snapshotId, filesChanged: changedFiles.length, status, pgBackup: pgResult });
 
@@ -2532,7 +2541,11 @@ export async function saveState(patch, onFailure) {
     await ensureDir(join(PATHS.data, 'backup'));
     // Status projections are read-only and must never become durable state.
     const current = await readJSONFile(STATE_PATH, DEFAULT_STATE, { strict: true });
-    const updated = { ...current, ...patch };
+    // Preserve legacy success before a failed/degraded attempt replaces its status.
+    const legacySuccess = Object.hasOwn(current, 'lastSuccessfulRun') ? {} : {
+      lastSuccessfulRun: current.status === 'ok' ? current.lastRun ?? null : null,
+    };
+    const updated = { ...current, ...legacySuccess, ...patch };
     await atomicWrite(STATE_PATH, updated);
     failedStateProjection = null;
     return updated;

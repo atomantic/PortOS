@@ -109,8 +109,11 @@ async function maybeCatchUpMissedSlot(inputs, timezone, settings) {
     const prevRunMs = prevRun.getTime();
 
     const state = await getState().catch(() => null);
-    const lastRunMs = state?.lastRun ? new Date(state.lastRun).getTime() : NaN;
-    if (Number.isFinite(lastRunMs) && lastRunMs >= prevRunMs) return; // not missed
+    // Older installs recorded only attempts; only an ok legacy result proves success.
+    const lastSuccess = Object.hasOwn(state ?? {}, 'lastSuccessfulRun')
+      ? state.lastSuccessfulRun : (state?.status === 'ok' ? state.lastRun : null);
+    const lastSuccessMs = lastSuccess ? new Date(lastSuccess).getTime() : NaN;
+    if (Number.isFinite(lastSuccessMs) && lastSuccessMs >= prevRunMs) return; // not missed
 
     const configUpdatedAt = Number(settings?.backupConfigUpdatedAt) || 0;
     const timezoneUpdatedAt = (await getTimezoneUpdatedAt().catch(() => null)) || 0;

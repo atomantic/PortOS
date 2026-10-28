@@ -597,6 +597,7 @@ Left unbounded, `snapshots/<hostname>/` grows forever — every prior full DB du
 
 - Daily backups are driven by `backupScheduler.js` via the `backup-daily` cron event; `getNextRunTime()` reports the next run.
 - **The registration tracks settings — no restart needed.** `syncBackupSchedule()` runs at boot *and* on every settings save (subscribed to `settingsEvents`' `settings:updated`), so enabling backups or setting `destPath` when scheduling was previously inactive registers the cron immediately, editing `cronExpression` re-registers it, and disabling backups (or clearing `destPath`) cancels it. A save that doesn't change the registration inputs (cron expression, timezone, active/inactive) is a no-op — `destPath` and the exclude lists are re-read by the handler per run, so changing them never churns the registration.
+- **Boot catch-up requires a complete snapshot.** Once per boot, a missed slot schedules a catch-up after five minutes, unless backup configuration or timezone changed after that slot. `lastRun` records the latest attempt; `lastSuccessfulRun` records the latest complete snapshot and survives later failed or database-degraded attempts. Legacy state without that field counts `lastRun` only when its status is `ok`.
 - `GET /api/backup/status` surfaces the persisted state including the last `pgBackup` outcome, so the Backup settings tab shows whether the last DB dump succeeded, its size, and table count.
 
 ### Omitted schedule fields

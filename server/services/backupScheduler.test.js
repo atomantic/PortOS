@@ -512,14 +512,44 @@ describe('missed-slot catch-up at boot (#8456)', () => {
     });
   });
 
-  it('does not catch up when the last run is at or after the most recent slot', async () => {
+  it('does not catch up when a legacy successful run is at the most recent slot', async () => {
     getSettings.mockResolvedValue(SETTINGS);
     parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
-    getState.mockResolvedValue({ lastRun: MISSED_SLOT.toISOString() });
+    getState.mockResolvedValue({ status: 'ok', lastRun: MISSED_SLOT.toISOString() });
 
     await startBackupScheduler();
     await vi.advanceTimersByTimeAsync(5 * 60_000);
 
+    expect(runBackup).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: 'ok', lastRun: '2026-01-02T01:00:00.000Z', lastSuccessfulRun: null },
+    { status: 'error', lastRun: '2026-01-02T01:00:00.000Z' },
+    { status: 'degraded', lastRun: '2026-01-02T01:00:00.000Z', pgBackup: { status: 'failed' } },
+    { status: 'error', lastRun: '2026-01-02T01:00:00.000Z', lastSuccessfulRun: '2026-01-01T00:00:00.000Z' },
+    { status: 'degraded', lastRun: '2026-01-02T01:00:00.000Z', lastSuccessfulRun: '2026-01-01T00:00:00.000Z' },
+  ])('catches up after an incomplete attempt: %j', async (state) => {
+    getSettings.mockResolvedValue(SETTINGS);
+    parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
+    getState.mockResolvedValue(state);
+
+    await startBackupScheduler();
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    expect(runBackup).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runBackup).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a satisfied slot after a later failed attempt', async () => {
+    getSettings.mockResolvedValue(SETTINGS);
+    parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
+    getState.mockResolvedValue({
+      status: 'error', lastRun: '2026-01-02T01:00:00.000Z', lastSuccessfulRun: MISSED_SLOT.toISOString(),
+    });
+
+    await startBackupScheduler();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(runBackup).not.toHaveBeenCalled();
   });
 

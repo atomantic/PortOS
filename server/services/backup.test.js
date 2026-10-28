@@ -3696,6 +3696,7 @@ describe('getState and saveState', () => {
 
   const DEFAULTS = {
     lastRun: null,
+    lastSuccessfulRun: null,
     status: 'never',
     lastSnapshotId: null,
     filesChanged: 0,
@@ -4719,6 +4720,7 @@ describe('runBackup lifecycle', () => {
     const state = await readJson(joinPath(dataRoot, 'backup', 'state.json'));
     expect(state).toMatchObject({
       lastRun: result.lastRun,
+      lastSuccessfulRun: result.lastRun,
       lastSnapshotId: result.snapshotId,
       status: 'ok',
       filesChanged: 2,
@@ -4944,17 +4946,23 @@ describe('runBackup lifecycle', () => {
     const { errorEvents } = await import('../lib/errorHandler.js');
     const warning = vi.fn();
     if (pgStatus === 'failed') errorEvents.once('error', warning);
+    const priorRun = '2026-01-01T00:00:00.000Z';
+    const fsp = await actualFs();
+    await fsp.mkdir(joinPath(dataRoot, 'backup'), { recursive: true });
+    await fsp.writeFile(joinPath(dataRoot, 'backup', 'state.json'), JSON.stringify({ status: 'ok', lastRun: priorRun }));
     const io = { emit: vi.fn() };
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const pending = runBackup(destRoot, io);
     await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
     proc.emit('close', 0);
-    await expect(pending).resolves.toMatchObject({
+    const result = await pending;
+    expect(result).toMatchObject({
       status, pgBackup: { status: pgStatus }, manifest: { fileCount: 0, files: {} },
     });
     expect(await readJson(joinPath(dataRoot, 'backup', 'state.json')))
-      .toMatchObject({ status, pgBackup: { status: pgStatus } });
+      .toMatchObject({ status, pgBackup: { status: pgStatus }, lastRun: result.lastRun,
+        lastSuccessfulRun: pgStatus === 'failed' ? priorRun : result.lastRun });
     expect(io.emit).toHaveBeenCalledWith('backup:completed', expect.objectContaining({ status }));
     if (pgStatus === 'failed') expect(warning).toHaveBeenCalledWith(
       expect.objectContaining({ code: 'BACKUP_DB_DUMP_FAILED' }), expect.any(Object));
@@ -5114,14 +5122,18 @@ describe('runBackup lifecycle', () => {
 
   it.each(['snapshot', 'reservation', 'failed'])('reports %s marker cleanup failure instead of publishing a completed backup', async (marker) => {
     const fsp = await actualFs();
-    const { saveState, getState } = await import('./backup.js');
+    const { getState } = await import('./backup.js');
     const oldIds = ['2020-01-01T00-00-00', '2020-01-02T00-00-00'];
     const snapshotsRoot = joinPath(destRoot, 'snapshots', machineHost);
     for (const id of oldIds) {
       await fsp.mkdir(joinPath(snapshotsRoot, id, 'data'), { recursive: true });
       await fsp.writeFile(joinPath(snapshotsRoot, id, 'manifest.json'), '{}');
     }
-    await saveState({ status: 'ok', lastSnapshotId: oldIds[1], error: null });
+    const priorRun = '2020-01-02T00:00:00.000Z';
+    await fsp.mkdir(joinPath(dataRoot, 'backup'), { recursive: true });
+    await fsp.writeFile(joinPath(dataRoot, 'backup', 'state.json'), JSON.stringify({
+      status: 'ok', lastSnapshotId: oldIds[1], lastRun: priorRun, error: null,
+    }));
     const io = { emit: vi.fn() };
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
@@ -5131,9 +5143,14 @@ describe('runBackup lifecycle', () => {
     const snapshotDir = joinPath(snapshotsRoot, snapshotId);
     const target = marker === 'reservation' ? joinPath(snapshotsRoot, `.${snapshotId}.in-progress`)
       : joinPath(snapshotDir, marker === 'failed' ? '.failed' : '.in-progress');
-    fs.unlink.mockImplementation((path, ...args) => path === target
-      ? Promise.reject(Object.assign(new Error('private destination details'), { code: 'EACCES' }))
-      : fsp.unlink(path, ...args));
+    fs.unlink.mockImplementation(async (path, ...args) => {
+      if (path !== target) return fsp.unlink(path, ...args);
+      if (marker === 'reservation') {
+        expect(await readJson(joinPath(dataRoot, 'backup', 'state.json')))
+          .toMatchObject({ lastSuccessfulRun: priorRun });
+      }
+      throw Object.assign(new Error('private destination details'), { code: 'EACCES' });
+    });
     const rejection = expect(pending).rejects.toMatchObject({
       code: 'BACKUP_SNAPSHOT_FINALIZATION_FAILED',
       message: `Backup snapshot finalization failed (${marker} marker, EACCES)`,
@@ -5142,7 +5159,7 @@ describe('runBackup lifecycle', () => {
     await rejection;
 
     expect(await getState()).toMatchObject({
-      status: 'error', lastSnapshotId: oldIds[1],
+      status: 'error', lastSnapshotId: oldIds[1], lastSuccessfulRun: priorRun,
       error: `Backup snapshot finalization failed (${marker} marker, EACCES)`,
     });
     expect(io.emit.mock.calls.some(([event]) => event === 'backup:completed')).toBe(false);
@@ -5374,7 +5391,11 @@ describe('runBackup lifecycle', () => {
   it.each(['ENOENT', 'EACCES', 'EIO'])('persists a failed preflight (%s) over prior success and permits repair', async (code) => {
     const { saveState, getState } = await import('./backup.js');
     const priorRun = '2026-01-01T00:00:00.000Z';
-    await saveState({ lastRun: priorRun, lastSnapshotId: 'previous-snapshot', status: 'ok', error: null });
+    const fsp = await actualFs();
+    await fsp.mkdir(joinPath(dataRoot, 'backup'), { recursive: true });
+    await fsp.writeFile(joinPath(dataRoot, 'backup', 'state.json'), JSON.stringify({
+      lastRun: priorRun, lastSnapshotId: 'previous-snapshot', status: 'ok', error: null,
+    }));
     const io = { emit: vi.fn() };
     const cause = Object.assign(new Error('private destination detail'), { code });
     fs.access.mockRejectedValueOnce(cause);
@@ -5388,6 +5409,7 @@ describe('runBackup lifecycle', () => {
     expect(state).toMatchObject({
       status: 'error',
       lastSnapshotId: 'previous-snapshot',
+      lastSuccessfulRun: priorRun,
       error: `${code === 'ENOENT' ? 'Backup destination not found' : 'Backup destination inaccessible'} (${code})`
     });
     expect(Date.parse(state.lastRun)).toBeGreaterThanOrEqual(attemptStarted);
