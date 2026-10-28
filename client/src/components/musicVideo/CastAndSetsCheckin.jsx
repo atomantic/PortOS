@@ -95,7 +95,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
       {stage.greyboxPending && <p role="status" className="text-xs text-port-warning">Greybox selection saved. Regenerate to render the set plates with it.</p>}
       <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview}
         actions={!working && stage.direction && stage.status !== 'skipped' && onRegenerateImages && onEditDirection
-          ? { busy, onRegenerate: onRegenerateImages, onEdit: onEditDirection } : null} />
+          ? { projectId: project.id, busy, onRegenerate: onRegenerateImages, onEdit: onEditDirection } : null} />
       <div className="flex flex-wrap gap-2">
         {sheet && (
           <button type="button" onClick={() => onOpenSheet(sheet.id)} className={`${buttonClass} border border-port-border`}>

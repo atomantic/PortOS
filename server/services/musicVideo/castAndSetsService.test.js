@@ -947,6 +947,8 @@ describe('Cast & Sets per-item actions', () => {
       return { project: { ...c, castAndSets: { ...c.castAndSets, plan } } };
     });
     const before = await current(project.id);
+    const staleView = await request(app).get(`/api/music-video/${project.id}/cast-and-sets`);
+    expect(staleView.body.stage.plan['test:2'].test).toBeUndefined();
     const stale = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 2, caption: 'new caption' }] });
     expect(stale.status).toBe(409);
     expect((await current(project.id)).castAndSets).toEqual(before.castAndSets);
@@ -955,9 +957,33 @@ describe('Cast & Sets per-item actions', () => {
       plan['test:2'].prompt = plan['test:2'].prompt.slice(0, -6);
       return { project: { ...c, castAndSets: { ...c.castAndSets, plan } } };
     });
-    expect((await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 2, caption: 'new caption' }] })).status).toBe(202);
+    const view = await request(app).get(`/api/music-video/${project.id}/cast-and-sets`);
+    expect(view.body.stage.plan['test:2'].test).toMatchObject({ action: expect.stringContaining('quiet moment'), caption: expect.any(String) });
+    expect((await current(project.id)).castAndSets.plan['test:2'].test).toBeUndefined();
+    expect((await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 2, caption: '' }] })).status).toBe(202);
     await runTo(project.id, 'review');
-    expect((await current(project.id)).castAndSets.direction.tests[1].caption).toBe('new caption');
+    expect((await current(project.id)).castAndSets.direction.tests[1].caption).toBe('');
+  });
+
+  it('keeps a combined test edit on the renamed look and respects an explicit different look', async () => {
+    runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, tests: [...DIRECTION.tests,
+      { setId: 'roof', look: 'Watch', action: 'looking out', caption: 'last beat' }] }) });
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    let saved = await current(project.id);
+    const looks = saved.castAndSets.direction.looks.map((look) => ({ ...look, originalName: look.name }));
+    looks[1].name = 'Rain';
+    const ambiguous = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ looks: [looks[0], { ...looks[1], originalName: looks[0].originalName }],
+      tests: [{ index: 1, look: 'Storm' }] });
+    expect(ambiguous.status).toBe(422);
+    const combined = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ looks,
+      tests: [{ index: 1, look: 'Storm', caption: 'new beat' }, { index: 2, look: 'Rain' }, { index: 3, look: 'Watch' }] });
+    expect(combined.status).toBe(202);
+    await runTo(project.id, 'review');
+    saved = await current(project.id);
+    expect(saved.castAndSets.direction.tests.map((test) => test.look)).toEqual(['Rain', 'Rain', 'Watch']);
+    expect(saved.castAndSets.direction.tests[0].caption).toBe('new beat');
   });
 
   it('reads the story, draws moods and other ages, then edits, removes and re-renders single items', async () => {

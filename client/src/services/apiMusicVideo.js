@@ -577,6 +577,8 @@ export const deleteMusicVideoDevArtifact = (id, artifactId, options = {}) =>
 // ---- Cast & Sets check-in (before the shot plan) ----
 // Start / regenerate / resume return at once (`{ project, stage }`); the stage
 // advances server-side and reports over the `music-video:cast-and-sets` socket event.
+export const getMusicVideoCastAndSets = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets`, options);
 export const startMusicVideoCastAndSets = (id, body = {}, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets`, { method: 'POST', body: JSON.stringify(body), ...options });
 // Body: { notes?: [{ text, target? }], keys?: [planKey] } — omitted notes = the sheet's open notes;

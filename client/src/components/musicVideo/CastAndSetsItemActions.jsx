@@ -1,6 +1,8 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
+import useMounted from '../../hooks/useMounted.js';
+import { getMusicVideoCastAndSets } from '../../services/apiMusicVideo.js';
 
 const buttonClass = 'flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs sm:min-h-0 disabled:opacity-50';
 const fieldClass = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm';
@@ -110,30 +112,66 @@ function ItemEditor({ editor, label, busy, onSave, onCancel }) {
  * member, set, test or other age from the sheet, and add another age to the
  * protagonist. Shown only while the stage is not working.
  */
-export default function CastAndSetsItemActions({ item, direction, busy, onRegenerate, onEdit }) {
+export default function CastAndSetsItemActions({ item, direction, revision, projectId, busy, onRegenerate, onEdit }) {
   const [mode, setMode] = useState(null);
-  const editor = editorFor(item, direction);
+  const [resolution, setResolution] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState('');
+  const mounted = useMounted();
+  const identity = JSON.stringify([projectId, revision, item.key, item.testIndex, item.setId, item.prompt]);
+  const currentIdentity = useRef(identity);
+  currentIdentity.current = identity;
+  const resolvedTest = resolution?.identity === identity ? resolution.test : null;
+  const currentMode = mode === 'edit' && resolution && !resolvedTest ? null : mode;
+  const editor = editorFor(resolvedTest ? { ...item, test: resolvedTest } : item, direction);
   const label = item.label || item.key;
   const close = () => setMode(null);
   const save = async (edits) => { if (await onEdit(edits)) close(); };
+  const edit = async () => {
+    if (currentMode === 'edit') { close(); return; }
+    setNotice('');
+    if (item.kind !== 'test' || item.test) { setResolution(null); setMode('edit'); return; }
+    setLoading(true);
+    try {
+      const { stage } = await getMusicVideoCastAndSets(projectId, { silent: true });
+      if (!mounted.current) return;
+      const fresh = stage?.plan?.[item.key];
+      if (currentIdentity.current !== identity || stage?.revision !== revision || fresh?.prompt !== item.prompt
+        || fresh?.testIndex !== item.testIndex || fresh?.setId !== item.setId) {
+        setNotice('This test changed. Try editing it again.');
+        return;
+      }
+      if (!fresh?.test) {
+        setNotice('Rebuild the check-in before editing this test.');
+        return;
+      }
+      setResolution({ identity, test: fresh.test });
+      setMode('edit');
+    } catch {
+      if (mounted.current && currentIdentity.current === identity) setNotice('Could not load this test. Try again.');
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
+  };
+  const actionBusy = busy || loading;
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
-        <button type="button" disabled={busy} onClick={() => onRegenerate([item.key])} className={buttonClass} aria-label={`Regenerate ${label}`}>
+        <button type="button" disabled={actionBusy} onClick={() => onRegenerate([item.key])} className={buttonClass} aria-label={`Regenerate ${label}`}>
           <RotateCcw size={12} aria-hidden="true" /> Regenerate
         </button>
         {editor && !editor.missing && (
-          <button type="button" disabled={busy} onClick={() => setMode(mode === 'edit' ? null : 'edit')} aria-expanded={mode === 'edit'} className={buttonClass} aria-label={`Edit ${label}`}>
-            <Pencil size={12} aria-hidden="true" /> Edit
+          <button type="button" disabled={actionBusy} onClick={edit} aria-expanded={currentMode === 'edit'} className={buttonClass} aria-label={`Edit ${label}`}>
+            <Pencil size={12} aria-hidden="true" /> {loading ? 'Loading…' : 'Edit'}
           </button>
         )}
         {item.kind === 'character' && (direction?.protagonist?.forms || []).length < 3 && (
-          <button type="button" disabled={busy} onClick={() => setMode(mode === 'add' ? null : 'add')} aria-expanded={mode === 'add'} className={buttonClass}>
+          <button type="button" disabled={actionBusy} onClick={() => setMode(mode === 'add' ? null : 'add')} aria-expanded={mode === 'add'} className={buttonClass}>
             <Plus size={12} aria-hidden="true" /> Add another age
           </button>
         )}
         {editor?.removeEdits && !editor.missing && mode !== 'remove' && (
-          <button type="button" disabled={busy} onClick={() => setMode('remove')} className={`${buttonClass} text-port-error`} aria-label={`Remove ${label}`}>
+          <button type="button" disabled={actionBusy} onClick={() => setMode('remove')} className={`${buttonClass} text-port-error`} aria-label={`Remove ${label}`}>
             <Trash2 size={12} aria-hidden="true" /> Remove
           </button>
         )}
@@ -142,7 +180,8 @@ export default function CastAndSetsItemActions({ item, direction, busy, onRegene
             ariaLabel={`Remove ${label} from the sheet`} confirmAriaLabel={`Remove ${label} from the sheet`} onConfirm={() => save(editor.removeEdits())} onCancel={close} />
         )}
       </div>
-      {mode === 'edit' && <ItemEditor editor={editor} label={label} busy={busy} onSave={save} onCancel={close} />}
+      {notice && <p role="status" className="text-xs text-port-warning">{notice}</p>}
+      {currentMode === 'edit' && <ItemEditor editor={editor} label={label} busy={busy} onSave={save} onCancel={close} />}
       {mode === 'add' && <ItemEditor editor={editorFor(item, direction, true)} label="another age" busy={busy} onSave={save} onCancel={close} />}
     </div>
   );
