@@ -22,7 +22,7 @@ import { readFileSync } from 'fs';
 import { chmod } from 'fs/promises';
 import { tryReadFileStrict, atomicWrite } from './fileUtils.js';
 import { createSingleFlight } from './singleFlight.js';
-import { PORTOS_ENV_PATH } from './portosEnv.js';
+import { PORTOS_ENV_PATH, queuePortosEnvWrite } from './portosEnv.js';
 
 const CIPHER = 'aes-256-gcm';
 const IV_BYTES = 12;
@@ -115,11 +115,11 @@ export function ensureVaultKey({ envPath = resolveEnvPath() } = {}) {
   // Single-flight per env path: two concurrent first writes must share ONE
   // generation — otherwise each mints its own key, one wins the .env write,
   // and the loser's freshly encrypted row is unrecoverable after restart.
-  return keyProvisioning.run(envPath, () => provisionVaultKey(envPath));
+  return keyProvisioning.run(envPath, () => queuePortosEnvWrite(envPath, () => provisionVaultKey(envPath)));
 }
 
 async function provisionVaultKey(envPath) {
-  // Re-check inside the flight: a caller that raced in behind an adopt/generate
+  // Re-check inside the shared .env queue and flight: a caller behind an adopt/generate
   // (or a fresh call after the slot cleared) must not rotate an existing key.
   if (parseKey(process.env.PRIVACY_VAULT_KEY)) return { generated: false };
 
