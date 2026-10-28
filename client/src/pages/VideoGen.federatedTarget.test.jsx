@@ -83,6 +83,26 @@ describe('VideoGen federated render target', () => {
     }
   });
 
+  it('keeps a ready peer usable when the local model catalog fails', async () => {
+    state.getVideoGenModelContext.mockRejectedValue(new Error('offline'));
+    await startRender();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the model list');
+    fireEvent.change(screen.getByRole('combobox', { name: /generation target/i }), { target: { value: 'peer-example' } });
+    await findEnabledByRole('button', { name: /^Generate$/ });
+    expect(screen.queryByText(/Could not load the model list/)).toBeNull();
+    expect(screen.getByRole('button', { name: /Add to queue/ })).toBeEnabled();
+  });
+
+  it('keeps a hosted backend usable when the local model catalog fails', async () => {
+    state.getVideoGenModelContext.mockRejectedValue(new Error('offline'));
+    state.getVideoGenStatus.mockResolvedValue(videoGenStatus([], { falEnabled: true }));
+    await startRender();
+    fireEvent.click(screen.getByRole('button', { name: 'fal.ai' }));
+    await findEnabledByRole('button', { name: /^Generate$/ });
+    expect(screen.queryByText(/Could not load the model list/)).toBeNull();
+    expect(screen.getByRole('button', { name: /Add to queue/ })).toBeEnabled();
+  });
+
   // The local model dropdown lists models the peer does not have. Leaving it
   // visible would let a stale selection read as the model that rendered the clip.
   it('replaces the local model dropdown with the peer’s advertised models', async () => {
