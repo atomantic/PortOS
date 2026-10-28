@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FileText } from 'lucide-react';
 import { getMusicVideoFestivalPacket, previewMusicVideoFestivalPacket, saveMusicVideoFestivalPacket } from '../../services/apiMusicVideo.js';
 import { copyToClipboard } from '../../lib/clipboard.js';
@@ -19,9 +19,12 @@ function PacketEditor({ project }) {
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
   const [removing, setRemoving] = useState(null);
+  const previewGeneration = useRef(0);
   const renderId = project.renderHistoryId ?? null;
   useEffect(() => {
     let active = true;
+    previewGeneration.current += 1;
+    setPreview(null);
     getMusicVideoFestivalPacket(project.id, { silent: true }).then(result => {
       if (!active) return;
       setData({ ...result, renderId });
@@ -43,8 +46,9 @@ function PacketEditor({ project }) {
     setSaved(JSON.stringify(result.packet));
   });
   const makePreview = () => run(async () => {
+    const generation = previewGeneration.current;
     const result = await previewMusicVideoFestivalPacket(project.id, packet, { silent: true });
-    setPreview({ ...result, renderId });
+    if (generation === previewGeneration.current) setPreview({ ...result, renderId });
   });
   const selected = id => packet.include.includes(id);
   const toggle = id => edit({ ...packet, include: selected(id) ? packet.include.filter(value => value !== id) : [...packet.include, id] });

@@ -25,7 +25,7 @@ const URL_FIELDS = new Set(['screener', 'poster', 'still', 'captions']);
 
 // A packet is deliberately portable text. Reject private references rather than
 // silently rewriting creative input or allowing them into the peer/export path.
-export function festivalPublicUrl(value) {
+function festivalPublicUrl(value) {
   const parsed = z.string().url().safeParse(value);
   if (!parsed.success) return false;
   const url = new URL(value);
@@ -39,7 +39,9 @@ export function festivalSafeText(value) {
   if (/\b(?:password|passcode|api[ _-]?key|secret|token|authorization|cookie|card[ _-]?number|cvv)\s*[:=]|\bBearer\s+|\b(?:sk-|ghp_|github_pat_)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+/i.test(value)) return false;
   if (/(?:^|[\s('"=])(?:[a-z]:[\\/]|~[\\/]|\/(?!\/))\S|\\\\|\b(?:file|data|smb|ssh):|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[\w.-]+\.(?:local|internal|lan|home|ts\.net)\b|\blocalhost\b/i.test(value)) return false;
   const links = value.match(/(?:[a-z]+:\/\/|\/\/)[^\s<>"')]+/gi) || [];
-  return links.every(festivalPublicUrl);
+  // Prose punctuation is not part of the link; dedicated URL fields below
+  // still validate the exact value without this sentence-token adjustment.
+  return links.every(link => festivalPublicUrl(link.replace(/[.,;:!?]+$/, '')));
 }
 const safeText = z.string().max(12000).refine(festivalSafeText, 'Remove credentials, payment details and private paths or network references. Use public HTTPS links without access tokens.');
 const fields = Object.fromEntries(FESTIVAL_FIELDS.map(({ id }) => [id, URL_FIELDS.has(id)

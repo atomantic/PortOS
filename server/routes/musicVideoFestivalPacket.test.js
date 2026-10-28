@@ -68,6 +68,16 @@ describe('festival packet routes and persisted project workflow', () => {
     expect((await call('post', project.id, packet, '/preview')).measurements.status).toBe('unavailable');
   });
 
+  it('preserves public links with sentence punctuation in prose while dedicated URL fields remain strict', async () => {
+    const project = await projects.createProject({ name: 'Prose fixture' });
+    const prose = 'See https://example.com. More at https://example.org/film, including credits.';
+    const packet = { version: 1, fields: { shortSynopsis: prose }, include: ['shortSynopsis'] };
+    const saved = await call('put', project.id, packet);
+    expect(saved.packet.fields.shortSynopsis).toBe(prose);
+    expect((await call('post', project.id, saved.packet, '/preview')).text).toContain(prose);
+    await expect(call('put', project.id, { ...packet, fields: { screener: 'https://example.com.' } })).rejects.toThrow();
+  });
+
   it.each(['password: hidden', 'https://example.com/film?token=hidden', 'https://studio.ts.net/film', '/Users/example/private.mp4', 'C:\\private\\film.mp4', 'http://192.168.1.2/film', 'https://name:secret@example.com/film'])('rejects unsafe packet text before persistence and export: %s', async value => {
     const project = await projects.createProject({ name: 'Privacy fixture' });
     const packet = { version: 1, fields: { shortSynopsis: value }, include: ['shortSynopsis'] };

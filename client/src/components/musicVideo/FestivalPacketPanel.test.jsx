@@ -51,6 +51,21 @@ describe('Festival packet editing and selected export', () => {
     await act(async () => { second.rerender(<FestivalPacketPanel project={{ ...project, renderHistoryId: 'render-b' }} />); });
     expect(screen.getByRole('button', { name: 'Copy selected packet' })).toBeDisabled();
     expect(screen.getByLabelText('Title')).toHaveValue('Festival title');
+    await act(async () => { second.rerender(<FestivalPacketPanel project={project} />); });
+    expect(screen.getByRole('button', { name: 'Copy selected packet' })).toBeDisabled();
+  });
+
+  it('drops an in-flight preview after switching renders away and back', async () => {
+    let finishPreview;
+    api.previewMusicVideoFestivalPacket.mockImplementationOnce(() => new Promise(resolve => { finishPreview = resolve; }));
+    const view = render(<FestivalPacketPanel project={project} />);
+    await screen.findByLabelText('Title');
+    fireEvent.click(screen.getByRole('button', { name: 'Preview selected export' }));
+    await act(async () => { view.rerender(<FestivalPacketPanel project={{ ...project, renderHistoryId: 'render-b' }} />); });
+    await act(async () => { view.rerender(<FestivalPacketPanel project={project} />); });
+    await act(async () => { finishPreview({ text: 'Stale preview', measurements: measured }); });
+    expect(screen.queryByLabelText('Exact text to copy or download')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Copy selected packet' })).toBeDisabled();
   });
 
   it('removes a festival note at the limit and saves the removal', async () => {
