@@ -72,9 +72,13 @@ export async function withData(fn) {
   return withLock(async () => {
     const data = await loadData();
     const previousAuthority = authorityProjection(data);
-    const result = await fn(data);
+    // Register notifications during mutation; publish only committed state while
+    // still holding the writer lock, so a later write cannot overtake them.
+    const notifications = [];
+    const result = await fn(data, notify => notifications.push(notify));
     if (previousAuthority !== authorityProjection(data)) await executionAuthorityGuard?.();
     await saveData(data);
+    for (const notify of notifications) notify();
     return result;
   });
 }
