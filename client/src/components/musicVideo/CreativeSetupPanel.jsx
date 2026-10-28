@@ -12,6 +12,9 @@ import { ingredientPath } from '../../lib/creativeLibraries.js';
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const kinds = [['character', 'Cast'], ['place', 'Places'], ['object', 'Objects']];
 const fields = { character: 'characters', place: 'places', object: 'objects' };
+// Unchecked subjects are saved to these catalog pages on Cast & Sets approval
+// and offered by the importer; `localOnly` opts a subject out of both.
+const catalogPages = { character: 'Casting', place: 'Environments', object: 'Objects' };
 
 // A catalog record as a canon-shaped entry, so its image joins the look
 // references the same way a universe entry's does. Attached catalog media wins.
@@ -168,7 +171,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
         </div>
         {subject.ingredientId
           ? <Link className="text-xs text-port-accent" target="_blank" to={ingredientPath({ id: subject.ingredientId, type: subject.kind })}>Open in catalog</Link>
-          : <div className="flex items-center gap-2 min-h-[32px]"><input id={idFor(`local-${subject.id}`)} type="checkbox" checked={!!subject.localOnly} onChange={(e) => setDraft((d) => ({ ...d, subjects: d.subjects.map((s) => (s.id === subject.id ? { ...s, localOnly: e.target.checked || undefined } : s)) }))} /><label htmlFor={idFor(`local-${subject.id}`)} className="text-xs text-port-text-muted">Keep in this video only</label></div>}
+          : <div className="flex items-center gap-2 min-h-[32px]"><input id={idFor(`local-${subject.id}`)} type="checkbox" checked={!!subject.localOnly} onChange={(e) => setDraft((d) => ({ ...d, subjects: d.subjects.map((s) => (s.id === subject.id ? { ...s, localOnly: e.target.checked || undefined } : s)) }))} /><label htmlFor={idFor(`local-${subject.id}`)} className="text-xs text-port-text-muted">Don&apos;t save to {catalogPages[subject.kind]}</label></div>}
         <label htmlFor={idFor(`description-${subject.id}`)} className="sr-only">Description for {subject.name}</label>
         <textarea id={idFor(`description-${subject.id}`)} rows={2} maxLength={1000} className={inputClass} value={subject.description || ''} onChange={(e) => setDraft((d) => ({ ...d, subjects: d.subjects.map((s) => s.id === subject.id ? { ...s, description: e.target.value } : s) }))} />
       </li>)}</ul>
