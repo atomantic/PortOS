@@ -19,6 +19,7 @@ import { RELEASE_SYNC_FROZEN_METADATA_KEYS } from '../lib/releaseSynchronization
  */
 
 import { DEVELOPMENT_ACTIVE_STATUSES, developmentWorkIdentity, sameDevelopmentWork } from '../lib/developmentWorkIdentity.js';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, hasKnownPrefix, toRepresentableTask, PRIORITY_VALUES } from '../lib/taskParser.js';
@@ -529,6 +530,22 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
   }
   const tasks = await readTaskFile(taskType);
 
+  if (taskData.metadata?.cleanupRefillSource) {
+    const valid = await (await import('./swarmCleanupDelivery.js')).validCleanupRefillSource(
+      taskData.metadata.cleanupRefillSource, taskData.metadata.analysisType, taskData.metadata.app,
+    ).catch(() => false);
+    if (!valid) return { error: 'The swarm cleanup continuation source changed before admission' };
+  }
+
+  // A verified, delivered swarm may still own retained checkouts. Its cleanup
+  // task stays in progress, but it no longer owns the unpinned drain slot.
+  // Resolve the server's agent receipt under the same lock as admission.
+  const cleanupOnlyIds = isTruthyMeta(taskData.metadata?.perpetual)
+    && isTruthyMeta(taskData.metadata?.claimFlow) && !taskData.metadata?.claimTarget
+    ? await (await import('./swarmCleanupDelivery.js')).verifiedCleanupSwarmTaskIds(tasks,
+      { allowSourceAgentId: taskData.metadata?.cleanupRefillSource }).catch(() => new Set())
+    : new Set();
+
   // One state lock covers BOTH queues: manual and autonomous producers
   // must acquire the same durable work identity even with different titles.
   const newWorkIdentity = developmentWorkIdentity(taskData);
@@ -536,7 +553,7 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
   if (newWorkIdentity) {
     const other = await readTaskFile(taskType === 'user' ? 'internal' : 'user');
     dependencies[taskType === 'user' ? 'internal' : 'user'] = listSnapshots.get(other).version;
-    const owner = [...tasks, ...other].find(task => task.id !== ignoreTaskId
+    const owner = [...tasks, ...other].find(task => task.id !== ignoreTaskId && !cleanupOnlyIds.has(task.id)
       && DEVELOPMENT_ACTIVE_STATUSES.has(task.status) && sameDevelopmentWork(task, taskData)
       // Targeted claims and the backlog drain coexist in either admission order.
       // Otherwise a completed drain cannot refill while a targeted claim runs:
@@ -580,7 +597,7 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
   // one blocked duplicate per cadence tick, forever (nothing reaps blocked
   // tasks automatically).
   const duplicate = tasks.find(t =>
-    t.id !== ignoreTaskId &&
+    t.id !== ignoreTaskId && !cleanupOnlyIds.has(t.id) &&
     (t.status === 'pending' || t.status === 'in_progress' || t.status === 'blocked') &&
     firstLine(t.description).toLowerCase() === normalizedDesc &&
     (t.metadata?.app || null) === targetApp &&

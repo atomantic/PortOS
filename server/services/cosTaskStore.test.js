@@ -59,6 +59,7 @@ vi.mock('./cosTaskRepository.js', async (importOriginal) => {
 
 vi.mock('./cosState.js', async () => ({
   loadState: vi.fn(async () => mock.state),
+  readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: mock.state.agents })),
   withStateLock: (await import('../lib/fileWriteQueue.js')).createFileWriteQueue(),
 }));
 
@@ -2940,6 +2941,61 @@ describe('cosTaskStore — a repaired task is returned exactly as it is persiste
 });
 
 describe('shared development work admission', () => {
+  it('admits one new drain after exact delivery proof while retaining the original cleanup task', async () => {
+    const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+    const identity = await import('./instanceIdentity.js');
+    const local = vi.spyOn(identity, 'getInstanceId').mockResolvedValue('fixture-local');
+    const start = '2026-01-01T00:00:00.000Z';
+    const branches = ['claim/issue-1', 'claim/issue-2'];
+    const heads = ['a'.repeat(40), 'b'.repeat(40)];
+    const source = { id: 'sys-swarm-original', status: 'in_progress', priority: 'LOW', description: 'Claim next issue', metadata: {
+      app: 'example', analysisType: 'claim-issue', perpetual: true, claimFlow: true, swarmCount: 6,
+      claimedBy: 'fixture-local', claimedAt: start, lastSpawnedAt: start, totalSpawnCount: 1,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-original',
+      taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } },
+    } };
+    const agent = { id: 'agent-original', taskId: source.id, status: 'completed', startedAt: start, completedAt: '2026-01-01T00:02:00.000Z',
+      result: { executionSuccess: true, cleanupPending: true, deliveryRecoveryOwned: true,
+        taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } },
+      metadata: { instanceId: 'fixture-local', taskApp: 'example', taskAnalysisType: 'claim-issue', configClaimFlow: true, workspacePath: '/repo', isWorktree: false,
+        checkoutCapture: { status: 'captured' }, claimBranches: branches, claimReleasedBranches: [],
+        completionTaskDispatch: { taskId: source.id, taskType: 'internal', expected: [
+          ['claimedBy', 'fixture-local'], ['claimedAt', start], ['lastSpawnedAt', start], ['totalSpawnCount', 1],
+        ] },
+        completedCheckouts: branches.map((branch, index) => ({ version: 1, agentId: 'agent-original', startedAt: start,
+          capturedAt: '2026-01-01T00:01:00.000Z', repoPath: '/repo', path: `/tree/${index}`, branch, head: heads[index],
+          incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } })),
+        swarmCleanupDelivery: { version: 1, continuationIssued: true, branches: branches.map((branch, index) => ({ branch, head: heads[index], prUrl: `https://github.com/a/b/pull/${index + 1}` })) },
+      } };
+    await seed('internal', [source]);
+    getAgentRecord.mockResolvedValue(agent);
+    const next = id => ({ id, status: 'pending', priority: 'LOW', description: 'Claim next issue', metadata: {
+      app: 'example', analysisType: 'claim-issue', perpetual: true, claimFlow: true,
+    } });
+    try {
+      mock.state.agents.rival = { id: 'rival', taskId: source.id, status: 'running' };
+      expect(await addTask(next('sys-swarm-raced'), 'internal', { raw: true }))
+        .toMatchObject({ id: source.id, duplicate: true });
+      delete mock.state.agents.rival;
+      const first = await addTask(next('sys-swarm-next'), 'internal', { raw: true });
+      expect(first).toMatchObject({ id: 'sys-swarm-next', status: 'pending' });
+      expect(await addTask(next('sys-swarm-duplicate'), 'internal', { raw: true }))
+        .toMatchObject({ id: 'sys-swarm-next', duplicate: true });
+      expect((await getTaskById(source.id))).toMatchObject({ status: 'in_progress', metadata: { deliveryRecovery: 'cleanup' } });
+      expect(agent.metadata.completedCheckouts).toHaveLength(2);
+    } finally { local.mockRestore(); }
+  });
+
+  it('does not release the drain slot for an unverified cleanup claim', async () => {
+    const source = { id: 'sys-swarm-held', status: 'in_progress', priority: 'LOW', description: 'Claim next issue', metadata: {
+      app: 'example', analysisType: 'claim-issue', perpetual: true, claimFlow: true,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-held',
+    } };
+    await seed('internal', [source]);
+    expect(await addTask({ id: 'swarm-next', status: 'pending', priority: 'LOW', description: source.description,
+      metadata: { app: 'example', analysisType: 'claim-issue', perpetual: true, claimFlow: true } }, 'internal', { raw: true }))
+      .toMatchObject({ id: source.id, duplicate: true });
+  });
   it('matches a manual PR resolution and autonomous follow-up across task files and titles', async () => {
     const metadata = { app: 'example', reviewLoopPRUrl: 'https://github.com/acme/example/pull/42' };
     const manual = await addTask({ description: 'Manual resolve', metadata }, 'user');

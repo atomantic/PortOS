@@ -126,6 +126,21 @@ describe('scheduled managed-app queue admission', () => {
     expect(recordExecution).toHaveBeenCalledExactlyOnceWith('task:security', 'example-app');
   });
 
+  it('replays a delivered swarm only for its original app and task with an idempotent queue key', async () => {
+    getActiveApps.mockResolvedValue([{ id: 'example-app', name: 'Example App' }, { id: 'other-app', name: 'Other App' }]);
+    due = [{ ...drain, taskType: 'claim-issue' }, dueCron('do-release')];
+    const result = await run([], { continuationSourceAgentId: 'agent-source',
+      perpetualContinuation: { appId: 'example-app', taskType: 'claim-issue' }, wakeAfterRecord: false });
+    expect(result).toEqual({ queued: 1, continuationSatisfied: true });
+    expect(prepareTask).toHaveBeenCalledOnce();
+    expect(prepareTask.mock.calls[0][0]).toBe('claim-issue');
+    expect(persistTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'sys-swarm-refill-agent-source',
+      metadata: expect.objectContaining({ app: 'example-app', cleanupRefillSource: 'agent-source' }) }),
+    'internal', expect.objectContaining({ idempotencyKey: 'swarm-cleanup-refill:agent-source' }));
+    expect(recordExecution).toHaveBeenCalledExactlyOnceWith('task:claim-issue', 'example-app');
+    getActiveApps.mockResolvedValue([{ id: 'example-app', name: 'Example App' }]);
+  });
+
   it('forwards completion exclusions and respects a disabled improvement gate', async () => {
     await run([queuedTask('do-release', 'in_progress')], { ignoreTaskId: 'sys-example-do-release', wakeAfterRecord: false });
     expect(prepareTask).toHaveBeenCalledWith('do-release', expect.anything(), state, { ignoreTaskId: 'sys-example-do-release' });

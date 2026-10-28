@@ -157,6 +157,7 @@ import {
   recordWorkspaceCheckoutRetirement,
   applyOnDemandRunResets,
   queuePerpetualRefill,
+  acknowledgeSwarmCleanupRefill,
   isRefillRequest,
   ON_DEMAND_ORIGINS,
   recordTaskTypeFailure,
@@ -2431,6 +2432,37 @@ describe('taskSchedule', () => {
       })
       expect(cosEvents.emit).not.toHaveBeenCalled()
       expect(recordUserAction).not.toHaveBeenCalled()
+    })
+
+    it('replays a cleanup refill without losing or duplicating its durable request', async () => {
+      mockSchedule({ tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } } })
+      const first = await queuePerpetualRefill('claim-issue', 'app-1', { cleanupSourceAgentId: 'agent-old' })
+      let saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+      expect(saved.onDemandRequests).toEqual([expect.objectContaining({ id: first.id, cleanupSourceAgentId: 'agent-old' })])
+      expect(saved.swarmCleanupRefillPending['agent-old'].id).toBe(first.id)
+      // An interrupted enqueue with no handoff must replay the same request id.
+      saved.onDemandRequests = []
+      readJSONFile.mockResolvedValue(saved)
+      const replay = await queuePerpetualRefill('claim-issue', 'app-1', { cleanupSourceAgentId: 'agent-old' })
+      expect(replay).toMatchObject({ id: first.id, alreadyQueued: true })
+      saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+      expect(saved.onDemandRequests).toHaveLength(1)
+      expect(saved.swarmCleanupRefillPending['agent-old'].id).toBe(first.id)
+    })
+
+    it('keeps an accepted refill receipt until its source has been recorded', async () => {
+      mockSchedule({ tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } } })
+      const first = await queuePerpetualRefill('claim-issue', 'app-1', { cleanupSourceAgentId: 'agent-old' })
+      const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+      saved.onDemandRequests = []
+      saved.onDemandHandoffs = { [first.id]: { status: 'accepted' } }
+      readJSONFile.mockResolvedValue(saved)
+      const replay = await queuePerpetualRefill('claim-issue', 'app-1', { cleanupSourceAgentId: 'agent-old' })
+      expect(replay).toMatchObject({ id: first.id, alreadyQueued: true })
+      expect(saved.onDemandRequests).toEqual([])
+      await acknowledgeSwarmCleanupRefill('agent-old')
+      const acknowledged = JSON.parse(writeFile.mock.calls.at(-1)[1])
+      expect(acknowledged.swarmCleanupRefillPending['agent-old']).toBeUndefined()
     })
 
     // Operator-action ledger (#5594). Only a human pressing Run Now is an

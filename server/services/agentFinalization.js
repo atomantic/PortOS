@@ -1567,7 +1567,7 @@ async function sidelineFailedAgentProvider({ providerId, verdict, terminatedByUs
   }
 }
 
-async function recordScheduledAgentOutcome({ agentId, task, verdict, terminatedByUser, hookResult }) {
+async function recordScheduledAgentOutcome({ agentId, task, verdict, terminatedByUser, hookResult, cleanupPending = false }) {
   // Type-level consecutive-failure ledger (#2616): feed the per-type
   // backoff/auto-park in taskSchedule. Only SCHEDULED task types carry
   // `metadata.analysisType`; user/ad-hoc tasks don't participate — so this gate
@@ -1578,6 +1578,10 @@ async function recordScheduledAgentOutcome({ agentId, task, verdict, terminatedB
   // types back off" are genuinely different questions. The pure
   // resolveTypeFailureSignal decides success vs failure vs skip — including the
   // exit-0-but-unparseable-output case that must count as a failure.
+  // Cleanup is a durable, still-pending delivery obligation, not a provider
+  // failure. Counting it here eventually failure-parks an otherwise progressing
+  // perpetual drain before the independent delivery/retirement verifier runs.
+  if (cleanupPending) return;
   const scheduledType = task?.metadata?.analysisType || null;
   if (scheduledType) {
     const signal = resolveTypeFailureSignal({
@@ -2126,7 +2130,7 @@ async function finalizeAgentInCompletionContext({
 
   await sidelineFailedAgentProvider({ providerId, verdict, terminatedByUser });
 
-  await recordScheduledAgentOutcome({ agentId, task, verdict: deliveryVerdict, terminatedByUser, hookResult });
+  await recordScheduledAgentOutcome({ agentId, task, verdict: deliveryVerdict, terminatedByUser, hookResult, cleanupPending: capturePending });
 
   await processAgentCompletion(agentId, task, deliverySuccess, outputBuffer);
 
