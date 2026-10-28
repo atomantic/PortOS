@@ -345,6 +345,33 @@ async function verifyHeldArchive(repoPath, dir, release, work = archiveWork()) {
   return { repoPath, archiveDir: dir, archivedAt: saved.archivedAt, evidenceDigest: evidenceHash(digest + bundleHash), kind: 'held', recheck };
 }
 
+/** Inspect an existing service archive without creating or modifying one. The
+ * retirement receipt supplies its generation and location; neither a path nor
+ * an archive manifest alone grants ownership. */
+export async function inspectLegacyReleaseArchive(repoPath, release, archiveDir, { cosDir, requireCurrent = false } = {}) {
+  const root = resolve(heldCheckoutArchiveRoot(cosDir));
+  const dir = resolve(archiveDir || '');
+  const relativeDir = relative(root, dir);
+  if (!relativeDir || isAbsolute(relativeDir) || relativeDir.includes(sep) || relativeDir === '..') throw new Error('legacy-archive-location-invalid');
+  const proof = await verifyHeldArchive(repoPath, dir, release);
+  const lifecyclePath = await archiveFile(dir, join(dir, 'administration/gitdir/portos-local-review-lifecycle')).catch(error => {
+    if (error.code === 'ENOENT') throw Object.assign(new Error('legacy-review-lifecycle-unverified'), { code: 'legacy-review-lifecycle-unverified' });
+    throw error;
+  });
+  const lifecycle = JSON.parse((await archiveBytes(lifecyclePath, archiveWork(), 64 * 1024)).toString('utf8'));
+  if (requireCurrent) {
+    const { manifest } = await archiveManifest(dir);
+    const [content, administration] = await archiveSnapshots({ path: release.path, branch: `refs/heads/${release.branch}`, head: release.head }, repoPath, null);
+    if (administration.fingerprint !== manifest.administration.fingerprint
+      || evidenceHash(content.indexDiff) !== manifest.patchHashes?.index || evidenceHash(content.worktreeDiff) !== manifest.patchHashes?.worktree
+      || JSON.stringify(content.files) !== JSON.stringify(manifest.captured.files)
+      || JSON.stringify(content.symlinks) !== JSON.stringify(manifest.captured.symlinks)
+      || JSON.stringify(content.gitlinks) !== JSON.stringify(manifest.captured.gitlinks)) throw new Error('legacy-archive-content-changed');
+  }
+  if (!await proof.recheck()) throw new Error('legacy-archive-changed');
+  return { archiveDir: dir, archivedAt: proof.archivedAt, evidenceDigest: proof.evidenceDigest, lifecycle, recheck: proof.recheck };
+}
+
 async function historicalCheckoutAbsent(release, trees) {
   const present = await lstat(release.path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
   return !present && trees.length > 0 && !trees.some(tree => tree.path === release.path || (release.branch && shortBranch(tree.branch) === release.branch));
@@ -1737,6 +1764,9 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   const second = await matchRelease(repoPath, release);
   if (!second.tree) return { ok: false, reason: second.reason };
   if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return { ok: false, reason: 'checkout-identity-changed' };
+  const { validateLegacyReleaseRetirement } = await import('./releaseSynchronization.js');
+  const legacyCurrent = unlocked => validateLegacyReleaseRetirement({ ...release, repoPath, checkoutIdentity }, { unlocked }).catch(() => false);
+  if (!await legacyCurrent(false)) return { ok: false, reason: 'legacy-release-recovery-changed' };
   await opts.beforeMutation?.();
   if (release.locked) {
     const unlocked = await execGit(['worktree', 'unlock', tree.path], repoPath).then(() => true, () => false);
@@ -1751,6 +1781,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
     if (!await matchesObservedCheckoutIncarnation(repoPath, release)) return 'checkout-identity-changed';
     if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return 'checkout-identity-changed';
+    if (!await legacyCurrent(release.locked)) return 'legacy-release-recovery-changed';
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
     const [reason, fresh, porcelain] = await Promise.all([
       ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled }),

@@ -6,6 +6,12 @@ import {
 } from './hostControlRoutes.js';
 import { LLM_DRILL_TYPES } from './postDrillTypes.js';
 
+it('gates legacy release recovery review and acceptance as host control', () => {
+  for (const action of ['review', 'accept']) {
+    expect(isHostControlRoute('POST', `/api/cos/schedule/release-synchronization/legacy/${action}`)).toBe(true);
+  }
+});
+
 describe('voice config instruction paths (#10990)', () => {
   const stored = {
     llm: {

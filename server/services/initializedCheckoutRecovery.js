@@ -274,6 +274,10 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
           .then(() => null, error => error.message || 'checkout-not-disposable');
         if (hold) return { ok: false, reason: hold };
       }
+      const legacyCurrent = deps.validateLegacyReleaseRetirement || (await import('./releaseSynchronization.js')).validateLegacyReleaseRetirement;
+      if (!await legacyCurrent({ ...input.release, repoPath: ctx.repoPath, checkoutIdentity }).catch(() => false)) {
+        return { ok: false, reason: 'legacy-release-recovery-changed' };
+      }
       const validationEvidence = forgeValidationEvidence(prepared.review);
       const removed = await runGit(['worktree', 'remove', '--force', input.release.path], ctx.repoPath, { ignoreExitCode: true }).catch(() => null);
       if (!removed || removed.exitCode !== 0) {
