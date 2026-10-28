@@ -194,6 +194,9 @@ export function ReleasePublicationLine({ publication, synchronization, className
           Blocker: {sync.blocker}
         </div>
       )}
+      {syncStatus === 'blocked' && sync?.nextAction && (
+        <div className="text-xs text-port-text-muted">Next action: {sync.nextAction}</div>
+      )}
     </div>
   );
 }

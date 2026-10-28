@@ -6,12 +6,13 @@ import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { realpath } from 'node:fs/promises';
+import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { z } from 'zod';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { RELEASE_SYNC_POLICY_KEYS, RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS,
-  effectiveReleaseSynchronization, publisherCandidateSeed } from '../lib/releaseSynchronization.js';
+  effectiveReleaseSynchronization, publisherCandidateSeed, publisherCandidateTarget, legacyPublisherRecovery } from '../lib/releaseSynchronization.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { storedForm } from '../lib/cosTaskRows.js';
 import { cosEvents } from './cosEvents.js';
@@ -30,6 +31,7 @@ const entrySchema = z.object({
   synchronization: z.object({ status: z.enum(['pending', 'running', 'blocked', 'verified']),
     attempts: z.number().int().nonnegative(), checkedAt: z.string().datetime(), retryAt: z.string().datetime().nullable(),
     verifiedAt: z.string().datetime().nullable(), blocker: z.string().nullable() }).strict().optional(),
+  legacyRecovery: z.record(z.string(), z.unknown()).optional(),
   checkouts: z.array(z.unknown()), registeredAt: z.string().datetime().nullable(),
   attempts: z.number().int().nonnegative(), lastAttemptAt: z.string().datetime().nullable(),
   blocker: z.string().nullable(), retryAt: z.string().datetime().nullable(),
@@ -218,7 +220,7 @@ export async function recoverReleaseSynchronizationHandoffs(agents) {
 }
 
 async function verifyEntry(entry, agents) {
-  const result = !publisherCandidateSeed(entry)
+  const result = !publisherCandidateTarget(entry)
     ? { status: 'blocked', blocker: 'publisher-candidate-checkout-unverified', obligations: entry.obligations }
     : agents.some(agent => agent.taskId === entry.task.id)
       ? await (await import('./releaseSynchronizationEvidence.js')).inspectReleaseSynchronization(entry, agents)
@@ -231,6 +233,11 @@ async function verifyEntry(entry, agents) {
     retryAt: result.status === 'verified' ? null : new Date(Date.now() + Math.min(30 * 60_000, 60_000 * 2 ** Math.min(attempts - 1, 5))).toISOString() };
   // Receipt persistence precedes change events and checkout retirement.
   await saveReleaseSynchronization(entry);
+  await emitReleaseSynchronization(entry, agents);
+  return entry.synchronization;
+}
+
+async function emitReleaseSynchronization(entry, agents) {
   const { projectTaskReleaseMilestones, projectAgentReleaseMilestones } = await import('./releaseSynchronizationProjection.js');
   const { getTaskById } = await import('./cosTaskStore.js');
 
@@ -253,7 +260,6 @@ async function verifyEntry(entry, agents) {
     cosEvents.emit('agent:updated', projectAgentReleaseMilestones(agent, entry));
   }
   cosEvents.emit('agents:changed');
-  return entry.synchronization;
 }
 
 /** Inspect one continuation independently of its execution verdict. Only this task's enrolled outbox can authorize inspection.
@@ -269,6 +275,23 @@ export function verifyReleaseSynchronizationTask(taskId, { agents = null, respec
   });
 }
 
+/** A vanished workspace cannot be matched by path. A fresh exact promotion PR
+ * can still exclude unrelated branch names; an unavailable PR keeps the hold. */
+async function legacyPromotionBranch(entry, repoPath) {
+  if (entry.publication.candidateBranch) return entry.publication.candidateBranch;
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(entry.publication.repository || '')
+    || !Number.isSafeInteger(entry.publication.promotionPrNumber) || entry.publication.promotionPrNumber < 1) return null;
+  const [{ execGh }, { resolveForgeExecOptions }] = await Promise.all([import('./github.js'), import('./forgeExecOptions.js')]);
+  const options = await resolveForgeExecOptions(repoPath);
+  const pr = JSON.parse(await execGh(['api', '--hostname', 'github.com',
+    `repos/${entry.publication.repository}/pulls/${entry.publication.promotionPrNumber}`], undefined, options));
+  if (pr.number !== entry.publication.promotionPrNumber || pr.merged !== true
+    || pr.head?.sha !== entry.publication.candidateHead || pr.head?.repo?.full_name !== entry.publication.repository
+    || pr.base?.ref !== 'release' || pr.base?.repo?.full_name !== entry.publication.repository
+    || pr.merge_commit_sha !== entry.publication.promotionMerge || typeof pr.head?.ref !== 'string' || !pr.head.ref) return null;
+  return pr.head.ref;
+}
+
 /** Retirement runs this outside its ownership fence. The ordinary retirement
  * transaction still rechecks the exact generation and all removal authority.
  */
@@ -278,7 +301,6 @@ export function retainReleaseSynchronizationReview(release) {
     const entries = Object.values(outbox.publications).filter(entry => entry.registeredAt && effectiveReleaseSynchronization(entry)?.status !== 'verified');
     if (!entries.length) return true;
     const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
-    const { retirementCheckoutIdentityFromPointer } = await import('../lib/retirementCheckoutObservation.js');
     const agents = await readBranchCompletionPolicies({ repairIndex: false });
     for (const entry of entries) {
       // Missing publisher proof means an old handoff never established which
@@ -288,9 +310,22 @@ export function retainReleaseSynchronizationReview(release) {
       const normalize = path => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
       const [releaseRepo, ownerRepo] = release.repoPath
         ? await Promise.all([realpath(release.repoPath).catch(() => null), realpath(entry.owner.workspace).catch(() => null)]) : [null, null];
-      const sameRepository = !releaseRepo || !ownerRepo || normalize(releaseRepo) === normalize(ownerRepo);
+      let sameRepository = !releaseRepo || !ownerRepo || normalize(releaseRepo) === normalize(ownerRepo);
+      if (releaseRepo && !ownerRepo && !publisherCandidateSeed(entry)) {
+        const candidate = await legacyPromotionBranch(entry, releaseRepo).catch(() => null);
+        if (candidate && candidate !== release.branch) sameRepository = false;
+      }
       if (sameRepository && !publisherCandidateSeed(entry)
-        && (!entry.publication.candidateBranch || entry.publication.candidateBranch === release.branch)) return false;
+        && (!entry.publication.candidateBranch || entry.publication.candidateBranch === release.branch)) {
+        const legacy = legacyPublisherRecovery(entry);
+        const target = publisherCandidateTarget(entry);
+        if (!legacy || legacy.evidence.mode !== 'present' || !target || target.branch !== release.branch
+          || target.path !== release.path || target.head !== release.head || target.checkoutIdentity !== release.checkoutIdentity) return false;
+        await verifyEntry(entry, agents);
+        if (entry.obligations.localReview.status !== 'verified' || entry.obligations.processSettlement.status !== 'verified'
+          || !entry.obligations.retirement.evidence?.checkouts?.some(row => isDeepStrictEqual(row, target))) return false;
+        continue;
+      }
       const owns = agents.some(agent => (agent.taskId === entry.task.id
         || (agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt)) && agent.metadata?.checkoutSeeds?.some(seed =>
         seed.branch === release.branch && seed.path === release.path
@@ -323,4 +358,117 @@ export function retainReleaseSynchronizationReview(release) {
     }
     return true;
   });
+}
+
+/** Explicit recovery binds the original capture and existing preservation.
+ * The completed source run and publication stay immutable. */
+export async function reviewLegacyReleaseRecovery(identity) {
+  const outbox = await readOutbox();
+  const entry = outbox.publications[identity];
+  if (!entry?.registeredAt || publisherCandidateSeed(entry)) refuse('Legacy recovery requires a registered unseeded publication');
+  const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+  const { inspectLegacyPublisher } = await import('./legacyReleaseRecovery.js');
+  const proof = await inspectLegacyPublisher(entry, await readBranchCompletionPolicies({ repairIndex: false }));
+  return { digest: proof.digest, prUrl: proof.evidence.prUrl, branch: proof.evidence.capture.branch,
+    head: proof.evidence.capture.head, path: proof.evidence.capture.path, mode: proof.evidence.mode,
+    checkoutIdentity: retirementCheckoutIdentityFromPointer(proof.evidence.capture.incarnation.pointer),
+    publisherAgentId: proof.evidence.owner.agentId, publisherTaskId: proof.evidence.owner.taskId,
+    publisherStartedAt: proof.evidence.owner.startedAt, archiveDir: proof.evidence.archive.archiveDir,
+    capturedAt: proof.evidence.capture.capturedAt, archiveDigest: proof.evidence.archive.evidenceDigest,
+    archivedAt: proof.evidence.archive.archivedAt, lifecycleStatus: proof.evidence.review.status,
+    lifecycleRecordedHead: proof.evidence.review.reviewedHead, candidateInspection: proof.evidence.candidateInspection, ...(proof.evidence.preservation && { lock: proof.evidence.preservation.lock }),
+    ...(proof.retirement && { retiredAt: proof.retirement.retiredAt }) };
+}
+
+export function acceptLegacyReleaseRecovery(identity, digest) {
+  return queue(async () => {
+    const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+    const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+    const { inspectLegacyPublisher } = await import('./legacyReleaseRecovery.js');
+    const initial = (await readOutbox()).publications[identity];
+    if (!initial?.registeredAt || publisherCandidateSeed(initial)) refuse('Legacy recovery requires a registered unseeded publication');
+    // Verify a potentially large existing archive outside the ownership lock.
+    // The fenced pass rechecks its stamps, current bytes and every other fact.
+    const prepared = await inspectLegacyPublisher(initial, await readBranchCompletionPolicies({ repairIndex: false }));
+    if (prepared.digest !== digest) refuse('Legacy recovery review changed');
+    const result = await withClaimOwnershipLock(async () => {
+      const entry = (await readOutbox()).publications[identity];
+      if (!entry?.registeredAt || publisherCandidateSeed(entry)) refuse('Legacy recovery requires a registered unseeded publication');
+      const existing = entry.legacyRecovery ? legacyPublisherRecovery(entry) : null;
+      if (entry.legacyRecovery && (!existing || existing.digest !== digest)) refuse('A different legacy recovery already exists');
+      const proof = await inspectLegacyPublisher(entry, await readBranchCompletionPolicies({ repairIndex: false }), { archiveProof: prepared.archiveProof });
+      if (proof.digest !== digest || !await proof.recheck()) refuse('Legacy recovery review changed');
+      if (existing) return { receipt: existing, entry };
+      entry.legacyRecovery = { version: 1, kind: 'legacy-publisher', digest, evidence: proof.evidence, acceptedAt: new Date().toISOString() };
+      // Old verified synchronization was obtained without publisher proof. It
+      // cannot survive acceptance until the independent obligations are inspected.
+      entry.synchronization = { status: 'pending', attempts: entry.synchronization?.attempts || 0, checkedAt: new Date().toISOString(),
+        retryAt: null, verifiedAt: null, blocker: null };
+      if (!legacyPublisherRecovery(entry)) refuse('Legacy recovery evidence is incomplete');
+      await saveReleaseSynchronization(entry);
+      const saved = (await readOutbox()).publications[identity];
+      if (!isDeepStrictEqual(saved?.legacyRecovery, entry.legacyRecovery)) refuse('Legacy recovery receipt was not retained');
+      return { receipt: saved.legacyRecovery, entry: saved };
+    });
+    await emitReleaseSynchronization(result.entry, await readBranchCompletionPolicies({ repairIndex: false }));
+    return result.receipt;
+  });
+}
+
+/** Expensive archive verification runs outside the ownership fence. Its
+ * immutable file stamps and current content are checked again before removal. */
+export async function prepareLegacyReleaseRetirement(release) {
+  const outbox = await readOutbox();
+  const entries = Object.values(outbox.publications).filter(entry => {
+    const legacy = legacyPublisherRecovery(entry), target = publisherCandidateTarget(entry);
+    return legacy?.evidence.mode === 'present' && target?.path === release.path && target.branch === release.branch
+      && target.head === release.head && target.checkoutIdentity === release.checkoutIdentity;
+  });
+  const proofs = new Map();
+  if (!entries.length) return proofs;
+  const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+  const { inspectLegacyPublisher } = await import('./legacyReleaseRecovery.js');
+  const agents = await readBranchCompletionPolicies({ repairIndex: false });
+  for (const entry of entries) {
+    const legacy = legacyPublisherRecovery(entry);
+    const proof = await inspectLegacyPublisher(entry, agents);
+    if (proof.digest !== legacy.digest || proof.retirement || !await proof.recheck() || !proof.archiveProof) throw new Error('legacy-release-recovery-changed');
+    proofs.set(entry.identity, proof.archiveProof);
+  }
+  return proofs;
+}
+
+/** Called under the ordinary checkout ownership fence immediately before a
+ * legacy candidate can be unlocked or removed. It grants no removal authority. */
+export async function validateLegacyReleaseRetirement(release, { unlocked = false, archiveProofs = new Map() } = {}) {
+  const outbox = await readOutbox();
+  const entries = Object.values(outbox.publications).filter(row => row.registeredAt && !publisherCandidateSeed(row)
+    && effectiveReleaseSynchronization(row)?.status !== 'verified'
+    && (!row.publication.candidateBranch || row.publication.candidateBranch === release.branch));
+  if (!entries.length) return true;
+  const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+  const { inspectLegacyPublisher, legacyProcessesSettled } = await import('./legacyReleaseRecovery.js');
+  const agents = await readBranchCompletionPolicies({ repairIndex: false });
+  for (const entry of entries) {
+    if (entry.publication.candidateBranch && entry.publication.candidateBranch !== release.branch) continue;
+    const [ownerRepo, targetRepo] = await Promise.all([realpath(entry.owner.workspace).catch(() => null), realpath(release.repoPath).catch(() => null)]);
+    if (!targetRepo) return false;
+    if (!ownerRepo) {
+      const candidate = await legacyPromotionBranch(entry, targetRepo).catch(() => null);
+      if (candidate && candidate !== release.branch) continue;
+      return false;
+    }
+    const sameRepository = process.platform === 'win32' ? resolve(ownerRepo).toLowerCase() === resolve(targetRepo).toLowerCase() : resolve(ownerRepo) === resolve(targetRepo);
+    if (!sameRepository) continue;
+    const legacy = legacyPublisherRecovery(entry), target = publisherCandidateTarget(entry);
+    if (!legacy || legacy.evidence.mode !== 'present' || !target || target.path !== release.path || target.branch !== release.branch
+      || target.head !== release.head || target.checkoutIdentity !== release.checkoutIdentity
+      || entry.obligations.localReview.status !== 'verified' || entry.obligations.processSettlement.status !== 'verified') return false;
+    const archiveProof = archiveProofs.get(entry.identity);
+    if (!archiveProof) return false;
+    const proof = await inspectLegacyPublisher(entry, agents, { unlocked, archiveProof });
+    if (proof.digest !== legacy.digest || proof.retirement || !await proof.recheck()
+      || !await legacyProcessesSettled(entry, agents, target.path)) return false;
+  }
+  return true;
 }

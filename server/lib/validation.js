@@ -3040,6 +3040,9 @@ export const cosScheduleTriggerBodySchema = z.object({
   targetModels: z.array(nonEmptyString).nullable().optional(),
   targetPullRequest: z.union([z.number(), z.string()]).nullable().optional(),
 });
+export const legacyReleaseRecoveryReviewSchema = z.object({ identity: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const legacyReleaseRecoveryAcceptSchema = legacyReleaseRecoveryReviewSchema.extend({ digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+
 // A scoped release names the exact inventory row the operator saw (#12002).
 export const heldCheckoutRetireBodySchema = z.object({
   checkoutIdentity: z.string().regex(/^[a-f0-9]{64}$/).optional(),
