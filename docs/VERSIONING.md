@@ -159,6 +159,11 @@ Missing/changed evidence yields a held `releaseCandidateRecovery` projection on
 the successor with a reason and safe next step. Preserve uncommitted work and
 the original checkout while resolving it.
 
+Newly registered coordinators also record the reservation and checkout capture
+milestones in their service-owned lifecycle. A `registered` milestone says only
+that the service observed no reservation; it does not prove a candidate was not
+created through Git. It cannot authorize a resumed run to reserve another one.
+
 **Current recovery limits:** whole-process settlement uses the existing native
 Windows supervision receipt. macOS/Linux have no equivalent durable receipt yet
 and remain held with `candidate-process-proof-unavailable`, including when the

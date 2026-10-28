@@ -107,6 +107,20 @@ afterEach(async () => {
 });
 afterAll(cleanupTempDataRoots);
 
+test('does not treat an unreserved service lifecycle as proof that Git created no candidate', async () => {
+  const source = fixture.state.agents['agent-original'];
+  delete source.metadata.releaseCandidate;
+  delete source.metadata.checkoutSeeds;
+  delete source.metadata.completedCheckouts;
+  delete source.metadata.checkoutCapture;
+  source.metadata.releaseCandidateLifecycle = { version: 1, agentId: source.id, taskId: source.taskId,
+    startedAt: source.startedAt, stage: 'registered' };
+  expect(await git(['rev-parse', '--verify', `refs/heads/${branch}`])).toBe(head);
+  expect(await updateReleaseCandidateOwnership('agent-successor', 'reserve'))
+    .toEqual({ reserved: false, reason: 'candidate-recovery-required' });
+  expect(fixture.state.agents['agent-successor'].metadata.releaseCandidate).toBeUndefined();
+});
+
 test('transfers the seeded generation once across interruption/restart, retaining original receipts and private review bytes', async () => {
   const review = await readFile(reviewPath, 'utf8');
   const first = await recover();

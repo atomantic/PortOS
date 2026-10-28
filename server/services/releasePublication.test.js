@@ -273,11 +273,16 @@ test('does not accept publication prose or caller-supplied receipts through regi
 test('does not accept caller-supplied release checkout ownership through generic agent metadata', async () => {
   const forged = { releaseCandidate: { version: 1, branch: 'codex/release-agent-forged' }, checkoutSeeds: [{ forged: true }],
     completedCheckouts: [{ forged: true }], checkoutCapture: { status: 'captured' },
-    releaseCandidateRecovery: { status: 'transferred' }, releaseCandidateSuccessor: { forged: true } };
+    releaseCandidateRecovery: { status: 'transferred' }, releaseCandidateSuccessor: { forged: true },
+    releaseCandidateLifecycle: { version: 1, stage: 'captured' } };
   await registerAgent('agent-forged', 'other-task', { taskAnalysisType: 'do-release', isWorktree: false, ...forged });
-  for (const key of Object.keys(forged)) expect(fixture.disk.agents['agent-forged'].metadata[key]).toBeUndefined();
+  const lifecycle = fixture.disk.agents['agent-forged'].metadata.releaseCandidateLifecycle;
+  expect(lifecycle).toEqual({ version: 1, agentId: 'agent-forged', taskId: 'other-task',
+    startedAt: fixture.disk.agents['agent-forged'].startedAt, stage: 'registered' });
+  for (const key of Object.keys(forged).filter(key => key !== 'releaseCandidateLifecycle')) expect(fixture.disk.agents['agent-forged'].metadata[key]).toBeUndefined();
   await updateAgent('agent-forged', { metadata: forged });
-  for (const key of Object.keys(forged)) expect(fixture.disk.agents['agent-forged'].metadata[key]).toBeUndefined();
+  expect(fixture.disk.agents['agent-forged'].metadata.releaseCandidateLifecycle).toEqual(lifecycle);
+  for (const key of Object.keys(forged).filter(key => key !== 'releaseCandidateLifecycle')) expect(fixture.disk.agents['agent-forged'].metadata[key]).toBeUndefined();
 });
 
 test('requires recovery before a resumed publisher can record publication, and rejects a concurrent recovery change', async () => {

@@ -28,6 +28,7 @@ import { hasClaimCheckoutBindings, hasReleaseCandidateBinding, boundCheckoutBran
 import { isAgentHandoff } from '../lib/agentOutcome.js';
 import { collectProtectedCleanupOwners } from '../lib/taskRetryHold.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
+import { initialCandidateLifecycle } from './releaseCandidateLifecycle.js';
 
 function hasPendingRepoStateVerification(agent) {
   return agent?.status === 'completed' && agent?.metadata?.repoStateVerification?.status === 'pending';
@@ -110,7 +111,7 @@ export async function registerAgent(agentId, taskId, metadata = {}) {
   metadata = { ...metadata, releasePublication: null };
   if (metadata.taskAnalysisType === 'do-release') {
     // A task's supplied metadata is not a server-observed checkout reservation.
-    const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...trusted } = metadata;
+    const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate, releaseCandidateLifecycle: _lifecycle, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...trusted } = metadata;
     metadata = trusted;
   }
   return withStateLock(async () => {
@@ -124,6 +125,9 @@ export async function registerAgent(agentId, taskId, metadata = {}) {
       metadata,
       output: []
     };
+    if (metadata.taskAnalysisType === 'do-release' && metadata.isWorktree === false) {
+      registered.metadata = { ...metadata, releaseCandidateLifecycle: initialCandidateLifecycle(registered) };
+    }
     if (metadata.isWorktree === true && metadata.worktreeBranch && metadata.sourceWorkspace) {
       const { captureCheckoutSeeds } = await import('./completedCheckoutEvidence.js');
       registered.metadata = { ...metadata, checkoutSeeds: await captureCheckoutSeeds(registered) };
@@ -175,7 +179,7 @@ export async function updateAgent(agentId, updates) {
     if (current.metadata?.taskAnalysisType === 'do-release' && updates.metadata) {
       // Only the ownership transaction and completion capture write these
       // fields; generic updates cannot manufacture or revoke their evidence.
-      const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...metadata } = updates.metadata;
+      const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate, releaseCandidateLifecycle: _lifecycle, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...metadata } = updates.metadata;
       updates = { ...updates, metadata };
     }
 
