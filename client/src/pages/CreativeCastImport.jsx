@@ -2,10 +2,11 @@
  * CreativeCastImport — Casting › Import from music videos.
  *
  * Lists every music video's cast, sets and props that are not in the catalog
- * yet, each with the server's proposal (link to the universe or synced record
- * it matches, or create a new one). The director reviews, changes any choice,
- * and imports. "Keep in this video only" is remembered on the video so it is
- * not offered again.
+ * yet, each with the server's proposal (link to the universe, synced or
+ * same-named record it matches, or create a new one). Each name match says why
+ * it was suggested; a similar name is marked for checking. The director
+ * reviews, changes any choice, and imports. "Keep in this video only" is
+ * remembered on the video so it is not offered again.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -34,11 +35,23 @@ async function commitInChunks(selections) {
   return totals;
 }
 
+// Why the server suggested a link (`item.match`). Exact pointers need no note.
+const MATCH_NOTES = {
+  name: { text: 'Same name in the catalog' },
+  linked: { text: 'Linked in another video' },
+  base: { text: 'Similar name, check before importing', check: true },
+  'first-name': { text: 'Similar name, check before importing', check: true },
+  import: { text: 'Also in another video, added once' },
+};
+
+const suggestionLabel = (item) => `Use ${item.ingredientName}${item.formLabel ? ` (${item.formLabel})` : ''}`;
+
 // A row's choice: the server's proposal unless the director changed it. A
 // record picked by hand is a link carrying its own id and name.
 function ImportRow({ project, item, choice, onChange, onPick }) {
   const id = `cast-import-${project.projectId}-${item.subjectId}`;
   const kindLabel = libraryForType(item.kind)?.singular || item.kind;
+  const note = item.action === 'link' && choice.action === 'link' && choice.ingredientId === item.ingredientId ? MATCH_NOTES[item.match] : null;
   return (
     <li className="flex items-center gap-3 py-2 min-w-0">
       <div className="w-12 h-16 shrink-0 rounded bg-port-bg border border-port-border overflow-hidden flex items-center justify-center">
@@ -48,7 +61,9 @@ function ImportRow({ project, item, choice, onChange, onPick }) {
       </div>
       <div className="min-w-0 flex-1">
         <div className="text-sm text-white truncate">{item.name}</div>
-        <div className="text-[11px] text-gray-500 capitalize">{kindLabel}</div>
+        <div className="text-[11px] text-gray-500"><span className="capitalize">{kindLabel}</span>
+          {note && <span className={note.check ? 'text-port-warning' : undefined}> · {note.text}</span>}
+        </div>
       </div>
       <label htmlFor={id} className="sr-only">What to do with {item.name}</label>
       <select
@@ -57,12 +72,12 @@ function ImportRow({ project, item, choice, onChange, onPick }) {
         onChange={(e) => {
           const value = e.target.value;
           if (value === 'pick') onPick();
-          else if (value === 'link') onChange({ action: 'link', ingredientId: item.ingredientId, ingredientName: item.ingredientName });
+          else if (value === 'link') onChange({ action: 'link', ingredientId: item.ingredientId, ingredientName: item.ingredientName, formId: item.formId });
           else if (value !== 'picked') onChange({ action: value });
         }}
         className="max-w-[11rem] sm:max-w-xs bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
       >
-        {item.action === 'link' && <option value="link">Use {item.ingredientName}</option>}
+        {item.action === 'link' && <option value="link">{suggestionLabel(item)}</option>}
         {choice.action === 'link' && choice.ingredientId !== item.ingredientId && <option value="picked">Use {choice.ingredientName}</option>}
         <option value="create">Add as new</option>
         <option value="local">Keep in this video only</option>
@@ -95,11 +110,12 @@ export default function CreativeCastImport() {
   }, [load]);
 
   const choiceFor = (project, item) => decisions[decisionKey(project.projectId, item.subjectId)]
-    || { action: item.action, ingredientId: item.ingredientId, ingredientName: item.ingredientName };
+    || { action: item.action, ingredientId: item.ingredientId, ingredientName: item.ingredientName, formId: item.formId };
   const setChoice = (project, item, choice) => setDecisions((d) => ({ ...d, [decisionKey(project.projectId, item.subjectId)]: choice }));
   const selections = useMemo(() => (projects || []).flatMap((project) => project.items.map((item) => {
     const choice = decisions[decisionKey(project.projectId, item.subjectId)] || item;
-    return { projectId: project.projectId, subjectId: item.subjectId, action: choice.action, ...(choice.action === 'link' ? { ingredientId: choice.ingredientId } : {}) };
+    const link = choice.action === 'link' ? { ingredientId: choice.ingredientId, ...(choice.formId ? { formId: choice.formId } : {}) } : {};
+    return { projectId: project.projectId, subjectId: item.subjectId, action: choice.action, ...link };
   })), [projects, decisions]);
   const toCatalog = selections.filter((s) => s.action !== 'local').length;
 
@@ -135,7 +151,7 @@ export default function CreativeCastImport() {
         <>
           <div className="flex flex-wrap items-center justify-between gap-2 bg-port-card border border-port-border rounded-lg p-3">
             <p className="text-sm text-gray-300">
-              {formatCount(selections.length)} from {formatCount(projects.length)} {projects.length === 1 ? 'video' : 'videos'}. Matches to a universe record are linked, not copied.
+              {formatCount(selections.length)} from {formatCount(projects.length)} {projects.length === 1 ? 'video' : 'videos'}. Matches to an existing record are linked, not copied.
             </p>
             <button
               type="button"

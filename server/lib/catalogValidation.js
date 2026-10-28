@@ -667,6 +667,8 @@ export const catalogMusicVideoImportSchema = z.object({
     subjectId: z.string().min(1).max(64),
     action: z.enum(['create', 'link', 'local']),
     ingredientId: z.string().min(1).max(128).optional(),
+    // The linked record's age or look the subject shows, from the preview.
+    formId: z.string().min(1).max(128).optional(),
   }).strict().refine((s) => s.action !== 'link' || s.ingredientId, { message: 'link needs an ingredientId' })).min(1).max(2000),
 }).strict();
 
