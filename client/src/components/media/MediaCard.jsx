@@ -157,8 +157,10 @@ function MediaCard({
           disabled={disabled}
           className="block w-full h-full disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {previewUrl ? (
-            <MediaImage src={thumbnailUrl || previewUrl} fallbackSrc={kind === 'image' ? previewUrl : undefined} assetSrc={previewUrl} alt={prompt} className="w-full h-full object-cover" loading="lazy" />
+          {previewUrl || (isVideo && downloadUrl) ? (
+            <MediaImage src={thumbnailUrl || previewUrl} fallbackSrc={kind === 'image' ? previewUrl : undefined}
+              fallbackVideoSrc={isVideo ? downloadUrl : undefined} assetSrc={isVideo ? downloadUrl : previewUrl}
+              alt={prompt} className="w-full h-full object-cover" loading="lazy" />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-gray-600">
               {isVideo ? <Film className="w-10 h-10" /> : <ImageIcon className="w-10 h-10" />}

@@ -62,8 +62,10 @@ export const PEER_API_SURFACE = Object.freeze([
   { prefix: '/api/eidoverse/travel/federation/', methods: ANY_METHOD },
   // Static asset mounts the sync workers pull bytes from.
   { prefix: '/data/images/', methods: READ },
+  { prefix: '/data/image-thumbnails/', methods: READ },
   { prefix: '/data/image-refs/', methods: READ },
   { prefix: '/data/videos/', methods: READ },
+  { prefix: '/data/video-thumbnails/', methods: READ },
   { prefix: '/data/music/', methods: READ },
   { prefix: '/data/audio/', methods: READ },
   { prefix: '/data/models/', methods: READ },

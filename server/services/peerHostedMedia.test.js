@@ -26,6 +26,7 @@ vi.mock('../lib/peerHttpClient.js', () => ({ peerStreamRequest: (...args) => str
 
 const { markHosted, unmarkHosted, takeHostedAssets, resolveMediaLocations } = await import('./peerHostedMedia.js');
 const { mountAssetRoutes } = await import('./assetMounts.js');
+const { saveHistory } = await import('./videoGen/history.js');
 
 let app;
 beforeAll(() => {
@@ -40,6 +41,7 @@ beforeEach(async () => {
   streamRequest.mockReset();
   getPeers.mockImplementation(async () => [PEER]);
   rmSync(join(tempRoot, 'peer-hosted-media.json'), { force: true });
+  rmSync(join(tempRoot, 'video-history.json'), { force: true });
 });
 
 const upstream = (body, status = 200, headers = {}) => ({
@@ -126,6 +128,27 @@ describe('static-mount fallback', () => {
     const res = await request(app).get('/data/video-thumbnails/clip2.jpg');
     expect(res.status).toBe(200);
     expect(streamRequest.mock.calls[0][0]).toBe('https://peer.example.com:5555/data/video-thumbnails/clip2.jpg');
+  });
+
+  it('streams hosted image thumbnails and resolves custom video posters through history', async () => {
+    const other = { ...PEER, id: 'p2', instanceId: 'peer-instance-2' };
+    getPeers.mockImplementation(async () => [PEER, other]);
+    await markHosted(PEER.instanceId, [{ kind: 'image', filename: 'remote-image.png' }, { kind: 'video', filename: 'clip.mp4' }]);
+    await markHosted(other.instanceId, [{ kind: 'video', filename: 'clip-poster-123.mp4' }]);
+    await saveHistory([{ id: 'clip', filename: 'clip.mp4', thumbnail: 'clip-poster-123.jpg' }]);
+    streamRequest.mockImplementation(async () => upstream('POSTER'));
+
+    expect((await request(app).get('/data/image-thumbnails/remote-image.webp')).status).toBe(200);
+    expect(streamRequest.mock.calls[0][0]).toBe('https://peer.example.com:5555/data/image-thumbnails/remote-image.webp');
+    expect((await request(app).get('/data/video-thumbnails/clip-poster-123.jpg')).status).toBe(200);
+    expect(streamRequest.mock.calls[1][2].instanceId).toBe(PEER.instanceId);
+    expect(streamRequest.mock.calls[1][0]).toBe('https://peer.example.com:5555/data/video-thumbnails/clip-poster-123.jpg');
+
+    // A same-stem video cannot stand in for the poster's recorded owner.
+    await saveHistory([{ id: 'other', filename: 'unhosted.mp4', thumbnail: 'clip-poster-123.jpg' }]);
+    streamRequest.mockClear();
+    expect((await request(app).get('/data/video-thumbnails/clip-poster-123.jpg')).status).toBe(404);
+    expect(streamRequest).not.toHaveBeenCalled();
   });
 
   it('404s a file nobody hosts', async () => {

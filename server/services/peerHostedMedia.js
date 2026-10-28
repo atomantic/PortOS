@@ -154,6 +154,29 @@ async function lookupHosted(kind, filename) {
   return entries[hostedKey(kind, filename)] || null;
 }
 
+// Poster filenames can differ from the video stem (custom posters, stitched
+// renders). Reuse the immutable compact history and rebuild this lookup only
+// when its underlying history changes.
+let thumbnailHistory;
+let thumbnailVideos = new Map();
+async function videoFilenamesForThumbnail(filename) {
+  const { loadCompactHistory } = await import('./videoGen/history.js');
+  const rows = await loadCompactHistory();
+  if (rows !== thumbnailHistory) {
+    const next = new Map();
+    for (const row of rows) {
+      const thumbnail = isStr(row?.thumbnail) ? sanitizeAssetFilename(row.thumbnail) : null;
+      const video = isStr(row?.filename) ? sanitizeAssetFilename(row.filename) : null;
+      if (!thumbnail || !video) continue;
+      if (!next.has(thumbnail)) next.set(thumbnail, []);
+      next.get(thumbnail).push(video);
+    }
+    thumbnailHistory = rows;
+    thumbnailVideos = next;
+  }
+  return thumbnailVideos.get(filename) || [];
+}
+
 /**
  * Resolve a request for a local static path to `{ peerId, url }`
  * when a peer hosts it and the local file is absent; otherwise null.
@@ -177,9 +200,18 @@ async function resolveHostedRequest(mount, filename) {
     return hosted && { peerId: hosted.peerId, url: `/data/image-thumbnails/${encodeURIComponent(safe)}` };
   }
   if (mount === '/data/video-thumbnails') {
+    const entries = await readEntriesOrEmpty();
+    const videos = await videoFilenamesForThumbnail(safe).catch(() => []);
+    for (const video of videos) {
+      const hosted = entries[hostedKey('video', video)];
+      if (hosted) return { peerId: hosted.peerId, url: `/data/video-thumbnails/${encodeURIComponent(safe)}` };
+    }
+    // If history names this poster, don't substitute an unrelated same-stem
+    // video. The stem fallback is for older records with no poster mapping.
+    if (videos.length > 0) return null;
     const stem = basename(safe, extname(safe));
     for (const ext of VIDEO_EXTS) {
-      const hosted = await lookupHosted('video', `${stem}${ext}`);
+      const hosted = entries[hostedKey('video', `${stem}${ext}`)];
       if (hosted) return { peerId: hosted.peerId, url: `/data/video-thumbnails/${encodeURIComponent(safe)}` };
     }
   }
