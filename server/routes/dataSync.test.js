@@ -17,6 +17,7 @@ vi.mock('../services/sharing/tombstoneGc.js', () => ({
 // truth the route's hand-maintained `categoryParam` enum has to match; a stub
 // would make the parity tests below compare the route to a copy of itself.
 vi.mock('../services/dataSync.js', async () => ({
+  getVideoHistoryInventory: vi.fn(),
   getChecksum: vi.fn(),
   getSnapshot: vi.fn(),
   getManifest: vi.fn(),
@@ -47,7 +48,7 @@ vi.mock('../services/settings.js', async () => ({
 }));
 
 import { sweepTombstones, getSweepStatus } from '../services/sharing/tombstoneGc.js';
-import { getChecksum, getSnapshot, getManifest, applyRemote, getSupportedCategories } from '../services/dataSync.js';
+import { getVideoHistoryInventory, getChecksum, getSnapshot, getManifest, applyRemote, getSupportedCategories } from '../services/dataSync.js';
 import { PEER_INSTANCE_ID_HEADER, __resetPullWarnThrottleForTests } from '../services/sharing/peerPullAuthorization.js';
 import { MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
 import dataSyncRoutes, { categoryParam } from './dataSync.js';
@@ -417,5 +418,24 @@ describe('GET /api/sync/:category — peer-pull authorization', () => {
     });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ applied: false, count: 0, blockedBySchema });
+  });
+});
+
+describe('video history inventory authorization', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    settings = { federation: { strictPullAuthorization: true } };
+    setPeers(allowedPeer());
+    getVideoHistoryInventory.mockResolvedValue({ version: 1, filenames: ['v.mp4'] });
+  });
+
+  it('uses the same peer/category gate as history snapshots', async () => {
+    const allowed = await request(buildApp()).get('/api/sync/videoHistory/inventory').set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.filenames).toEqual(['v.mp4']);
+    setPeers(allowedPeer({ fullSync: false, syncCategories: { videoHistory: false } }));
+    const denied = await request(buildApp()).get('/api/sync/videoHistory/inventory').set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+    expect(denied.status).toBe(403);
+    expect(getVideoHistoryInventory).toHaveBeenCalledTimes(1);
   });
 });

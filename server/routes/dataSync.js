@@ -129,6 +129,11 @@ const slotsOf = (req) => {
   return ids.length > 0 ? ids : undefined;
 };
 
+router.get('/videoHistory/inventory', asyncHandler(async (req, res) => {
+  await authorizeSyncPull(req, 'videoHistory');
+  res.json(await dataSync.getVideoHistoryInventory());
+}));
+
 // GET /api/sync/:category/manifest — the category's per-slot version map.
 // 404 for a category that doesn't serve one; a puller treats that (and the
 // 404 an older peer returns for the whole route) as "no manifest" and falls

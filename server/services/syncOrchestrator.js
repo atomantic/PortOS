@@ -575,6 +575,10 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   if (gap && !schemaGapMayHaveCleared(gap, peer, checksumRes.checksum)) {
     return { totalApplied: 0, checksum: null, blockedBySchema: gap };
   }
+  if (category === 'videoHistory' && peer.mediaSyncMode === 'host') {
+    const inventory = await fetchPeer(peer, '/api/sync/videoHistory/inventory').catch(() => null);
+    if (inventory) await dataSync.applyRemote(category, inventory, { peerId, portosMeta: inventory.portosMeta, inventory: true });
+  }
   if (!gap && lastChecksum && lastChecksum === checksumRes.checksum) {
     return { totalApplied: 0, checksum: checksumRes.checksum };
   }

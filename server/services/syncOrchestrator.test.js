@@ -1368,6 +1368,29 @@ describe('syncOrchestrator', () => {
     });
   });
 
+  it('refreshes host inventory on matching history checksums and ignores unavailable peers', async () => {
+    const dataSync = await import('./dataSync.js');
+    dataSync.getSupportedCategories.mockReturnValue(['videoHistory']);
+    dataSync.applyRemote.mockResolvedValue({ applied: false, count: 0 });
+    readJSONFile.mockImplementation(async () => ({ 'peer-inst-1': { checksums: { videoHistory: 'same' } } }));
+    const peer = { ...mockPeer, mediaSyncMode: 'host', syncCategories: { videoHistory: true } };
+    const evidence = { version: 1, filenames: ['clip.mp4'], checked: ['clip.mp4'], portosMeta: { schemaVersions: {} } };
+    mockFetch.mockImplementation(async (url) => {
+      if (url.includes('/videoHistory/checksum')) return { ok: true, json: async () => ({ checksum: 'same' }) };
+      if (url.includes('/videoHistory/inventory')) return { ok: true, json: async () => evidence };
+      return { ok: false };
+    });
+    await syncWithPeer(peer);
+    expect(dataSync.applyRemote).toHaveBeenCalledWith('videoHistory', evidence, expect.objectContaining({ peerId: peer.instanceId, inventory: true }));
+    expect(mockFetch.mock.calls.some(([url]) => url.includes('/videoHistory/snapshot'))).toBe(false);
+    dataSync.applyRemote.mockClear();
+    mockFetch.mockImplementation(async (url) => url.includes('/videoHistory/checksum')
+      ? { ok: true, json: async () => ({ checksum: 'same' }) } : { ok: false });
+    await syncWithPeer(peer);
+    expect(dataSync.applyRemote).not.toHaveBeenCalled();
+    dataSync.getSupportedCategories.mockReturnValue(['goals', 'character', 'digitalTwin', 'meatspace']);
+  });
+
   // #5759: `usage` is always dirty AND a map of per-instance slots, so the
   // checksum short-circuit alone dragged every instance's digest across the
   // wire whenever any one of them advanced.

@@ -82,6 +82,13 @@ describe('resolveMediaLocations', () => {
 });
 
 describe('takeHostedAssets', () => {
+  it('does not replace a video host with a digest-less legacy manifest', async () => {
+    await markHosted('owner', [{ kind: 'video', filename: 'legacy.mp4' }]);
+    const missing = [{ kind: 'video', filename: 'legacy.mp4' }];
+    expect(await takeHostedAssets(PEER.instanceId, missing, new Set(['video:legacy.mp4']))).toEqual(missing);
+    expect((await resolveMediaLocations([{ kind: 'video', ref: 'legacy.mp4' }]))[0].hostPeerId).toBe('owner');
+  });
+
   it('hosts absent collection-owned files and leaves everything else to the copy path', async () => {
     const missing = [
       { kind: 'image', filename: 'coll-only.png' },

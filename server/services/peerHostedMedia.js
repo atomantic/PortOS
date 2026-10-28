@@ -83,6 +83,34 @@ export function markHosted(peerInstanceId, assets) {
   });
 }
 
+/** Reconcile one peer's authoritative video inventory, without touching other hosts. */
+export function reconcileHostedVideos(peerInstanceId, filenames, checked, historyFilenames) {
+  if (!isStr(peerInstanceId) || !Array.isArray(filenames) || !Array.isArray(checked) ||
+      [...filenames, ...checked].some((name) => !isStr(name) || sanitizeAssetFilename(name) !== name)) return Promise.resolve();
+  return queueWrite(async () => {
+    const entries = await readEntries();
+    const present = new Set(filenames);
+    const examined = new Set(checked);
+    if (filenames.some((name) => !examined.has(name))) return;
+    const history = new Set(historyFilenames);
+    let changed = false;
+    for (const [key, entry] of Object.entries(entries)) {
+      if (key.startsWith('video:') && history.has(key.slice(6)) && examined.has(key.slice(6)) && entry?.peerId === peerInstanceId && !present.has(key.slice(6))) {
+        delete entries[key];
+        changed = true;
+      }
+    }
+    for (const filename of present) {
+      if (existsSync(join(PATHS.videos, filename))) continue;
+      const key = hostedKey('video', filename);
+      if (entries[key]?.peerId === peerInstanceId) continue;
+      entries[key] = { peerId: peerInstanceId, at: new Date().toISOString() };
+      changed = true;
+    }
+    if (changed) await writeEntries(entries);
+  });
+}
+
 /**
  * Host-mode split of a push's missing-asset list. Collection-owned entries whose
  * bytes are ABSENT locally are recorded as hosted by `peerInstanceId` and
@@ -95,7 +123,10 @@ export async function takeHostedAssets(peerInstanceId, missingAssets, collection
   const remaining = [];
   for (const entry of missingAssets) {
     const dir = KIND_DIRS[entry?.kind]?.();
-    const owned = dir && collectionKeys.has(hostedKey(entry.kind, entry.filename));
+    // A video manifest without a digest is legacy metadata, not evidence the
+    // sender hashed local bytes. Keep it on the normal pull path instead.
+    const verified = entry.kind !== 'video' || /^[a-f0-9]{64}$/i.test(entry.sha256 || '');
+    const owned = verified && dir && collectionKeys.has(hostedKey(entry.kind, entry.filename));
     if (owned && !existsSync(join(dir, entry.filename))) hosted.push(entry);
     else remaining.push(entry);
   }
@@ -103,10 +134,11 @@ export async function takeHostedAssets(peerInstanceId, missingAssets, collection
   return remaining;
 }
 
-function forgetHosted(kind, filename) {
+function forgetHosted(kind, filename, peerId) {
   return queueWrite(async () => {
     const entries = await readEntries();
-    if (delete entries[hostedKey(kind, filename)]) await writeEntries(entries);
+    const key = hostedKey(kind, filename);
+    if (entries[key]?.peerId === peerId) { delete entries[key]; await writeEntries(entries); }
   }).catch(() => {});
 }
 
@@ -260,7 +292,7 @@ async function streamFromPeer(peer, path, req, res, drop, timeoutMs) {
     upstream.stream.destroy();
     // The peer no longer has it (deleted, or a snapshot referenced bytes it never
     // held): forget the entry so the collection stops advertising it as hosted.
-    if (upstream.status === 404 && drop) await forgetHosted(drop.kind, drop.filename);
+    if (upstream.status === 404 && drop) await forgetHosted(drop.kind, drop.filename, peer.instanceId);
     res.status(upstream.status === 404 ? 404 : 502).end();
     return;
   }
