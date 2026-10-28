@@ -118,6 +118,13 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   musicVideoPublishKitEventsUrl: (jobId) => `/api/music-video/publish-kit/${jobId}/events`,
   cancelMusicVideoPublishKit: vi.fn(async () => ({ ok: true })),
   draftMusicVideoPublishCopy: vi.fn(),
+  getMusicVideoFestivalPacket: vi.fn(async () => ({
+    packet: { version: 1, fields: {}, rights: 'unknown', musicRights: 'unknown', consent: 'unknown', festivals: [], include: [] },
+    fields: [{ id: 'title', label: 'Title', group: 'Film' }], festivalFields: [], rightsLabels: {}, suggestions: [],
+    measurements: { status: 'unavailable' }, assets: { render: false, poster: false, still: false, captions: false },
+  })),
+  saveMusicVideoFestivalPacket: vi.fn(async (_id, packet) => ({ packet })),
+  previewMusicVideoFestivalPacket: vi.fn(async () => ({ text: 'Festival submission packet', measurements: { status: 'unavailable' } })),
   getMusicVideoPromotionPlan: vi.fn(async () => ({ steps: [] })),
   planMusicVideoPromotion: vi.fn(),
   updateMusicVideoPublishCopy: vi.fn(),
@@ -290,7 +297,7 @@ import {
   deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender, analyzeMusicVideoProject, prepareMusicVideoSong,
   importMusicVideoLyrics, importMusicVideoTrackLyrics, separateMusicVideoVocals, alignMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene, moveMusicVideoSceneStart,
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
-  addMusicVideoSceneTake, getMusicVideoHandoffBundle,
+  addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoFestivalPacket,
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
   updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject, getMusicVideoActiveRender, getMusicVideoActiveJobs,
   startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
@@ -3028,6 +3035,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'go-/music-video/mv-other/publish' }));
     await screen.findByRole('heading', { level: 2, name: second.name });
     expect(await screen.findByLabelText(/Making-of notes/)).toHaveValue('Example second story');
+    await waitFor(() => expect(getMusicVideoFestivalPacket).toHaveBeenLastCalledWith(second.id, { silent: true }));
     expect(screen.getByLabelText(/Full video URL/)).toHaveValue('https://example.com/second');
     fireEvent.click(screen.getByRole('button', { name: 'Draft copy' }));
     await waitFor(() => expect(draftMusicVideoPublishCopy).toHaveBeenCalledWith(second.id, expect.objectContaining({

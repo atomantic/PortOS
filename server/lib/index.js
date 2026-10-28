@@ -1016,3 +1016,5 @@ export * from './universeVisualProfile.js';
 export * from './universeVisualProfileValidation.js';
 
 export * from './musicVideoPublishExports.js';
+
+export * from './musicVideoFestivalPacket.js';

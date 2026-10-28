@@ -702,3 +702,8 @@ export const getMusicVideoRenderCleanup = (id, options = {}) => request(`/music-
 export const cleanupMusicVideoRenders = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/render-cleanup`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+
+export const getMusicVideoFestivalPacket = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/festival-packet`, options);
+export const previewMusicVideoFestivalPacket = (id, packet, options = {}) => request(`/music-video/${encodeURIComponent(id)}/festival-packet/preview`, { ...options, method: 'POST', body: JSON.stringify(packet) });
+
+export const saveMusicVideoFestivalPacket = (id, packet, options = {}) => request(`/music-video/${encodeURIComponent(id)}/festival-packet`, { ...options, method: 'PUT', body: JSON.stringify(packet) });

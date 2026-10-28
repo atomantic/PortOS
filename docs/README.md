@@ -72,6 +72,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 ## Feature deep dives (`features/`)
 
 - [Music Video private sharing copy](./features/music-video-sharing-copy.md) — source-bound 720p downloads strictly under 100 MB, private local export and media queue lifecycle
+- [Music Video festival packet](./features/music-video-festival-packet.md) — editable festival information, explicit source suggestions and selected text exports
 - [Music Video making-of export](./features/music-video-making-of.md) — local multi-variant planning packages, inventory previews, source planning retention and publication boundaries
 
 Start with the [product surface map](./features/product-surfaces.md) for a complete, user-facing inventory of the application. The focused guides below explain the features with their own operating contracts.

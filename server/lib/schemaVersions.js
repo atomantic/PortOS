@@ -793,7 +793,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v30 = the director's rough story summary, retained across project sync.
   // v31 = a creative-setup subject's catalog age form (`concept.subjects[].castForm`),
   // which a v30 strict subject schema rejects with a 400. Optional, no backfill.
-  musicVideoProjects: 31,
+  // v32 = optional versioned festival packet; older strict project schemas cannot edit it.
+  // No backfill. New receivers preserve a packet omitted by an older sender.
+  musicVideoProjects: 32,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

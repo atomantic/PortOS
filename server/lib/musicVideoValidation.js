@@ -1,3 +1,4 @@
+import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { filmLookSchema } from './filmLookValidation.js';
@@ -1470,6 +1471,7 @@ export const musicVideoTitleCardSchema = z.object({
 }).strict();
 
 export const musicVideoProjectCreateSchema = z.object({
+  festivalPacket: festivalPacketSchema.nullable().optional(),
   mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   productionPolicy: musicVideoProductionPolicySchema.optional(),
   name: z.string().min(1).max(200),
@@ -1501,6 +1503,7 @@ export const musicVideoProjectCreateSchema = z.object({
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
+  festivalPacket: festivalPacketSchema.nullable().optional(),
   storySummary: z.string().max(20000).optional(),
   mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   productionPolicy: musicVideoProductionPolicySchema.optional(),
