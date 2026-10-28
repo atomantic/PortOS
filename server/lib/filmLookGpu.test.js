@@ -62,15 +62,19 @@ describe('film look on the GPU', () => {
     expect(blurKernel(0.7361, 'box')).toBeNull();
     expect(Array.from(blurKernel(0.9276, 'box').weights, w => Math.round(w * 255))).toEqual([21, 64, 85, 64, 21]);
     // σ 2.24 → d = 4: two boxes of 4 and one of 5, centred over 80.
-    const box = blurKernel(2.24);
+    const box = blurKernel(2.24, 'box');
     expect(box.divisor).toBe(80);
     expect(Array.from(box.weights, (w) => Math.round(w * 80))).toEqual([1, 3, 6, 10, 13, 14, 13, 10, 6, 3, 1]);
     expect(box.origin).toBe(5);
     for (const sigma of [3.1378, 20.46, 43.648, 110.484]) {
-      const { weights, origin, boxes } = blurKernel(sigma);
+      const { weights, origin, boxes } = blurKernel(sigma, 'box');
       expect(weights.reduce((sum, w) => sum + w, 0)).toBeCloseTo(1, 5);
       expect(origin * 2 + 1).toBe(weights.length);
       expect(boxes.reduce((sum, [lo]) => sum + lo, 0)).toBe(-origin);
+      // The hardware compositor stays a sampled Gaussian at every sigma (a 36 px blur measured 4 dB closer than boxes).
+      const sampled = blurKernel(sigma);
+      expect(sampled.boxes).toBeUndefined();
+      expect(sampled.weights.reduce((sum, w) => sum + w, 0)).toBeCloseTo(1, 5);
     }
   });
 

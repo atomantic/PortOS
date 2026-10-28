@@ -111,9 +111,9 @@ function turbulencePixel(tables, x, y, { baseFrequency = [0, 0], numOctaves = 1,
 
 /**
  * The 1D blur kernel used to match Chrome's filter for a standard deviation.
- * Small sigmas use the browser's measured model: accelerated filters use a
- * sampled Gaussian, while Chromium's raster path uses boxes (including an
- * identity for small windows). Larger sigmas use the spec's window
+ * The browser's measured model decides: accelerated filters use a sampled
+ * Gaussian at every sigma, while Chromium's raster path uses boxes (including
+ * an identity for small windows) with the spec's window
  * d = ⌊σ·3·√(2π)/4 + ½⌋ (for an even d, two boxes of d shifted against each
  * other plus one of d + 1). Past Skia's 135 limit (a 255-pixel window) Chrome blurs a downscaled copy; a sampled Gaussian stands
  * in for that. `weights[i]` applies to offset `i - origin`; `boxes` and
@@ -130,7 +130,7 @@ function blurKernel(sigma, smallBlur = 'gaussian') {
     for (let i = 0; i < weights.length; i++) weights[i] /= sum;
     return { weights, origin: radius };
   };
-  if (sigma < 2 && smallBlur === 'gaussian') return gaussian();
+  if (smallBlur === 'gaussian') return gaussian();
   const window = Math.max(1, Math.floor(Math.fround(sigma * 3 * Math.sqrt(2 * Math.PI) / 4 + 0.5)));
   if (window === 1) return null;
   if (window >= 255) return gaussian();
@@ -579,20 +579,33 @@ void main() {
     });
   };
   // The row and column profiles of a blurred flood rectangle: the row one
-  // rounded to 8 bits as Skia's horizontal pass stores it.
+  // rounded to 8 bits as Skia's horizontal pass stores it. Fitted to Chrome's
+  // accelerated blur: it reads a flood about FLOOD_OUTSET px wider on every
+  // side than its subregion, and FLOOD_REACH px past the frame where the flood
+  // runs off it (the vignette and version-2 leak floods are fractional and
+  // large-sigma; unadjusted, the all-controls look fell to 38.6 dB).
+  const FLOOD_OUTSET = 1.5;
+  const FLOOD_REACH = 3;
   const floodBlurProfiles = (flood, sx, sy) => {
+    // Each pixel of the rectangle weighs by how much of it the (fractional) edges cover.
     const profile = (length, from, to, sigma) => {
       const values = new Float32Array(length);
       const kernel = sigma > 0 ? blurKernel(sigma) : null;
+      const covered = (j) => Math.max(0, Math.min(j + 1, to) - Math.max(j, from));
       for (let i = 0; i < length; i++) {
-        if (!kernel) { values[i] = i >= from && i < to ? 1 : 0; continue; }
+        if (!kernel) { values[i] = Math.max(0, Math.min(i + 1, to) - Math.max(i, from)) >= 0.5 ? 1 : 0; continue; }
         let sum = 0;
-        for (let j = Math.max(from, i - (kernel.weights.length - 1 - kernel.origin)); j < Math.min(to, i + kernel.origin + 1); j++) sum += kernel.weights[i - j + kernel.origin];
+        for (let j = Math.max(Math.floor(from), i - (kernel.weights.length - 1 - kernel.origin)); j < Math.min(Math.ceil(to), i + kernel.origin + 1); j++) sum += kernel.weights[i - j + kernel.origin] * covered(j);
         values[i] = sum;
       }
       return values;
     };
-    const [x0, y0, x1, y1] = flood.rect;
+    let [x0, y0, x1, y1] = flood.rect;
+    if (smallBlur === 'gaussian') {
+      const grow = (a, b, length) => [Math.max(-FLOOD_REACH, a - FLOOD_OUTSET), Math.min(length + FLOOD_REACH, b + FLOOD_OUTSET)];
+      [x0, x1] = grow(flood.region[0], flood.region[2], width);
+      [y0, y1] = grow(flood.region[1], flood.region[3], height);
+    }
     const row = profile(width, x0, x1, sx);
     const column = profile(height, y0, y1, sy);
     const bytes = new Uint8Array(width * 4);
@@ -764,7 +777,7 @@ void main() {
         const opacity = num(attrs['flood-opacity'], 1);
         const color = [r * opacity, g * opacity, bl * opacity, opacity];
         run('flood', target, (u) => { clipUniform(u, region); gl.uniform4f(u.floodColor, ...color); });
-        floodOf = { color, rect: pixelRect(region) };
+        floodOf = { color, rect: pixelRect(region), region };
       } else if (p.type === 'feOffset') {
         run('offset', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniform2f(u.shift, num(attrs.dx), num(attrs.dy)); gl.uniform1i(u.sampled, i < last - 1 ? 1 : 0); });
       } else if (p.type === 'feGaussianBlur') {
