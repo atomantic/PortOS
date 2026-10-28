@@ -30,6 +30,7 @@ import { AsyncLocalStorage, AsyncResource } from 'node:async_hooks';
 import { currentGitMutationLifetime, withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 
 vi.mock('./agentWorktreeCleanup.js', () => ({ releaseRetryHold: vi.fn(async () => ({})) }));
+vi.mock('./claimDisposition.js', () => ({ verifyCleanupClaimDisposition: vi.fn(async () => null) }));
 vi.mock('./releaseSynchronization.js', () => ({ recoverReleaseSynchronizationHandoffs: vi.fn(async () => {}),
   verifyReleaseSynchronizationTask: vi.fn(async () => ({ status: 'verified' })) }));
 import { recoverReleaseSynchronizationHandoffs, verifyReleaseSynchronizationTask } from './releaseSynchronization.js';
@@ -102,6 +103,7 @@ import { replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { resumeAgentCompletionRetirement, resumeDeferredRepoStateVerifications, verifyAgentRepoState, sweepRepoStateVerifications, bindCompletionRetirementEvents, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
+import { verifyCleanupClaimDisposition } from './claimDisposition.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
 import { recordBranchReconcileOutcome } from './taskSchedule.js';
 import { loadSchedule } from './taskScheduleStore.js';
@@ -496,6 +498,45 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(await run({ task: pending, prExpected: false, success: false, agentState: state })).toMatchObject({ skipReason: 'cleanup-transferred-to-recovery' });
     expect(releaseRetryHold).toHaveBeenCalledOnce();
     expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['parked', 'unverified', 'wrong-issue', 'open-pr'])('retains only an independently verified parked swarm checkout: %s', async scenario => {
+    const branch = 'claim/issue-42';
+    const capture = { version: 1, agentId: 'agent-swarm', startedAt: CREATED_AT, capturedAt: CREATED_AT,
+      repoPath: '/repo', branch, path: '/tree/42', head: HEAD,
+      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const delivered = { ...capture, branch: 'claim/issue-43', path: '/tree/43' };
+    const outcome = { status: 'incomplete', recovery: { mode: 'cleanup' } };
+    const state = { id: 'agent-swarm', taskId: 'task-1', status: 'completed', startedAt: CREATED_AT,
+      result: { executionSuccess: true, deliveryRecoveryOwned: true, cleanupPending: true, taskOutcome: outcome },
+      metadata: { isWorktree: false, workspacePath: '/repo', configClaimFlow: true, claimPicksOwnBranch: true,
+        claimBranches: [branch, delivered.branch], completedCheckouts: [capture, delivered], repoStateVerification: { status: 'pending' } } };
+    const pending = { ...task({ claimFlow: true }), status: 'in_progress', metadata: { ...task({ claimFlow: true }).metadata,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: state.id } };
+    getTaskById.mockResolvedValue(pending);
+    listWorktrees.mockResolvedValue([capture, delivered].map(row => ({ branch: `refs/heads/${row.branch}`, path: row.path, head: row.head })));
+    readCompletedCheckoutIdentity.mockImplementation(async ({ branch: name }) => name === branch ? capture : delivered);
+    readCheckoutPathPresence.mockResolvedValue(true);
+    localBranch(true);
+    findPullRequestForBranch.mockImplementation(async name => name === delivered.branch
+      ? { status: 'found', detail: 'MERGED', url: 'https://github.com/example/repo/pull/43' }
+      : scenario === 'open-pr' ? { status: 'found', detail: 'OPEN', url: 'https://github.com/example/repo/pull/42' }
+        : { status: 'none', url: null, detail: null });
+    verifyCleanupClaimDisposition.mockResolvedValue(scenario === 'unverified' ? { status: 'unverified' }
+      : { status: 'verified', issues: [{ issue: scenario === 'wrong-issue' ? 43 : 42, disposition: 'operator-blocked' }] });
+    updateTask.mockResolvedValue({ status: 'in_progress' });
+    const result = await run({ agentId: state.id, task: pending, agentState: state, success: false });
+    if (scenario === 'parked') {
+      expect(result.branches).toMatchObject([{ branch, verified: false, skipReason: 'cleanup-delivery-unverified' },
+        { branch: delivered.branch, verified: false }]);
+      expect(recordRepoStateVerification).toHaveBeenLastCalledWith(state.id, expect.objectContaining({ status: 'pending' }));
+      expect(updateTask).not.toHaveBeenCalled();
+      expect(releaseRetryHold).not.toHaveBeenCalled();
+    } else {
+      expect(result.skipReason).toBe('cleanup-transferred-to-recovery');
+      expect(releaseRetryHold).toHaveBeenCalledOnce();
+    }
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
   });
 
   it.each(['follow-up', 'capture'])('immediately finalizes receipt-retired delivery after %s, including duplicate observations', async event => {

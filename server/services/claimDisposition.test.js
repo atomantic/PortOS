@@ -13,7 +13,7 @@ import { resolveForgeForRepo } from './forgeAuth.js';
 import { execGh } from './github.js';
 import { execGlab } from './gitlab.js';
 import { execGit } from '../lib/execGit.js';
-import { verifyClaimDisposition } from './claimDisposition.js';
+import { verifyClaimDisposition, verifyCleanupClaimDisposition } from './claimDisposition.js';
 
 const target = { forge: 'github', fullName: 'example/project', webHost: 'github.example.test', apiHost: 'github.example.test', repoSpec: 'github.example.test/example/project' };
 const task = { id: 'task-example', taskType: 'internal', metadata: { app: 'example', claimFlow: true, claimTarget: '42' } };
@@ -87,6 +87,23 @@ describe('selected claim tracker completion', () => {
       expect(await verify({ reportedOutcome: { status: 'blocked', reason: 'Unmet prerequisite.', recovery: { mode } } })).toBeNull();
     }
     expect(execGh).not.toHaveBeenCalled();
+  });
+
+  it('reads parked issue evidence for a completed cleanup owner without converting its outcome', async () => {
+    parkIssue();
+    const outcome = { status: 'incomplete', recovery: { mode: 'cleanup' } };
+    const owner = { ...agent, status: 'completed', metadata: { ...agent.metadata, isWorktree: false, configClaimFlow: true,
+      claimBranches: ['claim/issue-42'], checkoutSeeds: [{ agentId: agent.id, branch: 'claim/issue-42',
+        repoPath: '/example/project', path: '/example/claim' }] },
+    result: { executionSuccess: true, deliveryRecoveryOwned: true, cleanupPending: true, taskOutcome: outcome } };
+    expect(await verifyCleanupClaimDisposition({ task, agent: owner })).toMatchObject({ status: 'verified',
+      issues: [{ issue: 42, disposition: 'operator-blocked' }] });
+    expect(owner.result.taskOutcome).toEqual(outcome);
+    owner.metadata.executionInterruption = { reason: 'interrupted' };
+    expect(await verifyCleanupClaimDisposition({ task, agent: owner })).toBeNull();
+    delete owner.metadata.executionInterruption;
+    owner.result.executionSuccess = false;
+    expect(await verifyCleanupClaimDisposition({ task, agent: owner })).toBeNull();
   });
 
   it('verifies exact remote ancestry when the live default head has not been fetched locally', async () => {
