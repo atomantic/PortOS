@@ -12,7 +12,8 @@ function buildReleaseSynchronizationPayload(entry) {
     || entry.obligations?.localReview?.evidence?.prUrl
     || null;
   const syncHead = entry.obligations?.synchronizationPr?.evidence?.headSha
-    || entry.obligations?.localReview?.evidence?.receipt?.reviewedHead
+    || entry.obligations?.localReview?.evidence?.receipt?.completedHead
+    || (entry.obligations?.localReview?.evidence?.receipt?.version === 1 && entry.obligations.localReview.evidence.receipt.reviewedHead)
     || entry.obligations?.requiredCi?.evidence?.headSha
     || null;
 
