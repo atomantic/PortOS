@@ -138,12 +138,6 @@ async function resolveSheetTarget(id, options) {
   const ingredient = await getIngredient(id);
   if (!ingredient) throw new ServerError('Ingredient not found', { status: 404, code: 'NOT_FOUND' });
   const payload = ingredient.payload && typeof ingredient.payload === 'object' ? ingredient.payload : {};
-  if (payload.locked === true) {
-    throw new ServerError(
-      `"${ingredient.name}" is locked — unlock it before rendering a reference sheet`,
-      { status: 409, code: 'CATALOG_INGREDIENT_LOCKED' },
-    );
-  }
   const isLook = options.variant === CATALOG_LOOK_VARIANT_ID;
   const variants = variantsForType(ingredient.type);
   let variant = isLook
@@ -288,6 +282,13 @@ export async function previewCatalogSheet(id, options = {}) {
 export async function renderCatalogSheet(id, options = {}) {
   await assertCatalogIdentityWritable(id);
   const target = await resolveSheetTarget(id, options);
+  // The lock guards writes only; a preview of a locked record stays available.
+  if (target.ingredient.payload?.locked === true) {
+    throw new ServerError(
+      `"${target.ingredient.name}" is locked — unlock it before rendering a reference sheet`,
+      { status: 409, code: 'CATALOG_INGREDIENT_LOCKED' },
+    );
+  }
   if (target.delegate) {
     const { universeId, entryId } = target.delegate;
     const result = await renderCharacterReferenceSheet(universeId, entryId, { ...options, variant: target.variant.id });

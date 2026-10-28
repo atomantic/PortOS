@@ -253,6 +253,35 @@ describe('catalog sheet routes', () => {
     expect(mocks.enqueueJob).not.toHaveBeenCalled();
   });
 
+  // A preview writes nothing, so the lock never hides it; only the render is refused.
+  it('previews a locked record but refuses to render it, for catalog-only and universe-delegated sheets', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...object, payload: { ...object.payload, locked: true } });
+    const preview = await request(app).post('/api/catalog/ingredients/cat-obj-1/sheets/preview').send({});
+    expect(preview.status).toBe(200);
+    expect(preview.body.preview.sentPrompt).toContain('Example Lantern');
+    const render = await request(app).post('/api/catalog/ingredients/cat-obj-1/sheets').send({});
+    expect(render).toMatchObject({ status: 409, body: { code: 'CATALOG_INGREDIENT_LOCKED' } });
+
+    mocks.getIngredient.mockResolvedValue({ ...character, payload: { ...character.payload, locked: true } });
+    mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
+    mocks.getUniverse.mockResolvedValue({
+      id: 'universe-1', name: 'Example Universe', influences: { embrace: [] },
+      characters: [{ id: 'char-entry-1', name: 'Example Hero', ingredientId: 'cat-chr-1', locked: true }],
+    });
+    const delegatedPreview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
+    expect(delegatedPreview.status).toBe(200);
+    expect(delegatedPreview.body.preview.sentPrompt).toContain('Example Hero');
+    const delegatedRender = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
+    expect(delegatedRender.status).toBe(409);
+
+    // The universe renderer keeps its own canon lock when the record is unlocked.
+    mocks.getIngredient.mockResolvedValue(character);
+    const canonLocked = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
+    expect(canonLocked).toMatchObject({ status: 409, body: { code: 'UNIVERSE_CANON_LOCKED' } });
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    expect(mocks.updateUniverse).not.toHaveBeenCalled();
+  });
+
   // Catches the preview and the render drifting apart (#11317).
   it('previews exactly the prompt the render queues, for a place and an object', async () => {
     for (const [record, marker] of [[place, 'ENVIRONMENT REFERENCE SHEET'], [object, 'PRODUCT REFERENCE SHEET']]) {

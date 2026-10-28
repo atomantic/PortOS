@@ -63,7 +63,33 @@ export async function setPrimitiveOwner(id, universeId) {
   return context;
 }
 
-export async function createOwnedPrimitive(input, universeId, operationKey) {
+const CANON_FIELD = Object.freeze({ character: 'characters', place: 'places', object: 'objects' });
+
+/**
+ * A record the user creates themselves starts unlocked. The bit is stamped
+ * explicitly because an absent `locked` reads as locked on a universe canon
+ * entry (default-lock contract) and as not-yet-unlocked to merge/identity flows.
+ */
+export function withUserCreatedLock(input) {
+  if (!CANON_FIELD[input?.type]) return input;
+  const payload = input.payload && typeof input.payload === 'object' ? input.payload : {};
+  return typeof payload.locked === 'boolean' ? input : { ...input, payload: { ...payload, locked: false } };
+}
+
+// A character/place/object created inside a universe joins that universe's
+// canon exactly as a record added from the Catalog does, so it appears in the
+// universe's Cast/Environments/Objects lists and pickers. Idempotent: an entry
+// already carrying this identity is left alone, which also lets a receipt
+// replay retry a join that failed after the create committed.
+export async function createOwnedPrimitive(rawInput, universeId, operationKey) {
+  const input = withUserCreatedLock(rawInput);
+  const ingredient = await createOwnedRecord(input, universeId, operationKey);
+  if (!CANON_FIELD[ingredient.type]) return ingredient;
+  await addPrimitiveToUniverse(ingredient.id, universeId, `canon-${ingredient.type}`);
+  return (await getIngredient(ingredient.id)) || ingredient;
+}
+
+async function createOwnedRecord(input, universeId, operationKey) {
   return withTransaction(async (client) => {
     const fingerprint = createHash('sha256').update(canonicalStringify({ action: 'create-primitive', universeId,
       type: input.type, name: input.name, payload: input.payload, tags: input.tags })).digest('hex');
@@ -100,7 +126,7 @@ export async function addPrimitiveToUniverse(id, universeId, role) {
   const ingredient = await getIngredient(id);
   if (!ingredient) fail('Ingredient not found', 'CATALOG_NOT_FOUND', 404);
   const identityIds = new Set(await getIngredientIdentityIds(ingredient.id));
-  const field = { character: 'characters', place: 'places', object: 'objects' }[ingredient.type];
+  const field = CANON_FIELD[ingredient.type];
   let universe = null;
   if (field && role === `canon-${ingredient.type}`) {
     const { updateUniverse } = await import('./universeBuilder.js');
@@ -112,7 +138,10 @@ export async function addPrimitiveToUniverse(id, universeId, role) {
       if (list.length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) fail('This universe’s canon bucket is full. Remove a membership before adding another.', 'UNIVERSE_CANON_FULL');
       const payload = structuredClone(ingredient.payload);
       for (const key of ['id', 'ingredientId', 'createdAt', 'updatedAt']) delete payload[key];
-      return { [field]: [...list, { ...payload, id: `${ingredient.type}-${randomUUID()}`,
+      // Joining canon never changes the record's lock. Without an explicit bit
+      // the universe default-locks the new entry and the canon→catalog
+      // projection writes that lock back onto the record.
+      return { [field]: [...list, { ...payload, locked: payload.locked === true, id: `${ingredient.type}-${randomUUID()}`,
         ingredientId: ingredient.id, name: ingredient.name, updatedAt: ingredient.updatedAt }] };
     }, { afterWrite: () => linkIngredientToRef(ingredient.id, 'universe', universeId, role) });
   } else await linkIngredientToRef(ingredient.id, 'universe', universeId, role);
@@ -127,7 +156,7 @@ export async function removePrimitiveFromUniverse(id, universeId, role) {
   if (!ingredient) fail('Ingredient not found', 'CATALOG_NOT_FOUND', 404);
   const identityIds = new Set(await getIngredientIdentityIds(ingredient.id));
   const { rows: containers } = await query('SELECT id FROM universes WHERE id = $1 AND deleted = false', [universeId]);
-  const field = { character: 'characters', place: 'places', object: 'objects' }[ingredient.type];
+  const field = CANON_FIELD[ingredient.type];
   if (containers.length && field && role === `canon-${ingredient.type}`) {
     const { updateUniverse } = await import('./universeBuilder.js');
     await updateUniverse(universeId, async (current) => {
