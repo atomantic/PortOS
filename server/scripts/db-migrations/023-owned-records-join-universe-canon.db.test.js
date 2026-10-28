@@ -19,7 +19,7 @@ const key = randomUUID().slice(0, 8);
 const universeId = `${key}-universe`;
 const ingredientIds = [];
 const CREATED_AT = '2026-01-01T00:00:00.000Z';
-const UNIVERSE_CLOCK = '2026-02-01T00:00:00.000Z';
+const UNIVERSE_CLOCK = '2099-02-01T00:00:00.000Z';
 
 afterAll(async () => {
   if (runDb) {
@@ -74,13 +74,15 @@ describe.skipIf(!runDb)('db-migration 023 — owned records join their universe 
     expect(await canonRoles(place)).toEqual([{ role: 'canon-place', deleted: false }]);
     for (const untouched of [ownedLater, fork, present]) expect(await canonRoles(untouched)).toEqual([]);
     expect(await canonRoles(removed)).toEqual([{ role: 'canon-character', deleted: true }]);
-    // A derived, peer-convergent change keeps the universe's LWW clock.
-    expect(after.updated_at.toISOString()).toBe(UNIVERSE_CLOCK);
-    expect(after.data.updatedAt).toBe(UNIVERSE_CLOCK);
+    // An unmodified peer rejects equal timestamps, so the backfill must
+    // advance even a universe clock that is ahead of the local wall clock.
+    expect(after.updated_at.toISOString() > UNIVERSE_CLOCK).toBe(true);
+    expect(after.data.updatedAt).toBe(after.updated_at.toISOString());
 
     await withTransaction((client) => up(client));
     const again = await universe();
     expect(again.data.characters).toHaveLength(2);
     expect(again.data.places).toHaveLength(1);
+    expect(again.data.updatedAt).toBe(after.data.updatedAt);
   });
 });

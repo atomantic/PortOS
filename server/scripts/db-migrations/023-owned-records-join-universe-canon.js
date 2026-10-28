@@ -20,9 +20,9 @@
  * is the record's payload with an explicit lock bit (so the universe does not
  * default-lock it), the record's name, id and clock, plus the `canon-<type>`
  * ref. A universe that already holds an entry for the record, or whose bucket
- * is full, is skipped. The entry id is derived from the record and universe ids
- * and the universe clock is left alone, so every sync peer that runs this over
- * its synced copy makes the identical change instead of racing its own.
+ * is full, is skipped. The entry id is derived from the record and universe
+ * ids, so it is deterministic across peers. The universe clock advances so
+ * peers that have not run the backfill can receive it through normal LWW sync.
  */
 
 import { createHash } from 'node:crypto';
@@ -75,7 +75,7 @@ export async function up(client) {
     return;
   }
   const universeIds = [...new Set(rows.map((row) => row.universe_id))];
-  const { rows: universes } = await client.query('SELECT id, data FROM universes WHERE id = ANY($1) AND deleted = false', [universeIds]);
+  const { rows: universes } = await client.query('SELECT id, data, updated_at FROM universes WHERE id = ANY($1) AND deleted = false', [universeIds]);
   const data = new Map(universes.map((u) => [u.id, structuredClone(u.data && typeof u.data === 'object' ? u.data : {})]));
   const changed = new Set();
   let joined = 0;
@@ -98,7 +98,12 @@ export async function up(client) {
     joined += 1;
   }
   for (const universeId of changed) {
-    await client.query('UPDATE universes SET data = $2::jsonb WHERE id = $1 AND deleted = false', [universeId, toPgJson(data.get(universeId))]);
+    const universe = data.get(universeId);
+    const before = universes.find((row) => row.id === universeId);
+    const previousClocks = [before.updated_at?.getTime(), Date.parse(universe.updatedAt)].filter(Number.isFinite);
+    const now = new Date(Math.max(Date.now(), ...previousClocks.map((clock) => clock + 1))).toISOString();
+    await client.query('UPDATE universes SET data = $2::jsonb, updated_at = $3 WHERE id = $1 AND deleted = false',
+      [universeId, toPgJson({ ...universe, updatedAt: now }), now]);
   }
   console.log(`🎭 universe canon backfill: joined ${joined} owned record${joined === 1 ? '' : 's'} to ${changed.size} universe${changed.size === 1 ? '' : 's'}, skipped ${skipped}`);
 }

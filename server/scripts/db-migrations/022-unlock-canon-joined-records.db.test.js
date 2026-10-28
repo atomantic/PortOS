@@ -62,8 +62,9 @@ describe.skipIf(!runDb)('db-migration 022 — unlock records locked by joining c
     const characters = [joinEntry(bug), joinEntry(userLocked), joinEntry(promoted), joinEntry(relocked),
       { id: `chr-${randomUUID()}`, ingredientId: authored, name: 'Ada', locked: true }, joinEntry(pruned),
       joinEntry(shared), { id: 'chr-example', ingredientId: shared, name: 'Ada', locked: true }];
+    const universeClock = '2099-01-01T00:00:00.000Z';
     await query('INSERT INTO universes (id, name, data, updated_at) VALUES ($1, $2, $3::jsonb, $4)',
-      [universeId, 'Example Universe', toPgJson({ id: universeId, name: 'Example Universe', characters, updatedAt: at(1) }), at(1)]);
+      [universeId, 'Example Universe', toPgJson({ id: universeId, name: 'Example Universe', characters, updatedAt: universeClock }), universeClock]);
 
     await withTransaction((client) => up(client));
 
@@ -78,7 +79,7 @@ describe.skipIf(!runDb)('db-migration 022 — unlock records locked by joining c
     expect(after.data.characters.find((e) => e.ingredientId === bug)).toMatchObject({ locked: false, updatedAt: recordClock.toISOString() });
     expect(after.data.characters.filter((e) => e.ingredientId !== bug).every((e) => e.locked === true)).toBe(true);
     expect(after.updated_at.toISOString()).toBe(after.data.updatedAt);
-    expect(after.data.updatedAt > at(1)).toBe(true);
+    expect(after.data.updatedAt > universeClock).toBe(true);
 
     // A re-run finds nothing left to unlock and rewrites nothing.
     await withTransaction((client) => up(client));

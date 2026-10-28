@@ -89,7 +89,7 @@ export async function up(client) {
     return;
   }
   const candidates = new Map(rows.map((row) => [row.id, row.type]));
-  const { rows: universes } = await client.query('SELECT id, data FROM universes WHERE deleted = false');
+  const { rows: universes } = await client.query('SELECT id, data, updated_at FROM universes WHERE deleted = false');
   const entries = canonEntriesFor(universes, candidates);
   const edits = new Map();
   let unlocked = 0;
@@ -112,8 +112,10 @@ export async function up(client) {
     }
     unlocked += 1;
   }
-  const now = new Date().toISOString();
   for (const [universeId, data] of edits) {
+    const before = universes.find((universe) => universe.id === universeId);
+    const previousClocks = [before.updated_at?.getTime(), Date.parse(data.updatedAt)].filter(Number.isFinite);
+    const now = new Date(Math.max(Date.now(), ...previousClocks.map((clock) => clock + 1))).toISOString();
     await client.query('UPDATE universes SET data = $2::jsonb, updated_at = $3 WHERE id = $1 AND deleted = false',
       [universeId, toPgJson({ ...data, updatedAt: now }), now]);
   }

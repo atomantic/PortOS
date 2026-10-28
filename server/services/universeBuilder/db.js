@@ -203,11 +203,12 @@ export async function countUniverses({ includeDeleted = false } = {}) {
  * warm/import, would block the whole backend). `created_at` is preserved on
  * conflict — only the first INSERT sets it.
  */
-export async function writeRaw(id, record) {
+export async function writeRaw(id, record, { client } = {}) {
   const now = new Date().toISOString();
   const createdAt = mirrorTimestamp(record?.createdAt, now);
   const schemaVersion = Number.isInteger(record?.schemaVersion) ? record.schemaVersion : 5;
-  await query(
+  const exec = client ? client.query.bind(client) : query;
+  await exec(
     `INSERT INTO universes (id, name, data, schema_version, ephemeral, created_at, updated_at, deleted, deleted_at)
      VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (id) DO UPDATE SET
