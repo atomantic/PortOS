@@ -449,6 +449,107 @@ describe('catalog sheet routes', () => {
       expect(mocks.enqueueJob).not.toHaveBeenCalled();
     });
 
+    describe('edit from the canonical portrait', () => {
+      const codex = { imageGen: { mode: 'codex', codex: { enabled: true } } };
+      const portraitMedia = [
+        { kind: 'portrait', mediaKey: 'portrait.png' },
+        { kind: 'reference', mediaKey: 'side.png' },
+        { kind: 'reference', mediaKey: 'old-look.png', role: 'look:wd-scarf' },
+      ];
+      const body = { variant: 'look', wardrobeId: 'wd-scarf', visualDirection: { ...visualDirection, style: 'Live-action photography' } };
+      beforeEach(() => {
+        ['portrait.png', 'side.png', 'old-look.png'].forEach((name) => mocks.imageFiles.add(name));
+      });
+
+      // Catches the portrait riding as a loose reference again (the face drifts
+      // to a different person), the preview hiding the edit base, the record's
+      // everyday outfit text fighting the look, and a triptych shrinking the face.
+      it('edits the portrait into one full-body figure, with other references as guides, exactly as previewed', async () => {
+        mocks.getSettings.mockResolvedValue(codex);
+        mocks.getIngredient.mockResolvedValue(dressed);
+        mocks.listMediaForIngredient.mockResolvedValue(portraitMedia);
+        const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+        expect(preview.status).toBe(200);
+        const sent = preview.body.preview;
+        expect(sent.editBase).toMatchObject({ filename: 'portrait.png', source: 'Portrait', status: 'included', url: '/data/images/portrait.png' });
+        expect(sent.referenceImages.map((ref) => [ref.filename, ref.status, ref.role])).toEqual([
+          ['portrait.png', 'included', 'edit-base'], ['side.png', 'included', undefined],
+        ]);
+        expect(sent.promptAdditions.map((a) => a.id)).toContain('portrait-edit-base');
+        expect(sent.promptAdditions.map((a) => a.id)).not.toContain('character-identity');
+        expect(sent.sentPrompt).toContain('ONE full-body figure');
+        expect(sent.sentPrompt).toContain('long red wool scarf over a grey travel coat');
+        expect(sent.sentPrompt).not.toContain('silver coat');
+
+        const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        expect(res.status).toBe(200);
+        expect(res.body.editBase).toMatchObject({ filename: 'portrait.png', status: 'included' });
+        const params = queuedParams();
+        expect(basename(params.initImagePath)).toBe('portrait.png');
+        expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['side.png']);
+        expect(params.initImageStrength).toBeGreaterThan(0.4);
+        expect(params.height).toBeGreaterThan(params.width);
+        expect(params.width).toBe(2048);
+        expect(params.prompt).toBe(sent.sentPrompt);
+        expect(params.promptAdditions).toEqual(sent.promptAdditions);
+      });
+
+      it('keeps today’s three-view generate with no portrait to edit', async () => {
+        mocks.getSettings.mockResolvedValue(codex);
+        mocks.getIngredient.mockResolvedValue({ ...dressed, payload: { ...dressed.payload, primaryImageRef: 'side.png' } });
+        const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+        expect(preview.body.preview.editBase).toBeUndefined();
+        expect(preview.body.preview.referenceImages.map((ref) => ref.role)).toEqual([undefined]);
+        await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        const params = queuedParams();
+        expect(params.initImagePath).toBeUndefined();
+        expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['side.png']);
+        expect(params.prompt).toContain('three full-body views');
+        expect(params.prompt).toContain('long red wool scarf over a grey travel coat');
+        expect(params).toMatchObject({ width: 4096, height: 3072 });
+      });
+
+      // Catches a backend that cannot restage the portrait silently dropping it
+      // or pretending to edit: the reason is shown and the portrait still guides.
+      it('falls back to the portrait as a reference on the local backend and says why', async () => {
+        mocks.getIngredient.mockResolvedValue(dressed);
+        mocks.listMediaForIngredient.mockResolvedValue(portraitMedia);
+        const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+        expect(preview.body.preview.editBase).toMatchObject({ filename: 'portrait.png', status: 'fallback', reason: expect.stringMatching(/cloud image backend/) });
+        expect(preview.body.preview.referenceImages.map((ref) => [ref.filename, ref.status])).toEqual([
+          ['portrait.png', 'included'], ['side.png', 'included'],
+        ]);
+        const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        expect(res.body.editBase).toMatchObject({ status: 'fallback' });
+        const params = queuedParams();
+        expect(params.initImagePath).toBeUndefined();
+        expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['portrait.png', 'side.png']);
+        expect(params.prompt).toContain('three full-body views');
+
+        mocks.getImageModels.mockReturnValue([{ id: 'dev', runner: 'mflux', hardwareCompatibility: { state: 'available' } }]);
+        const refused = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        expect(refused.status).toBe(400);
+        expect(refused.body.code).toBe('CHARACTER_SHEET_REFERENCES_UNSUPPORTED');
+      });
+
+      it('starts a universe-delegated sheet from the linked record’s portrait too', async () => {
+        mocks.getSettings.mockResolvedValue(codex);
+        mocks.getIngredient.mockResolvedValue(character);
+        mocks.listMediaForIngredient.mockResolvedValue(portraitMedia);
+        mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
+        mocks.getUniverse.mockResolvedValue({ id: 'universe-1', name: 'Example Universe', influences: { embrace: [] },
+          characters: [{ id: 'char-entry-1', name: 'Example Hero', ingredientId: 'cat-chr-1' }] });
+        const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
+        expect(preview.body.preview.editBase).toMatchObject({ filename: 'portrait.png', status: 'included' });
+        const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
+        expect(res.body.delegatedTo).toBe('universe');
+        const params = queuedParams();
+        expect(basename(params.initImagePath)).toBe('portrait.png');
+        expect(params).toMatchObject({ width: 4096, height: 3072 });
+        expect(params.prompt).toBe(preview.body.preview.sentPrompt);
+      });
+    });
+
     it('is not offered among the sheet variants', async () => {
       mocks.getIngredient.mockResolvedValue(dressed);
       const res = await request(app).get('/api/catalog/ingredients/cat-chr-1/sheets/variants');

@@ -24,7 +24,7 @@ import { universeAestheticLine } from '../lib/universeVisualStyle.js';
 import { applyImageVisualProfile } from './imageGen/visualProfile.js';
 import { resolveUniverseVisualProfile } from '../lib/universeVisualProfile.js';
 import { promptAddition } from '../lib/modelInput.js';
-import { characterSheetReferenceCandidates, resolveCharacterSheetReferences } from '../lib/characterSheetReferences.js';
+import { characterSheetEditBase, characterSheetReferenceCandidates, resolveCharacterSheetReferences } from '../lib/characterSheetReferences.js';
 import { enqueueJob, getJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
@@ -59,10 +59,20 @@ const CODEX_HEIGHT = 3072;
 // return the FLUX-tuned defaults; the renderer overrides for codex so the
 // text annotations land at codex's native hi-res instead of being downsampled
 // from a smaller request.
+// Codex doubles the template's own size, so a portrait-orientation template (a
+// single full-body look) keeps its orientation at codex's resolution too.
 function resolveSheetDimensions(mode, builtWidth, builtHeight) {
-  if (mode === IMAGE_GEN_MODE.CODEX) return { width: CODEX_WIDTH, height: CODEX_HEIGHT };
-  return { width: builtWidth || DEFAULT_WIDTH, height: builtHeight || DEFAULT_HEIGHT };
+  const width = builtWidth || DEFAULT_WIDTH;
+  const height = builtHeight || DEFAULT_HEIGHT;
+  if (mode === IMAGE_GEN_MODE.CODEX) return { width: width * (CODEX_WIDTH / DEFAULT_WIDTH), height: height * (CODEX_HEIGHT / DEFAULT_HEIGHT) };
+  return { width, height };
 }
+
+// Codex/grok/agy/fal/runway describe the init image's fidelity in words
+// (describeFidelity): the default 0.25 tells the model to keep the source's
+// composition, which would pin a headshot. 0.6 asks for a strong reference
+// the template may restage, while identity is held by the edit-base addition.
+const PORTRAIT_EDIT_STRENGTH = 0.6;
 
 const DEFAULT_EXPRESSIONS = Object.freeze([
   'neutral', 'curious', 'worried', 'surprised', 'amused', 'determined', 'relaxed',
@@ -468,10 +478,15 @@ function subscribeToSheetJob(jobId, handlers) {
  * `styleLine` is the style block the template carries; it is listed as
  * `styleChip` only when the template (not a typed override) is sent and the
  * block is actually in it. A typed override is sent exactly as written.
- * Returns `{ params, prompt, negativePrompt, modelId, activeMode }`.
+ *
+ * `editBaseCandidate` is the record's canonical portrait. On a backend that
+ * edits, the render starts from it (`initImagePath`) and the other references
+ * follow as identity guides; `built` may then be a function of
+ * `{ editFromPortrait }` so a template can pick a layout that suits an edit.
+ * Returns `{ params, prompt, negativePrompt, modelId, activeMode, referenceImages, editBase }`.
  */
 export async function buildSheetRenderParams({
-  built,
+  built: buildOrBuilt,
   options = {},
   styleLine = '',
   renderPin = {},
@@ -479,18 +494,9 @@ export async function buildSheetRenderParams({
   styleChip = { id: 'universe-style', label: 'Universe style' },
   negativesLabel = 'Character sheet negatives',
   referenceCandidates = [],
+  editBaseCandidate = null,
   sharedIdentity = '',
 }) {
-  const hasPromptOverride = typeof options.overridePrompt === 'string' && !!options.overridePrompt.trim();
-  // A blank prompt override means "use the template"; a negative override is
-  // the user's choice even when empty, so "" sends no template negatives.
-  const hasNegativeOverride = typeof options.overrideNegativePrompt === 'string';
-  let prompt = hasPromptOverride ? options.overridePrompt : built.prompt;
-  const identityAddition = !hasPromptOverride && sharedIdentity && !prompt.includes(sharedIdentity)
-    ? promptAddition('shared-character-identity', 'Shared facial identity', sharedIdentity) : null;
-  if (identityAddition) prompt += `\n\nShared facial identity: ${sharedIdentity}`;
-  const negativePrompt = hasNegativeOverride ? options.overrideNegativePrompt : built.negativePrompt;
-
   const settings = await getSettings();
   // Text-template rendering works with any image-gen backend. Route through
   // the media-job queue with the active mode set; codex and local are both
@@ -505,6 +511,24 @@ export async function buildSheetRenderParams({
     fallbackMode: IMAGE_GEN_MODE.LOCAL,
   });
   const activeMode = sheetTarget.mode;
+  const cloud = sheetTarget.cloud;
+  if (cloud && !cloud.enabled) throw cloud.disabledError;
+  const localModel = !cloud && activeMode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, options.modelId) : null;
+  const modelId = cloud ? cloud.modelId : localModel?.id || null;
+  const references = resolveCharacterSheetReferences(referenceCandidates, activeMode, modelId, localModel, editBaseCandidate);
+  const editFromPortrait = !!references.initPath;
+  const built = typeof buildOrBuilt === 'function' ? buildOrBuilt({ editFromPortrait }) : buildOrBuilt;
+
+  const hasPromptOverride = typeof options.overridePrompt === 'string' && !!options.overridePrompt.trim();
+  // A blank prompt override means "use the template"; a negative override is
+  // the user's choice even when empty, so "" sends no template negatives.
+  const hasNegativeOverride = typeof options.overrideNegativePrompt === 'string';
+  let prompt = hasPromptOverride ? options.overridePrompt : built.prompt;
+  const identityAddition = !hasPromptOverride && sharedIdentity && !prompt.includes(sharedIdentity)
+    ? promptAddition('shared-character-identity', 'Shared facial identity', sharedIdentity) : null;
+  if (identityAddition) prompt += `\n\nShared facial identity: ${sharedIdentity}`;
+  const negativePrompt = hasNegativeOverride ? options.overrideNegativePrompt : built.negativePrompt;
+
   // Sheet renders hard-code cleanC2PA=true (lossless metadata strip — gpt-image
   // adds a caBX provenance chunk we don't want to ship) and denoise=false
   // (the median+sharpen pass blurs annotation text; sheets ship with their
@@ -514,8 +538,8 @@ export async function buildSheetRenderParams({
   const denoise = false;
   // Codex's image_gen tool can render up to 4K — asking for FLUX's 2048×1536
   // under-uses the available headroom and pixelates annotation text when the
-  // user zooms. resolveSheetDimensions bumps codex up to 4K landscape while
-  // local FLUX keeps its memory-tuned 2048×1536 defaults.
+  // user zooms. resolveSheetDimensions doubles the template size for codex
+  // while local FLUX keeps the template's memory-tuned size.
   const { width, height } = resolveSheetDimensions(activeMode, built.width, built.height);
   // The sheet template is PortOS's own text around the record's fields; the
   // style and the sheet negatives it carries are listed on the render's
@@ -536,17 +560,10 @@ export async function buildSheetRenderParams({
     denoise,
   };
 
-  let modelId = null;
-  let localModel = null;
   let params;
-  const cloud = sheetTarget.cloud;
   if (cloud) {
-    if (!cloud.enabled) throw cloud.disabledError;
-    modelId = cloud.modelId;
     params = { ...baseParams, ...cloud.providerParams };
   } else if (activeMode === IMAGE_GEN_MODE.LOCAL) {
-    localModel = selectLocalImageModelFromSettings(settings, options.modelId);
-    modelId = localModel?.id || null;
     if (!modelId) {
       throw new ServerError(
         'No local image-gen models are registered. Install a model via `bash scripts/setup-image-video.sh` before generating a reference sheet.',
@@ -560,9 +577,19 @@ export async function buildSheetRenderParams({
       { status: 400, code: 'UNIVERSE_CHARACTER_SHEET_UNSUPPORTED_MODE' },
     );
   }
-  const references = resolveCharacterSheetReferences(referenceCandidates, activeMode, modelId, localModel);
-  if (references.paths.length) {
-    params.referenceImagePaths = references.paths;
+  if (references.paths.length) params.referenceImagePaths = references.paths;
+  if (editFromPortrait) {
+    params.initImagePath = references.initPath;
+    params.initImageStrength = PORTRAIT_EDIT_STRENGTH;
+    if (!hasPromptOverride) {
+      const guides = references.paths.length
+        ? ' The other attached images are identity guides for the same person.' : '';
+      const text = `Edit the FIRST attached image, the character’s canonical portrait, into the image described above. Keep this exact person: the same facial structure, eyes, skin, hair color and distinctive marks. Apply the age, hairstyle, clothing, pose, framing, setting and layout the description asks for, and do not keep the portrait’s own clothing, crop or background unless the description asks for them.${guides}`;
+      prompt += `\n\n${text}`;
+      params.prompt = prompt;
+      params.promptAdditions = [...(params.promptAdditions || []), promptAddition('portrait-edit-base', 'Edit from the canonical portrait', text)];
+    }
+  } else if (references.paths.length) {
     if (!hasPromptOverride) {
       const text = 'Use the attached canonical character images as the identity reference. Preserve the character’s facial features, proportions, skin, hair, markings and distinctive likeness across every view. Apply the requested age, wardrobe and visual direction while keeping the same character identity.';
       prompt += `\n\n${text}`;
@@ -571,7 +598,10 @@ export async function buildSheetRenderParams({
     }
   }
   params = applyImageVisualProfile(params, visualProfile);
-  return { params, prompt: params.prompt, negativePrompt: params.negativePrompt, modelId, activeMode, referenceImages: references.images };
+  return {
+    params, prompt: params.prompt, negativePrompt: params.negativePrompt, modelId, activeMode,
+    referenceImages: references.images, editBase: references.editBase,
+  };
 }
 
 export function assertSheetReferencesAvailable(referenceImages) {
@@ -624,6 +654,7 @@ async function prepareCharacterSheet(universeId, entryId, options) {
       : { id: 'sheet-default-style', label: 'Default sheet style' },
     renderPin: recordRenderPin(universe), visualProfile: options.visualProfileOverride === undefined ? universe.visualProfile : options.visualProfileOverride,
     referenceCandidates: characterSheetReferenceCandidates(character, media),
+    editBaseCandidate: characterSheetEditBase(character, media),
     sharedIdentity: character.visualIdentity,
   });
   return { variant, variantConfig, universe, character, ...sheet };
@@ -631,12 +662,13 @@ async function prepareCharacterSheet(universeId, entryId, options) {
 
 /** What a universe character's sheet render would send, without queueing it. */
 export async function previewCharacterReferenceSheet(universeId, entryId, options = {}) {
-  const { params, referenceImages } = await prepareCharacterSheet(universeId, entryId, options);
+  const { params, referenceImages, editBase } = await prepareCharacterSheet(universeId, entryId, options);
   return {
     sentPrompt: params.prompt,
     ...(params.negativePrompt ? { sentNegativePrompt: params.negativePrompt } : {}),
     promptAdditions: params.promptAdditions || [],
     referenceImages,
+    ...(editBase ? { editBase } : {}),
   };
 }
 
