@@ -1768,6 +1768,18 @@ describe('claim-swarm completion', () => {
     expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', expect.objectContaining({
       branch: 'claim/issue-11', status: 'blocked', reason: 'claim-owner-ambiguous', owners: ['agent-a', 'agent-bb'] }));
   });
+  it('scans claim holds for a completed claim checkout, not an unrelated worktree', async () => {
+    const events = new EventEmitter();
+    const unbind = bindCompletionRetirementEvents(events);
+    try {
+      await events.listeners('agent:completed')[0]({ id: 'unrelated', metadata: { isWorktree: true,
+        workspacePath: '/repo/data/cos/worktrees/agent-unrelated', worktreeBranch: 'cos/task/unrelated' } });
+      expect(readBranchCompletionPolicies).not.toHaveBeenCalled();
+      await events.listeners('agent:completed')[0]({ id: 'claim-owner', metadata: { isWorktree: true,
+        workspacePath: '/repo/data/cos/worktrees/claim-example', worktreeBranch: 'claim/issue-11' } });
+    } finally { unbind(); }
+    expect(readBranchCompletionPolicies).toHaveBeenCalledOnce();
+  });
   it.each(['bound-elsewhere', 'bound-here', 'completed', 'pending-only-completed', 'racing-bind'])('rechecks the recorded hold when its picker changes ownership: %s', async scenario => {
     const branch = 'claim/issue-11';
     const capture = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,

@@ -3,6 +3,7 @@ import { outsideGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
+import { isHumanClaimWorktree, worktreeAgentId } from '../lib/worktreeOwnership.js';
 import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
 import { recoverCompletionTaskHandoff, matchesCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
 import { withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
@@ -869,7 +870,10 @@ export function bindCompletionRetirementEvents(events) {
   };
   const onClaimOwnerCompleted = agent => {
     const meta = agent?.metadata;
-    if (!meta?.isWorktree && !agent?.claimBranch && !meta?.claimBranch && !agent?.claimPicksOwnBranch && !meta?.claimPicksOwnBranch
+    const checkoutPath = agent?.workspacePath || meta?.workspacePath;
+    const claimCheckout = meta?.isWorktree && ((typeof checkoutPath === 'string' && isHumanClaimWorktree(worktreeAgentId(checkoutPath)))
+      || (typeof meta.worktreeBranch === 'string' && /^(claim|next)\//.test(meta.worktreeBranch)));
+    if (!claimCheckout && !agent?.claimBranch && !meta?.claimBranch && !agent?.claimPicksOwnBranch && !meta?.claimPicksOwnBranch
       && !agent?.claimSelectionPending && !meta?.claimSelectionPending && !agent?.claimBranches?.length && !meta?.claimBranches?.length
       && !meta?.reconcileReservations?.length && !meta?.releaseCandidate) return;
     return onClaimOwnership(agent);
