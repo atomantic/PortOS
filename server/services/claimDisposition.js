@@ -147,6 +147,24 @@ async function gitlabDisposition({ number, target, run }) {
 export async function verifyClaimDisposition({ task, agent, reportedOutcome, success }) {
   if (!success || !['no-action-needed', 'blocked'].includes(reportedOutcome?.status)
     || reportedOutcome.recovery || !hasClaimFlowContract(task)) return null;
+  return inspectClaimDisposition(task, agent);
+}
+
+/** Read the same tracker evidence during a cleanup hold without settling the
+ * task or authorizing retirement. The completed swarm remains the owner of its
+ * captured checkouts while the service retains any no-PR stand-down. */
+export async function verifyCleanupClaimDisposition({ task, agent }) {
+  const result = agent?.result;
+  if (agent?.status !== 'completed' || agent.metadata?.isWorktree !== false
+    || agent.metadata?.configClaimFlow !== true || result?.executionSuccess !== true
+    || result.validationPassed === false || result.cleanupPending !== true || result.deliveryRecoveryOwned !== true
+    || result.executionInterruption || agent.metadata?.executionInterruption
+    || !['incomplete', 'blocked'].includes(result.taskOutcome?.status)
+    || result.taskOutcome?.recovery?.mode !== 'cleanup' || !hasClaimFlowContract(task)) return null;
+  return inspectClaimDisposition(task, agent);
+}
+
+async function inspectClaimDisposition(task, agent) {
   if (!task?.id || agent?.taskId !== task.id) return unverified('task-binding-unverified');
   const app = await getAppDataForTask(task);
   const source = agent.metadata?.sourceWorkspace || agent.metadata?.workspacePath;

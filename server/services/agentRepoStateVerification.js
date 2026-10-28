@@ -417,11 +417,24 @@ export async function verifyAgentRepoState(input) {
     // A retirement policy refusal is a preservation hold, not failed delivery.
     // Keep its persisted obligation pending for service replay; requeueing the
     // original task would launch another review agent against an already merged PR.
-    const unsupported = prStaysOpen(input.task) ? { skipReason: 'leave-open-cleanup-unsupported' } : outcomes.find(item => [REPO_STATE_SKIPS.DISABLED, REPO_STATE_SKIPS.NOT_WORKTREE,
+    const unsupportedOutcomes = prStaysOpen(input.task) ? [{ skipReason: 'leave-open-cleanup-unsupported' }] : outcomes.filter(item => [REPO_STATE_SKIPS.DISABLED, REPO_STATE_SKIPS.NOT_WORKTREE,
       REPO_STATE_SKIPS.PERSISTENT_WORKTREE, REPO_STATE_SKIPS.DISCARDED_WORKTREE,
       'retirement-app-unavailable', 'retirement-app-ambiguous'].includes(item.skipReason)
       || (item.skipReason === 'cleanup-delivery-unverified' && (['OPEN', 'CLOSED'].includes(item.observed?.prState)
         || (item.observed?.prState === null && item.observed?.prUrl === null && item.observed?.unreadable?.length === 0))));
+    let unsupported = unsupportedOutcomes[0];
+    if (swarmCleanup && unsupported && unsupportedOutcomes.every(item => item.skipReason === 'cleanup-delivery-unverified'
+      && item.observed?.prState === null && item.observed?.prUrl === null && item.observed?.unreadable?.length === 0)) {
+      // A parked child has no PR by design. Verify every selected issue and
+      // the parked checkout independently before retaining this as a service
+      // hold; this evidence neither retires the checkout nor completes the task.
+      const { verifyCleanupClaimDisposition } = await import('./claimDisposition.js');
+      const disposition = await verifyCleanupClaimDisposition({ task: input.task, agent: input.agentState }).catch(() => null);
+      if (disposition?.status === 'verified' && unsupportedOutcomes.every(item => {
+        const issue = item.branch?.match(/^claim\/issue-([1-9]\d*)$/)?.[1];
+        return issue && disposition.issues?.some(row => row.issue === Number(issue) && row.disposition === 'operator-blocked');
+      })) unsupported = null;
+    }
     if (cleanupPending && unsupported) {
       // An exhausted task gets no new recovery dispatch or refunded budget.
       if (input.task.status === 'blocked') return result;
