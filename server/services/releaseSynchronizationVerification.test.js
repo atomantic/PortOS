@@ -7,7 +7,8 @@ import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../lib/m
 
 const f = vi.hoisted(() => ({ agents: [], pr: null, review: null, reviews: [], checks: [], receipts: [],
   present: true, busy: false, unavailable: false, ancestor: true, quality: null, qualityFile: null, failSave: false,
-  missingSyncAncestry: false, retirementUnavailable: false, liveAgents: null, liveTrusted: true, legacyProof: null, legacySettled: true, promotion: null }));
+  missingSyncAncestry: false, retirementUnavailable: false, liveAgents: null, liveTrusted: true, legacyProof: null, legacySettled: true, promotion: null,
+  physical: {}, forgeCalls: 0 }));
 vi.mock('../lib/fileUtils.js', async original => {
   const actual = await original();
   return makePathsProxy(actual, { dataRoot: lazyTempDataRoot('release-sync-verifier-'), overrides: {
@@ -19,7 +20,13 @@ vi.mock('../lib/fileUtils.js', async original => {
 });
 vi.mock('node:fs/promises', async original => {
   const actual = await original();
-  return { ...actual, realpath: async path => path.startsWith('/example/') ? path : actual.realpath(path) };
+  return { ...actual, realpath: async path => path.startsWith('/example/') ? path : actual.realpath(path),
+    lstat: async (path, options) => {
+      const item = f.physical[path];
+      return item ? { dev: BigInt(item.dev), ino: BigInt(item.ino), birthtimeNs: BigInt(item.birthtimeNs),
+        isDirectory: () => item.directory, isFile: () => !item.directory } : actual.lstat(path, options);
+    },
+    readFile: async (path, ...options) => f.physical[path]?.contents ?? actual.readFile(path, ...options) };
 });
 vi.mock('./legacyReleaseRecovery.js', async original => ({ ...await original(), legacyProcessesSettled: async () => f.legacySettled, inspectLegacyPublisher: async () => {
   if (!f.legacyProof) throw Object.assign(new Error('legacy proof unavailable'), { code: 'legacy-proof-unavailable' });
@@ -56,6 +63,7 @@ vi.mock('./worktreeManager.js', () => ({ listWorktrees: async () => [{ path: '/e
 vi.mock('./branchReconcile.js', () => ({ listRemoteHeads: async () => new Map() }));
 vi.mock('./appQualityFederation.js', () => ({ buildQualitySnapshot: async () => f.quality }));
 vi.mock('./github.js', () => ({ execGh: async args => {
+  f.forgeCalls++;
   if (f.unavailable) throw new Error('synthetic forge transport failure');
   const path = args.at(-1).replace(/^repos\/example\/repo\/?/, '');
   let result;
@@ -91,7 +99,7 @@ let identity, taskId, publication;
 const getReleaseSynchronization = async key => (await readReleaseSynchronizationOutbox()).publications[key];
 beforeEach(async () => {
   await rm(join(PATHS.cos, 'release-synchronization.json'), { force: true });
-  f.legacyProof = null; f.legacySettled = true; f.promotion = null;
+  f.legacyProof = null; f.legacySettled = true; f.promotion = null; f.physical = {}; f.forgeCalls = 0;
   f.liveAgents = null;
   f.liveTrusted = true;
   restorePlatform = pinPlatform('darwin');
@@ -130,6 +138,26 @@ beforeEach(async () => {
   f.retirementUnavailable = false;
   f.quality = { schemaVersion: 1, repository: 'f'.repeat(64), measurements: [] };
 });
+
+function independentRelease(repoPath = '/example/repo', branch = 'other-branch') {
+  const path = '/example/other-checkout', gitdirPath = '/example/repo/.git/worktrees/other-checkout';
+  const born = String(BigInt(Date.parse('2026-01-02T00:00:00Z')) * 1000000n);
+  const checkout = { dev: '1', ino: '10', birthtimeNs: born };
+  const pointer = { dev: '1', ino: '11', birthtimeNs: born };
+  const gitdir = { path: gitdirPath, dev: '1', ino: '12', birthtimeNs: born };
+  const seed = { version: 1, agentId: 'independent-agent', startedAt: '2026-01-02T00:00:01Z', seededAt: '2026-01-02T00:00:02Z',
+    repoPath, path, branch, repository: checkout, checkout, incarnation: { pointer, gitdir } };
+  const head = 'f'.repeat(40);
+  const receipt = { version: 1, agentId: seed.agentId, startedAt: seed.startedAt, capturedAt: '2026-01-02T00:00:03Z',
+    repoPath, path, branch, head, incarnation: structuredClone(seed.incarnation) };
+  const agent = { id: seed.agentId, taskId: 'independent-task', status: 'completed', startedAt: seed.startedAt,
+    completedAt: '2026-01-02T00:00:04Z', metadata: { workspacePath: path, checkoutSeeds: [seed], completedCheckouts: [receipt] } };
+  f.physical[path] = { ...checkout, directory: true };
+  f.physical[`${path}/.git`] = { ...pointer, directory: false, contents: `gitdir: ${gitdirPath}\n` };
+  f.physical[gitdirPath] = { ...gitdir, directory: true };
+  f.agents.push(agent);
+  return { repoPath, path, branch, head, checkoutIdentity: retirementCheckoutIdentityFromPointer(pointer) };
+}
 
 async function finishExecution({ retain = true } = {}) {
   const agent = f.agents[1], seed = agent.metadata.checkoutSeeds[0];
@@ -260,7 +288,7 @@ it('avoids loading agent history for ordinary retirement with no applicable lega
   expect(readBranchCompletionPolicies).not.toHaveBeenCalled();
 });
 
-it('scopes a missing publisher workspace by a fresh exact promotion branch', async () => {
+it('scopes a missing publisher workspace only with a later independent checkout and exact promotion', async () => {
   const id = '7'.repeat(64), source = await addTask({ description: 'Missing publisher workspace', app: 'example-app' });
   const legacyPublication = { ...publication, identity: id, tag: `v7.7.7-${id}` };
   delete legacyPublication.candidateBranch;
@@ -271,14 +299,18 @@ it('scopes a missing publisher workspace by a fresh exact promotion branch', asy
   f.promotion = { number: 12, merged: true, merge_commit_sha: legacyPublication.promotionMerge,
     head: { ref: 'old-candidate', sha: legacyPublication.candidateHead, repo: { full_name: legacyPublication.repository } },
     base: { ref: 'release', repo: { full_name: legacyPublication.repository } } };
-  const release = { repoPath: '/example/other-repository', path: '/example/other-checkout', branch: 'other-branch', head: 'f'.repeat(40), checkoutIdentity: '1'.repeat(64) };
+  const release = independentRelease('/example/other-repository');
   expect(await retainReleaseSynchronizationReview(release)).toBe(true);
-  expect(await validateLegacyReleaseRetirement(release)).toBe(true);
+  expect(await validateLegacyReleaseRetirement(release)).toBe(false);
+  const proofs = await prepareLegacyReleaseRetirement(release);
+  f.forgeCalls = 0;
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: proofs })).toBe(true);
+  expect(f.forgeCalls).toBe(0);
   expect(await retainReleaseSynchronizationReview({ ...release, branch: 'old-candidate' })).toBe(false);
-  expect(await validateLegacyReleaseRetirement({ ...release, branch: 'old-candidate' })).toBe(false);
+  expect(await validateLegacyReleaseRetirement({ ...release, branch: 'old-candidate' }, { archiveProofs: proofs })).toBe(false);
   f.unavailable = true;
   expect(await retainReleaseSynchronizationReview(release)).toBe(false);
-  expect(await validateLegacyReleaseRetirement(release)).toBe(false);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: await prepareLegacyReleaseRetirement(release) })).toBe(false);
 });
 
 it('scopes an unseeded publisher in the existing primary checkout without weakening candidate holds', async () => {
@@ -293,22 +325,87 @@ it('scopes an unseeded publisher in the existing primary checkout without weaken
   f.promotion = { number: 12, merged: true, merge_commit_sha: legacyPublication.promotionMerge,
     head: { ref: 'old-candidate', sha: legacyPublication.candidateHead, repo: { full_name: legacyPublication.repository } },
     base: { ref: 'release', repo: { full_name: legacyPublication.repository } } };
-  const release = { repoPath: '/example/repo', path: '/example/other-checkout', branch: 'other-branch', head: 'f'.repeat(40), checkoutIdentity: '1'.repeat(64) };
+  const release = independentRelease();
   expect(await retainReleaseSynchronizationReview(release)).toBe(true);
-  expect(await validateLegacyReleaseRetirement(release)).toBe(true);
+  const proofs = await prepareLegacyReleaseRetirement(release);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: proofs })).toBe(true);
   expect(await retainReleaseSynchronizationReview({ ...release, branch: 'old-candidate' })).toBe(false);
-  expect(await validateLegacyReleaseRetirement({ ...release, branch: 'old-candidate' })).toBe(false);
+  expect(await validateLegacyReleaseRetirement({ ...release, branch: 'old-candidate' }, { archiveProofs: proofs })).toBe(false);
   const syncSeed = f.agents[1].metadata.checkoutSeeds[0];
   expect(await retainReleaseSynchronizationReview({ ...release, branch: syncSeed.branch, path: syncSeed.path,
     checkoutIdentity: retirementCheckoutIdentityFromPointer(syncSeed.incarnation.pointer) })).toBe(false);
   expect(await retainReleaseSynchronizationReview({ ...release, branch: null })).toBe(false);
-  expect(await validateLegacyReleaseRetirement({ ...release, branch: null })).toBe(false);
+  expect(await validateLegacyReleaseRetirement({ ...release, branch: null }, { archiveProofs: proofs })).toBe(false);
   f.promotion.head.sha = '0'.repeat(40);
   expect(await retainReleaseSynchronizationReview(release)).toBe(false);
-  expect(await validateLegacyReleaseRetirement(release)).toBe(false);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: await prepareLegacyReleaseRetirement(release) })).toBe(false);
   f.unavailable = true;
   expect(await retainReleaseSynchronizationReview(release)).toBe(false);
-  expect(await validateLegacyReleaseRetirement(release)).toBe(false);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: await prepareLegacyReleaseRetirement(release) })).toBe(false);
+});
+
+it('holds locally aliased candidates and changed or ambiguous independent generations', async () => {
+  const id = '5'.repeat(64), source = await addTask({ description: 'Unseeded aliased publisher', app: 'example-app' });
+  const legacyPublication = { ...publication, identity: id, tag: `v5.5.5-${id}` };
+  delete legacyPublication.candidateBranch;
+  const publisher = { ...f.agents[0], id: 'legacy-publisher', taskId: source.id,
+    metadata: { workspacePath: '/example/repo', releasePublication: legacyPublication } };
+  await ensureReleaseSynchronization(publisher);
+  f.agents.push(publisher);
+  f.promotion = { number: 12, merged: true, merge_commit_sha: legacyPublication.promotionMerge,
+    head: { ref: 'old-candidate', sha: legacyPublication.candidateHead, repo: { full_name: legacyPublication.repository } },
+    base: { ref: 'release', repo: { full_name: legacyPublication.repository } } };
+  const release = independentRelease(), agent = f.agents.at(-1), seed = agent.metadata.checkoutSeeds[0];
+  const proofs = await prepareLegacyReleaseRetirement(release);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: proofs })).toBe(true);
+
+  // Another local name for the old physical generation is not evidence that
+  // the checkout is unrelated to the publisher.
+  const born = seed.checkout.birthtimeNs;
+  seed.checkout.birthtimeNs = String(BigInt(Date.parse('2025-12-31T23:59:59Z')) * 1000000n);
+  expect(await retainReleaseSynchronizationReview(release)).toBe(false);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: proofs })).toBe(false);
+  seed.checkout.birthtimeNs = born;
+
+  const oldInode = f.physical[release.path].ino;
+  f.physical[release.path].ino = '99';
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: proofs })).toBe(false);
+  f.physical[release.path].ino = oldInode;
+
+  const receipt = agent.metadata.completedCheckouts[0];
+  receipt.head = '0'.repeat(40);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: proofs })).toBe(false);
+  receipt.head = release.head;
+  f.physical[`${release.path}/.git`].contents = 'gitdir: /example/repo/.git/worktrees/replaced\n';
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: proofs })).toBe(false);
+  f.physical[`${release.path}/.git`].contents = `gitdir: ${seed.incarnation.gitdir.path}\n`;
+  const oldOwner = agent.taskId;
+  agent.taskId = publisher.taskId;
+  expect(await retainReleaseSynchronizationReview(release)).toBe(false);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: proofs })).toBe(false);
+  agent.taskId = oldOwner;
+  const stale = structuredClone(proofs), prior = stale.get(`legacy-exclusion:${id}`);
+  prior.owner.startedAt = '2025-01-01T00:00:00Z';
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: stale })).toBe(false);
+  f.agents.push(structuredClone(agent));
+  expect(await retainReleaseSynchronizationReview(release)).toBe(false);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: proofs })).toBe(false);
+});
+
+it('keeps the exact candidate held even when its checkout was created later', async () => {
+  const id = '4'.repeat(64), source = await addTask({ description: 'Unseeded candidate publisher', app: 'example-app' });
+  const legacyPublication = { ...publication, identity: id, tag: `v4.4.4-${id}` };
+  delete legacyPublication.candidateBranch;
+  const publisher = { ...f.agents[0], id: 'legacy-publisher', taskId: source.id,
+    metadata: { workspacePath: '/example/repo', releasePublication: legacyPublication } };
+  await ensureReleaseSynchronization(publisher);
+  f.agents.push(publisher);
+  f.promotion = { number: 12, merged: true, merge_commit_sha: legacyPublication.promotionMerge,
+    head: { ref: 'old-candidate', sha: legacyPublication.candidateHead, repo: { full_name: legacyPublication.repository } },
+    base: { ref: 'release', repo: { full_name: legacyPublication.repository } } };
+  const release = independentRelease('/example/repo', 'old-candidate');
+  expect(await retainReleaseSynchronizationReview(release)).toBe(false);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: await prepareLegacyReleaseRetirement(release) })).toBe(false);
 });
 
 it('requires the publisher private-review observation as well as both exact retirement receipts', async () => {
