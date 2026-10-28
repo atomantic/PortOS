@@ -34,6 +34,9 @@ export default function PersonaMasterDetail({
   const [generationJobId, setGenerationJobId] = useState(null);
   const generationRequestRef = useRef(0);
   const hydratedRef = useRef(null);
+  const preservedCreateRef = useRef(null);
+  const selectionRef = useRef({ id: selectedId });
+  if (selectionRef.current.id !== selectedId) selectionRef.current = { id: selectedId };
 
   const generation = useMediaJobProgress(generationJobId);
   const isGenerating = startingGeneration || !!generationJobId;
@@ -81,8 +84,10 @@ export default function PersonaMasterDetail({
     hydratedRef.current = selectedId;
     cancelDelete();
     clearGeneration();
+    const preserveCreatedForm = preservedCreateRef.current === selectedId;
+    preservedCreateRef.current = null;
     if (isCreate) setForm(emptyForm);
-    else if (selected) {
+    else if (selected && !preserveCreatedForm) {
       setForm(Object.fromEntries(formKeys.map((key) => [key, selected[key] || ''])));
     }
   }, [selectedId, isCreate, selected, loading, emptyForm, formKeys]);
@@ -136,6 +141,7 @@ export default function PersonaMasterDetail({
       toast.error(`${singular} name is required`);
       return;
     }
+    const selectionAtSave = selectionRef.current;
     setSaving(true);
     const payload = { ...form, name };
     const saved = await (isCreate
@@ -150,8 +156,16 @@ export default function PersonaMasterDetail({
     setRecords((current) => (isCreate
       ? [...current, saved].sort(byName)
       : current.map((record) => (record.id === saved.id ? saved : record)).sort(byName)));
+    if (selectionRef.current === selectionAtSave) {
+      // Adopt server-normalized values without erasing edits made during the save.
+      setForm((current) => Object.fromEntries(formKeys.map((key) => [key, current[key] === form[key] ? (saved[key] || '') : current[key]])));
+      if (isCreate) {
+        // Keep edits made while creating instead of rehydrating over the form.
+        preservedCreateRef.current = saved.id;
+        navigate(`${basePath}/${encodeURIComponent(saved.id)}`);
+      }
+    }
     if (isCreate) {
-      navigate(`${basePath}/${encodeURIComponent(saved.id)}`);
       toast.success(`Created "${saved.name}"`);
     } else {
       toast.success('Saved');
