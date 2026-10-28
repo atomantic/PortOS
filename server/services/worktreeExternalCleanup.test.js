@@ -10,16 +10,7 @@ import { materializeGitRepo, resetGitWorktreeSandbox, SKIP_HEAVY_INTEGRATION } f
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { cleanupOrphanedWorktrees } from './worktreeManager.js';
-import { withClaimOwnershipLock, checkoutRetirementFenceReason } from './cosClaimOwnershipState.js';
 
-const archiveGate = vi.hoisted(() => ({ beforeArchive: null }));
-vi.mock('./heldCheckoutRecovery.js', async importOriginal => {
-  const actual = await importOriginal();
-  return { ...actual, releaseCheckoutWithoutArchive: async (context, prepare) => {
-    await archiveGate.beforeArchive?.(context?.repoPath);
-    return prepare();
-  } };
-});
 
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal();
@@ -114,7 +105,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     fault.aliasTarget = null;
     fault.registrationPath = null;
     fault.onGit = null;
-    archiveGate.beforeArchive = null;
     await resetGitWorktreeSandbox(external, initialHead);
     await rm(PATHS.worktrees, { recursive: true, force: true });
     await mkdir(PATHS.worktrees, { recursive: true });
@@ -148,24 +138,16 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     expect(await branchExists('agent-merged')).toBe(false);
   });
 
-  // #12748: the archive ran inside the shared claim-ownership lock.
-  it('archives with the ownership queue free while fencing only the reclaimed checkout', async () => {
-    const path = await addTree('agent-fenced', { committed: true });
-    await execGit(['merge', '--no-ff', 'agent-fenced', '--no-edit'], external);
-    let started;
-    let resume;
-    const archiving = new Promise(resolve => { started = resolve; });
-    // Git spells the parent repository its own way on Windows; fence what it archives.
-    archiveGate.beforeArchive = repoPath => new Promise(resolve => { resume = resolve; started(repoPath); });
-    const cleaning = cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS);
-    const repoPath = await archiving;
-    expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
-    expect(checkoutRetirementFenceReason({ repoPath, branch: 'agent-fenced' })).toBe('checkout-retirement-reserved');
-    expect(checkoutRetirementFenceReason({ repoPath, branch: 'agent-unrelated' })).toBe(null);
-    resume();
-    expect(await cleaning).toBe(1);
+  // Merged work lives on the default branch; ignored build output is disposable.
+  it('reclaims a merged checkout holding only ignored build output', async () => {
+    const path = await addTree('agent-ignored-output', { committed: true });
+    await execGit(['merge', '--no-ff', 'agent-ignored-output', '--no-edit'], external);
+    await writeFile(join(external, '.git', 'info', 'exclude'), '.cache/\n');
+    await mkdir(join(path, '.cache', 'pregate'), { recursive: true });
+    await writeFile(join(path, '.cache', 'pregate', 'report.json'), '{"passed":true}');
+    expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(1);
     expect(existsSync(path)).toBe(false);
-    expect(checkoutRetirementFenceReason({ repoPath, branch: 'agent-fenced' })).toBe(null);
+    expect(await branchExists('agent-ignored-output')).toBe(false);
   });
 
   it('matches Git registration spelling when Node retains another alias for the same checkout', async () => {

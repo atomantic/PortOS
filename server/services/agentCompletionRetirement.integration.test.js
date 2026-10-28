@@ -1,7 +1,7 @@
 /** No-inventory completion must retain one exact obligation through execution release and in-place removal. */
 import { afterEach, afterAll, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, mkdir, readFile, writeFile, rm, realpath, rename } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, realpath } from 'node:fs/promises';
 import { join, sep, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
@@ -210,20 +210,7 @@ describe('completion to in-place retirement (real Git and persisted service stat
     const { buildRenewal } = await import('./cosTaskClaim.js');
     Object.assign(fixture.task.metadata, buildRenewal(fixture.task.metadata, 'fixture-instance'));
     await writeFile(join(fixture.root, 'task.json'), JSON.stringify(fixture.task));
-    const held = await Promise.all([verify(), verify()]);
-    expect(held).toMatchObject([
-      { verified: false, skipReason: 'checkout-ignored-payload-unverified' },
-      { verified: false, skipReason: 'checkout-ignored-payload-unverified' },
-    ]);
-    expect(await readFile(join(path, 'ignored.txt'), 'utf8')).toBe('private preserved bytes\n');
-    expect((await execGit(['rev-parse', 'HEAD'], path)).stdout.trim()).toBe(head);
-    const retained = await getBranchReconcileOutcome(fixture.app.id);
-    expect(retained).toMatchObject({ status: 'incomplete', retirementObligations: [{ path, branch, head }] });
-    expect(retained.retired).toBeUndefined();
-    expect(JSON.parse(await readFile(join(fixture.root, 'task.json'), 'utf8')).status).toBe('in_progress');
-    // Recover the wanted bytes outside the checkout before retrying retirement.
-    const recovered = join(scratch, 'recovered-private-bytes.txt');
-    await rename(join(path, 'ignored.txt'), recovered);
+    // The merged checkout's ignored file is disposable output, not a hold.
     const results = await Promise.all([verify(), verify()]); expect(results).toMatchObject([{ verified: true, skipReason: null }, { verified: true, skipReason: null }]);
     const outcome = await getBranchReconcileOutcome(fixture.app.id); expect(outcome.retirementObligations).toEqual([]);
     expect(outcome.retired).toHaveLength(1); const receipt = outcome.retired[0];
@@ -233,7 +220,7 @@ describe('completion to in-place retirement (real Git and persisted service stat
     expect((await listWorktrees(repo)).some(tree => resolve(tree.path) === resolve(path))).toBe(false);
     expect((await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
     expect(JSON.parse(await readFile(join(fixture.root, 'task.json'), 'utf8')).status).toBe('completed');
-    expect(await readFile(recovered, 'utf8')).toBe('private preserved bytes\n');
+    expect(existsSync(join(path, 'ignored.txt'))).toBe(false);
     await verify(); expect((await getBranchReconcileOutcome(fixture.app.id)).retired).toHaveLength(1);
   // Completion capture, held retirement, recovery and fresh receipt proof are
   // separate real-Git workflows. Keep their existing public-boundary budget.

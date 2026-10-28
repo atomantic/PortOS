@@ -7,8 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createHash } from 'node:crypto';
-import { execGit as realExecGit } from '../lib/execGit.js';
 const persisted = vi.hoisted(() => ({ json: '{}', hostType: null, rejectDirectoryOpen: false, syntheticModes: false, fileSyncs: 0 }));
 vi.mock('node:os', async importOriginal => {
   const actual = await importOriginal();
@@ -73,7 +71,7 @@ beforeEach(async () => {
   isCurrentRetirementCheckout.mockReset().mockResolvedValue(false);
   persisted.hostType = null; persisted.rejectDirectoryOpen = persisted.syntheticModes = false; persisted.fileSyncs = 0;
   root = await mkdtemp(join(tmpdir(), 'initialized-recovery-'));
-  const facts = { prUrl, prHead: release.head, defaultHead: 'b'.repeat(40) };
+  const facts = { prUrl, prHead: release.head, mergeCommit: 'c'.repeat(40), defaultHead: 'b'.repeat(40) };
   const snapshot = { fingerprint: 'c'.repeat(64), administrationFingerprint: 'd'.repeat(64), identity: { working: 1, administration: 2, common: 3 } };
   fixture = { cut: null, facts, snapshot, headExists: true, placement: { working: 'original', administration: 'original' }, failPart: null,
     metadataToken: 'f'.repeat(64), finalizationToken: '7'.repeat(64), quarantineToken: '6'.repeat(64) };
@@ -214,6 +212,7 @@ describe('initialized checkout removal', () => {
     fixture.deps.deleteRef.mockImplementation(async () => { fixture.headExists = false; return true; });
   };
   const nativeCommands = () => fixture.deps.native.mock.calls.map(([input]) => input.command);
+  const forgeEvidence = () => ({ source: 'forge-pr', prUrl, prHead: release.head, mergeCommit: 'c'.repeat(40) });
 
   it('reviews a merged checkout without creating a transaction directory', async () => {
     const response = await fixture.service.review({ appId: 'app', release, prUrl });
@@ -228,7 +227,7 @@ describe('initialized checkout removal', () => {
   it('removes an integrated clean checkout without copying it and deletes the branch', async () => {
     cleanGit();
     const result = await fixture.service.retire(await reviewed());
-    expect(result).toEqual({ ok: true, branchDeleted: true });
+    expect(result).toEqual({ ok: true, branchDeleted: true, validationEvidence: forgeEvidence() });
     expect(await readdir(root)).toEqual([]);
     expect(nativeCommands()).not.toContain('preserve');
     expect(nativeCommands()).not.toContain('move');
@@ -237,7 +236,7 @@ describe('initialized checkout removal', () => {
       ['worktree', 'remove', '--force', release.path], '/fixture/repo', { ignoreExitCode: true },
     );
     expect(fixture.deps.recordRetirement).toHaveBeenCalledWith('app', {
-      path: release.path, branch: release.branch, head: release.head, branchDeleted: true,
+      path: release.path, branch: release.branch, head: release.head, branchDeleted: true, validationEvidence: forgeEvidence(),
     });
   });
 
@@ -245,9 +244,10 @@ describe('initialized checkout removal', () => {
     cleanGit();
     readRetirementCheckoutIdentity.mockResolvedValue('identity-1');
     const result = await fixture.service.retire(await reviewed());
-    expect(result).toEqual({ ok: true, branchDeleted: true });
+    expect(result).toEqual({ ok: true, branchDeleted: true, validationEvidence: forgeEvidence() });
     expect(fixture.deps.recordRetirement).toHaveBeenCalledWith('app', {
       path: release.path, branch: release.branch, head: release.head, branchDeleted: true, checkoutIdentity: 'identity-1',
+      validationEvidence: forgeEvidence(),
     });
   });
 
@@ -318,60 +318,21 @@ describe('initialized checkout removal', () => {
     expect(await readdir(root)).toEqual([]);
   });
 
-  it.each(['unchanged', 'changed'])('preserves an initialized checkout validation receipt before removal: %s', async kind => {
+  it.each(['parent', 'module'])('removes an integrated checkout whose %s holds only ignored output, without scanning it', async location => {
     cleanGit();
-    const repo = join(root, 'repo'); const checkout = join(root, 'checkout');
-    await mkdir(repo); await realExecGit(['init'], repo);
-    await mkdir(join(checkout, '.cache/pregate'), { recursive: true });
-    const bytes = JSON.stringify({ version: 3, passed: true, tree: 'fixture-tree' });
-    const receiptPath = join(checkout, '.cache/pregate/report.json');
-    await writeFile(receiptPath, bytes);
-    fixture.deps.context = async () => ({ repoPath: repo });
-    const run = fixture.deps.execGit.getMockImplementation();
-    fixture.deps.execGit.mockImplementation(async (...args) => args[0][0] === 'ls-files'
-      ? { exitCode: 0, stdout: '.cache/pregate/report.json\0' } : run(...args));
-    fixture.facts.mergeCommit = 'c'.repeat(40);
-    fixture.service = _createInitializedCheckoutRecovery(fixture.deps);
-    const currentRelease = { ...release, path: checkout };
-    const prepared = await fixture.service.review({ appId: 'app', release: currentRelease, prUrl });
-    expect(prepared.ok, JSON.stringify(prepared)).toBe(true);
-    if (kind === 'changed') await writeFile(receiptPath, '{"changed":"unique evidence"}');
-    const result = await fixture.service.retire({ appId: 'app', release: currentRelease,
-      review: { prUrl, digest: prepared.review.digest } });
-    if (kind === 'changed') {
-      expect(result).toEqual({ ok: false, reason: 'retirement-review-changed' });
-      expect(await readFile(receiptPath, 'utf8')).toBe('{"changed":"unique evidence"}');
-      expect(fixture.deps.execGit.mock.calls.some(([args]) => args[0] === 'worktree')).toBe(false);
-    } else {
-      expect(result).toMatchObject({ ok: true, branchDeleted: true, validationEvidence: {
-        bytes: Buffer.byteLength(bytes), sha256: createHash('sha256').update(bytes).digest('hex'),
-      } });
-      const saved = JSON.parse(await readFile(join(repo, '.git/portos-retirement-validation', `${result.validationEvidence.digest}.json`), 'utf8'));
-      expect(Buffer.from(saved.receipt.data, 'base64').toString('utf8')).toBe(bytes);
-      expect(fixture.deps.recordRetirement.mock.calls[0][1].validationEvidence).toEqual(result.validationEvidence);
-    }
-    expect(fixture.deps.native.mock.calls.some(([input]) => input.command === 'preserve')).toBe(false);
-  });
-
-  it.each(['parent', 'module'])('retains sole ignored payload in the %s despite clean Git status', async location => {
     const checkout = join(root, 'checkout');
     const payloadRoot = location === 'module' ? join(checkout, 'vendor') : checkout;
-    await mkdir(payloadRoot, { recursive: true });
-    const sentinel = join(payloadRoot, 'unpublished.bin');
-    const bytes = Buffer.from([0, 255, 128, 42]);
-    await writeFile(sentinel, bytes);
+    await mkdir(join(payloadRoot, '.cache/pregate'), { recursive: true });
+    await writeFile(join(payloadRoot, '.cache/pregate/report.json'), '{"passed":true}');
+    await writeFile(join(payloadRoot, 'build.bin'), Buffer.from([0, 255, 128, 42]));
     fixture.snapshot.modules = location === 'module' ? [{ path: 'vendor' }] : [];
-    fixture.deps.execGit.mockImplementation(async (args, cwd) => ({ exitCode: 0,
-      stdout: args[0] === 'ls-files' && cwd === payloadRoot ? 'unpublished.bin\0' : '' }));
     const currentRelease = { ...release, path: checkout };
     const prepared = await fixture.service.review({ appId: 'app', release: currentRelease, prUrl });
     const result = await fixture.service.retire({ appId: 'app', release: currentRelease,
       review: { prUrl, digest: prepared.review.digest } });
-    expect(result).toEqual({ ok: false, reason: 'checkout-ignored-payload-unverified' });
-    expect(await readFile(sentinel)).toEqual(bytes);
-    expect(fixture.deps.execGit.mock.calls.some(([args]) => args[0] === 'worktree')).toBe(false);
-    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
-    expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: true, branchDeleted: true, validationEvidence: forgeEvidence() });
+    expect(fixture.deps.execGit.mock.calls.some(([args]) => args[0] === 'ls-files')).toBe(false);
+    expect(fixture.deps.execGit).toHaveBeenCalledWith(['worktree', 'remove', '--force', checkout], '/fixture/repo', { ignoreExitCode: true });
   });
 
   it('preserves the original directory when Git refuses removal even if its toplevel matches', async () => {
