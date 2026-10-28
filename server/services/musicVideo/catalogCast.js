@@ -78,11 +78,12 @@ async function projectUniverse(project, getUniverse) {
 }
 
 /**
- * Reuse only the exact canon pointer or this subject's deterministic identity.
- * Names describe subjects; they do not establish shared identity across videos
- * or universes. The importer still permits an explicitly reviewed link.
+ * Reuse the exact canon pointer or this subject's deterministic identity. The
+ * importer passes `suggest`, which proposes an existing record by name for the
+ * director to review; approving Cast & Sets passes none, so names alone never
+ * link a subject without review.
  */
-async function planCatalogCast(project, candidates, deps) {
+async function planCatalogCast(project, candidates, deps, suggest = null) {
   const { catalogDB, getUniverse } = deps;
   const universe = await projectUniverse(project, getUniverse);
   const plan = [];
@@ -94,13 +95,141 @@ async function planCatalogCast(project, candidates, deps) {
     // A canon entry keeps its ingredientId after its record is deleted.
     const canonLive = canon ? await catalogDB.getIngredient(canon.ingredientId) : null;
     const target = canonLive?.type === candidate.kind ? canonLive : await catalogDB.getIngredient(ownId);
+    const suggestion = !target && suggest ? await suggest(candidate, ownId) : null;
     if (target) {
-      plan.push({ ...candidate, action: 'link', ingredientId: target.id, ingredientName: target.name });
+      plan.push({ ...candidate, action: 'link', ingredientId: target.id, ingredientName: target.name, match: target === canonLive ? 'canon' : 'saved' });
+    } else if (suggestion) {
+      plan.push({ ...candidate, action: 'link', ...suggestion });
     } else {
       plan.push({ ...candidate, action: 'create', ingredientId: ownId });
     }
   }
   return plan;
+}
+
+const nameKey = (name) => String(name || '').trim().toLowerCase();
+const firstWordOf = (key) => key.split(/\s+/)[0] || '';
+
+// The names a candidate may be matched by: as written, without an age or look
+// qualifier ("Ada (17)" → "ada"), and for a character, the first name.
+function candidateKeys(candidate) {
+  const exact = nameKey(candidate.name);
+  const { base, qualifier } = subjectNameParts(candidate.name);
+  const baseKey = nameKey(base);
+  return { exact, baseKey, qualifier, first: candidate.kind === 'character' ? firstWordOf(baseKey) : '' };
+}
+
+const recordKeys = (record) => [record.name, ...(Array.isArray(record.payload?.aliases) ? record.payload.aliases : [])]
+  .map(nameKey).filter(Boolean);
+
+function pushTo(map, key, value) {
+  if (!map.has(key)) map.set(key, []);
+  map.get(key).push(value);
+}
+
+/**
+ * The importer's name index over the whole catalog, read once per preview:
+ * live records by name or alias, characters by first name, and the records
+ * other subjects with the same name are already linked to. Tombstoned records
+ * are never read, so a deleted record is never suggested.
+ */
+async function buildNameIndex(projects, d) {
+  const exactKeys = new Map();
+  const firstKeys = new Map();
+  for (const project of projects) {
+    for (const candidate of catalogCastCandidates(project)) {
+      const k = candidateKeys(candidate);
+      if (!exactKeys.has(candidate.kind)) exactKeys.set(candidate.kind, new Set());
+      for (const key of [k.exact, k.baseKey, k.first]) if (key) exactKeys.get(candidate.kind).add(key);
+      if (k.first && k.first === k.baseKey) {
+        if (!firstKeys.has(candidate.kind)) firstKeys.set(candidate.kind, new Set());
+        firstKeys.get(candidate.kind).add(k.first);
+      }
+    }
+  }
+  const byName = new Map();
+  const byFirst = new Map();
+  const rows = new Map();
+  for (const [kind, keys] of exactKeys) {
+    for (const record of await d.catalogDB.findIngredientsByName(kind, [...keys])) {
+      rows.set(record.id, record);
+      for (const key of new Set(recordKeys(record))) if (keys.has(key)) pushTo(byName, `${kind}:${key}`, record.id);
+    }
+  }
+  for (const [kind, words] of firstKeys) {
+    for (const record of await d.catalogDB.findIngredientsByName(kind, [...words], { firstWord: true })) {
+      rows.set(record.id, record);
+      for (const word of new Set(recordKeys(record).map(firstWordOf))) if (words.has(word)) pushTo(byFirst, `${kind}:${word}`, record.id);
+    }
+  }
+  const linked = new Map();
+  for (const project of projects) {
+    for (const s of project.concept?.subjects || []) {
+      if (!s?.ingredientId || !TYPE_PREFIX[s.kind]) continue;
+      for (const key of new Set([nameKey(s.name), nameKey(subjectNameParts(s.name).base)])) {
+        if (key && !linked.has(`${s.kind}:${key}`)) linked.set(`${s.kind}:${key}`, s.ingredientId);
+      }
+    }
+  }
+  const ids = [...new Set([...rows.keys(), ...linked.values()])];
+  // Keyed by the id asked for: live records only, with their owning universe.
+  const cards = new Map((ids.length ? await d.catalogDB.getIngredientCards(ids) : []).map((card) => [card.id, card]));
+  return { byName, byFirst, linked, rows, cards };
+}
+
+/**
+ * The importer's suggestion for one video's candidates, strongest first: a
+ * record with the same name or alias, the record another video's same-named
+ * subject is linked to, then the similar names (without the age qualifier, or
+ * the first name), which must point at one record. A record owned by another
+ * universe is never suggested, and the video's own universe is preferred.
+ * `claimed` makes a name shared by videos of one world be added once.
+ */
+async function nameSuggester(project, index, d, claimed) {
+  const universeId = project.concept?.universeId || null;
+  const members = new Set(universeId
+    ? (await d.catalogDB.listIngredientsForRef('universe', universeId)).map(({ ingredient }) => ingredient?.id).filter(Boolean)
+    : []);
+  const pick = (kind, ids, { unique = false } = {}) => {
+    const seen = new Set();
+    const eligible = [];
+    for (const id of ids) {
+      const card = index.cards.get(id);
+      const recordId = card?.canonicalId || card?.id;
+      if (!card || card.type !== kind || seen.has(recordId)) continue;
+      const owner = card.owningUniverse?.id || null;
+      if (universeId && owner && owner !== universeId) continue;
+      seen.add(recordId);
+      eligible.push({ id: recordId, name: card.name });
+    }
+    const own = eligible.filter((r) => members.has(r.id));
+    const pool = own.length ? own : eligible;
+    return pool.length && (!unique || pool.length === 1) ? pool[0] : null;
+  };
+  return async (candidate, ownId) => {
+    const { kind } = candidate;
+    const k = candidateKeys(candidate);
+    const named = (key) => (key ? index.byName.get(`${kind}:${key}`) || [] : []);
+    const linkedTo = (key) => (key && index.linked.has(`${kind}:${key}`) ? [index.linked.get(`${kind}:${key}`)] : []);
+    const similar = k.baseKey !== k.exact;
+    const firstName = !k.first ? [] : k.first === k.baseKey ? index.byFirst.get(`${kind}:${k.first}`) || [] : named(k.first);
+    const tiers = [
+      ['name', pick(kind, named(k.exact))],
+      ['linked', pick(kind, linkedTo(k.exact))],
+      ['base', similar ? pick(kind, [...named(k.baseKey), ...linkedTo(k.baseKey)]) : null],
+      ['first-name', pick(kind, firstName.filter((id) => !named(k.baseKey).includes(id)), { unique: true })],
+    ];
+    const [match, record] = tiers.find(([, r]) => r) || [];
+    if (record) {
+      const full = k.qualifier ? index.rows.get(record.id) || await d.catalogDB.getIngredient(record.id) : null;
+      const form = full ? formForQualifier(full, k.qualifier) : null;
+      return { ingredientId: record.id, ingredientName: record.name, match, ...(form ? { formId: form.id, formLabel: form.label || String(form.age || '') } : {}) };
+    }
+    const claimKey = `${universeId || ''}:${kind}:${k.exact}`;
+    if (claimed.has(claimKey)) return { ...claimed.get(claimKey), match: 'import' };
+    claimed.set(claimKey, { ingredientId: ownId, ingredientName: candidate.name });
+    return null;
+  };
 }
 
 // Creates the record and attaches its image. False when a row already sits at
@@ -150,7 +279,9 @@ async function commitCatalogCast(projectId, decisions, deps) {
       const target = await catalogDB.getIngredient(d.ingredientId);
       if (target) {
         if (target.type !== subject.kind) continue;
-        stamps.set(subject.id, { ingredientId: target.id });
+        const form = d.formId ? (target.payload?.forms || []).find((f) => f?.id === d.formId) : null;
+        const castForm = castFormSnapshot(form);
+        stamps.set(subject.id, { ingredientId: target.id, ...(castForm ? { castForm } : {}) });
         stats.linked++;
         continue;
       }
@@ -217,11 +348,15 @@ export async function saveCheckinCastToCatalog(projectId, deps = null) {
 /** The importer's dry run: every live video's uncatalogued subjects, decided. */
 export async function previewCatalogCastImport(deps = null) {
   const d = deps || await defaultDeps();
+  const projects = (await d.listProjects()).filter((p) => p && !p.deleted);
+  const index = await buildNameIndex(projects, d);
+  const claimed = new Map();
   const out = [];
-  for (const project of await d.listProjects()) {
+  for (const project of projects) {
     const candidates = catalogCastCandidates(project);
     if (!candidates.length) continue;
-    out.push({ projectId: project.id, name: project.name || 'Untitled', items: await planCatalogCast(project, candidates, d) });
+    const suggest = await nameSuggester(project, index, d, claimed);
+    out.push({ projectId: project.id, name: project.name || 'Untitled', items: await planCatalogCast(project, candidates, d, suggest) });
   }
   return out;
 }
@@ -245,9 +380,10 @@ export async function commitCatalogCastImport(selections, deps = null) {
 
 // "Nora (17)" → { base: 'Nora', qualifier: '17' }: a subject named for one age
 // or look of a cast member. The qualifier only picks among the record's forms.
+// "Nora, 17" is read the same way; only a trailing number follows a comma.
 function subjectNameParts(name) {
   const text = String(name || '').trim();
-  const match = text.match(/^(.*?)\s*[([]\s*([^)\]]*?)\s*[)\]]\s*$/);
+  const match = text.match(/^(.*?)\s*[([]\s*([^)\]]*?)\s*[)\]]\s*$/) || text.match(/^(.*?)\s*,\s*(\d{1,3})$/);
   return match && match[1] ? { base: match[1].trim(), qualifier: match[2] } : { base: text, qualifier: '' };
 }
 
