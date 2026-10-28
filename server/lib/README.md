@@ -171,6 +171,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `modelPersonalityValidation.js` | LLM personality self-profile test schemas: trait taxonomy (versioned), self-eval + twin-alignment response schemas, run/settings route inputs. |
 | `moodBoardValidation.js` | Mood board + board-item create/update schemas. |
 | `musicVideoValidation.js` | Music Video project/scene/reorder + cached audio-analysis schemas. |
+| `musicVideoStoryValidation.js` | Typed Story summary, proposal and selective-apply request schemas. |
 | `notesValidation.js` | Notes route schemas + safe-relative-path guard. |
 | `peerSyncValidation.js` | Federated peer-sync wire/request schemas (push payload, subscribe, sync-now, pull-metadata). |
 | `pipelineValidation.js` | Creative-production pipeline schemas (Writers Room works/folders/live-mode/drafts, story-bible character/place/object, editorial checks, storyboard shots/scenes, prompt-stage config, issue-list query). |

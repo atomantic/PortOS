@@ -102,6 +102,11 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   getMusicVideoHandoffBundle: vi.fn(),
   importMusicVideoHandoff: vi.fn(),
   getMusicVideoProject: vi.fn(),
+  getMusicVideoStoryContext: vi.fn(),
+  saveMusicVideoStorySummary: vi.fn(),
+  proposeMusicVideoStory: vi.fn(),
+  applyMusicVideoStory: vi.fn(),
+  applyMusicVideoStoryBeats: vi.fn(),
   updateMusicVideoTreatment: vi.fn(),
   compileMusicVideoTreatment: vi.fn(),
   previewMusicVideoTreatmentApply: vi.fn(),
@@ -366,7 +371,7 @@ const selectProject = async (projectId) => {
 // control is only on screen while its step is open, so tests say which one.
 // Compose is part of Shots now; Plan holds the planning tools. The phone's step bar is the tablist.
 const STAGE_TABS = {
-  setup: /^Song/, 'cast-sets': /^Look/, board: /^Plan/, produce: /^Shots/, compose: /^Shots/, review: /^Final render/, publish: /^Publish/,
+  setup: /^Song/, story: /^Story/, 'cast-sets': /^Look/, board: /^Plan/, produce: /^Shots/, compose: /^Shots/, review: /^Final render/, publish: /^Publish/,
 };
 // Project settings (render style, audio tools, autopilot, files) is a drawer over the step.
 const openSettings = async (tab = 'Project') => {
@@ -2878,6 +2883,55 @@ describe('MusicVideo stage tabs (#9243)', () => {
     fireEvent.click(within(dock).getByRole('button', { name: 'Edit shot' }));
     await waitFor(() => expect(scrolled).toContain('scene-s1'));
     scroll.mockRestore();
+  });
+
+  it('opens Story without a preview and keeps a rough draft across stage navigation', async () => {
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, concept: { prompt: 'Existing direction', style: 'Blue', songStyle: 'Synth' } }]);
+    renderAt('/music-video/mv-1/story');
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    expect(screen.getByLabelText('Concept')).toHaveValue('Existing direction');
+    expect(screen.getByLabelText('Visual style')).toHaveValue('Blue');
+    expect(screen.getByLabelText('Song style')).toHaveValue('Synth');
+    expect(screen.queryByRole('complementary', { name: 'Preview' })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Story in your own words'), { target: { value: 'A rough story draft' } });
+    await openStage('cast-sets');
+    expect(screen.getByLabelText('Concept')).not.toBeVisible();
+    await openStage('story');
+    expect(screen.getByLabelText('Story in your own words')).toHaveValue('A rough story draft');
+    expect(screen.queryByRole('complementary', { name: 'Preview' })).toBeNull();
+  });
+
+  it('keeps failed direction text visible and offers a retry', async () => {
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, concept: { prompt: 'Original direction' } }]);
+    updateMusicVideoProject.mockRejectedValueOnce(new Error('Could not save'));
+    renderAt('/music-video/mv-1/story');
+    const concept = await screen.findByLabelText('Concept');
+    fireEvent.change(concept, { target: { value: 'My unsaved direction' } });
+    fireEvent.blur(concept);
+    const retry = await screen.findByRole('button', { name: 'Retry saving' });
+    expect(concept).toHaveValue('My unsaved direction');
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry saving' })).toBeNull());
+    expect(updateMusicVideoProject).toHaveBeenLastCalledWith('mv-1', { concept: { prompt: 'My unsaved direction' } }, { silent: true });
+  });
+
+  it('saves successive direction edits in order after an earlier request fails', async () => {
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, concept: { prompt: 'Original direction' } }]);
+    let rejectFirst;
+    updateMusicVideoProject.mockImplementationOnce(() => new Promise((_, reject) => { rejectFirst = reject; }));
+    renderAt('/music-video/mv-1/story');
+    const concept = await screen.findByLabelText('Concept');
+    fireEvent.change(concept, { target: { value: 'First edit' } });
+    fireEvent.blur(concept);
+    await waitFor(() => expect(rejectFirst).toBeTypeOf('function'));
+    fireEvent.change(concept, { target: { value: 'Second edit' } });
+    fireEvent.blur(concept);
+    expect(updateMusicVideoProject).toHaveBeenCalledTimes(1);
+    await act(async () => rejectFirst(new Error('First request failed')));
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledTimes(2));
+    expect(updateMusicVideoProject).toHaveBeenLastCalledWith('mv-1', { concept: { prompt: 'Second edit' } }, { silent: true });
+    expect(concept).toHaveValue('Second edit');
+    expect(screen.queryByRole('button', { name: 'Retry saving' })).toBeNull();
   });
 
   // Uniquely catches the opening title card form leaving the Look step or reappearing on Plan/Shots.

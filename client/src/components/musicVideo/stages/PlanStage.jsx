@@ -14,11 +14,6 @@ import StoryboardLinkPanel from '../StoryboardLinkPanel.jsx';
 export default function PlanStage({ board }) {
   const { project, locked, busy, treatment } = board;
   const scenes = project.scenes || [];
-  // Linking a board changes no shot, so it stays usable while shots are locked; Fit to song writes them and is not.
-  const linkStoryboard = (storyboardId, { saved = false } = {}) => {
-    board.editProjectLocal({ storyboardId });
-    if (!saved) board.saveProjectFields({ storyboardId });
-  };
   return (
     <div className="min-w-0 space-y-3">
       <fieldset disabled={locked} className="min-w-0 space-y-3">
@@ -28,10 +23,10 @@ export default function PlanStage({ board }) {
         </StageSection>
 
         {/* The brief feeds the shot planner; the direction is applied per shot once they exist. */}
-        <StageSection id="mv-board-treatment" title="Treatment" summary={scenes.length ? treatmentSummary(project) : 'Write the brief the shot planner follows'}>
-          <div id="mv-setup-treatment">
+        <StageSection id="mv-board-treatment" title="Treatment direction" summary={scenes.length ? treatmentSummary(project) : 'Plan shots to compile their direction'}>
+          <div>
             <TreatmentPanel key={`treatment-${project.id}`} project={project} treatment={treatment}
-              storyboardApproved={!!board.productionReadiness?.storyboard?.approved} />
+              storyboardApproved={!!board.productionReadiness?.storyboard?.approved} part="production" />
           </div>
         </StageSection>
 
@@ -42,8 +37,8 @@ export default function PlanStage({ board }) {
           </StageSection>
         )}
       </fieldset>
-      <StageSection id="mv-board-storyboard" title="Storyboard" summary={project.storyboardId ? 'Linked' : 'Plan the story as beats and panels'}>
-        <StoryboardLinkPanel project={project} onLink={linkStoryboard} fitDisabled={locked || busy.planning || busy.arranging}
+      <StageSection id="mv-board-storyboard" title="Fit storyboard to song" summary={project.storyboardId ? 'Linked' : 'Choose a storyboard on Story'}>
+        <StoryboardLinkPanel project={project} mode="fit" onStory={() => board.goToStage('story')} fitDisabled={locked || busy.planning || busy.arranging}
           onFitted={(saved) => board.editProjectLocal(saved)} />
       </StageSection>
     </div>

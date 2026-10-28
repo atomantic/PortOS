@@ -78,6 +78,7 @@ import TitleCardPanel from '../components/musicVideo/TitleCardPanel.jsx';
 import StatsOutroPanel from '../components/musicVideo/StatsOutroPanel.jsx';
 import NeedsAttentionBanner from '../components/musicVideo/NeedsAttentionBanner.jsx';
 import SetupStage from '../components/musicVideo/stages/SetupStage.jsx';
+import StoryStage from '../components/musicVideo/stages/StoryStage.jsx';
 import StageChecklist from '../components/musicVideo/StageChecklist.jsx';
 import CastSetsStage from '../components/musicVideo/stages/CastSetsStage.jsx';
 import PlanStage from '../components/musicVideo/stages/PlanStage.jsx';
@@ -142,7 +143,7 @@ const approvalStageFor = (tab, project, readiness, proofActive) => (tab === 'pro
 // Steps reviewed by watching: the player leads them, with the approval beside it.
 const PLAYER_FIRST_STAGES = new Set(['board', 'produce', 'review']);
 const STAGE_VIEWS = {
-  setup: SetupStage, 'cast-sets': CastSetsStage, board: PlanStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
+  setup: SetupStage, story: StoryStage, 'cast-sets': CastSetsStage, board: PlanStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
   assets: AssetsStage, cleanup: CleanupStage,
 };
 
@@ -772,6 +773,12 @@ function ProjectWorkspace({
   const [creativeSetupPending, setCreativeSetupPending] = useState(false);
   const [styleReferencesPending, setStyleReferencesPending] = useState(false);
   const [compositionSavePending, setCompositionSavePending] = useState(0);
+  const [conceptSavePending, setConceptSavePending] = useState(0);
+  const [conceptSaveFailures, setConceptSaveFailures] = useState({});
+  const conceptSaveChain = useRef(Promise.resolve());
+  const conceptSaveVersions = useRef({});
+  const conceptSaveSequence = useRef(0);
+  const [songStyleReadPending, setSongStyleReadPending] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [importingLyrics, setImportingLyrics] = useState(false);
 
@@ -804,6 +811,8 @@ function ProjectWorkspace({
   const pinnedStage = openedStageRef.current;
   // A shot's card lives on Shots, including links made when it lived on the Storyboard.
   const activeStage = routeSceneId ? 'produce' : (resolveStageParam(routeStage) || pinnedStage || progress.current);
+  const storyVisited = useRef(false);
+  if (activeStage === 'story') storyVisited.current = true;
 
   const handleToggleSceneExpand = (sceneId, isExpanded) => {
     if (!selected) return;
@@ -1089,9 +1098,19 @@ function ProjectWorkspace({
   // buildScenePlanPrompt (AI Plan) and by the server's frame and clip composers
   // (lib/musicVideoShotPrompt.js), both already reading concept.
   const commitConcept = (patch) => {
-    replaceProject({ ...selected, concept: { ...selected.concept, ...patch } });
-    updateMusicVideoProject(selected.id, { concept: patch }, { silent: true })
-      .catch((err) => toast.error(err?.message || 'Failed to save concept'));
+    const version = ++conceptSaveSequence.current;
+    for (const key of Object.keys(patch)) conceptSaveVersions.current[key] = version;
+    patchProject(selected.id, (project) => ({ concept: { ...project.concept, ...patch } }));
+    setConceptSavePending((count) => count + 1);
+    const run = conceptSaveChain.current.then(() => updateMusicVideoProject(selected.id, { concept: patch }, { silent: true }));
+    conceptSaveChain.current = run.catch(() => {});
+    return run.then(() => {
+      setConceptSaveFailures((previous) => Object.fromEntries(Object.entries(previous).filter(([key]) => conceptSaveVersions.current[key] !== version)));
+    }).catch((err) => {
+      setConceptSaveFailures((previous) => ({ ...previous, ...Object.fromEntries(Object.entries(patch).filter(([key]) => conceptSaveVersions.current[key] === version)) }));
+      toast.error(err?.message || 'Failed to save concept');
+    })
+      .finally(() => setConceptSavePending((count) => count - 1));
   };
   // Lyric cues / phrases / pacing (#8964) and the typography manifest (#8984)
   // — optimistic-local + silent PATCH on blur, like the scene editors. Each PATCH replaces a whole list, so the
@@ -1168,15 +1187,19 @@ function ProjectWorkspace({
   // This workspace remounts per project, so a still-focused, unblurred draft
   // cannot survive a project switch and be committed onto the next project.
   // Re-read the song style (with its excluded styles) from the song's Suno link.
-  const songStyleFromSuno = (url) => refreshMusicVideoSongStyleFromSuno(selected.id, url, { silent: true })
-    .then(({ project, excludedStylesKnown }) => {
-      songStyleDraft.reset();
-      replaceProject(project);
-      if (excludedStylesKnown) toast.success('Song style read from Suno');
-      else toast.warning('Read the style, but Suno only shows excluded styles when the PortOS Browser is signed in to Suno');
-      return true;
-    })
-    .catch((err) => { toast.error(err?.message || 'Could not read the song style from Suno'); return false; });
+  const songStyleFromSuno = (url) => {
+    setSongStyleReadPending(true);
+    return refreshMusicVideoSongStyleFromSuno(selected.id, url, { silent: true })
+      .then(({ project, excludedStylesKnown }) => {
+        songStyleDraft.reset();
+        patchProject(project.id, (current) => ({ concept: { ...current.concept, songStyle: project.concept?.songStyle }, updatedAt: project.updatedAt }));
+        if (excludedStylesKnown) toast.success('Song style read from Suno');
+        else toast.warning('Read the style, but Suno only shows excluded styles when the PortOS Browser is signed in to Suno');
+        return true;
+      })
+      .catch((err) => { toast.error(err?.message || 'Could not read the song style from Suno'); return false; })
+      .finally(() => setSongStyleReadPending(false));
+  };
   // BeatTimeline drag commit — same optimistic-local + silent-PATCH pattern as
   // the other scene field editors (#1854).
   const commitSceneTiming = (sceneId, patch) => {
@@ -1543,6 +1566,10 @@ function ProjectWorkspace({
     productionReadiness: productionReview.readiness,
     onRevertApproval: productionReview.revert,
     locked: creativeSetupPending || styleReferencesPending || compositionSavePending > 0,
+    storySavePending: conceptSavePending > 0 || Object.keys(conceptSaveFailures).length > 0 || songStyleReadPending || treatment.pendingWrites > 0 || treatment.applying,
+    conceptSaveFailures,
+    conceptSavePending,
+    retryConceptSave: () => commitConcept(conceptSaveFailures),
     busy: { analyzing, planning, arranging, cloning },
     tracks,
     trackLibrary,
@@ -1583,6 +1610,9 @@ function ProjectWorkspace({
     autopilotBlockedReason,
     canContinueShot,
     replaceProject,
+    patchStoryProject: (patch) => patchProject(selected.id, patch),
+    saveStoryLink: (storyboardId) => updateMusicVideoProject(selected.id, { storyboardId }, { silent: true })
+      .then((saved) => { patchProject(saved.id, { storyboardId: saved.storyboardId, updatedAt: saved.updatedAt }); return saved; }),
     editProjectLocal,
     saveProjectFields,
     saveCompositionGrade: (patch) => saveProjectFields(patch, { applyComposition: true }),
@@ -1734,7 +1764,7 @@ function ProjectWorkspace({
             onRename={onRename}
             renameForm={renameForm}
             cancelRender={renderTargetsSelected && !renderJob.pending ? { onCancel: renderJob.cancel, cancelling: renderJob.cancelling } : null}
-            lead={(
+            lead={activeStage === 'story' ? null : (
               <StageChecklist
                 items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
                 onAction={runChecklistAction}
@@ -1777,7 +1807,7 @@ function ProjectWorkspace({
               />
             )}
             // Assets is a contact sheet: it takes the whole column, no player beside it.
-            dock={activeStage === 'assets' ? null : withTitleCard(
+            dock={activeStage === 'assets' || activeStage === 'story' ? null : withTitleCard(
               <PreviewDock
                 project={selected}
                 sources={previewSources}
@@ -1791,7 +1821,8 @@ function ProjectWorkspace({
               />,
             )}
           >
-            <StageView board={board} />
+            {storyVisited.current && <div hidden={activeStage !== 'story'}><StoryStage board={board} active={activeStage === 'story'} /></div>}
+            {activeStage !== 'story' && <StageView board={board} />}
           </MusicVideoLayout>
           </ShotLockContext.Provider>
     </>

@@ -1449,6 +1449,7 @@ export const musicVideoProjectCreateSchema = z.object({
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
+  storySummary: z.string().max(20000).optional(),
   mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   productionPolicy: musicVideoProductionPolicySchema.optional(),
   name: z.string().min(1).max(200).optional(),

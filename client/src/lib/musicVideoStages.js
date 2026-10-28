@@ -18,7 +18,7 @@ import { supersededStillsCheckpoint } from '../../../server/lib/musicVideoAutono
 import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
 
 /**
- * The six steps of a music video, in the order the director decides them. The
+ * The steps of a music video, in the order the director decides them. The
  * ids are the route's `:stage` values and stay stable across the relabel
  * (#10297 follow-up): Song is `setup`, Look is `cast-sets`, Plan (once
  * Storyboard) is `board`, Shots (once Make) is `produce` — each shot's still,
@@ -27,6 +27,7 @@ import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers 
  */
 export const MUSIC_VIDEO_STAGES = [
   { id: 'setup', label: 'Song', title: 'Song', doneWhen: 'Done when the track is analyzed and every lyric word is timed to the vocal.' },
+  { id: 'story', label: 'Story', title: 'Story', optional: true, doneWhen: 'Done when the story direction is ready; this step is optional.' },
   { id: 'cast-sets', label: 'Look', title: 'Look', doneWhen: 'Done when the art direction is written, a visual guide is chosen, and you approve it.' },
   { id: 'board', label: 'Plan', title: 'Plan', doneWhen: 'Done when timed shots cover the whole song, each with its action, staging, camera and lyric.' },
   { id: 'produce', label: 'Shots', title: 'Shots', doneWhen: 'Done when every shot is locked (a video shot: its still, then its clip) and the composition is ready.' },
@@ -322,7 +323,7 @@ export function autopilotStatus(project, readiness = project?.productionReadines
 export function describeProjectStatus(project, { progress, nextAction = null, reviewingDraft = false, reviewDraftState } = {}) {
   if (!project || !progress) return null;
   const entry = progress.stages.find((stage) => stage.id === progress.current);
-  const allDone = progress.stages.every((stage) => stage.state === 'done');
+  const allDone = progress.stages.every((stage) => stage.optional || stage.state === 'done');
   const blocked = entry?.state === 'blocked';
   const asksForYou = ['review-production', 'approve-cast-sets', 'review-autonomous'].includes(nextAction?.id);
   const needsYou = blocked || asksForYou;
@@ -445,6 +446,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   const liveRun = !!run && RESUMABLE_RUN_STATUSES.has(run.status) && (run.status === 'running' || !shotsDone);
   const done = {
     setup: projectHasAudio(project) && !!project?.audioAnalysis && lyricSetupState(project, readiness).ok,
+    story: !!(project?.concept?.prompt?.trim() || project?.storySummary?.trim() || project?.treatment?.brief?.premise?.trim()),
     'cast-sets': castDone,
     board: planned || shotsPlanned,
     produce: shotsDone,
@@ -456,6 +458,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   // Finished outside PortOS: the steps it made elsewhere count as done, with no approval to go stale.
   const external = !!finishedOutside(project);
   if (external) for (const id of Object.keys(done)) if (finishedOutsideCovers(project, id)) done[id] = true;
+  if (external) done.story = true;
   const blocked = {
     'cast-sets': castStopped,
     produce: !!run && RUN_BLOCKED_STATUSES.has(run.status),
@@ -468,7 +471,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   };
   const current = liveRun
     ? 'produce'
-    : (MUSIC_VIDEO_STAGES.find((stage) => !done[stage.id])?.id || 'publish');
+    : (MUSIC_VIDEO_STAGES.find((stage) => !stage.optional && !done[stage.id])?.id || 'publish');
   const stages = MUSIC_VIDEO_STAGES.map((stage) => {
     let state = 'todo';
     if (done[stage.id] && !(stage.id === current && liveRun)) state = 'done';
@@ -1184,7 +1187,7 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
     : drafts ? `${formatCount(drafts)} ${drafts === 1 ? 'draft' : 'drafts'} to watch` : '';
   const posts = publishPlatformProgress(project, publish);
   const publishNote = posts.total ? `${formatCount(posts.posted)} of ${formatCount(posts.total)} posted` : posts.posted ? 'Posted' : '';
-  return { setup: song, 'cast-sets': look, board, produce: make, review, publish: publishNote };
+  return { setup: song, story: project.concept?.prompt?.trim() ? 'Concept written' : '', 'cast-sets': look, board, produce: make, review, publish: publishNote };
 }
 
 /**

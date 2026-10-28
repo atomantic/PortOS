@@ -786,7 +786,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v29 = lyric words aligned into vocal silence (`lyricCues[].silentWords`),
   // saved and flagged instead of refused. A v28 strict cue schema rejects the
   // field and its normalizer drops it. Optional, no backfill.
-  musicVideoProjects: 29,
+  // v30 = the director's rough story summary, retained across project sync.
+  musicVideoProjects: 30,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

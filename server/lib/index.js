@@ -82,6 +82,7 @@ export * as memoryValidation from './memoryValidation.js';
 export * as modelPersonalityValidation from './modelPersonalityValidation.js';
 export * as moodBoardValidation from './moodBoardValidation.js';
 export * as musicVideoValidation from './musicVideoValidation.js';
+export * as musicVideoStoryValidation from './musicVideoStoryValidation.js';
 export * as notesValidation from './notesValidation.js';
 export * as peerSyncValidation from './peerSyncValidation.js';
 export * as pipelineValidation from './pipelineValidation.js';
