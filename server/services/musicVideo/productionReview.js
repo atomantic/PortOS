@@ -449,7 +449,7 @@ const storyboardApprovalCurrent = (approval, basis) => !!approval
 
 // A subject's catalog link and keep-local choice are bookkeeping saved after an
 // approval (catalogCast.js), never a change to who or what was approved.
-const CATALOG_SUBJECT_KEYS = ['ingredientId', 'localOnly'];
+const CATALOG_SUBJECT_KEYS = ['ingredientId', 'castForm', 'localOnly'];
 const withoutCatalogFields = subjects => (subjects || []).map(s => (s && typeof s === 'object' ? Object.fromEntries(Object.entries(s).filter(([k]) => !CATALOG_SUBJECT_KEYS.includes(k))) : s));
 const approvalConcept = concept => (concept?.subjects ? { ...concept, subjects: withoutCatalogFields(concept.subjects) } : concept);
 // Restoring approved subjects keeps the catalog fields saved since.

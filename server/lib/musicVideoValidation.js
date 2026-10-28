@@ -129,6 +129,13 @@ export const musicVideoConceptSchema = z.object({
     // The catalog record this subject was cast from (Casting / Environments /
     // Objects). The project keeps its own name and description snapshot.
     ingredientId: z.string().max(128).optional(),
+    // The linked record's age or look this subject shows (a snapshot of the
+    // catalog form; `age` only when the form states a whole number).
+    castForm: z.object({
+      id: z.string().regex(/^[A-Za-z0-9_-]{1,24}$/),
+      label: z.string().max(80),
+      age: z.number().int().min(0).max(150).optional(),
+    }).strict().optional(),
     // Kept in this video only: never offered for saving to the catalog.
     localOnly: z.boolean().optional(),
   }).strict()).max(24).optional(),

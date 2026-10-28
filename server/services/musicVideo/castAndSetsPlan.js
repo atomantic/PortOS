@@ -423,7 +423,7 @@ export function castAndSetsSubjects(project, stage) {
     .map((s) => {
       const prior = previous.get(s.id);
       if (prior?.kind !== s.kind) return s;
-      return { ...s, ...(prior.ingredientId ? { ingredientId: prior.ingredientId } : {}), ...(prior.localOnly ? { localOnly: true } : {}) };
+      return { ...s, ...(prior.ingredientId ? { ingredientId: prior.ingredientId } : {}), ...(prior.castForm ? { castForm: prior.castForm } : {}), ...(prior.localOnly ? { localOnly: true } : {}) };
     });
   return [...authored, ...fresh].slice(0, MAX_SUBJECTS);
 }
