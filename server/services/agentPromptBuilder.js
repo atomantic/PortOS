@@ -1243,7 +1243,9 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
       // signals completion by exiting.
       writesSentinel: isTui,
       reviewPolicy: prSidePolicy,
-      localPhaseReviewers: localReviewers,
+      // A configured roster is not evidence of a local phase: merge-only
+      // delivery does not emit one, even when reviewer defaults are populated.
+      localPhaseReviewers: localReviewSection ? localReviewers : [],
       localPhaseCanShortCircuit,
       localPhaseReviewRequired: localReviewSection ? localReviewRequired : false,
       reviewerPositions,
