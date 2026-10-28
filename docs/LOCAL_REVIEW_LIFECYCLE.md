@@ -41,7 +41,7 @@ After the phase finishes and all accepted findings/validation failures are fixed
 run `node <installation>/server/scripts/local-review-lifecycle.mjs complete <base> <status>`
 with `clean`, a qualifying `partial`, or availability-only `review-blocked`.
 Incomplete/dirty/findings are rejected. Save original phase state and model
-receipts alongside it. Before PR creation a same-completion-head retry reuses this completion. Initial publication must match `completedHead`, even when the actual inspection was earlier. Publication guards use the validated receipt completion projection; a reusable v1 receipt supplies its original completion head even if the old phase state lacks `LOCAL_REMEDIATED_HEAD_SHA`, while inspection remains explicitly unknown.
+receipts alongside it. Before PR creation a same-completion-head retry reuses this completion. Initial publication must match `completedHead`, even when the actual inspection was earlier. Publication guards call `node <installation>/server/scripts/local-review-lifecycle.mjs publication-head <base> <status>`: it prints only the completion SHA when an unpublished same-head receipt is reusable and its aggregate matches, and otherwise refuses. It preserves the receipt and never reports that SHA as inspected. A reusable v1 receipt supplies its original completion head even if the old phase state lacks `LOCAL_REMEDIATED_HEAD_SHA`, while inspection remains explicitly unknown.
 After successful creation or recovery, run
 `node <installation>/server/scripts/local-review-lifecycle.mjs publish <base> <PR_URL>`.
 Receipt-write failure blocks publication/merge until repaired from the completed
@@ -85,6 +85,8 @@ clean zero-change pass; `on-findings` requires a clean pass that added commits;
 `partial` already records a qualifying configured short-circuit.
 
 Before every reviewer call, capture its exact input HEAD. After a validated clean/findings response, persist that captured SHA as `LOCAL_REVIEWED_HEAD_SHA`; retain it through remediation. Failed/unavailable attempts do not update it. If no reviewer produced a validated result, explicitly persist an empty value, which records unavailable inspection rather than inventing a reviewed commit. This is valid for availability-only `review-blocked`, or `clean` when only optional availability/inconclusive outcomes remain; any triggered stop, including `partial`, requires an actual inspection.
+
+After base preparation and only for a fresh phase, initialize `LOCAL_PHASE_START_SHA` to HEAD, `LOCAL_OVERALL_STATUS=incomplete`, `LOCAL_STOP_TRIGGERED=false`, `LOCAL_STOP_INDEX=-1`, `LOCAL_STOP_REVIEW_COMMITS=-1`, `LOCAL_PHASE_COMMITS=0`, and empty inspection/completion heads in the private state file. Stop on initialization failure; never reset a resumed phase.
 
 After remediation, record `LOCAL_REMEDIATED_HEAD_SHA=$(git rev-parse HEAD)` and persist all fields together (reload existing state across shell calls). Completion validates the aggregate status, exact remediation head, phase start/history and commit counts, coherent stop fields (including an explicit triggered stop for `partial`), and that the actual inspection SHA lies within the phase history. A supplied clean `portos-review-status` inspection head must agree; malformed/duplicate evidence is refused without replacing existing proof:
 

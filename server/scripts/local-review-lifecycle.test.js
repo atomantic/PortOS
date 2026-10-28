@@ -29,7 +29,8 @@ async function exerciseDelivery() {
   let cliHeld = false;
   const cli = async (...args) => {
     try {
-      return JSON.parse((await exec(process.execPath, [script, ...args], { cwd, timeout: 15000 })).stdout);
+      const { stdout } = await exec(process.execPath, [script, ...args], { cwd, timeout: 15000 });
+      return args[0] === 'publication-head' ? stdout.trim() : JSON.parse(stdout);
     } catch (error) {
       cliHeld ||= Boolean(error.killed || error.signal);
       throw error;
@@ -62,6 +63,8 @@ async function exerciseDelivery() {
     const completed = await cli('complete', 'main', 'clean');
     expect(completed).toMatchObject({ version: 2, completedHead: await git('rev-parse', 'HEAD'), inspectionProvenance: 'recorded' });
     expect((await run('check', 'main')).receipt.reviewedHead).toBe(completed.reviewedHead);
+    expect(await cli('publication-head', 'main', 'clean')).toBe(completed.completedHead);
+    await expect(cli('publication-head', 'main', 'partial')).rejects.toMatchObject({ code: 1 });
     // A failed create can retry on the same head without another review.
     expect((await run('check', 'main')).reusable).toBe(true);
     await git('push', '-q', '-u', 'origin', 'delivery');
@@ -119,10 +122,12 @@ async function exerciseDelivery() {
     await writeFile(phasePath, validPartial);
     const partial = await cli('complete', 'main', 'partial');
     expect(partial).toMatchObject({ completedHead: remediated, reviewedHead: inspected, inspectionProvenance: 'recorded' });
+    expect(await cli('publication-head', 'main', 'partial')).toBe(remediated);
     // Creation interrupted after completion can resume, but new commits cannot be silently published.
     expect((await cli('check', 'main')).reusable).toBe(true);
     await commit();
     await expect(cli('publish', 'main', pr)).rejects.toMatchObject({ code: 1 });
+    await expect(cli('publication-head', 'main', 'partial')).rejects.toMatchObject({ code: 1 });
     await git('reset', '--hard', remediated);
     await cli('publish', 'main', pr);
     await commit();
@@ -161,6 +166,7 @@ async function exerciseDelivery() {
     expect(JSON.parse(await readFile(receiptPath, 'utf8'))).toEqual(legacy);
     await writeFile(receiptPath, JSON.stringify({ ...legacy, prUrl: '', reviewedHead: await git('rev-parse', 'HEAD') }));
     expect((await cli('check', 'main')).inspection).toMatchObject({ reviewedHead: null, inspectionProvenance: 'legacy-unknown' });
+    expect(await cli('publication-head', 'main', 'clean')).toBe(await git('rev-parse', 'HEAD'));
     await cli('publish', 'main', pr);
     const malformed = { ...legacy, version: 2, completedHead: legacy.reviewedHead, reviewedHead: null, inspectionProvenance: 'recorded' };
     await writeFile(receiptPath, JSON.stringify(malformed));
