@@ -561,6 +561,19 @@ describe('GitHub inbox tab', () => {
       .toHaveAttribute('href', '/cos/tasks?task=user-review&source=user');
     expect(screen.getByRole('link', { name: 'Review: Active — view' }))
       .toHaveAttribute('href', '/cos/tasks?task=system-review&source=internal');
+    expect(screen.getByRole('button', { name: 'Do:Review' })).toBeTruthy();
+  });
+
+  it('hides Do:Review while a review is active and restores it after completion', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({ notifications: [{ ...NOTIFICATION,
+      pullRequest: { number: 7, doReviewEligible: true },
+      pullRequestAction: { action: 'do-review', taskId: 'user-review', status: 'active', at: 'review-start' } }], sync: {} });
+    await renderInbox();
+    expect(screen.getByRole('link', { name: 'Review: Active — view' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Do:Review' })).toBeNull();
+
+    act(() => { socket.emit('cos:tasks:changed', { task: { id: 'user-review', status: 'completed' } }); });
+    expect(screen.getByRole('button', { name: 'Do:Review' })).toBeTruthy();
   });
 
   it('opens by default, syncs on arrival, and links only to the stored GitHub page', async () => {
