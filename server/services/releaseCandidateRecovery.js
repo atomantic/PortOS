@@ -158,8 +158,7 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
           sourceWorkspace: repoPath, agents: Object.values(state.agents), ignoreIds: [source.id, successor.id] });
         if (other) refuse(other);
         for (const agent of Object.values(state.agents)) {
-          if (agent.id === source.id || agent.id === successor.id || !releaseRun(agent) || agent.status === 'completed'
-            || agent.metadata.resumedFromAgentId === source.id) continue;
+          if (agent.id === source.id || agent.id === successor.id || !releaseRun(agent) || agent.status === 'completed') continue;
           if (await realpath(repository(agent)) === repoPath) refuse('candidate-owner-ambiguous');
         }
         const settlement = await readReleaseCandidateSettlement(source);

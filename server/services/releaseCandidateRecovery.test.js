@@ -242,20 +242,19 @@ test('shares the cleanup fence and durable retirement cut, and drains a pending 
   });
 });
 
-test('serializes conflicting successors and refuses publication or review drift during verification', async () => {
-  fixture.state.agents['agent-competitor'] = { ...structuredClone(fixture.state.agents['agent-successor']), id: 'agent-competitor' };
+test('serializes same-successor retries and refuses review drift during verification', async () => {
   let resume, entered;
   const gate = new Promise(resolve => { resume = resolve; });
   const waiting = new Promise(resolve => { entered = resolve; });
   fixture.processGate = async () => { entered(); await gate; };
   const first = recover();
   await waiting;
-  const second = recoverReleaseCandidate('agent-competitor', 'agent-original');
+  const second = recover();
   resume();
   const results = await Promise.all([first, second]);
   fixture.processGate = null;
   expect(results[0]).toMatchObject({ recovered: true });
-  expect(results[1]).toMatchObject({ recovered: false, reason: 'candidate-successor-conflict' });
+  expect(results[1]).toEqual(results[0]);
   // A later retry preserves the completed transfer when private evidence drifts.
   const saved = structuredClone(fixture.disk);
   fixture.forgeReads = 0;
@@ -264,4 +263,18 @@ test('serializes conflicting successors and refuses publication or review drift 
   };
   expect(await recover()).toMatchObject({ recovered: false, reason: 'candidate-evidence-changed' });
   expect(fixture.state).toEqual(saved);
+});
+
+test('refuses competing active successors and cannot replace an already recorded successor', async () => {
+  const competitor = { ...structuredClone(fixture.state.agents['agent-successor']), id: 'agent-competitor' };
+  fixture.state.agents[competitor.id] = competitor;
+  expect(await recover()).toMatchObject({ recovered: false, reason: 'candidate-owner-ambiguous' });
+  expect(await recoverReleaseCandidate(competitor.id, 'agent-original')).toMatchObject({ recovered: false, reason: 'candidate-owner-ambiguous' });
+  expect(fixture.state.agents['agent-original'].metadata.releaseCandidateSuccessor).toBeUndefined();
+  // The competitor ends without acquiring the checkout. Only then can the
+  // documented successor acquire it; a subsequent competing request cannot.
+  fixture.state.agents[competitor.id].status = 'completed';
+  expect(await recover()).toMatchObject({ recovered: true });
+  fixture.state.agents[competitor.id].status = 'running';
+  expect(await recoverReleaseCandidate(competitor.id, 'agent-original')).toMatchObject({ recovered: false, reason: 'candidate-successor-conflict' });
 });
