@@ -318,21 +318,25 @@ describe('initialized checkout removal', () => {
     expect(await readdir(root)).toEqual([]);
   });
 
-  it.each(['parent', 'module'])('removes an integrated checkout whose %s holds only ignored output, without scanning it', async location => {
-    cleanGit();
+  it.each(['parent', 'module'])('retains sole ignored payload in the %s despite clean Git status', async location => {
     const checkout = join(root, 'checkout');
     const payloadRoot = location === 'module' ? join(checkout, 'vendor') : checkout;
-    await mkdir(join(payloadRoot, '.cache/pregate'), { recursive: true });
-    await writeFile(join(payloadRoot, '.cache/pregate/report.json'), '{"passed":true}');
-    await writeFile(join(payloadRoot, 'build.bin'), Buffer.from([0, 255, 128, 42]));
+    await mkdir(payloadRoot, { recursive: true });
+    const sentinel = join(payloadRoot, 'unpublished.bin');
+    const bytes = Buffer.from([0, 255, 128, 42]);
+    await writeFile(sentinel, bytes);
     fixture.snapshot.modules = location === 'module' ? [{ path: 'vendor' }] : [];
+    fixture.deps.execGit.mockImplementation(async (args, cwd) => ({ exitCode: 0,
+      stdout: args[0] === 'ls-files' && cwd === payloadRoot ? 'unpublished.bin\0' : '' }));
     const currentRelease = { ...release, path: checkout };
     const prepared = await fixture.service.review({ appId: 'app', release: currentRelease, prUrl });
     const result = await fixture.service.retire({ appId: 'app', release: currentRelease,
       review: { prUrl, digest: prepared.review.digest } });
-    expect(result).toEqual({ ok: true, branchDeleted: true, validationEvidence: forgeEvidence() });
-    expect(fixture.deps.execGit.mock.calls.some(([args]) => args[0] === 'ls-files')).toBe(false);
-    expect(fixture.deps.execGit).toHaveBeenCalledWith(['worktree', 'remove', '--force', checkout], '/fixture/repo', { ignoreExitCode: true });
+    expect(result).toEqual({ ok: false, reason: 'checkout-ignored-payload-unverified' });
+    expect(await readFile(sentinel)).toEqual(bytes);
+    expect(fixture.deps.execGit.mock.calls.some(([args]) => args[0] === 'worktree')).toBe(false);
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
   });
 
   it('preserves the original directory when Git refuses removal even if its toplevel matches', async () => {

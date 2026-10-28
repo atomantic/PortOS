@@ -258,9 +258,14 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     const status = await runGit(['status', '--porcelain'], input.release.path, { ignoreExitCode: true }).catch(() => null);
     if (!status || status.exitCode !== 0) return { ok: false, reason: 'worktree-status-unavailable' };
     if (String(status.stdout || '').trim()) return { ok: false, reason: 'worktree-dirty' };
-    // Integrated on the forge: ignored build/cache output is disposable, and the
-    // merged PR's required CI is the validation record.
-    const { forgeValidationEvidence } = await import('./heldCheckoutRecovery.js');
+    // A merged commit cannot account for ignored files in the parent or modules.
+    const { assertNoUniqueIgnoredCheckoutPayload, forgeValidationEvidence } = await import('./heldCheckoutRecovery.js');
+    const paths = [input.release.path, ...(prepared.review.snapshot.modules || []).map(module => join(input.release.path, module.path))];
+    for (const path of paths) {
+      const hold = await assertNoUniqueIgnoredCheckoutPayload(path, runGit, [], [], path === input.release.path ? ctx.repoPath : null)
+        .then(() => null, error => error.message || 'checkout-not-disposable');
+      if (hold) return { ok: false, reason: hold };
+    }
     const validationEvidence = forgeValidationEvidence(prepared.review);
     const removed = await runGit(['worktree', 'remove', '--force', input.release.path], ctx.repoPath, { ignoreExitCode: true }).catch(() => null);
     if (!removed || removed.exitCode !== 0) {
