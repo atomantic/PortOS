@@ -3701,6 +3701,7 @@ describe('getState and saveState', () => {
     lastSnapshotId: null,
     filesChanged: 0,
     pgBackup: null,
+    restoreWarning: null,
     error: null
   };
 
@@ -4821,6 +4822,8 @@ describe('runBackup lifecycle', () => {
         filesChanged: 2,
         status: 'ok',
         pgBackup: SKIPPED_PG,
+        restoreWarning: null,
+        error: null,
       }],
     ]);
   });
