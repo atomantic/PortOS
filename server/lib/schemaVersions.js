@@ -783,7 +783,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v28 = film look controls for dye crossover, halation spread, lens fall-off,
   // tape softness and tracking. Older renderers discard them and cannot
   // reproduce the chosen finish.
-  musicVideoProjects: 28,
+  // v29 = lyric words aligned into vocal silence (`lyricCues[].silentWords`),
+  // saved and flagged instead of refused. A v28 strict cue schema rejects the
+  // field and its normalizer drops it. Optional, no backfill.
+  musicVideoProjects: 29,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

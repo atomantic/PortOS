@@ -20,13 +20,17 @@ const buttonClass = 'min-h-[44px] rounded border border-port-border bg-port-bg p
  * Timing is judged by watching, so a vocal song's check carries the lyric
  * playthrough: the aligned words drawn with the render's own type over a plain
  * frame, played with the song (`audioUrl`). `aligning` says alignment is running.
+ * Lines alignment flagged (too fast, or words on vocal silence) are listed with a
+ * jump into the playthrough and `onAlign(cueId)` to re-align just that line; the
+ * flags advise and never block the confirmation.
  */
-export default function LyricTimingCheck({ project, review, planning = null, disabled = false, audioUrl = null, aligning = false }) {
+export default function LyricTimingCheck({ project, review, planning = null, disabled = false, audioUrl = null, aligning = false, onAlign = null }) {
   const saved = { ...EMPTY_DRAFT, ...(project.productionReview?.draft || {}) };
   const lyrics = lyricSetupState(project, review.readiness);
   const [mode, setMode] = useState(saved.lyricsMode === 'instrumental' ? 'instrumental' : 'vocal');
   const [seekRequest, setSeekRequest] = useState(null);
   const [notes, setNotes] = useState(saved.timingNotes || '');
+  const [alignError, setAlignError] = useState('');
   const stale = lyrics.alignment === 'stale';
   const busy = disabled || review.busy || !review.current;
   const notesId = `mv-timing-notes-${project.id}`;
@@ -44,7 +48,11 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
 
   const verified = mode === 'vocal' ? lyrics.verified && !lyrics.instrumental : lyrics.instrumental && lyrics.verified;
   const timed = (project.lyricCues || []).some((cue) => typeof cue.startSec === 'number' && cue.text?.trim());
-  const suspectCues = (project.lyricCues || []).filter((cue) => cue.suspect);
+  const flaggedCues = (project.lyricCues || []).filter((cue) => cue.suspect || cue.silentWords?.length > 0);
+  const realign = (cueId) => {
+    setAlignError('');
+    Promise.resolve(onAlign(cueId)).catch((err) => setAlignError(err?.message || 'Could not re-align that line. Try again.'));
+  };
   const playable = mode === 'vocal' && timed && !!project.audioAnalysis && !!audioUrl && !aligning;
   return (
     <div className="space-y-2">
@@ -59,21 +67,36 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
           Instrumental
         </label>
       </fieldset>
-      {playable && (!verified || suspectCues.length > 0) && (
+      {playable && (!verified || flaggedCues.length > 0) && (
         <>
           <p className="text-sm text-port-text-muted">Play the lyrics through with the song and watch each word land on the vocal.</p>
-          {suspectCues.length > 0 && (
+          {flaggedCues.length > 0 && (
             <div className="space-y-1 text-sm">
-              <p className="text-port-warning">These lines may play too quickly. Jump to each one and check it against the vocal.</p>
+              <p className="text-port-warning">Check these lines against the vocal: they may play too quickly, or their underlined words landed where the vocal is silent. Re-align a line if it sounds off.</p>
               <ul className="space-y-1">
-                {suspectCues.map((cue) => {
+                {flaggedCues.map((cue) => {
                   const t = cue.words?.[0]?.startSec ?? cue.startSec ?? 0;
-                  return <li key={cue.id}><button type="button" className={buttonClass}
-                    onClick={() => setSeekRequest((previous) => ({ t, n: (previous?.n ?? 0) + 1, play: true }))}>
-                    {formatTimecode(t)} — {cue.text}
-                  </button></li>;
+                  const silent = new Set(cue.silentWords || []);
+                  return (
+                    <li key={cue.id} className="flex flex-wrap items-center gap-2">
+                      <button type="button" className={`${buttonClass} text-left`}
+                        onClick={() => setSeekRequest((previous) => ({ t, n: (previous?.n ?? 0) + 1, play: true }))}>
+                        {formatTimecode(t)} — {silent.size > 0 && cue.words?.length
+                          ? cue.words.map((word, index) => (
+                            <span key={index}>{index > 0 && ' '}{silent.has(index) ? <span className="underline decoration-port-warning decoration-2">{word.w}</span> : word.w}</span>
+                          ))
+                          : cue.text}
+                      </button>
+                      {onAlign && (
+                        <button type="button" className={buttonClass} disabled={disabled || aligning} onClick={() => realign(cue.id)}>
+                          Re-align line
+                        </button>
+                      )}
+                    </li>
+                  );
                 })}
               </ul>
+              {alignError && <p role="alert" className="text-xs text-port-error">{alignError}</p>}
             </div>
           )}
           <CompositionPreviewPlayer project={project} audioUrl={audioUrl} lyrics scrubId={`mv-lyrics-check-scrub-${project.id}`} seekRequest={seekRequest} />

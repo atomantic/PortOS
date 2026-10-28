@@ -135,7 +135,7 @@ export default function SetupStage({ board }) {
           )}
           {board.productionReview && (
             <LyricTimingCheck project={project} review={board.productionReview} planning={board.planningDraft} disabled={locked}
-              audioUrl={board.audioUrl} aligning={aligningLyrics} />
+              audioUrl={board.audioUrl} aligning={aligningLyrics} onAlign={board.onAlignLyrics} />
           )}
         </SongStep>
       </div>
