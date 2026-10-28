@@ -663,7 +663,7 @@ export default function InboxTab({ onRefresh, settings }) {
                             <button
                               key={dest}
                               onClick={() => handleResolve(entry.id, dest)}
-                              className={`flex items-center gap-1 px-2 py-1 text-xs rounded border ${destInfo.color} hover:opacity-80 transition-opacity`}
+                              className={`flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs rounded border ${destInfo.color} hover:opacity-80 transition-opacity`}
                               title={`Route to ${destInfo.label}`}
                             >
                               <Icon size={12} />
@@ -673,7 +673,7 @@ export default function InboxTab({ onRefresh, settings }) {
                         })}
                         <button
                           onClick={() => handleMarkDone(entry.id)}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-port-success transition-colors"
+                          className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-port-success transition-colors"
                           title="Mark as done without filing"
                         >
                           <CheckCheck size={12} />
@@ -682,7 +682,7 @@ export default function InboxTab({ onRefresh, settings }) {
                         <button
                           onClick={() => handleRetry(entry.id)}
                           disabled={retryingId === entry.id}
-                          className={`flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border transition-colors ${retryingId === entry.id ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white'}`}
+                          className={`flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs rounded border border-port-border transition-colors ${retryingId === entry.id ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white'}`}
                           title="Retry AI classification"
                         >
                           <RefreshCw size={12} className={retryingId === entry.id ? 'animate-spin' : ''} />
@@ -915,7 +915,7 @@ export default function InboxTab({ onRefresh, settings }) {
                       {entry.filed?.destinationId && (
                         <button
                           onClick={() => navigate(filedRecordHref(entry.filed))}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
+                          className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
                           title={filedRecordTitle(entry.filed)}
                         >
                           <ExternalLink size={12} />
@@ -926,7 +926,7 @@ export default function InboxTab({ onRefresh, settings }) {
                       {/* Done button */}
                       <button
                         onClick={() => handleMarkDone(entry.id)}
-                        className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-port-success transition-colors"
+                        className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-port-success transition-colors"
                         title="Mark as done"
                       >
                         <CheckCheck size={12} />
@@ -935,12 +935,12 @@ export default function InboxTab({ onRefresh, settings }) {
 
                       {/* Fix button */}
                       {fixingId === entry.id ? (
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <select
                             aria-label="Fix destination"
                             value={fixDestination}
                             onChange={(e) => setFixDestination(e.target.value)}
-                            className="px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
+                            className="min-h-[44px] min-w-[44px] px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
                             title="Select new destination"
                           >
                             <option value="">Select...</option>
@@ -952,14 +952,14 @@ export default function InboxTab({ onRefresh, settings }) {
                           </select>
                           <button
                             onClick={() => handleFix(entry.id)}
-                            className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30"
+                            className="min-h-[44px] min-w-[44px] px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30"
                             title="Move to selected destination"
                           >
                             Move
                           </button>
                           <button
                             onClick={() => { setFixingId(null); setFixDestination(''); }}
-                            className="px-2 py-1 text-xs text-gray-400 hover:text-white"
+                            className="min-h-[44px] min-w-[44px] px-2 py-1 text-xs text-gray-400 hover:text-white"
                             title="Cancel fix"
                           >
                             Cancel
@@ -968,7 +968,7 @@ export default function InboxTab({ onRefresh, settings }) {
                       ) : (
                         <button
                           onClick={() => setFixingId(entry.id)}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
+                          className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
                           title="Fix/move to different destination"
                         >
                           <Edit2 size={12} />
