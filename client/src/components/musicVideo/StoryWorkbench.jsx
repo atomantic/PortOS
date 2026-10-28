@@ -56,6 +56,18 @@ export default function StoryWorkbench({ project, disabled, onProject, onBoardCh
       setSummary(summaryRef.current); setSaved(savedRef.current);
     }
   }, [project.storySummary, dirty, saved, saving]);
+  // A board linked, created or unlinked after the proposal: take the new board's
+  // snapshot so its beats can apply. The story basis stays the proposal's.
+  const hasContext = !!context;
+  const contextBoardId = context?.board?.id ?? null;
+  useEffect(() => {
+    if (!hasContext || contextBoardId === (project.storyboardId || null)) return undefined;
+    let live = true;
+    getMusicVideoStoryContext(project.id, { silent: true })
+      .then((next) => { if (live && next) setContext((old) => old && { ...old, board: next.board }); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [project.id, project.storyboardId, hasContext, contextBoardId]);
   const save = () => {
     if (saveFlight.current) return saveFlight.current;
     const notes = summaryRef.current;
