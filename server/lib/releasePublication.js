@@ -5,3 +5,5 @@ export const releasePublicationRequestSchema = z.object({
   promotionPrNumber: z.number().int().positive().safe(),
   workflowRunId: z.number().int().positive().safe(),
 }).strict();
+
+export const releaseCandidateRequestSchema = z.object({ action: z.enum(['reserve', 'capture']) }).strict();

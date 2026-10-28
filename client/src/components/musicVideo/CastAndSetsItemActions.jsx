@@ -1,0 +1,141 @@
+import { useId, useState } from 'react';
+import { Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
+
+const buttonClass = 'flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs sm:min-h-0 disabled:opacity-50';
+const fieldClass = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm';
+
+const PROTAGONIST_FIELDS = [['name', 'Name'], ['description', 'Who they are'], ['face', 'Face'], ['hair', 'Hair'], ['signature', 'Signature detail'], ['gesture', 'Gesture']];
+const FORM_FIELDS = [['label', 'Label'], ['age', 'Age'], ['description', 'How they look at that age'], ['hair', 'Hair'], ['wardrobe', 'Wardrobe']];
+const CAST_FIELDS = [['name', 'Name'], ['role', 'Role'], ['description', 'Who they are'], ['face', 'Face'], ['hair', 'Hair'], ['wardrobe', 'Wardrobe']];
+const SET_FIELDS = [['name', 'Name'], ['description', 'The empty place'], ['lighting', 'Lighting']];
+const TEST_FIELDS = [['action', 'What happens in the frame'], ['caption', 'Caption']];
+const LONG = new Set(['description', 'action', 'face', 'wardrobe']);
+
+const lines = (text) => String(text || '').split('\n').map((line) => line.trim()).filter(Boolean);
+const looksText = (looks = []) => looks.map((look) => `${look.name}: ${look.description}`).join('\n');
+const parseLooks = (text) => lines(text).map((line) => {
+  const at = line.indexOf(':');
+  return at > 0 ? { name: line.slice(0, at).trim(), description: line.slice(at + 1).trim() } : { name: line, description: line };
+});
+
+/**
+ * What one card on the check-in edits, as `{ fields | list, values, toEdits, removeEdits }`:
+ * the direction text the image is drawn from, and the PATCH body that saves or removes it.
+ */
+function editorFor(item, direction, adding = false) {
+  const p = direction?.protagonist || {};
+  const forms = p.forms || [];
+  if (item.kind === 'character') {
+    if (adding) {
+      return { fields: FORM_FIELDS, values: { label: '', age: '', description: '', hair: '', wardrobe: '' },
+        toEdits: (v) => ({ protagonist: { forms: [...forms, v] } }) };
+    }
+    return { fields: PROTAGONIST_FIELDS, values: Object.fromEntries(PROTAGONIST_FIELDS.map(([key]) => [key, p[key] || ''])),
+      toEdits: (v) => ({ protagonist: v }) };
+  }
+  if (item.kind === 'expressions') {
+    return { list: 'One mood per line: what the face, eyes and head do', values: { text: (p.expressions || []).join('\n') },
+      toEdits: (v) => ({ protagonist: { expressions: lines(v.text) } }) };
+  }
+  if (item.kind === 'looks') {
+    return { list: 'One look per line: NAME: the complete outfit', values: { text: looksText(direction?.looks) },
+      toEdits: (v) => ({ looks: parseLooks(v.text) }) };
+  }
+  if (item.kind === 'form') {
+    const form = forms.find((f) => f.id === item.formId) || {};
+    return { fields: FORM_FIELDS, values: Object.fromEntries(FORM_FIELDS.map(([key]) => [key, form[key] || ''])),
+      toEdits: (v) => ({ protagonist: { forms: forms.map((f) => (f.id === form.id ? { ...v, id: f.id } : f)) } }),
+      removeEdits: () => ({ protagonist: { forms: forms.filter((f) => f.id !== form.id) } }) };
+  }
+  if (item.kind === 'cast') {
+    const member = (direction?.cast || []).find((c) => c.id === item.castId) || {};
+    return { fields: CAST_FIELDS, values: Object.fromEntries(CAST_FIELDS.map(([key]) => [key, member[key] || ''])),
+      toEdits: (v) => ({ cast: [{ id: member.id, ...v }] }), removeEdits: () => ({ cast: [{ id: member.id, remove: true }] }) };
+  }
+  if (item.kind === 'plate') {
+    const set = (direction?.sets || []).find((s) => s.id === item.setId) || {};
+    return { fields: SET_FIELDS, values: Object.fromEntries(SET_FIELDS.map(([key]) => [key, set[key] || ''])),
+      toEdits: (v) => ({ sets: [{ id: set.id, ...v }] }), removeEdits: () => ({ sets: [{ id: set.id, remove: true }] }) };
+  }
+  if (item.kind === 'test') {
+    const index = (item.testIndex ?? 0) + 1;
+    const test = (direction?.tests || [])[index - 1] || {};
+    return { fields: TEST_FIELDS, values: Object.fromEntries(TEST_FIELDS.map(([key]) => [key, test[key] || ''])),
+      toEdits: (v) => ({ tests: [{ index, ...v }] }), removeEdits: () => ({ tests: [{ index, remove: true }] }),
+      // An automatic test the direction did not write cannot be edited, only re-rendered.
+      missing: !direction?.tests?.[index - 1] };
+  }
+  return null;
+}
+
+function ItemEditor({ editor, label, busy, onSave, onCancel }) {
+  const baseId = useId();
+  const [values, setValues] = useState(editor.values);
+  const set = (key, value) => setValues((old) => ({ ...old, [key]: value }));
+  return (
+    <form className="space-y-2 rounded border border-port-border p-2" aria-label={`Edit ${label}`}
+      onSubmit={(e) => { e.preventDefault(); onSave(editor.toEdits(values)); }}>
+      {editor.list ? (
+        <label htmlFor={`${baseId}-text`} className="block text-xs text-port-text-muted">{editor.list}
+          <textarea id={`${baseId}-text`} rows={6} className={fieldClass} value={values.text} onChange={(e) => set('text', e.target.value)} />
+        </label>
+      ) : editor.fields.map(([key, name]) => (
+        <label key={key} htmlFor={`${baseId}-${key}`} className="block text-xs text-port-text-muted">{name}
+          {LONG.has(key)
+            ? <textarea id={`${baseId}-${key}`} rows={3} className={fieldClass} value={values[key]} onChange={(e) => set(key, e.target.value)} />
+            : <input id={`${baseId}-${key}`} className={fieldClass} value={values[key]} onChange={(e) => set(key, e.target.value)} />}
+        </label>
+      ))}
+      <p className="text-[11px] text-port-text-muted">Saving re-renders this image and anything drawn from it.</p>
+      <div className="flex flex-wrap gap-2">
+        <button type="submit" disabled={busy} className={`${buttonClass} bg-port-accent text-white border-transparent`}>Save and re-render</button>
+        <button type="button" onClick={onCancel} className={buttonClass}>Cancel</button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * One check-in card's own actions: render this image again, edit the direction
+ * text it is drawn from (saving re-renders only what changed), remove a cast
+ * member, set, test or other age from the sheet, and add another age to the
+ * protagonist. Shown only while the stage is not working.
+ */
+export default function CastAndSetsItemActions({ item, direction, busy, onRegenerate, onEdit }) {
+  const [mode, setMode] = useState(null);
+  const editor = editorFor(item, direction);
+  const label = item.label || item.key;
+  const close = () => setMode(null);
+  const save = async (edits) => { if (await onEdit(edits)) close(); };
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-2">
+        <button type="button" disabled={busy} onClick={() => onRegenerate([item.key])} className={buttonClass} aria-label={`Regenerate ${label}`}>
+          <RotateCcw size={12} aria-hidden="true" /> Regenerate
+        </button>
+        {editor && !editor.missing && (
+          <button type="button" disabled={busy} onClick={() => setMode(mode === 'edit' ? null : 'edit')} aria-expanded={mode === 'edit'} className={buttonClass} aria-label={`Edit ${label}`}>
+            <Pencil size={12} aria-hidden="true" /> Edit
+          </button>
+        )}
+        {item.kind === 'character' && (direction?.protagonist?.forms || []).length < 3 && (
+          <button type="button" disabled={busy} onClick={() => setMode(mode === 'add' ? null : 'add')} aria-expanded={mode === 'add'} className={buttonClass}>
+            <Plus size={12} aria-hidden="true" /> Add another age
+          </button>
+        )}
+        {editor?.removeEdits && !editor.missing && mode !== 'remove' && (
+          <button type="button" disabled={busy} onClick={() => setMode('remove')} className={`${buttonClass} text-port-error`} aria-label={`Remove ${label}`}>
+            <Trash2 size={12} aria-hidden="true" /> Remove
+          </button>
+        )}
+        {mode === 'remove' && (
+          <ConfirmButtonPair prompt="Remove?" confirmText="Remove" busy={busy} responsiveTouchTargets
+            ariaLabel={`Remove ${label} from the sheet`} confirmAriaLabel={`Remove ${label} from the sheet`} onConfirm={() => save(editor.removeEdits())} onCancel={close} />
+        )}
+      </div>
+      {mode === 'edit' && <ItemEditor editor={editor} label={label} busy={busy} onSave={save} onCancel={close} />}
+      {mode === 'add' && <ItemEditor editor={editorFor(item, direction, true)} label="another age" busy={busy} onSave={save} onCancel={close} />}
+    </div>
+  );
+}

@@ -92,6 +92,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/music/ChiptunePanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/music/MusicDesigner.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/music/TrackWaveformHost.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/musicVideo/ArtGuideDrafter.jsx` | Session-local structured options forwarded to art-guide preview and draft requests |
 | `client/src/components/musicVideo/AutoReviewPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/AutonomousStartDrawer.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/AutopilotPanel.jsx` | Shared structured options or saved provider reference |

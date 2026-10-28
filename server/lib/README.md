@@ -30,6 +30,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `catalogUniverseContext.js` | Explicit catalog owning-universe role and visible legacy/missing/conflicting ownership classification, independent of usage. |
 | `appOperationErrorContext.js` | `appOperationErrorContext` projects bounded forge scope repair fields for failed update events and history; all other error context is withheld. |
 | `checkoutRetirementAdmission.js` | Durable common-repository publication/cut admission for explicit initialized-checkout quarantine; pending reservations survive restart and block managed checkout mutations until verified recovery. |
+| `checkoutSeed.js` | Schema for server-captured physical checkout ownership and incarnation evidence. |
 | `branchRetirementArchive.js` | `preserveBranchRetirement` remains for direct callers and historical tests. Production branch deletion does not call it and does not write `data/cos/branch-retirement-archives`. Deletion still uses Git's receiver lease and holder guards, then removes the local branch section after the ref is actually gone. |
 | `reconcileRetirementEvidence.js` | Matches exact checkout receipts and recovered-preservation receipts, preserves observation identity across delayed scans, and retains each unresolved checkout incarnation. Legacy observations keep their original generation timestamps. A recreated checkout at the same branch, path and head starts after every older receipt; verified historical preservation does not assert branch deletion. |
 | `legacyRetirementTransition.js` | Freezes archive-era observations for evidence-based reconciliation and retains their original diagnoses and delivery/receipt proofs as audit history, without manufacturing deletion receipts or changing task outcomes. |
@@ -1031,9 +1032,9 @@ migration with explicit recognition of the outgoing shipped defaults.
 
 | `releasePublication.js` | Validated request for forge-verified release publication milestones. |
 
-| `testCacheRetirementProof.js` | Vitest module-cache recognizers (cache tag, roots, entry names, metadata shape) for the ignored-payload check on retirements of non-integrated checkouts. |
+| `testCacheRetirementProof.js` | Vitest module-cache recognizers (cache tag, roots, entry names, metadata shape) for checkout ignored-payload checks. |
 | `releaseSynchronization.js` | Frozen continuation policy fields and mandatory synchronization obligations shared by publication enrollment, verification and task update guards. |
 
 | `realityStarterV2.js` | Frozen original natural-photography starter and optional preview recipe; V1 remains available to migrations. |
-| `universeVisualProfile.js` | Shared profile normalization, original photography default, labeled additions, explicit overrides and separate color/texture strength. |
+| `universeVisualProfile.js` | Shared profile normalization, original photography default, photoreal detection, labeled additions, explicit overrides and separate color/texture strength. |
 | `universeVisualProfileValidation.js` | Strict API validation for optional universe photography and finishing profiles. |

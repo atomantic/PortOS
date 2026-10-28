@@ -4,6 +4,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
+import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 const fixture = await vi.hoisted(async () => {
   const { mkdtemp } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
@@ -105,13 +106,19 @@ it('retains publisher and continuation history until the outbox verifies synchro
   await writeFile(join(fixture.root, date, continuation, 'metadata.json'), JSON.stringify(fixture.state.agents[continuation]));
   fixture.state.agents[unrelated].taskId = 'unrelated-task';
   await writeFile(join(fixture.root, date, unrelated, 'metadata.json'), JSON.stringify(fixture.state.agents[unrelated]));
+  const pointer = { dev: '1', ino: '2', birthtimeNs: '3' };
+  const seed = { version: 1, agentId: publisher, startedAt: publisherRecord.startedAt, seededAt: '2001-01-01T01:00:01Z',
+    repoPath: '/repo', path: '/candidate', branch: 'codex/release-publisher', repository: pointer, checkout: pointer,
+    incarnation: { pointer, gitdir: { path: '/repo/.git/worktrees/candidate', ...pointer } } };
+  const candidateHead = 'b'.repeat(40);
   const entry = {
     version: 1, identity,
     owner: { agentId: publisher, taskId: 'publisher-task', startedAt: publisherRecord.startedAt, workspace: '/repo' },
-    publication: { identity, status: 'verified' },
+    publication: { identity, status: 'verified', repository: 'example/repo', promotionPrNumber: 12,
+      candidateBranch: seed.branch, candidateHead },
     task: { id: taskId, metadata: { releaseSynchronization: { identity } } },
     obligations: Object.fromEntries(RELEASE_SYNC_OBLIGATIONS.map(name => [name, { status: 'pending' }])),
-    checkouts: [], registeredAt: '2001-01-01T02:00:00Z', attempts: 1, lastAttemptAt: null, blocker: null, retryAt: null,
+    checkouts: [seed], registeredAt: '2001-01-01T02:00:00Z', attempts: 1, lastAttemptAt: null, blocker: null, retryAt: null,
   };
   const { saveReleaseSynchronization } = await import('./releaseSynchronizationStore.js');
   await saveReleaseSynchronization(entry);
@@ -131,6 +138,18 @@ it('retains publisher and continuation history until the outbox verifies synchro
   }]));
   entry.synchronization = { status: 'verified', attempts: 1, checkedAt: '2001-01-01T03:00:00Z',
     verifiedAt: '2001-01-01T03:00:00Z', retryAt: null, blocker: null };
+  await saveReleaseSynchronization(entry);
+  // A stale verified status cannot release history without publisher evidence.
+  expect(await api.clearCompletedAgents()).toEqual({ cleared: 0, retained: 3 });
+  await assertIndexedTrees();
+  const target = { agentId: publisher, repoPath: seed.repoPath, branch: seed.branch, path: seed.path, head: candidateHead,
+    checkoutIdentity: retirementCheckoutIdentityFromPointer(pointer), createdAt: seed.seededAt };
+  entry.obligations.retirement.evidence = {
+    checkouts: [target],
+    receipts: [{ ...target, branchDeleted: true, archiveDir: null, retiredAt: '2001-01-01T02:30:00Z' }],
+    publisherReview: { branch: seed.branch, path: seed.path, head: candidateHead, checkoutIdentity: target.checkoutIdentity,
+      prUrl: 'https://github.com/example/repo/pull/12', receipt: null, models: [] },
+  };
   await saveReleaseSynchronization(entry);
   expect(await api.clearCompletedAgents()).toEqual({ cleared: 3, retained: 0 });
 });

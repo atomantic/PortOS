@@ -618,17 +618,20 @@ export async function searchIngredientsByEmbedding(vector, { type, limit = 20, t
 /**
  * Live records of `type` whose name or one of whose aliases equals one of
  * `names` (trimmed, case-insensitive), oldest first. Used to link to an
- * existing record instead of creating a same-named duplicate.
+ * existing record instead of creating a same-named duplicate. With
+ * `firstWord`, the name's or alias's first word is compared instead, so
+ * "Ada" finds "Ada Example".
  */
-export async function findIngredientsByName(type, names) {
+export async function findIngredientsByName(type, names, { firstWord = false } = {}) {
   const keys = [...new Set((names || []).map((n) => String(n || '').trim().toLowerCase()).filter(Boolean))];
   if (!type || !keys.length) return [];
+  const key = (column) => (firstWord ? `split_part(lower(btrim(${column})), ' ', 1)` : `lower(btrim(${column}))`);
   const result = await query(
     `SELECT * FROM catalog_ingredients
        WHERE deleted = false AND id = catalog_canonical_ingredient_id(id) AND type = $1
-         AND (lower(btrim(name)) = ANY($2)
+         AND (${key('name')} = ANY($2)
            OR (jsonb_typeof(payload->'aliases') = 'array'
-             AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(payload->'aliases') a WHERE lower(btrim(a)) = ANY($2))))
+             AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(payload->'aliases') a WHERE ${key('a')} = ANY($2))))
        ORDER BY created_at, id`,
     [type, keys],
   );

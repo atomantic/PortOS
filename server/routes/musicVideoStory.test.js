@@ -20,7 +20,7 @@ const { __setStoryDepsForTests } = await import('../services/musicVideo/story.js
 // listening socket; the file-backed project and storyboard stores remain real.
 function request(router, operator = false) {
   const call = (method, url, body) => new Promise((resolveResult, reject) => {
-    const match = url.match(/^\/api\/music-video\/([^/]+)\/story\/(context|summary|propose|apply|beats)$/);
+    const match = url.match(/^\/api\/music-video\/([^/]+)\/story\/(context|summary|propose|apply|beats|art-guides)$/);
     const layer = router.stack.find((entry) => entry.route?.path === `/:id/story/${match?.[2]}` && entry.route.methods[method.toLowerCase()]);
     if (!match || !layer) return reject(new Error(`No ${method} route for ${url}`));
     const req = { params: { id: match[1] }, body, method, url, headers: {}, socket: { remoteAddress: '192.0.2.1' },
@@ -163,5 +163,25 @@ describe('Music Video story review and apply', () => {
     const staleStory = await request(app).post(`${path(id)}/beats`).send({ boardId, boardBasis: latest.board.basis, basis: latest.basis, beats });
     expect(staleStory.status).toBe(409);
     expect((await boards.getStoryboard(boardId)).beats).toHaveLength(2);
+  });
+});
+
+describe('Music Video art guides from the story', () => {
+  it('previews the exact prompt, refuses without a story, and returns guides without saving them', async () => {
+    const { id } = await fixture();
+    const input = { providerId: 'test-route', model: 'chosen-model' };
+    expect((await request(app).post(`${path(id)}/art-guides`).send(input)).status).toBe(409);
+    await request(app).put(`${path(id)}/summary`).send({ summary: 'Ari at 7 and at 30, the old rink at night.', baseSummary: '' });
+    const preview = await request(app).post(`${path(id)}/art-guides`).send({ ...input, preview: true });
+    expect(preview.status).toBe(200);
+    expect(run).not.toHaveBeenCalled();
+    expect(preview.body.promptAdditions.map((a) => a.id)).toEqual(['creative-latitude', 'art-guide-instructions', 'story', 'project']);
+    expect(preview.body.sentPrompt).toContain('Story in your own words:\nAri at 7 and at 30, the old rink at night.');
+    run.mockResolvedValueOnce({ text: JSON.stringify({ cast: 'Ari, 30: tired eyes. Ari, 7: pigtails.', environments: 'The rink, empty, at night.', visualLanguage: 'Warm tungsten, 16mm grain.' }) });
+    const drafted = await request(app, true).post(`${path(id)}/art-guides`).send(input);
+    expect(drafted.status).toBe(200);
+    expect(drafted.body.proposal).toEqual({ cast: 'Ari, 30: tired eyes. Ari, 7: pigtails.', environments: 'The rink, empty, at night.', visualLanguage: 'Warm tungsten, 16mm grain.' });
+    expect(run.mock.calls[0][0].prompt).toBe(preview.body.sentPrompt);
+    expect((await projects.getProject(id)).productionReview?.draft?.cast).toBeFalsy();
   });
 });

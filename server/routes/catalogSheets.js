@@ -8,14 +8,14 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { catalogSheetRenderSchema } from '../lib/catalogValidation.js';
 import { getIngredient } from '../services/catalogDB.js';
-import { listCatalogSheetVariants, previewCatalogSheet, renderCatalogSheet } from '../services/catalogSheet.js';
+import { listCatalogSheetVariantsFor, previewCatalogSheet, renderCatalogSheet } from '../services/catalogSheet.js';
 
 const router = Router();
 
 router.get('/ingredients/:id/sheets/variants', asyncHandler(async (req, res) => {
   const ingredient = await getIngredient(req.params.id);
   if (!ingredient) throw new ServerError('Ingredient not found', { status: 404, code: 'NOT_FOUND' });
-  res.json({ variants: listCatalogSheetVariants(ingredient.type) });
+  res.json({ variants: await listCatalogSheetVariantsFor(ingredient) });
 }));
 
 router.post('/ingredients/:id/sheets/preview', asyncHandler(async (req, res) => {

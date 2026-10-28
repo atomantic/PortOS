@@ -318,7 +318,13 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       return null;
     }
 
-    if (!updateResult.error && !updateResult.statusChanged) await bindCompletionTaskDispatch(agentId, { ...updateResult, taskType: task.taskType || 'user' });
+    // Completion and its retry decision must see the dispatch that was actually
+    // persisted, including the incremented spawn count. Passing the pre-claim
+    // task lets finalization write the previous count back and refund a spawn.
+    // Unpersisted scheduled jobs retain their original task on the expected miss.
+    const dispatchedTask = !updateResult.error && !updateResult.statusChanged && updateResult.id === task.id && updateResult.metadata
+      ? { ...task, ...updateResult, taskType: task.taskType || 'user' } : task;
+    if (!updateResult.error && !updateResult.statusChanged) await bindCompletionTaskDispatch(agentId, dispatchedTask);
 
     if (task.metadata?.autonomousJob && task.metadata?.jobId) {
       cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });
@@ -350,7 +356,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     if (!spawnHeadless) {
       return await spawnTuiAgent({
         agentId,
-        task,
+        task: dispatchedTask,
         prompt,
         workspacePath,
         model: selectedModel,
@@ -368,11 +374,11 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       });
     }
     if (dispatchUseRunner) {
-      return await spawnViaRunner(agentId, task, { prompt, workspacePath, model: selectedModel, provider: runProvider, runId, cliConfig, executionId: toolExecution.id, laneName, securityScanGrant });
+      return await spawnViaRunner(agentId, dispatchedTask, { prompt, workspacePath, model: selectedModel, provider: runProvider, runId, cliConfig, executionId: toolExecution.id, laneName, securityScanGrant });
     }
     return await spawnDirectly({
       agentId,
-      task,
+      task: dispatchedTask,
       prompt,
       workspacePath,
       model: selectedModel,

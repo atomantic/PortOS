@@ -311,6 +311,67 @@ describe('catalog sheet routes', () => {
     expect(res.body.preview.promptAdditions).toEqual([]);
   });
 
+  // Catches an empty negative override being treated as absent (the template
+  // negatives sent anyway, with their chip) and the preview drifting from it.
+  it('sends an empty negative override as no negatives, with no negatives chip', async () => {
+    mocks.getIngredient.mockResolvedValue(character);
+    const body = { variant: 'standard', overrideNegativePrompt: '' };
+    const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+    expect(preview.status).toBe(200);
+    expect(preview.body.preview.sentNegativePrompt).toBeUndefined();
+    expect(preview.body.preview.promptAdditions.map((a) => a.id)).not.toContain('sheet-negatives');
+    await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+    const params = queuedParams();
+    expect(params.negativePrompt).toBe('');
+    expect(params.prompt).toBe(preview.body.preview.sentPrompt);
+    expect(params.promptAdditions).toEqual(preview.body.preview.promptAdditions);
+  });
+
+  it('renders the photographic turnaround with no negatives and no illustrated styling', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...character, name: 'Ada' });
+    const body = { variant: 'photographic' };
+    const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+    expect(preview.status).toBe(200);
+    const sent = preview.body.preview;
+    expect(sent.sentPrompt).toContain('PHOTOGRAPHIC CHARACTER REFERENCE SHEET');
+    expect(sent.sentPrompt).toContain('Ada');
+    expect(sent.sentPrompt).not.toMatch(/illustrat/i);
+    expect(sent.sentNegativePrompt).toBeUndefined();
+    const style = sent.promptAdditions.find((a) => a.id === 'sheet-default-style');
+    expect(style.text).toMatch(/photography/);
+    expect(sent.promptAdditions.map((a) => a.id)).not.toContain('sheet-negatives');
+    const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+    expect(res.body).toMatchObject({ variant: 'photographic', role: 'sheet:photographic' });
+    const params = queuedParams();
+    expect(params.negativePrompt).toBe('');
+    expect(params.prompt).toBe(sent.sentPrompt);
+    expect(params.promptAdditions).toEqual(sent.promptAdditions);
+  });
+
+  // Catches a photoreal universe starting its cast on the illustrated sheet.
+  it('lists and defaults to the photographic sheet for a character in a photoreal universe', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...character, name: 'Ada' });
+    mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
+    mocks.getUniverse.mockResolvedValue({
+      id: 'universe-1', name: 'Example Universe', influences: { embrace: [] },
+      visualProfile: { version: 1, generation: { enabled: true, lighting: 'Soft window light' } },
+      characters: [{ id: 'char-entry-1', name: 'Ada', ingredientId: 'cat-chr-1' }],
+    });
+    const listed = await request(app).get('/api/catalog/ingredients/cat-chr-1/sheets/variants');
+    expect(listed.body.variants.map((v) => v.id)).toEqual(['photographic', 'standard', 'blueprint']);
+    const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
+    expect(preview.body.preview.sentPrompt).toContain('PHOTOGRAPHIC CHARACTER REFERENCE SHEET');
+    expect(preview.body.preview.sentPrompt).toContain('Soft window light');
+    expect(preview.body.preview.sentPrompt).not.toMatch(/illustrat/i);
+    const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
+    expect(res.body).toMatchObject({ delegatedTo: 'universe', variant: 'photographic' });
+    expect(queuedParams().prompt).toBe(preview.body.preview.sentPrompt);
+
+    mocks.getUniverse.mockResolvedValue({ id: 'universe-1', name: 'Example Universe', characters: [] });
+    const plain = await request(app).get('/api/catalog/ingredients/cat-chr-1/sheets/variants');
+    expect(plain.body.variants.map((v) => v.id)).toEqual(['standard', 'photographic', 'blueprint']);
+  });
+
   describe('look renders', () => {
     const visualDirection = { camera: '  50mm film photography\n', lighting: 'Soft window light', environment: 'A weathered timber room' };
     const dressed = {

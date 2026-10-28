@@ -39,6 +39,11 @@ export function naturalUniverseVisualProfile() {
   });
 }
 
+/** True when the profile adds photography direction to image prompts (a photoreal universe). */
+export function isPhotographicVisualProfile(input) {
+  return normalizeUniverseVisualProfile(input)?.generation.enabled === true;
+}
+
 export function visualProfileAdditions(input) {
   const profile = normalizeUniverseVisualProfile(input);
   if (!profile?.generation.enabled) return [];

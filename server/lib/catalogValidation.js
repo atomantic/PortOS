@@ -285,6 +285,8 @@ export const catalogVideoSubjectLinksSchema = z.object({
     subjectId: z.string().trim().min(1).max(64),
     ingredientId: z.string().trim().min(1).max(128).nullable(),
     formId: z.string().regex(FORM_ID_PATTERN).optional(),
+    // Replace the subject's description with the catalog's appearance text.
+    useCatalogText: z.boolean().optional(),
   }).strict()).min(1).max(24),
 }).strict();
 export const catalogStoryDraftSchema = z.object({
@@ -667,6 +669,8 @@ export const catalogMusicVideoImportSchema = z.object({
     subjectId: z.string().min(1).max(64),
     action: z.enum(['create', 'link', 'local']),
     ingredientId: z.string().min(1).max(128).optional(),
+    // The linked record's age or look the subject shows, from the preview.
+    formId: z.string().min(1).max(128).optional(),
   }).strict().refine((s) => s.action !== 'link' || s.ingredientId, { message: 'link needs an ingredientId' })).min(1).max(2000),
 }).strict();
 

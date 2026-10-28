@@ -34,6 +34,15 @@ router.post('/agents/:id/release-publication', asyncHandler(async (req, res) => 
   res.json(await verifyAgentReleasePublication(req.params.id, input));
 }));
 
+// The server chooses and reserves the branch before its checkout exists; the
+// capture step discovers that checkout from Git, never from a supplied path.
+router.post('/agents/:id/release-candidate', asyncHandler(async (req, res) => {
+  const { releaseCandidateRequestSchema } = await import('../lib/releasePublication.js');
+  const input = validateRequest(releaseCandidateRequestSchema, req.body ?? {});
+  const { updateReleaseCandidateOwnership } = await import('../services/cosClaimOwnership.js');
+  res.json(await updateReleaseCandidateOwnership(req.params.id, input.action));
+}));
+
 const mergeAdmissionSchema = z.object({
   agentId: z.string().min(1).max(200),
   action: z.enum(['prepare', 'yield', 'acquire', 'check', 'release']),

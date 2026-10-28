@@ -31,7 +31,7 @@ beforeAll(async () => {
   if (!ready) return;
   await query('INSERT INTO universes (id, name, data) VALUES ($1, $2, $3::jsonb)', [ids.universe, 'Example world', toPgJson({ logline: 'A city that never sleeps.' })]);
   await query(`INSERT INTO catalog_ingredients (id, type, name, payload) VALUES
-    ($1, 'character', 'Example Lead', '{"physicalDescription":"Tall, red jacket.","forms":[{"id":"teen","label":"Teen","age":"17"},{"id":"kid","label":"Kid","age":"7"}]}'::jsonb),
+    ($1, 'character', 'Example Lead', '{"physicalDescription":"Tall, red jacket.","forms":[{"id":"teen","label":"Teen","age":"17","description":"Seventeen, braids."},{"id":"kid","label":"Kid","age":"7"}]}'::jsonb),
     ($2, 'character', 'Example Friend', '{}'::jsonb), ($3, 'place', 'Example Rink', '{}'::jsonb)`, [ids.lead, ids.friend, ids.rink]);
   await query(`INSERT INTO catalog_ingredient_refs (ingredient_id, ref_kind, ref_id, role) VALUES
     ($1, 'universe', $3, 'owner'), ($2, 'universe', $3, 'owner')`, [ids.lead, ids.friend, ids.universe]);
@@ -108,6 +108,25 @@ describe.skipIf(!ready)('catalog stories', () => {
     await linkVideoSubjects(ids.video, [{ subjectId: 'mvc-a', ingredientId: null }], d);
     expect(d.project.concept.subjects[0]).not.toHaveProperty('ingredientId');
     expect(d.project.concept.subjects[0]).not.toHaveProperty('castForm');
+  });
+
+  // Uniquely catches a linked subject keeping its stale description with no way to take the catalog's.
+  it('shows the linked age\'s catalog description and can take it, refusing one that would not fit', async () => {
+    const d = videoDeps([
+      { id: 'mvc-a', kind: 'character', name: 'Example Lead (17)', description: 'Short hair.', ingredientId: ids.lead, castForm: { id: 'teen', label: 'Teen', age: 17 } },
+      { id: 'mvc-b', kind: 'place', name: 'Example Rink', description: 'Old.', ingredientId: ids.rink },
+    ]);
+    const { subjects } = await listVideoSubjectLinks(ids.video, {}, d);
+    expect(subjects[0].linked.appearance).toEqual({ field: 'form', formId: 'teen', text: 'Seventeen, braids.' });
+    expect(subjects[1].linked.appearance).toEqual({ field: 'record', text: '' });
+    await linkVideoSubjects(ids.video, [{ subjectId: 'mvc-a', ingredientId: ids.lead, formId: 'teen', useCatalogText: true }], d);
+    expect(d.project.concept.subjects[0]).toMatchObject({ description: 'Seventeen, braids.', castForm: { id: 'teen' } });
+
+    await query(`UPDATE catalog_ingredients SET payload = payload || jsonb_build_object('description', repeat('x', 1001)) WHERE id = $1`, [ids.rink]);
+    await expect(linkVideoSubjects(ids.video, [{ subjectId: 'mvc-b', ingredientId: ids.rink, useCatalogText: true }], d))
+      .rejects.toMatchObject({ status: 400, code: 'DESCRIPTION_TOO_LONG' });
+    expect(d.project.concept.subjects[1].description).toBe('Old.');
+    await query(`UPDATE catalog_ingredients SET payload = payload - 'description' WHERE id = $1`, [ids.rink]);
   });
 
   it('refuses a record of another kind or an age it does not have', async () => {
