@@ -559,7 +559,10 @@ def inspect(request, full=False):
         fail('release-head-or-branch-changed')
     lock = admin / 'locked'
     locked = lock.exists()
-    if locked != release['locked']:
+    expected_locked = release['locked'] and not request.get('expectUnlocked', False)
+    if request.get('expectUnlocked') and not (request.get('lockTransition') and release['locked']):
+        fail('invalid-unlock-observation')
+    if locked != expected_locked:
         fail('release-lock-changed')
     if locked and lock.read_text().strip() != (release.get('lockReason') or ''):
         fail('release-lock-reason-changed')
@@ -640,6 +643,14 @@ def inspect(request, full=False):
         facts['dependencies'] = dependencies
     facts['administrationFingerprint'] = digest(sources['administration'])
     facts['fingerprint'] = digest({'facts': facts, 'sources': sources})
+    if request.get('lockTransition') is True:
+        # Unlock removes only this file and changes its parent directory mtime.
+        # All other bytes, metadata and physical identities remain bound.
+        stable_admin = [{k: v for k, v in row.items() if not (row['path'] == '' and k == 'mtimeNs')}
+                        for row in sources['administration'] if row['path'] != 'locked']
+        stable_sources = {**sources, 'administration': stable_admin}
+        stable_facts = {k: v for k, v in facts.items() if k not in ('administrationFingerprint', 'fingerprint')}
+        facts['lockTransitionFingerprint'] = digest({'facts': stable_facts, 'sources': stable_sources})
     return {**facts, **({'sources': sources} if full else {})}
 
 
