@@ -618,7 +618,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     }
     return { ok: true, transactionId, phase: state.phase, release: state.release, placement,
       branchDeleted: state.branchDeleted ?? null, journalDigest: hash(state),
-      ...(state.phase.startsWith('locked-') && state.phase !== 'locked-retired' ? { recoveryRequired: true, reason: 'locked-retirement-recovery-held' } : {}),
+      ...(state.phase.startsWith('locked-') && !['locked-restored', 'locked-retired'].includes(state.phase) ? { recoveryRequired: true, reason: 'locked-retirement-recovery-held' } : {}),
       ...(unboundPreservation ? { recoveryRequired: true, recoveryAction: 'restore', reason: 'preservation-proof-unbound' } : {}),
       ...(state.phase === 'branch-retirement-intent' ? { branchDeletion: 'uncertain', branchRef, recoveryRequired: true } : {}),
       ...(state.phase === 'branch-retired' ? { receiptPending: true, recoveryRequired: true } : {}),
@@ -1171,8 +1171,8 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     } finally { await executor.release(); }
   });
 
-  // Receipt is already durable; replay only verifies its evidence and releases
-  // this transaction's cut. It never repeats removal or branch deletion.
+  // Recheck the preserved archive and exact absences before replaying a missing
+  // receipt or releasing its cut. Never repeat removal or branch deletion.
   const finishLockedReceipt = (input, beforeMutation) => fenced(async () => {
     const bound = await recoveryBinding(input.transactionId, input.journalDigest);
     const { ctx, directory } = bound;
