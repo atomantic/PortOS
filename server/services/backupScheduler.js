@@ -15,6 +15,7 @@ import { getUserTimezone, getTimezoneUpdatedAt } from './userTimezone.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
 
 const EVENT_ID = 'backup-daily';
+const CATCHUP_EVENT_ID = 'backup-missed-slot-catchup';
 
 // How long to wait before retrying a boot-time read that came back corrupt
 // (issue #8428) — long enough to skip past a transient EIO/iCloud-dataless
@@ -39,10 +40,6 @@ let corruptRetryTimer = null;
 // moment a catch-up is EVALUATED (whether or not one is actually scheduled),
 // so a settings save right after boot can't re-arm a second attempt.
 let catchUpEvaluated = false;
-
-// The pending catch-up timer, so stopBackupScheduler() (used between tests,
-// and by anything that tears the scheduler down) can cancel it.
-let catchUpTimer = null;
 
 /**
  * The registration-affecting slice of settings: `null` when backup scheduling
@@ -124,12 +121,13 @@ async function maybeCatchUpMissedSlot(inputs, timezone, settings) {
     }
 
     console.log(`💾 Backup scheduler: missed slot ${prevRun.toISOString()} — catching up in ${Math.round(CATCHUP_BOOT_DELAY_MS / 60_000)}m`);
-    catchUpTimer = setTimeout(() => {
-      catchUpTimer = null;
-      runScheduledBackup('missed-slot catch-up').catch(err =>
-        console.error(`❌ Backup scheduler: catch-up run failed: ${err.message}`));
-    }, CATCHUP_BOOT_DELAY_MS);
-    catchUpTimer.unref?.();
+    schedule({
+      id: CATCHUP_EVENT_ID,
+      type: 'once',
+      delayMs: CATCHUP_BOOT_DELAY_MS,
+      handler: () => runScheduledBackup('missed-slot catch-up'),
+      metadata: { source: 'backupScheduler' }
+    });
   } catch (err) {
     console.error(`❌ Backup scheduler: missed-slot check failed: ${err.message}`);
   }
@@ -288,10 +286,7 @@ export function stopBackupScheduler() {
     clearTimeout(corruptRetryTimer);
     corruptRetryTimer = null;
   }
-  if (catchUpTimer) {
-    clearTimeout(catchUpTimer);
-    catchUpTimer = null;
-  }
+  cancel(CATCHUP_EVENT_ID);
   catchUpEvaluated = false;
   console.log('💾 Backup scheduler: stopped');
 }

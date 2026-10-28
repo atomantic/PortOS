@@ -13,16 +13,21 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('./eventScheduler.js', () => ({
-  // The real schedule() returns the registered event; the scheduler treats a
-  // null nextRunAt as a failed registration, so the default mock returns a
-  // firing one.
-  schedule: vi.fn(() => ({ id: 'backup-daily', nextRunAt: Date.now() + 60_000 })),
-  cancel: vi.fn(),
-  // Defaults to "no missed slot" so every pre-existing test above stays
-  // unaffected by the #8456 catch-up check that now runs on every boot.
-  parseCronToPrevRun: vi.fn(() => null)
-}));
+vi.mock('./eventScheduler.js', async (importOriginal) => {
+  const real = await importOriginal();
+  return {
+    // The real schedule() returns the registered event; the scheduler treats a
+    // null nextRunAt as a failed registration, so the default mock returns a
+    // firing one.
+    schedule: vi.fn((config) => config.type === 'once'
+      ? real.schedule(config)
+      : { id: 'backup-daily', nextRunAt: Date.now() + 60_000 }),
+    cancel: vi.fn(real.cancel),
+    // Defaults to "no missed slot" so every pre-existing test above stays
+    // unaffected by the #8456 catch-up check that now runs on every boot.
+    parseCronToPrevRun: vi.fn(() => null)
+  };
+});
 
 // The scheduler subscribes to `settings:updated` at module load, so the mock
 // needs a working emitter the re-sync tests below can fire. `vi.hoisted` runs
