@@ -3,6 +3,7 @@ import { join } from 'path';
 import { meatspaceEvents } from './meatspaceEvents.js';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
 import { loadMeatspaceDailyLog, mutateDailyLog, newDailyLogEvent, stampDailyLogEventEdit, tombstoneDailyLogEvent } from './meatspaceDailyLog.js';
+import { createMutex } from '../lib/asyncMutex.js';
 import { isMortalLoomEnabled, mlPush, mlPatchById, mlRemoveById, mlIdAtDateIndex } from './mortalLoomStore.js';
 
 export function createSubstanceLog({ key, itemsField, totalField, mlCollection, itemFields, computeTotal, computeLogAmount = computeTotal, describe, customButtons, computeAverages, summaryConfig }) {
@@ -149,6 +150,8 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
     return result;
   }
 
+  // Serializes button read-modify-write so overlapping requests cannot drop each other's edit.
+  const withButtonsLock = createMutex();
   const buttonsFile = join(PATHS.meatspace, customButtons.file);
   async function loadButtons() {
     const data = await readJSONFile(buttonsFile, null, { allowArray: false, strict: true });
@@ -163,15 +166,15 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
     await atomicWrite(buttonsFile, data);
   }
   async function getButtons() { return (await loadButtons())[customButtons.field] || []; }
-  async function addButton(input) {
+  const addButton = (input) => withButtonsLock(async () => {
     const data = await loadButtons();
     const item = Object.fromEntries(customButtons.fields.map(field => [field, input[field]]));
     data[customButtons.field].push(item);
     await saveButtons(data);
     console.log(`${describe.icon} Added custom ${describe.noun} button: ${describe.button(item)}`);
     return item;
-  }
-  async function updateButton(index, updates) {
+  });
+  const updateButton = (index, updates) => withButtonsLock(async () => {
     if (!Number.isInteger(index)) return null;
     const data = await loadButtons();
     if (index < 0 || index >= data[customButtons.field].length) return null;
@@ -180,8 +183,8 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
     await saveButtons(data);
     console.log(`📝 Updated custom ${describe.noun} button [${index}]: ${item.name}`);
     return item;
-  }
-  async function removeButton(index) {
+  });
+  const removeButton = (index) => withButtonsLock(async () => {
     if (!Number.isInteger(index)) return null;
     const data = await loadButtons();
     if (index < 0 || index >= data[customButtons.field].length) return null;
@@ -189,6 +192,6 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
     await saveButtons(data);
     console.log(`🗑️ Removed custom ${describe.noun} button: ${removed.name}`);
     return removed;
-  }
+  });
   return { summary, daily, log, update, remove, getButtons, addButton, updateButton, removeButton };
 }
