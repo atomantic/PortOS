@@ -464,6 +464,41 @@ describe('schedule() lifecycle with fake timers', () => {
     expect(await running).toBe(true);
   });
 
+  it('keeps ownership across cancellation and replacement while other ids run', async () => {
+    let release;
+    const original = vi.fn(() => new Promise(resolve => { release = resolve; }));
+    const replacement = vi.fn();
+    const other = vi.fn();
+    schedule({ id: 'replace', type: 'interval', intervalMs: 1000, handler: original });
+    await vi.advanceTimersByTimeAsync(1000);
+    cancel('replace');
+    schedule({ id: 'replace', type: 'interval', intervalMs: 1000, handler: replacement });
+    schedule({ id: 'other', type: 'interval', intervalMs: 1000, handler: other });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(replacement).not.toHaveBeenCalled();
+    expect(other).toHaveBeenCalledTimes(1);
+    const joined = triggerNow('replace');
+    release();
+    expect(await joined).toEqual({ joined: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(replacement).toHaveBeenCalledTimes(1);
+    expect(original).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not rearm a replacement cancelled while its timer joins an old run', async () => {
+    let release;
+    schedule({ id: 'replace-cancel', type: 'interval', intervalMs: 1000, handler: () => new Promise(resolve => { release = resolve; }) });
+    await vi.advanceTimersByTimeAsync(1000);
+    const replacement = vi.fn();
+    schedule({ id: 'replace-cancel', type: 'interval', intervalMs: 1000, handler: replacement });
+    await vi.advanceTimersByTimeAsync(1000);
+    cancel('replace-cancel');
+    release();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(replacement).not.toHaveBeenCalled();
+    expect(getEvent('replace-cancel')).toBeNull();
+  });
+
   it('triggerNow() returns false for an unknown id', async () => {
     expect(await triggerNow('does-not-exist')).toBe(false);
   });
