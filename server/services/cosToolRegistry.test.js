@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   worldSay: vi.fn(),
   observeWorld: vi.fn(),
   listUserActions: vi.fn(),
+  listArtists: vi.fn(),
   fileIssue: vi.fn(),
   listIssues: vi.fn(),
   adoptFoundation: vi.fn(),
@@ -148,6 +149,10 @@ vi.mock('./eidoverseFoundationLedger.js', () => ({
 }));
 vi.mock('./instanceIdentity.js', () => ({
   ensureInstanceId: (...args) => mocks.ensureInstanceId(...args),
+}));
+vi.mock('./artists/index.js', async () => ({
+  listArtists: (...args) => mocks.listArtists(...args),
+  buildSubmissionProfile: (await vi.importActual('./artists/logic.js')).buildSubmissionProfile,
 }));
 vi.mock('./userActions.js', () => ({
   listUserActions: (...args) => mocks.listUserActions(...args),
@@ -546,6 +551,31 @@ describe('cosToolRegistry', () => {
       authority: { scope: 'mind', capabilities: { createTasks: true } },
     })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
     expect(mocks.listUserActions).not.toHaveBeenCalled();
+  });
+
+  it('lets a granted external agent read the curated artist profile without filling its gaps', async () => {
+    const mcp = formatCosToolCatalog(getCosToolCatalog({ scope: 'agent', capabilities: { readPortos: true } }), 'mcp');
+    expect(mcp.tools.find((tool) => tool.name === 'music_artist_profile').annotations).toMatchObject({ readOnlyHint: true });
+    expect(getCosToolCatalog({ scope: 'agent', capabilities: {} }).tools.find((tool) => tool.name === 'music.artist-profile').granted).toBe(false);
+    mocks.listArtists.mockResolvedValue([
+      { id: 'artist-1', name: 'Nova Vale', bioShort: 'Writes folk songs.', aiStatement: 'Music generated with a model; lyrics are mine.' },
+      { id: 'artist-2', name: 'Other Persona' },
+    ]);
+    const result = await executeCosToolCall({
+      call: { requestId: 'artist-read', name: 'music.artist-profile', arguments: { name: 'nova vale' } },
+      authority: { scope: 'agent', capabilities: { readPortos: true } },
+    });
+    expect(result.state).toBe('completed');
+    expect(result.result.artists).toHaveLength(1);
+    expect(result.result.artists[0].profile).toMatchObject({ name: 'Nova Vale', bioShort: 'Writes folk songs.', creditName: '' });
+    expect(result.result.artists[0].missing).toContain('Name for credits');
+    expect(result.result.artists[0].markdown).toContain('- AI process statement: Music generated with a model; lyrics are mine.');
+
+    const none = await executeCosToolCall({
+      call: { requestId: 'artist-none', name: 'music.artist-profile', arguments: { name: 'Nobody' } },
+      authority: { scope: 'agent', capabilities: { readPortos: true } },
+    });
+    expect(none.result).toMatchObject({ artists: [], note: expect.stringContaining('No artist named "Nobody"') });
   });
 
   it('returns bounded ledger events with source reduced to route identity', async () => {

@@ -23,8 +23,11 @@ export {
   PHYSICAL_DESCRIPTION_MAX,
   PORTRAIT_STYLE_MAX,
   PORTRAIT_IMAGE_URL_MAX,
+  SUBMISSION_FIELD_SPECS,
+  SUBMISSION_FIELDS,
   ARTIST_ID_RE,
   portraitImageFilename,
+  buildSubmissionProfile,
 } from './logic.js';
 
 // Shared dispatcher (#2909). ensureSchema() runs inside the selector so the

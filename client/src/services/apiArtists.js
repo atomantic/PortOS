@@ -20,6 +20,10 @@ export const deleteArtist = (id, requestOptions = {}) => request(`/artists/${enc
   method: 'DELETE',
   ...requestOptions,
 });
+// The press & submission profile (filled fields, labels still empty, Markdown)
+// that agents read when filling festival forms.
+export const getArtistSubmissionProfile = (id, requestOptions = {}) => request(`/artists/${encodeURIComponent(id)}/submission-profile`, requestOptions);
 
 // Caps come from the server leaf so client inputs and the server sanitizer can't drift.
 export { NAME_MAX as ARTIST_NAME_MAX, GENRE_MAX as ARTIST_GENRE_MAX, BIO_MAX as ARTIST_BIO_MAX, MUSICAL_STYLE_MAX as ARTIST_MUSICAL_STYLE_MAX, PHYSICAL_DESCRIPTION_MAX as ARTIST_PHYSICAL_DESCRIPTION_MAX, PORTRAIT_STYLE_MAX as ARTIST_PORTRAIT_STYLE_MAX, PORTRAIT_IMAGE_URL_MAX as ARTIST_PORTRAIT_IMAGE_URL_MAX } from '../../../server/lib/artistLimits.js';
+export { SUBMISSION_FIELD_SPECS as ARTIST_SUBMISSION_FIELD_SPECS } from '../../../server/lib/artistLimits.js';
