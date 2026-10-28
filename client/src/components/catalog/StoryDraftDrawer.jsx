@@ -6,6 +6,7 @@ import SentPromptPanel from '../media/SentPromptPanel';
 import toast from '../ui/Toast';
 import { createCatalogIngredient, draftCatalogStoryMember, joinCatalogStory } from '../../services/api';
 import { formatCount } from '../../utils/formatters';
+import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
 import { STORY_DRAFT_LIMITS } from '../../../../server/lib/catalogStoryDraft.js';
 
 const actionButton = 'min-h-[44px] inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
@@ -15,15 +16,8 @@ const PICK_KEY = 'portos.catalogStoryDraft.llm';
 const EMPTY_PICK = { providerId: '', model: '', effort: '' };
 
 const readPick = () => {
-  try {
-    const saved = JSON.parse(localStorage.getItem(PICK_KEY) || 'null');
-    return saved && typeof saved === 'object' ? { ...EMPTY_PICK, ...saved } : EMPTY_PICK;
-  } catch {
-    return EMPTY_PICK;
-  }
-};
-const savePick = (pick) => {
-  try { localStorage.setItem(PICK_KEY, JSON.stringify(pick)); } catch { /* per-viewer convenience only */ }
+  const saved = safeReadJsonStorage(PICK_KEY, null);
+  return saved && typeof saved === 'object' ? { ...EMPTY_PICK, ...saved } : EMPTY_PICK;
 };
 
 const storyKey = (story) => (story ? `${story.kind}:${story.id}` : '');
@@ -56,7 +50,7 @@ export default function StoryDraftDrawer({ open, onClose, library, typeMeta, uni
 
   const changePick = (next) => {
     setPick(next);
-    savePick(next);
+    safeWriteJsonStorage(PICK_KEY, next);
   };
 
   const draft = async () => {
