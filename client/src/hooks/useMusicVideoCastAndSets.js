@@ -37,7 +37,7 @@ const reachedCheckpoint = (stage) => CHECKPOINTS.has(stage?.status) || stage?.in
  * `interrupted` by a restart), or null when it could not start or the wait was
  * abandoned with `cancelWait()` (the kickoff's Cancel).
  *
- * Returns `{ busy, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, runToCheckpoint, cancelWait }`.
+ * Returns `{ busy, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait }`.
  */
 export default function useMusicVideoCastAndSets({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
@@ -128,6 +128,11 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
   const reconfirm = () => call(() => reconfirmMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets kept approved');
   const skip = () => call(() => skipMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets check-in skipped');
   const discard = () => call(() => discardMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets cleared — build it again when your story and guides are ready');
+  // A sheet in review must be cleared before a fresh build; any other idle sheet rebuilds in place.
+  const rebuildFromStory = (status) => call(async () => {
+    if (status === 'review') await discardMusicVideoCastAndSets(projectId, { silent: true });
+    return startMusicVideoCastAndSets(projectId, {}, { silent: true });
+  }, 'Rebuilding Cast & Sets from your story');
 
   const runToCheckpoint = (target) => {
     if (!target?.id) return Promise.resolve(null);
@@ -156,5 +161,5 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     w.resolve(null);
   };
 
-  return { busy, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, runToCheckpoint, cancelWait };
+  return { busy, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
 }

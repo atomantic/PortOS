@@ -245,6 +245,24 @@ describe('Cast & Sets per-image actions', () => {
       { protagonist: { forms: [{ label: 'Teen', age: '17', description: 'lanky, braces', hair: '', wardrobe: '' }] } }, { silent: true });
   });
 
+  it('says a sheet in review predates the story and rebuilds it from the story in one tap', async () => {
+    api.discardMusicVideoCastAndSets.mockResolvedValue({ project: { id: 'example-project' } });
+    api.startMusicVideoCastAndSets.mockResolvedValue({ project: sheet('directing', { revision: 2 }) });
+    const Page = () => {
+      const [value, setValue] = useState(sheet('review'));
+      const actions = useMusicVideoCastAndSets({ project: value, replaceProject: setValue });
+      return <CastSetsStage board={{ project: value, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(),
+        productionReadiness: { castAndSets: { approved: false, stale: null, storyStale: { changedFields: ['story', 'cast guide'] } } }, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
+    };
+    render(<Page />);
+    expect(screen.getByText(/Built before your latest story, cast guide/)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Rebuild from story/ })); });
+    expect(api.discardMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { silent: true });
+    expect(api.startMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', {}, { silent: true });
+    // While the new direction is written, the banner gives way to progress.
+    expect(screen.queryByRole('button', { name: /Rebuild from story/ })).toBeNull();
+  });
+
   it('hides card actions while working and starts over only after confirming', async () => {
     const view = render(<Harness initial={sheet('imaging')} locked={false} />);
     expect(screen.queryByRole('button', { name: 'Regenerate Dad' })).toBeNull();

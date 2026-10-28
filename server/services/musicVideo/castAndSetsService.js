@@ -1,5 +1,5 @@
 import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
-import { castAndSetsApprovalInputs, castAndSetsApprovalValues, directorArtGuides, productionFeedbackContext, seedArtDraft } from './productionReview.js';
+import { castAndSetsApprovalInputs, castAndSetsApprovalValues, castAndSetsStoryInputs, directorArtGuides, productionFeedbackContext, seedArtDraft } from './productionReview.js';
 import { withMusicVideoStyle } from './styleReferences.js';
 /**
  * Music Video — Cast & Sets check-in orchestrator.
@@ -213,7 +213,7 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   // and scene, which then lands in every empty set plate.
   direction.look = (standing && (parsed.look || previous?.look)) || direction.look || trimTo(project.concept?.style, 500) || '';
   // Mood board images inform the direction as text only, never as image references.
-  return writePlan(projectId, { direction, forceKeys, changes: previous ? describeDirectionChanges(previous, direction) : null });
+  return writePlan(projectId, { direction, forceKeys, changes: previous ? describeDirectionChanges(previous, direction) : null, directedInputs: castAndSetsStoryInputs(project) });
 }
 
 /**
@@ -230,7 +230,7 @@ async function withoutBoardLook(project, direction) {
 }
 
 /** (Re)build the plan from the stage's direction + accumulated per-image notes, then dispatch. */
-async function writePlan(projectId, { direction = null, forceKeys = [], changes = null } = {}) {
+async function writePlan(projectId, { direction = null, forceKeys = [], changes = null, directedInputs = null } = {}) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   const nextDirection = await withoutBoardLook(project, direction || stage.direction);
@@ -249,6 +249,7 @@ async function writePlan(projectId, { direction = null, forceKeys = [], changes 
   const out = await mutateProjectRecord(projectId, (current) => {
     const next = setCastAndSetsDirection(current, { direction: nextDirection, plan, route, renderKeys });
     const stage = { ...next.stage, greyboxPending: false,
+      ...(directedInputs ? { directedInputs } : {}),
       ...(changes ? { changeSummary: { revision: next.stage.revision, changes, rerendered: renderKeys.length, at: next.stage.updatedAt } } : {}),
     };
     return { project: { ...next.project, castAndSets: stage }, stage };

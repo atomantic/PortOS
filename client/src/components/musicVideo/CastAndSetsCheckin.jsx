@@ -5,7 +5,7 @@ import { CheckCircle2, Eye, Play, RotateCcw, SkipForward, Trash2, Users } from '
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import LlmRouteNote from './LlmRouteNote.jsx';
 import Pill from '../ui/Pill.jsx';
-import { staleApprovalText } from '../../lib/musicVideoStages.js';
+import { changedFieldsText, staleApprovalText } from '../../lib/musicVideoStages.js';
 import CastAndSetsDirectionEditor from './CastAndSetsDirectionEditor.jsx';
 import CastAndSetsFeedback from './CastAndSetsFeedback.jsx';
 import CastAndSetsReferenceProgress from './CastAndSetsReferenceProgress.jsx';
@@ -42,10 +42,13 @@ function statusLine(stage) {
  * Edit direction on a procedural sheet, Resume, Skip). An approved sheet whose
  * concept, style, subjects or song changed since (`stale`, from the server's
  * readiness) says what changed and offers Keep approved beside each Revert,
- * right under that line (#10141).
+ * right under that line (#10141). A sheet built before the director's latest
+ * story or guides (`storyStale`) says so and offers Rebuild from story.
+ * Each image card carries its own Regenerate / Edit / Remove while the stage
+ * is idle, and Start over clears a check-in that has not been approved.
  * A sheet in review (or approved) takes plain-text feedback below the actions.
  */
-export default function CastAndSetsCheckin({ id, project, stale = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onRegenerateImages, onEditDirection, onApplyFeedback, onRemoveFeedback, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard }) {
+export default function CastAndSetsCheckin({ id, project, stale = null, storyStale = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onRegenerateImages, onEditDirection, onApplyFeedback, onRemoveFeedback, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard, onRebuildFromStory }) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const greyboxPlaces = useMusicVideoGreyboxPlaces(project);
   const stage = project.castAndSets;
@@ -73,6 +76,14 @@ export default function CastAndSetsCheckin({ id, project, stale = null, busy, on
       {staleText && (
         <StaleApprovalActions revertible={stale?.revertible} busy={busy} onKeep={onReconfirm} onRevert={onRevert}
           keepTitle="Keep this sheet approved on the current concept, style, subjects and song" />
+      )}
+      {storyStale && !working && (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-port-warning/60 p-2">
+          <p className="min-w-0 flex-1 text-xs text-port-warning">Built before your latest {changedFieldsText(storyStale.changedFields)}. Rebuild to cast and set it from them.</p>
+          <button type="button" disabled={busy} onClick={onRebuildFromStory} className={`${buttonClass} border border-port-border`}>
+            <RotateCcw size={14} aria-hidden="true" /> Rebuild from story
+          </button>
+        </div>
       )}
       {['review', 'approved'].includes(stage.status) && onEditDirection && (stage.direction?.sets || []).map((set) => (
         <div key={set.id} className="space-y-1">

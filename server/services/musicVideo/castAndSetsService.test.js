@@ -377,13 +377,13 @@ describe('Cast & Sets check-in', () => {
     // #10141: the approval records what it rests on, so a later concept edit is
     // named on the read; "Keep approved" re-stamps it without rebuilding the sheet.
     const castReadiness = async () => (await request(app).get(`/api/music-video/${project.id}`)).body.productionReadiness.castAndSets;
-    expect(await castReadiness()).toEqual({ approved: true, stale: null });
+    expect(await castReadiness()).toEqual({ approved: true, stale: null, storyStale: null });
     expect((await request(app).patch(`/api/music-video/${project.id}`).send({ concept: { prompt: 'a homecoming' } })).status).toBe(200);
     expect(await castReadiness()).toMatchObject({ approved: true, stale: { changedFields: ['concept'] } });
     const kept = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/reconfirm`);
     expect(kept.status).toBe(200);
     expect(kept.body.project.concept.prompt).toBe('a homecoming');
-    expect(await castReadiness()).toEqual({ approved: true, stale: null });
+    expect(await castReadiness()).toEqual({ approved: true, stale: null, storyStale: null });
   });
 
   it('seeds the empty art-direction draft and guide on approval without overwriting typed text', async () => {
@@ -908,6 +908,10 @@ describe('Cast & Sets per-item actions', () => {
     expect(saved.castAndSets.plan.expressions.prompt).toContain('1) grief held in: eyes closed, head bowed; 2) carefree: eyes closed, chin up');
     expect(saved.castAndSets.plan.expressions.prompt).not.toContain('singing full-voice');
     expect(saved.castAndSets.plan.expressions.prompt).toContain('nobody is singing or speaking');
+    // The direction records the story it read, so a later story edit marks the sheet out of date.
+    const { productionReadiness } = await import('./productionReview.js');
+    expect(productionReadiness(saved).castAndSets.storyStale).toBeNull();
+    expect(productionReadiness({ ...saved, storySummary: 'Example: the keeper leaves.' }).castAndSets.storyStale).toEqual({ changedFields: ['story'] });
 
     // One image again: only it (and nothing else) re-renders; open notes stay open.
     const before = jobs.length;
