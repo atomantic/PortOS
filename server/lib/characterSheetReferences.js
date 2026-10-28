@@ -60,7 +60,7 @@ export function characterSheetEditBase(character, media = [], want = {}) {
 // full-body look or a sheet there.
 function portraitEditUnsupportedReason(mode, modelId) {
   if (!CLOUD_IMAGE_GEN_MODES.includes(mode)) {
-    return 'The local image backend uses a source image as an img2img starting point that keeps its framing, so the portrait is sent as an identity reference instead of being edited. Choose a cloud image backend to edit from the portrait.';
+    return 'The local image backend uses a source image as an img2img starting point that keeps its framing, so the portrait is not edited here. Choose a cloud image backend to edit from the portrait.';
   }
   if ((maxInputImages(mode, modelId) ?? 1) < 1) return 'The selected image model takes no input image, so the portrait cannot be edited.';
   return null;

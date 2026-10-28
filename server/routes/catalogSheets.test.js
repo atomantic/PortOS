@@ -532,6 +532,52 @@ describe('catalog sheet routes', () => {
         expect(refused.body.code).toBe('CHARACTER_SHEET_REFERENCES_UNSUPPORTED');
       });
 
+      // Explicit guides supersede the portrait on the local backend; the
+      // fallback explanation must not claim that the omitted portrait is sent.
+      it('reports the local fallback accurately when explicit guides omit the portrait', async () => {
+        mocks.getIngredient.mockResolvedValue(dressed);
+        mocks.listMediaForIngredient.mockResolvedValue([
+          portraitMedia[0], { ...portraitMedia[1], library: { guide: true } },
+        ]);
+        const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+        expect(preview.status).toBe(200);
+        expect(preview.body.preview.editBase).toMatchObject({ status: 'fallback', reason: expect.stringContaining('portrait is not edited') });
+        expect(preview.body.preview.referenceImages.map((ref) => ref.filename)).toEqual(['side.png']);
+        const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        expect(res.status).toBe(200);
+        expect(queuedParams().referenceImagePaths.map((path) => basename(path))).toEqual(['side.png']);
+      });
+
+      // FIBO Edit with only one reference retains the source crop, so it
+      // cannot restage a portrait into a full-body look or a sheet.
+      it('refuses a one-image FIBO Edit before queueing and accepts a second guide', async () => {
+        mocks.getSettings.mockResolvedValue({ imageGen: { mode: 'runway', runway: { enabled: true, model: 'bria_fibo_edit_1_5' } } });
+        mocks.getIngredient.mockResolvedValue(dressed);
+        mocks.listMediaForIngredient.mockResolvedValue([portraitMedia[0]]);
+        const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+        expect(preview.status).toBe(400);
+        expect(preview.body.code).toBe('CHARACTER_SHEET_PORTRAIT_FRAMING_UNSUPPORTED');
+        expect(preview.body.error).toMatch(/Add another compatible reference image/);
+        const refused = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        expect(refused.status).toBe(400);
+        expect(refused.body.code).toBe(preview.body.code);
+        expect(mocks.enqueueJob).not.toHaveBeenCalled();
+
+        mocks.listMediaForIngredient.mockResolvedValue(portraitMedia);
+        const allowedPreview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+        expect(allowedPreview.status).toBe(200);
+        const allowed = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        expect(allowed.status).toBe(200);
+        expect(basename(queuedParams().initImagePath)).toBe('portrait.png');
+        expect(queuedParams().referenceImagePaths.map((path) => basename(path))).toEqual(['side.png']);
+        expect(queuedParams().prompt).toBe(allowedPreview.body.preview.sentPrompt);
+        const { buildRunwayImageRequest } = await import('../lib/runwayImageModels.js');
+        const { width, height, resolution } = queuedParams();
+        const wire = buildRunwayImageRequest({ modelId: 'bria_fibo_edit_1_5', prompt: queuedParams().prompt, width, height, resolution,
+          referenceImages: [{ uri: 'portrait' }, { uri: 'side' }] });
+        expect(wire.body.ratio).toBe('768:1152');
+      });
+
       it('starts a universe-delegated sheet from the linked record’s portrait too', async () => {
         mocks.getSettings.mockResolvedValue(codex);
         mocks.getIngredient.mockResolvedValue(character);

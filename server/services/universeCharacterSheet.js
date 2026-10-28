@@ -25,6 +25,7 @@ import { applyImageVisualProfile } from './imageGen/visualProfile.js';
 import { resolveUniverseVisualProfile } from '../lib/universeVisualProfile.js';
 import { promptAddition } from '../lib/modelInput.js';
 import { characterSheetEditBase, characterSheetReferenceCandidates, resolveCharacterSheetReferences } from '../lib/characterSheetReferences.js';
+import { runwayImagePreservesSourceFrame } from '../lib/runwayImageModels.js';
 import { enqueueJob, getJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
@@ -517,6 +518,12 @@ export async function buildSheetRenderParams({
   const modelId = cloud ? cloud.modelId : localModel?.id || null;
   const references = resolveCharacterSheetReferences(referenceCandidates, activeMode, modelId, localModel, editBaseCandidate);
   const editFromPortrait = !!references.initPath;
+  if (editFromPortrait && activeMode === IMAGE_GEN_MODE.RUNWAY
+    && runwayImagePreservesSourceFrame(modelId, 1 + references.paths.length)) {
+    throw new ServerError('Runway FIBO Edit keeps the portrait’s framing with one image and cannot reliably reframe it for the requested sheet or look. Add another compatible reference image or choose another image model.', {
+      status: 400, code: 'CHARACTER_SHEET_PORTRAIT_FRAMING_UNSUPPORTED',
+    });
+  }
   const built = typeof buildOrBuilt === 'function' ? buildOrBuilt({ editFromPortrait }) : buildOrBuilt;
 
   const hasPromptOverride = typeof options.overridePrompt === 'string' && !!options.overridePrompt.trim();

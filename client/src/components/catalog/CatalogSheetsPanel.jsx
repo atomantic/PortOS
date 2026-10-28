@@ -161,9 +161,10 @@ export default function CatalogSheetsPanel({
   }, []);
 
   const variant = (variants || []).find((v) => v.id === variantId) || null;
+  const renderBlocked = blockedReason || preview.error;
 
   const handleGenerate = async () => {
-    if (!variant || blockedReason) return;
+    if (!variant || renderBlocked) return;
     setStarting(true);
     const form = forms.find((f) => f.id === activeFormId) || null;
     const queued = await renderCatalogSheet(ingredientId, { variant: variant.id, ...(form ? { formId: form.id } : {}) }, { silent: true })
@@ -245,8 +246,8 @@ export default function CatalogSheetsPanel({
                 {variants.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
               </select>
             </div>
-            <button type="button" onClick={handleGenerate} disabled={busy || !!blockedReason || !variant}
-              title={blockedReason || undefined}
+            <button type="button" onClick={handleGenerate} disabled={busy || !!renderBlocked || !variant}
+              title={renderBlocked || undefined}
               className="inline-flex items-center gap-1.5 min-h-[40px] px-3 py-2 rounded bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium">
               {busy ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Sparkles size={14} aria-hidden="true" />}
               {jobId ? 'Rendering…' : 'Generate sheet'}

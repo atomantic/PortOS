@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import CatalogLooksPanel from './CatalogLooksPanel';
-import { previewCatalogSheet } from '../../services/apiCatalog';
+import CatalogSheetsPanel from './CatalogSheetsPanel';
+import { listCatalogSheetVariants, previewCatalogSheet } from '../../services/apiCatalog';
 
 // The real ModelInputPreview renders here, so this pins what the user sees
 // before Generate: which image the look render edits, or why it does not.
 vi.mock('../../services/apiCatalog', () => ({
   previewCatalogSheet: vi.fn(),
   renderCatalogSheet: vi.fn(),
+  listCatalogSheetVariants: vi.fn(),
 }));
 
 vi.mock('../media/UniverseMoodBoardPicker', () => ({
@@ -56,5 +58,20 @@ describe('CatalogLooksPanel Generate preview', () => {
     openGenerate();
     expect(await screen.findByText(/Not editing from the portrait: Choose a cloud image backend/, {}, { timeout: 3000 })).toBeInTheDocument();
     expect(screen.queryByText('Edit base — the render starts from this image')).not.toBeInTheDocument();
+  });
+
+  it('shows a framing refusal and prevents a look render', async () => {
+    previewCatalogSheet.mockRejectedValue(new Error('Add another compatible reference image or choose another image model.'));
+    openGenerate();
+    expect(await screen.findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('Add another compatible reference image');
+    expect(screen.getByRole('button', { name: 'Render look' })).toBeDisabled();
+  });
+
+  it('prevents sheet generation when its preview refuses the requested framing', async () => {
+    listCatalogSheetVariants.mockResolvedValue({ variants: [{ id: 'standard', label: 'Standard' }] });
+    previewCatalogSheet.mockRejectedValue(new Error('Add another compatible reference image or choose another image model.'));
+    render(<CatalogSheetsPanel ingredientId="cat-chr-1" payload={{}} sheetMedia={[]} />);
+    expect(await screen.findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('Add another compatible reference image');
+    expect(screen.getByRole('button', { name: 'Generate sheet' })).toBeDisabled();
   });
 });
