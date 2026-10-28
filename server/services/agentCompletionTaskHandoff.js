@@ -17,7 +17,10 @@ const matches = (metadata, expected) => expected.every(([key, value]) => key ===
 export function matchesCompletionTaskDispatch(agent, task) {
   const binding = agent?.metadata?.completionTaskDispatch;
   return !!binding && binding.taskId === task?.id && binding.taskId === agent.taskId
-    && binding.taskType === (task.taskType || 'user') && matches(task.metadata, binding.expected);
+    && binding.taskType === (task.taskType || 'user') && Array.isArray(binding.expected)
+    && binding.expected.length === DISPATCH_KEYS.length
+    && DISPATCH_KEYS.every(key => binding.expected.filter(row => Array.isArray(row) && row.length === 2 && row[0] === key).length === 1)
+    && matches(task.metadata, binding.expected);
 }
 
 /** Called by the trusted dispatcher after its task write, before provider launch. */

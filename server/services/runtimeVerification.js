@@ -140,18 +140,26 @@ export async function sweepRuntimeVerifications() {
         || m.deliveryDecisionAgentId !== p.agentId || (m.app && m.app !== PORTOS_APP_ID)
         || (m.lastSpawnedAt || null) !== p.lastSpawnedAt
         || String(m.totalSpawnCount ?? '') !== p.totalSpawnCount
-        || Object.values(owners.agents).some(a => a.taskId === task.id && a.status === 'running')) continue;
+        || Object.values(owners.agents).some(a => a.taskId === task.id && ['running', 'paused'].includes(a.status))) continue;
       const owner = await getAgentRecord(p.agentId);
-      if (owner?.taskId !== task.id || !['completed', 'failed'].includes(owner.status)) continue;
+      // A persisted prerequisite is not itself a dispatch receipt. In particular,
+      // stale completion metadata can understate a charged spawn. Keep the task
+      // and checkout held unless the server's exact binding still agrees.
+      if (owner?.taskId !== task.id || !['completed', 'failed'].includes(owner.status)
+        || !p.dispatch || !matchesCompletionTaskDispatch(owner, { ...task, taskType, metadata: { ...m, ...p.dispatch } })
+        || ['lastSpawnedAt', 'totalSpawnCount'].some(key => m[key] == null || p.dispatch[key] == null
+          || String(m[key]) !== String(p.dispatch[key]))) continue;
       // A restart may interrupt the failed-delivery cleanup before its resume
       // pointer is saved. Reuse its guarded preservation path, without re-running
       // finalization, resetting budgets or declaring checkout retirement complete.
       if (m.runtimeVerificationReadyAgentId !== p.agentId) {
         const { releaseRetryHold } = await import('./agentWorktreeCleanup.js');
-        await releaseRetryHold({ agentId: p.agentId, task: { ...task, taskType }, success: false, agentMetadata: owner.metadata })
+        await releaseRetryHold({ agentId: p.agentId, task: { ...task, taskType }, success: false, agentMetadata: owner.metadata,
+          recoveryOwner: { id: owner.id, startedAt: owner.startedAt, requireInactive: true } })
           .catch(async () => {
             await updateTask(task.id, { metadata: { blockedReason: 'Runtime prerequisite retained: original checkout resume evidence is unavailable.' } }, taskType,
-              { expectedStatus: 'blocked', expectedMetadata: { runtimeVerificationId: m.runtimeVerificationId, deliveryDecisionAgentId: p.agentId } });
+              { expectedStatus: 'blocked', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+                recoveryOwner: { id: owner.id, startedAt: owner.startedAt, requireInactive: true } });
           });
         continue;
       }
@@ -166,7 +174,8 @@ export async function sweepRuntimeVerifications() {
       const result = await updateTask(task.id, { status: 'pending', metadata: {
         runtimeVerification: { ...p, ...evidence, status: 'resumed', bootCommit: boot, resumedAt: new Date().toISOString() },
         runtimeVerificationReadyAgentId: undefined,
-      } }, taskType, { expectedStatus: 'blocked', expectedMetadata: {
+      } }, taskType, { expectedStatus: 'blocked', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+        recoveryOwner: { id: owner.id, startedAt: owner.startedAt, requireInactive: true }, expectedMetadata: {
         runtimeVerificationId: m.runtimeVerificationId, deliveryDecisionAgentId: p.agentId,
         blockedCategory: CATEGORY, blockedAt: m.blockedAt, lastSpawnedAt: m.lastSpawnedAt, totalSpawnCount: m.totalSpawnCount,
       } });

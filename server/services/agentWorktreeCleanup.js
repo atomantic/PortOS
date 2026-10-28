@@ -1000,7 +1000,7 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
  * @param {{agentId: string, task: object, success: boolean, agentMetadata?: object}} params
  * @returns {Promise<object>} the metadata patch that was written (empty when nothing was)
  */
-export async function releaseRetryHold({ agentId, task, success, agentMetadata }) {
+export async function releaseRetryHold({ agentId, task, success, agentMetadata, recoveryOwner }) {
   if (!agentId || !task?.id) return {};
   if (success && !isLegacyDeepAudit(task.metadata)) return {};
 
@@ -1021,6 +1021,7 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
     const result = await updateTask(task.id, { metadata: { ...patch,
       ...(persisted.metadata.blockedCategory === 'runtime-verification' ? { runtimeVerificationReadyAgentId: agentId } : {}) } }, task.taskType || persisted.taskType || 'user', {
       expectedStatus: 'blocked', expectedMetadata: { blockedCategory: persisted.metadata.blockedCategory, blockedAt: persisted.metadata.blockedAt, deliveryDecisionAgentId: agentId },
+      ...(recoveryOwner ? { recoveryOwner, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata } } : {}),
     });
     return result?.error || result?.statusChanged ? {} : patch;
   }
