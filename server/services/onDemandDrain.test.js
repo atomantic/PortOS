@@ -45,12 +45,17 @@ const mocks = vi.hoisted(() => ({
   reportPreflightStep: vi.fn(async () => {}),
   finishPreflightCard: vi.fn(async () => null),
   finishPreflightDispatch: vi.fn(async () => null),
+  validCleanupRefillSource: vi.fn(async () => true),
+  isPerpetualParkActive: vi.fn(async () => false),
+  settleOnDemandRequest: vi.fn(async () => true),
 }));
+
+vi.mock('./swarmCleanupDelivery.js', () => ({ validCleanupRefillSource: (...args) => mocks.validCleanupRefillSource(...args) }));
 
 vi.mock('./onDemandHandoff.js', () => ({
   reconcileOnDemandHandoffs: vi.fn(async () => {}),
   claimOnDemandRequest: vi.fn(async (id) => { const request = await mocks.clearOnDemandRequest(id); return request ? { request, token: id } : null; }),
-  settleOnDemandRequest: vi.fn(async () => true),
+  settleOnDemandRequest: mocks.settleOnDemandRequest,
 }));
 
 vi.mock('./apps.js', () => ({ getActiveApps: (...a) => mocks.getActiveApps(...a) }));
@@ -74,6 +79,7 @@ vi.mock('./taskSchedule.js', () => ({
   clearOnDemandRequest: (...a) => mocks.clearOnDemandRequest(...a),
   applyOnDemandRunResets: (...a) => mocks.applyOnDemandRunResets(...a),
   recordExecution: (...a) => mocks.recordExecution(...a),
+  isPerpetualParkActive: (...a) => mocks.isPerpetualParkActive(...a),
 }));
 // Only the card's I/O is doubled. `cardIdForRequest` keeps the REAL origin
 // policy (`isUserOriginRequest` is a pure leaf), so the 'opens no card for an
@@ -159,6 +165,8 @@ beforeEach(() => {
   mocks.generateSelfImprovementTaskForType.mockResolvedValue({ id: 'self-1', priority: 'HIGH' });
   mocks.drainProgrammaticOnDemandRequests.mockResolvedValue(new Set());
   mocks.applyOnDemandConsent.mockImplementation((t) => t);
+  mocks.validCleanupRefillSource.mockResolvedValue(true);
+  mocks.isPerpetualParkActive.mockResolvedValue(false);
 });
 
 // ── The #6618 defect ────────────────────────────────────────────────────────
@@ -222,6 +230,45 @@ describe.each(ENGINES)('%s — registry read cost', (_name, makeAdapter) => {
 
 // ── The parity the deleted "Mirrors the sibling engine" comments asserted ────
 describe.each(ENGINES)('%s — on-demand metadata stamp', (_name, makeAdapter) => {
+  it('rechecks a cleanup refill and uses one idempotent successor', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest({ origin: 'refill', cleanupSourceAgentId: 'agent-original' })]);
+    mocks.addTask.mockResolvedValue({ id: 'sys-swarm-refill-agent-original' });
+    const { spawned, adapter } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.validCleanupRefillSource).toHaveBeenCalledWith('agent-original', 'code-quality', 'acme');
+    expect(spawned[0]).toMatchObject({ id: 'sys-swarm-refill-agent-original', metadata: { cleanupRefillSource: 'agent-original' } });
+    expect(mocks.addTask.mock.calls[0][2]).toMatchObject({ idempotencyKey: 'swarm-cleanup-refill:agent-original' });
+  });
+
+  it('defers a cleanup refill whose source no longer owns its delivery', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest({ origin: 'refill', cleanupSourceAgentId: 'agent-original' })]);
+    mocks.validCleanupRefillSource.mockResolvedValue(false);
+    const { spawned, adapter } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(spawned).toEqual([]);
+    expect(mocks.addTask).not.toHaveBeenCalled();
+    expect(mocks.prepareManagedAppImprovementTask).not.toHaveBeenCalled();
+    expect(mocks.clearOnDemandRequest).not.toHaveBeenCalled();
+  });
+
+  it('does not revive a blocked successor when a cleanup refill is replayed', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest({ origin: 'refill', cleanupSourceAgentId: 'agent-original' })]);
+    mocks.addTask.mockResolvedValue({ id: 'sys-swarm-refill-agent-original', status: 'blocked', duplicate: true });
+    const { spawned, adapter } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.reviveBlockedTask).not.toHaveBeenCalled();
+    expect(spawned).toEqual([]);
+  });
+
+  it.each([false, true])('retries an empty cleanup refill unless its drain has parked (parked=%s)', async parked => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest({ origin: 'refill', cleanupSourceAgentId: 'agent-original' })]);
+    mocks.applyOnDemandRunResets.mockResolvedValue(false);
+    mocks.prepareManagedAppImprovementTask.mockResolvedValue({ task: null, skip: { gate: 'perpetual-work' } });
+    mocks.isPerpetualParkActive.mockResolvedValue(parked);
+    const { adapter } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.settleOnDemandRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ retry: !parked, taskId: null }));
+  });
   it('stamps onDemand + the request origin onto the task before addTask', async () => {
     mocks.getOnDemandRequests.mockResolvedValue([appRequest({ origin: 'refill' })]);
     const { spawned, adapter } = makeAdapter();

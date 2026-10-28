@@ -10,12 +10,16 @@ vi.mock('./appActivity.js', async (original) => ({
 vi.mock('./taskSchedule.js', async (original) => ({
   ...(await original()), getDueTasks: vi.fn(), recordExecution: vi.fn(async () => {})
 }));
+vi.mock('./cosTaskStore.js', async (original) => ({
+  ...(await original()), getTaskById: vi.fn(async () => null)
+}));
 
 import { queueEligibleImprovementTasks } from './cosTaskGenerator.js';
 import { getDueTasks, recordExecution } from './taskSchedule.js';
 import { loadAppActivity } from './appActivity.js';
 import { getActiveApps } from './apps.js';
 import { cosEvents, emitLog } from './cosEvents.js';
+import { getTaskById } from './cosTaskStore.js';
 
 const state = { config: { improvementEnabled: true, appReviewCooldownMs: 60_000 } };
 const dueCron = taskType => ({ taskType, reason: 'cron-due', interval: { type: 'cron' } });
@@ -37,6 +41,7 @@ beforeEach(() => {
     pendingPerpetualDispatch: null
   }));
   persistTask = vi.fn(async task => ({ ...task }));
+  getTaskById.mockResolvedValue(null);
 });
 const run = (tasks = [], options = {}) => queueEligibleImprovementTasks(state, { tasks }, { prepareTask, persistTask, ...options });
 
@@ -124,6 +129,46 @@ describe('scheduled managed-app queue admission', () => {
     await run();
     expect(persistTask).toHaveBeenCalledTimes(1);
     expect(recordExecution).toHaveBeenCalledExactlyOnceWith('task:security', 'example-app');
+  });
+
+  it('replays a delivered swarm only for its original app and task with an idempotent queue key', async () => {
+    getActiveApps.mockResolvedValue([{ id: 'example-app', name: 'Example App' }, { id: 'other-app', name: 'Other App' }]);
+    due = [{ ...drain, taskType: 'claim-issue' }, dueCron('do-release')];
+    const result = await run([], { continuationSourceAgentId: 'agent-source',
+      perpetualContinuation: { appId: 'example-app', taskType: 'claim-issue' }, wakeAfterRecord: false });
+    expect(result).toEqual({ queued: 1, continuationSatisfied: true });
+    expect(prepareTask).toHaveBeenCalledOnce();
+    expect(prepareTask.mock.calls[0][0]).toBe('claim-issue');
+    expect(persistTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'sys-swarm-refill-agent-source',
+      metadata: expect.objectContaining({ app: 'example-app', cleanupRefillSource: 'agent-source' }) }),
+    'internal', expect.objectContaining({ idempotencyKey: 'swarm-cleanup-refill:agent-source' }));
+    expect(recordExecution).toHaveBeenCalledExactlyOnceWith('task:claim-issue', 'example-app');
+    getActiveApps.mockResolvedValue([{ id: 'example-app', name: 'Example App' }]);
+  });
+
+  it.each(['in_progress', 'completed'])('recognizes an already persisted %s successor before queue deduplication', async status => {
+    const existing = { id: 'sys-swarm-refill-agent-source', taskType: 'internal', status, metadata: {
+      app: 'example-app', analysisType: 'claim-issue', cleanupRefillSource: 'agent-source',
+      idempotencyKey: 'swarm-cleanup-refill:agent-source',
+    } };
+    getTaskById.mockResolvedValue(existing);
+    const result = await run([existing], { continuationSourceAgentId: 'agent-source',
+      perpetualContinuation: { appId: 'example-app', taskType: 'claim-issue' }, wakeAfterRecord: false });
+    expect(result).toEqual({ queued: 0, continuationSatisfied: true });
+    expect(prepareTask).not.toHaveBeenCalled();
+    expect(persistTask).not.toHaveBeenCalled();
+  });
+
+  it('does not accept a colliding successor id without the source idempotency key', async () => {
+    const existing = { id: 'sys-swarm-refill-agent-source', taskType: 'internal', status: 'in_progress', metadata: {
+      app: 'example-app', analysisType: 'claim-issue', cleanupRefillSource: 'agent-source', idempotencyKey: 'different',
+    } };
+    getTaskById.mockResolvedValue(existing);
+    due = [{ ...drain, taskType: 'claim-issue' }];
+    const result = await run([existing], { continuationSourceAgentId: 'agent-source',
+      perpetualContinuation: { appId: 'example-app', taskType: 'claim-issue' }, wakeAfterRecord: false });
+    expect(result).toEqual({ queued: 0, continuationSatisfied: false });
+    expect(persistTask).not.toHaveBeenCalled();
   });
 
   it('forwards completion exclusions and respects a disabled improvement gate', async () => {

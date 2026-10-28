@@ -16,7 +16,7 @@ import { validateRequest, parsePagination } from '../lib/validation.js';
 import {
   catalogScrapCreateSchema,
   catalogScrapPatchSchema,
-  catalogIngredientCreateSchema,
+  catalogIngredientCreateRouteSchema,
   catalogIngredientPatchSchema,
   catalogIngredientLinkSchema,
   catalogRelationLinkSchema,
@@ -70,12 +70,14 @@ import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxSh
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
 import { getBoard as getMoodBoard } from '../services/moodBoard/index.js';
-import { filterLibraryMedia, pickGuideMedia, parseLibraryMediaKey, inferAgeFromText } from '../lib/catalogMediaLibrary.js';
+import { MAX_CAST_GUIDES, filterLibraryMedia, pickGuideMedia, parseLibraryMediaKey, inferAgeFromText } from '../lib/catalogMediaLibrary.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { previewCatalogCastImport, commitCatalogCastImport } from '../services/musicVideo/catalogCast.js';
 import { draftStoryMember, joinStory, listCatalogStories } from '../services/catalogStories.js';
 import { linkVideoSubjects, listVideoSubjectLinks } from '../services/musicVideo/catalogCast.js';
 import { fileCatalogImagesIntoUniverses } from '../services/catalogUniverseFiling.js';
+import { catalogFamilyRenderContext, familyImagesAddition } from '../services/catalogFamily.js';
+import { resolveGalleryImage } from '../lib/pathSafety.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
 import catalogIdentityRouter from './catalogIdentity.js';
@@ -406,7 +408,10 @@ router.post('/ingredient-merges/:id/recover', asyncHandler(async (req, res) => {
 }));
 
 router.post('/ingredients', asyncHandler(async (req, res) => {
-  const body = validateRequest(catalogIngredientCreateSchema, req.body);
+  const { relations = [], ...body } = validateRequest(catalogIngredientCreateRouteSchema, req.body);
+  // Check every relative first so a bad pick never leaves a half-linked record.
+  const relatives = await Promise.all(relations.map((r) => catalogDB.getIngredient(r.toId)));
+  if (relatives.some((r) => !r || r.deleted)) throw new ServerError('A related record no longer exists', { status: 404, code: 'NOT_FOUND' });
   const input = {
     type: body.type,
     name: body.name,
@@ -416,6 +421,7 @@ router.post('/ingredients', asyncHandler(async (req, res) => {
   };
   const { createOwnedPrimitive, withUserCreatedLock } = await import('../services/catalogPrimitives.js');
   const ing = body.universeId ? await createOwnedPrimitive(input, body.universeId, body.operationKey) : await catalogDB.createIngredient(withUserCreatedLock(input));
+  for (const relation of relations) await catalogDB.linkIngredientRelation(ing.id, relation.toId, relation.kind);
   res.status(201).json(ing);
   catalogEvents.emit('primitive-changed', { ingredientId: ing.id });
 }));
@@ -573,6 +579,20 @@ router.get('/refs/dangling', asyncHandler(async (req, res) => {
 }));
 
 // --- Ingredient↔ingredient relations -----------------------------------
+
+// What a character's family adds to an image render: one labeled addition per
+// relative plus each relative's top canonical image (see catalogFamily.js).
+router.get('/ingredients/:id/family-context', asyncHandler(async (req, res) => {
+  const ing = await catalogDB.getIngredient(req.params.id);
+  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  if (ing.type !== 'character') return res.json({ additions: [], images: [], imagesAddition: null });
+  const { additions, candidates } = await catalogFamilyRenderContext(ing.id, ing.name);
+  // Same resolution the generate route applies to named references, so a pick
+  // here can never fail that render as missing.
+  const images = candidates.filter(({ filename }) => resolveGalleryImage(filename) || resolveImageInputPath(filename))
+    .slice(0, MAX_CAST_GUIDES).map(({ filename, source, relative }) => ({ filename, source, relative }));
+  res.json({ additions, images, imagesAddition: familyImagesAddition(ing.name, images.map((image) => image.relative)) });
+}));
 
 router.get('/ingredients/:id/relations', asyncHandler(async (req, res) => {
   const ing = await catalogDB.getIngredient(req.params.id);

@@ -140,8 +140,9 @@ export async function drainOnDemandRequests(ctx, adapter) {
     // One helper so the log line and the card can never name different reasons —
     // the same hand-mirroring this module's header exists to eliminate.
     const dropRequest = async (level, reason, note) => {
-      const handoff = queuedRequest.burn ? await claimOnDemandRequest(queuedRequest.id) : null;
-      const claimed = queuedRequest.burn ? handoff?.request : await taskScheduleMod.clearOnDemandRequest(queuedRequest.id);
+      const durable = queuedRequest.burn || queuedRequest.cleanupSourceAgentId;
+      const handoff = durable ? await claimOnDemandRequest(queuedRequest.id) : null;
+      const claimed = durable ? handoff?.request : await taskScheduleMod.clearOnDemandRequest(queuedRequest.id);
       if (!claimed) return;
       if (handoff) await settleOnDemandRequest(handoff, { reason: `${note} Resume explicitly.` });
       await openCard(claimed);
@@ -188,6 +189,16 @@ export async function drainOnDemandRequests(ctx, adapter) {
       }
     }
 
+    if (queuedRequest.cleanupSourceAgentId) {
+      const { validCleanupRefillSource } = await import('./swarmCleanupDelivery.js');
+      if (queuedRequest.origin !== 'refill' || !await validCleanupRefillSource(
+        queuedRequest.cleanupSourceAgentId, queuedRequest.taskType, queuedRequest.appId,
+      ).catch(() => false)) {
+        emitLog('warn', 'Swarm cleanup refill deferred: its delivery source changed or is unreadable', { requestId: queuedRequest.id });
+        continue;
+      }
+    }
+
     // A request that cannot fit under its app's concurrency cap must stay in
     // the durable on-demand queue. Clearing it before preparation used to be
     // safe only when the final `canSpawn` could not deny; per-project capacity
@@ -204,8 +215,9 @@ export async function drainOnDemandRequests(ctx, adapter) {
 
     // Both engines can hold this snapshot. Only the atomic removal winner
     // owns preparation, accounting, and the shared card's terminal outcome.
-    const claim = queuedRequest.burn ? await claimOnDemandRequest(queuedRequest.id) : null;
-    const request = queuedRequest.burn ? claim?.request : await taskScheduleMod.clearOnDemandRequest(queuedRequest.id);
+    const durable = queuedRequest.burn || queuedRequest.cleanupSourceAgentId;
+    const claim = durable ? await claimOnDemandRequest(queuedRequest.id) : null;
+    const request = durable ? claim?.request : await taskScheduleMod.clearOnDemandRequest(queuedRequest.id);
     if (!request) continue;
     let acceptedTaskId = null;
     let preparationFailed = false;
@@ -306,20 +318,25 @@ export async function drainOnDemandRequests(ctx, adapter) {
         // `perpetualRefillPlan` reads to decide whether the completed run may
         // continue its drain — and a quota burn's provenance when it is one.
         task.metadata = { ...(task.metadata || {}), ...onDemandRequestMetadata(request) };
+        if (request.cleanupSourceAgentId) {
+          task.metadata.cleanupRefillSource = request.cleanupSourceAgentId;
+          task.id = `sys-swarm-refill-${request.cleanupSourceAgentId}`;
+        }
         // `addTaskOptions` carries the dequeue engine's `ignoreTaskId` so a
         // completion-triggered re-issue is dedup-safe: the perpetual drain
         // regenerates an identical first-line for the same app, and
         // `agent:completed` fires before the completing task's updateTask settles
         // it to `completed` — so without excluding it the re-issued claim is
         // rejected as a duplicate of the run that just finished and the drain stalls.
-        const persisted = await addTask(task, 'internal', { raw: true, ...addTaskOptions, suppressDequeue: true });
+        const persisted = await addTask(task, 'internal', { raw: true, ...addTaskOptions, suppressDequeue: true,
+          ...(request.cleanupSourceAgentId && { idempotencyKey: `swarm-cleanup-refill:${request.cleanupSourceAgentId}` }) });
         await finishPreflightDispatch(cardId, persisted?.id || task.id);
         if (persisted?.error) throw new Error(persisted.error);
         if (!persisted?.duplicate) {
           acceptedTaskId = persisted?.id || task.id;
           await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskScheduleMod);
           emitSpawn(task);
-        } else if (persisted.status === 'blocked') {
+        } else if (persisted.status === 'blocked' && !request.cleanupSourceAgentId) {
           // Explicit user Run colliding with a failure-blocked twin (#2614):
           // revive the existing task instead of silently dropping the Run and
           // stranding the bound on-demand review marker.
@@ -332,7 +349,8 @@ export async function drainOnDemandRequests(ctx, adapter) {
           const revived = isLegacyDeepAudit(task.metadata) ? stored : { ...task, id: persisted.id };
           emitSpawn(revived);
           emitLog('info', `🔁 On-demand ${request.taskType} revived blocked task ${persisted.id}`, { taskId: persisted.id });
-        } else if (!claim || quotaBurnProvenance(persisted.metadata).requestId === request.id) {
+        } else if (!claim || quotaBurnProvenance(persisted.metadata).requestId === request.id
+          || (request.cleanupSourceAgentId && persisted.id === task.id)) {
           acceptedTaskId = persisted.id;
         }
       } else if (!task && userInitiated) {
@@ -365,8 +383,12 @@ export async function drainOnDemandRequests(ctx, adapter) {
       preparationFailed = true;
       throw error;
     } finally {
-      if (claim) await settleOnDemandRequest(claim, { taskId: acceptedTaskId,
-        reason: acceptedTaskId ? null : refusalReason ?? (preparationFailed ? 'Request preparation failed; resume explicitly.' : 'Request produced no task; resume explicitly.') });
+      if (claim) {
+        const retry = !!request.cleanupSourceAgentId && !acceptedTaskId
+          && !await taskScheduleMod.isPerpetualParkActive(request.taskType, request.appId).catch(() => false);
+        await settleOnDemandRequest(claim, { taskId: acceptedTaskId, ...(request.cleanupSourceAgentId && { retry }),
+          reason: acceptedTaskId ? null : refusalReason ?? (preparationFailed ? 'Request preparation failed; resume explicitly.' : 'Request produced no task; resume explicitly.') });
+      }
     }
   }
 

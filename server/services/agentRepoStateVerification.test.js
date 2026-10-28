@@ -2,6 +2,7 @@ import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckout
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('../lib/gitRepositoryIdentity.js', () => ({ readGitCommonDirectory: vi.fn(async () => '/repo/.git') }));
 import { EventEmitter } from 'node:events';
+import { tmpdir } from 'node:os';
 import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
 vi.mock('./branchCompletionPolicy.js', async () => ({
   ...await vi.importActual('./branchCompletionPolicy.js'),
@@ -41,7 +42,7 @@ vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original
 vi.mock('./cos.js', () => ({}));
 vi.mock('./agentCompletionData.js', () => ({ readCompletionData: vi.fn() }));
 vi.mock('./agentCompletionCleanup.js', () => ({ replayAgentCompletionCleanup: vi.fn(async () => {}) }));
-vi.mock('./cosAgentLifecycle.js', async original => ({ recordInheritedCheckoutRetirement: vi.fn(async () => true), recordSeededCheckoutRetirement: vi.fn(async () => true), isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, recordSuccessorCheckoutRetirement: vi.fn(async () => true), settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
+vi.mock('./cosAgentLifecycle.js', async original => ({ recordInheritedCheckoutRetirement: vi.fn(async () => true), recordSeededCheckoutRetirement: vi.fn(async () => true), isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, recordSuccessorCheckoutRetirement: vi.fn(async () => true), settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), recordSwarmCleanupDelivery: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]), withClaimOwnershipLock: fn => fn() }));
 vi.mock('./taskSchedule.js', () => ({ recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
 vi.mock('./taskScheduleStore.js', () => ({ loadSchedule: vi.fn(async () => ({})) }));
@@ -94,7 +95,7 @@ import { readLocalBranchPresence, readCheckoutPathPresence } from './repoCleanup
 import { readRetirementForgeEvidence } from './heldCheckoutReview.js';
 import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
-import { retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
+import { retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, recordSwarmCleanupDelivery, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
 import { readCompletionData } from './agentCompletionData.js';
 import { recordCompletionCleanup, recordInheritedCheckoutRetirement, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion } from './cosAgentLifecycle.js';
 import { replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
@@ -116,7 +117,7 @@ import { findMergeRequestForBranch } from './gitlab.js';
 import { getAppById } from './apps.js';
 import { resolveRetirementApp } from './retirementAppScope.js';
 import { addNotification, exists as notificationExists } from './notifications.js';
-import { emitLog } from './cosEvents.js';
+import { cosEvents, emitLog } from './cosEvents.js';
 import { readPendingMergePrs } from './prWatcher.js';
 import { execGit } from '../lib/execGit.js';
 import { existsSync } from 'fs';
@@ -188,6 +189,37 @@ it('verifies a finished release outside the closed spawn Git lifetime while pres
   expect(verifyReleaseSynchronizationTask).toHaveBeenCalledOnce();
 });
 
+it('reads the claim checkout inventory after owner release even when the spawn Git lifetime closed', async () => {
+  const gitWork = await vi.importActual('../lib/execGit.js');
+  const caller = new AsyncLocalStorage();
+  const branch = 'claim/issue-42';
+  const state = { id: 'claim-owner', taskId: 'claim-task', status: 'completed', startedAt: CREATED_AT,
+    result: { success: false, cleanupPending: true }, metadata: { isWorktree: false, workspacePath: '/repo',
+      claimBranches: [branch], repoStateVerification: { status: 'pending' }, completionCleanup: { status: 'completed' } } };
+  const currentTask = { id: state.taskId, taskType: 'user', status: 'in_progress', metadata: {
+    app: 'demo-app', deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: state.id } };
+  getAgentRecord.mockResolvedValue(state);
+  getTaskById.mockResolvedValue(currentTask);
+  listWorktrees.mockImplementationOnce(async () => {
+    expect(caller.getStore()).toEqual({ operator: 'agent' });
+    await gitWork.execGit(['--version'], tmpdir());
+    return [];
+  });
+  readClaimOwnershipAgents.mockResolvedValue([{ id: 'other-owner', status: 'running',
+    metadata: { sourceWorkspace: '/repo', claimBranches: [branch] } }]);
+  await caller.run({ operator: 'agent' }, async () => {
+    let completionCallback;
+    await gitWork.withGitMutationLifetime(async () => { completionCallback = AsyncLocalStorage.snapshot(); });
+    await completionCallback(async () => {
+      const result = await resumeAgentCompletionRetirement(state.id);
+      expect(result.branches).toMatchObject([{ branch, verified: false, skipReason: 'claim-owner-active' }]);
+      await expect(gitWork.execGit(['--version'], tmpdir())).rejects.toMatchObject({ code: 'GIT_MUTATION_LIFETIME_CLOSED' });
+    });
+  });
+  expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+  expect(updateTask).not.toHaveBeenCalled();
+});
+
 const run = (overrides = {}) => verifyAgentRepoState({
   agentId: 'agent-1',
   task: task(),
@@ -195,6 +227,61 @@ const run = (overrides = {}) => verifyAgentRepoState({
   success: true,
   prExpected: true,
   ...overrides,
+});
+
+it.each(['all-merged', 'one-open'])('wakes a cleanup-held swarm only after independent delivery proof: %s', async scenario => {
+  const start = CREATED_AT;
+  const branches = ['claim/issue-1', 'claim/issue-2'];
+  const heads = ['a'.repeat(40), 'b'.repeat(40)];
+  const urls = branches.map((_, i) => `https://github.com/example/repo/pull/${i + 1}`);
+  const outcome = { status: 'incomplete', recovery: { mode: 'cleanup' } };
+  const originalTask = { id: 'task-swarm', taskType: 'internal', status: 'in_progress', metadata: {
+    app: 'demo-app', analysisType: 'claim-issue', perpetual: true, claimFlow: true, swarmCount: 2,
+    claimedBy: 'fixture-local', claimedAt: start, lastSpawnedAt: start, totalSpawnCount: 1,
+    deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-swarm', taskOutcome: outcome,
+  } };
+  const agent = { id: 'agent-swarm', taskId: originalTask.id, status: 'completed', startedAt: start,
+    completedAt: '2026-01-01T00:01:00.000Z', result: { executionSuccess: true, cleanupPending: true,
+      deliveryRecoveryOwned: true, taskOutcome: outcome }, metadata: { instanceId: 'fixture-local', taskApp: 'demo-app',
+      taskAnalysisType: 'claim-issue', configClaimFlow: true, isWorktree: false, workspacePath: '/repo',
+      claimBranches: branches, claimReleasedBranches: [], checkoutCapture: { status: 'captured' }, repoStateVerification: { status: 'pending' },
+      completionTaskDispatch: { taskId: originalTask.id, taskType: 'internal', expected: [
+        ['claimedBy', 'fixture-local'], ['claimedAt', start], ['lastSpawnedAt', start], ['totalSpawnCount', 1],
+      ] }, completedCheckouts: branches.map((branch, index) => ({ version: 1, agentId: 'agent-swarm', startedAt: start,
+        capturedAt: start, repoPath: '/repo', path: `/tree/${index}`, branch, head: heads[index],
+        incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } })) } };
+  getAgentRecord.mockResolvedValue(agent);
+  getTaskById.mockResolvedValue(originalTask);
+  listWorktrees.mockResolvedValue(branches.map((branch, index) => ({ branch: `refs/heads/${branch}`, path: `/tree/${index}`, head: heads[index] })));
+  readCompletedCheckoutIdentity.mockImplementation(async ({ branch }) => agent.metadata.completedCheckouts.find(row => row.branch === branch));
+  readCheckoutPathPresence.mockResolvedValue(true);
+  prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'checkout-ignored-payload-unverified' });
+  findPullRequestForBranch.mockImplementation(async branch => {
+    const index = branches.indexOf(branch);
+    return { status: 'found', number: index + 1, url: urls[index],
+      detail: scenario === 'one-open' && index === 1 ? 'OPEN' : 'MERGED' };
+  });
+  readRetirementForgeEvidence.mockImplementation(async (_repo, branch) => {
+    const index = branches.indexOf(branch);
+    return { scopeProof: 'exact-delivered-head', prHead: heads[index], prUrl: urls[index] };
+  });
+  recordSwarmCleanupDelivery.mockImplementation(async (_id, _expected, proof) => {
+    agent.metadata.swarmCleanupDelivery = proof;
+    return true;
+  });
+  const emitted = vi.spyOn(cosEvents, 'emit');
+  try {
+    const result = await run({ agentId: agent.id, task: originalTask, agentState: agent, success: false });
+    expect(result.verified).toBe(false);
+    expect(originalTask.status).toBe('in_progress');
+    if (scenario === 'all-merged') {
+      expect(recordSwarmCleanupDelivery).toHaveBeenCalledWith(agent.id, agent, expect.objectContaining({ version: 1 }));
+      expect(emitted).toHaveBeenCalledWith('swarm:cleanup-delivery-verified', { agentId: agent.id });
+    } else {
+      expect(recordSwarmCleanupDelivery).not.toHaveBeenCalled();
+      expect(emitted).not.toHaveBeenCalledWith('swarm:cleanup-delivery-verified', expect.anything());
+    }
+  } finally { emitted.mockRestore(); }
 });
 
 beforeEach(() => {

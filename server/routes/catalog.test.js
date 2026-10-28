@@ -514,6 +514,23 @@ describe.skipIf(!runDb)('ingredient content and history commit together', () => 
     });
   });
 
+  it('creates a cast record with its family relations, and refuses a missing relative before creating anything', async () => {
+    const nora = await request(makeApp()).post('/api/catalog/ingredients').send({ type: 'character', name: `Nora ${NONCE}` });
+    createdIngredientIds.add(nora.body.id);
+    const mother = await request(makeApp()).post('/api/catalog/ingredients')
+      .send({ type: 'character', name: `Mother ${NONCE}`, relations: [{ toId: nora.body.id, kind: 'mother-of' }] });
+    expect(mother.status).toBe(201);
+    createdIngredientIds.add(mother.body.id);
+    const relations = await request(makeApp()).get(`/api/catalog/ingredients/${nora.body.id}/relations`);
+    expect(relations.body.inbound).toEqual([expect.objectContaining({ fromId: mother.body.id, kind: 'mother-of' })]);
+
+    const name = `Orphan ${NONCE}`;
+    const refused = await request(makeApp()).post('/api/catalog/ingredients')
+      .send({ type: 'character', name, relations: [{ toId: 'cat-chr-missing', kind: 'father-of' }] });
+    expect(refused.status).toBe(404);
+    expect((await catalogDB.listIngredients({ type: 'character', query: name })).items).toEqual([]);
+  });
+
   it('keeps create and update inside a supplied transaction, including reads of uncommitted rows', async () => {
     const id = `cat-chr-owned-${NONCE}`;
     createdIngredientIds.add(id);

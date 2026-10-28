@@ -1578,6 +1578,13 @@ export async function init() {
     }
   });
 
+  cosEvents.on('swarm:cleanup-delivery-verified', ({ agentId }) => {
+    import('./swarmCleanupRefill.js').then(({ refillDeliveredCleanupSwarm }) => refillDeliveredCleanupSwarm(agentId, {
+      wake: () => dequeueNextTask(), refillPlan: perpetualRefillPlan,
+    }))
+      .catch(err => console.error(`❌ Swarm cleanup continuation failed: ${err.message}`));
+  });
+
   // Record autonomous job execution only after the agent actually spawns.
   // Update lastRun BEFORE clearing the spawning guard to prevent a race where
   // a pending timer fires between clearSpawningJob and recordJobExecution,

@@ -672,6 +672,21 @@ describe('recovery output-hook dispatch (#3182)', () => {
     } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
   });
 
+  it('records successful execution with a timestamp fence while cleanup remains pending', async () => {
+    const { recordTaskTypeFailure, recordTaskTypeSuccess } = await import('./taskSchedule.js');
+    const taskOutcome = { status: 'incomplete', reason: 'Only checkout retirement remains.', recovery: { mode: 'cleanup' } };
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    persistedAgent.metadata = { isWorktree: true };
+    const completedAt = '2026-10-28T10:00:00.000Z';
+    completeAgent.mockResolvedValueOnce({ completedAt, result: { cleanupPending: true, taskOutcome } });
+    try {
+      await finalizeAgent({ agentId: 'agent-example', task: TASK, success: true, exitCode: 0,
+        finalSummary: JSON.stringify({ summary: 'Cleanup retained.', taskOutcome }) });
+      expect(recordTaskTypeFailure).not.toHaveBeenCalled();
+      expect(recordTaskTypeSuccess).toHaveBeenCalledWith('example-output-hook', 'app-example', { notAfter: completedAt });
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
   it.each(['saved', 'pinned-claim'])('retains a %s cleanup handoff when its run is recovered after a crash', async mode => {
     const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
