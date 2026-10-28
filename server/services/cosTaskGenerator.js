@@ -45,7 +45,7 @@ import { remainingActionBudget } from '../lib/domainBudgets.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { pendingCosActionReservations } from './cosAdmissionReservations.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { addTask, updateTask, getAllTasks, getCosTasks, reconcileLegacyForgeMaintenanceTasks } from './cosTaskStore.js';
+import { addTask, updateTask, getAllTasks, getCosTasks, getTaskById, reconcileLegacyForgeMaintenanceTasks } from './cosTaskStore.js';
 import { PRIORITY_VALUES } from '../lib/taskParser.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
@@ -1273,6 +1273,19 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
   const { getDueTasks, getNextTaskType, recordExecution } = taskSchedule;
 
   if (!isImprovementEnabled(state)) return;
+
+  // A crash may occur after the exact successor was stored but before the
+  // source receipt was marked. Recognize it even in task history, before its
+  // active row can block the ordinary per-app deduplication below.
+  if (continuationSourceAgentId) {
+    const existing = await getTaskById(`sys-swarm-refill-${continuationSourceAgentId}`);
+    if (existing?.taskType === 'internal' && existing.metadata?.cleanupRefillSource === continuationSourceAgentId
+      && existing.metadata.idempotencyKey === `swarm-cleanup-refill:${continuationSourceAgentId}`
+      && existing.metadata.app === perpetualContinuation?.appId
+      && existing.metadata.analysisType === perpetualContinuation?.taskType) {
+      return { queued: 0, continuationSatisfied: true };
+    }
+  }
 
   // Existing active AND blocked system tasks feed the dedup sets — see
   // buildImprovementDedupSets for the occupancy semantics (#2614). The same
