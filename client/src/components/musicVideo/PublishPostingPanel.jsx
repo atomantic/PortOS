@@ -12,14 +12,14 @@ export const PUBLISH_TARGETS = [
   { target: 'youtube', label: 'YouTube', note: 'The final render, with chapters, thumbnail and captions' },
   { target: 'suno', label: 'Suno', note: 'Publishes the song with the cover and a link to the video' },
   { target: 'sunoHook', label: 'Suno Hook', note: 'A 9:16 cut (the newest by default) set to its window of the song. You press Post' },
-  { target: 'x', label: 'X thread', note: 'Hook with the 1080p video, then the story, prompt and links' },
+  { target: 'x', label: 'X thread', note: 'Hook with the social video (up to 1080p), then the story, prompt and links' },
   {
     target: 'linkedin', label: 'LinkedIn', accountPlaceholder: 'Your name',
-    note: 'Your short post with the 1080p video uploaded, and the links in a first comment. You press Post, then View post: PortOS records the link and types the comment for you to send',
+    note: 'Your short post with the social video (up to 1080p) uploaded, and the links in a first comment. You press Post, then View post: PortOS records the link and types the comment for you to send',
   },
   {
     target: 'facebook', label: 'Facebook', accountPlaceholder: 'Your name or Page',
-    note: 'Your short post with the 1080p video uploaded (Facebook shares it as a reel) and its AI label on, and the links in a first comment. Posts as the profile or Page active in the PortOS Browser. You press Post, then open the post: PortOS records the link and types the comment for you to send',
+    note: 'Your short post with the social video (up to 1080p) uploaded (Facebook shares it as a reel) and its AI label on, and the links in a first comment. Posts as the profile or Page active in the PortOS Browser. You press Post, then open the post: PortOS records the link and types the comment for you to send',
   },
   { target: 'shorts', label: 'YouTube Shorts', note: 'A 9:16 cut (the newest by default)' },
   { target: 'tiktok', label: 'TikTok', note: 'A 9:16 cut (the newest by default), labelled AI-generated' },

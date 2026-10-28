@@ -3,7 +3,7 @@ import { assertRenderCleanupIdle } from './renderCleanupActivity.js';
  * Music Video — publishing kit (#9281).
  *
  * Everything a release needs that the project already knows: platform encodes
- * of the final render (an X-sized 1080p, a 720p preview, a hook teaser),
+ * of the final render (an X-sized up-to-1080p, a 720p preview, a hook teaser),
  * thumbnail candidates, an SRT of the timed lyrics, YouTube chapters, and
  * per-platform copy the director edits. `project.publishKit` is an additive
  * field on the whole-record LWW body (same posture as `excerpts`), so an older
@@ -112,7 +112,7 @@ export async function startPublishKitBuild(projectId) {
 async function beginPublishKitBuild(projectId, jobId) {
   const project = await requireProject(projectId);
   const { entry, path: masterPath } = await finalRenderFile(project);
-  const { findFfmpeg, runFfmpegProcess, probeVideoDuration } = await import('../../lib/ffmpeg.js');
+  const { findFfmpeg, runFfmpegProcess, probeVideoDuration, probeVideoStreamInfo } = await import('../../lib/ffmpeg.js');
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw kitError(500, 'FFMPEG_MISSING', 'ffmpeg not found on PATH');
   const job = { id: jobId, projectId, status: 'running', clients: [], abort: new AbortController() };
@@ -127,7 +127,7 @@ async function beginPublishKitBuild(projectId, jobId) {
     const stem = `music-video-${projectId.slice(3, 11)}-${Date.now()}`;
     const [teaser] = suggestSocialCuts(project, { count: 1, minSec: 25, maxSec: 45 });
     const encodes = [
-      { kind: 'x-1080p', label: 'X / social 1080p (12 Mbps)', filename: `${stem}-x-1080p.mp4`,
+      { kind: 'x-1080p', label: 'X / social up to 1080p (12 Mbps)', filename: `${stem}-x-1080p.mp4`,
         args: ['-i', masterPath, '-vf', "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease", ...X_VIDEO_ARGS, ...AUDIO_ARGS] },
       { kind: 'preview-720p', label: '720p preview', filename: `${stem}-preview-720p.mp4`,
         args: ['-i', masterPath, '-vf', "scale=-2:'min(720,ih)'", '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', '-pix_fmt', 'yuv420p', ...AUDIO_ARGS] },
@@ -181,13 +181,12 @@ async function beginPublishKitBuild(projectId, jobId) {
     };
     for (const encode of encodes) {
       const out = join(PATHS.videos, encode.filename);
-      if (encode.native && await renderNative(encode, out)) {
-        written.push(encode.filename);
-        step();
-        continue;
+      if (!(encode.native && await renderNative(encode, out))) {
+        const result = await runFfmpegProcess({ bin: ffmpeg, signal: job.abort.signal, args: ['-hide_banner', '-loglevel', 'error', ...encode.args, '-y', out] });
+        if (!result.ok) throw new Error(`${encode.label} encode failed: ${result.reason || 'ffmpeg error'}`);
       }
-      const result = await runFfmpegProcess({ bin: ffmpeg, signal: job.abort.signal, args: ['-hide_banner', '-loglevel', 'error', ...encode.args, '-y', out] });
-      if (!result.ok) throw new Error(`${encode.label} encode failed: ${result.reason || 'ffmpeg error'}`);
+      const { width, height } = await probeVideoStreamInfo(out);
+      Object.assign(encode, { width, height });
       written.push(encode.filename);
       step();
     }
@@ -217,7 +216,7 @@ async function beginPublishKitBuild(projectId, jobId) {
         ...kit,
         builtAt: new Date().toISOString(),
         master: { filename: entry.filename, renderHistoryId: project.renderHistoryId },
-        exports: encodes.map(({ kind, label, filename, window, layout, fitReason }) => ({ kind, label, filename, ...(window ? { startSec: window.startSec, endSec: window.endSec } : {}), ...(layout ? { layout } : {}), ...(layout === 'fit' && fitReason ? { fitReason } : {}) })),
+        exports: encodes.map(({ kind, label, filename, width, height, window, layout, fitReason }) => ({ kind, label, filename, width, height, ...(window ? { startSec: window.startSec, endSec: window.endSec } : {}), ...(layout ? { layout } : {}), ...(layout === 'fit' && fitReason ? { fitReason } : {}) })),
         thumbnails,
         thumbnail: thumbnails.includes(kit.thumbnail) ? kit.thumbnail : (thumbnails[0] || null),
         captionsFilename,

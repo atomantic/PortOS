@@ -1,3 +1,4 @@
+import { publishExportLabel } from '../../../../server/lib/musicVideoPublishExports.js';
 import { useEffect, useRef, useState } from 'react';
 import { Package, Download, Copy, Sparkles, Captions, ListOrdered } from 'lucide-react';
 import useProviderModels from '../../hooks/useProviderModels.js';
@@ -178,7 +179,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
               )}
               {(kit.exports || []).map((e) => (
                 <li key={e.filename} className="flex flex-wrap items-center justify-between gap-2">
-                  <span>{e.label}{e.kind === 'teaser' && e.startSec != null && <span className="text-port-text-muted"> · {fmtTime(e.startSec)}–{fmtTime(e.endSec)}</span>}</span>
+                  <span>{publishExportLabel(e)}{e.kind === 'teaser' && e.startSec != null && <span className="text-port-text-muted"> · {fmtTime(e.startSec)}–{fmtTime(e.endSec)}</span>}</span>
                   <a href={`/data/videos/${e.filename}`} download className="text-port-accent flex items-center gap-1 min-h-[44px] sm:min-h-0"><Download size={12} /> Download</a>
                 </li>
               ))}

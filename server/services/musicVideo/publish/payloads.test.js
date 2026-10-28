@@ -228,11 +228,21 @@ describe('buildPublishPayload (#9282)', () => {
     expect(buildPublishPayload('suno', withCover, { songUrl: 'https://suno.com/song/87654321-dcba-4cba-8cba-cba987654321' }).cover.name).toBe('cover-1.jpg');
   });
 
+  it.each([[1280, 720], [1920, 1080], [null, null]])('previews social dimensions %s × %s for X, LinkedIn and Facebook', (width, height) => {
+    const p = project({ exports: [{ kind: 'x-1080p', label: 'X / social 1080p (12 Mbps)', filename: 'x.mp4', width, height }] });
+    p.publishKit.copy.facebook = { post: 'Facebook post' };
+    const expected = width ? `${width} × ${height}` : 'dimensions unknown';
+    for (const platform of ['x', 'linkedin', 'facebook']) {
+      const parts = publishPreviewParts(platform, p, buildPublishPayload(platform, p));
+      expect(JSON.stringify(parts)).toContain(`up to 1080p (12 Mbps) · ${expected}`);
+    }
+  });
+
   it('previews every word a post carries, including what PortOS adds (chapters, links, the Suno caption)', () => {
     const rows = (target, p = project(), options = {}) => Object.fromEntries(publishPreviewParts(target, p, buildPublishPayload(target, p, options)).map((r) => [r.label, r.text]));
     expect(rows('youtube').Description).toContain('Chapters\n0:00 Intro');
     const x = rows('x');
-    expect(x['Post · with the 1080p video']).toBe('Watch this');
+    expect(x['Post · with X / social up to 1080p (12 Mbps) · dimensions unknown']).toBe('Watch this');
     expect(x['Reply 1']).toBe('How it was made');
     expect(x['Reply 2']).toBe('The song: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc\nFull video: https://youtu.be/abc');
     expect(rows('suno').Caption).toBe('The story. Music video: https://youtu.be/abc');
