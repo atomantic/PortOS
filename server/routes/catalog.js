@@ -413,8 +413,8 @@ router.post('/ingredients', asyncHandler(async (req, res) => {
     tags: body.tags || [],
     ...(await embedIngredient(body)),
   };
-  const { createOwnedPrimitive } = await import('../services/catalogPrimitives.js');
-  const ing = body.universeId ? await createOwnedPrimitive(input, body.universeId, body.operationKey) : await catalogDB.createIngredient(input);
+  const { createOwnedPrimitive, withUserCreatedLock } = await import('../services/catalogPrimitives.js');
+  const ing = body.universeId ? await createOwnedPrimitive(input, body.universeId, body.operationKey) : await catalogDB.createIngredient(withUserCreatedLock(input));
   res.status(201).json(ing);
   catalogEvents.emit('primitive-changed', { ingredientId: ing.id });
 }));

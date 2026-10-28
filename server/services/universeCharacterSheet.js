@@ -601,15 +601,6 @@ async function prepareCharacterSheet(universeId, entryId, options) {
       status: 404, code: 'UNIVERSE_CANON_NOT_FOUND',
     });
   }
-  // Same frozen-identity guard the character refine/expand flows enforce —
-  // the UI gates this too, but the route is reachable directly so the lock
-  // has to be enforced server-side as well. 409 mirrors refineUniverseCharacter.
-  if (character.locked === true) {
-    throw new ServerError(
-      `Character "${character.name}" is locked — unlock it before rendering a reference sheet`,
-      { status: 409, code: 'UNIVERSE_CANON_LOCKED' },
-    );
-  }
   const built = variantConfig.build(universe, character);
   const media = character.ingredientId
     ? await import('./catalogDB.js').then(({ listMediaForIngredient }) => listMediaForIngredient(character.ingredientId))
@@ -654,6 +645,16 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   const {
     variant, variantConfig, universe, character, params, prompt, modelId, activeMode, referenceImages,
   } = await prepareCharacterSheet(universeId, entryId, options);
+  // Same frozen-identity guard the character refine/expand flows enforce —
+  // the UI gates this too, but the route is reachable directly so the lock
+  // has to be enforced server-side as well. 409 mirrors refineUniverseCharacter.
+  // Only the render is guarded: a preview never writes.
+  if (character.locked === true) {
+    throw new ServerError(
+      `Character "${character.name}" is locked — unlock it before rendering a reference sheet`,
+      { status: 409, code: 'UNIVERSE_CANON_LOCKED' },
+    );
+  }
   assertSheetReferencesAvailable(referenceImages);
 
   // Resolve (or create) the universe's media collection up front, then attach

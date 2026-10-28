@@ -63,25 +63,97 @@ export async function setPrimitiveOwner(id, universeId) {
   return context;
 }
 
-export async function createOwnedPrimitive(input, universeId, operationKey) {
-  return withTransaction(async (client) => {
-    const fingerprint = createHash('sha256').update(canonicalStringify({ action: 'create-primitive', universeId,
-      type: input.type, name: input.name, payload: input.payload, tags: input.tags })).digest('hex');
-    if (operationKey) {
-      const claim = await client.query(`INSERT INTO catalog_commit_receipts (operation_key, fingerprint)
-        VALUES ($1, $2) ON CONFLICT (operation_key) DO NOTHING RETURNING operation_key`, [operationKey, fingerprint]);
-      if (!claim.rowCount) {
-        const { rows: [receipt] } = await client.query('SELECT fingerprint, ingredients FROM catalog_commit_receipts WHERE operation_key = $1', [operationKey]);
-        if (receipt.fingerprint !== fingerprint) fail('Operation key was already used for a different request', 'CATALOG_CREATE_REPLAY_CONFLICT');
-        return receipt.ingredients[0];
+const CANON_FIELD = Object.freeze({ character: 'characters', place: 'places', object: 'objects' });
+
+/**
+ * A record the user creates themselves starts unlocked. The bit is stamped
+ * explicitly because an absent `locked` reads as locked on a universe canon
+ * entry (default-lock contract) and as not-yet-unlocked to merge/identity flows.
+ */
+export function withUserCreatedLock(input) {
+  if (!CANON_FIELD[input?.type]) return input;
+  const payload = input.payload && typeof input.payload === 'object' ? input.payload : {};
+  return typeof payload.locked === 'boolean' ? input : { ...input, payload: { ...payload, locked: false } };
+}
+
+function canonEntryFor(ingredient) {
+  const payload = structuredClone(ingredient.payload);
+  for (const key of ['id', 'ingredientId', 'createdAt', 'updatedAt']) delete payload[key];
+  return { ...payload, locked: payload.locked === true, id: `${ingredient.type}-${randomUUID()}`,
+    ingredientId: ingredient.id, name: ingredient.name, updatedAt: ingredient.updatedAt };
+}
+
+// Creation, ownership and canon membership share one DB transaction inside the
+// universe write queue. A full bucket or failed link therefore cannot leave a
+// record behind after the caller receives an error.
+export async function createOwnedPrimitive(rawInput, universeId, operationKey) {
+  const input = withUserCreatedLock(rawInput);
+  const field = CANON_FIELD[input.type];
+  if (!field) {
+    const result = await withTransaction((client) => createOwnedRecord(input, rawInput, universeId, operationKey, client));
+    return result.ingredient;
+  }
+  const role = `canon-${input.type}`;
+  const { updateUniverse } = await import('./universeBuilder.js');
+  let saved;
+  let skipLink = false;
+  await updateUniverse(universeId, async (current, { client }) => {
+    const { ingredient: receiptIngredient, replayed } = await createOwnedRecord(input, rawInput, universeId, operationKey, client);
+    const ingredient = await getIngredient(receiptIngredient.id, { client });
+    if (!ingredient) fail('Ingredient not found', 'CATALOG_NOT_FOUND', 404);
+    saved = ingredient;
+    await assertCatalogIdentityWritable(ingredient.id, { client });
+    await assertPrimitiveUniverse(ingredient.id, universeId, { client, role });
+    if (replayed) {
+      const { rows } = await client.query(`SELECT 1 FROM catalog_ingredient_refs
+        WHERE ingredient_id = ANY(catalog_identity_member_ids($1)) AND ref_kind = 'universe'
+          AND ref_id = $2 AND role = $3 AND deleted = true`, [ingredient.id, universeId, role]);
+      if (rows.length) {
+        skipLink = true;
+        return null;
       }
     }
-    await requireUniverse(client, universeId);
-    const ingredient = await createIngredient(input, { client });
-    await linkIngredientToRef(ingredient.id, 'universe', universeId, CATALOG_OWNER_ROLE, { client });
-    if (operationKey) await client.query('UPDATE catalog_commit_receipts SET ingredients = $2::jsonb WHERE operation_key = $1', [operationKey, toPgJson([ingredient])]);
-    return ingredient;
+    const { rows } = await client.query('SELECT unnest(catalog_identity_member_ids($1)) AS id', [ingredient.id]);
+    const identityIds = new Set(rows.map((row) => row.id));
+    const list = current[field] || [];
+    if (list.some((entry) => identityIds.has(entry.ingredientId))) return null;
+    if (list.length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) fail('This universe’s canon bucket is full. Remove a membership before adding another.', 'UNIVERSE_CANON_FULL');
+    return { [field]: [...list, canonEntryFor(ingredient)] };
+  }, { transactional: true, afterWrite: (_universe, { client }) => skipLink
+    ? Promise.resolve() : linkIngredientToRef(saved.id, 'universe', universeId, role, { client }) }).catch((error) => {
+    if (error.code === 'NOT_FOUND') fail('Destination universe not found', 'UNIVERSE_NOT_FOUND', 404);
+    throw error;
   });
+  catalogEvents.emit('primitive-changed', { ingredientId: saved.id });
+  // The transaction has committed; a failed refresh must not turn a completed
+  // create into an apparent failure that a caller without a key might repeat.
+  const refreshed = await getIngredient(saved.id).catch((error) => {
+    console.warn(`⚠️ catalog create refresh failed: ${error.message}`);
+    return null;
+  });
+  return refreshed || saved;
+}
+
+async function createOwnedRecord(input, rawInput, universeId, operationKey, client) {
+  // The fingerprint describes the caller's request, before applying defaults.
+  // Existing receipts were recorded from that same input before the explicit
+  // unlocked default was introduced.
+  const fingerprint = createHash('sha256').update(canonicalStringify({ action: 'create-primitive', universeId,
+    type: rawInput.type, name: rawInput.name, payload: rawInput.payload, tags: rawInput.tags })).digest('hex');
+  if (operationKey) {
+    const claim = await client.query(`INSERT INTO catalog_commit_receipts (operation_key, fingerprint)
+      VALUES ($1, $2) ON CONFLICT (operation_key) DO NOTHING RETURNING operation_key`, [operationKey, fingerprint]);
+    if (!claim.rowCount) {
+      const { rows: [receipt] } = await client.query('SELECT fingerprint, ingredients FROM catalog_commit_receipts WHERE operation_key = $1', [operationKey]);
+      if (receipt.fingerprint !== fingerprint) fail('Operation key was already used for a different request', 'CATALOG_CREATE_REPLAY_CONFLICT');
+      return { ingredient: receipt.ingredients[0], replayed: true };
+    }
+  }
+  await requireUniverse(client, universeId);
+  const ingredient = await createIngredient(input, { client });
+  await linkIngredientToRef(ingredient.id, 'universe', universeId, CATALOG_OWNER_ROLE, { client });
+  if (operationKey) await client.query('UPDATE catalog_commit_receipts SET ingredients = $2::jsonb WHERE operation_key = $1', [operationKey, toPgJson([ingredient])]);
+  return { ingredient, replayed: false };
 }
 
 // Container links preserve legacy records, but new cross-universe use of an
@@ -100,7 +172,7 @@ export async function addPrimitiveToUniverse(id, universeId, role) {
   const ingredient = await getIngredient(id);
   if (!ingredient) fail('Ingredient not found', 'CATALOG_NOT_FOUND', 404);
   const identityIds = new Set(await getIngredientIdentityIds(ingredient.id));
-  const field = { character: 'characters', place: 'places', object: 'objects' }[ingredient.type];
+  const field = CANON_FIELD[ingredient.type];
   let universe = null;
   if (field && role === `canon-${ingredient.type}`) {
     const { updateUniverse } = await import('./universeBuilder.js');
@@ -110,10 +182,10 @@ export async function addPrimitiveToUniverse(id, universeId, role) {
       const list = current[field] || [];
       if (list.some((entry) => identityIds.has(entry.ingredientId))) return null;
       if (list.length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) fail('This universe’s canon bucket is full. Remove a membership before adding another.', 'UNIVERSE_CANON_FULL');
-      const payload = structuredClone(ingredient.payload);
-      for (const key of ['id', 'ingredientId', 'createdAt', 'updatedAt']) delete payload[key];
-      return { [field]: [...list, { ...payload, id: `${ingredient.type}-${randomUUID()}`,
-        ingredientId: ingredient.id, name: ingredient.name, updatedAt: ingredient.updatedAt }] };
+      // Joining canon never changes the record's lock. Without an explicit bit
+      // the universe default-locks the new entry and the canon→catalog
+      // projection writes that lock back onto the record.
+      return { [field]: [...list, canonEntryFor(ingredient)] };
     }, { afterWrite: () => linkIngredientToRef(ingredient.id, 'universe', universeId, role) });
   } else await linkIngredientToRef(ingredient.id, 'universe', universeId, role);
   catalogEvents.emit('primitive-changed', { ingredientId: ingredient.id });
@@ -127,7 +199,7 @@ export async function removePrimitiveFromUniverse(id, universeId, role) {
   if (!ingredient) fail('Ingredient not found', 'CATALOG_NOT_FOUND', 404);
   const identityIds = new Set(await getIngredientIdentityIds(ingredient.id));
   const { rows: containers } = await query('SELECT id FROM universes WHERE id = $1 AND deleted = false', [universeId]);
-  const field = { character: 'characters', place: 'places', object: 'objects' }[ingredient.type];
+  const field = CANON_FIELD[ingredient.type];
   if (containers.length && field && role === `canon-${ingredient.type}`) {
     const { updateUniverse } = await import('./universeBuilder.js');
     await updateUniverse(universeId, async (current) => {
