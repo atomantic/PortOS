@@ -65,7 +65,7 @@ export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGi
     const { rel, info } = await listedContentEntry(path, listed, work);
     if (info.isSymbolicLink() || isAgentScratchPath(rel) || matchesScratchRoot(rel, ignoredPaths)) continue;
     if (rel === `node_modules/${WORKTREE_NODE_MODULES_MARKER}` && info.isFile() && info.size === 0) continue;
-    if (info.isFile() && await disposableTestCache(path, rel, ignored, verifiedCaches, work)) continue;
+    if (info.isFile() && (disposableRuntimeArtifact(rel) || await disposableTestCache(path, rel, ignored, verifiedCaches, work))) continue;
     if (info.isFile() && await npmPayload(rel).catch(cacheInspectionFailure)) continue;
     const preserved = preservedFiles.find(file => file.scope === 'content' && file.path === rel);
     if (info.isFile() && typeof preserved?.data === 'string') {
@@ -73,9 +73,17 @@ export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGi
       if (info.size === bytes.length && evidenceHash(bytes) === preserved.sha256
         && await archiveHash(join(path, rel), work, bytes.length) === preserved.sha256) continue;
     }
-    throw new Error('checkout-ignored-payload-unverified');
+    throw Object.assign(new Error('checkout-ignored-payload-unverified'), { path: rel });
   }
 }
+
+// Regenerable byproducts of running the repo's own tests. Matched by exact
+// producer shape (CPython's interpreter-tagged .pyc, the test-process
+// diagnostics receipt named by UUID), never by directory, so a stray file in
+// the same folder stays protected.
+const PYCACHE_FILE = /(?:^|\/)__pycache__\/[^/]+\.cpython-\d+\.pyc$/;
+const TEST_DIAGNOSTICS_FILE = /^\.cache\/test-process-diagnostics\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.json$/;
+const disposableRuntimeArtifact = rel => PYCACHE_FILE.test(rel) || TEST_DIAGNOSTICS_FILE.test(rel);
 
 export const heldCheckoutArchiveRoot = (cosDir = PATHS.cos) => join(cosDir, 'held-checkout-archives');
 
@@ -1744,7 +1752,9 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
       } catch (error) {
         const reason = ['worktree-dirty', 'not-merged-on-recheck', 'worktree-status-unavailable', 'retirement-archive-cancelled', 'checkout-ignored-payload-unverified'].includes(error.message)
           ? error.message : 'checkout-not-disposable';
-        return { result: { ok: false, reason, ...(reason === 'checkout-not-disposable' && error.message && { detail: error.message }) } };
+        // The blocking path (not its contents) tells the operator what pins the checkout.
+        const detail = reason === 'checkout-not-disposable' ? error.message : error.path;
+        return { result: { ok: false, reason, ...(detail && { detail }) } };
       }
     },
     finish: async ({ tree, reviewed, checkoutIdentity }) => {
