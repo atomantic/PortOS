@@ -187,6 +187,21 @@ class NativeArchive(unittest.TestCase):
             archive.inspect(self.request)
         self.assertEqual(list(self.txn.iterdir()), [])
 
+    def test_lock_transition_binds_all_other_checkout_bytes(self):
+        request = {**self.request, 'retirementOnly': True, 'lockTransition': True}
+        before = archive.inspect(request)
+        full = archive.inspect(self.request)
+        proof = archive.preserve({**self.request, 'expected': full})
+        self.assertTrue(proof['restoreProof'])
+        self.assertEqual((self.txn / 'archive' / 'administration' / 'modules' / 'sub' / 'refs' / 'private' / 'recovery').read_text(),
+                         (Path(before['modules'][0]['gitDir']) / 'refs' / 'private' / 'recovery').read_text())
+        self.git(self.repo, 'worktree', 'unlock', str(self.work))
+        after = archive.inspect({**request, 'expectUnlocked': True})
+        self.assertEqual(before['lockTransitionFingerprint'], after['lockTransitionFingerprint'])
+        (self.work / 'ignored').write_text('changed ignored evidence')
+        changed = archive.inspect({**request, 'expectUnlocked': True})
+        self.assertNotEqual(before['lockTransitionFingerprint'], changed['lockTransitionFingerprint'])
+
     def test_retirement_inspection_ignores_unrelated_refs_but_keeps_owned_state_and_legacy_proof(self):
         self.request['retirementOnly'] = True
         before = archive.inspect(self.request)

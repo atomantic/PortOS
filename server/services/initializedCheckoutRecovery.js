@@ -1,15 +1,15 @@
 /**
  * Explicit initialized-private-module retirement. A merged, clean checkout is
  * removed at its original path. An unmerged or dirty checkout stays there.
- * Retirement does not quarantine the tree or copy it under
- * data/cos/initialized-checkout-retirements. Historical restore helpers remain
- * for journals that already exist.
+ * A reviewed locked publisher additionally preserves an archive and a durable
+ * lock-transition journal before removal. Interrupted transitions retain the
+ * repository admission cut for recovery.
  */
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { spawn } from '../lib/childProcess.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { link, lstat, mkdir, open, opendir, readFile, readdir } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { type as hostOsType } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { PATHS } from '../lib/paths.js';
@@ -222,7 +222,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       return ensureOwner(ctx, release, true, { forge: { prUrl }, checkoutIncarnation });
     });
     const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release, requireOwnership: true, retirementOnly: true,
-      ...(wholeCheckout && { wholeCheckout: true }) });
+      ...(wholeCheckout && { wholeCheckout: true }), ...(release.locked && { lockTransition: true }) });
     const facts = await forge(ctx, release, prUrl);
     const base = await comparison(ctx, release, prUrl, snapshot, policy, facts);
     const checkoutIdentity = await readRetirementCheckoutIdentity(release.path);
@@ -245,9 +245,6 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     return join(root(), id);
   };
   const retire = input => (async () => {
-    // A locked registration is not disposable. worktree remove --force leaves it
-    // registered, and the directory fallback would delete the tree anyway.
-    if (input.release?.locked === true) return { ok: false, reason: 'checkout-locked' };
     // Retention performs its own evidence reads and must run before taking the
     // ownership fence; the reviewed retirement below rechecks all ownership.
     const ctx = await context(input.appId, input.release);
@@ -267,7 +264,8 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       // Captured by makeReview before removal. A later lstat of a deleted .git is null.
       const checkoutIdentity = prepared.review.checkoutIdentity || input.release.checkoutIdentity || null;
       const runGit = deps.execGit || execGit;
-      const status = await runGit(['status', '--porcelain'], input.release.path, { ignoreExitCode: true }).catch(() => null);
+      const status = await runGit(['status', '--porcelain'], input.release.path,
+        { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }).catch(() => null);
       if (!status || status.exitCode !== 0) return { ok: false, reason: 'worktree-status-unavailable' };
       if (String(status.stdout || '').trim()) return { ok: false, reason: 'worktree-dirty' };
       // A merged commit cannot account for ignored files in the parent or modules.
@@ -283,6 +281,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
         return { ok: false, reason: 'legacy-release-recovery-changed' };
       }
       const validationEvidence = forgeValidationEvidence(prepared.review);
+      if (input.release.locked) return retireLocked({ input, prepared, ctx, checkoutIdentity, archiveProofs, validationEvidence, runGit });
       const removed = await runGit(['worktree', 'remove', '--force', input.release.path], ctx.repoPath, { ignoreExitCode: true }).catch(() => null);
       if (!removed || removed.exitCode !== 0) {
         return { ok: false, reason: 'checkout-not-removed' };
@@ -313,6 +312,105 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       return { ok: true, branchDeleted, ...(validationEvidence && { validationEvidence }) };
     });
   })().catch(error => ({ ok: false, reason: error.message }));
+
+  // The durable cut and intent precede unlocking. Any uncertain transition is
+  // retained for inspection; restart never guesses that a Git child completed.
+  const retireLocked = async ({ input, prepared, ctx, checkoutIdentity, archiveProofs, validationEvidence, runGit }) => {
+    if (!checkoutIdentity || !prepared.review.snapshot.lockTransitionFingerprint || !validationEvidence) return { ok: false, reason: 'locked-retirement-evidence-unavailable' };
+    const validatePublisher = deps.validateLockedPublisherRetirement || (await import('./releaseSynchronization.js')).validateLockedPublisherRetirement;
+    const scoped = { ...input.release, repoPath: ctx.repoPath, checkoutIdentity };
+    if (!await validatePublisher(scoped)) return { ok: false, reason: 'locked-publisher-unverified' };
+    const id = randomUUID(), directory = location(id), gate = await admission();
+    let executor;
+    try {
+      await privateDirectory(root(), true);
+      await syncDirectory(dirname(root()));
+      await mkdir(directory, { mode: 0o700 });
+      await syncDirectory(root());
+      let state = await appendStep(directory, { version: 1, id, appId: input.appId, repoPath: ctx.repoPath,
+        release: input.release, review: prepared.review }, 'locked-intent');
+      executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
+      const reservation = await gate.reserveCheckoutRetirement(ctx.repoPath, id);
+      state = await appendStep(directory, state, 'locked-reserved', { reservation });
+      return await gate.withCheckoutReservation(reservation, async () => {
+        executor.assertHeld();
+        const fresh = await makeReview({ ...input, prUrl: input.review.prUrl });
+        assertReview(fresh.review, input.review);
+        if (fresh.review.checkoutIdentity !== checkoutIdentity || !await validatePublisher(scoped)) fail('locked-publisher-unverified');
+        const legacyCurrent = deps.validateLegacyReleaseRetirement || (await import('./releaseSynchronization.js')).validateLegacyReleaseRetirement;
+        if (!await legacyCurrent(scoped, { archiveProofs })) fail('legacy-release-recovery-changed');
+        // A clean submodule may still contain private refs and objects. Preserve
+        // its complete administration and working bytes before any unlock.
+        const inspection = await native({ command: 'inspect', repoPath: ctx.repoPath, release: input.release,
+          requireOwnership: true, ...(input.wholeCheckout && { wholeCheckout: true }) });
+        if (inspection.administrationFingerprint !== fresh.review.snapshot.administrationFingerprint
+          || JSON.stringify(inspection.identity) !== JSON.stringify(fresh.review.snapshot.identity)) fail('retirement-review-changed');
+        const proof = await native({ command: 'preserve', repoPath: ctx.repoPath, release: input.release,
+          transactionDir: directory, expected: inspection, requireOwnership: true,
+          ...(input.wholeCheckout && { wholeCheckout: true }) });
+        if (!/^[a-f0-9]{64}$/.test(proof.manifestSha256 || '')) fail('preservation-proof-unbound');
+        state = await appendStep(directory, state, 'locked-preserved', { proof });
+        const preserved = await makeReview({ ...input, prUrl: input.review.prUrl });
+        assertReview(preserved.review, input.review);
+        if (!await validatePublisher(scoped) || !await legacyCurrent(scoped, { archiveProofs })) fail('retirement-evidence-changed');
+        const archive = await native({ command: 'verify', transactionDir: directory, manifestSha256: proof.manifestSha256, mode: 'standalone' });
+        if (archive.verified !== true || archive.standalone !== true) fail('preservation-proof-unverified');
+        assertReview((await makeReview({ ...input, prUrl: input.review.prUrl })).review, input.review);
+        if (!await validatePublisher(scoped) || !await legacyCurrent(scoped, { archiveProofs })) fail('retirement-evidence-changed');
+        state = await appendStep(directory, state, 'locked-unlock-intent');
+        executor.assertHeld();
+        const unlock = await runGit(['worktree', 'unlock', input.release.path], ctx.repoPath, { ignoreExitCode: true });
+        if (unlock.exitCode !== 0) fail('worktree-unlock-uncertain');
+        state = await appendStep(directory, state, 'locked-unlocked');
+        const observation = await native({ command: 'inspect', repoPath: ctx.repoPath, release: input.release,
+          requireOwnership: true, retirementOnly: true, lockTransition: true, expectUnlocked: true,
+          ...(input.wholeCheckout && { wholeCheckout: true }) });
+        if (observation.lockTransitionFingerprint !== fresh.review.snapshot.lockTransitionFingerprint
+          || await readRetirementCheckoutIdentity(input.release.path) !== checkoutIdentity) fail('retirement-review-changed');
+        const unlocked = { ...input.release, locked: false, lockReason: null };
+        if (JSON.stringify(await ensureOwner(ctx, unlocked, true, fresh.review)) !== JSON.stringify(fresh.review.policy)
+          || JSON.stringify(await forge(ctx, input.release, input.review.prUrl)) !== JSON.stringify(fresh.review.forge)
+          || !await validatePublisher(scoped) || !await legacyCurrent(scoped, { unlocked: true, archiveProofs })) fail('retirement-evidence-changed');
+        const verifiedArchive = await native({ command: 'verify', transactionDir: directory, manifestSha256: proof.manifestSha256, mode: 'standalone' });
+        if (verifiedArchive.verified !== true || verifiedArchive.standalone !== true) fail('preservation-proof-unverified');
+        const final = await native({ command: 'inspect', repoPath: ctx.repoPath, release: input.release,
+          requireOwnership: true, retirementOnly: true, lockTransition: true, expectUnlocked: true,
+          ...(input.wholeCheckout && { wholeCheckout: true }) });
+        if (final.lockTransitionFingerprint !== fresh.review.snapshot.lockTransitionFingerprint
+          || await readRetirementCheckoutIdentity(input.release.path) !== checkoutIdentity
+          || JSON.stringify(await ensureOwner(ctx, unlocked, true, fresh.review)) !== JSON.stringify(fresh.review.policy)
+          || JSON.stringify(await forge(ctx, input.release, input.review.prUrl)) !== JSON.stringify(fresh.review.forge)
+          || !await validatePublisher(scoped) || !await legacyCurrent(scoped, { unlocked: true, archiveProofs })) fail('retirement-evidence-changed');
+        state = await appendStep(directory, state, 'locked-removal-intent');
+        executor.assertHeld();
+        const removed = await runGit(['worktree', 'remove', '--force', input.release.path], ctx.repoPath, { ignoreExitCode: true });
+        if (removed.exitCode !== 0) fail('checkout-removal-uncertain');
+        const list = deps.listWorktrees || (await import('./worktreeManager.js')).listWorktrees;
+        const exists = path => lstat(path).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; });
+        if (!fresh.review.snapshot.privateGitDir || await exists(input.release.path) || await exists(fresh.review.snapshot.privateGitDir)
+          || (await list(ctx.repoPath)).some(row => row.path === input.release.path)) fail('checkout-removal-unverified');
+        state = await appendStep(directory, state, 'locked-removed');
+        const deleteRef = deps.deleteRef || (await import('./worktreeManager.js')).deleteCompletedLocalBranch;
+        state = await appendStep(directory, state, 'locked-branch-intent');
+        const branchDeleted = await deleteRef(ctx.repoPath, input.release.branch, input.release.head, {}) === true;
+        if (!branchDeleted) fail('retirement-branch-delete-refused-or-uncertain');
+        state = await appendStep(directory, state, 'locked-branch-retired', { branchDeleted });
+        const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
+        const outcome = await record(input.appId, { path: input.release.path, branch: input.release.branch, head: input.release.head,
+          branchDeleted, checkoutIdentity, validationEvidence });
+        if (!outcome?.retired?.some(row => row.path === input.release.path && row.branch === input.release.branch
+          && row.head === input.release.head && row.branchDeleted === true && row.archiveDir == null
+          && row.checkoutIdentity === checkoutIdentity && row.validationEvidence?.source === validationEvidence.source
+          && row.validationEvidence?.prUrl === validationEvidence.prUrl && row.validationEvidence?.prHead === validationEvidence.prHead
+          && row.validationEvidence?.mergeCommit === validationEvidence.mergeCommit)) fail('retirement-receipt-unverified');
+        state = await appendStep(directory, state, 'locked-retired', { receiptRecorded: true });
+        await gate.releaseCheckoutReservation(reservation);
+        return { ok: true, transactionId: id, branchDeleted, validationEvidence };
+      });
+    } catch (error) {
+      return { ok: false, reason: error.message, transactionId: id, recoveryRequired: true };
+    } finally { if (executor) await executor.release(); }
+  };
 
   const loadBoundTransaction = async input => {
     const directory = location(input.transactionId);
@@ -520,6 +618,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     }
     return { ok: true, transactionId, phase: state.phase, release: state.release, placement,
       branchDeleted: state.branchDeleted ?? null, journalDigest: hash(state),
+      ...(state.phase.startsWith('locked-') && !['locked-restored', 'locked-retired'].includes(state.phase) ? { recoveryRequired: true, reason: 'locked-retirement-recovery-held' } : {}),
       ...(unboundPreservation ? { recoveryRequired: true, recoveryAction: 'restore', reason: 'preservation-proof-unbound' } : {}),
       ...(state.phase === 'branch-retirement-intent' ? { branchDeletion: 'uncertain', branchRef, recoveryRequired: true } : {}),
       ...(state.phase === 'branch-retired' ? { receiptPending: true, recoveryRequired: true } : {}),
@@ -918,8 +1017,8 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     return { directory, state, ctx };
   };
   const completedWithoutCut = async ({ state, ctx }) => {
-    const complete = (state.phase === 'retired' && state.branchDeleted === true && state.receiptRecorded === true)
-      || ['restored', 'restored-with-metadata-transitions', 'restored-with-reviewed-finalization'].includes(state.phase);
+    const complete = (['retired', 'locked-retired'].includes(state.phase) && state.branchDeleted === true && state.receiptRecorded === true)
+      || ['restored', 'restored-with-metadata-transitions', 'restored-with-reviewed-finalization', 'locked-restored'].includes(state.phase);
     if (!complete) return false;
     const gate = await admission();
     const cut = await gate.readCheckoutReservation(ctx.repoPath, state.id).catch(async error => {
@@ -980,6 +1079,154 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     }
     return { ok: true, transactions: rows.sort((a, b) => String(a.transactionId).localeCompare(String(b.transactionId))) };
   };
+  // Restore an unchanged checkout's lock after interruption. Never overwrite a
+  // different generation or modify a partially removed tree; those stay held.
+  const restoreLockedCheckout = (input, beforeMutation) => fenced(async () => {
+    const bound = await recoveryBinding(input.transactionId, input.journalDigest);
+    const { ctx, directory } = bound;
+    let { state } = bound;
+    if (state.appId !== input.appId || !['locked-intent', 'locked-reserved', 'locked-preserved',
+      'locked-unlock-intent', 'locked-unlocked', 'locked-removal-intent', 'locked-restored'].includes(state.phase)) fail('locked-retirement-recovery-held');
+    const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
+    try {
+      if (hash(await readJournal(directory)) !== hash(state)) fail('retirement-journal-changed');
+      const gate = await admission();
+      const reservation = await gate.readCheckoutReservation(ctx.repoPath, state.id).catch(error => {
+        if (error.code === 'ENOENT' && state.phase === 'locked-intent') return null;
+        throw error;
+      });
+      if (state.reservation && JSON.stringify(reservation) !== JSON.stringify(state.reservation)) fail('retirement-reservation-changed');
+      const restore = async () => {
+        executor.assertHeld();
+        const request = { command: 'inspect', repoPath: ctx.repoPath, release: state.release, requireOwnership: true,
+          retirementOnly: true, lockTransition: true, ...(state.review.mode === 'whole-checkout' && { wholeCheckout: true }) };
+        let unlocked = false;
+        const current = await native(request).catch(async error => {
+          if (error.message !== 'release-lock-changed' || !['locked-unlock-intent', 'locked-unlocked', 'locked-removal-intent'].includes(state.phase)) throw error;
+          unlocked = true;
+          return native({ ...request, expectUnlocked: true });
+        });
+        if (current.lockTransitionFingerprint !== state.review.snapshot.lockTransitionFingerprint
+          || await readRetirementCheckoutIdentity(state.release.path) !== state.review.checkoutIdentity) fail('retirement-review-changed');
+        const release = unlocked ? { ...state.release, locked: false, lockReason: null } : state.release;
+        if (JSON.stringify(await ensureOwner(ctx, release, true, state.review)) !== JSON.stringify(state.review.policy)) fail('retirement-evidence-changed');
+        await beforeMutation();
+        if (unlocked) {
+          const args = ['worktree', 'lock', ...(state.release.lockReason != null ? ['--reason', state.release.lockReason] : []), state.release.path];
+          const locked = await (deps.execGit || execGit)(args, ctx.repoPath, { ignoreExitCode: true });
+          if (locked.exitCode !== 0) fail('worktree-lock-uncertain');
+          const confirmed = await native(request);
+          if (confirmed.lockTransitionFingerprint !== state.review.snapshot.lockTransitionFingerprint
+            || await readRetirementCheckoutIdentity(state.release.path) !== state.review.checkoutIdentity) fail('retirement-review-changed');
+        }
+        if (state.phase !== 'locked-restored') state = await appendStep(directory, state, 'locked-restored', reservation ? { reservation } : {});
+        await beforeMutation();
+        executor.assertHeld();
+        if (reservation) await gate.releaseCheckoutReservation(reservation);
+        return { ok: true, transactionId: state.id, phase: state.phase, restored: true };
+      };
+      return reservation ? await gate.withCheckoutReservation(reservation, restore) : await gate.withCheckoutPublication(ctx.repoPath, restore);
+    } finally { await executor.release(); }
+  });
+
+  // A confirmed absent checkout may continue through the exact-head receiver.
+  // The intent remains a hold if the receiver's outcome is interrupted.
+  const resumeLockedBranch = (input, beforeMutation) => fenced(async () => {
+    const bound = await recoveryBinding(input.transactionId, input.journalDigest);
+    const { ctx, directory } = bound;
+    let { state } = bound;
+    if (state.appId !== input.appId || state.phase !== 'locked-removed') fail('locked-retirement-recovery-held');
+    const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
+    try {
+      if (hash(await readJournal(directory)) !== hash(state)) fail('retirement-journal-changed');
+      const gate = await admission();
+      const reservation = await gate.readCheckoutReservation(ctx.repoPath, state.id);
+      if (JSON.stringify(reservation) !== JSON.stringify(state.reservation)) fail('retirement-reservation-changed');
+      return await gate.withCheckoutReservation(reservation, async () => {
+        const verify = async () => {
+          executor.assertHeld();
+          const proof = await native({ command: 'verify', transactionDir: directory, manifestSha256: state.proof?.manifestSha256, mode: 'standalone' });
+          if (proof.verified !== true || proof.standalone !== true) fail('preservation-proof-unverified');
+          const exists = path => lstat(path).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; });
+          const list = deps.listWorktrees || (await import('./worktreeManager.js')).listWorktrees;
+          if (!state.review.snapshot.privateGitDir || await exists(state.release.path) || await exists(state.review.snapshot.privateGitDir)
+            || (await list(ctx.repoPath)).some(row => row.path === state.release.path
+              || String(row.branch || '').replace(/^refs\/heads\//, '') === state.release.branch)) fail('checkout-removal-unverified');
+          if (JSON.stringify(await ensureOwner(ctx, state.release, false, state.review)) !== JSON.stringify(state.review.policy)
+            || JSON.stringify(await forge(ctx, state.release, state.review.forge.prUrl)) !== JSON.stringify(state.review.forge)) fail('retirement-evidence-changed');
+          await beforeMutation();
+        };
+        await verify();
+        const remove = deps.deleteRef || (await import('./worktreeManager.js')).deleteCompletedLocalBranch;
+        let authorized = false;
+        const deleted = await remove(ctx.repoPath, state.release.branch, state.release.head, { beforeMutation: async () => {
+          await verify();
+          state = await appendStep(directory, state, 'locked-branch-intent');
+          authorized = true;
+        } });
+        if (!authorized || !deleted) fail('retirement-branch-delete-refused-or-uncertain');
+        state = await appendStep(directory, state, 'locked-branch-retired', { branchDeleted: true });
+        return { appId: state.appId, transactionId: state.id, journalDigest: hash(state) };
+      });
+    } finally { await executor.release(); }
+  });
+
+  // Recheck the preserved archive and exact absences before replaying a missing
+  // receipt or releasing its cut. Never repeat removal or branch deletion.
+  const finishLockedReceipt = (input, beforeMutation) => fenced(async () => {
+    const bound = await recoveryBinding(input.transactionId, input.journalDigest);
+    const { ctx, directory } = bound;
+    let { state } = bound;
+    if (state.appId !== input.appId || !['locked-branch-retired', 'locked-retired'].includes(state.phase)
+      || (state.phase === 'locked-retired' && state.receiptRecorded !== true)) fail('locked-retirement-recovery-held');
+    const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
+    try {
+      if (hash(await readJournal(directory)) !== hash(state)) fail('retirement-journal-changed');
+      const gate = await admission();
+      const reservation = await gate.readCheckoutReservation(ctx.repoPath, state.id);
+      if (JSON.stringify(reservation) !== JSON.stringify(state.reservation)) fail('retirement-reservation-changed');
+      return await gate.withCheckoutReservation(reservation, async () => {
+        executor.assertHeld();
+        const verified = await native({ command: 'verify', transactionDir: directory, manifestSha256: state.proof?.manifestSha256, mode: 'standalone' });
+        if (verified.verified !== true || verified.standalone !== true) fail('preservation-proof-unverified');
+        const exists = path => lstat(path).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; });
+        const admin = state.review.snapshot.privateGitDir;
+        const list = deps.listWorktrees || (await import('./worktreeManager.js')).listWorktrees;
+        if (!admin || await exists(state.release.path) || await exists(admin)
+          || (await list(ctx.repoPath)).some(row => row.path === state.release.path
+            || String(row.branch || '').replace(/^refs\/heads\//, '') === state.release.branch)) fail('checkout-removal-unverified');
+        const ref = await (deps.execGit || execGit)(['show-ref', '--verify', '--quiet', `refs/heads/${state.release.branch}`], ctx.repoPath, { ignoreExitCode: true });
+        if (ref.exitCode !== 1) fail('retirement-deleted-branch-not-absent');
+        const { forgeValidationEvidence } = await import('./heldCheckoutRecovery.js');
+        const evidence = forgeValidationEvidence(state.review);
+        if (!evidence || !state.review.checkoutIdentity) fail('retirement-receipt-unverified');
+        const matches = outcome => outcome?.retired?.some(row => row.path === state.release.path && row.branch === state.release.branch
+          && row.head === state.release.head && row.branchDeleted === true && row.archiveDir == null
+          && row.checkoutIdentity === state.review.checkoutIdentity && row.validationEvidence?.source === evidence.source
+          && row.validationEvidence?.prUrl === evidence.prUrl && row.validationEvidence?.prHead === evidence.prHead
+          && row.validationEvidence?.mergeCommit === evidence.mergeCommit);
+        const getOutcome = deps.getOutcome || (await import('./taskSchedule.js')).getBranchReconcileOutcome;
+        let outcome = await getOutcome(state.appId);
+        if (state.phase === 'locked-branch-retired') {
+          if (!matches(outcome)) {
+            await beforeMutation();
+            executor.assertHeld();
+            const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
+            outcome = await record(state.appId, { path: state.release.path, branch: state.release.branch, head: state.release.head,
+              branchDeleted: true, checkoutIdentity: state.review.checkoutIdentity, validationEvidence: evidence });
+          }
+          if (!matches(outcome)) fail('retirement-receipt-unverified');
+          state = await appendStep(directory, state, 'locked-retired', { receiptRecorded: true });
+        }
+        if (!matches(outcome)) fail('retirement-receipt-unverified');
+        await beforeMutation();
+        executor.assertHeld();
+        await gate.releaseCheckoutReservation(reservation);
+        return { ok: true, transactionId: state.id, phase: state.phase, receiptRecorded: true, branchDeleted: true };
+      });
+    } finally { await executor.release(); }
+  });
+
   const automaticReview = value => {
     if (!value || value.release?.head !== value.forge?.prHead) fail('automatic-retirement-exact-pr-head-required');
     if (value.comparison?.disposition !== 'integrated' || value.comparison.difference !== '') fail('automatic-retirement-independent-review-required');
@@ -993,6 +1240,11 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     if (state.appId !== input.appId) fail('retirement-transaction-app-mismatch');
     await permitted();
     if (await completedWithoutCut(bound)) return { ok: true, alreadyComplete: true, phase: state.phase, transactionId: state.id };
+    if (state.phase === 'locked-removed') return finishLockedReceipt(await resumeLockedBranch(input, permitted), permitted);
+    if (['locked-branch-retired', 'locked-retired'].includes(state.phase)) return finishLockedReceipt(input, permitted);
+    if (['locked-intent', 'locked-reserved', 'locked-preserved', 'locked-unlock-intent', 'locked-unlocked',
+      'locked-removal-intent', 'locked-restored'].includes(state.phase)) return restoreLockedCheckout(input, permitted);
+    if (state.phase.startsWith('locked-')) fail('locked-retirement-recovery-held');
     if (!/^[a-f0-9]{64}$/.test(state.proof?.manifestSha256 || '')) fail('preservation-proof-unbound');
     if (state.phase === 'branch-retirement-intent') fail('retirement-branch-deletion-uncertain');
     if (['branch-retired', 'retired'].includes(state.phase) && state.branchDeleted === true) {

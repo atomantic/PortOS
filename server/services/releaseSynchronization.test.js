@@ -5,12 +5,15 @@ import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckout
 
 vi.mock('../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: lazyTempDataRoot('release-sync-workflow-') }));
 vi.mock('./cosState.js', () => ({ loadState: async () => ({ agents: {} }), withStateLock: createFileWriteQueue() }));
+const settlement = vi.hoisted(() => vi.fn(async () => true));
+vi.mock('./legacyReleaseRecovery.js', () => ({ legacyProcessesSettled: settlement }));
+vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: async () => [] }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./codeReview.js', () => ({ getCodeReviewDefaults: async () => ({}),
   resolveReviewLoopOptions: async () => ({ reviewers: ['codex'], optionalReviewers: [], reviewerEfforts: { codex: 'high' }, reviewerApplies: false, reviewStopMode: 'on-clean' }) }));
 
 import { addTask, getTaskById, updateTask } from './cosTaskStore.js';
-import { ensureReleaseSynchronization, releaseTaskDispatchDisposition } from './releaseSynchronization.js';
+import { ensureReleaseSynchronization, releaseTaskDispatchDisposition, validateLockedPublisherRetirement } from './releaseSynchronization.js';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
 
 afterAll(cleanupTempDataRoots);
@@ -59,4 +62,12 @@ it('registers and rejoins a real task-store continuation with its frozen review 
   entry.obligations.retirement.evidence.receipts = [{ ...target, branchDeleted: true, archiveDir: null, retiredAt: '2026-01-01T01:00:00Z' }];
   await saveReleaseSynchronization(entry);
   expect(await releaseTaskDispatchDisposition(nextRelease)).toBeNull();
+  const locked = { ...target, locked: true, lockReason: 'fixture lock' };
+  expect(await validateLockedPublisherRetirement(locked)).toBe(true);
+  settlement.mockResolvedValueOnce(false);
+  expect(await validateLockedPublisherRetirement(locked)).toBe(false);
+  expect(await validateLockedPublisherRetirement({ ...locked, checkoutIdentity: 'different-generation' })).toBe(false);
+  entry.obligations.retirement.evidence.publisherReview = null;
+  await saveReleaseSynchronization(entry);
+  expect(await validateLockedPublisherRetirement(locked)).toBe(false);
 });

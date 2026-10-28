@@ -77,13 +77,18 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
       } : {}),
     } : {}),
   };
+  return previewPreparedImagePrompt({ params, mode, settings, envelope });
+}
+
+/** Apply the render backend's prompt builder to an already-prepared request. */
+export async function previewPreparedImagePrompt({ params, mode = params.mode, settings, envelope = {} }) {
   const carried = carriedPromptAdditions(params);
   const common = {
     prompt: params.prompt || '', negativePrompt: params.negativePrompt || '',
     width: params.width, height: params.height, initImageStrength: params.initImageStrength,
     promptAdditions: carried,
   };
-  const cloud = params.mediaProviderPeerId ? null : resolveCloudProviderConfig(settings, mode, { model: params.cloudModel });
+  const cloud = params.mediaProviderPeerId ? null : resolveCloudProviderConfig(settings, mode, { model: params.cloudModel || params.model });
   // The same refusal POST /generate gives a disabled provider, text-to-image included.
   if (cloud && !cloud.enabled) throw cloud.disabledError;
 
@@ -96,7 +101,7 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
   }
   if (mode === IMAGE_GEN_MODE.GROK) {
     return { ...envelope, ...grokSentPrompt({
-      ...common, aspectRatio: cloud?.providerParams.aspectRatio, stagingPath: jobOutputPath('portos-grok'),
+      ...common, aspectRatio: params.aspectRatio ?? cloud?.providerParams.aspectRatio, stagingPath: jobOutputPath('portos-grok'),
       inputImages: previewInputImages(mode, params),
     }).record };
   }

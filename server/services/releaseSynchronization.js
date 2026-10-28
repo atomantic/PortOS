@@ -415,6 +415,35 @@ export function acceptLegacyReleaseRecovery(identity, digest) {
   });
 }
 
+/** Locked initialized retirement is limited to an exact, settled publisher.
+ * Cached settlement is not authority at the destructive boundary. */
+export async function validateLockedPublisherRetirement(release) {
+  if (!release.checkoutIdentity || !release.locked) return false;
+  const outbox = await readOutbox();
+  const entries = Object.values(outbox.publications).filter(entry => {
+    const target = publisherCandidateTarget(entry);
+    return entry.registeredAt && target && target.repoPath === release.repoPath
+      && target.path === release.path && target.branch === release.branch
+      && target.head === release.head && target.checkoutIdentity === release.checkoutIdentity;
+  });
+  if (entries.length !== 1) return false;
+  const entry = entries[0], target = publisherCandidateTarget(entry);
+  const evidence = entry.obligations.retirement.evidence;
+  if (entry.obligations.localReview.status !== 'verified' || entry.obligations.processSettlement.status !== 'verified'
+    || !evidence?.checkouts?.some(row => isDeepStrictEqual(row, target))) return false;
+  const legacy = legacyPublisherRecovery(entry);
+  const review = evidence.publisherReview;
+  if (!legacy && (!review || review.path !== target.path || review.branch !== target.branch
+    || review.head !== target.head || review.checkoutIdentity !== target.checkoutIdentity
+    || review.prUrl !== `https://github.com/${entry.publication.repository}/pull/${entry.publication.promotionPrNumber}`
+    || !Array.isArray(review.models))) return false;
+  const [{ readBranchCompletionPolicies }, { legacyProcessesSettled }] = await Promise.all([
+    import('./branchCompletionPolicy.js'), import('./legacyReleaseRecovery.js'),
+  ]);
+  const agents = await readBranchCompletionPolicies({ repairIndex: false });
+  return legacyProcessesSettled(entry, agents, release.path);
+}
+
 /** Expensive archive verification runs outside the ownership fence. Its
  * immutable file stamps and current content are checked again before removal. */
 export async function prepareLegacyReleaseRetirement(release) {
