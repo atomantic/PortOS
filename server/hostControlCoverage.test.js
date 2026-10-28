@@ -270,6 +270,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/catalog/ingredients/:id/sheets/preview', READ_OVER_POST],
   ['POST /api/catalog/ingredients/merge', RECORDS],
   ['POST /api/catalog/migration/rerun', RECORDS],
+  ['POST /api/catalog/universe-filing', RECORDS],
   ['POST /api/catalog/scraps', RECORDS],
   ['DELETE /api/catalog/scraps/:id', REMOVES_RECORD],
   ['PATCH /api/catalog/scraps/:id', RECORDS],
