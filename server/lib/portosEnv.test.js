@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os';
 import { join } from 'path';
 import * as fileUtils from './fileUtils.js';
-import { parseEnvContents, upsertPortosEnvLine } from './portosEnv.js';
+import { parseEnvContents, readPortosEnvValue, upsertPortosEnvLine } from './portosEnv.js';
 import { __setVaultEnvPathForTests, decryptValue, encryptValue, ensureVaultKey } from './vaultCrypto.js';
 
 // Hold the real atomic replacement after the caller has read its pre-image.
@@ -48,6 +48,16 @@ describe('shared installation .env transactions', () => {
     vi.unstubAllEnvs();
     __setVaultEnvPathForTests(null);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Pins the persisted writer/reader contract when accepted whitespace and
+  // duplicate declarations would otherwise leave the old first value effective.
+  it('updates spaced and repeated assignments without touching other declarations', async () => {
+    writeFileSync(envPath, '# LLM_BACKEND=comment\r\nOTHER=first\r\n  LLM_BACKEND \t= "old"\r\nOTHER=last\r\nLLM_BACKEND=stale\r\n');
+    await upsertPortosEnvLine('LLM_BACKEND', '"new $& $` $\' value"', envPath);
+    expect(readPortosEnvValue('LLM_BACKEND', envPath)).toBe("new $& $` $' value");
+    expect(readFileSync(envPath, 'utf8')).toBe('# LLM_BACKEND=comment\r\nOTHER=first\r\nLLM_BACKEND="new $& $` $\' value"\r\nOTHER=last\r\n');
+    expect(readPortosEnvValue('OTHER', envPath)).toBe('first');
   });
 
   it('retains overlapping different-key updates while an independent file proceeds', async () => {

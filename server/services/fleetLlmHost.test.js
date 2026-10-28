@@ -29,7 +29,10 @@ vi.mock('../lib/cudaCapability.js', () => ({ getCudaUtilization: async () => ({ 
 vi.mock('../lib/tailscale.js', () => ({ getTailscaleStatus: async () => ({ running: true, dnsName: 'host-XXXX.example.ts.net' }) }));
 vi.mock('../lib/fileUtils.js', () => ({ PATHS: { root: '/example' }, atomicWrite: async (path, value) => state.writes.push({ path, value }), tryReadFile: async () => state.enabled }));
 vi.mock('node:fs/promises', () => ({ readFile: async () => { if (state.readError) throw state.readError; return 'VLLM_API_KEY=example-api-key-with-32-characters\n'; } }));
-vi.mock('../lib/portosEnv.js', async (original) => ({ ...(await original()), upsertPortosEnvLine: async (key, value) => { state.enabled = `${key}=${value}`; } }));
+vi.mock('../lib/portosEnv.js', async (original) => {
+  const env = await original();
+  return { ...env, upsertPortosEnvLine: async (key, value) => { state.enabled = env.upsertEnvLine(state.enabled, key, value); } };
+});
 vi.mock('../lib/commandExists.js', () => ({ commandOutput: async (_cmd, args) => args.includes('config') ? JSON.stringify({ services: { single: { image: 'example-runtime' } } }) : args.includes('inspect') ? 'sha256:' + 'a'.repeat(64) : '1.0' }));
 vi.mock('../lib/vllmQwenProject.js', () => ({ inspectVllmQwenProject: async () => ({ dir: '/example', composeFile: '/example/compose.yaml', hasWeights: true }) }));
 vi.mock('../lib/openAiModelsProbe.js', () => ({ probeOpenAiModels: async () => ({ reachable: true, models: ['qwen3.8-27b'] }) }));
@@ -69,7 +72,7 @@ describe('dedicated host setup workflow', () => {
 describe('stopping the dedicated host', () => {
   it('clears every thing that would start it again, and removes rather than merely stops the container', async () => {
     await configureFleetLlmHost();
-    expect(state.enabled).toBe('PORTOS_FLEET_LLM_ENABLED=1');
+    expect(state.enabled).toBe('PORTOS_FLEET_LLM_ENABLED=1\n');
     expect((await getFleetLlmHostStatus()).stoppable).toBe(true);
     vi.clearAllMocks();
 
@@ -77,7 +80,7 @@ describe('stopping the dedicated host', () => {
     // The marker, the login task and the container are three independent ways
     // the host comes back; leaving any one of them is what made it feel
     // impossible to stop.
-    expect(state.enabled).toBe('PORTOS_FLEET_LLM_ENABLED=0');
+    expect(state.enabled).toBe('PORTOS_FLEET_LLM_ENABLED=0\n');
     expect(state.loginTaskRemoved).toBe(true);
     // `rm -s -f`, not `stop`: the container carries `restart: unless-stopped`,
     // so a stopped one returns the next time the Docker engine starts.
@@ -87,13 +90,27 @@ describe('stopping the dedicated host', () => {
     expect(status.listening).toBe(false);
   });
 
+  // Exercises Stop followed by the boot startup path with the real env-line
+  // transform, keeping all host processes and I/O behind synthetic adapters.
+  it('stays disabled on startup after stopping a spaced enabled marker', async () => {
+    state.enabled = '# operator setting\n  PORTOS_FLEET_LLM_ENABLED = "1"\nPORTOS_FLEET_LLM_ENABLED=1\n';
+    await startFleetLlmHost();
+    expect((await getFleetLlmHostStatus()).listening).toBe(true);
+
+    await disableFleetLlmHost();
+    await startFleetLlmHost();
+
+    expect(state.enabled).toBe('# operator setting\nPORTOS_FLEET_LLM_ENABLED=0\n');
+    expect(await getFleetLlmHostStatus()).toMatchObject({ enabled: false, listening: false });
+  });
+
   it('still disables the host when docker refuses, and says which half did not happen', async () => {
     await configureFleetLlmHost();
     runStreamingCommand.mockResolvedValueOnce({ success: false, error: 'the Docker daemon is not answering' });
     const result = await disableFleetLlmHost();
     expect(result).toMatchObject({ success: true, containerStopped: false });
     expect(result.error).toContain('could not be stopped');
-    expect(state.enabled).toBe('PORTOS_FLEET_LLM_ENABLED=0');
+    expect(state.enabled).toBe('PORTOS_FLEET_LLM_ENABLED=0\n');
   });
 });
 
