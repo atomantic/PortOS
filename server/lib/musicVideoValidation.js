@@ -1391,6 +1391,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     name: castSetsText(120).min(1),
     description: castSetsText(1000).min(1),
     chapters: castSetsText(300).optional(),
+    originalName: castSetsText(120).optional(),
   }).strict()).min(1).max(4).optional(),
   cast: z.array(z.object({
     id: z.string().min(1).max(64),

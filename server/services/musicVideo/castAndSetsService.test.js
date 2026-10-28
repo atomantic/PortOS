@@ -892,6 +892,74 @@ describe('Cast & Sets per-item actions', () => {
     cast: [{ id: 'dad', name: 'Dad', role: 'father', description: 'a gentle man in his fifties', face: 'kind eyes' }],
   };
 
+  it('uses closed-mouth legacy and story expressions unless a shot lip-syncs', async () => {
+    const { buildCastAndSetsImagePlan } = await import('./castAndSetsPlan.js');
+    const legacy = buildCastAndSetsImagePlan({ scenes: [] }, DIRECTION).expressions.prompt;
+    expect(legacy).toContain('Mouth closed');
+    expect(legacy).not.toContain('singing full-voice');
+    const story = buildCastAndSetsImagePlan({ scenes: [] }, STORY_DIRECTION).expressions.prompt;
+    expect(story).toContain('Mouth closed');
+    const singing = buildCastAndSetsImagePlan({ scenes: [{ shotMode: 'performance' }] }, DIRECTION).expressions.prompt;
+    expect(singing).toContain('singing full-voice');
+    expect(singing).not.toContain('Mouth closed');
+  });
+
+  it('preserves wardrobe mappings and controls automatic tests through the route', async () => {
+    runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, tests: [DIRECTION.tests[0]] }) });
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    let saved = await current(project.id);
+    expect(saved.castAndSets.plan['test:2'].test).toBeDefined();
+    const looks = saved.castAndSets.direction.looks.map((look) => ({ ...look, originalName: look.name }));
+    looks[1].name = 'Rain';
+    looks[0].description = 'blue coat';
+    const editLooks = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ looks });
+    expect(editLooks.status).toBe(202);
+    await runTo(project.id, 'review');
+    saved = await current(project.id);
+    expect(saved.castAndSets.direction.looks.map((look) => look.chapters)).toEqual(['verses', 'chorus']);
+    expect(saved.castAndSets.direction.tests[0].look).toBe('Rain');
+    const remove = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 2, remove: true }] });
+    expect(remove.status).toBe(202);
+    await runTo(project.id, 'review');
+    saved = await current(project.id);
+    expect(saved.castAndSets.direction.testsFixed).toBe(true);
+    expect(saved.castAndSets.direction.tests).toHaveLength(1);
+    expect(saved.castAndSets.plan['test:2']).toBeUndefined();
+    const keep = saved.castAndSets.direction.looks[0];
+    expect((await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ looks: [{ ...keep, originalName: keep.name }] })).status).toBe(202);
+    await runTo(project.id, 'review');
+    saved = await current(project.id);
+    expect(saved.castAndSets.direction.tests[0].look).toBe('Watch');
+    expect(saved.castAndSets.direction.looks[0].chapters).toBe('verses');
+  });
+
+  it('reconstructs matching legacy test cards and refuses stale cards without saving', async () => {
+    runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, tests: [DIRECTION.tests[0]] }) });
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    await projects.mutateProjectRecord(project.id, (c) => {
+      const plan = structuredClone(c.castAndSets.plan);
+      for (const card of Object.values(plan)) delete card.test;
+      plan['test:2'].prompt += ' stale';
+      return { project: { ...c, castAndSets: { ...c.castAndSets, plan } } };
+    });
+    const before = await current(project.id);
+    const stale = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 2, caption: 'new caption' }] });
+    expect(stale.status).toBe(409);
+    expect((await current(project.id)).castAndSets).toEqual(before.castAndSets);
+    await projects.mutateProjectRecord(project.id, (c) => {
+      const plan = structuredClone(c.castAndSets.plan);
+      plan['test:2'].prompt = plan['test:2'].prompt.slice(0, -6);
+      return { project: { ...c, castAndSets: { ...c.castAndSets, plan } } };
+    });
+    expect((await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 2, caption: 'new caption' }] })).status).toBe(202);
+    await runTo(project.id, 'review');
+    expect((await current(project.id)).castAndSets.direction.tests[1].caption).toBe('new caption');
+  });
+
   it('reads the story, draws moods and other ages, then edits, removes and re-renders single items', async () => {
     runPrompt.mockResolvedValue({ text: JSON.stringify(STORY_DIRECTION) });
     const project = await seed();

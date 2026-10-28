@@ -13,11 +13,6 @@ const TEST_FIELDS = [['action', 'What happens in the frame'], ['caption', 'Capti
 const LONG = new Set(['description', 'action', 'face', 'wardrobe']);
 
 const lines = (text) => String(text || '').split('\n').map((line) => line.trim()).filter(Boolean);
-const looksText = (looks = []) => looks.map((look) => `${look.name}: ${look.description}`).join('\n');
-const parseLooks = (text) => lines(text).map((line) => {
-  const at = line.indexOf(':');
-  return at > 0 ? { name: line.slice(0, at).trim(), description: line.slice(at + 1).trim() } : { name: line, description: line };
-});
 
 /**
  * What one card on the check-in edits, as `{ fields | list, values, toEdits, removeEdits }`:
@@ -39,8 +34,8 @@ function editorFor(item, direction, adding = false) {
       toEdits: (v) => ({ protagonist: { expressions: lines(v.text) } }) };
   }
   if (item.kind === 'looks') {
-    return { list: 'One look per line: NAME: the complete outfit', values: { text: looksText(direction?.looks) },
-      toEdits: (v) => ({ looks: parseLooks(v.text) }) };
+    return { looks: true, values: { looks: (direction?.looks || []).map((look) => ({ ...look, originalName: look.name })) },
+      toEdits: (v) => ({ looks: v.looks }) };
   }
   if (item.kind === 'form') {
     const form = forms.find((f) => f.id === item.formId) || {};
@@ -60,11 +55,9 @@ function editorFor(item, direction, adding = false) {
   }
   if (item.kind === 'test') {
     const index = (item.testIndex ?? 0) + 1;
-    const test = (direction?.tests || [])[index - 1] || {};
+    const test = item.test || (direction?.tests || [])[index - 1] || {};
     return { fields: TEST_FIELDS, values: Object.fromEntries(TEST_FIELDS.map(([key]) => [key, test[key] || ''])),
-      toEdits: (v) => ({ tests: [{ index, ...v }] }), removeEdits: () => ({ tests: [{ index, remove: true }] }),
-      // An automatic test the direction did not write cannot be edited, only re-rendered.
-      missing: !direction?.tests?.[index - 1] };
+      toEdits: (v) => ({ tests: [{ index, ...Object.fromEntries(Object.entries(v).filter(([key, value]) => value !== (test[key] || ''))) }] }), removeEdits: () => ({ tests: [{ index, remove: true }] }) };
   }
   return null;
 }
@@ -76,7 +69,22 @@ function ItemEditor({ editor, label, busy, onSave, onCancel }) {
   return (
     <form className="space-y-2 rounded border border-port-border p-2" aria-label={`Edit ${label}`}
       onSubmit={(e) => { e.preventDefault(); onSave(editor.toEdits(values)); }}>
-      {editor.list ? (
+      {editor.looks ? (
+        <div className="space-y-3">
+          {values.looks.map((look, index) => (
+            <fieldset key={look.originalName || index} className="space-y-2 rounded border border-port-border p-2">
+              <legend className="text-xs">Look {index + 1}</legend>
+              {[['name', 'Name'], ['description', 'Outfit'], ['chapters', 'Song sections']].map(([key, title]) => (
+                <label key={key} className="block text-xs text-port-text-muted">{title}
+                  <input className={fieldClass} value={look[key] || ''} onChange={(e) => set('looks', values.looks.map((entry, i) => i === index ? { ...entry, [key]: e.target.value } : entry))} />
+                </label>
+              ))}
+              <button type="button" className={buttonClass} disabled={values.looks.length <= 1} onClick={() => set('looks', values.looks.filter((_, i) => i !== index))}>Remove look</button>
+            </fieldset>
+          ))}
+          <button type="button" className={buttonClass} disabled={values.looks.length >= 4} onClick={() => set('looks', [...values.looks, { name: '', description: '', chapters: '' }])}>Add look</button>
+        </div>
+      ) : editor.list ? (
         <label htmlFor={`${baseId}-text`} className="block text-xs text-port-text-muted">{editor.list}
           <textarea id={`${baseId}-text`} rows={6} className={fieldClass} value={values.text} onChange={(e) => set('text', e.target.value)} />
         </label>

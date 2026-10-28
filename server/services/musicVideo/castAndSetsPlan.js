@@ -205,8 +205,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       identity(p),
       moods.length
         ? `Panels: ${moods.map((mood, i) => `${i + 1}) ${mood}`).join('; ')}`
-        : `Panels: 1) singing full-voice with mouth wide open, eyes closed; 2) whispering close to the lens; 3) sly half-smile, eyes locked on camera; 4) ${p.gesture || 'a signature gesture toward the camera'}; 5) fingertips at parted lips, eyes half-lidded; 6) head tilted back, eyes shut`,
-      moods.length && !musicVideoLipSyncs(project) && 'Mouth closed or softly parted in every panel: nobody is singing or speaking',
+        : musicVideoLipSyncs(project) ? `Panels: 1) singing full-voice with mouth wide open, eyes closed; 2) whispering close to the lens; 3) sly half-smile, eyes locked on camera; 4) ${p.gesture || 'a signature gesture toward the camera'}; 5) fingertips at parted lips, eyes half-lidded; 6) head tilted back, eyes shut`
+          : 'Panels: 1) eyes closed, head bowed; 2) thoughtful gaze aside; 3) gentle smile; 4) quiet resolve; 5) eyes lowered; 6) head tilted back, eyes shut',
+      !musicVideoLipSyncs(project) && 'Mouth closed in every panel: nobody is singing or speaking',
       'Consistent identity across all panels',
       firstLight && `Light: ${firstLight}`,
       style && `Look: ${style}`,
@@ -323,6 +324,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       label: test.caption || set?.name || `Test ${i + 1}`,
       setId: test.setId,
       testIndex: i,
+      test: { ...test },
       deps: ['character', `set:${test.setId}`, 'looks'].filter((k) => plan[k]),
       refKeys: [`set:${test.setId}`, 'character', 'looks'].filter((k) => plan[k]),
       prompt: join(
