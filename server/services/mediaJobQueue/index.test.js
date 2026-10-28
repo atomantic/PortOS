@@ -1,7 +1,7 @@
 vi.mock('../musicVideo/projects.js', () => ({ getProject: vi.fn(async () => ({ mediaMode: 'code-images-video' })) }));
 vi.mock('../musicVideo/productionReviewService.js', () => ({ assertMusicVideoSceneReview: vi.fn(async () => {}) }));
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync, renameSync, lstatSync } from 'fs';
 import { tmpdir } from 'os';
 import { createHash } from 'node:crypto';
 import { join, sep } from 'path';
@@ -380,8 +380,14 @@ describe('mediaJobQueue', () => {
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
     const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest } });
     const snapshot = mediaJobQueue.getJob(job.jobId).params.reviewedReferenceRequest.referenceImagePaths[0];
-    rmSync(snapshot);
+    const identity = mediaJobQueue.getJob(job.jobId).params.reviewedReferenceSnapshot;
+    // Keep the original inode alive: unlink + recreate may recycle it, which
+    // would not establish the distinct file this ownership regression requires.
+    renameSync(snapshot, `${snapshot}.original`);
     writeFileSync(snapshot, 'reviewed bytes');
+    const replacement = lstatSync(snapshot, { bigint: true });
+    expect({ dev: String(replacement.dev), ino: String(replacement.ino) })
+      .not.toEqual({ dev: identity.dev, ino: identity.ino });
     videoGenEvents.emit('completed', { generationId: blocker.jobId, filename: 'done.mp4' });
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
     expect(stubs.generateImage).not.toHaveBeenCalled();
