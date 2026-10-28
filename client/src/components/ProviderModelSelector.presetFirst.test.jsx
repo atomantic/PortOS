@@ -76,6 +76,14 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('ProviderModelSelector — preset-first', () => {
+  it('keeps a saved composite visible with a neutral reason when its catalog cannot load', async () => {
+    api.getProviderCatalog.mockRejectedValueOnce(new Error('offline'));
+    renderSelector({ selectedProviderId: 'pi.tui@nvidia-nim-free' });
+    await waitFor(() => expect(providerSelect().textContent).toContain('catalog unavailable'));
+    expect(providerSelect().textContent).not.toContain('not available on this install');
+    expect(providerSelect().value).toBe('pi.tui@nvidia-nim-free');
+  });
+
   it('offers and selects Ultra for Codex GPT-6.1 Terra, but not Luna', () => {
     const codex = { id: 'codex-cli', name: 'Codex CLI', type: 'cli', command: 'codex', enabled: true, models: ['gpt-6.1-terra', 'gpt-6-luna'] };
     const { onEffortChange, rerender } = renderSelector({ providers: [codex], selectedProviderId: codex.id, selectedModel: 'gpt-6.1-terra' });
