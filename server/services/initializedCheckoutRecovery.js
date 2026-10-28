@@ -255,6 +255,10 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     const retained = await retain({ ...input.release, repoPath: ctx.repoPath,
       checkoutIdentity: input.release.checkoutIdentity || await readRetirementCheckoutIdentity(input.release.path) }).catch(() => false);
     if (!retained) return { ok: false, reason: 'release-sync-local-review-unretained' };
+    const prepareLegacy = deps.prepareLegacyReleaseRetirement || (await import('./releaseSynchronization.js')).prepareLegacyReleaseRetirement;
+    const archiveProofs = await prepareLegacy({ ...input.release, repoPath: ctx.repoPath,
+      checkoutIdentity: input.release.checkoutIdentity || await readRetirementCheckoutIdentity(input.release.path) }).catch(() => null);
+    if (!archiveProofs) return { ok: false, reason: 'legacy-release-recovery-changed' };
     return fenced(async () => {
       const prepared = await makeReview({ ...input, prUrl: input.review.prUrl });
       assertReview(prepared.review, input.review);
@@ -275,7 +279,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
         if (hold) return { ok: false, reason: hold };
       }
       const legacyCurrent = deps.validateLegacyReleaseRetirement || (await import('./releaseSynchronization.js')).validateLegacyReleaseRetirement;
-      if (!await legacyCurrent({ ...input.release, repoPath: ctx.repoPath, checkoutIdentity }).catch(() => false)) {
+      if (!await legacyCurrent({ ...input.release, repoPath: ctx.repoPath, checkoutIdentity }, { archiveProofs }).catch(() => false)) {
         return { ok: false, reason: 'legacy-release-recovery-changed' };
       }
       const validationEvidence = forgeValidationEvidence(prepared.review);

@@ -182,6 +182,7 @@ beforeEach(async () => {
     context: async () => ({ repoPath: '/fixture/repo' }),
     retainReleaseSynchronizationReview: vi.fn(async () => true),
     validateLegacyReleaseRetirement: vi.fn(async () => true),
+    prepareLegacyReleaseRetirement: vi.fn(async () => new Map()),
     ownership: vi.fn(async () => ({ ok: true, policy: null })),
     forge: async () => ({ ...fixture.facts }),
     comparison: async (_ctx, _release, _url, _snapshot, policy, forge) => ({

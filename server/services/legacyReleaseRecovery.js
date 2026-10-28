@@ -33,7 +33,7 @@ export function legacyPublisherCapture(entry, publisher) {
   return captures.length === 1 ? captures[0] : null;
 }
 
-export async function inspectLegacyPublisher(entry, agents, { unlocked = false } = {}) {
+export async function inspectLegacyPublisher(entry, agents, { unlocked = false, archiveProof = null } = {}) {
   const publisher = agents.find(agent => agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt);
   const capture = legacyPublisherCapture(entry, publisher);
   if (!capture) hold('legacy-publisher-generation-unverified');
@@ -96,7 +96,9 @@ export async function inspectLegacyPublisher(entry, agents, { unlocked = false }
     { forgeAccount: app.forgeAccount, exactDeliveredHead: capture.head });
   if (forge.repository !== `github.com/${entry.publication.repository}` || forge.prUrl !== prUrl || forge.prHead !== capture.head
     || forge.mergeCommit !== entry.publication.promotionMerge || (forge.targetBranch || forge.defaultBranch) !== 'release' || forge.scopeProof !== 'exact-delivered-head') hold('legacy-promotion-pr-mismatch');
-  const archived = await inspectLegacyReleaseArchive(capture.repoPath, release, archiveDir, { requireCurrent: pathPresent === true });
+  if (archiveProof && archiveProof.archiveDir !== archiveDir) hold('legacy-preservation-changed');
+  const archived = archiveProof || await inspectLegacyReleaseArchive(capture.repoPath, release, archiveDir, { requireCurrent: pathPresent === true });
+  if (archiveProof === archived && pathPresent === true) await archived.recheckCurrent();
   const review = archived.lifecycle;
   const origin = (await execGit(['remote', 'get-url', 'origin'], capture.repoPath)).stdout.trim();
   if (review?.version !== 1 || review.branch !== capture.branch || review.origin !== origin || review.base !== 'release'
@@ -108,7 +110,7 @@ export async function inspectLegacyPublisher(entry, agents, { unlocked = false }
       status: review.status, reviewedHead: review.reviewedHead }, candidateInspection: 'unverified',
     archive: { archiveDir: archived.archiveDir, archivedAt: archived.archivedAt, evidenceDigest: archived.evidenceDigest }, mode,
     ...(mode === 'present' ? { preservation } : { retirement }) };
-  return { evidence, digest: legacyRecoveryDigest(evidence), recheck: archived.recheck, retirement };
+  return { evidence, digest: legacyRecoveryDigest(evidence), recheck: archived.recheck, retirement, archiveProof: archived };
 }
 
 /** Fresh process settlement at the destructive boundary; a completion record

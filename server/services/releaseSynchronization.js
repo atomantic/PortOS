@@ -360,8 +360,8 @@ export function retainReleaseSynchronizationReview(release) {
   });
 }
 
-/** An explicitly reviewed legacy recovery binds existing preservation and a
- * retirement receipt. The completed source run and publication stay immutable. */
+/** Explicit recovery binds the original capture and existing preservation.
+ * The completed source run and publication stay immutable. */
 export async function reviewLegacyReleaseRecovery(identity) {
   const outbox = await readOutbox();
   const entry = outbox.publications[identity];
@@ -383,14 +383,20 @@ export async function reviewLegacyReleaseRecovery(identity) {
 export function acceptLegacyReleaseRecovery(identity, digest) {
   return queue(async () => {
     const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+    const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+    const { inspectLegacyPublisher } = await import('./legacyReleaseRecovery.js');
+    const initial = (await readOutbox()).publications[identity];
+    if (!initial?.registeredAt || publisherCandidateSeed(initial)) refuse('Legacy recovery requires a registered unseeded publication');
+    // Verify a potentially large existing archive outside the ownership lock.
+    // The fenced pass rechecks its stamps, current bytes and every other fact.
+    const prepared = await inspectLegacyPublisher(initial, await readBranchCompletionPolicies({ repairIndex: false }));
+    if (prepared.digest !== digest) refuse('Legacy recovery review changed');
     const result = await withClaimOwnershipLock(async () => {
       const entry = (await readOutbox()).publications[identity];
       if (!entry?.registeredAt || publisherCandidateSeed(entry)) refuse('Legacy recovery requires a registered unseeded publication');
       const existing = entry.legacyRecovery ? legacyPublisherRecovery(entry) : null;
       if (entry.legacyRecovery && (!existing || existing.digest !== digest)) refuse('A different legacy recovery already exists');
-      const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
-      const { inspectLegacyPublisher } = await import('./legacyReleaseRecovery.js');
-      const proof = await inspectLegacyPublisher(entry, await readBranchCompletionPolicies({ repairIndex: false }));
+      const proof = await inspectLegacyPublisher(entry, await readBranchCompletionPolicies({ repairIndex: false }), { archiveProof: prepared.archiveProof });
       if (proof.digest !== digest || !await proof.recheck()) refuse('Legacy recovery review changed');
       if (existing) return { receipt: existing, entry };
       entry.legacyRecovery = { version: 1, kind: 'legacy-publisher', digest, evidence: proof.evidence, acceptedAt: new Date().toISOString() };
@@ -404,15 +410,33 @@ export function acceptLegacyReleaseRecovery(identity, digest) {
       if (!isDeepStrictEqual(saved?.legacyRecovery, entry.legacyRecovery)) refuse('Legacy recovery receipt was not retained');
       return { receipt: saved.legacyRecovery, entry: saved };
     });
-    const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
     await emitReleaseSynchronization(result.entry, await readBranchCompletionPolicies({ repairIndex: false }));
     return result.receipt;
   });
 }
 
+/** Expensive archive verification runs outside the ownership fence. Its
+ * immutable file stamps and current content are checked again before removal. */
+export async function prepareLegacyReleaseRetirement(release) {
+  const outbox = await readOutbox();
+  const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+  const { inspectLegacyPublisher } = await import('./legacyReleaseRecovery.js');
+  const agents = await readBranchCompletionPolicies({ repairIndex: false });
+  const proofs = new Map();
+  for (const entry of Object.values(outbox.publications)) {
+    const legacy = legacyPublisherRecovery(entry), target = publisherCandidateTarget(entry);
+    if (!legacy || legacy.evidence.mode !== 'present' || !target || target.path !== release.path
+      || target.branch !== release.branch || target.head !== release.head || target.checkoutIdentity !== release.checkoutIdentity) continue;
+    const proof = await inspectLegacyPublisher(entry, agents);
+    if (proof.digest !== legacy.digest || proof.retirement || !await proof.recheck() || !proof.archiveProof) throw new Error('legacy-release-recovery-changed');
+    proofs.set(entry.identity, proof.archiveProof);
+  }
+  return proofs;
+}
+
 /** Called under the ordinary checkout ownership fence immediately before a
  * legacy candidate can be unlocked or removed. It grants no removal authority. */
-export async function validateLegacyReleaseRetirement(release, { unlocked = false } = {}) {
+export async function validateLegacyReleaseRetirement(release, { unlocked = false, archiveProofs = new Map() } = {}) {
   const outbox = await readOutbox();
   const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
   const { inspectLegacyPublisher, legacyProcessesSettled } = await import('./legacyReleaseRecovery.js');
@@ -432,7 +456,9 @@ export async function validateLegacyReleaseRetirement(release, { unlocked = fals
     if (!legacy || legacy.evidence.mode !== 'present' || !target || target.path !== release.path || target.branch !== release.branch
       || target.head !== release.head || target.checkoutIdentity !== release.checkoutIdentity
       || entry.obligations.localReview.status !== 'verified' || entry.obligations.processSettlement.status !== 'verified') return false;
-    const proof = await inspectLegacyPublisher(entry, agents, { unlocked });
+    const archiveProof = archiveProofs.get(entry.identity);
+    if (!archiveProof) return false;
+    const proof = await inspectLegacyPublisher(entry, agents, { unlocked, archiveProof });
     if (proof.digest !== legacy.digest || proof.retirement || !await proof.recheck()
       || !await legacyProcessesSettled(entry, agents, target.path)) return false;
   }

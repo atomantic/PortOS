@@ -74,7 +74,7 @@ vi.mock('./github.js', () => ({ execGh: async args => {
 
 import { addTask, getTaskById, updateTask } from './cosTaskStore.js';
 import { ensureReleaseSynchronization, verifyReleaseSynchronizationTask, recoverReleaseSynchronizationHandoffs, retainReleaseSynchronizationReview,
-  releaseTaskDispatchDisposition, reviewLegacyReleaseRecovery, acceptLegacyReleaseRecovery, validateLegacyReleaseRetirement } from './releaseSynchronization.js';
+  releaseTaskDispatchDisposition, reviewLegacyReleaseRecovery, acceptLegacyReleaseRecovery, prepareLegacyReleaseRetirement, validateLegacyReleaseRetirement } from './releaseSynchronization.js';
 import { legacyRecoveryDigest } from '../lib/releaseSynchronization.js';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
 import { projectTaskReleaseMilestones } from './releaseSynchronizationProjection.js';
@@ -231,18 +231,19 @@ it('requires the same preserved generation and settled owners again at retiremen
     forge: { repository: 'github.com/example/repo', prUrl, prHead: capture.head, mergeCommit: legacyPublication.promotionMerge },
     review: { version: 1, status: 'clean', branch: capture.branch, base: 'release', prUrl, reviewedHead: capture.head }, candidateInspection: 'unverified',
     archive: { archiveDir: preservation.receipt.archiveDir, archivedAt: '2026-01-01T01:12:00Z', evidenceDigest: '2'.repeat(64) } };
-  f.legacyProof = { evidence, digest: legacyRecoveryDigest(evidence), retirement: null };
+  f.legacyProof = { evidence, digest: legacyRecoveryDigest(evidence), retirement: null, archiveProof: {} };
   await acceptLegacyReleaseRecovery(id, f.legacyProof.digest);
   f.present = true;
   expect((await verifyReleaseSynchronizationTask(legacyTask)).status).toBe('blocked');
   const release = { repoPath: capture.repoPath, path: capture.path, branch: capture.branch, head: capture.head,
     checkoutIdentity: retirementCheckoutIdentityFromPointer(capture.incarnation.pointer) };
   expect(await retainReleaseSynchronizationReview(release)).toBe(true);
-  expect(await validateLegacyReleaseRetirement(release)).toBe(true);
+  const archiveProofs = await prepareLegacyReleaseRetirement(release);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs })).toBe(true);
   f.legacySettled = false;
-  expect(await validateLegacyReleaseRetirement(release)).toBe(false);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs })).toBe(false);
   f.legacySettled = true; f.legacyProof.digest = 'f'.repeat(64);
-  expect(await validateLegacyReleaseRetirement(release)).toBe(false);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs })).toBe(false);
 });
 
 it('scopes a missing publisher workspace by a fresh exact promotion branch', async () => {

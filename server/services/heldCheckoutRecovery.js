@@ -359,17 +359,21 @@ export async function inspectLegacyReleaseArchive(repoPath, release, archiveDir,
     throw error;
   });
   const lifecycle = JSON.parse((await archiveBytes(lifecyclePath, archiveWork(), 64 * 1024)).toString('utf8'));
-  if (requireCurrent) {
-    const { manifest } = await archiveManifest(dir);
+  const { manifest } = await archiveManifest(dir);
+  const recheckCurrent = async () => {
+    if (!await proof.recheck()) throw new Error('legacy-archive-changed');
     const [content, administration] = await archiveSnapshots({ path: release.path, branch: `refs/heads/${release.branch}`, head: release.head }, repoPath, null);
     if (administration.fingerprint !== manifest.administration.fingerprint
       || evidenceHash(content.indexDiff) !== manifest.patchHashes?.index || evidenceHash(content.worktreeDiff) !== manifest.patchHashes?.worktree
       || JSON.stringify(content.files) !== JSON.stringify(manifest.captured.files)
       || JSON.stringify(content.symlinks) !== JSON.stringify(manifest.captured.symlinks)
       || JSON.stringify(content.gitlinks) !== JSON.stringify(manifest.captured.gitlinks)) throw new Error('legacy-archive-content-changed');
-  }
+    if (!await proof.recheck()) throw new Error('legacy-archive-changed');
+    return true;
+  };
+  if (requireCurrent) await recheckCurrent();
   if (!await proof.recheck()) throw new Error('legacy-archive-changed');
-  return { archiveDir: dir, archivedAt: proof.archivedAt, evidenceDigest: proof.evidenceDigest, lifecycle, recheck: proof.recheck };
+  return { archiveDir: dir, archivedAt: proof.archivedAt, evidenceDigest: proof.evidenceDigest, lifecycle, recheck: proof.recheck, recheckCurrent };
 }
 
 async function historicalCheckoutAbsent(release, trees) {
@@ -1673,10 +1677,13 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
   if (!defaultBranch) return { ok: false, reason: 'default-branch-unavailable' };
   if (branch === defaultBranch) return { ok: false, reason: 'protected-branch' };
 
-  const { retainReleaseSynchronizationReview } = await import('./releaseSynchronization.js');
-  const retainedReview = await retainReleaseSynchronizationReview({ ...release, repoPath,
-    checkoutIdentity: release.checkoutIdentity || await readRetirementCheckoutIdentity(release.path) }).catch(() => false);
+  const { retainReleaseSynchronizationReview, prepareLegacyReleaseRetirement } = await import('./releaseSynchronization.js');
+  const scopedRelease = { ...release, repoPath, checkoutIdentity: release.checkoutIdentity || await readRetirementCheckoutIdentity(release.path) };
+  const retainedReview = await retainReleaseSynchronizationReview(scopedRelease).catch(() => false);
   if (!retainedReview) return { ok: false, reason: 'release-sync-local-review-unretained' };
+  const legacyProofs = await prepareLegacyReleaseRetirement(scopedRelease).catch(() => null);
+  if (!legacyProofs) return { ok: false, reason: 'legacy-release-recovery-changed' };
+  opts = { ...opts, legacyProofs };
 
   // Every ownership check queues behind the claim-ownership lock with a short
   // budget, so the archive runs between two critical sections (#12682).
@@ -1765,7 +1772,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   if (!second.tree) return { ok: false, reason: second.reason };
   if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return { ok: false, reason: 'checkout-identity-changed' };
   const { validateLegacyReleaseRetirement } = await import('./releaseSynchronization.js');
-  const legacyCurrent = unlocked => validateLegacyReleaseRetirement({ ...release, repoPath, checkoutIdentity }, { unlocked }).catch(() => false);
+  const legacyCurrent = unlocked => validateLegacyReleaseRetirement({ ...release, repoPath, checkoutIdentity }, { unlocked, archiveProofs: opts.legacyProofs }).catch(() => false);
   if (!await legacyCurrent(false)) return { ok: false, reason: 'legacy-release-recovery-changed' };
   await opts.beforeMutation?.();
   if (release.locked) {
