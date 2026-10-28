@@ -45,6 +45,11 @@ const looks = [
   ['soft focus 0.30', normalizeFilmLook({ defocus: 0.3 })],
   ['soft focus 0.35', normalizeFilmLook({ defocus: 0.35 })],
   ['color fringing 0.40', normalizeFilmLook({ chroma: 0.4 })],
+  // Fractional flood rectangles run through a wide blur; Chrome's accelerated
+  // blur reads them slightly wider than their subregion (the extreme look
+  // drifted to 38.6 dB when the version-2 leak joined the vignette).
+  ['light leak 1.00 (version 2)', normalizeFilmLook({ version: 2, leak: 1 })],
+  ['vignette 1.00', normalizeFilmLook({ version: 2, vignette: 1 })],
 ];
 
 const psnr = (a, b) => {
