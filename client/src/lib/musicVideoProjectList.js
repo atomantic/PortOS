@@ -27,7 +27,7 @@ export function projectRunPill(project) {
   if (RUNNING_ACTIONS.has(action?.id) || project.status === 'rendering') {
     return { id: 'running', label: 'Running', tone: 'muted' };
   }
-  if (deriveStages(project).stages.every((s) => s.state === 'done')) {
+  if (deriveStages(project).stages.every((s) => s.optional || s.state === 'done')) {
     return { id: 'done', label: 'Done', tone: 'ok' };
   }
   return null;

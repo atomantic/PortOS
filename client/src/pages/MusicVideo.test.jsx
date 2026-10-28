@@ -1930,7 +1930,7 @@ describe('MusicVideo section layers (#8985)', () => {
 describe('MusicVideo concept & style editor (#3168)', () => {
   it('seeds the fields from the project and persists each on blur', async () => {
     const withConcept = { ...PROJECT_NO_CLIP, concept: { prompt: 'A road trip through neon ruins', style: 'Cyberpunk anime' } };
-    await openProject(withConcept, 'cast-sets');
+    await openProject(withConcept, 'story');
 
     const conceptField = await screen.findByLabelText('Concept');
     const styleField = screen.getByLabelText('Visual style');
@@ -1956,7 +1956,7 @@ describe('MusicVideo concept & style editor (#3168)', () => {
 
   it('does not re-PATCH when a field is focused and blurred without an edit', async () => {
     const withConcept = { ...PROJECT_NO_CLIP, concept: { prompt: 'Unchanged', style: 'Unchanged' } };
-    await openProject(withConcept, 'cast-sets');
+    await openProject(withConcept, 'story');
     const conceptField = await screen.findByLabelText('Concept');
     fireEvent.focus(conceptField);
     fireEvent.blur(conceptField);
@@ -1973,14 +1973,14 @@ describe('MusicVideo concept & style editor (#3168)', () => {
     listMusicVideoProjects.mockResolvedValue([PROJECT_NO_CLIP, projectB]);
     renderMV();
     await selectProject(PROJECT_NO_CLIP.id);
-    // Concept and style are creative direction, on the Look step.
-    await openStage('cast-sets');
+    // Concept and style are creative direction, on the Story step.
+    await openStage('story');
 
     const conceptField = await screen.findByLabelText('Concept');
     fireEvent.change(conceptField, { target: { value: 'A unsaved draft' } });
     // No blur — switch projects while the edit is still pending.
     await selectProject(projectB.id);
-    await openStage('cast-sets');
+    await openStage('story');
 
     await waitFor(() => expect(screen.getByLabelText('Concept')).toHaveValue('B original'));
     fireEvent.blur(screen.getByLabelText('Concept'));
@@ -1993,7 +1993,7 @@ describe('MusicVideo concept & style editor (#3168)', () => {
   });
 
   it('starts empty and enables AI Plan to use them once set', async () => {
-    await openProject(PROJECT_ANALYZED, 'cast-sets');
+    await openProject(PROJECT_ANALYZED, 'story');
     const conceptField = await screen.findByLabelText('Concept');
     expect(conceptField).toHaveValue('');
 
@@ -3069,11 +3069,8 @@ describe('MusicVideo stage tabs (#9243)', () => {
         'Change track': (root) => root.queryByLabelText('Change track'),
         'Song content': (root) => root.queryByRole('radio', { name: 'Vocal song' }),
       },
-      'cast-sets': {
-        'Cast & Sets check-in': (root) => root.queryByLabelText('Cast & Sets check-in'),
-        // Creative direction is what the cast and sets are built from.
-        Concept: (root) => root.queryByLabelText('Concept'),
-      },
+      story: { Concept: (root) => root.queryByRole('textbox', { name: 'Concept' }) },
+      'cast-sets': { 'Cast & Sets check-in': (root) => root.queryByLabelText('Cast & Sets check-in') },
       board: { 'AI Plan': (root) => root.queryByRole('button', { name: /AI Plan/ }) },
       // Shots: the scene board, the footage, then the composition over it.
       produce: { 'Add scene': (root) => root.queryByRole('button', { name: /Add scene/ }), 'Shot prompt': (root) => root.queryByLabelText('Shot prompt'),

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import StoryWorkbench from './StoryWorkbench.jsx';
 
@@ -41,6 +42,47 @@ async function develop() {
 }
 
 describe('Story workbench', () => {
+  it.each(['Develop story', 'Preview prompt and context'])('saves notes before %s on the first click', async (action) => {
+    let finishSave;
+    api.saveMusicVideoStorySummary.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+    const user = userEvent.setup();
+    render(<Fixture />);
+    await user.type(screen.getByLabelText('Story in your own words'), 'A rough ending');
+    await user.click(screen.getByRole('button', { name: action }));
+    expect(api.saveMusicVideoStorySummary).toHaveBeenCalledTimes(1);
+    expect(api.proposeMusicVideoStory).not.toHaveBeenCalled();
+    await act(async () => finishSave({ project: { ...original, storySummary: 'A rough ending' } }));
+    await waitFor(() => expect(api.proposeMusicVideoStory).toHaveBeenCalledWith('mv-test', expect.objectContaining({ preview: action.startsWith('Preview') }), { silent: true }));
+  });
+
+  it('saves newer notes after an earlier save finishes before developing the story', async () => {
+    let finishFirstSave, finishSecondSave;
+    api.saveMusicVideoStorySummary.mockImplementationOnce(() => new Promise((resolve) => { finishFirstSave = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishSecondSave = resolve; }));
+    render(<Fixture />);
+    const notes = screen.getByLabelText('Story in your own words');
+    fireEvent.change(notes, { target: { value: 'First draft' } });
+    fireEvent.blur(notes);
+    fireEvent.change(notes, { target: { value: 'Newer draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Develop story' }));
+    await act(async () => finishFirstSave({ project: { ...original, storySummary: 'First draft' } }));
+    await waitFor(() => expect(api.saveMusicVideoStorySummary).toHaveBeenLastCalledWith('mv-test', { summary: 'Newer draft', baseSummary: 'First draft' }, { silent: true }));
+    expect(api.proposeMusicVideoStory).not.toHaveBeenCalled();
+    await act(async () => finishSecondSave({ project: { ...original, storySummary: 'Newer draft' } }));
+    await waitFor(() => expect(api.proposeMusicVideoStory).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not develop when saving notes conflicts', async () => {
+    api.saveMusicVideoStorySummary.mockRejectedValueOnce(Object.assign(new Error('Changed elsewhere'), { status: 409 }));
+    api.getMusicVideoStoryContext.mockResolvedValue({ ...current, inputs: { ...current.inputs, summary: 'A newer story' } });
+    const user = userEvent.setup();
+    render(<Fixture />);
+    await user.type(screen.getByLabelText('Story in your own words'), 'My notes');
+    await user.click(screen.getByRole('button', { name: 'Develop story' }));
+    await screen.findByText(/The saved summary changed elsewhere/);
+    expect(api.proposeMusicVideoStory).not.toHaveBeenCalled();
+  });
+
   it('shows both versions after a notes conflict and keeps the selected current version', async () => {
     api.saveMusicVideoStorySummary.mockRejectedValueOnce(Object.assign(new Error('Changed elsewhere'), { status: 409 }));
     api.getMusicVideoStoryContext.mockResolvedValue({ ...current, inputs: { ...current.inputs, summary: 'A newer story' } });
@@ -139,6 +181,7 @@ describe('Story workbench', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refine story' }));
     expect(screen.getByLabelText('Direction or follow-up')).toBeDisabled();
     expect(screen.getByLabelText('Proposed Concept')).toBeDisabled();
+    await waitFor(() => expect(api.proposeMusicVideoStory).toHaveBeenCalledTimes(2));
     await act(async () => resolveRefinement({ ...current, proposal: proposed, reply: 'A quieter ending.', sentPrompt: 'Prompt' }));
     expect(screen.getByLabelText('Direction or follow-up')).not.toBeDisabled();
     expect(screen.getByText(/A quieter ending/)).toBeInTheDocument();
@@ -154,13 +197,13 @@ describe('Story workbench', () => {
     render(<Fixture />);
     await develop();
     expect(screen.getByText('Current: Ari · character · protagonist · A singer')).toBeInTheDocument();
-    expect(screen.getByText('Current: Panel 1 action: Walk')).toBeInTheDocument();
+    expect(screen.getByText('Current: Panel 1 Action: Walk')).toBeInTheDocument();
     expect(screen.queryByText(/"id":/)).toBeNull();
     expect(screen.getByLabelText('Role')).toHaveValue('protagonist');
     expect(screen.getByLabelText('Description')).toHaveValue('A singer');
-    expect(screen.getByLabelText('title')).toHaveValue('Arrival');
+    expect(screen.getByLabelText('Title')).toHaveValue('Arrival');
     expect(screen.getByLabelText('Musical role')).toHaveValue('verse');
-    expect(screen.getByLabelText('camera')).toHaveValue('Dolly');
+    expect(screen.getByLabelText('Camera')).toHaveValue('Dolly');
     expect(screen.getByLabelText('Framing')).toHaveValue('wide');
     expect(screen.getByLabelText('Estimated seconds')).toHaveValue(5);
     fireEvent.click(screen.getByLabelText('Update beat'));

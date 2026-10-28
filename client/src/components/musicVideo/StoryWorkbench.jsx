@@ -8,7 +8,7 @@ import { STORYBOARD_LIMITS, STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_FRAMINGS 
 const input = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm';
 const button = 'min-h-[44px] rounded border border-port-border px-3 py-1.5 text-sm text-port-accent disabled:opacity-50';
 const display = (value) => typeof value === 'string' ? value : JSON.stringify(value ?? null, null, 2);
-const title = (key) => ({ prompt: 'Concept', style: 'Visual style', songStyle: 'Song style', premise: 'Narrative premise', mustHave: 'Must have', avoid: 'Avoid' }[key] || key.replace(/([A-Z])/g, ' $1'));
+const title = (key) => ({ prompt: 'Concept', style: 'Visual style', songStyle: 'Song style', premise: 'Narrative premise', mustHave: 'Must have', avoid: 'Avoid' }[key] || key.replace(/([A-Z])/g, ' $1').toLowerCase().replace(/^./, (letter) => letter.toUpperCase()));
 const fieldLimits = { prompt: 8000, style: 2000, songStyle: 2000, audience: 500, destination: 200, emotion: 500, premise: 2000, hookObjective: 1000, graphicLanguage: 1000, mustHave: 2000, avoid: 2000 };
 const aspectRatios = ['16:9', '9:16', '1:1', '4:5', '2.39:1'];
 // An omitted patch field retains its current value; an explicit null clears it.
@@ -46,35 +46,47 @@ export default function StoryWorkbench({ project, disabled, onProject, onBoardCh
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const flight = useRef(false);
-  const saveFlight = useRef(false);
+  const saveFlight = useRef(null);
+  const summaryRef = useRef(project.storySummary || '');
+  const savedRef = useRef(project.storySummary || '');
   const dirty = summary !== saved;
   useEffect(() => {
     if (!dirty && !saving && (project.storySummary || '') !== saved) {
-      setSummary(project.storySummary || ''); setSaved(project.storySummary || '');
+      summaryRef.current = project.storySummary || ''; savedRef.current = summaryRef.current;
+      setSummary(summaryRef.current); setSaved(savedRef.current);
     }
   }, [project.storySummary, dirty, saved, saving]);
-  const save = async () => {
-    if (!dirty || saveFlight.current) return !dirty;
-    saveFlight.current = true;
+  const save = () => {
+    if (saveFlight.current) return saveFlight.current;
+    const notes = summaryRef.current;
+    const baseSummary = savedRef.current;
+    if (notes === baseSummary) return Promise.resolve(true);
     setSaving(true); setError(''); setNotice('');
-    const result = await saveMusicVideoStorySummary(project.id, { summary, baseSummary: saved }, { silent: true })
+    const pending = saveMusicVideoStorySummary(project.id, { summary: notes, baseSummary }, { silent: true })
+      .then((result) => {
+        savedRef.current = result.project.storySummary || '';
+        setSaved(savedRef.current); setLatestSummary(null);
+        onProject({ storySummary: savedRef.current, updatedAt: result.project.updatedAt });
+        return true;
+      })
       .catch(async (err) => {
         if (err?.status === 409) {
           const latest = await getMusicVideoStoryContext(project.id, { silent: true }).catch(() => null);
           if (latest) setLatestSummary(latest.inputs.summary);
         }
         setError(err?.message || 'Could not save the story summary.');
-        return null;
-      });
-    saveFlight.current = false; setSaving(false);
-    if (!result) return false;
-    setSaved(result.project.storySummary || ''); setLatestSummary(null);
-    onProject({ storySummary: result.project.storySummary || '', updatedAt: result.project.updatedAt });
-    return true;
+        return false;
+      })
+      .finally(() => { saveFlight.current = null; setSaving(false); });
+    saveFlight.current = pending;
+    return pending;
   };
   const run = async (preview = false) => {
-    if (flight.current || dirty || saving || !llm.selectedProviderId || (!summary.trim() && !instruction.trim())) return;
+    if (flight.current || disabled || !llm.selectedProviderId || (!summary.trim() && !instruction.trim())) return;
     flight.current = true; setBusy(true); setError(''); setNotice('');
+    do {
+      if (!(await save())) { flight.current = false; setBusy(false); return; }
+    } while (summaryRef.current !== savedRef.current);
     const text = instruction.trim() ? instruction : 'Develop the story from my summary and the existing project.';
     const turns = [...messages, { role: 'user', content: text }];
     const result = await proposeMusicVideoStory(project.id, { providerId: llm.selectedProviderId, model: llm.selectedModel || undefined,
@@ -144,20 +156,22 @@ export default function StoryWorkbench({ project, disabled, onProject, onBoardCh
   const setField = (group, key, value) => setProposal((old) => ({ ...old, [group]: { ...old[group], [key]: value } }));
   const setArray = (group, index, patch) => setProposal((old) => ({ ...old, [group]: old[group].map((item, i) => i === index ? { ...item, ...patch } : item) }));
   const tick = (key, label) => <input id={`mv-story-select-${key}`} type="checkbox" aria-label={label} checked={!!selected[key]} onChange={(e) => setSelected((old) => ({ ...old, [key]: e.target.checked }))} />;
-  const canRun = !disabled && !busy && !saving && !dirty && !!llm.selectedProviderId && !!(summary.trim() || instruction.trim());
+  // Keep blur's saving indicator from moving the tapped button before click; run saves the notes itself.
+  const keepNotesFocused = (event) => { if (document.activeElement?.id === 'mv-story-summary') event.preventDefault(); };
+  const canRun = !disabled && !busy && !!llm.selectedProviderId && !!(summary.trim() || instruction.trim());
   return <section aria-label="Develop the story" aria-busy={busy} className="space-y-3 rounded-lg border border-port-border bg-port-card p-3">
     <fieldset disabled={busy} className="min-w-0 space-y-3">
     <h3 className="text-sm font-semibold">Develop the story</h3>
     {disabled && <p className="text-xs text-port-text-muted">Finish editing or saving story inputs before developing or applying a proposal.</p>}
     <label htmlFor="mv-story-summary" className="block text-xs text-port-text-muted">Story in your own words</label>
-    <textarea id="mv-story-summary" className={input} rows={5} maxLength={20000} value={summary} onChange={(e) => setSummary(e.target.value)} onBlur={save}
+    <textarea id="mv-story-summary" className={input} rows={5} maxLength={20000} value={summary} onChange={(e) => { summaryRef.current = e.target.value; setSummary(e.target.value); }} onBlur={save}
       placeholder="Describe who is there, what happens, and how it ends — rough notes are welcome." />
     <div className="flex flex-wrap items-center gap-2 text-xs text-port-text-muted"><span>{summary.length} / 20,000 characters · {saving ? 'Saving…' : dirty ? 'Unsaved' : 'Saved'}</span>
       {dirty && <button type="button" className={button} disabled={saving} onClick={save}>Save story notes</button>}</div>
     {latestSummary !== null && <div className="space-y-2 rounded border border-port-warning p-2 text-sm"><p>The saved summary changed elsewhere.</p>
       <p className="whitespace-pre-wrap break-words"><strong>Current:</strong> {latestSummary}</p><p className="whitespace-pre-wrap break-words"><strong>Yours:</strong> {summary}</p>
-      <div className="flex flex-wrap gap-2"><button type="button" className={button} onClick={() => { onProject({ storySummary: latestSummary }); setSummary(latestSummary); setSaved(latestSummary); setLatestSummary(null); setError(''); }}>Use current</button>
-        <button type="button" className={button} onClick={() => { setSaved(latestSummary); setLatestSummary(null); setError(''); }}>Keep mine for review</button></div></div>}
+      <div className="flex flex-wrap gap-2"><button type="button" className={button} onClick={() => { onProject({ storySummary: latestSummary }); summaryRef.current = latestSummary; savedRef.current = latestSummary; setSummary(latestSummary); setSaved(latestSummary); setLatestSummary(null); setError(''); }}>Use current</button>
+        <button type="button" className={button} onClick={() => { savedRef.current = latestSummary; setSaved(latestSummary); setLatestSummary(null); setError(''); }}>Keep mine for review</button></div></div>}
     <ProviderModelSelector providers={llm.providers} selectedProviderId={llm.selectedProviderId} selectedModel={llm.selectedModel}
       availableModels={llm.availableModels} onProviderChange={(id) => { llm.setSelectedProviderId(id); setEffort(''); setExecutionOptions({}); }} onModelChange={llm.setSelectedModel}
       effort={effort} onEffortChange={setEffort} executionOptions={executionOptions} onExecutionOptionsChange={setExecutionOptions}
@@ -168,8 +182,8 @@ export default function StoryWorkbench({ project, disabled, onProject, onBoardCh
     </div>
     <label htmlFor="mv-story-instruction" className="block text-xs text-port-text-muted">Direction or follow-up</label>
     <textarea id="mv-story-instruction" className={input} rows={2} maxLength={16000} value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="What should the assistant develop or change?" />
-    <div className="flex flex-wrap gap-2"><button type="button" className={button} disabled={!canRun || messages.length >= 40} onClick={() => run()}>{busy ? 'Working…' : proposal ? 'Refine story' : 'Develop story'}</button>
-      <button type="button" className={button} disabled={!canRun || messages.length >= 40} onClick={() => run(true)}>Preview prompt and context</button></div>
+    <div className="flex flex-wrap gap-2"><button type="button" className={button} disabled={!canRun || messages.length >= 40} onPointerDown={keepNotesFocused} onClick={() => run()}>{busy ? 'Working…' : proposal ? 'Refine story' : 'Develop story'}</button>
+      <button type="button" className={button} disabled={!canRun || messages.length >= 40} onPointerDown={keepNotesFocused} onClick={() => run(true)}>Preview prompt and context</button></div>
     {error && <p role="alert" className="text-sm text-port-error">{error}</p>}{notice && <p role="status" className="text-sm text-port-text-muted">{notice}</p>}
     {sent && <SentPromptPanel {...sent} />}
     {proposal && <div className="space-y-3 border-t border-port-border pt-3">
