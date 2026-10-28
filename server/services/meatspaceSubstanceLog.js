@@ -84,13 +84,27 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
     return result;
   }
 
+  const findEvent = (dailyLog, date, index, expectedId) => {
+    const entries = dailyLog.entries.filter(entry => entry.date === date);
+    if (expectedId !== undefined) {
+      for (const entry of entries) {
+        const eventIndex = entry[key]?.[itemsField]?.findIndex(item => item.id === expectedId) ?? -1;
+        if (eventIndex >= 0) return { entry, index: eventIndex };
+      }
+      return null;
+    }
+    const entry = entries[0];
+    return entry?.[key]?.[itemsField]?.[index] ? { entry, index } : null;
+  };
+
   async function update(date, index, updates) {
     if (await isMortalLoomEnabled()) {
-      const id = await mlIdAtDateIndex(mlCollection, date, index);
+      const id = updates.id ?? await mlIdAtDateIndex(mlCollection, date, index);
       if (!id) return null;
       const patch = {};
       for (const field of [...itemFields, 'date']) if (updates[field] !== undefined) patch[field] = updates[field];
       const updated = await mlPatchById(mlCollection, id, patch);
+      if (!updated) return null;
       invalidate();
       const effectiveDate = updated?.date || date;
       const dailyLog = await loadDailyLog();
@@ -99,13 +113,14 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
       return { [itemName]: Object.fromEntries(itemFields.map(field => [field, updated[field]])), dayTotal: entry?.[key]?.[totalField] || 0, date: effectiveDate };
     }
     const result = await mutateDailyLog((dailyLog) => {
-      const entry = dailyLog.entries.find(e => e.date === date);
-      if (!entry?.[key]?.[itemsField]?.[index]) return null;
-      const item = stampDailyLogEventEdit(entry[key][itemsField][index]);
+      const target = findEvent(dailyLog, date, index, updates.id);
+      if (!target) return null;
+      const { entry, index: eventIndex } = target;
+      const item = stampDailyLogEventEdit(entry[key][itemsField][eventIndex]);
       for (const field of itemFields) if (updates[field] !== undefined) item[field] = updates[field];
       const newDate = updates.date;
       if (newDate && newDate !== date) {
-        entry[key][itemsField].splice(index, 1);
+        entry[key][itemsField].splice(eventIndex, 1);
         if (entry[key][itemsField].length === 0) {
           delete entry[key];
           if (Object.keys(entry).length <= 1) dailyLog.entries = dailyLog.entries.filter(e => e !== entry);
@@ -127,18 +142,19 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
     return result;
   }
 
-  async function remove(date, index) {
+  async function remove(date, index, expectedId) {
     if (await isMortalLoomEnabled()) {
-      const id = await mlIdAtDateIndex(mlCollection, date, index);
+      const id = expectedId ?? await mlIdAtDateIndex(mlCollection, date, index);
       if (!id) return null;
       const removed = await mlRemoveById(mlCollection, id);
       invalidate();
       return removed;
     }
     const result = await mutateDailyLog((dailyLog) => {
-      const entry = dailyLog.entries.find(e => e.date === date);
-      if (!entry?.[key]?.[itemsField]?.[index]) return null;
-      const removed = entry[key][itemsField].splice(index, 1)[0];
+      const target = findEvent(dailyLog, date, index, expectedId);
+      if (!target) return null;
+      const { entry, index: eventIndex } = target;
+      const removed = entry[key][itemsField].splice(eventIndex, 1)[0];
       tombstoneDailyLogEvent(dailyLog, removed);
       if (entry[key][itemsField].length === 0) delete entry[key];
       else recalc(entry);

@@ -79,7 +79,7 @@ export const updateAlcoholDrink = (date, index, data) => request(`/meatspace/alc
   method: 'PUT',
   body: JSON.stringify(data)
 });
-export const removeAlcoholDrink = (date, index) => request(`/meatspace/alcohol/log/${date}/${index}`, {
+export const removeAlcoholDrink = (date, index, id) => request(`/meatspace/alcohol/log/${date}/${index}${id ? `?${new URLSearchParams({ id })}` : ''}`, {
   method: 'DELETE'
 });
 export const getCustomDrinks = () => request('/meatspace/alcohol/custom-drinks');
@@ -111,7 +111,7 @@ export const updateNicotineEntry = (date, index, data) => request(`/meatspace/ni
   method: 'PUT',
   body: JSON.stringify(data)
 });
-export const removeNicotineEntry = (date, index) => request(`/meatspace/nicotine/log/${date}/${index}`, {
+export const removeNicotineEntry = (date, index, id) => request(`/meatspace/nicotine/log/${date}/${index}${id ? `?${new URLSearchParams({ id })}` : ''}`, {
   method: 'DELETE'
 });
 export const getCustomNicotineProducts = () => request('/meatspace/nicotine/custom-products');

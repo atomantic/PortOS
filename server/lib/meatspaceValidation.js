@@ -82,7 +82,12 @@ export const drinkLogSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
 });
 
+export const substanceEventQuerySchema = z.object({
+  id: z.string().min(1).max(200).optional()
+});
+
 export const drinkUpdateSchema = z.object({
+  id: substanceEventQuerySchema.shape.id,
   name: z.string().max(200).optional(),
   oz: z.number().min(0.1).max(1000).optional(),
   abv: z.number().min(0).max(100).optional(),
@@ -110,6 +115,7 @@ export const nicotineLogSchema = z.object({
 });
 
 export const nicotineUpdateSchema = z.object({
+  id: substanceEventQuerySchema.shape.id,
   product: z.string().max(200).optional(),
   mgPerUnit: z.number().min(0.1).max(100).optional(),
   count: z.number().int().min(1).max(100).optional(),
