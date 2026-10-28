@@ -76,6 +76,8 @@ const trim = (s) => (typeof s === 'string' ? s.trim() : '');
 // Style line a sheet carries when no universe supplies one (a catalog-only
 // record). Exported so the catalog renderer can list it as a prompt addition.
 export const DEFAULT_CHARACTER_SHEET_STYLE = 'Style: contemporary illustrated character design with confident line work and saturated, intentional color.';
+// The photographic sheet's style when no universe supplies one.
+export const DEFAULT_PHOTOGRAPHIC_SHEET_STYLE = 'Style: natural studio photography with true-to-life color, real skin texture and soft, even key light.';
 
 // Shared field bag used by every variant's prompt builder. Centralizes the
 // trim/flatten calls so a new variant only writes the style-specific layout
@@ -283,6 +285,57 @@ export function buildCharacterBlueprintSheetPrompt(universe, character) {
   };
 }
 
+/**
+ * Photographic variant — a photographed turnaround and expression reference
+ * of a real person on a plain studio backdrop, for photoreal universes. It
+ * ships NO default negatives: the illustrated sheet's negatives (which ban
+ * photographs) fight a photographic look, and an empty negative is the
+ * user's stated rule for this kind of render.
+ */
+function buildCharacterPhotographicSheetPrompt(universe, character) {
+  if (!universe || !character) {
+    throw new ServerError('buildCharacterPhotographicSheetPrompt: universe and character are required', {
+      status: 400, code: 'VALIDATION_ERROR',
+    });
+  }
+
+  const styleBits = universeAestheticLine(universe);
+  const {
+    name, role, pronouns, age, visualNotes, physical, silhouette, posture, special, visualIdentity,
+    wardrobeLine, propsLine, expressionsLine,
+  } = extractCharacterPromptCommon(character);
+
+  const headerBits = [
+    age ? `Age: ${age}.` : '',
+    pronouns ? `Pronouns: ${pronouns}.` : '',
+    visualNotes ? `Visual notes: ${visualNotes}.` : '',
+  ].filter(Boolean).join(' ');
+
+  const promptParts = [
+    `PHOTOGRAPHIC CHARACTER REFERENCE SHEET — one studio contact page of photographs of ONE real person, ${name}${role ? `, ${role}` : ''}, shot on camera against a plain seamless light grey studio backdrop.`,
+    styleBits || DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
+    headerBits,
+    physical ? `Physical description: ${physical}` : '',
+    `Turnaround row (top half): four full-body photographs of ${name} at the same camera height, distance and focal length — FRONT, 3/4, SIDE profile, BACK — standing relaxed with arms slightly away from the body so build, proportions and clothing read clearly.`,
+    `Expression row (bottom half): seven head-and-shoulders portrait photographs of the same person facing the camera, showing — ${expressionsLine}.`,
+    silhouette ? `Silhouette: ${silhouette}` : '',
+    posture ? `Posture: ${posture}` : '',
+    special ? `Distinctive traits: ${special}` : '',
+    visualIdentity ? `Facial identity: ${visualIdentity}` : '',
+    wardrobeLine ? `Wardrobe, identical in every photograph: ${wardrobeLine}.` : 'Wardrobe: the same everyday outfit in every photograph.',
+    propsLine ? `Props held or worn where natural: ${propsLine}.` : '',
+    'Layout: thin white gutters between frames and a small plain sans-serif caption under each one (FRONT, 3/4, SIDE, BACK, then each expression name). The same person, lighting, exposure and color in every frame.',
+  ].filter(Boolean);
+
+  return {
+    prompt: promptParts.join('\n\n'),
+    negativePrompt: '',
+    width: DEFAULT_WIDTH,
+    height: DEFAULT_HEIGHT,
+    modelId: null,
+  };
+}
+
 // Per-generation filename so re-renders don't trample prior versions; the
 // "live" sheet pointer on the character always names the newest, but older
 // files stay on disk for rollback. The variant token in the middle keeps
@@ -302,6 +355,16 @@ const SHEET_VARIANTS = Object.freeze({
     label: 'Illustrated turnaround',
     description: 'Dense multi-zone reference sheet — front/back/side views, expression progression, color palette, wardrobe + props, hand gestures. Renders in the universe\'s defined illustrated style.',
     collectionCategory: 'character-sheet',
+    defaultStyle: DEFAULT_CHARACTER_SHEET_STYLE,
+  }),
+  photographic: Object.freeze({
+    id: 'photographic',
+    build: buildCharacterPhotographicSheetPrompt,
+    filenameToken: 'photo',
+    label: 'Photographic turnaround',
+    description: 'Studio photographs of a real person on a plain backdrop — front/3/4/side/back full-body views and a row of expression portraits. No default negatives. For photoreal universes.',
+    collectionCategory: 'character-photo-sheet',
+    defaultStyle: DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
   }),
   blueprint: Object.freeze({
     id: 'blueprint',
@@ -310,6 +373,7 @@ const SHEET_VARIANTS = Object.freeze({
     label: 'Blueprint concept sheet',
     description: 'Annotated character concept sheet on a clean white background with glowing accent linework over a structured base color. Both colors auto-pick from the character\'s palette.',
     collectionCategory: 'character-blueprint',
+    defaultStyle: DEFAULT_CHARACTER_SHEET_STYLE,
   }),
 });
 
@@ -330,10 +394,21 @@ export function getSheetVariantBuilder(variant) {
   return getVariantConfig(variant).build;
 }
 
+/** The style a variant's template carries when no universe supplies one. */
+export function getSheetVariantDefaultStyle(variant) {
+  return getVariantConfig(variant).defaultStyle;
+}
+
 // Catalog for the UI — pure, no I/O. The client renders one panel row per
 // entry. New entries here become available everywhere without further wiring.
-export function listSheetVariants() {
-  return Object.values(SHEET_VARIANTS).map((v) => ({
+// A photoreal universe (`photographic`) lists the photographic sheet first, so
+// a picker that defaults to the first entry starts on it.
+export function listSheetVariants({ photographic = false } = {}) {
+  const all = Object.values(SHEET_VARIANTS);
+  const ordered = photographic
+    ? [SHEET_VARIANTS.photographic, ...all.filter((v) => v !== SHEET_VARIANTS.photographic)]
+    : all;
+  return ordered.map((v) => ({
     id: v.id,
     label: v.label,
     description: v.description,
@@ -407,7 +482,9 @@ export async function buildSheetRenderParams({
   sharedIdentity = '',
 }) {
   const hasPromptOverride = typeof options.overridePrompt === 'string' && !!options.overridePrompt.trim();
-  const hasNegativeOverride = typeof options.overrideNegativePrompt === 'string' && !!options.overrideNegativePrompt.trim();
+  // A blank prompt override means "use the template"; a negative override is
+  // the user's choice even when empty, so "" sends no template negatives.
+  const hasNegativeOverride = typeof options.overrideNegativePrompt === 'string';
   let prompt = hasPromptOverride ? options.overridePrompt : built.prompt;
   const identityAddition = !hasPromptOverride && sharedIdentity && !prompt.includes(sharedIdentity)
     ? promptAddition('shared-character-identity', 'Shared facial identity', sharedIdentity) : null;
@@ -537,8 +614,15 @@ async function prepareCharacterSheet(universeId, entryId, options) {
   const media = character.ingredientId
     ? await import('./catalogDB.js').then(({ listMediaForIngredient }) => listMediaForIngredient(character.ingredientId))
     : [];
+  const universeStyle = universeAestheticLine(universe);
   const sheet = await buildSheetRenderParams({
-    built, options, styleLine: universeAestheticLine(universe), renderPin: recordRenderPin(universe), visualProfile: options.visualProfileOverride === undefined ? universe.visualProfile : options.visualProfileOverride,
+    built,
+    options,
+    styleLine: universeStyle || variantConfig.defaultStyle,
+    styleChip: universeStyle
+      ? { id: 'universe-style', label: 'Universe style' }
+      : { id: 'sheet-default-style', label: 'Default sheet style' },
+    renderPin: recordRenderPin(universe), visualProfile: options.visualProfileOverride === undefined ? universe.visualProfile : options.visualProfileOverride,
     referenceCandidates: characterSheetReferenceCandidates(character, media),
     sharedIdentity: character.visualIdentity,
   });
@@ -562,7 +646,8 @@ export async function previewCharacterReferenceSheet(universeId, entryId, option
  * any failure there is logged (the client tracks the render via SSE).
  *
  * `variant` selects the sheet style ('standard' = illustrated turnaround,
- * 'blueprint' = annotated concept sheet on white). Defaults to 'standard'
+ * 'photographic' = studio photo turnaround, 'blueprint' = annotated concept
+ * sheet on white). Defaults to 'standard'
  * so existing callers (and the legacy route) stay unchanged.
  */
 export async function renderCharacterReferenceSheet(universeId, entryId, options = {}) {

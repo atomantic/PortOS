@@ -39,8 +39,10 @@ router.get('/reference-sheet-variants', asyncHandler(async (_req, res) => {
 const renderReferenceSheetSchema = z.object({
   visualProfileOverride: universeVisualProfileSchema.nullable().optional(),
   variant: z.string().trim().min(1).max(48).optional(),
-  overridePrompt: z.string().trim().max(8000).optional(),
-  overrideNegativePrompt: z.string().trim().max(2000).optional(),
+  // The user's own words, sent exactly as typed — no trim (#11317). An empty
+  // negative override is honored as "no negatives".
+  overridePrompt: z.string().max(8000).optional(),
+  overrideNegativePrompt: z.string().max(2000).optional(),
   modelId: z.string().trim().max(64).optional(),
 });
 router.post('/:id/characters/:entryId/render-reference-sheet', asyncHandler(async (req, res) => {

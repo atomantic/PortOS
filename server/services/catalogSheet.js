@@ -1,4 +1,4 @@
-import { normalizeUniverseVisualProfile } from '../lib/universeVisualProfile.js';
+import { isPhotographicVisualProfile, normalizeUniverseVisualProfile } from '../lib/universeVisualProfile.js';
 import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
 /**
  * Catalog reference sheets: a sheet for a catalog record without needing a
@@ -36,10 +36,10 @@ import { catalogUniverseContext } from '../lib/catalogUniverseContext.js';
 import { getUniverse } from './universeBuilder.js';
 import { enqueueJob } from './mediaJobQueue/index.js';
 import {
-  DEFAULT_CHARACTER_SHEET_STYLE,
   buildSheetRenderParams,
   assertSheetReferencesAvailable,
   getSheetVariantBuilder,
+  getSheetVariantDefaultStyle,
   listSheetVariants,
   previewCharacterReferenceSheet,
   renderCharacterReferenceSheet,
@@ -73,23 +73,48 @@ const CATALOG_SHEET_VARIANTS = Object.freeze({
   })]),
 });
 
-function characterVariants() {
-  return listSheetVariants().map((v) => ({
+function characterVariants(options) {
+  return listSheetVariants(options).map((v) => ({
     ...v,
     build: getSheetVariantBuilder(v.id),
-    defaultStyle: DEFAULT_CHARACTER_SHEET_STYLE,
+    defaultStyle: getSheetVariantDefaultStyle(v.id),
     negativesLabel: 'Character sheet negatives',
   }));
 }
 
-function variantsForType(type) {
-  if (type === 'character') return characterVariants();
+// `photographic` (a photoreal universe) lists the photographic character sheet first.
+function variantsForType(type, options = {}) {
+  if (type === 'character') return characterVariants(options);
   return Object.prototype.hasOwnProperty.call(CATALOG_SHEET_VARIANTS, type) ? CATALOG_SHEET_VARIANTS[type] : [];
 }
 
 /** The sheet kinds a catalog type can render (empty for types without one). */
-export function listCatalogSheetVariants(type) {
-  return variantsForType(type).map(({ id, label, description }) => ({ id, label, description }));
+export function listCatalogSheetVariants(type, options = {}) {
+  return variantsForType(type, options).map(({ id, label, description }) => ({ id, label, description }));
+}
+
+async function universeContextFor(ingredient) {
+  const refs = await listLiveRefsForIngredient(ingredient.id);
+  const context = catalogUniverseContext(refs.map((ref) => ref.role === 'owner' && ref.ingredientId && ref.ingredientId !== ingredient.id
+    ? { ...ref, role: 'retained-owner' } : ref));
+  return { refs, context };
+}
+
+// A ref can outlive its universe (getUniverse throws NOT_FOUND then).
+const getLinkedUniverse = (universeId) => getUniverse(universeId).catch((error) => {
+  if (error?.code === 'NOT_FOUND') return null;
+  throw error;
+});
+
+/**
+ * The sheet kinds a record can render, ordered for its owning universe: a
+ * character in a photoreal universe lists the photographic sheet first.
+ */
+export async function listCatalogSheetVariantsFor(ingredient) {
+  if (ingredient.type !== 'character') return listCatalogSheetVariants(ingredient.type);
+  const { context } = await universeContextFor(ingredient);
+  const owner = context.owner?.refKind === 'universe' ? await getLinkedUniverse(context.owner.refId) : null;
+  return listCatalogSheetVariants(ingredient.type, { photographic: isPhotographicVisualProfile(owner?.visualProfile) });
 }
 
 // The `look` variant for one wardrobe entry, or a 400 when the record is not
@@ -145,7 +170,23 @@ async function resolveSheetTarget(id, options) {
     );
   }
   const isLook = options.variant === CATALOG_LOOK_VARIANT_ID;
-  const variants = variantsForType(ingredient.type);
+  const { refs, context } = await universeContextFor(ingredient);
+  const universes = [];
+  const universeRefs = isLook && options.universeId !== undefined
+    ? (options.universeId ? [{ refKind: 'universe', refId: options.universeId }] : [])
+    : context.owner ? [context.owner] : [];
+  if (isLook && options.universeId === undefined && !context.owner && new Set(refs.filter((r) => r.refKind === 'universe').map((r) => r.refId)).size > 1) {
+    throw new ServerError('Choose which universe supplies this look’s visual direction', { status: 400, code: 'LOOK_UNIVERSE_REQUIRED' });
+  }
+  for (const ref of universeRefs) {
+    if (ref.refKind !== 'universe') continue;
+    // A look's chosen universe must exist; a stale sheet ref is skipped.
+    const universe = isLook ? await getUniverse(ref.refId) : await getLinkedUniverse(ref.refId);
+    if (universe) universes.push(universe);
+  }
+  // With no variant named, a photoreal universe defaults to the photographic sheet.
+  const profile = options.visualProfileOverride === undefined ? universes[0]?.visualProfile : options.visualProfileOverride;
+  const variants = variantsForType(ingredient.type, { photographic: isPhotographicVisualProfile(profile) });
   let variant = isLook
     ? lookVariantFor(ingredient, payload, options.wardrobeId)
     : options.variant
@@ -164,26 +205,6 @@ async function resolveSheetTarget(id, options) {
       throw new ServerError(`Sheet role "${role}" exceeds ${MEDIA_ROLE_MAX} characters`, { status: 400, code: 'VALIDATION_ERROR' });
     }
     variant = { ...variant, label: `${variant.label} · ${form.label}`, role };
-  }
-
-  const refs = await listLiveRefsForIngredient(id);
-  const context = catalogUniverseContext(refs.map((ref) => ref.role === 'owner' && ref.ingredientId && ref.ingredientId !== ingredient.id
-    ? { ...ref, role: 'retained-owner' } : ref));
-  const universes = [];
-  const universeRefs = isLook && options.universeId !== undefined
-    ? (options.universeId ? [{ refKind: 'universe', refId: options.universeId }] : [])
-    : context.owner ? [context.owner] : [];
-  if (isLook && options.universeId === undefined && !context.owner && new Set(refs.filter((r) => r.refKind === 'universe').map((r) => r.refId)).size > 1) {
-    throw new ServerError('Choose which universe supplies this look’s visual direction', { status: 400, code: 'LOOK_UNIVERSE_REQUIRED' });
-  }
-  for (const ref of universeRefs) {
-    if (ref.refKind !== 'universe') continue;
-    // A ref can outlive its universe (getUniverse throws NOT_FOUND then).
-    const universe = await getUniverse(ref.refId).catch((error) => {
-      if (!isLook && error?.code === 'NOT_FOUND') return null;
-      throw error;
-    });
-    if (universe) universes.push(universe);
   }
   // A local consolidation retains embedded source variants. Render its
   // authoritative merged payload instead of delegating to a stale canon copy.
