@@ -57,6 +57,12 @@ export async function up(client) {
   let joined = 0;
   let skipped = 0;
   for (const record of rows) {
+    // Candidate discovery precedes the universe lock. Revalidate and hold the
+    // authorizing ref so a removal cannot be resurrected from that snapshot.
+    const { rows: liveRefs } = await client.query(`SELECT 1 FROM catalog_ingredient_refs
+      WHERE ingredient_id = $1 AND ref_kind = 'universe' AND ref_id = $2
+        AND role = $3 AND deleted = false FOR SHARE`, [record.id, record.universe_id, `canon-${record.type}`]);
+    if (!liveRefs.length) continue;
     const universe = data.get(record.universe_id);
     const field = FIELD[record.type];
     const list = universe && Array.isArray(universe[field]) ? universe[field] : [];

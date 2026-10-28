@@ -75,7 +75,7 @@ export async function up(client) {
     return;
   }
   const universeIds = [...new Set(rows.map((row) => row.universe_id))];
-  const { rows: universes } = await client.query('SELECT id, data, updated_at FROM universes WHERE id = ANY($1) AND deleted = false', [universeIds]);
+  const { rows: universes } = await client.query('SELECT id, data, updated_at FROM universes WHERE id = ANY($1) AND deleted = false ORDER BY id FOR UPDATE', [universeIds]);
   const data = new Map(universes.map((u) => [u.id, structuredClone(u.data && typeof u.data === 'object' ? u.data : {})]));
   const changed = new Set();
   let joined = 0;

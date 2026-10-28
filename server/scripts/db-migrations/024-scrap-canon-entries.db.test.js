@@ -40,4 +40,27 @@ describe.skipIf(!runDb)('migration 024 scrap canon projection', () => {
     await withTransaction(up);
     expect(await read()).toEqual(first);
   });
+  it('holds universe locks and rechecks memberships removed after candidate discovery', async () => {
+    await query("UPDATE universes SET data = '{}'::jsonb WHERE id = $1", [universeId]);
+    await query(`INSERT INTO catalog_ingredient_refs (ingredient_id, ref_kind, ref_id, role)
+      VALUES ($1, 'universe', $2, 'canon-character')`, [ids[0], universeId]);
+    await withTransaction(async (client) => up({ query: async (sql, params) => {
+      const lockingUniverseRead = sql.startsWith('SELECT id, data, updated_at FROM universes');
+      if (lockingUniverseRead) {
+        // A removal wins the race between candidate discovery and row locking.
+        await query("UPDATE catalog_ingredient_refs SET deleted = true WHERE ingredient_id = $1", [ids[0]]);
+      }
+      const result = await client.query(sql, params);
+      if (lockingUniverseRead) {
+        await expect(withTransaction(async (other) => {
+          await other.query("SET LOCAL lock_timeout = '100ms'");
+          await other.query("UPDATE universes SET name = 'Concurrent edit' WHERE id = $1", [universeId]);
+        })).rejects.toMatchObject({ code: '55P03' });
+      }
+      return result;
+    } }));
+    const { rows: [saved] } = await query('SELECT data FROM universes WHERE id = $1', [universeId]);
+    expect(saved.data.characters || []).toEqual([]);
+  });
+
 });
