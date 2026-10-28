@@ -140,6 +140,7 @@ describe('HOST_CONTROL_ROUTES (#8716)', () => {
   });
 
   it('covers Express spellings conservatively while preserving route boundaries', () => {
+    expect(hostControlRouteFor('POST', '/api/cos/agents/agent-123/release-candidate')).toBe('POST /api/cos/agents/:id/release-candidate');
     expect(isHostControlRoute('post', '/API/Apps/example-app/START/')).toBe(true);
     expect(hostControlRouteFor('post', '/API/HTML-COMPOSITION/TOOLKIT/SKILLS/INSTALL/')).toBe('POST /api/html-composition/toolkit/skills/install');
     expect(isHostControlRoute('GET', '/api/html-composition/toolkit')).toBe(false);

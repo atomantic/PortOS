@@ -244,6 +244,7 @@ function createFacade({ dir, sanitizeRecord }) {
     type: 'universes',
     _setSanitizer: (fn) => { if (typeof fn === 'function') sanitizer = fn; },
     getBackendName,
+    prepare: async () => { await getBackend(); },
 
     // Reads
     listIds: async () => (await getBackend()).listIds(),
@@ -255,8 +256,8 @@ function createFacade({ dir, sanitizeRecord }) {
     listSummaries: async () => (await getBackend()).listSummaries(),
     listStyles: async () => (await getBackend()).listStyles(),
     loadOneRaw: async (id) => (await getBackend()).readRaw(id),
-    loadOne: async (id) => {
-      const raw = await (await getBackend()).readRaw(id);
+    loadOne: async (id, { client } = {}) => {
+      const raw = await (await getBackend()).readRaw(id, { client });
       return raw ? sanitizer(raw) : null;
     },
 
@@ -266,12 +267,16 @@ function createFacade({ dir, sanitizeRecord }) {
     // Backend-agnostic record persistence — replaces the inline
     // ensureDir+atomicWrite(recordPath) / rm(recordDir) the service used to do.
     // Both bump the mutation epoch so dataSync re-sends the universe snapshot.
-    writeRecord: async (id, record) => {
+    writeRecord: async (id, record, { client } = {}) => {
       assertValidId(id); // parity with collectionStore.saveOneNow — reject bad ids on BOTH backends
-      const out = await (await getBackend()).writeRaw(id, record);
-      bumpChangeToken('universe');
+      const backend = await getBackend();
+      const out = await backend.writeRaw(id, record, { client });
+      // A PostgreSQL transaction is invisible to sync until it commits. Its
+      // caller advances the token after commit, never while the row is hidden.
+      if (!client || backend.name !== 'postgres') bumpChangeToken('universe');
       return out ?? record;
     },
+    transactionCommitted: () => bumpChangeToken('universe'),
     deleteRecord: async (id) => {
       assertValidId(id); // parity with collectionStore.deleteOneNow
       await (await getBackend()).deleteRaw(id);

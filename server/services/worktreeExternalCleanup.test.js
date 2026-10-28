@@ -138,13 +138,16 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     expect(await branchExists('agent-merged')).toBe(false);
   });
 
-  // Merged work lives on the default branch; ignored build output is disposable.
-  it('reclaims a merged checkout holding only ignored build output', async () => {
+  it('preserves ignored user data in a merged external checkout', async () => {
     const path = await addTree('agent-ignored-output', { committed: true });
     await execGit(['merge', '--no-ff', 'agent-ignored-output', '--no-edit'], external);
-    await writeFile(join(external, '.git', 'info', 'exclude'), '.cache/\n');
-    await mkdir(join(path, '.cache', 'pregate'), { recursive: true });
-    await writeFile(join(path, '.cache', 'pregate', 'report.json'), '{"passed":true}');
+    await writeFile(join(external, '.git', 'info', 'exclude'), '*.png\n');
+    const image = join(path, 'reference.png');
+    await writeFile(image, 'sole user image');
+    expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(0);
+    expect(await readFile(image, 'utf8')).toBe('sole user image');
+    expect(await branchExists('agent-ignored-output')).toBe(true);
+    await rm(image);
     expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(1);
     expect(existsSync(path)).toBe(false);
     expect(await branchExists('agent-ignored-output')).toBe(false);

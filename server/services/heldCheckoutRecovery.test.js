@@ -1490,15 +1490,18 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return root;
   }
 
-  it.each(['reviewed', 'merged'])('removes an integrated checkout with ignored output at the %s retirement boundary', async mode => {
+  it.each(['reviewed', 'merged'])('retains ignored payload through the %s retirement boundary', async mode => {
     const c = await reviewedCheckout(`ignored-payload-${mode}`, { normalMerge: true, ignoredPayload: true });
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
     expect((await execGit(['status', '--porcelain'], c.path)).stdout.trim()).toBe('');
     const result = mode === 'reviewed' ? await c.confirm(prepared.review)
       : await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, { ...c.opts, settleMergedReviewObligation: true });
-    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, branchDeleted: true });
-    expect(existsSync(c.path)).toBe(false);
+    expect(result).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
     expect(await archives()).toEqual([]);
   });
 
@@ -1524,7 +1527,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   it.each([
     { kind: 'oversized-file', cache: {} },
     { kind: 'oversized-total', cache: { count: 12, bytes: 22 * 1024 * 1024 } },
-  ])('retires a reviewed checkout without hashing its ignored module cache: $kind', async ({ kind, cache }) => {
+  ])('retires a reviewed checkout with verified disposable module cache: $kind', async ({ kind, cache }) => {
     const c = await reviewedCheckout(`disposable-cache-${kind}`);
     await moduleCache(c, cache);
     const prepared = await c.prepare();
@@ -1573,13 +1576,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   it.each(['native', 'traversed', 'directory'])('never follows a cache directory link or removes the outside content: %s listing', async listing => {
     const c = await reviewedCheckout('linked-cache');
-    const { wanted, before } = await cacheDirectoryLink(c);
+    const { wanted, before, link } = await cacheDirectoryLink(c);
     if (listing !== 'native') {
       // Git for Windows can enumerate junction descendants as ordinary files.
       // Reproduce that boundary on every OS while retaining a real link.
-      injected.onOtherFiles = output => [...output.split('\0').filter(rel => rel && !rel.startsWith('server/.cache/vitest/modules')),
-        ...(listing === 'directory' ? ['server/.cache/vitest/modules/']
-          : [`server/.cache/vitest/modules/${'a'.repeat(40)}`, 'server/.cache/vitest/modules/missing'])].join('\0') + '\0';
+      injected.onOtherFiles = output => !existsSync(link) ? output
+        : [...output.split('\0').filter(rel => rel && !rel.startsWith('server/.cache/vitest/modules')),
+          ...(listing === 'directory' ? ['server/.cache/vitest/modules/']
+            : [`server/.cache/vitest/modules/${'a'.repeat(40)}`, 'server/.cache/vitest/modules/missing'])].join('\0') + '\0';
     }
     const prepared = await c.prepare();
     expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true });
@@ -1988,11 +1992,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       retired = await owned.run('many-file-confirm', () => c.confirm(prepared.review));
     });
 
-    it('removes more than 1000 ignored files with the merged checkout without copying them', async () => {
-      expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
-      expect(retired.archiveDir).toBeUndefined();
-      expect(existsSync(c.path)).toBe(false);
-      expect(await registered(c.path)).toBe(false);
+    it('retains more than 1000 ignored files in the merged checkout', async () => {
+      expect(retired, JSON.stringify(retired)).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
+      expect(await readdir(join(c.path, 'private-files'))).toHaveLength(1050);
+      expect(await readFile(join(c.path, 'private-files', 'item-1049'), 'utf8')).toBe('retained ignored bytes\n');
+      expect(await registered(c.path)).toBe(true);
       expect(await archives()).toEqual([]);
     });
   });

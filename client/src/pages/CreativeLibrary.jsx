@@ -33,6 +33,7 @@ import useCancelableDebounce from '../hooks/useCancelableDebounce';
 import { libraryById, ingredientPath, ingredientCoverUrl, usageSummary, CATALOG_NAV_TABS } from '../lib/creativeLibraries';
 import { formatCount } from '../utils/formatters';
 import { threadRefUrl } from '../lib/threadRefKinds';
+import { VideoCastLinksDisclosure } from '../components/musicVideo/VideoCastLinks.jsx';
 
 const PAGE_SIZE = 48;
 const LIBRARY_ICONS = { casting: Drama, environments: Mountain, objects: Package };
@@ -54,7 +55,7 @@ const sideItemClass = (active) => `w-full min-h-[36px] flex items-center gap-2 p
 const chipClass = (active) => `shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap text-xs px-3 py-2 rounded-full border ${
   active ? 'bg-port-accent border-port-accent text-white' : 'border-port-border text-gray-300 hover:text-white'}`;
 
-function StoryHeader({ story, library, onDraft, onAddExisting }) {
+function StoryHeader({ story, library, onDraft, onAddExisting, onLinked }) {
   const kind = STORY_KINDS[story.kind] || STORY_KINDS.storyboard;
   const Icon = kind.icon;
   const url = threadRefUrl(story.kind, story.id);
@@ -79,8 +80,11 @@ function StoryHeader({ story, library, onDraft, onAddExisting }) {
             <Wand2 size={15} aria-hidden="true" /> New from prompt
           </button>
         </div>
-      ) : (
-        <p className="w-full text-xs text-gray-400">This video’s cast, sets and props are chosen in its Creative setup.</p>
+      ) : null}
+      {story.kind === 'music-video' && (
+        <VideoCastLinksDisclosure summary={`Link the video’s ${library.label.toLowerCase()} to the catalog`}
+          summaryClassName="min-h-[40px] flex items-center cursor-pointer text-xs text-port-accent"
+          projectId={story.id} type={library.type} onLinked={onLinked} idPrefix="story-cast" />
       )}
     </section>
   );
@@ -411,7 +415,7 @@ export default function CreativeLibrary({ libraryId }) {
           )}
         </div>
 
-        {story && <StoryHeader story={story} library={library} onDraft={() => updateParams({ create: 'prompt' })} onAddExisting={() => setPicking(true)} />}
+        {story && <StoryHeader story={story} library={library} onDraft={() => updateParams({ create: 'prompt' })} onAddExisting={() => setPicking(true)} onLinked={refreshAfterJoin} />}
 
         {cards.error && <p role="alert" className="text-sm text-port-error">Could not refresh card context. <button type="button" onClick={cards.retry} className="underline">Retry cards</button></p>}
         {page.loaded && page.items.length === 0 ? (

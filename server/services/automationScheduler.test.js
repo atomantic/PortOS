@@ -29,6 +29,7 @@ const {
   createSchedule,
   init,
   scheduleEvents,
+  registerActionExecutor,
 } = await import('./automationScheduler.js');
 
 const { cancelAll, getEvent, BOOT_GRACE_MS } = await import('./eventScheduler.js');
@@ -44,6 +45,7 @@ afterAll(() => {
 
 beforeEach(() => {
   cancelAll();
+  registerActionExecutor(async () => {});
   storeState.data = { schedules: {} };
   vi.setSystemTime(FIXED_NOW);
 });

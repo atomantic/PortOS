@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import MemoryTab from './MemoryTab';
+import socket from '../../../services/socket';
 
 const api = vi.hoisted(() => ({
   getBrainMemories: vi.fn(), getBrainMemory: vi.fn(), updateBrainMemory: vi.fn(),
@@ -38,6 +39,32 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('Brain record editor ownership', () => {
+  it('retains a saved body across an older reconnect read and a subsequent title-only save', async () => {
+    const stale = deferred();
+    const replay = deferred();
+    const original = memory('a');
+    const saved = memory('a', { content: 'Confirmed new body' });
+    await mount([original]);
+    api.getBrainMemories.mockReturnValueOnce(stale.promise).mockReturnValueOnce(replay.promise);
+    const reconnect = socket.on.mock.calls.find(([event]) => event === 'connect')[1];
+    act(() => reconnect());
+    const staleSignal = api.getBrainMemories.mock.calls[1][0].signal;
+    edit('Example a');
+    fireEvent.change(screen.getByRole('textbox', { name: 'What happened' }), { target: { value: saved.content } });
+    api.updateBrainMemory.mockResolvedValue(saved);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true })); });
+    await act(async () => { stale.resolve([original]); });
+    expect(screen.getByRole('button', { name: 'Read Example a' })).toHaveTextContent(saved.content);
+    expect(staleSignal.aborted).toBe(true);
+    await act(async () => { replay.resolve([saved]); });
+    edit('Example a');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Title' }), { target: { value: 'Renamed memory' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true })); });
+    expect(api.updateBrainMemory).toHaveBeenLastCalledWith('a', expect.objectContaining({
+      title: 'Renamed memory', content: saved.content,
+    }), { silent: true });
+  });
+
   it('cannot save a truncated preview, and offers retry before editing after a failed full read', async () => {
     const full = deferred();
     api.getBrainMemory.mockReturnValueOnce(full.promise).mockResolvedValueOnce(memory('a'));

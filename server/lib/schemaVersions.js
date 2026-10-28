@@ -300,7 +300,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `tracks` tables) federated via the per-record peer-sync push pipeline.
   // Each kind gets its own category gate so an older peer can reject only the
   // music record type it cannot parse while unrelated categories keep flowing.
-  artists: 1,
+  // artists v2 = the press & submission profile (creditName, bioOneLine,
+  // bioShort, statements, platform links, agent notes). A ≤v1 peer would
+  // re-sanitize the record through its profile-unaware `sanitizeArtist`, drop
+  // the curated text and LWW the loss back, so it rejects the transfer instead.
+  artists: 2,
   albums: 1,
   // tracks v2 = `track.renders[]` render-history added (every generated/uploaded
   // take, so the studio shows each render as a card + can re-select an earlier
@@ -787,7 +791,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // saved and flagged instead of refused. A v28 strict cue schema rejects the
   // field and its normalizer drops it. Optional, no backfill.
   // v30 = the director's rough story summary, retained across project sync.
-  musicVideoProjects: 30,
+  // v31 = a creative-setup subject's catalog age form (`concept.subjects[].castForm`),
+  // which a v30 strict subject schema rejects with a 400. Optional, no backfill.
+  musicVideoProjects: 31,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

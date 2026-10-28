@@ -3,9 +3,11 @@
  * and agent records for detail and status views.
  */
 import { readReleaseSynchronizationOutbox } from './releaseSynchronizationStore.js';
+import { effectiveReleaseSynchronization } from '../lib/releaseSynchronization.js';
 
 function buildReleaseSynchronizationPayload(entry) {
   if (!entry) return null;
+  const synchronization = effectiveReleaseSynchronization(entry);
   const syncPr = entry.obligations?.synchronizationPr?.evidence?.prUrl
     || entry.obligations?.localReview?.evidence?.prUrl
     || null;
@@ -17,13 +19,13 @@ function buildReleaseSynchronizationPayload(entry) {
   return {
     version: 1,
     identity: entry.identity,
-    status: entry.synchronization?.status || 'pending',
+    status: synchronization?.status || 'pending',
     prUrl: syncPr,
     headSha: syncHead,
-    blocker: entry.synchronization?.blocker || null,
-    verifiedAt: entry.synchronization?.verifiedAt || null,
-    checkedAt: entry.synchronization?.checkedAt || null,
-    retryAt: entry.synchronization?.retryAt || null,
+    blocker: synchronization?.blocker || null,
+    verifiedAt: synchronization?.verifiedAt || null,
+    checkedAt: synchronization?.checkedAt || null,
+    retryAt: synchronization?.retryAt || null,
     tag: entry.publication?.tag,
     releaseUrl: entry.publication?.releaseUrl,
     publishedAt: entry.publication?.publishedAt,

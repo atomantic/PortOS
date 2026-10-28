@@ -118,7 +118,7 @@ export default function ProviderComposePopover({
   const compositeId = harnessId && method && serviceSlug
     ? `${harnessId}.${method}@${serviceSlug}${bootstrapSlug ? `+${bootstrapSlug}` : ''}`
     : null;
-  const canCompose = Boolean(compositeId) && (!bootstrapRequired || bootstrapSlug);
+  const canCompose = !catalog.error && Boolean(compositeId) && (!bootstrapRequired || bootstrapSlug);
 
   const [saveAsPreset, saving] = useAsyncAction(async () => {
     const created = await catalog.savePreset({
@@ -189,7 +189,12 @@ export default function ProviderComposePopover({
       <div className="p-4 flex flex-col gap-3">
         <h2 className="text-base font-semibold text-white">{title}</h2>
 
-        <FormField label="Harness" className="mb-0">
+        {catalog.error ? (
+          <div role="alert" className="text-sm text-port-error">
+            <p>Provider catalog could not be loaded.</p>
+            <button type="button" onClick={catalog.retry} className="mt-2 px-3 py-1.5 border border-port-border rounded-lg text-white hover:bg-port-border">Retry</button>
+          </div>
+        ) : <FormField label="Harness" className="mb-0">
           <select
             id={harnessSelectId}
             className={SELECT_CLASS}
@@ -202,7 +207,7 @@ export default function ProviderComposePopover({
               <option key={harness.id} value={harness.id}>{harness.label}</option>
             ))}
           </select>
-        </FormField>
+        </FormField>}
 
         {harnessId && (
           <FormField label="Method" className="mb-0">

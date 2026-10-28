@@ -198,9 +198,9 @@ export default function VideoGen() {
   // `/model-context`. Fetched alongside /status on mount, it lands first — so
   // the Model picker paints on a cold load instead of holding a placeholder
   // through the interpreter probe.
-  const [modelContext, setModelContext] = useState(null);
+  const [modelContextRequest, setModelContextRequest] = useState({ state: 'loading', context: null, error: null });
+  const { context: modelContext } = modelContextRequest;
   const [statusLoading, setStatusLoading] = useState(true);
-  const [modelContextLoading, setModelContextLoading] = useState(true);
   // Grok Build CLI video backend (#2859 phase 2) — surfaced only when the
   // user enabled Grok in Settings → Image Gen (one toggle covers image +
   // video). 'local' keeps every existing flow untouched.
@@ -673,16 +673,13 @@ export default function VideoGen() {
       .finally(() => setStatusLoading(false));
   }, []);
 
-  // Kept separate from refreshStatus so the picker never inherits the python
-  // probe's latency. A failure leaves `modelContext` null, which reads exactly
-  // like "no model to offer" — the Model field takes itself away rather than
-  // holding a placeholder forever.
+  // Model context never waits on the python probe. Refreshes retain the last
+  // successful context so a transient catalog failure cannot erase a selection.
   const refreshModelContext = useCallback(() => {
-    setModelContextLoading(true);
+    setModelContextRequest((previous) => ({ ...previous, state: 'loading' }));
     getVideoGenModelContext({ silent: true })
-      .then(setModelContext)
-      .catch(() => {})
-      .finally(() => setModelContextLoading(false));
+      .then((context) => setModelContextRequest({ state: 'ready', context, error: null }))
+      .catch((error) => setModelContextRequest((previous) => ({ ...previous, state: 'error', error })));
   }, []);
 
   useEffect(() => {
@@ -1013,7 +1010,7 @@ export default function VideoGen() {
   // no model at all takes the field away. That fetch no longer waits on the
   // python probe, so on a cold load the list itself is normally what lands.
   const modelsLoading = models.length === 0;
-  const modelFieldVisible = !modelsLoading || modelContextLoading;
+  const modelFieldVisible = !modelsLoading || modelContextRequest.state !== 'ready';
   const falModel = getFalVideoModel(falModelId);
   const falResolutions = falVideoResolutions(falModel);
   const runwayCatalog = useRunwayCatalog(isRunway, mode);
@@ -1106,6 +1103,10 @@ export default function VideoGen() {
     byovLabel: byovStatus?.label,
     byovGateBlocked,
     byovRuntimeMissing,
+    modelContextUnavailable: !modelContext && {
+      loading: 'Loading the model list…',
+      error: 'Retry the model list before generating or queueing',
+    }[modelContextRequest.state],
     blockedAsset,
     extendModeBlocked,
     a2vModeBlocked,
@@ -1829,6 +1830,15 @@ export default function VideoGen() {
                   onChange={(e) => handleModelChange(e.target.value)}
                   loading={modelsLoading}
                 />
+                {modelContextRequest.error && (
+                  <ListLoadError
+                    what="the model list"
+                    error={modelContextRequest.error}
+                    onRetry={refreshModelContext}
+                    retrying={modelContextRequest.state === 'loading'}
+                    className="mb-2"
+                  />
+                )}
                 <ModelWorkflowHelp model={currentModel} mode={mode} models={models} onResolutionChange={handleResolutionChange} />
                 {remixModelFallback && (
                   <p className="mt-1 text-[11px] text-port-accent leading-snug" role="status">

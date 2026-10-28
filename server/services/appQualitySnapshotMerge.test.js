@@ -1,6 +1,5 @@
-// Real git: after the snapshot PR merges, its detached validation checkouts are
-// retired in place. Their ignored validation output is disposable; uncommitted
-// or untracked work keeps the checkout.
+// Real git: snapshot checkouts stay when ignored or untracked local content
+// cannot be proved disposable, even after their PR merges.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -28,11 +27,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retireSnapshotMergeCheckouts', () => {
     return path;
   }
 
-  it('removes a merged snapshot checkout holding only ignored validation output', async () => {
+  it('retains unverified ignored validation output in a merged snapshot checkout', async () => {
     const path = await snapshotCheckout('clean');
     const held = await retireSnapshotMergeCheckouts({ id: 'app', repoPath: sandbox.repo }, pr, admitted);
-    expect(held).toEqual([]);
-    expect(existsSync(path)).toBe(false);
+    expect(held).toHaveLength(1);
+    expect(existsSync(join(path, '.cache', 'pregate', 'report.json'))).toBe(true);
   });
 
   it('keeps a snapshot checkout with untracked work', async () => {

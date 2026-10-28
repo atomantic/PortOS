@@ -223,6 +223,7 @@ import {
   approveCastAndSets,
   reconfirmCastAndSets,
   skipCastAndSets,
+  discardCastAndSets,
   getCastAndSets,
   presentProjectCastAndSets,
 } from '../services/musicVideo/castAndSetsService.js';
@@ -1572,6 +1573,11 @@ router.post('/:id/cast-and-sets/feedback', asyncHandler(async (req, res) => {
 
 router.delete('/:id/cast-and-sets/feedback/:feedbackId', asyncHandler(async (req, res) => {
   res.json(await removeCastAndSetsFeedbackEntry(req.params.id, req.params.feedbackId));
+}));
+
+// Start over: drop a check-in that is not approved (images stay in the gallery).
+router.delete('/:id/cast-and-sets', asyncHandler(async (req, res) => {
+  res.json(await discardCastAndSets(req.params.id));
 }));
 
 router.post('/:id/cast-and-sets/resume', asyncHandler(async (req, res) => {

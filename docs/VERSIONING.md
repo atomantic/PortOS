@@ -97,16 +97,38 @@ supplied a verified exact kickoff SHA, use that instead. A timestamp cannot reco
 an earlier trigger-time commit. Capture before any potentially lengthy work. Use a
 unique candidate name and an unused worktree path; never reset an existing branch:
 
+A scheduled PortOS release coordinator must first reserve its candidate with the
+server and capture its physical checkout immediately after creation. The server
+chooses the branch for that active run, checks it was unused, and records the
+checkout generation from Git; a supplied path or a branch name by itself does
+not establish ownership. Set `RELEASE_AGENT_ID` to the registered coordinator's
+ID in the following example. A release outside PortOS has no agent registration
+and can leave it unset. A missing/refused registration must not be replaced by a
+guessed seed or by adopting an existing checkout. Preserve the candidate and use
+the normal recovery workflow if a run was interrupted before its seed was saved.
+The reservation endpoint cannot transfer an existing checkout to a new publisher
+run; until a lineage-checked transfer is supported, retain the original seed and
+checkout rather than adopting it or cutting a second candidate.
+
 ```bash
 set -e
 # PRIMARY is the existing primary checkout; WORKTREE is a new isolated path.
 # Keep these values in the run's record, not only in transient shell variables.
-CANDIDATE_BRANCH="codex/release-$(node -e 'console.log(crypto.randomUUID())')"
+if [ -n "${RELEASE_AGENT_ID:-}" ]; then
+  CANDIDATE_BRANCH=$(curl -fsS -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -H 'Content-Type: application/json' \
+    -d '{"action":"reserve"}' "http://127.0.0.1:5553/api/cos/agents/$RELEASE_AGENT_ID/release-candidate" | jq -er 'select(.reserved == true) | .branch')
+else
+  CANDIDATE_BRANCH="codex/release-$(node -e 'console.log(crypto.randomUUID())')"
+fi
 git fetch origin "refs/heads/main:refs/heads/$CANDIDATE_BRANCH"
 RELEASE_CUT_SHA=$(git rev-parse "$CANDIDATE_BRANCH^{commit}")
 git fetch origin refs/heads/release
 RELEASE_BASE_SHA=$(git rev-parse 'FETCH_HEAD^{commit}')
 git worktree add "$WORKTREE" "$CANDIDATE_BRANCH"
+if [ -n "${RELEASE_AGENT_ID:-}" ]; then
+  curl -fsS -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -H 'Content-Type: application/json' \
+    -d '{"action":"capture"}' "http://127.0.0.1:5553/api/cos/agents/$RELEASE_AGENT_ID/release-candidate" | jq -e '.captured == true' >/dev/null
+fi
 git worktree lock --reason "Active release candidate $CANDIDATE_BRANCH" "$WORKTREE"
 node scripts/link-worktree-deps.js "$PRIMARY" "$WORKTREE"
 ```
@@ -270,6 +292,14 @@ and local/remote ref absence; generic delivery/retirement recovery remains the
 only writer of those receipts. No verifier merges a PR, changes a published tag,
 steals a checkout, or resets a task retry budget. Status-view integration is
 tracked in #13773 under #13760.
+
+The ordinary inventoried checkout retirement service can release the exact
+reviewed lock as part of its fenced removal. Its initialized-submodule and
+whole-checkout counterpart currently refuses locked checkouts; retain that lock
+and the checkout as an explicit synchronization hold until service-owned lock
+recovery is available. A missing publisher seed, including an older publication
+whose checkout was already removed, likewise remains unverified; a branch name
+or later filesystem observation cannot recreate its original physical owner.
 
 On Windows, newly registered CLI and PTY release publishers and synchronization
 agents launch inside a native Job with breakaway disabled, atomically assigned at process

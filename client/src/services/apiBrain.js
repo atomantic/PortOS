@@ -44,6 +44,7 @@ export const getBrainInbox = (options = {}) => {
     signal: options.signal
   });
 };
+export const getBrainInboxEntry = (id, options = {}) => request(`/brain/inbox/${encodeURIComponent(id)}`, options);
 export const resolveBrainReview = (inboxLogId, destination, editedExtracted, options = {}) => request('/brain/review/resolve', {
   method: 'POST',
   body: JSON.stringify({ inboxLogId, destination, editedExtracted }),

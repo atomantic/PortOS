@@ -710,17 +710,22 @@ function broadcastToInstances(event, data) { broadcastToSet(instanceSubscribers,
 
 // Set up instance event forwarding
 function setupInstanceEventForwarding() {
+  let peerUpdateSequence = 0;
   // Invalidation only: the copyable serve capability stays behind the status API.
   instanceEvents.on('tailcat:serve:changed', () => ioInstance?.emit('tailcat:serve:changed', {}));
   // Redact each peer's stored proxy password before it reaches the browser
   // (keep username + hasPassword) — same secret-stripping the GET /instances
   // route applies. `data` is the full peers array.
   instanceEvents.on('peers:updated', (data) => {
+    const sequence = ++peerUpdateSequence;
+    const publishIfCurrent = (peers) => {
+      if (sequence === peerUpdateSequence) broadcastToInstances('instances:peers:updated', peers);
+    };
     const sanitized = Array.isArray(data) ? data.map(sanitizePeerForClient) : data;
     // Best-effort attach; never block the broadcast if forward metadata is busy.
     Promise.resolve(Array.isArray(sanitized) ? attachTailcatForwardsToPeers(sanitized) : sanitized)
-      .then((enriched) => broadcastToInstances('instances:peers:updated', enriched))
-      .catch(() => broadcastToInstances('instances:peers:updated', sanitized));
+      .then(publishIfCurrent)
+      .catch(() => publishIfCurrent(sanitized));
   });
   // Realtime sync lifecycle for the Instances cards: { phase, peerId, ... }.
   // No secrets — just a peer instanceId + counts — so forward as-is.

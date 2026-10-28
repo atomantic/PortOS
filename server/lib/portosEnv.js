@@ -26,9 +26,10 @@
  */
 
 import { readFileSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { PATHS, atomicWrite } from './fileUtils.js';
 import { escapeRegExp } from './textUtils.js';
+import { createKeyedFileWriteQueue } from './fileWriteQueue.js';
 
 /**
  * PortOS's own `.env` — where machine-local state is recorded.
@@ -38,6 +39,17 @@ import { escapeRegExp } from './textUtils.js';
  * whichever checkout loaded the code.
  */
 export const PORTOS_ENV_PATH = join(PATHS.installRoot || PATHS.root || '', '.env');
+
+const queueEnvWrite = createKeyedFileWriteQueue();
+
+/**
+ * Serialize the entire read-modify-write transaction, including vault key
+ * provisioning, on the same file. Callers must not acquire this queue again
+ * inside their transaction. Independent files retain independent queues.
+ */
+export function queuePortosEnvWrite(envPath, write) {
+  return queueEnvWrite(resolve(envPath), write);
+}
 
 function getDefaultEnvPath() {
   return join(PATHS.installRoot || PATHS.root || '', '.env');
@@ -140,15 +152,17 @@ export function readPortosEnvValue(key, envPath) {
  */
 export async function upsertPortosEnvLine(key, value, envPath) {
   const path = envPath ?? getDefaultEnvPath();
-  let contents = '';
-  try {
-    contents = readFileSync(path, 'utf8');
-  } catch (err) {
-    // Only a missing file is an empty start. Any other read failure (EACCES,
-    // EMFILE, EIO) would otherwise rewrite .env as this one line, dropping
-    // PGPASSWORD, PRIVACY_VAULT_KEY and every other recorded value.
-    if (err.code !== 'ENOENT') throw err;
-  }
-  const next = upsertEnvLine(contents, key, value);
-  await atomicWrite(path, next);
+  return queuePortosEnvWrite(path, async () => {
+    let contents = '';
+    try {
+      contents = readFileSync(path, 'utf8');
+    } catch (err) {
+      // Only a missing file is an empty start. Any other read failure (EACCES,
+      // EMFILE, EIO) would otherwise rewrite .env as this one line, dropping
+      // PGPASSWORD, PRIVACY_VAULT_KEY and every other recorded value.
+      if (err.code !== 'ENOENT') throw err;
+    }
+    const next = upsertEnvLine(contents, key, value);
+    await atomicWrite(path, next);
+  });
 }

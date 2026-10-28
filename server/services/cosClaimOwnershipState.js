@@ -85,6 +85,10 @@ export async function readClaimOwnershipAgents() {
   if (entries.some(([id, agent]) => {
     if (!agent || agent.id !== id || !['running', 'paused', 'completed'].includes(agent.status)) return true;
     if (agent.metadata != null && (typeof agent.metadata !== 'object' || Array.isArray(agent.metadata))) return true;
+    const candidate = agent.metadata?.releaseCandidate;
+    if (candidate != null && (candidate.version !== 1 || agent.metadata?.taskAnalysisType !== 'do-release'
+      || agent.metadata?.isWorktree !== false || candidate.startedAt !== agent.startedAt
+      || candidate.branch !== `codex/release-${id}` || !Number.isFinite(Date.parse(candidate.reservedAt)))) return true;
     return ['claimBranches', 'claimReleasedBranches'].some(key => {
       const bindings = agent.metadata?.[key] ?? agent[key];
       return bindings != null && (!Array.isArray(bindings) || bindings.some(branch => typeof branch !== 'string'));

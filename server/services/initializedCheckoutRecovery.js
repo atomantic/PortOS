@@ -244,53 +244,67 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     if (!/^[a-f0-9-]{36}$/.test(id)) fail('retirement-transaction-invalid');
     return join(root(), id);
   };
-  const retire = input => fenced(async () => {
+  const retire = input => (async () => {
     // A locked registration is not disposable. worktree remove --force leaves it
     // registered, and the directory fallback would delete the tree anyway.
     if (input.release?.locked === true) return { ok: false, reason: 'checkout-locked' };
-    const prepared = await makeReview({ ...input, prUrl: input.review.prUrl });
-    assertReview(prepared.review, input.review);
-    const { ctx } = prepared;
-    if (prepared.review.comparison?.disposition !== 'integrated') return { ok: false, reason: 'not-merged-on-recheck' };
-    // Captured by makeReview before removal. A later lstat of a deleted .git is null.
-    const checkoutIdentity = prepared.review.checkoutIdentity || input.release.checkoutIdentity || null;
-    const runGit = deps.execGit || execGit;
-    const status = await runGit(['status', '--porcelain'], input.release.path, { ignoreExitCode: true }).catch(() => null);
-    if (!status || status.exitCode !== 0) return { ok: false, reason: 'worktree-status-unavailable' };
-    if (String(status.stdout || '').trim()) return { ok: false, reason: 'worktree-dirty' };
-    // Integrated on the forge: ignored build/cache output is disposable, and the
-    // merged PR's required CI is the validation record.
-    const { forgeValidationEvidence } = await import('./heldCheckoutRecovery.js');
-    const validationEvidence = forgeValidationEvidence(prepared.review);
-    const removed = await runGit(['worktree', 'remove', '--force', input.release.path], ctx.repoPath, { ignoreExitCode: true }).catch(() => null);
-    if (!removed || removed.exitCode !== 0) {
-      return { ok: false, reason: 'checkout-not-removed' };
-    }
-    let branchDeleted = false;
-    if (input.release.branch) {
-      const deleteRef = deps.deleteRef || (await import('./worktreeManager.js')).deleteCompletedLocalBranch;
-      branchDeleted = await deleteRef(ctx.repoPath, input.release.branch, input.release.head, {}) === true;
-    }
-    const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
-    let outcome = null;
-    try {
-      outcome = await record(input.appId, {
-        path: input.release.path, branch: input.release.branch ?? null, head: input.release.head, branchDeleted,
-        ...(checkoutIdentity && { checkoutIdentity }),
-        ...(validationEvidence && { validationEvidence }),
-      });
-    } catch {
-      return { ok: false, reason: 'retirement-receipt-unverified', branchDeleted };
-    }
-    const wantedBranch = input.release.branch ?? null;
-    const recorded = outcome?.retired?.some(row => (row.path || null) === (input.release.path || null)
-      && (row.branch ?? null) === wantedBranch && row.head === input.release.head
-      && row.branchDeleted === true && row.archiveDir == null
-      && (!checkoutIdentity || row.checkoutIdentity === checkoutIdentity)
-      && (!validationEvidence || row.validationEvidence?.prHead === validationEvidence.prHead)) === true;
-    if (!recorded) return { ok: false, reason: 'retirement-receipt-unverified', branchDeleted };
-    return { ok: true, branchDeleted, ...(validationEvidence && { validationEvidence }) };
-  }).catch(error => ({ ok: false, reason: error.message }));
+    // Retention performs its own evidence reads and must run before taking the
+    // ownership fence; the reviewed retirement below rechecks all ownership.
+    const ctx = await context(input.appId, input.release);
+    const retain = deps.retainReleaseSynchronizationReview || (await import('./releaseSynchronization.js')).retainReleaseSynchronizationReview;
+    const retained = await retain({ ...input.release, repoPath: ctx.repoPath,
+      checkoutIdentity: input.release.checkoutIdentity || await readRetirementCheckoutIdentity(input.release.path) }).catch(() => false);
+    if (!retained) return { ok: false, reason: 'release-sync-local-review-unretained' };
+    return fenced(async () => {
+      const prepared = await makeReview({ ...input, prUrl: input.review.prUrl });
+      assertReview(prepared.review, input.review);
+      const { ctx } = prepared;
+      if (prepared.review.comparison?.disposition !== 'integrated') return { ok: false, reason: 'not-merged-on-recheck' };
+      // Captured by makeReview before removal. A later lstat of a deleted .git is null.
+      const checkoutIdentity = prepared.review.checkoutIdentity || input.release.checkoutIdentity || null;
+      const runGit = deps.execGit || execGit;
+      const status = await runGit(['status', '--porcelain'], input.release.path, { ignoreExitCode: true }).catch(() => null);
+      if (!status || status.exitCode !== 0) return { ok: false, reason: 'worktree-status-unavailable' };
+      if (String(status.stdout || '').trim()) return { ok: false, reason: 'worktree-dirty' };
+      // A merged commit cannot account for ignored files in the parent or modules.
+      const { assertNoUniqueIgnoredCheckoutPayload, forgeValidationEvidence } = await import('./heldCheckoutRecovery.js');
+      const paths = [input.release.path, ...(prepared.review.snapshot.modules || []).map(module => join(input.release.path, module.path))];
+      for (const path of paths) {
+        const hold = await assertNoUniqueIgnoredCheckoutPayload(path, runGit, [], [], path === input.release.path ? ctx.repoPath : null)
+          .then(() => null, error => error.message || 'checkout-not-disposable');
+        if (hold) return { ok: false, reason: hold };
+      }
+      const validationEvidence = forgeValidationEvidence(prepared.review);
+      const removed = await runGit(['worktree', 'remove', '--force', input.release.path], ctx.repoPath, { ignoreExitCode: true }).catch(() => null);
+      if (!removed || removed.exitCode !== 0) {
+        return { ok: false, reason: 'checkout-not-removed' };
+      }
+      let branchDeleted = false;
+      if (input.release.branch) {
+        const deleteRef = deps.deleteRef || (await import('./worktreeManager.js')).deleteCompletedLocalBranch;
+        branchDeleted = await deleteRef(ctx.repoPath, input.release.branch, input.release.head, {}) === true;
+      }
+      const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
+      let outcome = null;
+      try {
+        outcome = await record(input.appId, {
+          path: input.release.path, branch: input.release.branch ?? null, head: input.release.head, branchDeleted,
+          ...(checkoutIdentity && { checkoutIdentity }),
+          ...(validationEvidence && { validationEvidence }),
+        });
+      } catch {
+        return { ok: false, reason: 'retirement-receipt-unverified', branchDeleted };
+      }
+      const wantedBranch = input.release.branch ?? null;
+      const recorded = outcome?.retired?.some(row => (row.path || null) === (input.release.path || null)
+        && (row.branch ?? null) === wantedBranch && row.head === input.release.head
+        && row.branchDeleted === true && row.archiveDir == null
+        && (!checkoutIdentity || row.checkoutIdentity === checkoutIdentity)
+        && (!validationEvidence || row.validationEvidence?.prHead === validationEvidence.prHead)) === true;
+      if (!recorded) return { ok: false, reason: 'retirement-receipt-unverified', branchDeleted };
+      return { ok: true, branchDeleted, ...(validationEvidence && { validationEvidence }) };
+    });
+  })().catch(error => ({ ok: false, reason: error.message }));
 
   const loadBoundTransaction = async input => {
     const directory = location(input.transactionId);

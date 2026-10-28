@@ -180,6 +180,7 @@ beforeEach(async () => {
   });
   const deps = { root: () => root, fenced: work => work(), admission, native,
     context: async () => ({ repoPath: '/fixture/repo' }),
+    retainReleaseSynchronizationReview: vi.fn(async () => true),
     ownership: vi.fn(async () => ({ ok: true, policy: null })),
     forge: async () => ({ ...fixture.facts }),
     comparison: async (_ctx, _release, _url, _snapshot, policy, forge) => ({
@@ -259,11 +260,25 @@ describe('initialized checkout removal', () => {
     });
   });
 
-  it('leaves a locked checkout in place', async () => {
+  it('retains a locked release candidate with an initialized submodule', async () => {
     cleanGit();
-    const input = await reviewed();
-    input.release = { ...release, locked: true };
+    fixture.snapshot.modules = [{ path: 'lib/slashdo' }];
+    const candidate = { ...release, branch: 'codex/release-agent-test', locked: true,
+      lockReason: 'Active release candidate codex/release-agent-test' };
+    const preview = await fixture.service.review({ appId: 'app', release: candidate, prUrl });
+    expect(preview.ok).toBe(true);
+    expect(preview.review.snapshot.modules).toEqual([{ path: 'lib/slashdo' }]);
+    const input = { appId: 'app', release: candidate, review: { prUrl, digest: preview.review.digest } };
     expect(await fixture.service.retire(input)).toEqual({ ok: false, reason: 'checkout-locked' });
+    expect(fixture.deps.execGit).not.toHaveBeenCalled();
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
+  });
+
+  it('does not remove an initialized checkout before release synchronization retains its review', async () => {
+    cleanGit();
+    fixture.deps.retainReleaseSynchronizationReview.mockResolvedValue(false);
+    expect(await fixture.service.retire(await reviewed())).toEqual({ ok: false, reason: 'release-sync-local-review-unretained' });
     expect(fixture.deps.execGit).not.toHaveBeenCalled();
     expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
     expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
@@ -318,21 +333,25 @@ describe('initialized checkout removal', () => {
     expect(await readdir(root)).toEqual([]);
   });
 
-  it.each(['parent', 'module'])('removes an integrated checkout whose %s holds only ignored output, without scanning it', async location => {
-    cleanGit();
+  it.each(['parent', 'module'])('retains sole ignored payload in the %s despite clean Git status', async location => {
     const checkout = join(root, 'checkout');
     const payloadRoot = location === 'module' ? join(checkout, 'vendor') : checkout;
-    await mkdir(join(payloadRoot, '.cache/pregate'), { recursive: true });
-    await writeFile(join(payloadRoot, '.cache/pregate/report.json'), '{"passed":true}');
-    await writeFile(join(payloadRoot, 'build.bin'), Buffer.from([0, 255, 128, 42]));
+    await mkdir(payloadRoot, { recursive: true });
+    const sentinel = join(payloadRoot, 'unpublished.bin');
+    const bytes = Buffer.from([0, 255, 128, 42]);
+    await writeFile(sentinel, bytes);
     fixture.snapshot.modules = location === 'module' ? [{ path: 'vendor' }] : [];
+    fixture.deps.execGit.mockImplementation(async (args, cwd) => ({ exitCode: 0,
+      stdout: args[0] === 'ls-files' && cwd === payloadRoot ? 'unpublished.bin\0' : '' }));
     const currentRelease = { ...release, path: checkout };
     const prepared = await fixture.service.review({ appId: 'app', release: currentRelease, prUrl });
     const result = await fixture.service.retire({ appId: 'app', release: currentRelease,
       review: { prUrl, digest: prepared.review.digest } });
-    expect(result).toEqual({ ok: true, branchDeleted: true, validationEvidence: forgeEvidence() });
-    expect(fixture.deps.execGit.mock.calls.some(([args]) => args[0] === 'ls-files')).toBe(false);
-    expect(fixture.deps.execGit).toHaveBeenCalledWith(['worktree', 'remove', '--force', checkout], '/fixture/repo', { ignoreExitCode: true });
+    expect(result).toEqual({ ok: false, reason: 'checkout-ignored-payload-unverified' });
+    expect(await readFile(sentinel)).toEqual(bytes);
+    expect(fixture.deps.execGit.mock.calls.some(([args]) => args[0] === 'worktree')).toBe(false);
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
   });
 
   it('preserves the original directory when Git refuses removal even if its toplevel matches', async () => {

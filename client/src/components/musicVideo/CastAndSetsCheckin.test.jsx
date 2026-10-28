@@ -7,7 +7,7 @@ import { castAndSetsPreviewItems } from './CastAndSetsReferenceProgress.jsx';
 
 const { listeners, api, getMediaJob } = vi.hoisted(() => ({
   listeners: new Map(),
-  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn() },
+  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn() },
   getMediaJob: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({ default: {
@@ -200,6 +200,81 @@ describe('Cast & Sets direction editing', () => {
     fireEvent.change(screen.getByLabelText('Camera'), { target: { value: 'locked off' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save direction/ })); });
     expect(screen.getByLabelText('Camera').value).toBe('locked off');
+  });
+});
+
+describe('Cast & Sets per-image actions', () => {
+  const photoPlan = {
+    character: { key: 'character', kind: 'character', label: 'June', prompt: 'June portrait', deps: [], refKeys: [] },
+    expressions: { key: 'expressions', kind: 'expressions', label: 'June · moods', prompt: 'moods', deps: ['character'], refKeys: ['character'] },
+    'cast:dad': { key: 'cast:dad', kind: 'cast', castId: 'dad', label: 'Dad', prompt: 'Dad portrait', deps: [], refKeys: [] },
+  };
+  const direction = { protagonist: { name: 'June', description: 'a girl', expressions: ['eyes closed, looking down'], forms: [] },
+    cast: [{ id: 'dad', name: 'Dad', role: 'father', description: 'tall' }], sets: [], tests: [] };
+  const sheet = (status, extra = {}) => ({ id: 'example-project', castAndSets: { revision: 1, status, plan: photoPlan, images: {}, direction, ...extra } });
+
+  it('edits moods, removes a cast member and re-renders one image from its card', async () => {
+    api.regenerateMusicVideoCastAndSets.mockResolvedValue({ project: sheet('imaging', { revision: 2 }) });
+    api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: sheet('review', { revision: 2 }) });
+    render(<Harness initial={sheet('review')} locked={false} />);
+    fireEvent.click(card('June · moods').getByRole('button', { name: 'Edit June · moods' }));
+    const moods = card('June · moods').getByLabelText(/One mood per line/);
+    expect(moods.value).toBe('eyes closed, looking down');
+    fireEvent.change(moods, { target: { value: 'eyes closed, looking down\ncarefree, eyes closed' } });
+    await act(async () => { fireEvent.click(card('June · moods').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project',
+      { protagonist: { expressions: ['eyes closed, looking down', 'carefree, eyes closed'] } }, { silent: true });
+
+    fireEvent.click(card('Dad').getByRole('button', { name: 'Remove Dad' }));
+    await act(async () => { fireEvent.click(card('Dad').getByRole('button', { name: 'Remove Dad from the sheet' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project', { cast: [{ id: 'dad', remove: true }] }, { silent: true });
+
+    await act(async () => { fireEvent.click(card('Dad').getByRole('button', { name: 'Regenerate Dad' })); });
+    expect(api.regenerateMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { keys: ['cast:dad'] }, { silent: true });
+  });
+
+  it('adds another age to the protagonist', async () => {
+    api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: sheet('review', { revision: 2 }) });
+    render(<Harness initial={sheet('failed')} locked={false} />);
+    fireEvent.click(card('June').getByRole('button', { name: 'Add another age' }));
+    fireEvent.change(card('June').getByLabelText('Label'), { target: { value: 'Teen' } });
+    fireEvent.change(card('June').getByLabelText('Age'), { target: { value: '17' } });
+    fireEvent.change(card('June').getByLabelText('How they look at that age'), { target: { value: 'lanky, braces' } });
+    await act(async () => { fireEvent.click(card('June').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenCalledWith('example-project',
+      { protagonist: { forms: [{ label: 'Teen', age: '17', description: 'lanky, braces', hair: '', wardrobe: '' }] } }, { silent: true });
+  });
+
+  it('says a sheet in review predates the story and rebuilds it from the story in one tap', async () => {
+    api.discardMusicVideoCastAndSets.mockResolvedValue({ project: { id: 'example-project' } });
+    api.startMusicVideoCastAndSets.mockResolvedValue({ project: sheet('directing', { revision: 2 }) });
+    const Page = () => {
+      const [value, setValue] = useState(sheet('review'));
+      const actions = useMusicVideoCastAndSets({ project: value, replaceProject: setValue });
+      return <CastSetsStage board={{ project: value, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(),
+        productionReadiness: { castAndSets: { approved: false, stale: null, storyStale: { changedFields: ['story', 'cast guide'] } } }, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
+    };
+    render(<Page />);
+    expect(screen.getByText(/Built before your latest story, cast guide/)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Rebuild from story/ })); });
+    expect(api.discardMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { silent: true });
+    expect(api.startMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', {}, { silent: true });
+    // While the new direction is written, the banner gives way to progress.
+    expect(screen.queryByRole('button', { name: /Rebuild from story/ })).toBeNull();
+  });
+
+  it('hides card actions while working and starts over only after confirming', async () => {
+    const view = render(<Harness initial={sheet('imaging')} locked={false} />);
+    expect(screen.queryByRole('button', { name: 'Regenerate Dad' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Start over/ })).toBeNull();
+    view.unmount();
+    api.discardMusicVideoCastAndSets.mockResolvedValue({ project: { id: 'example-project' } });
+    render(<Harness initial={sheet('failed')} locked={false} />);
+    fireEvent.click(screen.getByRole('button', { name: /Start over/ }));
+    expect(api.discardMusicVideoCastAndSets).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start Cast & Sets over' })); });
+    expect(api.discardMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { silent: true });
+    expect(screen.queryByText('Cast & Sets check-in')).toBeNull();
   });
 });
 

@@ -17,6 +17,9 @@
  *   - physicalDescription — subject description for the portrait render
  *   - portraitStyle       — art/photography direction for the portrait render
  *   - portraitImageUrl    — optional pointer to a generated/chosen portrait
+ *   - SUBMISSION_FIELDS   — the press & submission profile (credit name, bio
+ *                           lengths, statements, links, notes) festival and
+ *                           EPK forms ask for; see lib/artistLimits.js
  *
  * Artists are `db-primary` (PostgreSQL `artists` table) and federate across
  * peers via the per-record peer-sync pipeline (`record kind: artist`, sync
@@ -27,8 +30,11 @@
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { localImageFilename } from '../../lib/localImageFilename.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
-import { NAME_MAX, GENRE_MAX, BIO_MAX, MUSICAL_STYLE_MAX, PHYSICAL_DESCRIPTION_MAX, PORTRAIT_STYLE_MAX, PORTRAIT_IMAGE_URL_MAX } from '../../lib/artistLimits.js';
-export { NAME_MAX, GENRE_MAX, BIO_MAX, MUSICAL_STYLE_MAX, PHYSICAL_DESCRIPTION_MAX, PORTRAIT_STYLE_MAX, PORTRAIT_IMAGE_URL_MAX };
+import {
+  NAME_MAX, GENRE_MAX, BIO_MAX, MUSICAL_STYLE_MAX, PHYSICAL_DESCRIPTION_MAX, PORTRAIT_STYLE_MAX, PORTRAIT_IMAGE_URL_MAX,
+  SUBMISSION_FIELD_SPECS, SUBMISSION_FIELDS,
+} from '../../lib/artistLimits.js';
+export { NAME_MAX, GENRE_MAX, BIO_MAX, MUSICAL_STYLE_MAX, PHYSICAL_DESCRIPTION_MAX, PORTRAIT_STYLE_MAX, PORTRAIT_IMAGE_URL_MAX, SUBMISSION_FIELD_SPECS, SUBMISSION_FIELDS };
 
 export const ARTIST_ID_RE = /^artist-[A-Za-z0-9-]{1,64}$/;
 
@@ -56,6 +62,7 @@ export function sanitizeArtist(raw) {
     portraitStyle: trimTo(raw.portraitStyle, PORTRAIT_STYLE_MAX),
     // Empty string = no portrait chosen; never null so the on-disk shape is stable.
     portraitImageUrl: trimTo(raw.portraitImageUrl, PORTRAIT_IMAGE_URL_MAX),
+    ...Object.fromEntries(SUBMISSION_FIELD_SPECS.map(({ key, max }) => [key, trimTo(raw[key], max)])),
     createdAt,
     updatedAt,
     deleted,
@@ -84,6 +91,7 @@ export function buildArtistRecord(input, { id, now }) {
     physicalDescription: input.physicalDescription || '',
     portraitStyle: input.portraitStyle || '',
     portraitImageUrl: input.portraitImageUrl || '',
+    ...Object.fromEntries(SUBMISSION_FIELDS.map((key) => [key, input[key] || ''])),
     createdAt: now,
     updatedAt: now,
     deleted: false,
@@ -95,6 +103,7 @@ export function buildArtistRecord(input, { id, now }) {
 // LWW/tombstone trio, and `createdAt` are server-owned / structural.
 const PATCHABLE = [
   'name', 'genre', 'bio', 'musicalStyle', 'physicalDescription', 'portraitStyle', 'portraitImageUrl',
+  ...SUBMISSION_FIELDS,
 ];
 
 /**
@@ -125,4 +134,52 @@ export function applyArtistPatch(current, patch = {}) {
   }
   next.updatedAt = new Date().toISOString();
   return sanitizeArtist(next);
+}
+
+const SUBMISSION_SECTIONS = [
+  ['identity', 'Identity'],
+  ['bio', 'Bio'],
+  ['statements', 'Statements'],
+  ['links', 'Links'],
+  ['notes', 'Notes for agents filling forms'],
+];
+
+/**
+ * The artist's press & submission profile as agents and copy buttons read it:
+ * the filled fields, the labels still empty, and a Markdown rendering. Empty
+ * fields are listed as missing, never filled with a guess, so an agent leaves
+ * the matching form field for the human instead of inventing an answer.
+ */
+export function buildSubmissionProfile(artist) {
+  const fields = [
+    { key: 'name', label: 'Artist name', section: 'identity' },
+    { key: 'genre', label: 'Genre', section: 'identity' },
+    ...SUBMISSION_FIELD_SPECS.filter(({ section }) => section === 'identity'),
+    ...SUBMISSION_FIELD_SPECS.filter(({ section }) => section === 'bio'),
+    { key: 'bio', label: 'Full bio', section: 'bio' },
+    ...SUBMISSION_FIELD_SPECS.filter(({ section }) => !['identity', 'bio'].includes(section)),
+  ];
+  const value = (key) => (isStr(artist?.[key]) ? artist[key].trim() : '');
+  const profile = Object.fromEntries(fields.map(({ key }) => [key, value(key)]));
+  // A missing Bandcamp page is a choice, not a gap: links count as one entry,
+  // and the agent notes are optional.
+  const missing = fields.filter(({ key, section }) => !profile[key] && !['links', 'notes'].includes(section)).map(({ label }) => label);
+  if (!fields.some(({ key, section }) => section === 'links' && profile[key])) missing.push('Links');
+  const lines = [
+    `# ${profile.name || 'Artist'} — press & submission profile`,
+    '',
+    `Curated by the artist in PortOS${isStr(artist?.updatedAt) ? `, last edited ${artist.updatedAt}` : ''}. Use this text as written. Leave a form field for the artist when this profile has nothing for it; never invent credits, awards, premieres or rights.`,
+  ];
+  for (const [section, heading] of SUBMISSION_SECTIONS) {
+    const filled = fields.filter((field) => field.section === section && profile[field.key]);
+    if (!filled.length) continue;
+    lines.push('', `## ${heading}`);
+    for (const { key, label } of filled) {
+      const text = profile[key];
+      if (text.includes('\n') || text.length > 160) lines.push('', `### ${label}`, '', text);
+      else lines.push(`- ${label}: ${text}`);
+    }
+  }
+  if (missing.length) lines.push('', '## Not filled in', '', ...missing.map((label) => `- ${label}`));
+  return { artistId: artist?.id || null, name: profile.name, updatedAt: artist?.updatedAt || null, profile, missing, markdown: `${lines.join('\n')}\n` };
 }

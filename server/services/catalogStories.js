@@ -9,7 +9,8 @@
  *
  * Joining a story links the record to it. A music video's cast is its subjects
  * (catalogLinks.js keeps those refs in step with them), so a record joins a
- * video in the video's Creative setup, never here.
+ * video as a subject: it links the unlinked subject named for it, or is added
+ * as a new one (musicVideo/catalogCast.js).
  *
  * `draftStoryMember` sends the user's prompt with the story's context to the
  * provider › model › effort they pick and answers with a preview; it runs only
@@ -27,7 +28,7 @@ import { getIngredient, listIngredients } from './catalogDB/ingredients.js';
 import { linkIngredientToRef } from './catalogDB/refs.js';
 
 export const STORY_KINDS = Object.freeze(['storyboard', 'music-video', 'series']);
-export const JOINABLE_STORY_KINDS = Object.freeze(['storyboard', 'series']);
+export const JOINABLE_STORY_KINDS = Object.freeze(['storyboard', 'music-video', 'series']);
 const STORY_KINDS_SQL = STORY_KINDS.map((kind) => `'${kind}'`).join(', ');
 const MEMBER_CONTEXT_LIMIT = 60;
 
@@ -90,9 +91,13 @@ async function getStory(kind, id) {
   return rows[0] || null;
 }
 
-/** Link a catalog record to a storyboard or series story, in the role its type plays there. */
+/** Link a catalog record to a story, in the role its type plays there (a video casts it as a subject). */
 export async function joinStory(kind, id, ingredientId) {
-  if (kind === 'music-video') throw refuse('Add cast to a music video in its Creative setup.', 'STORY_JOIN_IN_VIDEO', 409);
+  if (kind === 'music-video') {
+    const { addCatalogRecordToVideo } = await import('./musicVideo/catalogCast.js');
+    const { added, linked } = await addCatalogRecordToVideo(id, ingredientId);
+    return { ingredientId, refKind: kind, refId: id, added, linked };
+  }
   if (!JOINABLE_STORY_KINDS.includes(kind)) throw refuse(`Unknown story kind "${kind}".`, 'STORY_KIND_UNKNOWN');
   const [story, ingredient] = await Promise.all([getStory(kind, id), getIngredient(ingredientId)]);
   if (!story) throw refuse('That story no longer exists.', 'NOT_FOUND', 404);
