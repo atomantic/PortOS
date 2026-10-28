@@ -76,7 +76,7 @@ const SECTIONS = [
   { id: 'notes', title: 'Notes for agents', fields: specsIn('notes') },
 ];
 
-function CopyProfileButton({ selected, dirty }) {
+function CopyProfileButton({ selected, dirty, saving }) {
   const [copying, setCopying] = useState(false);
   const copy = async () => {
     setCopying(true);
@@ -91,8 +91,8 @@ function CopyProfileButton({ selected, dirty }) {
     <button
       type="button"
       onClick={copy}
-      disabled={copying || dirty}
-      title={dirty ? 'Save first, so the copy matches what you see' : 'Copy the press & submission profile as Markdown'}
+      disabled={copying || dirty || saving}
+      title={saving ? 'Wait for the save to finish' : dirty ? 'Save first, so the copy matches what you see' : 'Copy the press & submission profile as Markdown'}
       className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50 min-h-[44px]"
     >
       {copying ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />} Copy profile

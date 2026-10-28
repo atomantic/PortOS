@@ -63,4 +63,22 @@ describe('<ArtistsManager> press & submission profile', () => {
     expect(getArtistSubmissionProfile).toHaveBeenCalledWith('artist-1', { silent: true });
     expect(copyToClipboard).toHaveBeenCalledWith('# Nova Vale\n', 'Profile copied');
   });
+
+  it('keeps copying disabled while a save is in flight even if the form matches the old record', async () => {
+    await renderAt('/music/artists/artist-1');
+    let finishSave;
+    updateArtist.mockImplementation((id, patch) => new Promise((resolve) => {
+      finishSave = () => resolve({ ...LEGACY, ...patch, id });
+    }));
+
+    const bio = screen.getByLabelText('Short bio');
+    const copy = screen.getByRole('button', { name: /Copy profile/ });
+    fireEvent.change(bio, { target: { value: 'New bio' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.change(bio, { target: { value: '' } });
+    expect(copy).toBeDisabled();
+
+    await act(async () => { finishSave(); });
+    expect(copy).toBeDisabled(); // The saved record now differs from the current form.
+  });
 });

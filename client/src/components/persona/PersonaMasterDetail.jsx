@@ -295,7 +295,7 @@ export default function PersonaMasterDetail({
                     <button type="button" onClick={() => requestDelete(selected.id)} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-gray-400 hover:text-port-error text-sm"><Trash2 size={14} /> Delete</button>
                   )
                 ) : null}
-                {detailActions && selected && !isCreate ? detailActions({ selected, dirty }) : null}
+                {detailActions && selected && !isCreate ? detailActions({ selected, dirty, saving }) : null}
               </div>
             </div>
           )}
