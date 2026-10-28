@@ -114,6 +114,10 @@ export default function DailyLogTab() {
   const [quickAppend, setQuickAppend] = useState('');
   const [appending, setAppending] = useState(false);
   const [history, setHistory] = useState([]);
+  // 'loading' | 'ready' | 'error' — a failed read must not render as "no entries".
+  const [historyStatus, setHistoryStatus] = useState('loading');
+  const [settingsError, setSettingsError] = useState(false);
+  const historyFailed = historyStatus === 'error';
   const [dictation, setDictation] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState(null);
@@ -201,7 +205,13 @@ export default function DailyLogTab() {
 
   const loadHistory = useCallback(async () => {
     const res = await api.listDailyLogs({ limit: 60 }).catch(() => null);
-    setHistory(res?.records || []);
+    if (!Array.isArray(res?.records)) {
+      // Keep any already-loaded list; only the status flips.
+      setHistoryStatus('error');
+      return;
+    }
+    setHistory(res.records);
+    setHistoryStatus('ready');
   }, []);
 
   const loadSettings = useCallback(async () => {
@@ -212,7 +222,9 @@ export default function DailyLogTab() {
     ]);
     if (s) setSettings(s);
     if (d) setDigestSettings(d);
-    setProviders(p?.providers || (Array.isArray(p) ? p : []));
+    const providerList = p?.providers || (Array.isArray(p) ? p : null);
+    if (providerList) setProviders(providerList);
+    setSettingsError(!s || !d || !providerList);
   }, []);
 
   useEffect(() => { loadEntry(date); }, [date, loadEntry]);
@@ -753,6 +765,9 @@ export default function DailyLogTab() {
                 clearly-marked section of that day&apos;s log. Your typed and dictated text is never
                 changed. Runs only when enabled below.
               </p>
+              {settingsError ? (
+                <ListLoadError what="the digest settings and AI provider list" onRetry={loadSettings} />
+              ) : (<>
               <label htmlFor="digest-enabled" className="flex items-center gap-2 text-xs text-gray-400">
                 <input
                   id="digest-enabled"
@@ -800,13 +815,19 @@ export default function DailyLogTab() {
                   ? `Scheduled drafts will call ${digestProvider.name || digestProvider.id}. Use the Draft action in the toolbar to run it now.`
                   : 'No AI provider selected — drafts are a deterministic structured summary with zero AI calls.'}
               </p>
+              </>)}
             </div>
           </div>
         )}
 
         <div className="flex-1 overflow-auto">
+          {historyFailed && (
+            <div className="p-3">
+              <ListLoadError what="entry history" onRetry={loadHistory} />
+            </div>
+          )}
           {history.length === 0 ? (
-            <div className="p-4 text-xs text-gray-500">No entries yet — start today.</div>
+            historyStatus === 'ready' && <div className="p-4 text-xs text-gray-500">No entries yet — start today.</div>
           ) : (
             <div className="divide-y divide-port-border/50">
               {history.map((h) => {
