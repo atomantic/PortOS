@@ -554,6 +554,33 @@ describe('AgentCard agent ID', () => {
 });
 
 describe('AgentCard responsive header', () => {
+  it('keeps active, confirmation, and resume controls at the 44px minimum', async () => {
+    const runningAgent = { ...agent, status: 'running', completedAt: null };
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <AgentCard agent={runningAgent} liveOutput={[{ line: 'working' }]} onRelaunch={vi.fn()} onPause={vi.fn()} onKill={vi.fn()} />
+        <AgentCard agent={{ ...agent, id: 'paused-agent', status: 'paused' }} paused onResume={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    for (const button of [
+      screen.getAllByRole('button', { name: 'Show' })[0],
+      screen.getByRole('button', { name: "Relaunch this agent's task on a different provider or model" }),
+      screen.getByRole('button', { name: 'Pause agent and preserve worktree' }),
+      screen.getByRole('button', { name: 'Force kill agent (SIGKILL)' }),
+      screen.getByRole('button', { name: "Resume this agent's task on its preserved worktree" }),
+    ]) {
+      expect(button).toHaveClass('min-h-[44px]', 'min-w-[44px]');
+      expect(button.className).not.toMatch(/sm:min-[hw]-0/);
+    }
+
+    await user.click(screen.getByRole('button', { name: 'Force kill agent (SIGKILL)' }));
+    for (const button of [screen.getByRole('button', { name: 'Confirm' }), screen.getByRole('button', { name: 'Cancel' })]) {
+      expect(button).toHaveClass('min-h-[44px]', 'min-w-[44px]');
+    }
+  });
+
   it('reserves readable identity width and lets actions wrap on narrow cards', () => {
     const onDelete = vi.fn();
     const onResume = vi.fn();
