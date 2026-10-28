@@ -26,7 +26,9 @@ export function useCatalogPreviewSequence(sequence) {
   }, [setSequence, sequence]);
 }
 
-export function CatalogImagePreviewProvider({ children, ingredientId, onQuickEditQueued }) {
+// `onVariantSaved(variant, source)` runs after the viewer saves a derived copy
+// (a film look) of the open image, so the page can file it on its record.
+export function CatalogImagePreviewProvider({ children, ingredientId, onQuickEditQueued, onVariantSaved }) {
   const [sequence, setSequence] = useState(null);
   const items = useMemo(() => (sequence?.keys || []).map((key) => catalogImageItem('images', key)).filter(Boolean), [sequence]);
   const galleryResolver = useGalleryPreviewResolver();
@@ -71,7 +73,10 @@ export function CatalogImagePreviewProvider({ children, ingredientId, onQuickEdi
           onSendToVideo: actions.handleSendToVideo,
           onSendTo3d: actions.handleSendTo3d,
         } : {})}
-        onFilmLookComplete={actions.handleFilmLookComplete}
+        onFilmLookComplete={async (variant) => {
+          await actions.handleFilmLookComplete(variant);
+          if (variant?.filename && preview?.filename) await onVariantSaved?.(variant, preview);
+        }}
         quickEditParams={activeIngredientId ? { catalogIngredientId: activeIngredientId, catalogMediaKind: 'reference' } : undefined}
         onQuickEditQueued={activeOnQuickEditQueued}
       />

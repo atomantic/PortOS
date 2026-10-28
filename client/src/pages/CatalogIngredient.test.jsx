@@ -81,6 +81,7 @@ vi.mock('../services/apiCatalog', () => ({
   previewCatalogSheet: vi.fn(async () => ({ preview: null })),
   renderCatalogSheet: vi.fn(),
   refineCatalogMedia: vi.fn(async () => ({ sentPrompt: 'Example reference refinement' })),
+  updateCatalogIngredientMediaLibrary: vi.fn(async () => ({})),
 }));
 // Universe-delegated sheet renders announce completion on this broadcast.
 const { socketHandlers } = vi.hoisted(() => ({ socketHandlers: new Map() }));
@@ -91,7 +92,7 @@ vi.mock('../services/socket', () => ({
   },
 }));
 
-vi.mock('../services/apiSystem', () => ({ generateImage: vi.fn(), getSelfInstance: vi.fn(async () => ({ instanceId: 'canonical-owner' })), getInstances: vi.fn(async () => ({ peers: [{ instanceId: 'canonical-owner', host: 'canonical.example', port: 5555 }] })) }));
+vi.mock('../services/apiSystem', () => ({ generateImage: vi.fn(), getSettings: vi.fn(async () => ({})), updateSettings: vi.fn(async () => ({})), getSelfInstance: vi.fn(async () => ({ instanceId: 'canonical-owner' })), getInstances: vi.fn(async () => ({ peers: [{ instanceId: 'canonical-owner', host: 'canonical.example', port: 5555 }] })) }));
 vi.mock('../services/apiCatalogIdentity', () => ({
   listCatalogIdentities: vi.fn(async () => ({ items: [], nextOffset: null })), getCatalogIdentity: vi.fn(), acceptCatalogIdentity: vi.fn(), abortCatalogIdentity: vi.fn(),
 }));
@@ -132,6 +133,7 @@ vi.mock('../services/apiImageVideo', () => ({
   getGalleryImages: vi.fn(async () => []),
   listMediaGalleryPage: vi.fn(async () => ({ items: [] })),
   listImageGalleryPage: vi.fn(async () => ({ items: [], total: 0, offset: 0, limit: 60 })),
+  applyImageFilmLook: vi.fn(async () => ({ filename: 'one-look.png' })),
   // Echo the request as the "sent" prompt, with its declared additions as chips.
   previewImagePrompt: vi.fn(async (body) => ({
     sentPrompt: body.prompt,
@@ -1785,4 +1787,27 @@ it('adds a card with rendering animation placeholder when editing an image from 
 
   // Pending card is cleared upon completion
   await waitFor(() => expect(screen.queryByTestId('library-row-pending')).not.toBeInTheDocument());
+});
+
+it('files a film-look copy of a record image in its references with the source details', async () => {
+  const { applyImageFilmLook } = await import('../services/apiImageVideo');
+  const { attachCatalogIngredientMedia, updateCatalogIngredientMediaLibrary } = await import('../services/apiCatalog');
+  attachCatalogIngredientMedia.mockReset().mockResolvedValue({});
+  updateCatalogIngredientMediaLibrary.mockClear();
+  getCatalogIngredientDetails.mockResolvedValue({
+    ...detailsOf(CHAR_FIXTURE),
+    media: [{ mediaKey: 'one.png', kind: 'reference', library: { variant: { age: 30, formId: 'canonical' }, tags: ['coat'] } }],
+  });
+
+  await renderPage('/casting/cat-chr-1/references?preview=image%3Aone.png');
+  const dialog = await screen.findByRole('dialog');
+  await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Film look' })); });
+  const presets = within(dialog).getByRole('group', { name: 'Film look presets' });
+  await act(async () => { fireEvent.click(within(presets).getAllByRole('button').find((b) => b.getAttribute('aria-pressed') === 'false')); });
+  await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: /Save filtered copy/ })); });
+
+  await waitFor(() => expect(applyImageFilmLook).toHaveBeenCalledWith('one.png', expect.any(Object), { silent: true }));
+  await waitFor(() => expect(attachCatalogIngredientMedia).toHaveBeenCalledWith('cat-chr-1', { mediaKey: 'one-look.png', kind: 'reference' }, { silent: true }));
+  await waitFor(() => expect(updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith('cat-chr-1',
+    { mediaKey: 'one-look.png', kind: 'reference', variant: { age: 30, formId: 'canonical' }, tags: ['coat'] }, { silent: true }));
 });
