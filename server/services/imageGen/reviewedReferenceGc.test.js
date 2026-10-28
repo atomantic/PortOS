@@ -39,6 +39,15 @@ describe('reviewed reference collection', () => {
     expect(await sweepReviewedReferences({ now: future })).toEqual({ deleted: 0 });
   });
 
+  it('holds a retained output even if its provenance sidecar is missing', async () => {
+    const id = await stageReviewedReference(randomUUID(), source, digest);
+    await markSnapshotState(id, 'settled');
+    await writeFile(join(root, 'images', `${id.jobId}.png`), 'retained output');
+    expect(await sweepReviewedReferences({ now: future })).toEqual({ deleted: 0 });
+    await unlink(join(root, 'images', `${id.jobId}.png`));
+    expect(await sweepReviewedReferences({ now: future })).toEqual({ deleted: 1 });
+  });
+
   it('retains a replaced file even with matching bytes and cannot adopt it on replay', async () => {
     const id = await stageReviewedReference(randomUUID(), source, digest);
     const path = join(root, 'image-refs', id.filename);

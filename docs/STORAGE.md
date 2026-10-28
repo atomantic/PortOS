@@ -1344,7 +1344,7 @@ are included in backups; their ownership records and execution settings do not f
 The snapshot is retained while dispatch or provider settlement is uncertain,
 including an interrupted local child handoff. A completed image's sidecar names
 its snapshot as input provenance. The image-reference collector scans gallery
-sidecars and durable queue state before collecting an old snapshot; it requires
+sidecars and durable queue state before collecting an old snapshot, and retains it when its job's output still exists without a sidecar; it requires
 matching ownership and either a never-dispatched reservation or a persisted
 settlement. A durable deletion intent permits an interrupted collection to
 resume. Unreadable, mismatched or replaced records and files are preserved for

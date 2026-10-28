@@ -30,9 +30,13 @@ export function sweepReviewedReferences({ now = Date.now(), maxAgeMs = ORPHAN_RE
       if (!validSnapshotIdentity(record) || name !== `snapshot-${record.snapshotId}.json`
         || !['reserved', 'settled', 'deleting'].includes(record.state) || isSnapshotStaging(record.snapshotId)) continue;
       if (referenced.has(record.filename)) continue;
+      // A published or partially retained output without its sidecar cannot
+      // prove that provenance is absent. Hold the input until it is resolved.
+      const output = await lstat(join(PATHS.images, `${record.jobId}.png`)).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error));
+      if (output) continue;
       const jobs = queue.value.jobs;
       if (jobs.some(job => job?.id === record.jobId && ['queued', 'running'].includes(job.status))) continue;
-      if (jobs.some(job => job?.id !== record.jobId && [job?.params?.initImagePath, ...(Array.isArray(job?.params?.reviewedReferenceRequest?.referenceImagePaths) ? job.params.reviewedReferenceRequest.referenceImagePaths : []), ...(Array.isArray(job?.params?.referenceImagePaths) ? job.params.referenceImagePaths : [])]
+      if (jobs.some(job => job?.id !== record.jobId && [job?.params?.initImagePath, job?.params?.sourceImagePath, job?.params?.sourceImageFile, job?.params?.lastImagePath, job?.params?.lastImageFile, ...(Array.isArray(job?.params?.remoteMedia?.inputAssets) ? job.params.remoteMedia.inputAssets.map(asset => asset?.path) : []), ...(Array.isArray(job?.params?.reviewedReferenceRequest?.referenceImagePaths) ? job.params.reviewedReferenceRequest.referenceImagePaths : []), ...(Array.isArray(job?.params?.referenceImagePaths) ? job.params.referenceImagePaths : [])]
         .some(input => typeof input === 'string' && basename(input) === record.filename))) continue;
       const imagePath = join(PATHS.imageRefs, record.filename);
       const info = await lstat(imagePath).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error));

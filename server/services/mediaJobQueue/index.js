@@ -2258,7 +2258,9 @@ async function assertMusicVideoJobPolicy(kind, params) {
 
 export async function enqueueJob(job) {
   const params = job.params || {};
-  const inputs = [params.initImagePath, ...(Array.isArray(params.referenceImagePaths) ? params.referenceImagePaths : [])];
+  const inputs = [params.initImagePath, params.sourceImagePath, params.sourceImageFile, params.lastImagePath, params.lastImageFile,
+    ...(Array.isArray(params.referenceImagePaths) ? params.referenceImagePaths : []),
+    ...(Array.isArray(params.remoteMedia?.inputAssets) ? params.remoteMedia.inputAssets.map(asset => asset?.path) : [])];
   if (!params.reviewedReferenceDigest && !inputs.some(path => typeof path === 'string' && path.includes('snapshot-'))) return enqueueJobLocked(job);
   const { withReviewedSnapshotLock } = await import('../imageGen/reviewedReference.js');
   return withReviewedSnapshotLock(() => enqueueJobLocked(job));
