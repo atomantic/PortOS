@@ -42,7 +42,7 @@ describe.skipIf(!chrome)('Catalog gallery picker touch targets in Chromium', () 
           configureServer(vite) {
             vite.middlewares.use('/gallery-picker-test', async (_req, res) => {
               res.setHeader('Content-Type', 'text/html');
-              res.end(await vite.transformIndexHtml('/gallery-picker-test', '<meta name="viewport" content="width=device-width,initial-scale=1"><div id="root"></div><script type="module" src="/gallery-picker-fixture.jsx"></script>'));
+              res.end(await vite.transformIndexHtml('/gallery-picker-test', '<html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module" src="/gallery-picker-fixture.jsx"></script></body></html>'));
             });
           },
         }],
@@ -58,7 +58,7 @@ describe.skipIf(!chrome)('Catalog gallery picker touch targets in Chromium', () 
     page.setDefaultTimeout(5000);
     try {
       await page.goto(`${fixture.origin}gallery-picker-test`, { waitUntil: 'domcontentloaded' });
-      await page.waitForFunction(() => document.querySelector('button')?.textContent.includes('Attach'));
+      await page.getByRole('button', { name: 'Attach' }).first().waitFor({ state: 'attached' });
       expect(await page.evaluate(() => window.innerWidth)).toBe(width);
       const session = await context.newCDPSession(page);
       await session.send('Emulation.setEmulatedMedia', { features: [{ name: 'hover', value: 'none' }, { name: 'pointer', value: 'coarse' }] });
