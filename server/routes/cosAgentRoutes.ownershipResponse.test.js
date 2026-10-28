@@ -87,6 +87,20 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+it('requires a reserved release candidate and rejects caller-supplied paths at the HTTP boundary', async () => {
+  const id = 'agent-synthetic';
+  fixture.state.agents[id] = { id, status: 'running', startedAt: new Date().toISOString(),
+    metadata: { taskAnalysisType: 'do-release', isWorktree: false, workspacePath: '/synthetic/repo' } };
+  const url = `${fixture.apiBase}/api/cos/agents/${id}/release-candidate`;
+  const headers = { Authorization: 'Bearer synthetic-test-token', 'Content-Type': 'application/json' };
+  const missing = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ action: 'capture' }) });
+  expect(await missing.json()).toEqual({ captured: false, reason: 'candidate-reservation-missing' });
+  const forged = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ action: 'capture', path: '/other/worktree' }) });
+  expect(forged.status).toBe(400);
+  const unauthorized = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'capture' }) });
+  expect(unauthorized.status).toBe(401);
+});
+
 // Exercise the command handed to a coordinator, including shell quoting and
 // curl's output boundary. Split the HTTP header delimiter as bytes; the body
 // is never trimmed, concatenated with diagnostics, or repaired before parsing.

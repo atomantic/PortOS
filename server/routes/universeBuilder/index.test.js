@@ -1155,14 +1155,16 @@ describe('universe-builder routes', () => {
       }));
     });
 
-    it('200s with { jobId, generationId } and forwards overrides to the service', async () => {
+    // Overrides are the user's words: forwarded untrimmed, and an empty
+    // negative reaches the service as the user's "no negatives" choice.
+    it('200s with { jobId, generationId } and forwards overrides to the service as typed', async () => {
       const res = await request(buildApp())
         .post('/api/universe-builder/u-1/characters/c-1/render-reference-sheet')
-        .send({ overridePrompt: 'custom prompt', modelId: 'flux2-klein-9b' });
+        .send({ overridePrompt: '  custom prompt\n', overrideNegativePrompt: '', modelId: 'flux2-klein-9b' });
       expect(res.status).toBe(200);
       expect(renderCharacterReferenceSheetMock).toHaveBeenCalledWith(
         'u-1', 'c-1',
-        expect.objectContaining({ overridePrompt: 'custom prompt', modelId: 'flux2-klein-9b' }),
+        expect.objectContaining({ overridePrompt: '  custom prompt\n', overrideNegativePrompt: '', modelId: 'flux2-klein-9b' }),
       );
       expect(res.body.jobId).toBe('job-c-1');
       // generationId is now an alias for jobId (client back-compat).

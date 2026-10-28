@@ -28,6 +28,14 @@ export const draftCatalogStoryMember = (body, options) =>
 export const joinCatalogStory = (kind, id, ingredientId, options) =>
   request(`/catalog/stories/${enc(kind)}/${enc(id)}/members`, { method: 'POST', body: JSON.stringify({ ingredientId }), ...options });
 
+// A music video's subjects with their linked record or a suggested one (same
+// name, the age form "(17)" names); linking sets or clears ingredientId + form.
+export const listVideoSubjectLinks = (projectId, type, options) =>
+  request(`/catalog/stories/music-video/${enc(projectId)}/subjects${type ? `?${new URLSearchParams({ type })}` : ''}`, options);
+
+export const linkVideoSubjects = (projectId, links, options) =>
+  request(`/catalog/stories/music-video/${enc(projectId)}/subjects/link`, { method: 'POST', body: JSON.stringify({ links }), ...options });
+
 // --- Scraps -------------------------------------------------------------
 
 export const createCatalogScrap = (body = {}, options) =>

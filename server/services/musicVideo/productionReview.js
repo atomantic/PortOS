@@ -114,6 +114,19 @@ export function seedArtDraft(project, stage = project.castAndSets) {
 }
 
 /**
+ * The art-direction guides the director wrote (or accepted from a story
+ * draft): cast, environments, visual language. A field still holding the text
+ * a Cast & Sets approval seeded is the sheet's own echo, so it is left out.
+ */
+export function directorArtGuides(project) {
+  const draft = project?.productionReview?.draft || {};
+  const seeded = project?.productionReview?.seededDraft || {};
+  return Object.fromEntries(['cast', 'environments', 'visualLanguage']
+    .filter((key) => text(draft[key]) && seeded[key] !== hash(draft[key]))
+    .map((key) => [key, draft[key].trim()]));
+}
+
+/**
  * What one Board shot renders from: its prompts and direction, its span and
  * lyric, its selected frames and performance setup, and its storyboard row.
  * Automation may not change any of it on a locked shot (preserveAutomatedShotLocks).
@@ -449,7 +462,7 @@ const storyboardApprovalCurrent = (approval, basis) => !!approval
 
 // A subject's catalog link and keep-local choice are bookkeeping saved after an
 // approval (catalogCast.js), never a change to who or what was approved.
-const CATALOG_SUBJECT_KEYS = ['ingredientId', 'localOnly'];
+const CATALOG_SUBJECT_KEYS = ['ingredientId', 'castForm', 'localOnly'];
 const withoutCatalogFields = subjects => (subjects || []).map(s => (s && typeof s === 'object' ? Object.fromEntries(Object.entries(s).filter(([k]) => !CATALOG_SUBJECT_KEYS.includes(k))) : s));
 const approvalConcept = concept => (concept?.subjects ? { ...concept, subjects: withoutCatalogFields(concept.subjects) } : concept);
 // Restoring approved subjects keeps the catalog fields saved since.
@@ -600,8 +613,38 @@ export function castAndSetsApprovalInputs(project) {
   };
 }
 
+const STORY_INPUT_LABELS = { story: null, 'cast guide': 'cast', 'environment guide': 'environments', 'visual language': 'visualLanguage' };
+
 /**
- * The Cast & Sets check-in as an approval: `{ approved, stale }`. An approved
+ * The director's own words a Cast & Sets direction reads: the story and the
+ * guides they wrote (seeded echoes excluded), hashed per label. Stored on the
+ * stage as `directedInputs` each time the direction is written.
+ */
+export function castAndSetsStoryInputs(project) {
+  const guides = directorArtGuides(project);
+  return Object.fromEntries(Object.entries(STORY_INPUT_LABELS)
+    .map(([label, key]) => [label, h(key ? guides[key] || null : text(project?.storySummary) ? project.storySummary.trim() : null)]));
+}
+
+/**
+ * `{ changedFields }` when the story or a director-written guide moved since
+ * the direction was written; null otherwise. A direction written before the
+ * story was recorded never read it, so a sheet in review (or failed) with no
+ * `directedInputs` is out of date on every story input that now has text. A
+ * legacy approved sheet is left alone: its approval already names what moved.
+ */
+function castAndSetsStoryStale(project) {
+  const stage = project.castAndSets;
+  if (!stage?.direction || stage.status === 'skipped') return null;
+  const now = castAndSetsStoryInputs(project);
+  const empty = h(null);
+  const changedFields = stage.directedInputs ? changedInputs(stage.directedInputs, now)
+    : stage.status === 'approved' ? [] : Object.keys(now).filter(label => now[label] !== empty);
+  return changedFields.length ? { changedFields } : null;
+}
+
+/**
+ * The Cast & Sets check-in as an approval: `{ approved, stale, storyStale }`. An approved
  * stage stays approved when its inputs move (its references still condition
  * the frames) but reports what changed since. A stage approved before inputs
  * were recorded has no basis to compare and reports no staleness.
@@ -609,9 +652,10 @@ export function castAndSetsApprovalInputs(project) {
 function castAndSetsApproval(project) {
   const stage = project.castAndSets;
   const approved = stage?.status === 'approved';
-  if (!approved || !stage.approvedInputs) return { approved, stale: null };
+  const storyStale = castAndSetsStoryStale(project);
+  if (!approved || !stage.approvedInputs) return { approved, stale: null, storyStale };
   const changedFields = changedInputs(stage.approvedInputs, castAndSetsApprovalInputs(project));
-  return { approved, stale: changedFields.length ? withRevertible({ approvedAt: stage.approvedAt || null, changedFields }, stage.approvedValues) : null };
+  return { approved, stale: changedFields.length ? withRevertible({ approvedAt: stage.approvedAt || null, changedFields }, stage.approvedValues) : null, storyStale };
 }
 
 // A treatment's per-shot entry and exit (scene.direction, treatment.js), as one storyboard transition line.

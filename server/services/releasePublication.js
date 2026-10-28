@@ -61,6 +61,7 @@ export async function verifyAgentReleasePublication(agentId, body) {
     || pr.base?.ref !== 'release' || pr.base?.repo?.full_name !== repository
     || pr.head?.repo?.full_name !== repository) refuse('Promotion must be a merged same-repository release PR');
   const candidateHead = requireSha(pr.head.sha);
+  if (typeof pr.head.ref !== 'string' || !pr.head.ref) refuse('Promotion candidate branch is unavailable');
   const promotionMerge = requireSha(pr.merge_commit_sha);
   const candidate = await readCandidate(candidateHead, cwd);
   if (candidate.version !== input.version) refuse('Candidate version differs from the requested publication');
@@ -94,6 +95,7 @@ export async function verifyAgentReleasePublication(agentId, body) {
   const identity = createHash('sha256').update(JSON.stringify([origin.host, repository, tag, tagCommit, tree])).digest('hex');
   const receipt = {
     status: 'verified', synchronizationHandoffVersion: 1, identity, repository, version: input.version, candidateHead,
+    candidateBranch: pr.head.ref,
     cutoff: candidate.cutoff, pin: candidate.pin, releaseBase: candidate.releaseBase,
     previousCommit: candidate.previousCommit, previousTag: candidate.previousTag,
     promotionPrNumber: input.promotionPrNumber, promotionMerge, tag, tagCommit, tagTree,

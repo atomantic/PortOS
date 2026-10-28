@@ -12,6 +12,12 @@ export default function SceneCastVariant({ project, scene, castMedia = null, onE
   const cast = (project?.concept?.subjects || []).filter((s) => s?.kind === 'character' && s.ingredientId);
   if (!cast.length) return null;
   const variant = scene.characterVariant || null;
+  // Several subjects can be one cast member at different ages ("Nora (17)", "Nora (7)"):
+  // each is its own option, and picking one starts at its linked age.
+  const picked = variant
+    ? cast.find((s) => s.ingredientId === variant.ingredientId && s.castForm?.age === variant.age)
+      || cast.find((s) => s.ingredientId === variant.ingredientId) || null
+    : null;
   const id = (name) => `mv-scene-${scene.sceneId}-cast-${name}`;
   // A shot's hand-picked references keep their guide ids only for the variant that picked them.
   // A pick of only guides returns to Auto (null), so the new variant's guides lead; [] would send nothing.
@@ -39,11 +45,15 @@ export default function SceneCastVariant({ project, scene, castMedia = null, onE
       <legend className="sr-only">Cast member in this shot</legend>
       <div className="flex min-w-0 flex-col">
         <label htmlFor={id('member')} className="text-[11px] text-port-text-muted">Cast guides</label>
-        <select id={id('member')} className={`${FIELD} max-w-full`} value={variant?.ingredientId || ''}
-          onChange={(e) => save(e.target.value ? { ingredientId: e.target.value } : null)}>
+        <select id={id('member')} className={`${FIELD} max-w-full`} value={picked?.id || (variant ? 'removed' : '')}
+          onChange={(e) => {
+            const subject = cast.find((s) => s.id === e.target.value);
+            if (!e.target.value) save(null);
+            else if (subject) save({ ingredientId: subject.ingredientId, ...(Number.isInteger(subject.castForm?.age) ? { age: subject.castForm.age } : {}) });
+          }}>
           <option value="">None</option>
-          {cast.map((s) => <option key={s.ingredientId} value={s.ingredientId}>{s.name}</option>)}
-          {variant && !cast.some((s) => s.ingredientId === variant.ingredientId) && <option value={variant.ingredientId}>Removed cast member</option>}
+          {cast.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          {variant && !picked && <option value="removed">Removed cast member</option>}
         </select>
       </div>
       {variant && (

@@ -8,6 +8,7 @@ import { materializeGitRepo } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { storedForm } from '../lib/cosTaskRows.js';
+import { PREGATE_REPORT_PATH, writePregateReport } from '../../scripts/lib/pregateReport.js';
 const fixture = vi.hoisted(() => ({ root: null, app: null, forge: null, task: null, agents: {}, schedule: null, raceTaskEdit: false, inventoryAlias: false }));
 async function persistTask() {
   fixture.task = { ...storedForm(fixture.task, 'user'), taskType: 'user' };
@@ -144,8 +145,12 @@ describe('completion to in-place retirement (real Git and persisted service stat
       metadata: { isWorktree: true, sourceWorkspace: repo, workspacePath: path, worktreeBranch: branch, prCompletionPolicy: 'review-then-merge' } };
     await execGit(['merge', '--ff-only', branch], repo);
     const defaultHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
-    await writeFile(join(repo, '.git', 'info', 'exclude'), 'ignored.txt\n');
-    await writeFile(join(path, 'ignored.txt'), 'private preserved bytes\n');
+    await writeFile(join(repo, '.git', 'info', 'exclude'), '/.cache/\n');
+    // The mandatory pre-push gate leaves runtime evidence behind. A neighboring
+    // ignored file is still unique content and must hold retirement in place.
+    writePregateReport(path, { version: 3, validationMode: 'focused', passed: true });
+    const privatePath = join(path, '.cache/pregate/private-notes.txt');
+    await writeFile(privatePath, 'private preserved bytes\n');
     fixture.forge = { repository: 'github.com/example/repo', prUrl: 'https://github.com/example/repo/pull/42', prHead: head, changeBase: (await execGit(['rev-parse', `${head}^`], repo)).stdout.trim(), firstCommit: head,
       mergeCommit: defaultHead, defaultBranch: 'main', defaultHead, remoteHead: null, changedPaths: ['feature.txt'] };
     fixture.app = { id: 'app-completion', repoPath: repo }; fixture.schedule = { tasks: {}, executions: {} };
@@ -196,7 +201,7 @@ describe('completion to in-place retirement (real Git and persisted service stat
       expect(fixture.task.metadata.deliveryRecovery).toBeUndefined();
       expect((await getAgentRecord(agent.id)).metadata.repoStateVerification.status).toBe('pending');
       expect((await execGit(['rev-parse', 'HEAD'], path)).stdout.trim()).toBe(head);
-      expect(await readFile(join(path, 'ignored.txt'), 'utf8')).toBe('private preserved bytes\n');
+      expect(await readFile(privatePath, 'utf8')).toBe('private preserved bytes\n');
       expect(await getBranchReconcileOutcome(fixture.app.id)).toBeNull();
       return;
     }
@@ -210,7 +215,11 @@ describe('completion to in-place retirement (real Git and persisted service stat
     const { buildRenewal } = await import('./cosTaskClaim.js');
     Object.assign(fixture.task.metadata, buildRenewal(fixture.task.metadata, 'fixture-instance'));
     await writeFile(join(fixture.root, 'task.json'), JSON.stringify(fixture.task));
-    // The merged checkout's ignored file is disposable output, not a hold.
+    // Merge evidence cannot account for the only copy of an ignored file.
+    expect(await verify()).toMatchObject({ verified: false, skipReason: 'checkout-ignored-payload-unverified' });
+    expect(await readFile(privatePath, 'utf8')).toBe('private preserved bytes\n');
+    await rm(privatePath);
+    expect(existsSync(join(path, PREGATE_REPORT_PATH))).toBe(true);
     const results = await Promise.all([verify(), verify()]); expect(results).toMatchObject([{ verified: true, skipReason: null }, { verified: true, skipReason: null }]);
     const outcome = await getBranchReconcileOutcome(fixture.app.id); expect(outcome.retirementObligations).toEqual([]);
     expect(outcome.retired).toHaveLength(1); const receipt = outcome.retired[0];
@@ -220,7 +229,7 @@ describe('completion to in-place retirement (real Git and persisted service stat
     expect((await listWorktrees(repo)).some(tree => resolve(tree.path) === resolve(path))).toBe(false);
     expect((await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
     expect(JSON.parse(await readFile(join(fixture.root, 'task.json'), 'utf8')).status).toBe('completed');
-    expect(existsSync(join(path, 'ignored.txt'))).toBe(false);
+    expect(existsSync(join(path, PREGATE_REPORT_PATH))).toBe(false);
     await verify(); expect((await getBranchReconcileOutcome(fixture.app.id)).retired).toHaveLength(1);
   // Completion capture, held retirement, recovery and fresh receipt proof are
   // separate real-Git workflows. Keep their existing public-boundary budget.

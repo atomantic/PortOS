@@ -129,6 +129,13 @@ export const musicVideoConceptSchema = z.object({
     // The catalog record this subject was cast from (Casting / Environments /
     // Objects). The project keeps its own name and description snapshot.
     ingredientId: z.string().max(128).optional(),
+    // The linked record's age or look this subject shows (a snapshot of the
+    // catalog form; `age` only when the form states a whole number).
+    castForm: z.object({
+      id: z.string().regex(/^[A-Za-z0-9_-]{1,24}$/),
+      label: z.string().max(80),
+      age: z.number().int().min(0).max(150).optional(),
+    }).strict().optional(),
     // Kept in this video only: never offered for saving to the catalog.
     localOnly: z.boolean().optional(),
   }).strict()).max(24).optional(),
@@ -1329,13 +1336,15 @@ export const musicVideoCastAndSetsStartSchema = z.object({
 }).strict();
 
 // Regenerate with notes. Omitted notes = the open notes on the sheet. A
-// `target` names an image (`character`, `expressions`, `looks`, `cast:<id>`, `set:<id>`,
-// `test:<n>`); any other note revises the direction.
+// `target` names an image (`character`, `expressions`, `looks`, `form:<id>`, `cast:<id>`, `set:<id>`,
+// `test:<n>`); any other note revises the direction. `keys` re-renders just
+// those images (and what depends on them), leaving open sheet notes open.
 export const musicVideoCastAndSetsRegenerateSchema = z.object({
   notes: z.array(z.object({
     text: devArtifactNoteText,
     target: devArtifactNoteTarget,
   }).strict()).min(1).max(50).optional(),
+  keys: z.array(z.string().min(1).max(80)).min(1).max(40).optional(),
   providerId: z.string().min(1).max(64).optional(),
   model: z.string().min(1).max(200).optional(),
   effort: z.enum(EFFORT_LEVELS).optional(),
@@ -1351,8 +1360,9 @@ export const musicVideoCastAndSetsFeedbackSchema = z.object({
   effort: z.enum(EFFORT_LEVELS).optional(),
 }).strict();
 
-// Direct edits to a procedural direction. A present text field replaces the
-// current value (empty clears it); an absent one keeps it.
+// Direct edits to a direction. A present text field replaces the current value
+// (empty clears it); an absent one keeps it. List items are patched by id (or
+// a test by its 1-based index); `remove: true` drops one.
 const castSetsText = (max) => z.string().max(max);
 export const musicVideoCastAndSetsDirectionEditSchema = z.object({
   protagonist: z.object({
@@ -1362,7 +1372,43 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     palette: castSetsText(300).optional(),
     movement: castSetsText(1000).optional(),
     expressions: z.array(castSetsText(300)).max(8).optional(),
+    name: castSetsText(120).optional(),
+    description: castSetsText(1000).optional(),
+    face: castSetsText(1000).optional(),
+    hair: castSetsText(1000).optional(),
+    signature: castSetsText(1000).optional(),
+    gesture: castSetsText(1000).optional(),
+    forms: z.array(z.object({
+      id: z.string().max(64).optional(),
+      label: castSetsText(120),
+      age: castSetsText(40).optional(),
+      description: castSetsText(1000),
+      hair: castSetsText(1000).optional(),
+      wardrobe: castSetsText(1000).optional(),
+    }).strict()).max(3).optional(),
   }).strict().optional(),
+  looks: z.array(z.object({
+    name: castSetsText(120).min(1),
+    description: castSetsText(1000).min(1),
+    chapters: castSetsText(300).optional(),
+  }).strict()).min(1).max(4).optional(),
+  cast: z.array(z.object({
+    id: z.string().min(1).max(64),
+    remove: z.literal(true).optional(),
+    name: castSetsText(120).optional(),
+    role: castSetsText(120).optional(),
+    description: castSetsText(1000).optional(),
+    face: castSetsText(1000).optional(),
+    hair: castSetsText(1000).optional(),
+    wardrobe: castSetsText(1000).optional(),
+  }).strict()).max(4).optional(),
+  tests: z.array(z.object({
+    index: z.number().int().min(1).max(4),
+    remove: z.literal(true).optional(),
+    action: castSetsText(1000).optional(),
+    caption: castSetsText(300).optional(),
+    look: castSetsText(120).optional(),
+  }).strict()).max(4).optional(),
   world: z.object({
     layout: castSetsText(1000).optional(),
     depth: castSetsText(500).optional(),
@@ -1372,12 +1418,17 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
   }).strict().optional(),
   sets: z.array(z.object({
     id: z.string().min(1).max(64),
+    remove: z.literal(true).optional(),
+    name: castSetsText(120).optional(),
+    description: castSetsText(1000).optional(),
+    lighting: castSetsText(300).optional(),
     imageRole: z.enum(['background', 'texture', 'decoration', 'cutout']).optional(),
     setReference: musicVideoSceneSetReferenceSchema.nullable().optional(),
   }).strict()).max(8).optional(),
 }).strict().refine((edits) => {
   if (!edits.sets?.some((set) => Object.hasOwn(set, 'setReference'))) return true;
-  return !edits.protagonist && !edits.world && edits.sets.every((set) => Object.hasOwn(set, 'setReference') && !Object.hasOwn(set, 'imageRole'));
+  return !edits.protagonist && !edits.world && !edits.looks && !edits.cast && !edits.tests
+    && edits.sets.every((set) => Object.keys(set).every((key) => key === 'id' || key === 'setReference'));
 }, 'Save greybox selections separately from direction edits.');
 
 // The cutting room floor outro (lib/musicVideoStatsOutro.js): an optional scene

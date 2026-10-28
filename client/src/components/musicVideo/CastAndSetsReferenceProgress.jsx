@@ -1,6 +1,7 @@
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { formatCount } from '../../utils/formatters';
 import { normalizeImage } from '../media/normalize.js';
+import CastAndSetsItemActions from './CastAndSetsItemActions.jsx';
 
 const imageSource = ({ kind, filename }) => `/data/${kind === 'image-ref' ? 'image-refs' : 'images'}/${encodeURIComponent(filename)}`;
 // Reference sheets live under /data/image-refs, so they get their own key
@@ -41,7 +42,7 @@ export function castAndSetsPreviewItems(stage) {
   return items;
 }
 
-function ReferenceCard({ item, stage, onOpenPreview }) {
+function ReferenceCard({ item, stage, onOpenPreview, actions }) {
   const image = stage.images?.[item.key] || {};
   // Old images remain visible during regeneration, but only a persisted done
   // record can bypass the new job's subscription.
@@ -113,16 +114,21 @@ function ReferenceCard({ item, stage, onOpenPreview }) {
           </div>
         )}
       </details>
+      {actions && <CastAndSetsItemActions item={item} direction={stage.direction} {...actions} />}
     </article>
   );
 }
 
-export default function CastAndSetsReferenceProgress({ stage, onOpenPreview }) {
+/**
+ * `actions` ({ busy, onRegenerate, onEdit }) adds each card's Regenerate / Edit /
+ * Remove; the check-in passes it only while the stage is idle.
+ */
+export default function CastAndSetsReferenceProgress({ stage, onOpenPreview, actions = null }) {
   const items = Object.values(stage.plan || {});
   if (!items.length) return null;
   return (
     <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-2" aria-label="Cast and set references">
-      {items.map((item) => <ReferenceCard key={item.key} item={item} stage={stage} onOpenPreview={onOpenPreview} />)}
+      {items.map((item) => <ReferenceCard key={item.key} item={item} stage={stage} onOpenPreview={onOpenPreview} actions={actions} />)}
     </div>
   );
 }

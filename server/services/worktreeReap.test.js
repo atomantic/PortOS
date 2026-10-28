@@ -613,17 +613,23 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     expect(branches).toContain('pending-br');
   });
 
-  // #12682: the archive ran inside the shared ownership lock and starved every
-  // claim-ownership check queued behind it.
-  // Merged work lives on the default branch; ignored build output is disposable.
-  it('reaps a merged worktree holding only ignored build output', async () => {
+  it('keeps ignored user data in a merged checkout but removes a recognized test cache', async () => {
     const mergedPath = await addWorktree(dir, 'ignored-output', 'ignored-output-br');
     await execGit(['merge', '--no-ff', 'ignored-output-br', '--no-edit'], dir);
-    await writeFile(join(dir, '.git', 'info', 'exclude'), '.cache/\n');
-    await mkdir(join(mergedPath, '.cache', 'pregate'), { recursive: true });
-    await writeFile(join(mergedPath, '.cache', 'pregate', 'report.json'), '{"passed":true}');
-    const result = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
-    expect(result.reaped.map(r => r.branch), JSON.stringify(result.skipped)).toContain('ignored-output-br');
+    await writeFile(join(dir, '.git', 'info', 'exclude'), '*.png\nserver/.cache/\n');
+    const image = join(mergedPath, 'reference.png');
+    await writeFile(image, 'sole user image');
+    const cache = join(mergedPath, 'server', '.cache', 'vitest', 'modules');
+    await mkdir(cache, { recursive: true });
+    await writeFile(join(cache, 'CACHEDIR.TAG'), 'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.\n');
+    await writeFile(join(cache, '_metadata.json'), JSON.stringify({ lockfileHash: 'abcdef12' }));
+    await writeFile(join(cache, 'a'.repeat(40)), 'compiled test module');
+    const retained = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
+    expect(skipReason(retained, mergedPath)).toBe('checkout-ignored-payload-unverified');
+    expect(await readFile(image, 'utf8')).toBe('sole user image');
+    await rm(image);
+    const reaped = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
+    expect(reaped.reaped.map(r => r.branch), JSON.stringify(reaped.skipped)).toContain('ignored-output-br');
     expect(existsSync(mergedPath)).toBe(false);
   });
 

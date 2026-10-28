@@ -88,6 +88,15 @@ const releasePayload = () => releaseCheckoutWithoutArchive({ path: scratch }, as
 const tag = 'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.\n';
 
 describe('test cache admission before checkout removal', () => {
+  it.each(['report.json.bak', 'report.json/private.txt'])('retains pregate-like unique content at %s', async name => {
+    const relative = `.cache/pregate/${name}`;
+    await mkdir(join(scratch, relative, '..'), { recursive: true });
+    await writeFile(join(scratch, relative), 'private preserved bytes');
+    injected.ignored.push(relative);
+    await expect(releasePayload()).rejects.toThrow('checkout-ignored-payload-unverified');
+    expect(await readFile(join(scratch, relative), 'utf8')).toBe('private preserved bytes');
+  });
+
   it.each([
     ['unknown-metadata', { wanted: 'unique user data' }],
     ['wrong-hash-width', { lockfileHash: 'b'.repeat(7) }],

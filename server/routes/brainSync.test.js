@@ -40,9 +40,10 @@ import * as brainReconcile from '../services/brainReconcile.js';
 import { PEER_INSTANCE_ID_HEADER, __resetPullWarnThrottleForTests } from '../services/sharing/peerPullAuthorization.js';
 import brainSyncRoutes from './brainSync.js';
 
-const buildApp = () => {
+const buildApp = (authContext = null) => {
   const app = express();
   app.use(express.json());
+  app.use((req, _res, next) => { req.portosAuthContext = authContext; next(); });
   app.use('/api/brain', brainSyncRoutes);
   app.use(errorMiddleware);
   return app;
@@ -74,8 +75,7 @@ describe('brain pulls honor the per-peer brain category', () => {
     brainParity.buildBrainManifest.mockResolvedValue({ types: {} });
   });
 
-  it.each(reads)('strict mode refuses %s to a peer paired without brain sync', async (path, read) => {
-    settings = { federation: { strictPullAuthorization: true } };
+  it.each(reads)('refuses %s to a peer paired without brain sync by default', async (path, read) => {
     peers.push(peer({ brain: false, catalog: true }));
 
     const res = await request(buildApp()).get(path).set(PEER_INSTANCE_ID_HEADER, PEER_ID);
@@ -86,7 +86,6 @@ describe('brain pulls honor the per-peer brain category', () => {
   });
 
   it.each(reads)('serves %s to a peer the user shares brain with', async (path, read) => {
-    settings = { federation: { strictPullAuthorization: true } };
     peers.push(peer({ brain: true }));
 
     const res = await request(buildApp()).get(path).set(PEER_INSTANCE_ID_HEADER, PEER_ID);
@@ -95,13 +94,32 @@ describe('brain pulls honor the per-peer brain category', () => {
     expect(read()).toHaveBeenCalledOnce();
   });
 
-  it('keeps the warn-first ramp: without strict mode a denied pull is still served', async () => {
-    peers.push(peer({ brain: false }));
+  it.each(reads)('refuses unidentified and unknown callers of %s', async (path, read) => {
+    for (const instanceId of [null, 'unknown-instance']) {
+      const pending = request(buildApp()).get(path);
+      const res = await (instanceId ? pending.set(PEER_INSTANCE_ID_HEADER, instanceId) : pending);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('PEER_PULL_FORBIDDEN');
+    }
+    expect(read()).not.toHaveBeenCalled();
+  });
 
-    const res = await request(buildApp()).get('/api/brain/reconcile/snapshot').set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+  it.each(reads)('preserves local and delegated operator reads of %s', async (path, read) => {
+    for (const auth of [
+      { enabled: false, authenticated: false, method: null },
+      { enabled: true, authenticated: true, method: 'session' },
+    ]) {
+      const res = await request(buildApp(auth)).get(path);
+      expect(res.status).toBe(200);
+    }
+    expect(read()).toHaveBeenCalledTimes(2);
+  });
 
+  it.each(reads)('serves %s when fullSync grants the category', async (path, read) => {
+    peers.push({ ...peer({ brain: false }), fullSync: true });
+    const res = await request(buildApp()).get(path).set(PEER_INSTANCE_ID_HEADER, PEER_ID);
     expect(res.status).toBe(200);
-    expect(brainReconcile.getBrainSnapshot).toHaveBeenCalledOnce();
+    expect(read()).toHaveBeenCalledOnce();
   });
 });
 
@@ -109,7 +127,8 @@ describe('GET /api/brain/reconcile/manifest', () => {
   it('serves the parity manifest a peer audits against', async () => {
     brainParity.buildBrainManifest.mockResolvedValue({ types: { people: [{ id: 'p1', updatedAt: 'T1', deleted: false }] } });
 
-    const res = await request(buildApp()).get('/api/brain/reconcile/manifest');
+    peers.push({ instanceId: 'manifest-peer', enabled: true, fullSync: true });
+    const res = await request(buildApp()).get('/api/brain/reconcile/manifest').set(PEER_INSTANCE_ID_HEADER, 'manifest-peer');
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ types: { people: [{ id: 'p1', updatedAt: 'T1', deleted: false }] } });

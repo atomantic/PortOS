@@ -25,7 +25,7 @@ const router = Router();
 // fingerprints the same records, so it must not become the weaker door.
 const authorizeBrainPull = async (req, route) => {
   const { authorizePeerPull } = await import('../services/sharing/peerPullAuthorization.js');
-  return authorizePeerPull(req, { syncCategory: 'brain', route });
+  return authorizePeerPull(req, { syncCategory: 'brain', alwaysEnforce: true, allowOperator: true, route });
 };
 
 /**

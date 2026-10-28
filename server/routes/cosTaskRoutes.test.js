@@ -722,8 +722,9 @@ describe('GET /api/cos/tasks — bounded view routing (#9677)', () => {
     });
     const res = await request(buildApp()).get('/api/cos/tasks?view=completed&source=user');
     expect(res.status).toBe(200);
+    expect(res.body.items[0].metadata.releasePublication).toMatchObject({ status: 'verified', identity });
     expect(res.body.items[0].metadata.releaseSynchronization).toMatchObject({
-      status: 'verified',
+      status: 'blocked', blocker: 'publisher-candidate-checkout-unverified',
       identity,
       prUrl: 'https://github.com/example/repo/pull/99',
     });

@@ -86,9 +86,15 @@ does not admit.
 GET includes HEAD. Paths with `.`/`..`/empty segments or encoded separators
 are refused. Brain, memory, catalog and `/api/sync/*` reads also check this
 install's sharing settings for the caller (`authorizePeerPull`): a peer whose
-category is off is warned about, and refused with `403 PEER_PULL_FORBIDDEN`
-when `federation.strictPullAuthorization` is on (the digital twin, MeatSpace
-and character snapshots refuse a denied caller even without strict mode). The generic `GET /api/instances/peers/:id/query` proxy reaches only
+category is off is refused with `403 PEER_PULL_FORBIDDEN` for brain, memory,
+digital twin, MeatSpace and character reads even without strict mode. Catalog
+and the remaining categories retain the warn-first ramp unless
+`federation.strictPullAuthorization` is on. Scoped peer credentials bind this
+check to the verified peer's registered identity; requests without scoped peer
+authentication retain the self-asserted instance header for compatibility.
+Brain and memory reads also preserve verified operator/agent sessions and genuine
+local connections when the password is off. Scoped peers always use their peer
+category grant, including on a local connection. The generic `GET /api/instances/peers/:id/query` proxy reaches only
 these paths on a paired peer.
 
 `POST /api/instances/peers/pair-secret` is a separate Basic-auth bootstrap, not

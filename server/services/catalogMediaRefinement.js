@@ -68,14 +68,21 @@ export async function refineCatalogMedia(id, input, { preview = false } = {}) {
   const rejected = rejectedReferenceKeys(media);
   const guides = pickGuideMedia(media.filter(m => m.mediaKey !== source.mediaKey && !rejected.has(m.mediaKey)
     && !/^(?:archive:|sheet:|look:)/.test(m.role || '')), want, maxGuides);
-  const wardrobe = item.payload?.wardrobes?.find(w => w.id === variant.wardrobeId);
+  // A look image (tagged by variant or by its look:<id> role) is refined in
+  // that look's outfit. The record's or form's free-text appearance often
+  // names an everyday outfit, so it is not sent then and cannot fight the
+  // look; the source image and guides carry the face, the form its age.
+  const wardrobeId = variant.wardrobeId || (source.role?.startsWith('look:') ? source.role.slice('look:'.length) : null);
+  const wardrobe = wardrobeId ? item.payload?.wardrobes?.find(w => w.id === wardrobeId) : null;
   const additions = [
     promptAddition('reference-guidance-heading', 'Editing guidance heading', 'Editing guidance:'),
     promptAddition('reference-edit', 'Reference refinement', 'Refine the FIRST attached image as a new version. Preserve its subject, framing, pose and photographic treatment unless the editing guidance asks to change them. Remaining images are identity guides. Preserve facial identity; apply only the requested age/look hairstyle and clothing, rather than copying incompatible styling from another age. Follow the editing guidance when correcting an inaccurate source. No text or watermark.'),
     promptAddition('reference-identity', 'Shared facial identity', appearance.visualIdentity),
     promptAddition('reference-appearance', 'Requested age, hair and clothing', [
       `Subject: ${item.name}`, form?.label, `Age: ${want.age ?? appearance.age ?? 'as depicted'}`,
-      appearance.physicalDescription || appearance.description, wardrobe?.description,
+      ...(wardrobe
+        ? [`Outfit: ${wardrobe.name}. This outfit replaces any other clothing.`, wardrobe.description]
+        : [appearance.physicalDescription || appearance.description]),
     ].filter(Boolean).join('\n')),
     promptAddition('reference-style', 'Universe visual style', universe ? universeAestheticLine(universe) : ''),
   ].filter(Boolean);

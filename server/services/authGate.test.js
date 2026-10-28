@@ -36,7 +36,12 @@ const instanceRegistry = vi.hoisted(() => ({ data: { self: null, peers: [] } }))
 vi.mock('./instanceIdentity.js', async () => ({
   ...(await vi.importActual('./instanceIdentity.js')),
   loadData: async () => instanceRegistry.data,
-  withData: async (mutate) => mutate(instanceRegistry.data),
+  withData: async (mutate) => {
+    const notifications = [];
+    const result = await mutate(instanceRegistry.data, notify => notifications.push(notify));
+    for (const notify of notifications) notify();
+    return result;
+  },
   getInstanceId: async () => 'self-example-instance',
 }));
 

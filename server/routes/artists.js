@@ -7,6 +7,9 @@
  *   GET    /api/artists/:id     → Artist
  *   PATCH  /api/artists/:id     → Artist
  *   DELETE /api/artists/:id     → { id }     (soft delete)
+ *   GET    /api/artists/:id/submission-profile → { profile, missing, markdown }
+ *                                            (the press & submission profile agents
+ *                                            read when filling festival/EPK forms)
  *
  * The Music studio's persona store — mirrors routes/authors.js. Bounds come from
  * services/artists/logic.js so the Zod schema here and the service-layer
@@ -28,6 +31,9 @@ const musicalStyleField = z.string().trim().max(artists.MUSICAL_STYLE_MAX);
 const physicalDescriptionField = z.string().trim().max(artists.PHYSICAL_DESCRIPTION_MAX);
 const portraitStyleField = z.string().trim().max(artists.PORTRAIT_STYLE_MAX);
 const portraitImageUrlField = z.string().trim().max(artists.PORTRAIT_IMAGE_URL_MAX);
+const submissionFields = Object.fromEntries(artists.SUBMISSION_FIELD_SPECS.map(({ key, max }) => [key, z.string().trim().max(max)]));
+const submissionCreateFields = Object.fromEntries(Object.entries(submissionFields).map(([key, field]) => [key, field.optional().default('')]));
+const submissionPatchFields = Object.fromEntries(Object.entries(submissionFields).map(([key, field]) => [key, field.optional()]));
 
 const createSchema = z.object({
   name: nameField,
@@ -37,6 +43,7 @@ const createSchema = z.object({
   physicalDescription: physicalDescriptionField.optional().default(''),
   portraitStyle: portraitStyleField.optional().default(''),
   portraitImageUrl: portraitImageUrlField.optional().default(''),
+  ...submissionCreateFields,
 });
 
 const patchSchema = z.object({
@@ -47,6 +54,7 @@ const patchSchema = z.object({
   physicalDescription: physicalDescriptionField.optional(),
   portraitStyle: portraitStyleField.optional(),
   portraitImageUrl: portraitImageUrlField.optional(),
+  ...submissionPatchFields,
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
 // Backward-compatible by default: returns the full artists array. When a client
@@ -67,6 +75,12 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const artist = await artists.getArtist(req.params.id);
   if (!artist) throw new ServerError('Artist not found', { status: 404, code: 'NOT_FOUND' });
   res.json(artist);
+}));
+
+router.get('/:id/submission-profile', asyncHandler(async (req, res) => {
+  const artist = await artists.getArtist(req.params.id);
+  if (!artist) throw new ServerError('Artist not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(artists.buildSubmissionProfile(artist));
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {

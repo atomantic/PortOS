@@ -279,7 +279,7 @@ export default function ProviderModelSelector({
   const selectedComposite = isCompositeProviderId(selectedProviderId)
     // Unresolvable (catalog unknown, or still loading): keep the raw id on
     // screen rather than blanking a stored selection.
-    ? selectedRecord ?? { id: selectedProviderId, name: selectedProviderId, unavailableReason: catalog.loading ? null : 'not available on this install' }
+    ? selectedRecord ?? { id: selectedProviderId, name: selectedProviderId, unavailableReason: catalog.loading ? null : catalog.error ? 'catalog unavailable' : 'not available on this install' }
     : null;
   const allowedComposeMethods = composeMethods ?? selectionPolicy?.modes;
   // Fail closed under a provider policy the compose flow cannot honor: a

@@ -3,6 +3,7 @@ import DevArtifactsPanel from '../DevArtifactsPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import LookReferencesPanel from '../LookReferencesPanel.jsx';
 import VisualSpecPanel from '../VisualSpecPanel.jsx';
+import { VideoCastLinksDisclosure } from '../VideoCastLinks.jsx';
 import { formatCount } from '../../../utils/formatters.js';
 import { CAST_CHECKIN_ANCHOR, LOOK_GUIDES_ANCHOR } from '../../../lib/musicVideoStages.js';
 
@@ -37,12 +38,21 @@ export const directionSummary = (project) => {
  */
 export default function CastSetsStage({ board }) {
   const { project, locked, castSets, kickoff } = board;
+  const subjects = project.concept?.subjects || [];
   return (
     <div className="min-w-0 space-y-3">
       <p id="mv-setup-direction" className="px-1 text-xs text-port-text-muted" style={ANCHOR_STYLE}>
         Concept, song style and cast are on the{' '}
         <button type="button" onClick={() => board.goToStage('story', 'mv-story-direction')} className="min-h-[44px] text-port-accent hover:underline sm:min-h-0">Story step</button>.
       </p>
+      {subjects.length > 0 && (
+        <div className="min-w-0 rounded-lg border border-port-border bg-port-card px-3 pb-1">
+          <VideoCastLinksDisclosure
+            summary={`Catalog links · ${formatCount(subjects.filter((s) => s.ingredientId).length)} of ${formatCount(subjects.length)} linked`}
+            summaryClassName="flex min-h-[44px] cursor-pointer items-center text-sm font-medium"
+            projectId={project.id} universeId={project.concept?.universeId || null} onLinked={board.applyCastLinks} idPrefix={`mv-look-link-${project.id}`} />
+        </div>
+      )}
       <StageSection title="Visual guidance" summary={directionSummary(project)}>
         <LookReferencesPanel key={`look-${project.id}`} project={project}
           onSave={board.saveStyleReferences} onSaveSpec={board.saveVisualSpec} onAddReference={board.onAddReference}
@@ -54,11 +64,13 @@ export default function CastSetsStage({ board }) {
           id={CAST_CHECKIN_ANCHOR}
           project={project}
           stale={board.productionReadiness?.castAndSets?.stale || null}
+          storyStale={board.productionReadiness?.castAndSets?.storyStale || null}
           busy={locked || castSets.busy || kickoff.running}
           onOpenSheet={board.openArtifact}
           onOpenPreview={board.openPreview}
           onApprove={board.approveCastAndSets}
           onRegenerate={() => castSets.regenerate()}
+          onRegenerateImages={castSets.regenerateImages}
           onEditDirection={castSets.editDirection}
           onApplyFeedback={castSets.applyFeedback}
           onRemoveFeedback={castSets.removeFeedback}
@@ -67,6 +79,8 @@ export default function CastSetsStage({ board }) {
           onReconfirm={() => castSets.reconfirm()}
           onRevert={board.onRevertApproval ? (field) => board.onRevertApproval('castAndSets', field) : undefined}
           onSkip={board.skipCastAndSets}
+          onDiscard={castSets.discard}
+          onRebuildFromStory={() => castSets.rebuildFromStory(project.castAndSets.status)}
         />
       ) : (
         // Build lives on the step's checklist (and the header); this keeps only the way out.

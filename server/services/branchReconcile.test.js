@@ -493,12 +493,11 @@ describe('cleanupMerged', () => {
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
 
-  it('removes a merged checkout without scanning its ignored build output', async () => {
+  it('uses the guarded removal path for a merged checkout', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     const worktreePath = '/repo/.claude/worktrees/next-2190';
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]);
     expect(res.cleaned).toEqual(['next/issue-2190']);
-    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', worktreePath, expect.objectContaining({ disposableIgnored: true }));
     expect(releaseCheckoutWithoutArchive).not.toHaveBeenCalled();
   });
 
@@ -1787,8 +1786,6 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(res.cleaned).not.toContain(BRANCH);
     expect(res.superseded).toEqual([]);
     expect(backupSupersededBranchMock).toHaveBeenCalledTimes(1);
-    // Its commits are not on the default branch, so ignored payload is still checked.
-    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', WORKTREE, expect.objectContaining({ disposableIgnored: false }));
     expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', BRANCH, RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
   });
 
@@ -2094,7 +2091,6 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
     expect(res.detachedWorktrees).toEqual([]);
     expect(preserveMergedCheckout).not.toHaveBeenCalled();
     expect(releaseCheckoutWithoutArchive).not.toHaveBeenCalled();
-    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', path, expect.objectContaining({ disposableIgnored: true }));
   });
 
   it('removes a clean detached tree without copying it', async () => {

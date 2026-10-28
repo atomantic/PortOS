@@ -12,7 +12,7 @@ export default function ModelInputPreview({ preview, prompt, onOpenPreview }) {
   if (!sent) return null;
   return (
     <div className="text-xs space-y-3">
-      <ModelReferenceImages images={sent.referenceImages} onOpenPreview={onOpenPreview} />
+      <ModelReferenceImages images={sent.referenceImages} editBase={sent.editBase} onOpenPreview={onOpenPreview} />
       {!!sent.loraAdapters?.length && (
         <section aria-label="LoRA adapters" className="space-y-1">
           <h3 className="font-semibold text-gray-300">LoRA adapters</h3>

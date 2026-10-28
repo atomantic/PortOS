@@ -708,6 +708,15 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
+  it('stops incomplete delivery when the current dispatch spent the last spawn', async () => {
+    const taskOutcome = { status: 'incomplete', reason: 'Validation remains unfinished.' };
+    await finalizeAgent({ agentId: 'agent-example', task: { ...TASK, metadata: { ...TASK.metadata, totalSpawnCount: 5, failureCount: 0 } },
+      success: true, exitCode: 0, finalSummary: JSON.stringify({ summary: 'Retained unfinished work.', taskOutcome }) });
+    expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'blocked',
+      metadata: expect.objectContaining({ totalSpawnCount: 5, failureCount: 1, blockedCategory: 'task-recovery-exhausted' }) }), TASK.taskType);
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it.each(['normal', 'restart'].flatMap(mode => ['not-planned', 'operator-closed'].map(disposition => [mode, disposition])))
   ('settles a selected claim no-op during %s completion from a verified %s disposition', async (mode, disposition) => {
     isProgrammaticIoTaskType.mockReturnValue(false);

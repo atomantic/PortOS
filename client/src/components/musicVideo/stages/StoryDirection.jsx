@@ -40,6 +40,7 @@ export default function StoryDirection({ board }) {
         project={project}
         onPendingChange={board.setCreativeSetupPending}
         onSave={board.saveCreativeSetup}
+        onCastLinked={board.applyCastLinks}
       />
       {Object.keys(board.conceptSaveFailures || {}).length > 0 && <div role="alert" className="rounded border border-port-warning p-2 text-xs text-port-warning">
         Some direction edits have not saved. Your text is still here.{' '}

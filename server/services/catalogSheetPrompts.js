@@ -107,12 +107,24 @@ export function buildProductSheetPrompt(universe, object) {
   };
 }
 
+// A look edited from the portrait is one full-body figure in a 2:3 frame: the
+// face stays several times larger than in a three-across triptych, which is
+// what lets the edit carry the portrait's likeness into the new outfit.
+const LOOK_EDIT_WIDTH = 1024;
+const LOOK_EDIT_HEIGHT = 1536;
+
 /**
- * Look reference for a character wearing one of its wardrobes: the same
- * person (identity from the record's own fields) in full-body views using the
+ * Look reference for a character wearing one of its wardrobes, using the
  * chosen visual direction, no text. `wardrobe` is a `payload.wardrobes` entry.
+ *
+ * Without a portrait to edit (`editFromPortrait` false) it is a three-view
+ * full-body turnaround whose identity comes from the record's own fields.
+ * Edited from the portrait it is a single full-body figure: the portrait
+ * carries the face and body, so the record's free-text physical description
+ * (which often names the everyday outfit) is not sent and cannot fight the
+ * look. The outfit always comes from the look alone.
  */
-export function buildCharacterLookPrompt(universe, character, wardrobe, direction) {
+export function buildCharacterLookPrompt(universe, character, wardrobe, direction, { editFromPortrait = false } = {}) {
   requireEntry(character, 'buildCharacterLookPrompt');
   requireEntry(wardrobe, 'buildCharacterLookPrompt');
   const { name, age, pronouns, physical, silhouette, posture, special, visualIdentity, visualNotes } =
@@ -126,26 +138,35 @@ export function buildCharacterLookPrompt(universe, character, wardrobe, directio
     pronouns ? `Pronouns: ${pronouns}.` : '',
   ].filter(Boolean).join(' ');
 
+  const lead = editFromPortrait
+    ? `LOOK REFERENCE — a costume reference of one character, ${name}, wearing a single outfit, shown as ONE full-body figure from head to toe, front three-quarter view, standing in a relaxed neutral pose and filling most of the frame height so the face stays clearly readable. Use the visual direction below, including its medium, camera, lighting and environment.`
+    : `LOOK REFERENCE — a costume reference of one character, ${name}, wearing a single outfit, shown as three full-body views side by side at identical scale: FRONT, THREE-QUARTER and BACK, standing in a relaxed neutral pose. Use the visual direction below consistently across every view, including its medium, camera, lighting and environment.`;
+  const closing = editFromPortrait
+    ? 'Show the complete outfit from head to toe, including footwear and accessories, on the same person as the portrait. Keep the outfit readable within the specified environment. No props beyond what the outfit includes, no other people, no text, no labels, no captions.'
+    : 'Every view shows the same person with the same face, hair, proportions and the complete outfit from head to toe, including footwear and accessories. Keep the outfit readable within the specified environment. No props beyond what the outfit includes, no other people, no text, no labels, no captions.';
+
   const promptParts = [
-    `LOOK REFERENCE — a costume reference of one character, ${name}, wearing a single outfit, shown as three full-body views side by side at identical scale: FRONT, THREE-QUARTER and BACK, standing in a relaxed neutral pose. Use the visual direction below consistently across every view, including its medium, camera, lighting and environment.`,
+    lead,
     direction?.styleLine || '',
     identityBits,
-    physical ? `Physical description: ${physical}` : '',
+    !editFromPortrait && physical ? `Physical description: ${physical}` : '',
     silhouette ? `Silhouette: ${silhouette}` : '',
     posture ? `Posture: ${posture}` : '',
     special ? `Special traits: ${special}` : '',
     visualIdentity ? `Visual identity: ${visualIdentity}` : '',
     visualNotes ? `Visual notes: ${visualNotes}` : '',
-    `Outfit: ${lookName}.`,
+    `Outfit: ${lookName}. This outfit replaces any other clothing.`,
     lookDescription ? `Outfit description: ${lookDescription}` : '',
-    `Every view shows the same person with the same face, hair, proportions and the complete outfit from head to toe, including footwear and accessories. Keep the outfit readable within the specified environment. No props beyond what the outfit includes, no other people, no text, no labels, no captions.`,
+    closing,
   ].filter(Boolean);
 
   return {
     prompt: promptParts.join('\n\n'),
-    negativePrompt: 'text, labels, captions, watermark, signature, multiple different characters, busy background, cropped feet, cropped head, inconsistent outfit between views, distorted anatomy, blurry',
-    width: DEFAULT_WIDTH,
-    height: DEFAULT_HEIGHT,
+    negativePrompt: editFromPortrait
+      ? 'text, labels, captions, watermark, signature, multiple people, busy background, cropped feet, cropped head, different face, distorted anatomy, blurry'
+      : 'text, labels, captions, watermark, signature, multiple different characters, busy background, cropped feet, cropped head, inconsistent outfit between views, distorted anatomy, blurry',
+    width: editFromPortrait ? LOOK_EDIT_WIDTH : DEFAULT_WIDTH,
+    height: editFromPortrait ? LOOK_EDIT_HEIGHT : DEFAULT_HEIGHT,
     modelId: null,
   };
 }

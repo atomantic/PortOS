@@ -56,6 +56,8 @@ import {
   catalogStoryParamsSchema,
   catalogStoryJoinSchema,
   catalogStoryDraftSchema,
+  catalogVideoSubjectsQuerySchema,
+  catalogVideoSubjectLinksSchema,
   REF_KINDS,
 } from '../lib/catalogValidation.js';
 import { getActiveCatalogTypes, setUserCatalogTypes } from '../lib/catalogTypes.js';
@@ -72,6 +74,7 @@ import { filterLibraryMedia, pickGuideMedia, parseLibraryMediaKey, inferAgeFromT
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { previewCatalogCastImport, commitCatalogCastImport } from '../services/musicVideo/catalogCast.js';
 import { draftStoryMember, joinStory, listCatalogStories } from '../services/catalogStories.js';
+import { linkVideoSubjects, listVideoSubjectLinks } from '../services/musicVideo/catalogCast.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
 import catalogIdentityRouter from './catalogIdentity.js';
@@ -278,6 +281,19 @@ router.post('/stories/draft', asyncHandler(async (req, res) => {
   res.json(await draftStoryMember(validateRequest(catalogStoryDraftSchema, req.body ?? {})));
 }));
 
+// A music video's subjects of one kind, each with its linked record or a
+// suggested one (same name, age form from "(17)"); link sets or clears them.
+router.get('/stories/music-video/:id/subjects', asyncHandler(async (req, res) => {
+  const { type } = validateRequest(catalogVideoSubjectsQuerySchema, req.query);
+  res.json(await listVideoSubjectLinks(req.params.id, { type }));
+}));
+
+router.post('/stories/music-video/:id/subjects/link', asyncHandler(async (req, res) => {
+  const { links } = validateRequest(catalogVideoSubjectLinksSchema, req.body ?? {});
+  const { project, linked, unlinked } = await linkVideoSubjects(req.params.id, links);
+  res.json({ concept: project?.concept || {}, updatedAt: project?.updatedAt ?? null, linked, unlinked });
+}));
+
 router.post('/stories/:kind/:id/members', asyncHandler(async (req, res) => {
   const { kind, id } = validateRequest(catalogStoryParamsSchema, req.params);
   const { ingredientId } = validateRequest(catalogStoryJoinSchema, req.body ?? {});
@@ -397,8 +413,8 @@ router.post('/ingredients', asyncHandler(async (req, res) => {
     tags: body.tags || [],
     ...(await embedIngredient(body)),
   };
-  const { createOwnedPrimitive } = await import('../services/catalogPrimitives.js');
-  const ing = body.universeId ? await createOwnedPrimitive(input, body.universeId, body.operationKey) : await catalogDB.createIngredient(input);
+  const { createOwnedPrimitive, withUserCreatedLock } = await import('../services/catalogPrimitives.js');
+  const ing = body.universeId ? await createOwnedPrimitive(input, body.universeId, body.operationKey) : await catalogDB.createIngredient(withUserCreatedLock(input));
   res.status(201).json(ing);
   catalogEvents.emit('primitive-changed', { ingredientId: ing.id });
 }));

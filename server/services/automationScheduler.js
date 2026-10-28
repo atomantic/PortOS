@@ -12,6 +12,8 @@ import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 import * as eventScheduler from './eventScheduler.js';
 import * as agentActivity from './agentActivity.js';
 import { getUserTimezone } from './userTimezone.js';
+import { createSingleFlight } from '../lib/singleFlight.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 const SCHEDULES_FILE = join(PATHS.agentPersonalities, 'schedules.json');
 const store = createCachedStore(SCHEDULES_FILE, { schedules: {} }, { context: 'automation schedules' });
@@ -22,6 +24,13 @@ export const scheduleEvents = new EventEmitter();
 
 // Track active scheduled events
 const activeSchedules = new Map();
+// A schedule edit can replace its event while the old handler is still running.
+const scheduleRuns = createSingleFlight();
+let actionExecutor = null;
+
+export function registerActionExecutor(executor) {
+  actionExecutor = executor;
+}
 
 export const invalidateCache = store.invalidateCache;
 
@@ -200,7 +209,7 @@ async function activateSchedule(id, schedule) {
   const eventId = `agent-schedule-${id}`;
 
   const handler = async () => {
-    await executeScheduledAction(id);
+    await scheduleRuns.run(id, () => executeScheduledAction(id));
   };
 
   // Build schedule config based on type
@@ -274,6 +283,8 @@ async function executeScheduledAction(scheduleId) {
     return;
   }
 
+  const executor = actionExecutor;
+  if (!executor) throw new Error('Agent action executor is not initialized');
   const now = new Date().toISOString();
 
   // Check rate limits
@@ -329,19 +340,23 @@ async function executeScheduledAction(scheduleId) {
     }
   });
 
-  // Emit event for platform integration to pick up
-  scheduleEvents.emit('execute', {
-    scheduleId,
-    schedule,
-    timestamp: now
-  });
-
-  // For random schedules, reschedule with new random interval
-  if (schedule.schedule.type === 'random') {
-    await deactivateSchedule(scheduleId);
-    const freshSchedule = await getScheduleById(scheduleId);
-    if (freshSchedule && freshSchedule.enabled) {
-      await activateSchedule(scheduleId, freshSchedule);
+  const execution = { scheduleId, schedule, timestamp: now };
+  // Notifications do not own platform work or decide whether it runs.
+  try {
+    scheduleEvents.emit('execute', execution);
+  } catch (err) {
+    console.error(`❌ Schedule execution notification failed: ${err.message}`);
+  }
+  try {
+    await executor(execution);
+  } finally {
+    // A terminal activity failure must not pin future runs to the old random interval.
+    if (schedule.schedule.type === 'random') {
+      await deactivateSchedule(scheduleId);
+      const freshSchedule = await getScheduleById(scheduleId);
+      if (freshSchedule && freshSchedule.enabled) {
+        await activateSchedule(scheduleId, freshSchedule);
+      }
     }
   }
 }
@@ -355,7 +370,13 @@ export async function runNow(scheduleId) {
     return null;
   }
 
-  await executeScheduledAction(scheduleId);
+  if (schedule.enabled) {
+    await activateSchedule(scheduleId, schedule);
+    const result = await eventScheduler.triggerNow(`agent-schedule-${scheduleId}`);
+    if (result === false) {
+      throw new ServerError('Scheduler is shutting down', { status: 503 });
+    }
+  }
   return await getScheduleById(scheduleId);
 }
 

@@ -159,11 +159,10 @@ describe('universeCharacterSheet — variant catalog + prototype-pollution guard
   // member) through the route's `.string().min(1).max(48)` schema — bracket
   // access returns Object.prototype.constructor and the renderer crashes 500.
   // Verify the registry lookup rejects every Object.prototype name.
-  it('listSheetVariants exposes the two registered variants', () => {
+  it('listSheetVariants exposes the registered variants', () => {
     const variants = listSheetVariants();
     const ids = variants.map((v) => v.id);
-    expect(ids).toContain('standard');
-    expect(ids).toContain('blueprint');
+    expect(ids).toEqual(['standard', 'photographic', 'blueprint']);
     for (const v of variants) {
       expect(v).toHaveProperty('label');
       expect(v).toHaveProperty('description');

@@ -543,18 +543,18 @@ export async function mlPush(key, record) {
   return stored;
 }
 
-export async function mlPatchById(key, id, updates) {
+export async function mlPatchById(key, id, updates, { expectedDate } = {}) {
   return updateStore(store => {
     const item = store[key].find(r => r.id === id);
-    if (!item) return null;
+    if (!item || (expectedDate !== undefined && item.date !== expectedDate)) return null;
     Object.assign(item, updates);
     return item;
   });
 }
 
-export async function mlRemoveById(key, id) {
+export async function mlRemoveById(key, id, { expectedDate } = {}) {
   return updateStore(store => {
-    const i = store[key].findIndex(r => r.id === id);
+    const i = store[key].findIndex(r => r.id === id && (expectedDate === undefined || r.date === expectedDate));
     if (i < 0) return null;
     return store[key].splice(i, 1)[0];
   });

@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   sanitizeArtist, buildArtistRecord, applyArtistPatch,
-  mergeArtistRecord, portraitImageFilename,
-  NAME_MAX, MUSICAL_STYLE_MAX,
+  mergeArtistRecord, portraitImageFilename, buildSubmissionProfile,
+  NAME_MAX, MUSICAL_STYLE_MAX, SUBMISSION_FIELDS,
 } from './logic.js';
 
 describe('artists logic', () => {
@@ -143,6 +143,32 @@ describe('artists logic', () => {
       expect(portraitImageFilename('')).toBeNull();
       expect(portraitImageFilename(null)).toBeNull();
       expect(portraitImageFilename(undefined)).toBeNull();
+    });
+  });
+
+  describe('press & submission profile', () => {
+    it('gives a record saved before the profile existed every field as empty text', () => {
+      const legacy = sanitizeArtist({ id: 'artist-1', name: 'Nova', bio: 'blurb' });
+      for (const key of SUBMISSION_FIELDS) expect(legacy[key]).toBe('');
+      expect(legacy.bio).toBe('blurb');
+    });
+
+    it('patches one profile field without clearing the others', () => {
+      const base = sanitizeArtist({ id: 'artist-1', name: 'Nova', bioShort: 'Short.', creditName: 'N. Vale' });
+      const next = applyArtistPatch(base, { creditName: '' });
+      expect(next.creditName).toBe('');
+      expect(next.bioShort).toBe('Short.');
+    });
+
+    it('lists empty fields as missing instead of filling them, and keeps long text as blocks', () => {
+      const long = 'A songwriter.\nSecond paragraph.';
+      const result = buildSubmissionProfile(sanitizeArtist({ id: 'artist-1', name: 'Nova', bio: long, aiStatement: 'Music made with Suno; lyrics are mine.' }));
+      expect(result.missing).toEqual(expect.arrayContaining(['Genre', 'Name for credits', 'One-line bio', 'Links']));
+      expect(result.missing).not.toContain('Full bio');
+      expect(result.missing).not.toContain('Bandcamp');
+      expect(result.markdown).toContain('### Full bio\n\nA songwriter.\nSecond paragraph.');
+      expect(result.markdown).toContain('- AI process statement: Music made with Suno; lyrics are mine.');
+      expect(result.markdown).not.toContain('Contact email:');
     });
   });
 });

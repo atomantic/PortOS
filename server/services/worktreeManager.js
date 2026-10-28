@@ -449,11 +449,8 @@ function removalOutcome(worktreePath, { directory, registration }, failure = nul
  *   Callers that share claim ownership hold its lock through this operation.
  * @param {object[]} [opts.preservedFiles] - byte proofs already durably saved by
  *   the caller; ignored files still require an exact content/hash match.
- * @param {boolean} [opts.disposableIgnored] - skip the ignored-file payload scan.
- *   For completed agent checkouts whose published work lives on the forge: the
- *   caller's `verifyRemoval` gates tracked/untracked work, and ignored files are
- *   regenerable build/cache output. Leave unset when the checkout may hold the
- *   only copy of unpublished work (reconcile/retirement of superseded branches).
+ * Ignored files also require content verification: a merged commit does not
+ * prove those local bytes were published or are safe to discard.
  * @returns {Promise<{removed: boolean, directory: string, registration: string, warning: string|null}>}
  *   `warning` is set exactly when `removed` is false.
  */
@@ -466,10 +463,15 @@ export async function forceRemoveWorktreeDir(repo, worktreePath, opts = {}) {
 // Hold reasons that mean the cleanup could not even decide, rather than a gate declining.
 const REMOVAL_FAULT_HOLDS = new Set(['worktree-ownership-unreadable', 'worktree-removal-refused']);
 
-async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval, ignoredPaths = [], preservedFiles = [], disposableIgnored = false, beforeMutation = async () => {} } = {}) {
+async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval, ignoredPaths = [], preservedFiles = [], beforeMutation } = {}) {
   const logAll = label && log === 'all';
   let lastFailure = null;
   let heldReason = null;
+  const checkIgnored = async () => {
+    const { assertNoUniqueIgnoredCheckoutPayload } = await import('./heldCheckoutRecovery.js');
+    return assertNoUniqueIgnoredCheckoutPayload(worktreePath, execGit, ignoredPaths, preservedFiles, repo)
+      .then(() => null, error => error.message || 'checkout-not-disposable');
+  };
   const check = async () => {
     const entries = await listWorktrees(repo).catch(() => null);
     if (!entries) return 'worktree-ownership-unreadable';
@@ -477,12 +479,8 @@ async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log =
     if (holder?.locked) return 'worktree-locked';
     const reason = verifyRemoval ? await verifyRemoval(holder, entries).catch(() => 'worktree-ownership-unreadable') : null;
     if (reason) return reason;
-    if (!disposableIgnored) {
-      const { assertNoUniqueIgnoredCheckoutPayload } = await import('./heldCheckoutRecovery.js');
-      const payloadHold = await assertNoUniqueIgnoredCheckoutPayload(worktreePath, execGit, ignoredPaths, preservedFiles, repo)
-        .then(() => null, error => error.message || 'checkout-not-disposable');
-      if (payloadHold) return payloadHold;
-    }
+    const payloadHold = await checkIgnored();
+    if (payloadHold) return payloadHold;
     // Ownership/content checks await I/O. Refresh their registration afterward;
     // Git's own removal still honors locks acquired after this final read.
     const fresh = await listWorktrees(repo).catch(() => null);
@@ -493,7 +491,11 @@ async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log =
     return null;
   };
   heldReason = await check();
-  if (!heldReason) await beforeMutation();
+  if (!heldReason && beforeMutation) {
+    await beforeMutation();
+    // The preparation hook can yield to a writer; do not erase newly ignored bytes.
+    heldReason = await checkIgnored();
+  }
   if (!heldReason) await execGit(['worktree', 'remove', worktreePath, '--force'], repo, { timeout: WORKTREE_ADD_TIMEOUT_MS }).catch(async (err) => {
     lastFailure = errorExcerpt(err);
     if (label) console.log(`⚠️ ${label}: ${err.message}`);
@@ -503,7 +505,7 @@ async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log =
     // bypass a lock acquired after our last read, even with a caller guard.
     const directory = await lstat(worktreePath).then(() => 'present', err => err.code === 'ENOENT' ? 'absent' : 'unknown');
     if (directory !== 'absent') { heldReason = 'worktree-removal-refused'; return; }
-    await beforeMutation();
+    await beforeMutation?.();
     await execGit(['worktree', 'prune'], repo).catch((pruneErr) => {
       lastFailure = errorExcerpt(pruneErr);
       if (logAll) console.log(`⚠️ Worktree prune failed for ${subject}: ${pruneErr.message}`);
@@ -1602,9 +1604,8 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     return contained?.exitCode === 0 && contained.stdout.trim() ? null : 'detached-head-unpublished';
   };
   const ignoredPaths = [DONE_SENTINEL_NAME, ...doneSentinelCandidateNames(agentId)];
-  // Observes the checkout under the fence and returns the gate removal re-runs. Nothing
-  // is copied or hashed: the forge holds pushed/merged state, git status holds unpublished
-  // work, and ignored files are disposable build/cache output.
+  // Observe the checkout under the fence and return the gate removal re-runs.
+  // The destructive boundary separately checks ignored local content.
   const admitRemoval = async () => {
     const tree = (await listWorktrees(sourceWorkspace)).find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath));
     const detached = Boolean(await detachedCheckout());
@@ -1755,7 +1756,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     return retire({
       onArchiveFailure: () => ({ merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings }),
       finish: async (preservation) => {
-        const gone = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, { verifyRemoval: preservation.verify, disposableIgnored: true });
+        const gone = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, { verifyRemoval: preservation.verify, ignoredPaths });
         if (!gone.removed) {
           warnings.push(gone.warning);
           return { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
@@ -1845,7 +1846,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     finish: async (preservation) => {
       const removal = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
         verifyRemoval: preservation.verify,
-        disposableIgnored: true,
+        ignoredPaths,
         label: `Worktree remove failed for ${agentId}, falling back to manual cleanup`,
         log: 'all',
         subject: agentId,
@@ -2304,7 +2305,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
         if (initialHold) { hold(initialHold); return {}; }
         return { fence: { repoPath: sourceWorkspace, path: wt.path, branch: branchName } };
       },
-      // Merged: ignored build/cache output is disposable, so nothing is scanned or copied.
+      // The removal boundary checks ignored content before deleting the checkout.
       archive: async () => {
         const hold = await verifyRemoval(wt);
         if (hold) {
@@ -2317,7 +2318,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
         const { readRetirementCheckoutIdentity } = await import('../lib/retirementCheckoutObservation.js');
         const checkoutIdentity = await readRetirementCheckoutIdentity(wt.path).catch(() => null);
         const removal = await forceRemoveWorktreeDir(sourceWorkspace, wt.path, {
-          label: `worktree remove failed for ${wt.path}`, disposableIgnored: true,
+          label: `worktree remove failed for ${wt.path}`,
           verifyRemoval: async holder => await verifyRemoval(holder) || await preservation.verify(holder),
         });
         if (!removal.removed) {
@@ -2422,7 +2423,7 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
       archive: async () => {
         const { readRetirementCheckoutIdentity } = await import('../lib/retirementCheckoutObservation.js');
         const checkoutIdentity = await readRetirementCheckoutIdentity(worktreePath).catch(() => null);
-        // Merged: ignored build/cache output is disposable, so nothing is scanned or copied.
+        // Ignored local content is checked at the destructive boundary.
         return {
           archive: {
             ...(checkoutIdentity && { checkoutIdentity }),
@@ -2443,6 +2444,9 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
           || !await hasBranchMergeEvidence(parentRepo, wt.head, target).catch(() => false)) return false;
         const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
         if (await readBranchCompletionHold({ repoPath: parentRepo, branch: branchName, retirement: true })) return false;
+        const { assertNoUniqueIgnoredCheckoutPayload } = await import('./heldCheckoutRecovery.js');
+        const payloadSafe = await assertNoUniqueIgnoredCheckoutPayload(worktreePath, execGit, [], [], parentRepo).then(() => true, () => false);
+        if (!payloadSafe) return false;
         const ok = await execGit(['worktree', 'remove', worktreePath], parentRepo).then(() => true).catch(err => {
           console.warn(`⚠️ Preserved external worktree ${entry.name}: ${err.message}`);
           return false;

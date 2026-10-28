@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -29,8 +29,8 @@ vi.mock('../services/instanceIdentity.js', () => ({
 }));
 
 // Keep the mounted routers, authorization, saved schedules/personalities and
-// scheduler -> action-executor consumer real. Only external effects, provider
-// generation and wall-clock scheduling are replaced with synthetic fixtures.
+// scheduler -> action-executor consumer real. Only external effects and provider
+// generation are synthetic; each test cleans up the real scheduler timers.
 const effects = vi.hoisted(() => ({
   createPost: vi.fn(async () => ({ id: 'example-post' })),
   createComment: vi.fn(async () => ({ id: 'example-comment' })),
@@ -54,7 +54,12 @@ vi.mock('../integrations/moltbook/index.js', () => ({
 vi.mock('../integrations/moltworld/index.js', () => ({ createMoltworldClient: vi.fn() }));
 vi.mock('../services/platformAccounts.js', () => effects);
 vi.mock('../services/agentActivity.js', () => effects);
-vi.mock('../services/eventScheduler.js', () => effects);
+vi.mock('../services/eventScheduler.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  effects.schedule.mockImplementation(actual.schedule);
+  effects.cancel.mockImplementation(actual.cancel);
+  return { ...actual, schedule: effects.schedule, cancel: effects.cancel };
+});
 vi.mock('../services/userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 vi.mock('../services/history.js', () => ({ logAction: vi.fn(async () => {}) }));
 vi.mock('../services/agentContentGenerator.js', () => ({
@@ -93,6 +98,7 @@ import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import * as personalities from '../services/agentPersonalities.js';
 import * as scheduler from '../services/automationScheduler.js';
+import { cancelAll } from '../services/eventScheduler.js';
 import { init as initExecutor } from '../services/agentActionExecutor.js';
 import toolsRoutes from './agentTools.js';
 import scheduleRoutes from './automationSchedules.js';
@@ -162,6 +168,8 @@ beforeEach(async () => {
   initExecutor();
 });
 
+afterEach(() => { cancelAll(); });
+
 describe('Moltbook publication authority', () => {
   it('refuses remote, proxied and alternate spellings before credentials or persisted steering', async () => {
     const before = await savedState();
@@ -201,6 +209,7 @@ describe('Moltbook publication authority', () => {
   it('preserves local, human-session and delegated-agent publication and saved execution', async () => {
     const owner = await createSession();
     const agent = await createSession({ label: 'agent' });
+    let completedRuns = 0;
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
       [true, '192.0.2.10', { Cookie: `portos_auth=${owner.token}` }],
@@ -210,9 +219,15 @@ describe('Moltbook publication authority', () => {
       for (const operation of operations) {
         const response = await call(appFor(address), operation, headers);
         expect(response.status, operation[1]).toBe(operation[1] === '/schedules' || operation[1] === '/accounts' ? 201 : 200);
+        if (operation[1] === '/schedules/example-schedule/run') {
+          completedRuns++;
+          expect(effects.logActivity.mock.calls.filter(([entry]) =>
+            entry.scheduleId === 'example-schedule' && entry.status === 'completed'
+          )).toHaveLength(completedRuns);
+        }
       }
     }
-    await vi.waitFor(() => expect(effects.createPost).toHaveBeenCalledTimes(6));
+    expect(effects.createPost).toHaveBeenCalledTimes(6);
     expect(effects.createPost).toHaveBeenLastCalledWith('general', 'Example title', 'Example content');
     expect(effects.createComment).toHaveBeenCalledTimes(3);
     expect(effects.replyToComment).toHaveBeenCalledTimes(6);
@@ -283,9 +298,9 @@ describe('Moltbook publication authority', () => {
     await scheduler.updateSchedule('example-schedule', { action: { type: 'post', params: {} } });
     scheduler.invalidateCache();
     await scheduler.runNow('example-schedule');
-    await vi.waitFor(() => expect(effects.logActivity).toHaveBeenCalledWith(expect.objectContaining({
+    expect(effects.logActivity).toHaveBeenCalledWith(expect.objectContaining({
       scheduleId: 'example-schedule', action: 'post', status: 'completed',
-    })));
+    }));
     expect(effects.generatePost).toHaveBeenCalledWith(expect.objectContaining({ id: ids.agentId }),
       { submolt: 'general' }, payload.providerId, payload.model);
     expect(effects.createPost).toHaveBeenCalledWith('general', 'Generated title', 'Generated content');

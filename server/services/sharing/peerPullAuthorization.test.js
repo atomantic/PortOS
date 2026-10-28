@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { remoteRequestHandler } from '../../lib/requestOrigin.js';
 
 // `instances.js` pulls in the socket relay / Tailscale graph; the only thing
 // this module and `peerSyncShared` need from it is `getPeers` (the
@@ -18,7 +19,8 @@ vi.mock('../instances.js', async () => ({
 
 let settings = {};
 let settingsError = null;
-vi.mock('../settings.js', () => ({
+vi.mock('../settings.js', async () => ({
+  ...(await vi.importActual('../settings.js')),
   getSettings: async () => {
     if (settingsError) throw settingsError;
     return settings;
@@ -66,6 +68,7 @@ describe('peerPullAuthorization', () => {
     __resetPullWarnThrottleForTests();
     vi.restoreAllMocks();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
   describe('readCallerInstanceId', () => {
@@ -80,6 +83,40 @@ describe('peerPullAuthorization', () => {
       expect(readCallerInstanceId({ headers: { [PEER_INSTANCE_ID_HEADER]: [PEER_A, 'other'] } })).toBe(PEER_A);
       expect(readCallerInstanceId({ headers: { [PEER_INSTANCE_ID_HEADER]: `${PEER_A}, other` } })).toBe(PEER_A);
     });
+  });
+
+  it('binds scoped credentials to their registered peer regardless of the instance header', async () => {
+    setPeers(
+      universePeer({ id: 'denied-peer', syncCategories: { brain: false } }),
+      universePeer({ id: 'allowed-peer', instanceId: 'allowed-instance', syncCategories: { brain: true } }),
+    );
+    const scope = { syncCategory: 'brain', alwaysEnforce: true, allowOperator: true };
+    for (const header of [null, 'allowed-instance']) {
+      await expect(authorizePeerPull({ ...req(header), socket: { remoteAddress: '127.0.0.1' }, portosAuthContext: { enabled: false, authenticated: true, method: 'peer', peerId: 'denied-peer' } }, scope))
+        .rejects.toMatchObject({ status: 403, code: 'PEER_PULL_FORBIDDEN' });
+    }
+    for (const header of [null, PEER_A]) {
+      await expect(authorizePeerPull({ ...req(header), portosAuthContext: { method: 'peer', peerId: 'allowed-peer' } }, scope))
+        .resolves.toMatchObject({ allowed: true, callerId: 'allowed-instance' });
+    }
+    for (const peerId of [undefined, 'removed-peer']) {
+      await expect(authorizePeerPull({ ...req('allowed-instance'), portosAuthContext: { method: 'peer', peerId } }, scope))
+        .rejects.toMatchObject({ status: 403, code: 'PEER_PULL_FORBIDDEN' });
+    }
+  });
+
+  it('operator exceptions reject remote anonymous callers and unverified sessions', async () => {
+    const scope = { syncCategory: 'brain', alwaysEnforce: true, allowOperator: true };
+    const anonymous = { enabled: false, authenticated: false, method: null };
+    const tunneled = { headers: {}, socket: { remoteAddress: '127.0.0.1' }, portosAuthContext: anonymous };
+    remoteRequestHandler(() => {})(tunneled);
+    for (const request of [
+      { headers: {}, socket: { remoteAddress: '203.0.113.7' }, portosAuthContext: anonymous },
+      tunneled,
+      { headers: {}, socket: { remoteAddress: '127.0.0.1' }, portosAuthContext: { enabled: true, authenticated: false, method: 'session' } },
+    ]) {
+      await expect(authorizePeerPull(request, scope)).rejects.toMatchObject({ status: 403, code: 'PEER_PULL_FORBIDDEN' });
+    }
   });
 
   describe('decidePeerPull', () => {
@@ -185,7 +222,7 @@ describe('peerPullAuthorization', () => {
       // not silent: it logs the same throttled 🔒 refusal `alwaysEnforce` does,
       // once per caller. Since the 403 no longer self-logs, this is the only
       // record of a peer being cut off.
-      const lines = console.warn.mock.calls.map((c) => c[0]);
+      const lines = console.log.mock.calls.map((c) => c[0]);
       expect(lines).toHaveLength(2);
       for (const line of lines) expect(line).toContain('🔒');
     });
@@ -259,9 +296,7 @@ describe('peerPullAuthorization', () => {
     });
   });
 
-  // #5663 — the PII snapshot categories opt out of the warn-first ramp: root
-  // AGENTS.md forbids those records on the federation layer at all, so an
-  // unidentified caller must never be served one regardless of the setting.
+  // Personal snapshots opt out of the creative-sync compatibility ramp.
   describe('alwaysEnforce', () => {
     it('403s a denied pull with strictPullAuthorization off', async () => {
       settings = { federation: { strictPullAuthorization: false } };
@@ -280,8 +315,8 @@ describe('peerPullAuthorization', () => {
       const opts = { route: 'sync digitalTwin', alwaysEnforce: true };
       await expect(authorizePeerPull(req(null), opts)).rejects.toThrow();
       await expect(authorizePeerPull(req(null), opts)).rejects.toThrow();
-      expect(console.warn).toHaveBeenCalledTimes(1);
-      expect(console.warn.mock.calls[0][0]).toContain('🔒');
+      expect(console.log).toHaveBeenCalledTimes(1);
+      expect(console.log.mock.calls[0][0]).toContain('🔒');
     });
 
     it('does not consume the served-anyway throttle slot for the same caller', async () => {
@@ -289,7 +324,8 @@ describe('peerPullAuthorization', () => {
       // the one compatibility ⚠️ when it pulls a creative-work category.
       await expect(authorizePeerPull(req(null), { route: 'sync digitalTwin', alwaysEnforce: true })).rejects.toThrow();
       await authorizePeerPull(req(null), { route: 'sync universe' });
-      expect(console.warn).toHaveBeenCalledTimes(2);
+      expect(console.warn).toHaveBeenCalledTimes(1);
+      expect(console.log).toHaveBeenCalledTimes(1);
     });
   });
 });
