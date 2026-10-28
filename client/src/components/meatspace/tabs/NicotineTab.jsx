@@ -117,14 +117,15 @@ export default function NicotineTab() {
     setRefreshKey(k => k + 1);
   };
 
-  const handleRemove = async (entryDate, index) => {
-    await api.removeNicotineEntry(entryDate, index).catch(() => null);
+  const handleRemove = async (entryDate, index, id) => {
+    await api.removeNicotineEntry(entryDate, index, id).catch(() => null);
     setRefreshKey(k => k + 1);
   };
 
   const startEdit = (entryDate, index, item) => {
     setEditingKey(`${entryDate}:${index}`);
     setEditForm({
+      id: item.id,
       product: item.product || '',
       mgPerUnit: String(item.mgPerUnit || ''),
       count: item.count || 1,
@@ -141,6 +142,7 @@ export default function NicotineTab() {
     const [entryDate, indexStr] = editingKey.split(':');
     const index = parseInt(indexStr, 10);
     await api.updateNicotineEntry(entryDate, index, {
+      id: editForm.id,
       product: editForm.product,
       mgPerUnit: parseFloat(editForm.mgPerUnit),
       count: parseInt(editForm.count, 10) || 1,
@@ -522,7 +524,7 @@ export default function NicotineTab() {
                                     confirmText="Remove"
                                     confirmIcon={Trash2}
                                     ariaLabel={`Confirm remove nicotine entry ${item.product || ''}`}
-                                    onConfirm={() => confirmDelete(() => handleRemove(entry.date, idx))}
+                                    onConfirm={() => confirmDelete(() => handleRemove(entry.date, idx, item.id))}
                                     onCancel={cancelDelete}
                                   />
                                 ) : (
