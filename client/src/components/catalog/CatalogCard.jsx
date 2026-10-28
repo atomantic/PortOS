@@ -74,16 +74,15 @@ export default function CatalogCard({
           : 'border-port-border hover:border-port-accent/60'
       }`}
     >
-      <span className="absolute top-2 left-2 z-10 flex items-center justify-center rounded bg-port-card/90 border border-port-border">
+      <label className="absolute top-0 left-0 z-10 flex h-11 w-11 cursor-pointer items-center justify-center rounded bg-port-card/90 border border-port-border" title={`Select ${name}`}>
         <input
           type="checkbox"
           checked={selected}
           onChange={() => onToggleSelect(it)}
-          onClick={(e) => e.stopPropagation()}
           aria-label={`Select ${name}`}
-          className="w-4 h-4 m-1.5 accent-port-accent cursor-pointer"
+          className="h-4 w-4 accent-port-accent cursor-pointer"
         />
-      </span>
+      </label>
       {/* Armed delete: a full-width band above the card body (the house
           inline-confirm pattern) rather than a corner overlay. A corner overlay
           has to be paid for with reserved padding on the link, and on a
