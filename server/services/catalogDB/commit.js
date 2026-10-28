@@ -10,8 +10,10 @@ import { canonicalStringify } from '../../lib/objects.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { catalogScrapCommitSchema } from '../../lib/catalogValidation.js';
 import { query, withTransaction } from '../../lib/db.js';
-import { createIngredient } from './ingredients.js';
+import { createIngredient, getIngredient } from './ingredients.js';
 import { linkIngredientToSource, linkIngredientToRef, linkIngredientRelation, universeRefRoleForType } from './refs.js';
+import { BIBLE_LIMITS } from '../../lib/storyBible.js';
+import { assertCatalogIdentityWritable } from './identityAccess.js';
 import { toPgJson } from '../../lib/pgJson.js';
 
 // Legacy same-batch `related-to` edges connect a single scrap's extractions into one
@@ -44,26 +46,49 @@ async function readReceipt(exec, operationKey, fingerprint) {
 export async function getScrapCommitReceipt(input) {
   if (!input.operationKey) return null;
   const ingredients = await readReceipt(query, input.operationKey, commitFingerprint(input));
-  if (ingredients) await joinScrapCanon(ingredients, input.universeRef, input.role);
+  if (ingredients) await withScrapCanon(input, async () => ingredients);
   return ingredients;
 }
 
-// Run after the DB transaction, including receipt replay, so an interrupted
-// projection heals without creating another ingredient. Only a still-live canon
-// ref authorizes the join: replay must not restore a removed membership.
-async function joinScrapCanon(ingredients, universeRef, role) {
-  if (!universeRef) return;
-  for (const ingredient of ingredients) {
-    if (!['character', 'place', 'object'].includes(ingredient.type)) continue;
-    const canonRole = `canon-${ingredient.type}`;
-    if (role && role !== canonRole) continue;
-    const { rows } = await query(`SELECT 1 FROM catalog_ingredient_refs
-      WHERE ingredient_id = $1 AND ref_kind = 'universe' AND ref_id = $2
-        AND role = $3 AND deleted = false`, [ingredient.id, universeRef, canonRole]);
-    if (!rows.length) continue;
-    const { addPrimitiveToUniverse } = await import('../catalogPrimitives.js');
-    await addPrimitiveToUniverse(ingredient.id, universeRef, canonRole);
-  }
+const CANON_FIELD = Object.freeze({ character: 'characters', place: 'places', object: 'objects' });
+
+// Creation and receipt replay share the universe write queue with membership
+// removal. The catalog rows, receipt and canon patch commit together, including
+// requests without an operation key: a failed projection leaves no partial batch.
+async function withScrapCanon({ universeRef, role, accepted = [] }, produce) {
+  const eligible = (type) => CANON_FIELD[type] && (!role || role === `canon-${type}`);
+  if (!universeRef || !accepted.some((draft) => eligible(draft.type))) return withTransaction(produce);
+  const { updateUniverse } = await import('../universeBuilder.js');
+  const { canonEntryFor } = await import('../catalogPrimitives.js');
+  let ingredients;
+  await updateUniverse(universeRef, async (current, { client }) => {
+    ingredients = await produce(client);
+    const patch = {};
+    for (const receipt of ingredients) {
+      if (!eligible(receipt.type)) continue;
+      const { rows } = await client.query(`SELECT 1 FROM catalog_ingredient_refs
+        WHERE ingredient_id = $1 AND ref_kind = 'universe' AND ref_id = $2
+          AND role = $3 AND deleted = false FOR SHARE`, [receipt.id, universeRef, `canon-${receipt.type}`]);
+      if (!rows.length) continue;
+      await assertCatalogIdentityWritable(receipt.id, { client });
+      const ingredient = await getIngredient(receipt.id, { client });
+      if (!ingredient) continue;
+      const field = CANON_FIELD[ingredient.type];
+      const list = patch[field] || current[field] || [];
+      const { rows: members } = await client.query('SELECT unnest(catalog_identity_member_ids($1)) AS id', [ingredient.id]);
+      const identityIds = new Set(members.map((member) => member.id));
+      if (list.some((entry) => identityIds.has(entry.ingredientId))) continue;
+      if (list.length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) {
+        throw new ServerError('This universe’s canon bucket is full. Remove a membership before adding another.', { status: 409, code: 'UNIVERSE_CANON_FULL' });
+      }
+      patch[field] = [...list, canonEntryFor(ingredient)];
+    }
+    return Object.keys(patch).length ? patch : null;
+  }, { transactional: true }).catch((error) => {
+    if (error.code === 'NOT_FOUND') throw new ServerError('Owning universe not found', { status: 404 });
+    throw error;
+  });
+  return ingredients;
 }
 
 /**
@@ -83,7 +108,7 @@ export async function commitScrap({ scrapId, accepted = [], embeds = [], univers
   const fingerprint = operationKey
     ? commitFingerprint({ scrapId, accepted, universeRef, role, relationships })
     : null;
-  const ingredients = await withTransaction(async (client) => {
+  return withScrapCanon({ universeRef, role, accepted }, async (client) => {
     if (operationKey) {
       // A competing INSERT waits for the owner to commit or roll back. The
       // following SELECT gets a fresh READ COMMITTED snapshot of its receipt.
@@ -156,6 +181,4 @@ export async function commitScrap({ scrapId, accepted = [], embeds = [], univers
     }
     return created;
   });
-  await joinScrapCanon(ingredients, universeRef, role);
-  return ingredients;
 }

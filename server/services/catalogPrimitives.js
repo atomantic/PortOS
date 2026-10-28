@@ -76,7 +76,7 @@ export function withUserCreatedLock(input) {
   return typeof payload.locked === 'boolean' ? input : { ...input, payload: { ...payload, locked: false } };
 }
 
-function canonEntryFor(ingredient) {
+export function canonEntryFor(ingredient) {
   const payload = structuredClone(ingredient.payload);
   for (const key of ['id', 'ingredientId', 'createdAt', 'updatedAt']) delete payload[key];
   return { ...payload, locked: payload.locked === true, id: `${ingredient.type}-${randomUUID()}`,

@@ -311,11 +311,34 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit universe canon', ()
     expect(replay.body.ingredients.map((i) => i.id)).toEqual(first.body.ingredients.map((i) => i.id));
     await assertCanon();
     const character = first.body.ingredients.find((i) => i.type === 'character');
-    const removed = await request(app).delete(`/api/catalog/ingredients/${character.id}/link`)
-      .send({ refKind: 'universe', refId: universe.id, role: 'canon-character' });
+    const [removed, concurrentReplay] = await Promise.all([
+      request(app).delete(`/api/catalog/ingredients/${character.id}/link`)
+        .send({ refKind: 'universe', refId: universe.id, role: 'canon-character' }),
+      commit(),
+    ]);
     expect(removed.status).toBe(204);
+    expect(concurrentReplay.status).toBe(201);
     expect((await commit()).status).toBe(201);
     expect((await getUniverse(universe.id)).characters).toEqual([]);
+  });
+
+  it('rolls back the entire batch when canon is full, even without an operation key', async () => {
+    const universe = await makeUniverse();
+    const scrap = await catalogDB.createScrap({ rawText: 'A rejected batch.' });
+    scrapIds.add(scrap.id);
+    await query("UPDATE universes SET data = jsonb_set(data, '{objects}', $2::jsonb) WHERE id = $1", [universe.id,
+      toPgJson(Array.from({ length: BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX }, (_, i) => ({ id: `full-${i}`, name: `Existing ${i}` })))]);
+    const prefix = `Rollback scrap ${randomUUID()}`;
+    const response = await request(app).post(`/api/catalog/scraps/${scrap.id}/commit`).send({
+      universeRef: universe.id, accepted: ['character', 'object'].map((type) => ({ type, name: `${prefix} ${type}`, payload: {} })),
+    });
+    const { rows } = await query('SELECT id FROM catalog_ingredients WHERE name = ANY($1)', [[`${prefix} character`, `${prefix} object`]]);
+    for (const row of rows) ingredientIds.add(row.id);
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('UNIVERSE_CANON_FULL');
+    expect(rows).toEqual([]);
+    expect((await getUniverse(universe.id)).characters).toEqual([]);
+    expect((await query('SELECT ingredient_id FROM catalog_ingredient_sources WHERE scrap_id = $1', [scrap.id])).rows).toEqual([]);
   });
 
   it('keeps a caller-selected non-canon role out of the canon lists', async () => {
