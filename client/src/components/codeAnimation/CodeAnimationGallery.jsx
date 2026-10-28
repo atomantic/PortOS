@@ -90,13 +90,16 @@ export default function CodeAnimationGallery() {
     return { ...page, meta: page.counts };
   }, []);
   const gallery = usePagedCollection(fetchPage);
-  const { items, setItems, refreshFirst } = gallery;
-  useSocketSubscription('code-animation', { onResubscribe: refreshFirst });
+  const { items, setItems, removeItem, reload, refreshFirst } = gallery;
+  useSocketSubscription('code-animation', { onResubscribe: reload });
   useEffect(() => {
-    const refresh = () => refreshFirst();
+    const refresh = (event) => {
+      if (event?.kind === 'deleted' && event.id) removeItem(event.id);
+      else refreshFirst();
+    };
     socket.on('code-animation:changed', refresh);
     return () => socket.off('code-animation:changed', refresh);
-  }, [refreshFirst]);
+  }, [refreshFirst, removeItem]);
 
   // A completed job with no poster (one from before posters existed, or whose
   // capture was interrupted) gets one request per visit. Requests go one at a
@@ -137,7 +140,7 @@ export default function CodeAnimationGallery() {
     if (!mounted.current) return;
     setDeleting((previous) => { const next = new Set(previous); next.delete(item.id); return next; });
     if (!done) return;
-    setItems((previous) => previous.filter((entry) => entry.id !== item.id));
+    removeItem(item.id);
     toast.success(`Deleted ${item.title || 'the animation'}`);
   });
 
