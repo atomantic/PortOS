@@ -3,6 +3,7 @@ import { Pencil } from 'lucide-react';
 import toast from '../ui/Toast';
 import { generateImage, previewImagePrompt } from '../../services/api';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
+import { formatCount } from '../../utils/formatters';
 import ModelInputPreview from './ModelInputPreview';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
@@ -68,6 +69,7 @@ export default function QuickImageEdit({ item, onDone, generateParams }) {
         </button>
       </div>
       {preview?.reviewedReferenceImage && <img src={preview.reviewedReferenceImage} alt="Reference for this edit" className="max-h-32 max-w-full object-contain" />}
+      <p className="text-[10px] text-gray-500">Instruction: {formatCount(instruction.length)} characters{preview?.sentPrompt ? ` · Full prompt: ${formatCount(preview.sentPrompt.length)} characters` : ''}</p>
       <ModelInputPreview preview={modelInputPreview} prompt={instruction} />
       <p className="text-[10px] leading-snug text-gray-500">
         Sends this image as the reference with your instruction to the default image render, keeping everything else. Creates a new image; the original is kept.
