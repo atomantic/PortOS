@@ -161,15 +161,23 @@ describe('automation execution ownership (#13910)', () => {
     fakes.logActivity.mockImplementation(async (entry) => {
       if (entry.status === 'completed') throw new Error('Synthetic activity store unavailable');
     });
-    const schedule = await automation.createSchedule(scheduleInput());
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const schedule = await automation.createSchedule(scheduleInput({
+      schedule: { type: 'random', randomWindow: { minMs: 120000, maxMs: 360000 } },
+    }));
+    random.mockReturnValue(0.5);
     await automation.runNow(schedule.id);
-    expect(scheduler.getEvent(`agent-schedule-${schedule.id}`)).toMatchObject({
-      lastRunSucceeded: false, lastError: 'Synthetic activity store unavailable',
+    expect(scheduler.getHistory({ eventId: `agent-schedule-${schedule.id}` })[0]).toMatchObject({
+      success: false, error: 'Synthetic activity store unavailable',
     });
+    expect(scheduler.getEvent(`agent-schedule-${schedule.id}`).intervalMs).toBe(240000);
     expect(fakes.createPost).toHaveBeenCalledTimes(1);
     fakes.logActivity.mockResolvedValue(undefined);
-    await automation.runNow(schedule.id); // Only a new explicit request starts another write.
+    await vi.advanceTimersByTimeAsync(239999);
+    expect(fakes.createPost).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1); // The next regular run is allowed; no failed write replay.
     expect(fakes.createPost).toHaveBeenCalledTimes(2);
     expect(fakes.data.schedules[schedule.id].runCount).toBe(2);
+    random.mockRestore();
   });
 });

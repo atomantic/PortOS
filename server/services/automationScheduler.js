@@ -347,14 +347,16 @@ async function executeScheduledAction(scheduleId) {
   } catch (err) {
     console.error(`❌ Schedule execution notification failed: ${err.message}`);
   }
-  await executor(execution);
-
-  // For random schedules, reschedule with new random interval
-  if (schedule.schedule.type === 'random') {
-    await deactivateSchedule(scheduleId);
-    const freshSchedule = await getScheduleById(scheduleId);
-    if (freshSchedule && freshSchedule.enabled) {
-      await activateSchedule(scheduleId, freshSchedule);
+  try {
+    await executor(execution);
+  } finally {
+    // A terminal activity failure must not pin future runs to the old random interval.
+    if (schedule.schedule.type === 'random') {
+      await deactivateSchedule(scheduleId);
+      const freshSchedule = await getScheduleById(scheduleId);
+      if (freshSchedule && freshSchedule.enabled) {
+        await activateSchedule(scheduleId, freshSchedule);
+      }
     }
   }
 }
