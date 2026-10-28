@@ -117,6 +117,7 @@ export default function DailyLogTab() {
   // 'loading' | 'ready' | 'error' — a failed read must not render as "no entries".
   const [historyStatus, setHistoryStatus] = useState('loading');
   const [settingsError, setSettingsError] = useState(false);
+  const historyFailed = historyStatus === 'error';
   const [dictation, setDictation] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState(null);
@@ -820,7 +821,7 @@ export default function DailyLogTab() {
         )}
 
         <div className="flex-1 overflow-auto">
-          {historyStatus === 'error' && (
+          {historyFailed && (
             <div className="p-3">
               <ListLoadError what="entry history" onRetry={loadHistory} />
             </div>
