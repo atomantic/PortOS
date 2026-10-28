@@ -275,8 +275,8 @@ export function verifyReleaseSynchronizationTask(taskId, { agents = null, respec
   });
 }
 
-/** A vanished workspace cannot be matched by path. A fresh exact promotion PR
- * can still exclude unrelated branch names; an unavailable PR keeps the hold. */
+/** A fresh exact promotion PR can exclude unrelated branch names when a legacy
+ * receipt has none. An unavailable or mismatched PR keeps the hold. */
 async function legacyPromotionBranch(entry, repoPath) {
   if (entry.publication.candidateBranch) return entry.publication.candidateBranch;
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(entry.publication.repository || '')
@@ -311,7 +311,7 @@ export function retainReleaseSynchronizationReview(release) {
       const [releaseRepo, ownerRepo] = release.repoPath
         ? await Promise.all([realpath(release.repoPath).catch(() => null), realpath(entry.owner.workspace).catch(() => null)]) : [null, null];
       let sameRepository = !releaseRepo || !ownerRepo || normalize(releaseRepo) === normalize(ownerRepo);
-      if (releaseRepo && !ownerRepo && !publisherCandidateSeed(entry)) {
+      if (sameRepository && releaseRepo && !entry.publication.candidateBranch && release.branch && !publisherCandidateSeed(entry)) {
         const candidate = await legacyPromotionBranch(entry, releaseRepo).catch(() => null);
         if (candidate && candidate !== release.branch) sameRepository = false;
       }
@@ -482,13 +482,14 @@ export async function validateLegacyReleaseRetirement(release, { unlocked = fals
     if (entry.publication.candidateBranch && entry.publication.candidateBranch !== release.branch) continue;
     const [ownerRepo, targetRepo] = await Promise.all([realpath(entry.owner.workspace).catch(() => null), realpath(release.repoPath).catch(() => null)]);
     if (!targetRepo) return false;
-    if (!ownerRepo) {
+    const sameRepository = !ownerRepo || (process.platform === 'win32'
+      ? resolve(ownerRepo).toLowerCase() === resolve(targetRepo).toLowerCase() : resolve(ownerRepo) === resolve(targetRepo));
+    if (!sameRepository) continue;
+    if (!entry.publication.candidateBranch && release.branch) {
       const candidate = await legacyPromotionBranch(entry, targetRepo).catch(() => null);
       if (candidate && candidate !== release.branch) continue;
-      return false;
     }
-    const sameRepository = process.platform === 'win32' ? resolve(ownerRepo).toLowerCase() === resolve(targetRepo).toLowerCase() : resolve(ownerRepo) === resolve(targetRepo);
-    if (!sameRepository) continue;
+    if (!ownerRepo) return false;
     const legacy = legacyPublisherRecovery(entry), target = publisherCandidateTarget(entry);
     if (!legacy || legacy.evidence.mode !== 'present' || !target || target.path !== release.path || target.branch !== release.branch
       || target.head !== release.head || target.checkoutIdentity !== release.checkoutIdentity

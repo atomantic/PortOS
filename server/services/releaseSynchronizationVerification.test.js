@@ -281,6 +281,36 @@ it('scopes a missing publisher workspace by a fresh exact promotion branch', asy
   expect(await validateLegacyReleaseRetirement(release)).toBe(false);
 });
 
+it('scopes an unseeded publisher in the existing primary checkout without weakening candidate holds', async () => {
+  const id = '6'.repeat(64), source = await addTask({ description: 'Primary checkout publisher', app: 'example-app' });
+  const legacyPublication = { ...publication, identity: id, tag: `v6.6.6-${id}` };
+  delete legacyPublication.candidateBranch;
+  const publisher = { ...f.agents[0], id: 'primary-publisher', taskId: source.id,
+    metadata: { workspacePath: '/example/repo', releasePublication: legacyPublication } };
+  const legacyTask = (await ensureReleaseSynchronization(publisher)).taskId;
+  f.agents[1].taskId = legacyTask;
+  f.agents.push(publisher);
+  f.promotion = { number: 12, merged: true, merge_commit_sha: legacyPublication.promotionMerge,
+    head: { ref: 'old-candidate', sha: legacyPublication.candidateHead, repo: { full_name: legacyPublication.repository } },
+    base: { ref: 'release', repo: { full_name: legacyPublication.repository } } };
+  const release = { repoPath: '/example/repo', path: '/example/other-checkout', branch: 'other-branch', head: 'f'.repeat(40), checkoutIdentity: '1'.repeat(64) };
+  expect(await retainReleaseSynchronizationReview(release)).toBe(true);
+  expect(await validateLegacyReleaseRetirement(release)).toBe(true);
+  expect(await retainReleaseSynchronizationReview({ ...release, branch: 'old-candidate' })).toBe(false);
+  expect(await validateLegacyReleaseRetirement({ ...release, branch: 'old-candidate' })).toBe(false);
+  const syncSeed = f.agents[1].metadata.checkoutSeeds[0];
+  expect(await retainReleaseSynchronizationReview({ ...release, branch: syncSeed.branch, path: syncSeed.path,
+    checkoutIdentity: retirementCheckoutIdentityFromPointer(syncSeed.incarnation.pointer) })).toBe(false);
+  expect(await retainReleaseSynchronizationReview({ ...release, branch: null })).toBe(false);
+  expect(await validateLegacyReleaseRetirement({ ...release, branch: null })).toBe(false);
+  f.promotion.head.sha = '0'.repeat(40);
+  expect(await retainReleaseSynchronizationReview(release)).toBe(false);
+  expect(await validateLegacyReleaseRetirement(release)).toBe(false);
+  f.unavailable = true;
+  expect(await retainReleaseSynchronizationReview(release)).toBe(false);
+  expect(await validateLegacyReleaseRetirement(release)).toBe(false);
+});
+
 it('requires the publisher private-review observation as well as both exact retirement receipts', async () => {
   await finishExecution({ retain: false });
   await verifyReleaseSynchronizationTask(taskId);
