@@ -162,3 +162,57 @@ describe('interactive setup read failure', () => {
     expect(readFileSync(envPath, 'utf8')).toBe(original);
   });
 });
+
+describe('local LLM setup backend precedence', () => {
+  async function runSetup({ saved, exported, interactive = false }) {
+    const scriptsDir = join(dir, 'scripts');
+    mkdirSync(join(scriptsDir, 'lib'), { recursive: true });
+    for (const relative of ['setup-llm.js', 'lib/envFile.js', 'lib/envFile.cjs']) {
+      copyFileSync(fileURLToPath(new URL(`../${relative}`, import.meta.url)), join(scriptsDir, relative));
+    }
+    writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
+    writeFileSync(envPath, `LLM_BACKEND=${saved}\nOTHER=keep\n`);
+    const preload = join(dir, 'stub-setup-runtime.mjs');
+    writeFileSync(preload, `
+      import readline from 'node:readline';
+      import childProcess from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      Object.defineProperty(process.stdin, 'isTTY', { value: ${interactive} });
+      Object.defineProperty(process.stdout, 'isTTY', { value: ${interactive} });
+      readline.createInterface = () => ({ question: (_, answer) => answer('3'), close() {} });
+      childProcess.execFileSync = () => { throw new Error('synthetic command unavailable'); };
+      ${exported === undefined ? 'delete process.env.LLM_BACKEND;' : `process.env.LLM_BACKEND = ${JSON.stringify(exported)};`}
+      syncBuiltinESMExports();
+    `);
+    const result = spawnSync(process.execPath, ['--import', preload, join(scriptsDir, 'setup-llm.js')], { encoding: 'utf8' });
+    return { ...result, envContent: readFileSync(envPath, 'utf8') };
+  }
+
+  it.each([
+    ['valid exported value wins over a different valid saved value', 'lmstudio', 'ollama', 'ollama'],
+    ['valid exported value wins over an invalid saved value', 'invalid', 'ollama', 'ollama'],
+    ['invalid exported value falls through to a valid saved value', 'lmstudio', 'invalid', 'lmstudio'],
+  ])('%s', (_name, saved, exported, expected) => {
+    const result = runSetup({ saved, exported });
+    return result.then(({ status, stdout, envContent }) => {
+      expect(status).toBe(0);
+      expect(stdout).toContain(`Local LLM backend: ${expected}`);
+      expect(envContent).toContain(`LLM_BACKEND=${saved}`);
+    });
+  });
+
+  it('keeps the noninteractive no-backend behavior when neither source is valid', async () => {
+    const result = await runSetup({ saved: 'invalid', exported: 'also-invalid' });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('No local LLM backend selected');
+    expect(result.envContent).toContain('LLM_BACKEND=invalid');
+    expect(result.envContent).toContain('OTHER=keep');
+  });
+
+  it('keeps the interactive skip behavior when neither source is valid', async () => {
+    const result = await runSetup({ saved: 'invalid', exported: 'also-invalid', interactive: true });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Skipped — pick a backend later');
+    expect(result.envContent).toContain('LLM_BACKEND=invalid');
+  });
+});

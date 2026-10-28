@@ -103,9 +103,12 @@ function promptYesNo(question) {
 }
 
 const env = parseEnvFile(envPath);
-const existing = env.LLM_BACKEND || process.env.LLM_BACKEND;
+const isBackend = (value) => value === 'ollama' || value === 'lmstudio';
+const existing = isBackend(process.env.LLM_BACKEND)
+  ? process.env.LLM_BACKEND
+  : isBackend(env.LLM_BACKEND) ? env.LLM_BACKEND : null;
 
-if (existing === 'ollama' || existing === 'lmstudio') {
+if (existing) {
   const installed = existing === 'ollama' ? hasOllama() : hasLmStudio();
   console.log(`🧠 Local LLM backend: ${existing}${installed ? ' (installed)' : ' — not detected, install it to use local models'}`);
   process.exit(0);
