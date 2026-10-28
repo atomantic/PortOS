@@ -612,7 +612,7 @@ router.post('/switch', asyncHandler(async (req, res) => {
   const result = await switchBackend(to)
   if (!result.success) {
     emit('error', result.error || 'Switch failed')
-    throw new ServerError(result.error || 'Switch failed', { status: 500 })
+    throw new ServerError(result.error || 'Switch failed', { status: result.code === 'BACKEND_OVERRIDE_CONFLICT' ? 409 : 500 })
   }
   emit('complete', `${to} is now the default backend`)
   res.json(result)

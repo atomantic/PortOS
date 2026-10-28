@@ -354,6 +354,33 @@ describe('LocalLlmRuntimesView runtime servers', () => {
     await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith('localLlm.llama', { idleMinutes: 30 }));
   });
 
+  it('shows an exported backend conflict without a success toast', async () => {
+    const { getLocalLlmStatus, switchLocalLlmBackend } = await import('../../services/api');
+    const toast = (await import('../ui/Toast')).default;
+    const error = 'LLM_BACKEND is exported as ollama. Change or unset that environment override and restart PortOS before setting lmstudio as the default.';
+    getLocalLlmStatus.mockResolvedValue({
+      backend: 'ollama',
+      ollama: { installed: true, available: true, modelCount: 0, models: [] },
+      lmstudio: { installed: true, available: true, modelCount: 0, models: [] },
+    });
+    const realApi = await vi.importActual('../../services/apiLocalLlm');
+    switchLocalLlmBackend.mockImplementationOnce(realApi.switchLocalLlmBackend);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false, status: 409, json: async () => ({ error, code: 'CONFLICT' }),
+    });
+
+    await renderRuntimes('lmstudio');
+    fireEvent.click(screen.getByRole('button', { name: 'Set as Default' }));
+
+    try {
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(error));
+      expect(switchLocalLlmBackend).toHaveBeenCalledWith('lmstudio');
+      expect(toast.success).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it('reports a failed checkpoint download as one error, not an empty success', async () => {
     // `pullMtplxModel` RESOLVES `{success: false}` for a failed download (its
     // progress already streamed), so a formatter-only success message would fire

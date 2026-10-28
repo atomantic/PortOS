@@ -315,6 +315,25 @@ describe('localLlm', () => {
       expect(svc.getBackend()).toBe('lmstudio');
       expect(mocks.providers.updateProvider).toHaveBeenCalledWith('lmstudio', { enabled: true });
     });
+    it('refuses a conflicting exported override before changing disk or providers', async () => {
+      const saved = 'LLM_BACKEND=lmstudio\nPGMODE=docker\n';
+      writeEnv(saved);
+      process.env.LLM_BACKEND = 'ollama';
+      const result = await svc.switchBackend('lmstudio');
+      expect(result).toMatchObject({ success: false, code: 'BACKEND_OVERRIDE_CONFLICT' });
+      expect(result.error).toMatch(/LLM_BACKEND.*ollama.*unset.*restart/);
+      expect(fs.readFileSync(path.join(state.root, '.env'), 'utf8')).toBe(saved);
+      expect(mocks.providers.getProviderById).not.toHaveBeenCalled();
+      expect(mocks.providers.updateProvider).not.toHaveBeenCalled();
+      expect(svc.getBackend()).toBe('ollama');
+    });
+    it.each(['invalid', 'lmstudio'])('allows a nonconflicting exported value %s', async override => {
+      process.env.LLM_BACKEND = override;
+      expect(await svc.switchBackend('lmstudio')).toEqual({ success: true, backend: 'lmstudio' });
+      expect(fs.readFileSync(path.join(state.root, '.env'), 'utf8')).toContain('LLM_BACKEND=lmstudio');
+      expect(svc.getBackend()).toBe('lmstudio');
+      expect(mocks.providers.updateProvider).toHaveBeenCalledWith('lmstudio', { enabled: true });
+    });
     it('rejects an unknown backend', async () => {
       const r = await svc.switchBackend('nope');
       expect(r.success).toBe(false);
