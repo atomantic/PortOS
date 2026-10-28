@@ -14,6 +14,12 @@ describe('snapAspectToImage', () => {
     expect(snapAspectToImage(VIDEO_RESOLUTIONS, 1080, 1920)).toEqual({ w: 576, h: 1024 });
   });
 
+  it('snaps a 4:3 landscape source to the 4:3 quality preset', () => {
+    expect(snapAspectToImage(VIDEO_RESOLUTIONS, 1024, 768)).toEqual({ w: 1024, h: 768 });
+    expect(snapAspectToImage(VIDEO_RESOLUTIONS, 1600, 1200)).toEqual({ w: 1024, h: 768 });
+    expect(snapAspectToImage(VIDEO_RESOLUTIONS, 4032, 3024)).toEqual({ w: 1024, h: 768 });
+  });
+
   it('snaps a square source to a 1:1 preset', () => {
     const r = snapAspectToImage(VIDEO_RESOLUTIONS, 1000, 1000);
     expect(r.w).toBe(r.h); // 512×512 or 768×768 — both are exact 1:1 matches
@@ -68,6 +74,19 @@ describe('model-specific video resolutions', () => {
   it('falls back to the shared Video Gen presets and default', () => {
     expect(resolutionOptionsForModel({})).toBe(VIDEO_RESOLUTIONS);
     expect(defaultResolutionForModel({})).toEqual(DEFAULT_VIDEO_RESOLUTION);
+  });
+
+  it('includes 4:3 large and small presets compliant with the 64px video grid', () => {
+    const large = VIDEO_RESOLUTIONS.find((r) => r.label === '1024×768 (4:3)');
+    const small = VIDEO_RESOLUTIONS.find((r) => r.label === '512×384 (4:3)');
+    expect(large).toEqual({ label: '1024×768 (4:3)', w: 1024, h: 768 });
+    expect(small).toEqual({ label: '512×384 (4:3)', w: 512, h: 384 });
+
+    for (const preset of [large, small]) {
+      expect(preset.w % 64).toBe(0);
+      expect(preset.h % 64).toBe(0);
+      expect(preset.w / preset.h).toBeCloseTo(4 / 3);
+    }
   });
 });
 // @vitest-environment node
