@@ -5,6 +5,7 @@ import { copyToClipboard } from '../../lib/clipboard.js';
 import { downloadBlob } from '../../lib/downloadBlob.js';
 import { formatCount } from '../../utils/formatters.js';
 import PublishCard from './PublishCard.jsx';
+import CollapsibleListItem from '../ui/CollapsibleListItem.jsx';
 
 const inputClass = 'w-full rounded border border-port-border bg-port-bg p-2 text-sm';
 const buttonClass = 'rounded border border-port-border px-3 py-2 text-sm min-h-[44px] disabled:opacity-50';
@@ -17,6 +18,7 @@ function PacketEditor({ project }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
+  const [removing, setRemoving] = useState(null);
   const renderId = project.renderHistoryId ?? null;
   useEffect(() => {
     let active = true;
@@ -57,7 +59,7 @@ function PacketEditor({ project }) {
     {error && <div role="alert" className="text-port-error">{error} {!data && <button type="button" onClick={() => setRetry(value => value + 1)} className={buttonClass}>Retry packet load</button>}</div>}
     {!packet || !data ? <p>Loading festival packet…</p> : <>
       <p role="status">{saved === JSON.stringify(packet) ? 'Packet saved' : 'Unsaved packet changes'}</p>
-      <fieldset disabled={busy} className="min-w-0 space-y-3">
+      <fieldset disabled={busy || removing !== null} className="min-w-0 space-y-3">
         <p>Current final render: {measured?.status === 'current'
           ? `${formatCount(measured.width)} × ${formatCount(measured.height)} pixels; ${measured.durationSec} seconds (measured)`
           : 'Unknown — preview to measure the selected master'}</p>
@@ -93,7 +95,11 @@ function PacketEditor({ project }) {
         </div>)}</div>
         <details><summary>Festival-specific notes ({formatCount(packet.festivals.length)})</summary>
           <p>Organizational notes only. Check each festival&apos;s current rules independently.</p>
-          {packet.festivals.map((festival, index) => <fieldset key={index} className="my-3 grid gap-2 rounded border border-port-border p-3 sm:grid-cols-2">
+          <div tabIndex={-1}>
+          {packet.festivals.map((festival, index) => <CollapsibleListItem key={index} removing={removing === index} onExited={() => {
+            edit({ ...packet, festivals: packet.festivals.filter((_, i) => i !== index) });
+            setRemoving(null);
+          }}><fieldset className="grid gap-2 rounded border border-port-border p-3 sm:grid-cols-2">
             <legend>Festival {formatCount(index + 1)}</legend>
             {data.festivalFields.map(field => <div key={field.id}>
               <label htmlFor={fieldId(`note-${index}-${field.id}`)}>{field.label}</label>
@@ -101,7 +107,9 @@ function PacketEditor({ project }) {
                 onChange={event => edit({ ...packet, festivals: packet.festivals.map((item, i) => i === index ? { ...item, [field.id]: event.target.value } : item) })} />
             </div>)}
             <label htmlFor={fieldId(`note-${index}-include`)} className="flex gap-2 items-center"><input id={fieldId(`note-${index}-include`)} type="checkbox" checked={festival.include} onChange={event => edit({ ...packet, festivals: packet.festivals.map((item, i) => i === index ? { ...item, include: event.target.checked } : item) })} /> Include these festival notes</label>
-          </fieldset>)}
+            <button type="button" className={buttonClass} onClick={() => { setRemoving(index); setPreview(null); }}>Remove festival {formatCount(index + 1)} notes</button>
+          </fieldset></CollapsibleListItem>)}
+          </div>
           <button type="button" className={buttonClass} disabled={packet.festivals.length >= 50} onClick={() => edit({ ...packet, festivals: [...packet.festivals, { include: false }] })}>Add festival notes</button>
         </details>
         <details><summary>Missing fields checklist ({formatCount(missing.length)})</summary><ul>{missing.map(field => <li key={field.id}>{field.label}: unknown</li>)}</ul><p>Rights, music rights and consent: {packet.rights}, {packet.musicRights}, {packet.consent}. Eligibility: unverified.</p></details>

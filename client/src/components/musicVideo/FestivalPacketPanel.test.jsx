@@ -53,6 +53,21 @@ describe('Festival packet editing and selected export', () => {
     expect(screen.getByLabelText('Title')).toHaveValue('Festival title');
   });
 
+  it('removes a festival note at the limit and saves the removal', async () => {
+    stored.festivals = Array.from({ length: 50 }, (_, i) => ({ name: `Festival ${i + 1}`, include: false }));
+    render(<FestivalPacketPanel project={project} />);
+    await screen.findByLabelText('Title');
+    fireEvent.click(screen.getByText('Festival-specific notes (50)'));
+    expect(screen.getByRole('button', { name: 'Add festival notes' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove festival 1 notes', exact: true }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add festival notes' })).toBeEnabled());
+    expect(screen.getByText('Festival-specific notes (49)')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save festival packet' }));
+    await waitFor(() => expect(screen.getByText('Packet saved')).toBeTruthy());
+    expect(stored.festivals).toHaveLength(49);
+    expect(stored.festivals[0].name).toBe('Festival 2');
+  });
+
   it('retains failed saves and invalidates export when fields or selection change', async () => {
     render(<FestivalPacketPanel project={project} />);
     await screen.findByLabelText('Title');
