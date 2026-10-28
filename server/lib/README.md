@@ -1038,5 +1038,4 @@ migration with explicit recognition of the outgoing shipped defaults.
 | `realityStarterV2.js` | Frozen original natural-photography starter and optional preview recipe; V1 remains available to migrations. |
 | `universeVisualProfile.js` | Shared profile normalization, original photography default, photoreal detection, labeled additions, explicit overrides and separate color/texture strength. |
 | `universeVisualProfileValidation.js` | Strict API validation for optional universe photography and finishing profiles. |
-
 | `musicVideoPublishExports.js` | `publishExportLabel` and `publishExportDimensions`: measured export presentation with explicit unknown dimensions for legacy kits. Shared with the publishing UI. |
