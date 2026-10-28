@@ -18,7 +18,15 @@ vi.mock('../services/apiCatalog', () => ({
   getCatalogFacets: vi.fn(),
   getCatalogIngredientDetails: vi.fn(),
   attachCatalogIngredientGeneratedImage: vi.fn(),
+  listCatalogStories: vi.fn(),
+  joinCatalogStory: vi.fn(),
 }));
+vi.mock('../services/api', () => ({
+  createCatalogIngredient: (...args) => createCatalogIngredient(...args),
+  joinCatalogStory: (...args) => joinCatalogStory(...args),
+  draftCatalogStoryMember: vi.fn(),
+}));
+vi.mock('../components/musicVideo/MusicVideoLlmPicker', () => ({ default: () => <p>Model picker</p> }));
 vi.mock('../components/catalog/GenerateImageControl', () => ({
   default: ({ name, onComplete }) => <button type="button" onClick={() => onComplete('new-cover.png')}>Generate image for {name}</button>,
 }));
@@ -30,7 +38,8 @@ vi.mock('../components/MediaImage', () => ({
 }));
 
 import CreativeLibrary from './CreativeLibrary';
-import { listCatalogIngredients, createCatalogIngredient, getCatalogFacets, setCatalogIngredientLock, getCatalogIngredientCards, getCatalogIngredientDetails, attachCatalogIngredientGeneratedImage } from '../services/apiCatalog';
+import { listCatalogIngredients, createCatalogIngredient, getCatalogFacets, setCatalogIngredientLock, getCatalogIngredientCards, getCatalogIngredientDetails, attachCatalogIngredientGeneratedImage, listCatalogStories, joinCatalogStory } from '../services/apiCatalog';
+import { draftCatalogStoryMember } from '../services/api';
 import { listCatalogTypes } from '../services/apiCatalogTypes';
 
 const renderLibrary = (libraryId, entry) => render(
@@ -45,6 +54,7 @@ describe('CreativeLibrary', () => {
     getCatalogIngredientCards.mockReset().mockResolvedValue([]);
     setCatalogIngredientLock.mockReset();
     listCatalogTypes.mockResolvedValue([]);
+    listCatalogStories.mockResolvedValue({ stories: [] });
     getCatalogFacets.mockResolvedValue({
       types: [{ type: 'character', count: 2 }],
       universes: [{ refId: 'u-1', name: 'Example Universe', count: 3 }],
@@ -118,7 +128,7 @@ describe('CreativeLibrary', () => {
     ));
     expect(await screen.findByText('No environments match this filter.')).toBeInTheDocument();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Not in a universe' }));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Not in a universe' }))[0]);
     await waitFor(() => expect(listCatalogIngredients).toHaveBeenLastCalledWith(
       expect.objectContaining({ type: 'place', unlinked: true }),
     ));
@@ -172,7 +182,7 @@ describe('CreativeLibrary', () => {
     createCatalogIngredient.mockResolvedValue({ id: 'cat-obj-9', type: 'object', name: 'Reel can' });
     renderLibrary('objects', '/objects');
 
-    fireEvent.click(await screen.findByRole('button', { name: /New/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'New' }));
     await screen.findByRole('option', { name: 'Example Universe' });
     fireEvent.change(screen.getByLabelText(/Owning universe/), { target: { value: 'u-1' } });
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Reel can' } });
@@ -184,6 +194,34 @@ describe('CreativeLibrary', () => {
       expect.objectContaining({ type: 'object', name: 'Reel can', payload: { description: 'Dented tin.' } }),
       { silent: true },
     );
+  });
+
+  // The story filter lists a storyboard's members (its refs and panel cast)
+  // and offers creating cast that joins it.
+  it('narrows to a story in the universe and drafts new cast that joins it', async () => {
+    const story = { kind: 'storyboard', id: 'sb-1', name: 'Example Story', universeIds: ['u-1'], count: 1, joinable: true };
+    listCatalogStories.mockResolvedValue({ stories: [story, { kind: 'music-video', id: 'mv-2', name: 'Other Video', universeIds: ['u-9'], count: 0, joinable: false }] });
+    listCatalogIngredients.mockResolvedValue({ items: [] });
+    draftCatalogStoryMember.mockResolvedValue({ draft: { name: 'Example Rival', content: 'Green cap.' }, sentPrompt: 'full prompt', promptAdditions: [], providerId: 'example', model: 'example-model' });
+    createCatalogIngredient.mockResolvedValue({ id: 'cat-chr-9', type: 'character', name: 'Example Rival' });
+    joinCatalogStory.mockResolvedValue({ role: 'cast' });
+    renderLibrary('casting', '/casting?scope=u-1&story=storyboard:sb-1');
+
+    expect(await screen.findByRole('heading', { name: 'Example Story' })).toBeInTheDocument();
+    await waitFor(() => expect(listCatalogIngredients).toHaveBeenCalledWith(expect.objectContaining({ type: 'character', refKind: 'storyboard', refId: 'sb-1' })));
+    expect(screen.queryByRole('button', { name: /Other Video/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'New from prompt' })[1]);
+    fireEvent.change(await screen.findByLabelText('Describe the cast member'), { target: { value: 'A rival skater.' } });
+    expect(screen.getByLabelText('Joins story')).toHaveValue('storyboard:sb-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Draft' }));
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('Example Rival'));
+    expect(draftCatalogStoryMember).toHaveBeenCalledWith(expect.objectContaining({ type: 'character', universeId: 'u-1', storyKind: 'storyboard', storyId: 'sb-1', prompt: 'A rival skater.' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save to Example Story' }));
+
+    await waitFor(() => expect(joinCatalogStory).toHaveBeenCalledWith('storyboard', 'sb-1', 'cat-chr-9', { silent: true }));
+    expect(createCatalogIngredient).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'character', name: 'Example Rival', universeId: 'u-1', payload: { physicalDescription: 'Green cap.' } }), { silent: true });
   });
 
   it('renders section navigation tabs with the current library active', async () => {

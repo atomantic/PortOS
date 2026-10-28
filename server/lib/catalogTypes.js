@@ -561,6 +561,7 @@ const CONTAINER_ROLES = Object.freeze({
   series: { character: 'cast', place: 'canon-place', object: 'canon-object' },
   'creative-director': { character: 'cast', place: 'location', object: 'prop', scene: 'scene' },
   'music-video': { character: 'cast', place: 'set', object: 'prop' },
+  storyboard: { character: 'cast', place: 'set', object: 'prop' },
 });
 
 export const catalogReferenceRole = (type, refKind) => CONTAINER_ROLES[refKind]?.[type] || (refKind === 'series' ? 'mentioned' : 'reference');

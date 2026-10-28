@@ -36,6 +36,7 @@ export const REF_TARGET_TABLES = Object.freeze({
   work: { table: 'writers_room_works', liveClause: 'deleted = FALSE' },
   'creative-director': { table: 'creative_director_projects', liveClause: 'deleted = FALSE' },
   'music-video': { table: 'music_video_projects', liveClause: 'deleted = FALSE' },
+  storyboard: { table: 'storyboards', liveClause: 'deleted = FALSE' },
 });
 
 /** The ref kinds this resolver can resolve (those with a known target table). */
@@ -45,7 +46,7 @@ const REF_TITLE_SQL = Object.freeze({ universe: 'name', series: 'name', work: 't
   issue: "COALESCE(data->>'title', data->>'name', 'Issue ' || number::text)",
   'creative-director': "COALESCE(data->>'name', data->>'title')",
   'music-video': "COALESCE(data->>'name', data->>'title')",
-  fableloom: 'name', 'voice-profile': "data->>'name'" });
+  storyboard: 'name', fableloom: 'name', 'voice-profile': "data->>'name'" });
 
 const DERIVED_TARGETS = Object.freeze({ fableloom: { table: 'fableloom_stories', liveClause: 'deleted = false' },
   'voice-profile': { table: 'voice_profiles', liveClause: "approval_status <> 'retired'" } });

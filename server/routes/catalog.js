@@ -52,6 +52,10 @@ import {
   catalogBrainIngestSchema,
   catalogUserTypeSchema,
   catalogUserTypesSettingsSchema,
+  catalogStoryListQuerySchema,
+  catalogStoryParamsSchema,
+  catalogStoryJoinSchema,
+  catalogStoryDraftSchema,
   REF_KINDS,
 } from '../lib/catalogValidation.js';
 import { getActiveCatalogTypes, setUserCatalogTypes } from '../lib/catalogTypes.js';
@@ -67,6 +71,7 @@ import { getBoard as getMoodBoard } from '../services/moodBoard/index.js';
 import { filterLibraryMedia, pickGuideMedia, parseLibraryMediaKey, inferAgeFromText } from '../lib/catalogMediaLibrary.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { previewCatalogCastImport, commitCatalogCastImport } from '../services/musicVideo/catalogCast.js';
+import { draftStoryMember, joinStory, listCatalogStories } from '../services/catalogStories.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
 import catalogIdentityRouter from './catalogIdentity.js';
@@ -258,6 +263,25 @@ router.get('/ingredients', asyncHandler(async (req, res) => {
 // counts, in one round-trip. Live universes/series only.
 router.get('/facets', asyncHandler(async (_req, res) => {
   res.json(await catalogDB.getCatalogFacets());
+}));
+
+// Stories (storyboards, music videos, series) and their member counts for one
+// type, for the Casting / Environments / Objects story filter.
+router.get('/stories', asyncHandler(async (req, res) => {
+  const { type } = validateRequest(catalogStoryListQuerySchema, req.query);
+  res.json({ stories: await listCatalogStories({ type }) });
+}));
+
+// New from prompt: answers with a preview and the exact prompt sent; the
+// client saves the record (POST /ingredients) and joins it to the story.
+router.post('/stories/draft', asyncHandler(async (req, res) => {
+  res.json(await draftStoryMember(validateRequest(catalogStoryDraftSchema, req.body ?? {})));
+}));
+
+router.post('/stories/:kind/:id/members', asyncHandler(async (req, res) => {
+  const { kind, id } = validateRequest(catalogStoryParamsSchema, req.params);
+  const { ingredientId } = validateRequest(catalogStoryJoinSchema, req.body ?? {});
+  res.status(201).json(await joinStory(kind, id, ingredientId));
 }));
 
 router.get('/ingredient-cards', asyncHandler(async (req, res) => {

@@ -74,6 +74,7 @@ export const THREAD_REF_KINDS = Object.freeze({
   'writers-room': { label: "Writers' Room", external: false, navPath: '/writers-room' },
   work: { label: 'Works', external: false, navPath: '/writers-room', basePath: '/writers-room/works', segment: true },
   fableloom: { label: 'FableLoom', external: false, navPath: '/fableloom', segment: true },
+  storyboard: { label: 'Storyboards', external: false, navPath: '/storyboards', segment: true },
   'voice-profile': { label: 'Voice Studio', external: false, navPath: '/voices', segment: true },
 
   // ─── Other PortOS records ────────────────────────────────────────────────

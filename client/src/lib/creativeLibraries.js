@@ -102,6 +102,7 @@ export function ingredientCoverUrl(ingredient) {
 const USAGE_LABELS = [
   ['universe', 'universe', 'universes'],
   ['music-video', 'video', 'videos'],
+  ['storyboard', 'storyboard', 'storyboards'],
   ['creative-director', 'production', 'productions'],
   ['series', 'series', 'series'],
   ['issue', 'issue', 'issues'],

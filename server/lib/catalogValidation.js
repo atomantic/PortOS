@@ -28,6 +28,7 @@ import { GENERATION_METADATA_LIMITS } from './pngMetadata.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 
 import { isTruthyMeta } from './metadataFlags.js';
+import { STORY_DRAFT_LIMITS } from './catalogStoryDraft.js';
 // Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
 // type there flows through to consumers automatically. Kept as a frozen
 // re-export so existing `import { INGREDIENT_TYPES }` callers are unaffected.
@@ -59,6 +60,7 @@ export const REF_KINDS = Object.freeze([
   'work',
   'creative-director',
   'music-video',
+  'storyboard',
 ]);
 
 // Relation kinds derived from the shared registry (`catalogTypes.js`) — adding
@@ -271,6 +273,23 @@ export const catalogIngredientCreateSchema = z.object({
   universeId: z.string().trim().min(1).max(120).optional(),
   operationKey: z.string().uuid().optional(),
 }).strict();
+
+// Casting / Environments / Objects story filters and New from prompt.
+const storyKind = z.enum(['storyboard', 'music-video', 'series']);
+export const catalogStoryListQuerySchema = z.object({ type: z.enum(['character', 'place', 'object']) }).strict();
+export const catalogStoryJoinSchema = z.object({ ingredientId: z.string().trim().min(1).max(128) }).strict();
+export const catalogStoryParamsSchema = z.object({ kind: storyKind, id: z.string().trim().min(1).max(120) }).strict();
+export const catalogStoryDraftSchema = z.object({
+  type: z.enum(['character', 'place', 'object']),
+  universeId: z.string().trim().max(120).optional().default(''),
+  storyKind: storyKind.optional(),
+  storyId: z.string().trim().min(1).max(120).optional(),
+  prompt: z.string().trim().min(1).max(STORY_DRAFT_LIMITS.prompt),
+  providerId: z.string().trim().max(80).optional().default(''),
+  model: z.string().trim().max(200).optional().default(''),
+  effort: z.string().trim().max(32).optional().default(''),
+}).strict()
+  .refine((v) => (v.storyKind == null) === (v.storyId == null), { message: 'storyKind and storyId must be supplied together', path: ['storyId'] });
 
 // Revision-history sources, mirrored from the catalog_ingredient_revisions
 // DB CHECK constraint. The PATCH route accepts an optional `source`/`actor` so

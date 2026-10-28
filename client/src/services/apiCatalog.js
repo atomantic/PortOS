@@ -17,6 +17,17 @@ export const getCatalogStats = (options) => request('/catalog/stats', options);
 // { types, universes, series, tags, unlinkedCount, orphanedCount, total }.
 export const getCatalogFacets = (options) => request('/catalog/facets', options);
 
+// --- Stories (storyboards, music videos, series) ------------------------
+
+export const listCatalogStories = (type, options) =>
+  request(`/catalog/stories?${new URLSearchParams({ type })}`, options);
+
+export const draftCatalogStoryMember = (body, options) =>
+  request('/catalog/stories/draft', { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const joinCatalogStory = (kind, id, ingredientId, options) =>
+  request(`/catalog/stories/${enc(kind)}/${enc(id)}/members`, { method: 'POST', body: JSON.stringify({ ingredientId }), ...options });
+
 // --- Scraps -------------------------------------------------------------
 
 export const createCatalogScrap = (body = {}, options) =>
