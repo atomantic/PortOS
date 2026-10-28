@@ -207,6 +207,7 @@ describe('static-mount fallback', () => {
     });
 
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       let posterSettled = false;
       const poster = localGet('/data/video-thumbnails/stall-poster.jpg').finally(() => { posterSettled = true; });
@@ -233,6 +234,7 @@ describe('static-mount fallback', () => {
       await vi.advanceTimersByTimeAsync(1);
       expect([502, 'disconnected']).toContain(await body);
       expect((await resolveMediaLocations([{ kind: 'video', ref: 'stall.mp4' }]))[0].location).toBe('remote');
+      expect(warn).not.toHaveBeenCalled();
 
       const video = localGet('/data/videos/stall.mp4', { Range: 'bytes=0-3' });
       await videoRequest;
@@ -243,6 +245,7 @@ describe('static-mount fallback', () => {
       expect(result).toMatchObject({ status: 206, body: 'PART' });
       expect(result.headers['content-range']).toBe('bytes 0-3/100');
     } finally {
+      warn.mockRestore();
       vi.useRealTimers();
       peerServer.closeAllConnections();
       localServer.closeAllConnections();

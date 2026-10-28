@@ -237,11 +237,12 @@ export function hostedAssetFallback(mount) {
     if (!target) return next();
     const peer = await findHostPeer(target.peerId);
     if (!peer) return next();
-    const timeoutMs = mount === '/data/image-thumbnails' || mount === '/data/video-thumbnails'
-      ? THUMBNAIL_TIMEOUT_MS : STREAM_TIMEOUT_MS;
+    const isThumbnail = mount === '/data/image-thumbnails' || mount === '/data/video-thumbnails';
+    const timeoutMs = isThumbnail ? THUMBNAIL_TIMEOUT_MS : STREAM_TIMEOUT_MS;
     await streamFromPeer(peer, target.url, req, res, target.drop, timeoutMs).catch((err) => {
       const reason = err?.name === 'AbortError' || err?.message === 'peer media stream idle timeout' ? 'timeout' : 'transport error';
-      console.warn(`⚠️ peerHostedMedia: stream ${mount} from peer failed (${reason})`);
+      if (isThumbnail && reason === 'timeout') console.log(`🐢 peerHostedMedia: stream ${mount} from peer timed out`);
+      else console.warn(`⚠️ peerHostedMedia: stream ${mount} from peer failed (${reason})`);
       if (!res.headersSent) res.status(502).end();
       else res.destroy();
     });
