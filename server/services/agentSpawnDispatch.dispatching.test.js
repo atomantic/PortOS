@@ -87,6 +87,32 @@ beforeEach(() => {
 });
 
 describe('dispatchAgentRun ownership window', () => {
+  it.each(['direct', 'tui', 'runner'])('uses the persisted dispatch for %s completion and its spawn limit', async mode => {
+    const context = newContext();
+    context.task = { ...task, privateSecurityScope: { localOnly: true }, metadata: { totalSpawnCount: '4', failureCount: '0' } };
+    const claimed = { ...task, status: 'in_progress', metadata: { ...context.task.metadata,
+      totalSpawnCount: 5, lastSpawnedAt: '2026-01-01T00:00:00.000Z', claimedBy: 'instance-example' } };
+    f.updateResult = claimed;
+    f.tui = mode === 'tui';
+    setUseRunner(mode === 'runner');
+    const runner = vi.fn(async () => 'agent-x');
+
+    await dispatchAgentRun(context, { spawnViaRunner: runner });
+    const launchedTask = mode === 'runner' ? runner.mock.calls[0][1]
+      : (mode === 'tui' ? spawnTuiAgent : spawnDirectly).mock.calls[0][0].task;
+    expect(launchedTask).toMatchObject({ status: 'in_progress', metadata: {
+      totalSpawnCount: 5, failureCount: '0', lastSpawnedAt: claimed.metadata.lastSpawnedAt, claimedBy: 'instance-example',
+    }, privateSecurityScope: { localOnly: true } });
+  });
+
+  it('still launches an unpersisted scheduled job with its original task', async () => {
+    const context = newContext();
+    context.task = { ...task, id: 'job-example-123', metadata: { autonomousJob: true, jobId: 'job-example' } };
+    f.updateResult = { error: 'Task not found' };
+    await dispatchAgentRun(context);
+    expect(spawnDirectly.mock.calls[0][0].task).toBe(context.task);
+  });
+
   it('protects the agent while registration is pending and releases once handed off', async () => {
     let finishRegistration;
     f.registerGate = new Promise((resolve) => { finishRegistration = resolve; });
