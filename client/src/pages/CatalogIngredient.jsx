@@ -32,6 +32,7 @@ import {
   detachCatalogIngredientMedia,
   uploadCatalogIngredientMediaFile,
   recordCatalogIngredientVoiceMemo,
+  updateCatalogIngredientMediaLibrary,
 } from '../services/apiCatalog';
 import { arrayBufferToBase64 } from '../lib/audioRecorder';
 import useMemoRecorder from '../hooks/useMemoRecorder';
@@ -419,6 +420,32 @@ function IngredientEditor() {
     toast.success(result.kind === 'portrait' ? 'Generated portrait set' : 'Generated image attached');
   }, [record, refreshMedia, identityReadOnly]);
 
+  // A film-look copy saved from one of this record's images joins its
+  // references, carrying the source's form, age and tags so library filters
+  // keep it beside the original. Images from elsewhere stay gallery-only.
+  const handleVariantSaved = useCallback(async (variant, source) => {
+    if (!record || identityReadOnly || !variant?.filename) return;
+    const rows = media.filter((m) => !m.deleted && m.mediaKey === source?.filename && (m.kind === 'reference' || m.kind === 'portrait'));
+    if (rows.length === 0) return;
+    const ok = await attachCatalogIngredientMedia(record.id, { mediaKey: variant.filename, kind: 'reference' }, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err?.message || 'Could not add the copy to references'); return false; });
+    if (!ok) return;
+    const library = (rows.find((m) => m.kind === 'reference') || rows[0]).library || {};
+    const variantFields = Object.fromEntries(['age', 'era', 'wardrobeId', 'formId', 'label']
+      .filter((field) => library.variant?.[field] !== undefined).map((field) => [field, library.variant[field]]));
+    const carried = {
+      ...(Object.keys(variantFields).length > 0 ? { variant: variantFields } : {}),
+      ...(library.tags?.length ? { tags: library.tags } : {}),
+    };
+    if (Object.keys(carried).length > 0) {
+      await updateCatalogIngredientMediaLibrary(record.id, { mediaKey: variant.filename, kind: 'reference', ...carried }, { silent: true })
+        .catch((err) => toast.error(err?.message || 'Could not copy the reference details'));
+    }
+    refreshMedia();
+    toast.success('Filtered copy added to references');
+  }, [record, media, refreshMedia, identityReadOnly]);
+
   const [pendingRenders, setPendingRenders] = useState(() => (
     id ? (safeReadJsonSession(`catalog_pending_renders_${id}`, []) || []) : []
   ));
@@ -754,6 +781,7 @@ function IngredientEditor() {
       key={record.id}
       ingredientId={record.id}
       onQuickEditQueued={handleQuickEditQueued}
+      onVariantSaved={handleVariantSaved}
     >
     <fieldset disabled={mergeBusy} className="flex h-full min-h-0 min-w-0 flex-col">
       <UnsavedChangesConfirm
