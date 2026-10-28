@@ -103,7 +103,7 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
       if (!id) return null;
       const patch = {};
       for (const field of [...itemFields, 'date']) if (updates[field] !== undefined) patch[field] = updates[field];
-      const updated = await mlPatchById(mlCollection, id, patch);
+      const updated = await mlPatchById(mlCollection, id, patch, { expectedDate: date });
       if (!updated) return null;
       invalidate();
       const effectiveDate = updated?.date || date;
@@ -146,7 +146,7 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
     if (await isMortalLoomEnabled()) {
       const id = expectedId ?? await mlIdAtDateIndex(mlCollection, date, index);
       if (!id) return null;
-      const removed = await mlRemoveById(mlCollection, id);
+      const removed = await mlRemoveById(mlCollection, id, { expectedDate: date });
       invalidate();
       return removed;
     }

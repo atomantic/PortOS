@@ -118,14 +118,15 @@ describe.each(cases)('$name event log', ({ key, items, total, result, input, upd
     readDailyLogIfEnabled.mockResolvedValue({ entries: [] });
     const records = new Map([['target', { ...persisted, id: 'target', date: input.date }], ['neighbour', { ...persisted, id: 'neighbour', date: input.date }]]);
     mlIdAtDateIndex.mockResolvedValue('neighbour');
-    mlPatchById.mockImplementation(async (_collection, id, patch) => {
+    mlPatchById.mockImplementation(async (_collection, id, patch, { expectedDate }) => {
       const record = records.get(id);
-      if (!record) return null;
+      if (!record || record.date !== expectedDate) return null;
       Object.assign(record, patch);
       return record;
     });
-    mlRemoveById.mockImplementation(async (_collection, id) => {
+    mlRemoveById.mockImplementation(async (_collection, id, { expectedDate }) => {
       const record = records.get(id) ?? null;
+      if (!record || record.date !== expectedDate) return null;
       records.delete(id);
       return record;
     });
@@ -136,6 +137,10 @@ describe.each(cases)('$name event log', ({ key, items, total, result, input, upd
     expect(await edit(input.date, 1, { ...update, id: 'target' })).toBeNull();
     expect(await remove(input.date, 1, 'target')).toBeNull();
     expect(records.has('neighbour')).toBe(true);
+    records.get('neighbour').date = '2024-06-02';
+    expect(await edit(input.date, 1, { ...update, id: 'neighbour' })).toBeNull();
+    expect(await remove(input.date, 1, 'neighbour')).toBeNull();
+    expect(records.get('neighbour')).toEqual({ ...persisted, id: 'neighbour', date: '2024-06-02' });
     expect(mlIdAtDateIndex).not.toHaveBeenCalled();
   });
 
@@ -155,9 +160,9 @@ describe.each(cases)('$name event log', ({ key, items, total, result, input, upd
     expect(await edit(input.date, 0, { date: '2024-06-02' })).toMatchObject({
       [result]: persisted, date: '2024-06-02'
     });
-    expect(mlPatchById).toHaveBeenCalledWith(collection, 'event-id', { date: '2024-06-02' });
+    expect(mlPatchById).toHaveBeenCalledWith(collection, 'event-id', { date: '2024-06-02' }, { expectedDate: input.date });
     expect(await remove(input.date, 0)).toMatchObject(persisted);
-    expect(mlRemoveById).toHaveBeenCalledWith(collection, 'event-id');
+    expect(mlRemoveById).toHaveBeenCalledWith(collection, 'event-id', { expectedDate: input.date });
   });
 
   it('round-trips custom buttons in their existing file shape', async () => {
