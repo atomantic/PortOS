@@ -34,7 +34,7 @@ import { atomicWrite, createWriteStreamGuarded, ensureDir, PATHS, rmGuarded, wri
 import { execGit } from '../lib/execGit.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
-import { backupSlug } from './supersededBackup.js';
+import { kebabCase } from '../lib/textUtils.js';
 import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch, classifyWorktreeDirt } from './worktreeManager.js';
 import { getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence } from './git.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArchive } from './cosClaimOwnership.js';
@@ -84,6 +84,16 @@ export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGi
 const PYCACHE_FILE = /(?:^|\/)__pycache__\/[^/]+\.cpython-\d+\.pyc$/;
 const TEST_DIAGNOSTICS_FILE = /^\.cache\/test-process-diagnostics\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.json$/;
 const disposableRuntimeArtifact = rel => PYCACHE_FILE.test(rel) || TEST_DIAGNOSTICS_FILE.test(rel);
+
+/**
+ * Branch name to a filesystem-safe, collision-free directory name. The hash
+ * suffix is not decoration: `kebabCase` maps `feature/foo-bar` and
+ * `feature/foo/bar` to the same slug.
+ */
+const backupSlug = (branch) => {
+  const name = String(branch || '');
+  return `${kebabCase(name) || 'branch'}-${createHash('sha256').update(name).digest('hex').slice(0, 8)}`;
+};
 
 export const heldCheckoutArchiveRoot = (cosDir = PATHS.cos) => join(cosDir, 'held-checkout-archives');
 

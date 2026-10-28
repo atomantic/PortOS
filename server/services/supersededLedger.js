@@ -21,11 +21,9 @@
  * re-analyze-everything behavior rather than silently hiding a branch.
  *
  * Caching the verdict removes the cost of re-analysis; it does not retire the
- * branch. `reapSupersededBranches` (branchReconcile.js) does that, gated on a
- * recoverable backup written by `supersededBackup.js` — a superseded branch's
- * uncommitted work is redundant, not worthless, so it is preserved before the
- * worktree is removed. What reaches `formatSupersededForPrompt` is therefore not
- * the whole superseded set but the leftovers the reap could not take this cycle.
+ * branch. `reapSupersededBranches` (branchReconcile.js) does that, for a clean
+ * worktree only: nothing is copied first. What reaches
+ * `formatSupersededForPrompt` is therefore not the whole superseded set but the leftovers the reap could not take this cycle.
  */
 
 import { PATHS, tryReadFile, safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
@@ -198,7 +196,6 @@ export function formatSupersededForPrompt(superseded) {
     lines.push(`### \`${b.branch}\` — SUPERSEDED${v.decidedAt ? ` (verdict recorded ${v.decidedAt})` : ''}`);
     if (v.was) lines.push(`- Was: ${v.was}`);
     if (v.replacedBy?.length) lines.push(`- Replaced on the default branch by: ${v.replacedBy.map((s) => `\`${s}\``).join(', ')}${v.replacedByNote ? ` — ${v.replacedByNote}` : ''}`);
-    if (v.backupPatch) lines.push(`- Uncommitted work backed up at: \`${v.backupPatch}\``);
     if (b.worktreePath) {
       lines.push(`- Worktree still on disk: \`${b.worktreePath}\` — PortOS reaps it once its hold lifts. Do NOT run the removal yourself.`);
     }

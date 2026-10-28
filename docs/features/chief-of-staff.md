@@ -194,9 +194,10 @@ and leaves remote-only receipts and concurrent replacement receipts untouched.
 A single locked checkout no longer labels unrelated review holds as live owners.
 
 A branch with a fresh SUPERSEDED verdict (its replacement still on the default
-branch, its tip and dirty paths unchanged) is backed up under
-`data/cos/abandoned-worktree-backups/` and retired by the scheduled
-reconciliation, behind the same owner and lock gates as merged cleanup. The
+branch, its tip and dirty paths unchanged) is retired by the scheduled
+reconciliation, behind the same owner and lock gates as merged cleanup, and
+only when its worktree is clean: nothing is copied first, so a tree holding
+uncommitted or untracked work is held and reported instead. The
 per-app `reapSuperseded` toggle (on unless `false`, and off whenever
 `cleanupMerged` is off) keeps such branches instead; direct `reconcile()`
 callers still opt in explicitly.

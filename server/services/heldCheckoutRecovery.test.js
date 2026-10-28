@@ -6,7 +6,7 @@
  * remain readable.
  */
 import { describe, it as vitestIt, expect, beforeEach as vitestBeforeEach, afterEach, afterAll, vi } from 'vitest';
-import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat } from 'fs/promises';
+import { appendFile, cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { createHash } from 'node:crypto';
@@ -295,12 +295,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return { release, saved };
   }
 
-  async function supersededCheckout() {
+  async function supersededCheckout({ clean = false } = {}) {
     const { release } = await heldCheckout('superseded', { branch: 'feature/superseded' });
     await rm(join(release.path, 'ignored.txt'));
     await execGit(['worktree', 'unlock', release.path], repo);
-    await execGit(['add', 'initial.txt'], release.path);
-    await writeFile(join(release.path, 'initial.txt'), 'unstaged original work\n');
+    if (clean) {
+      await execGit(['reset', '--hard'], release.path);
+      await execGit(['clean', '-fdx'], release.path);
+    } else {
+      await execGit(['add', 'initial.txt'], release.path);
+      await writeFile(join(release.path, 'initial.txt'), 'unstaged original work\n');
+    }
     const gitdir = (await execGit(['rev-parse', '--absolute-git-dir'], release.path)).stdout.trim();
     await writeFile(join(gitdir, 'private-note'), 'private administration');
     const dirtyPaths = (await execGit(['status', '--porcelain'], release.path)).stdout.trimEnd().split('\n').filter(Boolean).map(line => line.slice(3));
@@ -400,23 +405,25 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it('removes a superseded checkout after the abandoned-worktree backup without copying the checkout', async () => {
-    const { entry, release } = await supersededCheckout();
-    const { backupRoot, backupSlug } = await import('./supersededBackup.js');
-    const backupDir = join(backupRoot(cosDir), backupSlug(release.branch));
-    retirementFaults.onRemove = async () => {
-      expect(existsSync(release.path)).toBe(true);
-      expect(await readFile(join(backupDir, 'worktree.diff'), 'utf8')).toContain('unstaged original work');
-      expect(existsSync(heldCheckoutArchiveRoot(cosDir))).toBe(false);
-    };
+  it('removes a clean superseded checkout without writing any backup or checkout archive', async () => {
+    const { entry, release } = await supersededCheckout({ clean: true });
     expect(await reapSuperseded(entry)).toMatchObject({ reaped: [release.branch], skipped: [] });
     expect(existsSync(release.path)).toBe(false);
     expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
+    expect(existsSync(join(cosDir, 'abandoned-worktree-backups'))).toBe(false);
     expect(await archives()).toEqual([]);
     const outcome = await getBranchReconcileOutcome('app-1');
     expect(outcome.retired).toContainEqual(expect.objectContaining({
       path: release.path, branch: release.branch, head: release.head, archiveDir: null, branchDeleted: true, retiredAt: expect.any(String),
     }));
+  });
+
+  it('keeps a superseded checkout with uncommitted work, since nothing is copied before removal', async () => {
+    const { entry, release } = await supersededCheckout();
+    expect(await reapSuperseded(entry)).toMatchObject({ reaped: [], skipped: [expect.objectContaining({ branch: release.branch, reason: 'worktree-dirty' })] });
+    expect(existsSync(release.path)).toBe(true);
+    expect(await readFile(join(release.path, 'initial.txt'), 'utf8')).toBe('unstaged original work\n');
+    expect(existsSync(join(cosDir, 'abandoned-worktree-backups'))).toBe(false);
   });
 
   it('keeps a superseded checkout held by a live owner and writes no checkout archive', async () => {
@@ -432,8 +439,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect((await getBranchReconcileOutcome('app-1'))?.retired || []).toEqual([]);
   });
 
-  it('retains ignored payload that the superseded patch backup does not preserve', async () => {
-    const { entry, release } = await supersededCheckout();
+  it('retains unique ignored payload on a clean superseded checkout', async () => {
+    const { entry, release } = await supersededCheckout({ clean: true });
+    await appendFile(join(repo, '.git', 'info', 'exclude'), 'ignored.txt\n');
     await writeFile(join(release.path, 'ignored.txt'), 'sole unpublished bytes');
     const result = await reapSuperseded(entry);
     expect(result.reaped).toEqual([]);
@@ -443,35 +451,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await registered(release.path)).toBe(true);
     expect((await execGit(['rev-parse', release.branch], repo)).stdout.trim()).toBe(release.head);
     expect(await archives()).toEqual([]);
-  });
-
-  it('keeps a superseded checkout when its untracked backup cannot be copied', async () => {
-    const { entry, release } = await supersededCheckout();
-    // Mode 000 does not deny the owner on Windows, so that simulation would
-    // copy the file and remove the checkout. A non-directory backup root
-    // fails the same gate.
-    if (process.platform === 'win32') {
-      await rm(cosDir, { recursive: true, force: true });
-      await writeFile(cosDir, 'not-a-directory');
-      const result = await reapSuperseded(entry);
-      expect(result.reaped).toEqual([]);
-      expect(result.skipped[0].reason).toMatch(/backup-failed/);
-      expect(existsSync(release.path)).toBe(true);
-      expect(await registered(release.path)).toBe(true);
-      expect(await archives()).toEqual([]);
-      return;
-    }
-    await chmod(join(release.path, 'untracked.txt'), 0o000);
-    try {
-      const result = await reapSuperseded(entry);
-      expect(result.reaped).toEqual([]);
-      expect(result.skipped[0].reason).toMatch(/backup-failed/);
-      expect(existsSync(release.path)).toBe(true);
-      expect(await registered(release.path)).toBe(true);
-      expect(await archives()).toEqual([]);
-    } finally {
-      await chmod(join(release.path, 'untracked.txt'), 0o644).catch(() => {});
-    }
   });
 
   it('preserves a superseded branch whose exact head no longer matches its verdict', async () => {
@@ -485,7 +464,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   });
 
   it('removes a superseded checkout even when an old obligation has no incarnation proof', async () => {
-    const { entry, release } = await supersededCheckout();
+    const { entry, release } = await supersededCheckout({ clean: true });
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', retirementObligations: [{ ...release, reason: 'retirement-review-pending' }] });
     expect(await reapSuperseded(entry)).toMatchObject({ reaped: [release.branch], skipped: [] });
     expect(existsSync(release.path)).toBe(false);
@@ -493,7 +472,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   });
 
   it('reports an unverified receipt when retirement persistence fails and writes no checkout archive', async () => {
-    const { entry, release } = await supersededCheckout();
+    const { entry, release } = await supersededCheckout({ clean: true });
     retirementFaults.failScheduleWrite = 1;
     expect(await reapSuperseded(entry)).toMatchObject({ reaped: [], skipped: [{ branch: release.branch, reason: 'retirement-receipt-unverified' }] });
     expect((await getBranchReconcileOutcome('app-1'))?.retired || []).toEqual([]);
