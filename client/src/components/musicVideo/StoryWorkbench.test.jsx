@@ -157,6 +157,28 @@ describe('Story workbench', () => {
     expect(screen.getByLabelText('Proposed Concept')).toHaveValue('A rough arc');
   });
 
+  it('enables beats once a storyboard is linked after the proposal', async () => {
+    const unlinked = { ...original, storyboardId: null };
+    api.proposeMusicVideoStory.mockResolvedValue({ ...current, board: null, proposal: proposed, reply: 'Try a return home.', sentPrompt: 'Exact prompt', promptAdditions: [] });
+    function Linkable() {
+      const [project, setProject] = useState(unlinked);
+      return <>
+        <StoryWorkbench project={project} onProject={(patch) => setProject((previous) => ({ ...previous, ...patch }))} />
+        <button type="button" onClick={() => setProject((previous) => ({ ...previous, storyboardId: 'sb-test' }))}>Link board</button>
+      </>;
+    }
+    render(<Linkable />);
+    await develop();
+    fireEvent.click(screen.getByLabelText('Add beat'));
+    expect(screen.getByRole('button', { name: 'Apply selected beats to storyboard' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Link board' }));
+    expect(await screen.findByText('Destination: My board')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply selected beats to storyboard' }));
+    await waitFor(() => expect(api.applyMusicVideoStoryBeats).toHaveBeenCalledWith('mv-test', {
+      boardId: 'sb-test', boardBasis: 'board-1', basis: 'basis-1', beats: [proposed.beats[0]],
+    }, { silent: true }));
+  });
+
   it('uses the prior conversation and edited proposal for a follow-up without applying beats', async () => {
     const view = render(<Fixture />);
     await develop();
