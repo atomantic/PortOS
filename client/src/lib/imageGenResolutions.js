@@ -24,6 +24,8 @@ export const RESOLUTIONS = [
   { label: '1216×832 (Flux landscape)', w: 1216, h: 832, compatible: ['flux1', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM, 'external'] },
   { label: '1024×576 (16:9)', w: 1024, h: 576 },
   { label: '576×1024 (9:16)', w: 576, h: 1024 },
+  { label: '1024×768 (4:3)', w: 1024, h: 768 },
+  { label: '512×384 (4:3)', w: 512, h: 384 },
   { label: '1536×1536 (hi-res square)', w: 1536, h: 1536, compatible: ['codex', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM] },
   { label: '1024×1536 (hi-res portrait)', w: 1024, h: 1536, compatible: ['codex', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM] },
   { label: '1536×1024 (hi-res landscape)', w: 1536, h: 1024, compatible: ['codex', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM] },

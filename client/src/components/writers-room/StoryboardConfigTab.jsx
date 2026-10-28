@@ -142,6 +142,8 @@ const RES_PRESETS = [
   { label: '512×512 (1:1)',  width: 512, height: 512 },
   { label: '512×768 (2:3)',  width: 512, height: 768 },
   { label: '1024×576 (16:9)', width: 1024, height: 576 },
+  { label: '1024×768 (4:3)', width: 1024, height: 768 },
+  { label: '512×384 (4:3)', width: 512, height: 384 },
   { label: '1024×1024 (1:1)', width: 1024, height: 1024 },
 ];
 
