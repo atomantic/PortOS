@@ -895,13 +895,13 @@ describe('Cast & Sets per-item actions', () => {
   it('uses closed-mouth legacy and story expressions unless a shot lip-syncs', async () => {
     const { buildCastAndSetsImagePlan } = await import('./castAndSetsPlan.js');
     const legacy = buildCastAndSetsImagePlan({ scenes: [] }, DIRECTION).expressions.prompt;
-    expect(legacy).toContain('Mouth closed or softly parted');
+    expect(legacy).toContain('Mouth closed');
     expect(legacy).not.toContain('singing full-voice');
     const story = buildCastAndSetsImagePlan({ scenes: [] }, STORY_DIRECTION).expressions.prompt;
-    expect(story).toContain('Mouth closed or softly parted');
+    expect(story).toContain('Mouth closed');
     const singing = buildCastAndSetsImagePlan({ scenes: [{ shotMode: 'performance' }] }, DIRECTION).expressions.prompt;
     expect(singing).toContain('singing full-voice');
-    expect(singing).not.toContain('Mouth closed or softly parted');
+    expect(singing).not.toContain('Mouth closed');
   });
 
   it('preserves wardrobe mappings and controls automatic tests through the route', async () => {
