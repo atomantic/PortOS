@@ -1699,7 +1699,7 @@ function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = 
 // Modal that lists the existing media gallery (history) so the user can attach
 // or set-portrait from already-generated assets — the "scoped to existing media
 // history" requirement. Never uploads; it only references library keys.
-function GalleryPickerModal({ onClose, onPick }) {
+export function GalleryPickerModal({ onClose, onPick }) {
   const [query, setQuery] = useState('');
   const page = useGalleryPage({ q: query });
   const items = page.loading && page.items.length === 0 ? null : page.items;
@@ -1727,16 +1727,16 @@ function GalleryPickerModal({ onClose, onPick }) {
           {items === null && <p className="text-xs text-gray-500">Loading gallery…</p>}
           {items?.length === 0 && <p className="text-xs text-gray-500">No images in the gallery yet. Generate one in Image Gen first.</p>}
           {items && items.length > 0 && (
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
               {items.map((it) => (
                 <div key={it.filename} className="relative group rounded border border-port-border overflow-hidden">
                   <MediaImage src={it.path || `/data/images/${it.filename}`} alt={it.filename}
                     className="w-full aspect-square object-cover" />
-                  <div className="absolute inset-x-0 bottom-0 flex opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                  <div className="absolute inset-x-0 bottom-0 flex opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
                     <button type="button" onClick={() => onPick(it.filename, false)}
-                      className="flex-1 text-[10px] py-2.5 sm:py-1 bg-black/70 text-gray-200 hover:text-white">Attach</button>
+                      className="flex-1 min-w-0 min-h-[44px] text-[10px] bg-black/70 text-gray-200 hover:text-white">Attach</button>
                     <button type="button" onClick={() => onPick(it.filename, true)}
-                      className="flex-1 text-[10px] py-2.5 sm:py-1 bg-black/70 text-gray-200 hover:text-port-warning">Portrait</button>
+                      className="flex-1 min-w-0 min-h-[44px] text-[10px] bg-black/70 text-gray-200 hover:text-port-warning">Portrait</button>
                   </div>
                 </div>
               ))}
