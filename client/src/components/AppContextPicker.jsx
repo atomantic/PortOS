@@ -20,7 +20,8 @@ export default function AppContextPicker({
 }) {
   const selectId = useId();
   const selectedApp = apps.find(app => app.id === value);
-  const sortedApps = [...apps].sort((a, b) =>
+  // Archived apps are hidden from the dashboard; keep one only while it is the current selection.
+  const sortedApps = apps.filter(app => !app.archived || app.id === value).sort((a, b) =>
     (a?.name || '').localeCompare(b?.name || '', undefined, { sensitivity: 'base' })
   );
 
