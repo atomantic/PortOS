@@ -77,6 +77,7 @@ import {
   castAndSetsReferences,
   castAndSetsSubjects,
   noteImageKeys,
+  plannedTests,
 } from './castAndSetsPlan.js';
 import { renderCastAndSetsSheet } from './castAndSetsSheet.js';
 import { findDevArtifact, reviewDevArtifact, resolveDevArtifactNotes } from './devArtifacts.js';
@@ -784,7 +785,19 @@ export async function editCastAndSetsDirection(projectId, edits) {
     const stage = current.castAndSets;
     if (!stage?.direction) throw new ServerError('There is no Cast & Sets direction to edit yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
     if (stage.status === 'skipped') throw new ServerError('The Cast & Sets check-in was skipped — rebuild it first', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
-    const edited = applyCastAndSetsDirectionEdits(stage.direction, edits, { sections });
+    let direction = stage.direction;
+    if (edits.tests?.length) {
+      const effective = plannedTests(current, direction);
+      const rebuilt = buildCastAndSetsImagePlan(current, direction, { revisionNotes: keyNotesText(stage.keyNotes) });
+      const cards = Object.values(stage.plan || {}).filter((item) => item.kind === 'test').sort((a, b) => a.testIndex - b.testIndex);
+      if (cards.length !== effective.length || cards.some((card, i) => card.testIndex !== i || (card.test
+        ? JSON.stringify(card.test) !== JSON.stringify(effective[i])
+        : card.prompt !== rebuilt[card.key]?.prompt))) {
+        throw new ServerError('The saved test cards no longer match this direction. Rebuild the check-in before editing them.', { status: 409, code: 'CAST_SETS_TEST_PLAN_STALE' });
+      }
+      direction = { ...direction, tests: cards.map((card, i) => card.test || effective[i]) };
+    }
+    const edited = applyCastAndSetsDirectionEdits(direction, edits, { sections });
     if (!edited.changed.length) throw new ServerError('Nothing changed — edit a field first', { status: 422, code: 'CAST_SETS_NO_EDITS' });
     changed = edited.changed;
     const notesApplied = [{ id: null, target: 'direction', text: `Edited by the director: ${changed.join(', ')}` }];

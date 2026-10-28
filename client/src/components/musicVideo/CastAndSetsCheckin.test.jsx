@@ -233,6 +233,26 @@ describe('Cast & Sets per-image actions', () => {
     expect(api.regenerateMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { keys: ['cast:dad'] }, { silent: true });
   });
 
+  it('edits structured wardrobe sections and exposes automatic test controls', async () => {
+    const photoDirection = { ...direction, looks: [{ name: 'Rain', description: 'coat', chapters: 'chorus' }] };
+    const plan = { ...photoPlan,
+      looks: { key: 'looks', kind: 'looks', label: 'Wardrobe', prompt: 'looks', deps: [], refKeys: [] },
+      'test:1': { key: 'test:1', kind: 'test', testIndex: 0, label: 'Automatic frame', test: { action: 'walk', caption: 'bridge' }, prompt: 'test', deps: [], refKeys: [] },
+    };
+    api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: sheet('review', { revision: 2, direction: photoDirection, plan }) });
+    render(<Harness initial={sheet('review', { direction: photoDirection, plan })} locked={false} />);
+    fireEvent.click(card('Wardrobe').getByRole('button', { name: 'Edit Wardrobe' }));
+    fireEvent.change(card('Wardrobe').getByLabelText('Song sections'), { target: { value: 'chorus, bridge' } });
+    await act(async () => { fireEvent.click(card('Wardrobe').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project', { looks: [{ name: 'Rain', description: 'coat', chapters: 'chorus, bridge', originalName: 'Rain' }] }, { silent: true });
+    fireEvent.click(card('Automatic frame').getByRole('button', { name: 'Edit Automatic frame' }));
+    expect(card('Automatic frame').getByLabelText('What happens in the frame').value).toBe('walk');
+    fireEvent.change(card('Automatic frame').getByLabelText('Caption'), { target: { value: 'outro' } });
+    await act(async () => { fireEvent.click(card('Automatic frame').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project', { tests: [{ index: 1, caption: 'outro' }] }, { silent: true });
+    expect(card('Automatic frame').getByRole('button', { name: 'Remove Automatic frame' })).toBeInTheDocument();
+  });
+
   it('adds another age to the protagonist', async () => {
     api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: sheet('review', { revision: 2 }) });
     render(<Harness initial={sheet('failed')} locked={false} />);

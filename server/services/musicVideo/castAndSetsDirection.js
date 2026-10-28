@@ -778,7 +778,16 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
     parsed.protagonist = protagonist;
   }
   if (procedural && edits?.world) parsed.world = pickText(edits.world, CAST_SETS_EDITABLE_WORLD);
-  if (Array.isArray(edits?.looks)) parsed.looks = edits.looks.map((l) => pickText(l, { name: SHORT, description: TEXT, chapters: 300 }));
+  if (Array.isArray(edits?.looks)) {
+    parsed.looks = edits.looks.map((l) => pickText(l, { name: SHORT, description: TEXT, chapters: 300 }));
+    const originals = edits.looks.map((l) => l.originalName).filter(Boolean);
+    const names = edits.looks.map((l) => l.name.toLowerCase());
+    if (new Set(originals).size !== originals.length || originals.some((name) => !(previous.looks || []).some((look) => look.name === name)) || new Set(names).size !== names.length) {
+      throw new ServerError('Look names or original references are ambiguous', { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
+    }
+    const renames = new Map(edits.looks.filter((l) => l.originalName).map((l) => [l.originalName, l.name]));
+    parsed.tests = (previous.tests || []).map((test) => ({ ...test, look: renames.get(test.look) || test.look }));
+  }
   if (!procedural && Array.isArray(edits?.cast) && edits.cast.length) {
     parsed.cast = patchItems(previous.cast || [], edits.cast.map((c) => ({ ...c, key: c.id })), { what: 'cast member', keyOf: (c) => c.id, fields: EDITABLE_CAST });
   }
@@ -789,7 +798,7 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
     });
   }
   if (!procedural && Array.isArray(edits?.tests) && edits.tests.length) {
-    parsed.tests = patchItems(previous.tests || [], edits.tests.map((t) => ({ ...t, key: t.index })), { what: 'test', keyOf: (_t, i) => i + 1, fields: EDITABLE_TEST });
+    parsed.tests = patchItems(parsed.tests || previous.tests || [], edits.tests.map((t) => ({ ...t, key: t.index })), { what: 'test', keyOf: (_t, i) => i + 1, fields: EDITABLE_TEST });
     parsed.testsFixed = true;
   }
   const { direction, missing } = mergeCastAndSetsDirection(previous, parsed, { sections, medium: procedural ? 'procedural' : 'photographic', minSets: 1 });
