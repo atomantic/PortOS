@@ -23,6 +23,7 @@
  *     createdAt, updatedAt, approvedAt,
  *     approvedInputs,       // labeled input hashes the approval rests on (productionReview.js); absent on legacy approvals
  *     approvedValues,       // capped approved values of the revertible inputs, keyed like approvedInputs; absent = not revertible
+ *     directedInputs,       // story/guide hashes the direction was written from (productionReview.js); absent before they were recorded
  *   }
  *
  * Status: `directing` → `imaging` → `assembling` → `review` → `approved`, or

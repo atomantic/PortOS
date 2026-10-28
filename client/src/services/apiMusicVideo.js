@@ -44,6 +44,11 @@ export const saveMusicVideoStorySummary = (id, body, options = {}) => request(`/
 export const proposeMusicVideoStory = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/propose`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+// Draft the Cast guide, Environment guide and Visual language from the story summary.
+// Body: { providerId, model?, effort?, executionOptions?, instruction?, preview? }. Nothing is saved.
+export const proposeMusicVideoArtGuides = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/art-guides`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 export const applyMusicVideoStory = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/apply`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
@@ -574,10 +579,12 @@ export const deleteMusicVideoDevArtifact = (id, artifactId, options = {}) =>
 // advances server-side and reports over the `music-video:cast-and-sets` socket event.
 export const startMusicVideoCastAndSets = (id, body = {}, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets`, { method: 'POST', body: JSON.stringify(body), ...options });
-// Body: { notes?: [{ text, target? }] } — omitted notes = the sheet's open notes.
+// Body: { notes?: [{ text, target? }], keys?: [planKey] } — omitted notes = the sheet's open notes;
+// `keys` re-renders just those images (and what depends on them).
 export const regenerateMusicVideoCastAndSets = (id, body = {}, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/regenerate`, { method: 'POST', body: JSON.stringify(body), ...options });
-// Body: { protagonist?, world?, sets?: [{ id, imageRole }] } — the director's direct edits to a procedural direction.
+// Body: { protagonist?, world?, looks?, cast?, sets?, tests? } — the director's direct edits
+// (a list item is patched by id, a test by 1-based index; `remove: true` drops it).
 export const editMusicVideoCastAndSetsDirection = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/direction`, { method: 'PATCH', body: JSON.stringify(body), ...options });
 // Body: { text, target? } — plain-text feedback on the sheet. No target = the whole
@@ -595,6 +602,9 @@ export const reconfirmMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/reconfirm`, { method: 'POST', ...options });
 export const skipMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/skip`, { method: 'POST', ...options });
+// Start over: drop a check-in that is not approved (its images stay in the gallery).
+export const discardMusicVideoCastAndSets = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets`, { method: 'DELETE', ...options });
 
 // ---- Composition document (render style `document`) ----
 // A project-owned HTML composition document rendered over the song. Imports

@@ -64,11 +64,13 @@ export default function CastSetsStage({ board }) {
           id={CAST_CHECKIN_ANCHOR}
           project={project}
           stale={board.productionReadiness?.castAndSets?.stale || null}
+          storyStale={board.productionReadiness?.castAndSets?.storyStale || null}
           busy={locked || castSets.busy || kickoff.running}
           onOpenSheet={board.openArtifact}
           onOpenPreview={board.openPreview}
           onApprove={board.approveCastAndSets}
           onRegenerate={() => castSets.regenerate()}
+          onRegenerateImages={castSets.regenerateImages}
           onEditDirection={castSets.editDirection}
           onApplyFeedback={castSets.applyFeedback}
           onRemoveFeedback={castSets.removeFeedback}
@@ -77,6 +79,8 @@ export default function CastSetsStage({ board }) {
           onReconfirm={() => castSets.reconfirm()}
           onRevert={board.onRevertApproval ? (field) => board.onRevertApproval('castAndSets', field) : undefined}
           onSkip={board.skipCastAndSets}
+          onDiscard={castSets.discard}
+          onRebuildFromStory={() => castSets.rebuildFromStory(project.castAndSets.status)}
         />
       ) : (
         // Build lives on the step's checklist (and the header); this keeps only the way out.

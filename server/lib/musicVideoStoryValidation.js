@@ -31,3 +31,10 @@ export const storyApplySchema = z.object({ basis: text(64).min(1), proposal: sto
 ) }).strict();
 export const storyBeatsApplySchema = z.object({ boardId: text(120).min(1), boardBasis: text(64).min(1), basis: text(64).min(1),
   beats: z.array(beat).min(1).max(40) }).strict();
+// Art-direction guides drafted from the story (story.js proposeArtGuides).
+const guideText = text(12000).optional();
+export const artGuideProposalSchema = z.object({ cast: guideText, environments: guideText, visualLanguage: guideText }).strip();
+export const artGuideProposeSchema = z.object({
+  providerId: text(256).min(1), model: text(256).optional(), effort: text(32).optional(), executionOptions: executionOptionsSchema.optional(),
+  instruction: text(4000).optional(), preview: z.boolean().optional(),
+}).strict();

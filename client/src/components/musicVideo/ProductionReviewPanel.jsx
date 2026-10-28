@@ -3,6 +3,7 @@ import useMusicVideoProofReview from '../../hooks/useMusicVideoProofReview.js';
 import ProofReviewContent, { ProofRenderControls } from './ProofReviewContent.jsx';
 import ProductionReviewContext from './ProductionReviewContext.jsx';
 import OverlayTextCheck from './OverlayTextCheck.jsx';
+import ArtGuideDrafter from './ArtGuideDrafter.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
 import { ART_DIRECTION_ANCHOR, artDirectionGaps, changeRequestBlocker, openChangeRequests, stageChecklist, summarizeStoryboardProblems } from '../../lib/musicVideoStages.js';
 
@@ -229,6 +230,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         {draft.sourceArtifactId && <button type="button" className={buttonClass} onClick={() => onOpenArtifact(draft.sourceArtifactId)}>Read preserved original planning draft</button>}
         <button type="button" className={buttonClass} disabled={dirty || review.busy || documentShots} onClick={review.prepare}>Draft art direction and shots</button>
         <p className="text-xs text-port-text-muted">Uses the saved authoring provider and allowed tools. Builds Cast & Sets first, then pauses for art approval before planning shots. Existing edits are retained.</p>
+        <ArtGuideDrafter project={project} disabled={review.busy} onUse={fields => setLocal({ ...draft, ...fields })} />
         <div id={ART_DIRECTION_ANCHOR} className="grid gap-3 sm:grid-cols-2" style={FOLD_STYLE}>
           {Object.entries({ cast: 'Cast guide', environments: 'Environment guide', visualLanguage: 'Visual language and mood board' }).map(([key, label]) =>
             <label key={key} htmlFor={fieldId(key)} className="text-sm">{label}<textarea id={fieldId(key)} rows={4} value={draft[key]} onChange={e => set(key, e.target.value)} className={fieldClass} /></label>)}
