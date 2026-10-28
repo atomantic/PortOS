@@ -80,9 +80,9 @@ function runRepository(meta) {
  * active. Bind before creation reserves the branch; binding again afterward
  * records its physical generation before work starts. A changed seed refuses.
  */
-export async function captureCheckoutSeeds(agent) {
+export async function captureCheckoutSeeds(agent, { allowUncreated = true } = {}) {
   const prior = agent.metadata?.checkoutSeeds || [];
-  const rows = await captureCompletedCheckouts(agent, { success: true, strict: true, allowUncreated: true });
+  const rows = await captureCompletedCheckouts(agent, { success: true, strict: true, allowUncreated });
   const seeds = [...prior];
   for (const row of rows) {
     const seed = checkoutSeedSchema.parse({ version: 1, agentId: agent.id, startedAt: agent.startedAt,

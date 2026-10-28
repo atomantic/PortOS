@@ -167,7 +167,7 @@ export async function updateReleaseCandidateOwnership(agentId, action) {
         if (!prior) return { captured: false, reason: 'candidate-reservation-missing' };
         const { captureCheckoutSeeds } = await import('./completedCheckoutEvidence.js');
         let seeds;
-        try { seeds = await captureCheckoutSeeds(agent); }
+        try { seeds = await captureCheckoutSeeds(agent, { allowUncreated: false }); }
         catch { return { captured: false, reason: 'checkout-seed-unavailable' }; }
         if (seeds.length !== 1 || seeds[0].agentId !== agentId || seeds[0].startedAt !== agent.startedAt
           || seeds[0].branch !== branch) return { captured: false, reason: 'checkout-seed-unavailable' };

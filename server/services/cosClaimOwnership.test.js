@@ -139,6 +139,12 @@ it('reserves a release branch before creation and captures its actual locked che
     await writeFile(pointer, contents);
     expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'checkout-seed-unavailable' });
     expect(store.state.agents[agentId].metadata.checkoutSeeds).toEqual([seed]);
+    await rm(pointer);
+    await rename(join(scratch, 'original-pointer'), pointer);
+    await execGit(['worktree', 'unlock', checkout], repo);
+    await execGit(['worktree', 'remove', checkout], repo);
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'checkout-seed-unavailable' });
+    expect(store.state.agents[agentId].metadata.checkoutSeeds).toEqual([seed]);
   } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
 });
 
