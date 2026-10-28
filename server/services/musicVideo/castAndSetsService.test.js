@@ -927,6 +927,12 @@ describe('Cast & Sets per-item actions', () => {
     expect(saved.castAndSets.direction.testsFixed).toBe(true);
     expect(saved.castAndSets.direction.tests).toHaveLength(1);
     expect(saved.castAndSets.plan['test:2']).toBeUndefined();
+    const keep = saved.castAndSets.direction.looks[0];
+    expect((await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ looks: [{ ...keep, originalName: keep.name }] })).status).toBe(202);
+    await runTo(project.id, 'review');
+    saved = await current(project.id);
+    expect(saved.castAndSets.direction.tests[0].look).toBe('Watch');
+    expect(saved.castAndSets.direction.looks[0].chapters).toBe('verses');
   });
 
   it('reconstructs matching legacy test cards and refuses stale cards without saving', async () => {
