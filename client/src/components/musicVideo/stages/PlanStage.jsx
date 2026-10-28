@@ -18,7 +18,7 @@ export default function PlanStage({ board }) {
   return (
     <div className="min-w-0 space-y-3">
       <fieldset disabled={locked} className="min-w-0 space-y-3">
-        <StageSection title="Planning tools">
+        <StageSection id="mv-board-plan" title="Planning tools">
           <PlanActions project={project} busy={busy} onPlan={board.onPlan} onAutoArrange={board.onAutoArrange} />
           <ShotPacingFields project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />
         </StageSection>
