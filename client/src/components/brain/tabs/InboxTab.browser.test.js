@@ -64,6 +64,17 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
                 window.captures = [...(window.captures || []), args];
                 return { inboxLog: { id: 'example-thought', status: 'filed', capturedText: args[0] } };
               }
+              const entry = id => window.inboxEntries.find(item => item.id === id);
+              const record = (action, id, destination) => {
+                window.inboxActions = [...(window.inboxActions || []), { action, id, destination }];
+                const inboxLog = { ...entry(id), status: action === 'done' ? 'done' : action === 'retry' ? 'classifying' : 'corrected' };
+                if (destination) inboxLog.filed = { ...inboxLog.filed, destination, destinationId: 'updated-record' };
+                return { inboxLog };
+              };
+              export async function markBrainInboxDone(id) { return record('done', id); }
+              export async function resolveBrainReview(id, destination) { return record('route', id, destination); }
+              export async function retryBrainClassification(id) { return record('retry', id); }
+              export async function fixBrainClassification(id, destination) { return record('fix', id, destination); }
             `;
             if (id === '\0inbox-socket') return 'export default { on() {}, off() {} };';
             if (id === '\0inbox-hooks') return `
@@ -76,12 +87,13 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
             return `
               import React from 'react';
               import { createRoot } from 'react-dom/client';
-              import { MemoryRouter } from 'react-router';
+              import { MemoryRouter, useLocation } from 'react-router';
               import InboxTab from '/src/components/brain/tabs/InboxTab.jsx';
               import '/src/index.css';
               window.SpeechRecognition = function () { throw new Error('Recording must not start'); };
+              function LocationProbe() { const location = useLocation(); return React.createElement('output', { 'aria-label': 'Current path' }, location.pathname); }
               createRoot(document.getElementById('root')).render(
-                React.createElement(MemoryRouter, null, React.createElement(InboxTab))
+                React.createElement(MemoryRouter, null, React.createElement(React.Fragment, null, React.createElement(LocationProbe), React.createElement(InboxTab)))
               );
             `;
           },
@@ -155,6 +167,87 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
         await capture.click();
         await page.waitForFunction(() => window.captures?.length === 2);
         expect(await page.evaluate(() => window.captures[1][3].note)).toBe('Example note');
+        expect(errors).toEqual([]);
+      } finally {
+        await page.close();
+      }
+    }, 30000,
+  );
+
+  it.each([[360, 800], [768, 1024]])(
+    'keeps filed and needs-review actions distinct and touch-sized at %ix%i', async (width, height) => {
+      const page = await browser.newPage({ viewport: { width, height }, hasTouch: true });
+      page.setDefaultTimeout(5000);
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      const entries = [
+        { id: 'file-done', status: 'filed', capturedText: 'Filed done row', capturedAt: '2026-10-28T00:00:00Z', filed: { destination: 'people', destinationId: 'people-1' } },
+        { id: 'file-view', status: 'filed', capturedText: 'Filed view row', capturedAt: '2026-10-28T00:00:00Z', filed: { destination: 'memories', destinationId: 'memory-1' } },
+        { id: 'file-fix', status: 'filed', capturedText: 'Filed fix row', capturedAt: '2026-10-28T00:00:00Z', filed: { destination: 'people', destinationId: 'people-2' } },
+        { id: 'review-route', status: 'needs_review', capturedText: 'Review route row', capturedAt: '2026-10-28T00:00:00Z', classification: { destination: 'people', confidence: 0.4 } },
+        { id: 'review-retry', status: 'needs_review', capturedText: 'Review retry row', capturedAt: '2026-10-28T00:00:00Z', classification: { destination: 'ideas', confidence: 0.3 } },
+      ];
+      try {
+        await page.goto(`${origin}inbox-test`, { timeout: 15000 });
+        await page.evaluate(data => {
+          window.inboxEntries = data;
+          window.resolveInboxHistory({ entries: data, total: data.length, counts: { filed: 3, needs_review: 2 } });
+        }, entries);
+        await page.getByText('Filed done row', { exact: true }).waitFor();
+
+        const targets = [
+          ...await page.getByRole('button', { name: 'View', exact: true }).all(),
+          ...await page.getByRole('button', { name: 'Done', exact: true }).all(),
+          ...await page.getByRole('button', { name: 'Fix', exact: true }).all(),
+          ...await page.getByRole('button', { name: 'People', exact: true }).all(),
+          ...await page.getByRole('button', { name: 'Projects', exact: true }).all(),
+          ...await page.getByRole('button', { name: 'Ideas', exact: true }).all(),
+          ...await page.getByRole('button', { name: 'Admin', exact: true }).all(),
+          ...await page.getByRole('button', { name: 'Memories', exact: true }).all(),
+          ...await page.getByRole('button', { name: 'Retry AI' }).all(),
+        ];
+        for (const target of targets) {
+          await target.scrollIntoViewIfNeeded();
+          const box = await target.boundingBox();
+          expect(box.height).toBeGreaterThanOrEqual(44);
+          expect(box.width).toBeGreaterThanOrEqual(44);
+          expect(box.x).toBeGreaterThanOrEqual(16);
+          expect(box.x + box.width).toBeLessThanOrEqual(width - 16);
+          expect(await target.evaluate(el => {
+            const r = el.getBoundingClientRect();
+            return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+          }), `target ${await target.getAttribute('title')} ${await target.textContent()} at ${JSON.stringify(box)}`).toBe(true);
+        }
+
+        const filedDone = page.locator('div.p-3.bg-port-card').filter({ hasText: 'Filed done row' });
+        await filedDone.getByRole('button', { name: 'Done', exact: true }).click();
+        expect(await page.evaluate(() => window.inboxActions.at(-1))).toEqual({ action: 'done', id: 'file-done', destination: undefined });
+
+        const filedView = page.locator('div.p-3.bg-port-card').filter({ hasText: 'Filed view row' });
+        await filedView.getByRole('button', { name: 'View', exact: true }).click();
+        await page.waitForFunction(() => document.querySelector('output[aria-label="Current path"]')?.textContent === '/brain/memory');
+        expect(await page.evaluate(() => window.inboxActions.length)).toBe(1);
+
+        const filedFix = page.locator('div.p-3.bg-port-card').filter({ hasText: 'Filed fix row' });
+        await filedFix.getByRole('button', { name: 'Fix', exact: true }).click();
+        const fixSelect = filedFix.getByRole('combobox', { name: 'Fix destination' });
+        const move = filedFix.getByRole('button', { name: 'Move' });
+        for (const control of [fixSelect, move, filedFix.getByRole('button', { name: 'Cancel', exact: true })]) {
+          await control.scrollIntoViewIfNeeded();
+          const box = await control.boundingBox();
+          expect(box.height).toBeGreaterThanOrEqual(44);
+          expect(box.width).toBeGreaterThanOrEqual(44);
+          expect(box.x + box.width).toBeLessThanOrEqual(width - 16);
+        }
+        await fixSelect.selectOption('projects');
+        await move.click();
+        expect(await page.evaluate(() => window.inboxActions.at(-1))).toEqual({ action: 'fix', id: 'file-fix', destination: 'projects' });
+
+        expect(await page.getByText('Review route row', { exact: true }).count()).toBe(1);
+        await page.getByRole('button', { name: 'Ideas', exact: true }).first().click();
+        expect(await page.evaluate(() => window.inboxActions.at(-1))).toEqual({ action: 'route', id: 'review-route', destination: 'ideas' });
+        await page.getByRole('button', { name: 'Retry AI' }).last().click();
+        expect(await page.evaluate(() => window.inboxActions.at(-1))).toEqual({ action: 'retry', id: 'review-retry', destination: undefined });
         expect(errors).toEqual([]);
       } finally {
         await page.close();
