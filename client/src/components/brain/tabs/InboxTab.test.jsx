@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 
 vi.mock('../../../services/api', () => ({
   getBrainInbox: vi.fn(),
+  getBrainInboxEntry: vi.fn(),
   captureBrainThought: vi.fn(),
   resolveBrainReview: vi.fn(),
   fixBrainClassification: vi.fn(),
@@ -45,8 +46,9 @@ vi.mock('../../ui/Toast', () => ({
 vi.mock('../VoiceCapture', () => ({ default: () => null }));
 vi.mock('../RepoIntakeOptions', () => ({ default: () => null }));
 
-import { captureBrainThought, getBrainInbox, resolveBrainReview } from '../../../services/api';
+import { captureBrainThought, getBrainInbox, getBrainInboxEntry, resolveBrainReview, markBrainInboxDone, updateBrainInboxEntry, deleteBrainInboxEntry } from '../../../services/api';
 import socket from '../../../services/socket';
+import toast from '../../ui/Toast';
 import InboxTab from './InboxTab';
 
 function LocationProbe() {
@@ -114,7 +116,7 @@ describe('Brain inbox capture', () => {
       counts: { filed: 1 },
     });
     const classified = socket.on.mock.calls.find(([event]) => event === 'brain:classified')[1];
-    act(() => classified({ status: 'filed', destination: 'ideas', title: 'Example idea' }));
+    await act(async () => { await classified({ status: 'filed', destination: 'ideas', title: 'Example idea' }); });
     await screen.findByTitle('View in Memory');
     if (acknowledgementLast) {
       await act(async () => { acknowledge({ inboxLog: accepted }); });
@@ -270,5 +272,90 @@ describe('Brain inbox capture', () => {
       expect(screen.queryByRole('group', { name: 'Not saved capture' })).toBeNull();
       expect(captureBrainThought).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+
+describe('Brain inbox loaded history updates', () => {
+  const older = { id: 'older', capturedText: 'Older review thought', status: 'needs_review', capturedAt: '2026-01-01T00:00:00Z' };
+  const newer = Array.from({ length: 50 }, (_, i) => ({ id: `newer-${i}`, capturedText: `Newer thought ${i}`, status: 'filed', capturedAt: '2026-02-01T00:00:00Z' }));
+  async function loadHistory() {
+    getBrainInbox.mockImplementation(({ cursor }) => Promise.resolve({
+      items: cursor ? [older] : newer, total: 51, nextCursor: cursor ? null : 'older-page', counts: { needs_review: 1, filed: 50 },
+    }));
+    render(<MemoryRouter><InboxTab /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+    await screen.findByText(older.capturedText);
+  }
+
+  it.each(['done', 'edit', 'resolve'])('applies an older row %s response while preserving loaded history', async action => {
+    await loadHistory();
+    const row = screen.getByText(older.capturedText).closest('.bg-port-card');
+    if (action === 'done') {
+      markBrainInboxDone.mockResolvedValue({ ...older, status: 'done' });
+      fireEvent.click(within(row).getByTitle('Mark as done without filing'));
+      await screen.findByText('Done (1)');
+      expect(screen.queryByTitle('Route to Ideas')).toBeNull();
+    } else if (action === 'edit') {
+      updateBrainInboxEntry.mockResolvedValue({ ...older, capturedText: 'Edited older thought' });
+      fireEvent.click(within(row).getByTitle('Edit text'));
+      fireEvent.change(within(row).getByRole('textbox'), { target: { value: 'Edited older thought' } });
+      fireEvent.click(within(row).getByTitle('Save changes'));
+      await screen.findByText('Edited older thought');
+      expect(screen.queryByText(older.capturedText)).toBeNull();
+    } else {
+      resolveBrainReview.mockResolvedValue({ inboxLog: { ...older, status: 'filed', filed: { destination: 'ideas', destinationId: 'idea' } } });
+      fireEvent.click(within(row).getByTitle('Route to Ideas'));
+      await screen.findByTitle('View in Memory');
+      expect(screen.queryByTitle('Route to Ideas')).toBeNull();
+    }
+    expect(screen.getByText('Newer thought 49')).toBeInTheDocument();
+    await waitFor(() => expect(getBrainInbox.mock.calls.length).toBeGreaterThan(2));
+  });
+
+  it('targets loaded classification rows, retains failed rows, and reconciles new captures and counts', async () => {
+    await loadHistory();
+    const classified = socket.on.mock.calls.find(([event]) => event === 'brain:classified')[1];
+    getBrainInboxEntry.mockRejectedValueOnce(new Error('Targeted read failed'));
+    await act(async () => classified({ entryId: older.id, status: 'filed' }));
+    expect(screen.getByText(older.capturedText)).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalledWith('Targeted read failed');
+    expect(toast.success).not.toHaveBeenCalled();
+
+    const arrival = { ...newer[0], id: 'arrival', capturedText: 'New arrival' };
+    getBrainInbox.mockResolvedValue({ items: [arrival, ...newer], total: 52, counts: { filed: 52 }, nextCursor: 'older-page' });
+    getBrainInboxEntry.mockResolvedValue({ ...older, capturedText: 'Classified older thought', status: 'filed' });
+    await act(async () => classified({ entryId: older.id, status: 'filed', destination: 'ideas', title: 'Classified' }));
+    await screen.findByText('Classified older thought');
+    await screen.findByText('New arrival');
+    expect(screen.getByText('Newer thought 49')).toBeInTheDocument();
+    expect(screen.getByText('52')).toBeInTheDocument();
+    await act(async () => classified({ entryId: 'not-loaded', status: 'needs_review' }));
+    expect(getBrainInboxEntry).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops superseded targeted reads after a mutation or deletion', async () => {
+    await loadHistory();
+    const classified = socket.on.mock.calls.find(([event]) => event === 'brain:classified')[1];
+    let finish;
+    getBrainInboxEntry.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    let reading;
+    act(() => { reading = classified({ entryId: older.id, status: 'filed' }); });
+    updateBrainInboxEntry.mockResolvedValue({ ...older, capturedText: 'Latest edit' });
+    const row = screen.getByText(older.capturedText).closest('.bg-port-card');
+    fireEvent.click(within(row).getByTitle('Edit text'));
+    fireEvent.change(within(row).getByRole('textbox'), { target: { value: 'Latest edit' } });
+    fireEvent.click(within(row).getByTitle('Save changes'));
+    await screen.findByText('Latest edit');
+    await act(async () => { finish({ ...older, capturedText: 'Stale classification' }); await reading; });
+    expect(screen.queryByText('Stale classification')).toBeNull();
+
+    act(() => { reading = classified({ entryId: older.id, status: 'filed' }); });
+    deleteBrainInboxEntry.mockResolvedValue({ success: true });
+    fireEvent.click(within(screen.getByText('Latest edit').closest('.bg-port-card')).getByTitle('Delete entry'));
+    fireEvent.click(screen.getByTitle('Confirm delete'));
+    await waitFor(() => expect(screen.queryByText('Latest edit')).toBeNull());
+    await act(async () => { finish(older); await reading; });
+    expect(screen.queryByText(older.capturedText)).toBeNull();
   });
 });
