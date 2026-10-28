@@ -449,15 +449,15 @@ export async function verifyAgentRepoState(input) {
  * periodic bounded sweep remains the durable fallback if the process exits. */
 const releasedCompletionRuns = createSingleFlight();
 export function resumeAgentCompletionRetirement(agentId, seedContext) {
-  return releasedCompletionRuns.run(agentId, () => resumeReleasedCompletion(agentId, seedContext));
+  // The owner-release callback can inherit the finished spawn's closed Git
+  // lifetime. Its fresh verification still uses the usual retirement gates.
+  return releasedCompletionRuns.run(agentId, () => outsideGitMutationLifetime(() => resumeReleasedCompletion(agentId, seedContext)));
 }
 
 async function verifyReleasedSynchronization(agent) {
   if (agent?.status === 'completed' && agent.metadata?.taskAnalysisType === 'release-sync') {
     const { verifyReleaseSynchronizationTask } = await import('./releaseSynchronization.js');
-    // This post-exit callback outlives spawn's Git operation, just like cleanup.
-    // Keep caller authorization; the verifier retains its own exact task/repo checks.
-    await outsideGitMutationLifetime(() => verifyReleaseSynchronizationTask(agent.taskId));
+    await verifyReleaseSynchronizationTask(agent.taskId);
   }
 }
 
