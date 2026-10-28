@@ -113,7 +113,8 @@ export async function retainedSnapshotMergeCheckouts(app, pr, deps) {
 
 /** Remove verified snapshot checkouts in place. Nothing is copied into an archive. */
 export async function retireSnapshotMergeCheckouts(app, pr, deps) {
-  const { forceRemoveWorktreeDir } = await import('./worktreeManager.js');
+  const { forceRemoveWorktreeDir, classifyWorktreeDirt } = await import('./worktreeManager.js');
+  const { execGit } = await import('../lib/execGit.js');
   const { retireWithUnlockedArchive } = await import('./cosClaimOwnershipState.js');
   const checkOwner = deps.checkSnapshotPublicationOwnership
     || (await import('./cosClaimOwnership.js')).checkSnapshotPublicationOwnership;
@@ -125,15 +126,17 @@ export async function retireSnapshotMergeCheckouts(app, pr, deps) {
       admit: async () => await ownership()
         ? { fence: { repoPath: app.repoPath, path: tree.path, branch: null } }
         : { result: { removed: false } },
-      archive: async () => {
-        const { releaseCheckoutWithoutArchive } = await import('./heldCheckoutRecovery.js');
-        const archive = await releaseCheckoutWithoutArchive({ repoPath: app.repoPath, path: tree.path }, async () => ({
-          verify: async holder => (!holder || holder.head !== tree.head || holder.branch || holder.detached !== true)
-            ? 'snapshot-checkout-changed' : null,
-        }));
-        return { archive };
-      },
+      // The snapshot PR is merged, so the checkout's ignored validation output is
+      // disposable; only uncommitted or untracked work keeps it.
+      archive: async () => ({ archive: {
+        verify: async holder => {
+          if (!holder || holder.head !== tree.head || holder.branch || holder.detached !== true) return 'snapshot-checkout-changed';
+          const status = await execGit(['status', '--porcelain'], tree.path).then(r => r.stdout, () => null);
+          return status !== null && classifyWorktreeDirt(status).clean ? null : 'worktree-dirty';
+        },
+      } }),
       finish: async (_admitted, archive) => forceRemoveWorktreeDir(app.repoPath, tree.path, {
+        disposableIgnored: true,
         verifyRemoval: async holder => await ownership() ? archive.verify(holder) : 'snapshot-owner-changed',
       }),
     }).catch(() => ({ removed: false }));

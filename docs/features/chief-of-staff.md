@@ -166,11 +166,13 @@ review obligation whose commits are already on the default branch (ancestor or
 patch-equivalent) is removed in place: no PR identity, owner
 history or agent review is needed, and the retirement
 service re-proves merge evidence and ownership under its fence. Nothing is copied
-into an archive. Git-ignored payload is checked separately: unverified ignored
-files retain the checkout and branch, while recognized disposable module caches
-and links retain their existing policy. An agent's own completed checkout is simpler still: only Git status (uncommitted
-or untracked work), claim ownership and merge evidence gate its removal, and
-ignored files are discarded without a payload scan. Historical recovery archives and
+into an archive, and git-ignored files are disposable build/cache output: only
+Git status (uncommitted or untracked work), claim ownership and merge evidence
+gate removal of a merged checkout, including an agent's own completed checkout.
+The merged PR's required CI is the validation record; no local pregate report
+or run diagnostic is retained. Only a checkout whose commits are not on the
+default branch (a superseded reap or accepted supersession review) still checks
+its ignored payload. Historical recovery archives and
 unfinished quarantine journals remain available after setup. Human handoffs
 and unreadable policy stay held. Other completed local review obligations become bounded
 `REVIEW_RETIREMENT` tasks after a fresh merged-PR preview accepts their policy,

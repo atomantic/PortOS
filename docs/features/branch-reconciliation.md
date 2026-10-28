@@ -56,11 +56,15 @@ persisted inventory and a fresh Git read still matches it — a changed lock,
 HEAD or branch is an ownership change. It then requires merge evidence on the
 default branch and no live owner, claim binding or manual completion handoff.
 
-A merged, clean checkout is removed at its original path after checking ignored
-payload too. `checkout-ignored-payload-unverified` retains the checkout and its
-branch until the wanted files have been recovered or their disposal explicitly
-resolved. Recognized disposable Vitest module caches and links whose target
-bytes remain outside the checkout keep their existing removal policy.
+A merged, clean checkout is removed at its original path. Its ignored files are
+disposable build/cache output and are not scanned: merge evidence (local
+ancestry, or a reviewed `integrated` forge disposition) says the work is on the
+default branch, and Git status guards uncommitted and untracked work. A
+superseded checkout, whose commits are not integrated, still checks ignored
+payload: `checkout-ignored-payload-unverified` retains it and its branch until
+the wanted files have been recovered or their disposal explicitly resolved.
+There, recognized disposable Vitest caches, private npm copies and links whose
+target bytes remain outside the checkout keep their existing removal policy.
 Dirty, unmerged, protected, and live-owner checkouts stay where they are. Retirement does not
 copy the checkout, its ignored files, or its commit history. The lock is
 released only after a second fresh match, and ownership, HEAD and cleanliness
@@ -251,9 +255,10 @@ Git layouts fail closed. It does not deinitialize a module.
    `acceptSuperseded` decision after reviewing the full comparison.
 2. `POST /retire` accepts that tuple plus `review: {prUrl, digest,
    acceptSuperseded}`. It repeats the review. When the disposition is `integrated`
-   and `git status --porcelain` is empty, it also checks ignored files in the
-   parent checkout and each initialized module. Unverified ignored payload holds
-   the checkout and branch. Otherwise it requests `git worktree remove --force`;
+   and `git status --porcelain` is empty, ignored files in the parent checkout
+   and each initialized module are disposable, so it requests
+   `git worktree remove --force` and records the merged PR as the receipt's
+   `validationEvidence`;
    a Git refusal preserves the directory and branch with `checkout-not-removed`.
    After successful removal it deletes the local branch with the same exact-head
    lease as other completed branches.

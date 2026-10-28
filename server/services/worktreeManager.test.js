@@ -6,7 +6,6 @@ import { dirname, join } from 'path';
 
 // Stub every git operation; lifecycle tests exercise the real service without
 // creating, changing or removing a live repository.
-const releaseCheckoutMock = vi.fn(async (_context, prepare) => prepare());
 // The unlocked phase of a completion's removal ends by observing the checkout's identity, so
 // this is where a test pauses or perturbs the window between the two critical sections.
 const observeIdentityMock = vi.fn(async () => null);
@@ -18,7 +17,6 @@ vi.mock('../lib/branchRetirementArchive.js', () => ({ preserveBranchRetirement: 
 vi.mock('./heldCheckoutRecovery.js', () => ({
   assertNoUniqueIgnoredCheckoutPayload: async () => {},
   preserveMergedCheckout: (...args) => preserveCheckoutMock(...args),
-  releaseCheckoutWithoutArchive: (...args) => releaseCheckoutMock(...args),
 }));
 const retirementReceiptMock = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('./taskSchedule.js', () => ({ recordWorkspaceCheckoutRetirement: retirementReceiptMock }));
@@ -879,7 +877,6 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     execGitMock.mock.calls.some(([args]) => JSON.stringify(args) === JSON.stringify(subcommandArgs));
 
   beforeEach(() => {
-    releaseCheckoutMock.mockReset().mockImplementation(async (_context, prepare) => prepare());
     observeIdentityMock.mockReset().mockResolvedValue(null);
     preserveCheckoutMock.mockReset().mockResolvedValue({ archiveDir: '/archive', checkoutIdentity: 'original', verify: async () => null });
     retirementReceiptMock.mockClear();

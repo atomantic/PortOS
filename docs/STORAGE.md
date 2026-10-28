@@ -1221,16 +1221,23 @@ readable and Gmail/API IDs retain their existing meaning.
 
 PortOS no longer writes `data/cos/held-checkout-archives/`,
 `data/cos/branch-retirement-archives/`, or
-`data/cos/initialized-checkout-retirements/`. A merged, clean checkout is
-removed in place only after checking ignored payload as well as Git status.
-Unverified ignored files keep the checkout and branch in place; independently
-recognized disposable caches retain their existing policy. The exception is an
-agent's own completed checkout (`removeWorktree` in
-`server/services/worktreeManager.js`): its published work lives on the forge, Git
-status guards uncommitted and untracked work, and ignored files are treated as
-disposable build/cache output. Completion no longer scans or hashes them, and no
-longer copies `.cache/pregate` reports into `.git/portos-retirement-validation`;
-required CI on the pull request is the validation record.
+`data/cos/initialized-checkout-retirements/`. The forge is the source of truth
+for merged work: a merged or forge-integrated, clean checkout is removed in
+place. Git status guards uncommitted and untracked work, and ignored files are
+disposable build/cache output that is neither scanned, hashed nor copied. This
+covers an agent's own completed checkout (`removeWorktree`), branch
+reconciliation's merged and detached-on-merged cleanup, merged external
+worktrees, quality-snapshot validation checkouts, and reviewed held/initialized
+checkout retirement whose disposition is `integrated`. Nothing copies
+`.cache/pregate` reports or run diagnostics into
+`.git/portos-retirement-validation` or the run's completion data any more;
+the merged PR's required CI is the validation record, and a retirement receipt
+names it as `validationEvidence: { source: "forge-pr", prUrl, prHead,
+mergeCommit }`. Only a checkout whose commits are not integrated (a superseded
+reap or an accepted supersession review) keeps the ignored-payload content
+check: unverified ignored files keep it and its branch in place, and the Vitest
+and npm recognizers still admit producer-shaped caches there. Earlier receipts
+and proofs under `.git/portos-retirement-validation` are left in place.
 Migration 442 preserves all three historical roots and sibling checkouts such
 as `data/cos/worktrees/` and `data/cos/agents/`. Historical archives can contain
 the only unpublished bytes, quarantined originals or unfinished recovery

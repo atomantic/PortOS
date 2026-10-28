@@ -2304,27 +2304,20 @@ export async function reapMergedWorktrees(sourceWorkspace, {
         if (initialHold) { hold(initialHold); return {}; }
         return { fence: { repoPath: sourceWorkspace, path: wt.path, branch: branchName } };
       },
+      // Merged: ignored build/cache output is disposable, so nothing is scanned or copied.
       archive: async () => {
-        const { releaseCheckoutWithoutArchive } = await import('./heldCheckoutRecovery.js');
-        try {
-          return await releaseCheckoutWithoutArchive({ repoPath: sourceWorkspace, path: wt.path, branch: branchName }, async () => {
-            const hold = await verifyRemoval(wt);
-            if (hold) {
-              skipped.push({ path: wt.path, branch: branchName, reason: hold });
-              return {};
-            }
-            return { archive: { verify: holder => verifyRemoval(holder) } };
-          });
-        } catch (error) {
-          skipped.push({ path: wt.path, branch: branchName, reason: 'checkout-not-disposable', detail: error.message });
+        const hold = await verifyRemoval(wt);
+        if (hold) {
+          skipped.push({ path: wt.path, branch: branchName, reason: hold });
           return {};
         }
+        return { archive: { verify: holder => verifyRemoval(holder) } };
       },
       finish: async (_admitted, preservation) => {
         const { readRetirementCheckoutIdentity } = await import('../lib/retirementCheckoutObservation.js');
         const checkoutIdentity = await readRetirementCheckoutIdentity(wt.path).catch(() => null);
         const removal = await forceRemoveWorktreeDir(sourceWorkspace, wt.path, {
-          label: `worktree remove failed for ${wt.path}`,
+          label: `worktree remove failed for ${wt.path}`, disposableIgnored: true,
           verifyRemoval: async holder => await verifyRemoval(holder) || await preservation.verify(holder),
         });
         if (!removal.removed) {
@@ -2429,8 +2422,8 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
       archive: async () => {
         const { readRetirementCheckoutIdentity } = await import('../lib/retirementCheckoutObservation.js');
         const checkoutIdentity = await readRetirementCheckoutIdentity(worktreePath).catch(() => null);
-        const { releaseCheckoutWithoutArchive, assertNoUniqueIgnoredCheckoutPayload } = await import('./heldCheckoutRecovery.js');
-        return releaseCheckoutWithoutArchive({ repoPath: parentRepo, path: worktreePath, branch: branchName }, async () => ({
+        // Merged: ignored build/cache output is disposable, so nothing is scanned or copied.
+        return {
           archive: {
             ...(checkoutIdentity && { checkoutIdentity }),
             verify: async (latest) => {
@@ -2438,11 +2431,10 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
               const status = await execGit(['status', '--porcelain'], worktreePath).then(r => r.stdout, () => null);
               if (status === null || !classifyWorktreeDirt(status).clean) return 'worktree-dirty';
               if (!await hasBranchMergeEvidence(parentRepo, wt.head, target).catch(() => false)) return 'unmerged';
-              return assertNoUniqueIgnoredCheckoutPayload(worktreePath, execGit, [], [], parentRepo).then(() => null,
-                error => error.message || 'checkout-not-disposable');
+              return null;
             },
           },
-        }));
+        };
       },
       finish: async (_admitted, preservation) => {
         const latest = (await listWorktrees(parentRepo)).find(holder => pathsEqual(holder.path, worktreePath));

@@ -157,28 +157,6 @@ import { getOriginInfo } from '../lib/gitRemote.js';
 import { __resetForgeNoAccessLog } from '../lib/forgeAccessErrors.js';
 
 const RETIRE_HEAD = 'a'.repeat(40);
-/**
- * #12682: hold preservation open and prove, while it is pending, that the shared
- * ownership queue is free and only the retiring checkout is fenced.
- */
-async function expectArchiveOutsideOwnershipLock(retirement, fenced) {
-  let started;
-  let finish;
-  const archiving = new Promise(resolve => { started = resolve; });
-  releaseCheckoutWithoutArchive.mockImplementationOnce((_context, prepare) => new Promise(resolve => {
-    finish = () => resolve(prepare());
-    started();
-  }));
-  const pending = retirement();
-  await archiving;
-  expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
-  expect(checkoutRetirementFenceReason({ repoPath: '/repo', ...fenced })).toBe('checkout-retirement-reserved');
-  expect(checkoutRetirementFenceReason({ repoPath: '/repo', branch: 'feature/unrelated', path: '/repo/data/cos/worktrees/other' })).toBe(null);
-  finish();
-  const result = await pending;
-  expect(checkoutRetirementFenceReason({ repoPath: '/repo', ...fenced })).toBe(null);
-  return result;
-}
 const pinnedRef = args => args[0] === 'rev-parse' && args[1] === '--verify' && /^refs\/heads\/[^{}]+$/.test(args[2]);
 const gitFixtureResult = (stdout = '', exitCode = 0) => async args => ({ stdout: pinnedRef(args) ? RETIRE_HEAD : stdout, exitCode });
 let retirementTrees = [];
@@ -515,13 +493,13 @@ describe('cleanupMerged', () => {
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
 
-  it('archives a merged checkout outside the ownership lock while fencing its branch', async () => {
+  it('removes a merged checkout without scanning its ignored build output', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     const worktreePath = '/repo/.claude/worktrees/next-2190';
-    const res = await expectArchiveOutsideOwnershipLock(
-      () => cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]), { branch: 'next/issue-2190' });
+    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]);
     expect(res.cleaned).toEqual(['next/issue-2190']);
-    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', worktreePath, expect.any(Object));
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', worktreePath, expect.objectContaining({ disposableIgnored: true }));
+    expect(releaseCheckoutWithoutArchive).not.toHaveBeenCalled();
   });
 
   it('deletes a merged branch with no worktree', async () => {
@@ -1809,7 +1787,8 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(res.cleaned).not.toContain(BRANCH);
     expect(res.superseded).toEqual([]);
     expect(backupSupersededBranchMock).toHaveBeenCalledTimes(1);
-    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', WORKTREE, expect.anything());
+    // Its commits are not on the default branch, so ignored payload is still checked.
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', WORKTREE, expect.objectContaining({ disposableIgnored: false }));
     expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', BRANCH, RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
   });
 
@@ -2114,15 +2093,8 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', path, expect.any(Object));
     expect(res.detachedWorktrees).toEqual([]);
     expect(preserveMergedCheckout).not.toHaveBeenCalled();
-    expect(releaseCheckoutWithoutArchive).toHaveBeenCalled();
-  });
-
-  it('archives a detached tree outside the ownership lock while fencing its path', async () => {
-    const path = '/repo/data/cos/worktrees/agent-1234abcd';
-    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
-    stubGit();
-    const res = await expectArchiveOutsideOwnershipLock(() => reconcile('/repo'), { path });
-    expect(res.cleaned).toContain(path);
+    expect(releaseCheckoutWithoutArchive).not.toHaveBeenCalled();
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', path, expect.objectContaining({ disposableIgnored: true }));
   });
 
   it('removes a clean detached tree without copying it', async () => {

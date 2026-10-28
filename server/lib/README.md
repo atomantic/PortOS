@@ -1030,7 +1030,7 @@ migration with explicit recognition of the outgoing shipped defaults.
 
 | `releasePublication.js` | Validated request for forge-verified release publication milestones. |
 
-| `testCacheRetirementProof.js` | Bounded, versioned streaming proofs of independently recognized Vitest module caches for current merged-checkout retirement; binds marker bytes, ordered file digests and directory generations without changing historical archive formats. |
+| `testCacheRetirementProof.js` | Vitest module-cache recognizers (cache tag, roots, entry names, metadata shape) for the ignored-payload check on retirements of non-integrated checkouts. |
 | `releaseSynchronization.js` | Frozen continuation policy fields and mandatory synchronization obligations shared by publication enrollment, verification and task update guards. |
 
 | `realityStarterV2.js` | Frozen original natural-photography starter and optional preview recipe; V1 remains available to migrations. |

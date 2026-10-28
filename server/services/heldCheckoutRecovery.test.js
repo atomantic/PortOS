@@ -6,7 +6,7 @@
  * remain readable.
  */
 import { describe, it as vitestIt, expect, beforeEach as vitestBeforeEach, afterEach, afterAll, vi } from 'vitest';
-import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, link, utimes, truncate, chmod, stat, lstat } from 'fs/promises';
+import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { createHash } from 'node:crypto';
@@ -65,25 +65,6 @@ vi.mock('./cosClaimOwnershipState.js', async importOriginal => {
 const SYMLINKS = process.platform !== 'win32';
 const retirementFaults = vi.hoisted(() => ({ onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null }));
 const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null }));
-
-const cacheFaults = vi.hoisted(() => ({ onOpen: null, afterOpen: null, onRead: null, onLstat: null }));
-vi.mock('node:fs/promises', async importOriginal => {
-  const actual = await importOriginal();
-  return { ...actual, lstat: async (...args) => {
-    await cacheFaults.onLstat?.(args[0]);
-    return actual.lstat(...args);
-  }, open: async (...args) => {
-    await cacheFaults.onOpen?.(args[0]);
-    const handle = await actual.open(...args);
-    await cacheFaults.afterOpen?.(args[0]);
-    const read = handle.read.bind(handle);
-    handle.read = async (...readArgs) => {
-      await cacheFaults.onRead?.(args[0]);
-      return read(...readArgs);
-    };
-    return handle;
-  } };
-});
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
@@ -169,7 +150,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     receiptTiming.current = remoteSquash || task.name.startsWith('settles a normally merged checkout before the next scan')
       ? { entryPoint: remoteSquash ? 'remote squash receipt' : task.name.endsWith('cleanupMerged') ? 'cleanupMerged' : 'early reaper', started: performance.now(), phases: {} } : null;
     await receiptTiming.run('fixture-setup', async () => {
-      Object.assign(cacheFaults, { onOpen: null, afterOpen: null, onRead: null, onLstat: null });
       Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
       Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null, onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null });
       scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
@@ -1510,13 +1490,29 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return root;
   }
 
-  it.each(['reviewed', 'merged'])('retains ignored payload through the %s retirement boundary', async mode => {
+  it.each(['reviewed', 'merged'])('removes an integrated checkout with ignored output at the %s retirement boundary', async mode => {
     const c = await reviewedCheckout(`ignored-payload-${mode}`, { normalMerge: true, ignoredPayload: true });
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
     expect((await execGit(['status', '--porcelain'], c.path)).stdout.trim()).toBe('');
     const result = mode === 'reviewed' ? await c.confirm(prepared.review)
       : await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, { ...c.opts, settleMergedReviewObligation: true });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(c.path)).toBe(false);
+    expect(await archives()).toEqual([]);
+  });
+
+  it('retains ignored payload through an accepted supersession retirement boundary', async () => {
+    const c = await reviewedCheckout('ignored-payload-superseded', { superseded: true, normalMerge: true, multipleCommits: true, ignoredPayload: true });
+    // An older, locally merged PR commit whose files the default branch replaced.
+    await execGit(['worktree', 'unlock', c.path], repo);
+    await execGit(['reset', '--hard', 'HEAD~1'], c.path);
+    await execGit(['worktree', 'lock', '--reason', c.release.lockReason, c.path], repo);
+    c.release.head = (await execGit(['rev-parse', 'HEAD'], c.path)).stdout.trim();
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
+    const prepared = await c.prepare();
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { comparison: { disposition: 'review-supersession' } } });
+    const result = await c.confirm(prepared.review);
     expect(result).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
     expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
     expect(await registered(c.path)).toBe(true);
@@ -1528,7 +1524,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   it.each([
     { kind: 'oversized-file', cache: {} },
     { kind: 'oversized-total', cache: { count: 12, bytes: 22 * 1024 * 1024 } },
-  ])('retires a reviewed checkout with verified disposable module cache: $kind', async ({ kind, cache }) => {
+  ])('retires a reviewed checkout without hashing its ignored module cache: $kind', async ({ kind, cache }) => {
     const c = await reviewedCheckout(`disposable-cache-${kind}`);
     await moduleCache(c, cache);
     const prepared = await c.prepare();
@@ -1541,436 +1537,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  // This lifecycle uniquely exercises the old 16 MiB per-module proof failure,
-  // including persisted settlement, without relaxing any production budget.
-  it('retires a cache whose former per-file metadata exceeds 16 MiB with bounded streaming proof', async ({ signal }) => {
-    const c = await reviewedCheckout('compact-cache-cardinality');
-    c.opts.signal = signal;
-    if (signal.aborted) return;
-    const root = await moduleCache(c, { count: 0, bytes: 1 });
-    const count = 80000;
-    const fixtureStarted = performance.now();
-    const payloads = Array.from({ length: 256 }, (_, index) => join(scratch, `cache-fixture-payload-${index}`));
-    for (let offset = 0; offset < payloads.length; offset += 32) {
-      if (signal.aborted) return;
-      await Promise.all(payloads.slice(offset, offset + 32).map(path => writeFile(path, 'x')));
-    }
-    let oldMetadataBytes = 0;
-    for (let offset = 0; offset < count; offset += 32) {
-      if (signal.aborted) return;
-      await Promise.all(Array.from({ length: Math.min(32, count - offset) }, async (_, index) => {
-        const name = (offset + index).toString(16).padStart(64, '0');
-        oldMetadataBytes += Buffer.byteLength(JSON.stringify({ path: `server/.cache/vitest/modules/${name}`,
-          bytes: 1, sha256: '0'.repeat(64), disposableCache: true }));
-        // Share fixture storage, while the service still opens and hashes every
-        // distinct path. Mutation cases below use independent ordinary files.
-        await link(payloads[(offset + index) % payloads.length], join(root, name));
-      }));
-    }
-    if (signal.aborted) return;
-    console.log(`📏 Cache fixture: ${JSON.stringify({ entries: count, creationMs: Math.ceil(performance.now() - fixtureStarted) })}`);
-    expect(oldMetadataBytes).toBeGreaterThan(16 * 1024 * 1024);
-    const initialHeap = process.memoryUsage().heapUsed;
-    let peakHeap = initialHeap;
-    let opened = 0;
-    cacheFaults.onOpen = () => { if (++opened % 1024 === 0) peakHeap = Math.max(peakHeap, process.memoryUsage().heapUsed); };
-    const started = performance.now();
-    const prepared = await c.prepare();
-    if (signal.aborted) return;
-    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, archiveUsage: {
-      cacheRoots: 1, cacheEntries: count + 2, cacheBytes: expect.any(Number), cacheReadBytes: expect.any(Number),
-    } });
-    expect(prepared.review.disposableCacheProofs).toEqual([{ version: 1, producer: 'vitest-modules',
-      root: 'server/.cache/vitest/modules', entries: count + 2, bytes: prepared.archiveUsage.cacheBytes,
-      sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }]);
-    expect(prepared.archiveUsage.metadata).toBeLessThan(64 * 1024);
-    expect(prepared.archiveUsage.directory).toBeLessThan(16 * 1024 * 1024);
-    expect(prepared.archiveUsage.cacheProofPeakBytes).toBeLessThan(4096);
-    expect(prepared.archiveUsage.cacheReadBytes).toBeGreaterThanOrEqual(prepared.archiveUsage.cacheBytes);
-    console.log(`📏 Compact cache proof: ${JSON.stringify({ oldMetadataBytes, ...prepared.archiveUsage,
-      previewMs: Math.ceil(performance.now() - started), sampledPeakHeapDeltaBytes: peakHeap - initialHeap })}`);
-    const retired = await c.confirm(prepared.review);
-    if (signal.aborted) return;
-    expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
-    expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
-      branch: c.release.branch, path: c.path, head: c.release.head, branchDeleted: true,
-    }));
-    expect(existsSync(c.path)).toBe(false);
-    expect(await registered(c.path)).toBe(false);
-    expect(await archives()).toEqual([]);
-  }, 180000);
-
-  it('binds a deterministic cache proof independent of enumeration order', async () => {
-    const c = await reviewedCheckout('compact-cache-order');
-    await moduleCache(c, { count: 3, bytes: 8 });
-    const first = await c.prepare();
-    injected.onOtherFiles = output => output.split('\0').filter(Boolean).reverse().join('\0') + '\0';
-    const second = await c.prepare();
-    expect(first.ok).toBe(true);
-    expect(second.ok).toBe(true);
-    expect(second.review.digest).toBe(first.review.digest);
-    expect(second.archiveUsage.cacheEntries).toBe(5);
-  });
-
-  it.each(['same-size-content', 'size', 'added', 'removed', 'tag', 'metadata', 'unexpected', 'symlink', 'junction', 'parent', 'identical-parent'])(
-    'preserves checkout/ref when a compact cache changes after review: %s', async change => {
-      const c = await reviewedCheckout(`compact-cache-${change}`);
-      const root = await moduleCache(c, { bytes: 24 });
-      const prepared = await c.prepare();
-      expect(prepared.ok).toBe(true);
-      const module = join(root, 'a'.repeat(40));
-      if (change === 'same-size-content') await writeFile(module, 'y'.repeat(24));
-      if (change === 'size') await writeFile(module, 'changed size');
-      if (change === 'added') await writeFile(join(root, 'b'.repeat(64)), 'added');
-      if (change === 'removed') await rm(module);
-      if (change === 'tag') await writeFile(join(root, 'CACHEDIR.TAG'), 'changed marker');
-      if (change === 'metadata') await writeFile(join(root, '_metadata.json'), JSON.stringify({ lockfileHash: 'c'.repeat(8) }));
-      if (change === 'unexpected') await writeFile(join(root, 'wanted-unique-output'), 'retain me');
-      if (change === 'identical-parent') {
-        const original = join(scratch, 'original-cache-root');
-        await rename(root, original);
-        await cp(original, root, { recursive: true });
-      }
-      if (['symlink', 'junction', 'parent'].includes(change)) {
-        const outside = join(scratch, 'outside-compact-cache');
-        await mkdir(outside);
-        await writeFile(join(outside, 'wanted'), 'outside bytes');
-        if (change === 'parent') {
-          await rename(root, root + '-original');
-          await symlink(outside, root, process.platform === 'win32' ? 'junction' : 'dir');
-        } else if (change === 'junction') await symlink(outside, join(root, 'b'.repeat(40)), process.platform === 'win32' ? 'junction' : 'dir');
-        else if (SYMLINKS) { await rm(module); await symlink(join(outside, 'wanted'), module); }
-        else { await rm(module); await mkdir(module); }
-      }
-      const retired = await c.confirm(prepared.review);
-      expect(retired.ok).toBe(false);
-      expect(await registered(c.path)).toBe(true);
-      expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
-      expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
-      expect(await archives()).toEqual([]);
-    });
-
-  it.each(['link', 'directory'])('refuses a cache parent replaced during open before reading redirected bytes: %s', async kind => {
-    const c = await reviewedCheckout('compact-cache-parent-race');
-    const root = await moduleCache(c, { bytes: 24 });
-    const module = join(root, 'a'.repeat(40));
-    const outside = join(scratch, 'outside-redirected-cache');
-    await mkdir(outside);
-    await writeFile(join(outside, 'a'.repeat(40)), 'outside bytes must never be read');
-    let replaced = false;
-    let reads = 0;
-    cacheFaults.onOpen = async path => {
-      if (path !== module || replaced) return;
-      replaced = true;
-      await rename(root, root + '-original');
-      if (kind === 'link') await symlink(outside, root, process.platform === 'win32' ? 'junction' : 'dir');
-      else { await mkdir(root); await writeFile(module, 'different inode'); }
-    };
-    cacheFaults.onRead = path => { if (path === module) reads++; };
-    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-test-cache-changed', archiveUsage: { cacheRoots: 1 } });
-    expect(replaced).toBe(true);
-    expect(reads).toBe(0);
+  // Untracked (not ignored) output is local work even when it is cache-shaped.
+  it('retains large untracked content that only resembles disposable module cache', async () => {
+    const c = await reviewedCheckout('unverified-cache-untracked');
+    const root = await moduleCache(c, { ignored: false });
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-archive-limit-exceeded' });
     expect(await registered(c.path)).toBe(true);
-    expect(await readFile(join(outside, 'a'.repeat(40)), 'utf8')).toBe('outside bytes must never be read');
-    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
-  });
-
-  it('detects an ancestor temporarily redirected and restored before the descriptor fence', async () => {
-    const c = await reviewedCheckout('compact-cache-restored-ancestor');
-    const root = await moduleCache(c, { count: 2, bytes: 24 });
-    const module = join(root, '1'.padStart(40, '0'));
-    const originalModule = join(root, '0'.repeat(40));
-    const originalBytes = await readFile(module);
-    const ancestor = dirname(dirname(root));
-    const saved = join(scratch, 'original-cache-ancestor');
-    const outside = join(scratch, 'outside-cache-ancestor');
-    await mkdir(join(outside, 'vitest/modules'), { recursive: true });
-    await writeFile(join(outside, 'vitest/modules', '1'.padStart(40, '0')), 'outside payload must not be read');
-    let unblockOriginal;
-    const parentRestored = new Promise(resolve => { unblockOriginal = resolve; });
-    let swapped = false;
-    let restored = false;
-    let reads = 0;
-    cacheFaults.onLstat = async path => {
-      if (path === originalModule) await parentRestored;
-      if (path !== module || swapped) return;
-      swapped = true;
-      await rename(ancestor, saved);
-      await symlink(outside, ancestor, process.platform === 'win32' ? 'junction' : 'dir');
-    };
-    cacheFaults.afterOpen = async path => {
-      if (path !== module || restored) return;
-      await rm(ancestor, { recursive: true });
-      await rename(saved, ancestor);
-      restored = true;
-      unblockOriginal();
-    };
-    cacheFaults.onRead = path => { if (path === module || path === originalModule) reads++; };
-    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-test-cache-changed' });
-    expect(swapped && restored).toBe(true);
-    expect(reads).toBe(0);
-    expect(await readFile(module)).toEqual(originalBytes);
-    expect(await registered(c.path)).toBe(true);
-    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
-  });
-
-  it('recomputes the compact proof under the final destructive fence', async () => {
-    const c = await reviewedCheckout('compact-cache-final-fence');
-    const root = await moduleCache(c, { bytes: 24 });
-    const prepared = await c.prepare();
-    expect(prepared.ok).toBe(true);
-    let snapshots = 0;
-    injected.onSnapshot = async () => {
-      // Confirmation's admission snapshot still matches; mutate only at finish.
-      if (++snapshots === 2) await writeFile(join(root, 'a'.repeat(40)), 'changed at final fence');
-    };
-    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
-    expect(snapshots).toBe(2);
-    expect(await registered(c.path)).toBe(true);
-    expect(await lockText(c.path)).toBe(c.release.lockReason);
-    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
-  });
-
-  it.each(['cancel', 'time'])('keeps originals with bounded numeric cache evidence on %s exhaustion', async kind => {
-    const c = await reviewedCheckout('compact-cache-budget');
-    const root = await moduleCache(c, { count: 2, bytes: 32 });
-    const controller = new AbortController();
-    c.opts.signal = controller.signal;
-    let clock;
-    cacheFaults.onRead = path => {
-      if (!path.endsWith('0'.repeat(40))) return;
-      if (kind === 'cancel') controller.abort();
-      else clock = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 600001);
-    };
-    let prepared;
-    try { prepared = await c.prepare(); } finally { clock?.mockRestore(); }
-    expect(prepared).toMatchObject({ ok: false,
-      reason: kind === 'cancel' ? 'retirement-archive-cancelled' : 'retirement-archive-work-limit-exceeded',
-      archiveUsage: { cacheRoots: 1, cacheReadBytes: expect.any(Number) },
-    });
-    expect(Object.values(prepared.archiveUsage).every(value => typeof value === 'number' && Number.isFinite(value))).toBe(true);
-    expect(JSON.stringify(prepared.archiveUsage)).not.toContain('modules');
-    expect(await readFile(join(root, '0'.repeat(40)), 'utf8')).toContain('synthetic compiled module');
-    expect(await registered(c.path)).toBe(true);
-    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+    expect((await stat(join(root, 'a'.repeat(40)))).size).toBe(26 * 1024 * 1024);
     expect(await archives()).toEqual([]);
   });
-
-  // A successful job's meaningful validation record must survive its checkout,
-  // without either declaring it disposable or archiving the whole repository.
-  it.each(['preserved', 'changed-source', 'changed-copy', 'store-symlink', 'sidecar', 'oversized'])(
-    'preserves exact reviewed validation bytes before removal: %s', async scenario => {
-      const c = await reviewedCheckout(`validation-evidence-${scenario}`);
-      await writeFile(join(repo, '.git', 'info', 'exclude'), '.cache/\n');
-      const dir = join(c.path, '.cache/pregate'); await mkdir(dir, { recursive: true });
-      const receipt = join(dir, 'report.json');
-      const bytes = scenario === 'oversized' ? 'x'.repeat(64 * 1024 + 1) : '{"meaningful":"exact local validation evidence"}';
-      await writeFile(receipt, bytes);
-      if (scenario === 'sidecar') await writeFile(join(dir, 'wanted.txt'), 'unique unrelated work');
-      const store = join(repo, '.git', 'portos-retirement-validation');
-      if (scenario === 'store-symlink') await symlink(c.path, store, process.platform === 'win32' ? 'junction' : 'dir');
-      const prepared = await c.prepare(); expect(prepared.ok).toBe(true);
-      if (['changed-source', 'changed-copy', 'preserved'].includes(scenario)) {
-        let mutations = 0;
-        c.opts.beforeMutation = async () => {
-          if (++mutations !== 2) return;
-          const names = await readdir(store); expect(names).toHaveLength(1);
-          const saved = JSON.parse(await readFile(join(store, names[0]), 'utf8'));
-          expect(Buffer.from(saved.receipt.data, 'base64').toString('utf8')).toBe(bytes);
-          expect(saved.release.head).toBe(c.release.head);
-          expect(await registered(c.path)).toBe(true);
-          if (scenario === 'changed-source') await writeFile(receipt, 'changed evidence');
-          if (scenario === 'changed-copy') await writeFile(join(store, names[0]), '{}');
-        };
-      }
-      const result = await c.confirm(prepared.review);
-      if (scenario !== 'preserved') {
-        expect(result.ok).toBe(false);
-        expect(await registered(c.path)).toBe(true);
-        expect(await readFile(receipt, 'utf8')).toBe(scenario === 'changed-source' ? 'changed evidence' : bytes);
-        return;
-      }
-      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, branchDeleted: true,
-        validationEvidence: { bytes: Buffer.byteLength(bytes), sha256: createHash('sha256').update(bytes).digest('hex') } });
-      expect(await registered(c.path)).toBe(false);
-      const saved = JSON.parse(await readFile(join(store, `${result.validationEvidence.digest}.json`), 'utf8'));
-      expect(Buffer.from(saved.receipt.data, 'base64').toString('utf8')).toBe(bytes);
-      expect((await getBranchReconcileOutcome('app-1')).retired).toEqual(expect.arrayContaining([
-        expect.objectContaining({ validationEvidence: result.validationEvidence }),
-      ]));
-      expect(await archives()).toEqual([]);
-    });
-
-  it.each(['duplicate', 'modified'])('retires only proven private npm copies at the destructive boundary: %s', async kind => {
-    const manifest = { name: 'fixture', version: '1.0.0' };
-    const lock = { ...manifest, lockfileVersion: 3, requires: true, packages: { 'node_modules/example': { version: '1.0.0' } } };
-    await writeFile(join(repo, 'package.json'), JSON.stringify(manifest));
-    await writeFile(join(repo, 'package-lock.json'), JSON.stringify(lock));
-    await execGit(['add', 'package.json', 'package-lock.json'], repo);
-    await execGit(['commit', '-m', 'fixture dependency inputs'], repo);
-    const c = await reviewedCheckout(`private-npm-${kind}`);
-    for (const root of [repo, c.path]) {
-      await mkdir(join(root, 'node_modules/example'), { recursive: true });
-      await writeFile(join(root, 'node_modules/.package-lock.json'), JSON.stringify(lock));
-      await writeFile(join(root, 'node_modules/example/index.js'), 'shipped package bytes');
-    }
-    if (kind === 'modified') await writeFile(join(c.path, 'node_modules/example/index.js'), 'unique local modification');
-    const prepared = await c.prepare();
-    expect(prepared.ok, JSON.stringify(prepared)).toBe(true);
-    const retired = await c.confirm(prepared.review);
-    if (kind === 'duplicate') {
-      expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
-      expect(await registered(c.path)).toBe(false);
-      expect(await readFile(join(repo, 'node_modules/example/index.js'), 'utf8')).toBe('shipped package bytes');
-    } else {
-      expect(retired).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
-      expect(await readFile(join(c.path, 'node_modules/example/index.js'), 'utf8')).toBe('unique local modification');
-    }
-    expect(await archives()).toEqual([]);
-  });
-
-  // Keep real Git/destructive coverage for each producer/root and for payload,
-  // ignore and sidecar refusals. Schema permutations live in the preflight suite.
-  const stateCacheCases = [
-    ...['results', 'dependencies', 'atomic-empty', 'atomic-nonempty', 'atomic-untracked', 'untracked', 'sidecar']
-      .map(kind => ['server/.cache/vitest/vitest', kind]),
-    ...['server/.cache/vitest-db/vitest', 'client/.cache/vitest/vitest', 'client/.cache/vite/vitest'].map(root => [root, 'results']),
-    ...['unknown-field', 'untagged', 'untracked'].map(kind => ['client/.cache/vite/vitest', kind]),
-    ['client/.cache/unknown/vitest', 'wrong-root'],
-  ];
-  it.each(stateCacheCases)(
-    'recognizes only the actual tagged Vitest state producer: root=%s kind=%s', async (cacheRoot, kind) => {
-      const c = await reviewedCheckout(`state-cache-${kind}`);
-      const root = join(c.path, cacheRoot);
-      const project = join(root, 'a'.repeat(40)); await mkdir(project, { recursive: true });
-      if (!['untracked', 'atomic-untracked'].includes(kind)) await writeFile(join(repo, '.git', 'info', 'exclude'), `${cacheRoot.split('/')[0]}/.cache/\n`);
-      if (kind !== 'untagged') await writeFile(join(root, 'CACHEDIR.TAG'),
-        'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.\n# For information about cache directory tags see https://bford.info/cachedir/\n');
-      const dependencies = kind === 'dependencies';
-      const value = { version: 1, projects: { parallel: dependencies
-        ? { modules: ['services/feature.js'], globalSetup: [], files: { 'services/feature.test.js': [0] } }
-        : { files: { 'services/feature.test.js': { failed: false, duration: 12, lastRun: 12345 } } } } };
-      if (kind === 'unknown-field') value.wanted = 'unique user content';
-      const file = join(project, kind.startsWith('atomic-') ? '.tmp-1700000000000-abc123' : dependencies ? 'dependencies.json' : 'results.json');
-      const content = kind.startsWith('atomic-') ? kind === 'atomic-nonempty' ? 'unique partial output' : '' : JSON.stringify(value);
-      await writeFile(file, content);
-      if (kind === 'sidecar') await writeFile(join(project, 'wanted.txt'), 'unique user data');
-      const prepared = await c.prepare();
-      expect(prepared.ok).toBe(true);
-      const retired = await c.confirm(prepared.review);
-      if (['results', 'dependencies', 'atomic-empty'].includes(kind)) {
-        expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
-        expect(await registered(c.path)).toBe(false);
-      } else {
-        expect(retired.ok).toBe(false);
-        expect(await registered(c.path)).toBe(true);
-        expect(await readFile(file, 'utf8')).toBe(content);
-      }
-      expect(await archives()).toEqual([]);
-    });
-
-  // Real destructive boundary: retain captured-run diagnostics, and refuse
-  // any source that changed after its review rather than deleting new output.
-  it.each([false, true])('retains completed-run diagnostics before exact merged retirement, source changed=%s', async changed => {
-    const c = await reviewedCheckout(`run-validation-${changed}`);
-    await writeFile(join(repo, '.git', 'info', 'exclude'), '.cache/\n');
-    await mkdir(join(c.path, '.cache'), { recursive: true });
-    const file = join(c.path, '.cache', 'validation.log');
-    await writeFile(file, 'meaningful synthetic validation output');
-    c.release.checkoutIdentity = await readRetirementCheckoutIdentity(c.path);
-    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
-    const pointer = await lstat(join(c.path, '.git'), { bigint: true });
-    const agent = injected.policies[0];
-    Object.assign(agent, { startedAt: '2026-01-01T10:00:00.000Z', completedAt: '2026-01-01T11:00:00.000Z' });
-    agent.metadata.completedCheckouts = [{ version: 1, agentId: agent.id, startedAt: agent.startedAt,
-      capturedAt: '2026-01-01T10:59:00.000Z', repoPath: repo, path: c.path, branch: c.release.branch, head: c.release.head,
-      incarnation: { pointer: Object.fromEntries(['dev', 'ino', 'birthtimeNs'].map(key => [key, String(pointer[key])])) } }];
-    const prepared = await c.prepare();
-    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { validationArtifacts: { owner: { id: agent.id, startedAt: agent.startedAt } } } });
-    if (changed) await writeFile(file, 'new unique output after review');
-    const retired = await c.confirm(prepared.review);
-    if (changed) {
-      expect(retired).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
-      expect(await readFile(file, 'utf8')).toBe('new unique output after review');
-      expect(await registered(c.path)).toBe(true);
-    } else {
-      expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
-      expect(await registered(c.path)).toBe(false);
-      const { readCompletionData } = await import('./agentCompletionData.js');
-      const proof = retired.validationEvidence.artifacts;
-      const retained = await readCompletionData(proof.owner, proof.reference);
-      expect(retained.release.head).toBe(c.release.head);
-      expect(Buffer.from(retained.files[0].data, 'base64').toString()).toBe('meaningful synthetic validation output');
-    }
-    expect(await archives()).toEqual([]);
-  });
-
-  // External terminal jobs have checkout evidence, not a fabricated CoS run.
-  // Aggregate bytes exceed one private proof's cap; each file remains bounded.
-  it.each(['retained', 'changed', 'oversized', 'unknown', 'lost-proof'])(
-    'preserves external checkout validation bytes before merged retirement: %s', async kind => {
-      const c = await reviewedCheckout(`external-validation-${kind}`);
-      await writeFile(join(repo, '.git', 'info', 'exclude'), 'scripts/__pycache__/\n');
-      const directory = join(c.path, 'scripts/__pycache__');
-      await mkdir(directory, { recursive: true });
-      const files = ['one', 'two', 'three'].map(name => `${name}.cpython-311.pyc`);
-      const bytes = Buffer.alloc(kind === 'oversized' ? 65537 : 32768, 17);
-      for (const file of files) await writeFile(join(directory, file), bytes);
-      if (kind === 'unknown') await writeFile(join(directory, 'wanted.bin'), 'unique user work');
-      const prepared = await c.prepare();
-      expect(prepared.ok, JSON.stringify(prepared)).toBe(true);
-      if (kind !== 'oversized') expect(prepared.review.validationArtifacts).toMatchObject({ scope: 'checkout' });
-      if (kind === 'changed') await writeFile(join(directory, files[0]), 'new unique output');
-      const retired = await c.confirm(prepared.review, kind === 'lost-proof' ? { beforeMutation: async () => {
-        await rm(join(repo, '.git', 'portos-retirement-validation'), { recursive: true, force: true });
-      } } : {});
-      if (kind === 'retained') {
-        expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
-        expect(await registered(c.path)).toBe(false);
-        const evidence = retired.validationEvidence.artifacts;
-        expect(evidence.scope).toBe('checkout');
-        expect(evidence.owner).toBeUndefined();
-        expect(evidence.references).toHaveLength(3);
-        for (const { digest } of evidence.references) {
-          const proof = JSON.parse(await readFile(join(repo, '.git', 'portos-retirement-validation', `${digest}.json`), 'utf8'));
-          expect(proof.release.head).toBe(c.release.head);
-          expect(Buffer.from(proof.file.data, 'base64')).toEqual(bytes);
-        }
-      } else {
-        expect(retired.ok, JSON.stringify(retired)).toBe(false);
-        expect(await registered(c.path)).toBe(true);
-        expect(await readFile(join(directory, files[2]))).toEqual(bytes);
-      }
-      expect(await archives()).toEqual([]);
-    });
-
-  it('retains an ignored validation receipt beside a verified disposable module cache', async () => {
-    const c = await reviewedCheckout('cache-with-receipt');
-    await moduleCache(c, { bytes: 32 });
-    const receiptDir = join(c.path, 'server/.cache/pregate');
-    await mkdir(receiptDir, { recursive: true });
-    const receipt = join(receiptDir, 'report.json');
-    await writeFile(receipt, '{"validatedTree":"unpublished-evidence"}');
-    const prepared = await c.prepare();
-    expect(prepared.ok).toBe(true);
-    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
-    expect(await readFile(receipt, 'utf8')).toBe('{"validatedTree":"unpublished-evidence"}');
-    expect(await registered(c.path)).toBe(true);
-    expect(await lockText(c.path)).toBe(c.release.lockReason);
-    expect(await archives()).toEqual([]);
-  });
-
-  it.each(['untagged', 'unique-file', 'untracked'])(
-    'retains large content that only resembles disposable module cache: %s', async kind => {
-      const c = await reviewedCheckout(`unverified-cache-${kind}`);
-      const root = await moduleCache(c, { tagged: kind !== 'untagged', ignored: kind !== 'untracked',
-        name: kind === 'unique-file' ? 'wanted-dataset.bin' : 'a'.repeat(40),
-      });
-      expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-archive-limit-exceeded' });
-      expect(await registered(c.path)).toBe(true);
-      expect((await stat(join(root, kind === 'unique-file' ? 'wanted-dataset.bin' : 'a'.repeat(40)))).size).toBe(26 * 1024 * 1024);
-      expect(await archives()).toEqual([]);
-    });
 
   it('keeps archive creation limits intact even for a tagged disposable cache', async () => {
     const c = await reviewedCheckout('archive-cache-budget');
@@ -2154,16 +1729,16 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it('rebuilds content evidence at confirmation after an unlocked preview observes older bytes', async () => {
+  it('rechecks local work at confirmation after an unlocked preview observes an older tree', async () => {
     const c = await reviewedCheckout('preview-content-change');
     injected.onPreviewEvidence = async () => {
       injected.onPreviewEvidence = null;
-      await writeFile(join(c.path, 'ignored.txt'), 'changed during preview\n');
+      await writeFile(join(c.path, 'wanted.txt'), 'written during preview\n');
     };
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
-    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
-    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('changed during preview\n');
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'worktree-dirty' });
+    expect(await readFile(join(c.path, 'wanted.txt'), 'utf8')).toBe('written during preview\n');
     expect(await lockText(c.path)).toBe(c.release.lockReason);
     expect(await archives()).toEqual([]);
   });
@@ -2353,8 +1928,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(prepared.ok).toBe(true);
     const bytes = 22 * 1024 * 1024;
     const files = [];
-    for (const root of [c.path, c.admin]) {
-      const directory = join(root, 'private-files');
+    // Untracked (not ignored) content is local work; ignored output is not bound.
+    for (const [root, name] of [[c.path, 'untracked-files'], [c.admin, 'private-files']]) {
+      const directory = join(root, name);
       await mkdir(directory);
       for (let i = 0; i < 6; i++) {
         const file = join(directory, `item-${i}`);
@@ -2372,25 +1948,24 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(preview).toEqual(refusal);
     expect(preview.archiveLimit.observedBytes).toBeGreaterThanOrEqual(12 * bytes);
     expect(preview.archiveLimit.observedBytes).toBeLessThan(12 * bytes + 1024 * 1024);
-    expect(await c.confirm(prepared.review)).toEqual(refusal);
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'worktree-dirty' });
     expect(await Promise.all(files.map(sha256File))).toEqual(hashes);
     expect(await registered(c.path)).toBe(true);
     expect(await lockText(c.path)).toBe(c.release.lockReason);
     expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
     expect(await archives()).toEqual([]);
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
-    // Unattended cleanup must also preserve bytes omitted from Git status.
     const removed = await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, {
       ...c.opts, settleMergedReviewObligation: true,
     });
-    expect(removed).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
+    expect(removed).toMatchObject({ ok: false, reason: 'worktree-dirty' });
     expect(removed.archiveDir).toBeUndefined();
     expect(await Promise.all(files.map(sha256File))).toEqual(hashes);
     expect(await registered(c.path)).toBe(true);
     expect(await archives()).toEqual([]);
   });
 
-  describe('many-file resource-bounded preservation', () => {
+  describe('many-file integrated retirement', () => {
     let c;
     let prepared;
     let retired;
@@ -2411,15 +1986,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
     beforeEach(async () => {
       retired = await owned.run('many-file-confirm', () => c.confirm(prepared.review));
-      expect(retired).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
     });
 
-    it('retains more than 1000 ignored files and their original checkout without copying', async () => {
+    it('removes more than 1000 ignored files with the merged checkout without copying them', async () => {
+      expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
       expect(retired.archiveDir).toBeUndefined();
-      expect(await readFile(join(c.path, 'private-files', 'item-1049'), 'utf8')).toBe('retained ignored bytes\n');
-      expect(await registered(c.path)).toBe(true);
-      expect(await lockText(c.path)).toBe(c.release.lockReason);
-      expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+      expect(existsSync(c.path)).toBe(false);
+      expect(await registered(c.path)).toBe(false);
       expect(await archives()).toEqual([]);
     });
   });
@@ -2432,7 +2005,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     { scope: 'administration', kind: 'total', count: 11, bytes: 24 * 1024 * 1024 },
   ])('reports $scope $kind capacity at the public preview boundary without changing checkout bytes', async ({ scope, kind, count, bytes }) => {
     const c = await reviewedCheckout('archive-capacity');
-    const root = join(scope === 'content' ? c.path : c.admin, 'private-build-output');
+    const root = join(scope === 'content' ? c.path : c.admin, scope === 'content' ? 'private-untracked-output' : 'private-build-output');
     await mkdir(root);
     const files = Array.from({ length: count }, (_, i) => join(root, `private-${i}.bin`));
     for (const file of files) {
@@ -2467,50 +2040,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it.each(['reviewed', 'merged'])('retains archive capacity evidence when %s retirement refuses before archival', async mode => {
-    const c = await reviewedCheckout('retire-capacity', { normalMerge: true });
-    const prepared = await c.prepare();
-    expect(prepared.ok).toBe(true);
-    const file = join(c.path, 'ignored.txt');
-    const bytes = 25 * 1024 * 1024 + 1;
-    await writeFile(file, 'synthetic ignored payload');
-    await truncate(file, bytes);
-    const hash = await sha256File(file);
-    const before = await getBranchReconcileOutcome('app-1');
-    const result = mode === 'reviewed' ? await c.confirm(prepared.review)
-      : await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, { ...c.opts, settleMergedReviewObligation: true });
-    if (mode === 'reviewed') {
-      expect(result).toEqual({ ok: false, reason: 'retirement-archive-limit-exceeded', nextAction: expect.any(String), archiveLimit: {
-        scope: 'content', kind: 'file', limitBytes: bytes - 1, observedBytes: bytes,
-      } });
-      expect(await sha256File(file)).toBe(hash);
-      expect(await registered(c.path)).toBe(true);
-      expect(await lockText(c.path)).toBe(c.release.lockReason);
-      expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
-      expect(await archives()).toEqual([]);
-      expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
-      return;
-    }
-    expect(result).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
-    expect(result.archiveDir).toBeUndefined();
-    expect(await sha256File(file)).toBe(hash);
-    expect(await registered(c.path)).toBe(true);
-    expect(await lockText(c.path)).toBe(c.release.lockReason);
-    expect(await archives()).toEqual([]);
-  });
-
   it('retains measured capacity and the exact lock when the final refreshed review exceeds its budget', async () => {
     const c = await reviewedCheckout('final-review-capacity', { normalMerge: true });
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
     const before = await getBranchReconcileOutcome('app-1');
-    const file = join(c.path, 'ignored.txt');
+    // Untracked work written just before the destructive step is refused there.
+    const file = join(c.path, 'late-untracked.bin');
     const bytes = 25 * 1024 * 1024 + 1;
     let mutations = 0;
     let changedHash;
     const result = await c.confirm(prepared.review, { beforeMutation: async () => {
       if (++mutations === 2) {
-        await writeFile(file, 'synthetic ignored payload');
+        await writeFile(file, 'synthetic untracked payload');
         await truncate(file, bytes);
         changedHash = await sha256File(file);
       }
@@ -3330,7 +2872,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       expect(prepared.ok).toBe(true);
     });
     it('refuses confirmation and retains the checkout, lock and archive state', async () => {
-      if (change === 'content') await writeFile(join(c.path, 'ignored.txt'), 'new evidence');
+      if (change === 'content') await writeFile(join(c.path, 'wanted.txt'), 'new local work');
       if (change === 'index') { await writeFile(join(c.path, 'staged.txt'), 'new index'); await execGit(['add', 'staged.txt'], c.path); }
       if (change === 'administration') await writeFile(join(c.admin, 'portos-review-status'), 'new review');
       if (change === 'default') {

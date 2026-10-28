@@ -1391,17 +1391,11 @@ async function retireBranch(repoPath, b, opts) {
       const prepared = gated.prepare ? await gated.prepare() : null;
       if (prepared?.error) return { result: { ok: false, reason: prepared.error } };
       if (!gated.archiveTree) return { archive: { prepared, preservation: prepared?.preservation || null } };
-      const { releaseCheckoutWithoutArchive } = await import('./heldCheckoutRecovery.js');
-      try {
-        const preservation = await releaseCheckoutWithoutArchive({ repoPath, path: gated.archiveTree.path, branch: gated.b.branch }, async () => {
-          const status = await execGit(['status', '--porcelain'], gated.archiveTree.path).then(r => r.stdout, () => null);
-          if (status === null) throw new Error('worktree-status-unavailable');
-          return null;
-        });
-        return { archive: { prepared, preservation } };
-      } catch (error) {
-        return { result: { ok: false, reason: error.message || 'checkout-not-disposable' } };
-      }
+      // A merged checkout's ignored build/cache output is disposable; removal
+      // re-proves merge evidence, ownership and a clean tree.
+      const status = await execGit(['status', '--porcelain'], gated.archiveTree.path).then(r => r.stdout, () => null);
+      if (status === null) return { result: { ok: false, reason: 'worktree-status-unavailable' } };
+      return { archive: { prepared, preservation: null } };
     },
     finish: ({ gated }, { prepared, preservation }) => finishBranchRetirement(repoPath, gated, { prepared, preservation }),
   });
@@ -1571,7 +1565,8 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
       if (mergedRetirement && !await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return 'not-merged-on-recheck';
       return preservation ? preservation.verify(holder) : null;
     };
-    removal = await forceRemoveWorktreeDir(repoPath, b.worktreePath, { label, log: 'all', verifyRemoval });
+    // Superseded retirement keeps the ignored-payload check: its commits are not on the default branch.
+    removal = await forceRemoveWorktreeDir(repoPath, b.worktreePath, { label, log: 'all', verifyRemoval, disposableIgnored: mergedRetirement === true });
     // The branch is still checked out by a surviving worktree: deleting it would
     // fail, and reporting success would mark the branch reconciled while it is held.
     if (!removal.removed) return { ok: false, reason: removal.reason || 'worktree-remove-failed' };
@@ -1784,26 +1779,19 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
         if (initialHold) return { result: { removed: false, reason: initialHold } };
         return { fence: { repoPath, path: tree.path }, current };
       },
-      archive: async ({ current }) => {
-        const { releaseCheckoutWithoutArchive } = await import('./heldCheckoutRecovery.js');
-        try {
-          const archive = await releaseCheckoutWithoutArchive({ repoPath, path: current.path }, async () => ({
-            verify: async holder => {
-              if (!holder || holder.head !== current.head || holder.branch) return 'worktree-holder-changed';
-              const status = await execGit(['status', '--porcelain'], current.path).then(r => r.stdout, () => null);
-              if (status === null || !classifyWorktreeDirt(status).clean) return 'worktree-dirty';
-              return null;
-            },
-          }));
-          return { archive };
-        } catch {
-          return { result: { removed: false, reason: 'checkout-not-disposable' } };
-        }
-      },
+      // Its HEAD is on the default branch, so ignored build/cache output is disposable.
+      archive: async ({ current }) => ({ archive: {
+        verify: async holder => {
+          if (!holder || holder.head !== current.head || holder.branch) return 'worktree-holder-changed';
+          const status = await execGit(['status', '--porcelain'], current.path).then(r => r.stdout, () => null);
+          if (status === null || !classifyWorktreeDirt(status).clean) return 'worktree-dirty';
+          return null;
+        },
+      } }),
       finish: async (_admitted, preservation) => {
         const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path).catch(() => null);
         const removed = await forceRemoveWorktreeDir(repoPath, tree.path, {
-          label: '🔀 branch-reconcile: remove detached worktree', log: 'all',
+          label: '🔀 branch-reconcile: remove detached worktree', log: 'all', disposableIgnored: true,
           verifyRemoval: async holder => await verifyRemoval(holder) || await preservation.verify(holder),
         });
         if (!removed.removed) return removed;
