@@ -27,11 +27,13 @@ vi.mock('./store.js', () => ({
 }));
 
 const { schedule, cancel, triggerNow, getEvent, getHistory } = await import('../eventScheduler.js');
-const { runScheduledCommission } = await import('./scheduler.js');
+const { runScheduledCommission, syncCommissionSchedules, stopCommissionScheduler } = await import('./scheduler.js');
 
 const EVENT_ID = 'creative-commission-boundary-test-7528';
 
 afterEach(() => {
+  stopCommissionScheduler();
+  vi.useRealTimers();
   cancel(EVENT_ID); // clears the real pending timer so the test process can exit
   vi.clearAllMocks();
 });
@@ -47,6 +49,26 @@ function arm() {
 }
 
 describe('runScheduledCommission through the real eventScheduler boundary (#7528)', () => {
+  it('reconciles a schedule during a deferred fire without overlapping the next tick', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const commission = { id: 'boundary', enabled: true, schedule: { kind: 'DAILY', atLocalTime: '00:01' } };
+    let release;
+    getCommissionMock.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    getCommissionMock.mockResolvedValue({ id: 'boundary', enabled: false });
+    await syncCommissionSchedules([commission]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(getCommissionMock).toHaveBeenCalledTimes(1);
+    await syncCommissionSchedules([{ ...commission, schedule: { kind: 'DAILY', atLocalTime: '00:02' } }]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(getCommissionMock).toHaveBeenCalledTimes(1);
+    release({ id: 'boundary', enabled: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getEvent('creative-commission-boundary').active).toBe(true);
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
+    expect(getCommissionMock).toHaveBeenCalledTimes(2);
+  });
+
   it('a pre-fire read failure is caught by runEvent, recorded failed on the SCHEDULE history, and the recurring event stays armed', async () => {
     getCommissionMock.mockRejectedValueOnce(Object.assign(new Error('storage timeout'), { code: 'ETIMEDOUT' }));
     arm();
