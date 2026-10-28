@@ -321,7 +321,11 @@ async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, task
  *
  * @param {{ agentId: string, task: object, agent: object, effectiveSuccess: boolean, outputBuffer: string, branchProvenEmpty?: boolean }} params
  */
-export async function runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess, outputBuffer, prClaimVerified = false, branchProvenEmpty = false }) {
+export async function runAgentCompletionCleanup(input) {
+  return outsideGitMutationLifetime(() => runAgentCompletionCleanupInOwnContext(input));
+}
+
+async function runAgentCompletionCleanupInOwnContext({ agentId, task, agent, effectiveSuccess, outputBuffer, prClaimVerified = false, branchProvenEmpty = false }) {
   // Fetch agent state once for JIRA, plan-question, and the resume pointer. Its
   // worktree fields are stamped once at registerAgent and never mutated, so passing
   // it to the release spares a re-read that would re-split the whole output.txt.
@@ -737,7 +741,11 @@ async function reportWorktreeCleanupWarnings({ agentId, task, cleanupWarnings })
  * must reach cleanup, or a run that opened no PR is cleaned up as a success and
  * loses its retry state (#3358).
  */
-export async function runSpawnerCompletionCleanup({ agentId, task, success: effectiveSuccess, prOwnership, prClaimVerified = false, branchProvenEmpty = false, outputBuffer }) {
+export async function runSpawnerCompletionCleanup(input) {
+  return outsideGitMutationLifetime(() => runSpawnerCompletionCleanupInOwnContext(input));
+}
+
+async function runSpawnerCompletionCleanupInOwnContext({ agentId, task, success: effectiveSuccess, prOwnership, prClaimVerified = false, branchProvenEmpty = false, outputBuffer }) {
   let agentState = null;
   try {
     const { getAgent } = await import('./cosAgentLifecycle.js');

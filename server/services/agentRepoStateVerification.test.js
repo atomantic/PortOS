@@ -2,6 +2,7 @@ import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckout
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('../lib/gitRepositoryIdentity.js', () => ({ readGitCommonDirectory: vi.fn(async () => '/repo/.git') }));
 import { EventEmitter } from 'node:events';
+import { tmpdir } from 'node:os';
 import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
 vi.mock('./branchCompletionPolicy.js', async () => ({
   ...await vi.importActual('./branchCompletionPolicy.js'),
@@ -186,6 +187,37 @@ it('verifies a finished release outside the closed spawn Git lifetime while pres
     expect(span.closed).toBe(true);
   });
   expect(verifyReleaseSynchronizationTask).toHaveBeenCalledOnce();
+});
+
+it('reads the claim checkout inventory after owner release even when the spawn Git lifetime closed', async () => {
+  const gitWork = await vi.importActual('../lib/execGit.js');
+  const caller = new AsyncLocalStorage();
+  const branch = 'claim/issue-42';
+  const state = { id: 'claim-owner', taskId: 'claim-task', status: 'completed', startedAt: CREATED_AT,
+    result: { success: false, cleanupPending: true }, metadata: { isWorktree: false, workspacePath: '/repo',
+      claimBranches: [branch], repoStateVerification: { status: 'pending' }, completionCleanup: { status: 'completed' } } };
+  const currentTask = { id: state.taskId, taskType: 'user', status: 'in_progress', metadata: {
+    app: 'demo-app', deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: state.id } };
+  getAgentRecord.mockResolvedValue(state);
+  getTaskById.mockResolvedValue(currentTask);
+  listWorktrees.mockImplementationOnce(async () => {
+    expect(caller.getStore()).toEqual({ operator: 'agent' });
+    await gitWork.execGit(['--version'], tmpdir());
+    return [];
+  });
+  readClaimOwnershipAgents.mockResolvedValue([{ id: 'other-owner', status: 'running',
+    metadata: { sourceWorkspace: '/repo', claimBranches: [branch] } }]);
+  await caller.run({ operator: 'agent' }, async () => {
+    let completionCallback;
+    await gitWork.withGitMutationLifetime(async () => { completionCallback = AsyncLocalStorage.snapshot(); });
+    await completionCallback(async () => {
+      const result = await resumeAgentCompletionRetirement(state.id);
+      expect(result.branches).toMatchObject([{ branch, verified: false, skipReason: 'claim-owner-active' }]);
+      await expect(gitWork.execGit(['--version'], tmpdir())).rejects.toMatchObject({ code: 'GIT_MUTATION_LIFETIME_CLOSED' });
+    });
+  });
+  expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+  expect(updateTask).not.toHaveBeenCalled();
 });
 
 const run = (overrides = {}) => verifyAgentRepoState({
