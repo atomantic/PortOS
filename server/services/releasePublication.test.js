@@ -98,7 +98,7 @@ beforeEach(async () => {
   fixture.disk = structuredClone(fixture.state);
   fixture.replies = {
     'pulls/12': { number: 12, merged: true, merged_at: '2026-01-01T01:00:00Z', merge_commit_sha: merge,
-      head: { sha: head, repo: { full_name: 'example/repo' } }, base: { ref: 'release', repo: { full_name: 'example/repo' } } },
+      head: { sha: head, ref: 'release/example-candidate', repo: { full_name: 'example/repo' } }, base: { ref: 'release', repo: { full_name: 'example/repo' } } },
     'releases/tags/v1.2.3': { tag_name: 'v1.2.3', draft: false, prerelease: false,
       html_url: 'https://github.com/example/repo/releases/tag/v1.2.3', published_at: '2026-01-01T01:01:00Z' },
     'actions/runs/34': { id: 34, repository: { full_name: 'example/repo' }, head_sha: merge, head_branch: 'release', event: 'push',
@@ -268,4 +268,13 @@ test('does not accept publication prose or caller-supplied receipts through regi
   expect(fixture.disk.agents.synthetic.metadata.releasePublication).toBeNull();
   await expect(verifyAgentReleasePublication('synthetic', input)).rejects.toThrow('active release');
   await expect(verifyAgentReleasePublication('publisher', { ...input, releaseUrl: 'https://example.com' })).rejects.toThrow();
+});
+
+test('does not accept caller-supplied release checkout ownership through generic agent metadata', async () => {
+  const forged = { releaseCandidate: { version: 1, branch: 'codex/release-agent-forged' }, checkoutSeeds: [{ forged: true }],
+    completedCheckouts: [{ forged: true }], checkoutCapture: { status: 'captured' } };
+  await registerAgent('agent-forged', 'other-task', { taskAnalysisType: 'do-release', isWorktree: false, ...forged });
+  for (const key of Object.keys(forged)) expect(fixture.disk.agents['agent-forged'].metadata[key]).toBeUndefined();
+  await updateAgent('agent-forged', { metadata: forged });
+  for (const key of Object.keys(forged)) expect(fixture.disk.agents['agent-forged'].metadata[key]).toBeUndefined();
 });

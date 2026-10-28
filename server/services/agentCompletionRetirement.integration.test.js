@@ -210,7 +210,10 @@ describe('completion to in-place retirement (real Git and persisted service stat
     const { buildRenewal } = await import('./cosTaskClaim.js');
     Object.assign(fixture.task.metadata, buildRenewal(fixture.task.metadata, 'fixture-instance'));
     await writeFile(join(fixture.root, 'task.json'), JSON.stringify(fixture.task));
-    // The merged checkout's ignored file is disposable output, not a hold.
+    // Merge evidence cannot account for the only copy of an ignored file.
+    expect(await verify()).toMatchObject({ verified: false, skipReason: 'checkout-ignored-payload-unverified' });
+    expect(await readFile(join(path, 'ignored.txt'), 'utf8')).toBe('private preserved bytes\n');
+    await rm(join(path, 'ignored.txt'));
     const results = await Promise.all([verify(), verify()]); expect(results).toMatchObject([{ verified: true, skipReason: null }, { verified: true, skipReason: null }]);
     const outcome = await getBranchReconcileOutcome(fixture.app.id); expect(outcome.retirementObligations).toEqual([]);
     expect(outcome.retired).toHaveLength(1); const receipt = outcome.retired[0];

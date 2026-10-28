@@ -180,7 +180,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retirement fixture cancellation boundar
         });
         writeFileSync(join(root, 'lifecycle.test.js'), lifecycleSource(root, mode, true));
         fixture.args.push('--testNamePattern', mode.endsWith('git')
-          ? 'custom-driver' : 'removes more than 1000 ignored files');
+          ? 'custom-driver' : 'retains more than 1000 ignored files');
         result = await runFixtureToCompletion(fixture, undefined, { signal });
         const output = result.stdout + result.stderr;
         expect(result.error, output).toBeUndefined();
@@ -213,7 +213,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retirement fixture cancellation boundar
         });
         writeFileSync(join(root, 'lifecycle.test.js'), lifecycleSource(root, mode, true));
         fixture.args.push('--testNamePattern', mode.endsWith('git')
-          ? 'custom-driver' : 'removes more than 1000 ignored files');
+          ? 'custom-driver' : 'retains more than 1000 ignored files');
         result = await runFixtureToCompletion(fixture, undefined, { signal });
         const output = result.stdout + result.stderr;
         expect(result.error, output).toBeUndefined();
@@ -270,7 +270,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retirement fixture cancellation boundar
         writeFileSync(join(host, 'keep'), 'neighboring artifact');
         fixture.args[fixture.args.indexOf('--maxWorkers') + 1] = '2';
         fixture.args.push('--bail=1', '--testNamePattern', mode === 'git'
-          ? 'custom-driver|controlled sibling failure' : 'removes more than 1000|controlled sibling failure');
+          ? 'custom-driver|controlled sibling failure' : 'retains more than 1000|controlled sibling failure');
         closed = false;
         running = runFixtureToCompletion(fixture, undefined, { signal: controller.signal });
         void running.then(() => controller.abort(new Error('nested run ended')));
