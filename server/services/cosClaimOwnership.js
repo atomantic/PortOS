@@ -34,7 +34,7 @@ export { withClaimOwnershipLock, readClaimOwnershipAgents, checkoutRetirementFen
 export const CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS = 15_000;
 const retryAfterMs = 5000;
 
-async function ownershipTransaction(operation, done, work) {
+export async function ownershipTransaction(operation, done, work) {
   const { withStateLock, loadState, saveState } = await import('./cosState.js');
   const queuedAt = performance.now();
   let started = false;
@@ -166,6 +166,7 @@ export async function updateReleaseCandidateOwnership(agentId, action) {
     if (checkoutRetirementFenceReason({ repoPath, branch })) return { [done]: false, reason: 'checkout-retirement-reserved' };
     const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
     return withCheckoutPublication(repoPath, async () => {
+      if (agent.metadata.releaseCandidateRecovery || agent.metadata.resumedFromAgentId) return { [done]: false, reason: 'candidate-recovery-required' };
       const prior = agent.metadata.releaseCandidate;
       if (prior && (prior.version !== 1 || prior.branch !== branch || prior.startedAt !== agent.startedAt)) return { [done]: false, reason: 'candidate-owner-conflict' };
       const other = claimCheckoutOwnerReason({ branchName: branch, sourceWorkspace: repoPath, agents: Object.values(state.agents), ignoreIds: [agentId] });

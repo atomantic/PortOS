@@ -110,7 +110,7 @@ export async function registerAgent(agentId, taskId, metadata = {}) {
   metadata = { ...metadata, releasePublication: null };
   if (metadata.taskAnalysisType === 'do-release') {
     // A task's supplied metadata is not a server-observed checkout reservation.
-    const { releaseCandidate: _candidate, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...trusted } = metadata;
+    const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...trusted } = metadata;
     metadata = trusted;
   }
   return withStateLock(async () => {
@@ -175,7 +175,7 @@ export async function updateAgent(agentId, updates) {
     if (current.metadata?.taskAnalysisType === 'do-release' && updates.metadata) {
       // Only the ownership transaction and completion capture write these
       // fields; generic updates cannot manufacture or revoke their evidence.
-      const { releaseCandidate: _candidate, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...metadata } = updates.metadata;
+      const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...metadata } = updates.metadata;
       updates = { ...updates, metadata };
     }
 
@@ -231,7 +231,8 @@ export async function recordAgentReleasePublication(owner, receipt) {
     if (!agent || agent.status !== 'running' || agent.taskId !== owner.taskId
       || agent.startedAt !== owner.startedAt || agent.metadata?.taskAnalysisType !== 'do-release'
       || agent.metadata?.sourceWorkspace !== owner.metadata?.sourceWorkspace
-      || agent.metadata?.workspacePath !== owner.metadata?.workspacePath) {
+      || agent.metadata?.workspacePath !== owner.metadata?.workspacePath
+      || !isDeepStrictEqual(agent.metadata?.releaseCandidateRecovery, owner.metadata?.releaseCandidateRecovery)) {
       throw new ServerError('Release coordinator ownership changed during verification', { status: 409 });
     }
     const previous = agent.metadata.releasePublication;

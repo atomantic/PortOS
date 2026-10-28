@@ -272,9 +272,30 @@ test('does not accept publication prose or caller-supplied receipts through regi
 
 test('does not accept caller-supplied release checkout ownership through generic agent metadata', async () => {
   const forged = { releaseCandidate: { version: 1, branch: 'codex/release-agent-forged' }, checkoutSeeds: [{ forged: true }],
-    completedCheckouts: [{ forged: true }], checkoutCapture: { status: 'captured' } };
+    completedCheckouts: [{ forged: true }], checkoutCapture: { status: 'captured' },
+    releaseCandidateRecovery: { status: 'transferred' }, releaseCandidateSuccessor: { forged: true } };
   await registerAgent('agent-forged', 'other-task', { taskAnalysisType: 'do-release', isWorktree: false, ...forged });
   for (const key of Object.keys(forged)) expect(fixture.disk.agents['agent-forged'].metadata[key]).toBeUndefined();
   await updateAgent('agent-forged', { metadata: forged });
   for (const key of Object.keys(forged)) expect(fixture.disk.agents['agent-forged'].metadata[key]).toBeUndefined();
+});
+
+test('requires recovery before a resumed publisher can record publication, and rejects a concurrent recovery change', async () => {
+  fixture.state.agents.publisher.metadata.resumedFromAgentId = 'agent-predecessor';
+  await expect(verifyAgentReleasePublication('publisher', input)).rejects.toThrow('recovery must be verified');
+  delete fixture.state.agents.publisher.metadata.resumedFromAgentId;
+  fixture.readHook = () => { fixture.state.agents.publisher.metadata.releaseCandidateRecovery = { version: 1, status: 'held' }; };
+  await expect(verifyAgentReleasePublication('publisher', input)).rejects.toThrow('ownership changed');
+  expect(fixture.disk.agents.publisher.metadata.releasePublication).toBeUndefined();
+});
+
+test('binds recovered publication to the original cutoff, promotion and publisher identity', async () => {
+  const original = { agentId: 'agent-predecessor', taskId: 'release-task', startedAt: '2026-01-01T00:00:00Z' };
+  fixture.state.agents.publisher.metadata.releaseCandidateRecovery = { status: 'transferred', transfer: {
+    branch: 'release/example-candidate', origin: original, publication: { number: 12 },
+    candidate: { cutoff: 'f'.repeat(40), pin, releaseBase: root, version: '1.2.3' },
+  } };
+  await expect(verifyAgentReleasePublication('publisher', input)).rejects.toThrow('differs from the recovered');
+  fixture.state.agents.publisher.metadata.releaseCandidateRecovery.transfer.candidate.cutoff = cutoff;
+  expect(await verifyAgentReleasePublication('publisher', input)).toMatchObject({ recoveredPublisher: original, cutoff, pin, candidateHead: head });
 });

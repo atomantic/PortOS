@@ -15,10 +15,13 @@ const shortBranch = branch => branch?.replace(/^refs\/heads\//, '');
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export const hasClaimCheckoutBindings = meta => meta?.isWorktree !== true
   && (isTruthyMeta(meta?.claimPicksOwnBranch) || Array.isArray(meta?.claimBranches));
+export const releaseCandidateBranch = meta => meta?.releaseCandidateRecovery?.status === 'transferred'
+  ? meta.releaseCandidateRecovery.transfer.branch : meta?.releaseCandidate?.branch;
 export const hasReleaseCandidateBinding = meta => meta?.isWorktree !== true && meta?.taskAnalysisType === 'do-release'
-  && meta.releaseCandidate?.version === 1 && typeof meta.releaseCandidate.branch === 'string';
+  && ((meta.releaseCandidate?.version === 1 && typeof meta.releaseCandidate.branch === 'string')
+    || (meta.releaseCandidateRecovery?.status === 'transferred' && typeof releaseCandidateBranch(meta) === 'string'));
 export const boundCheckoutBranches = meta => hasClaimCheckoutBindings(meta) ? meta.claimBranches
-  : hasReleaseCandidateBinding(meta) ? [meta.releaseCandidate.branch] : [meta?.worktreeBranch];
+  : hasReleaseCandidateBinding(meta) ? [releaseCandidateBranch(meta)] : [meta?.worktreeBranch];
 
 const repoCommonByRepo = new Map();
 async function resolveRepoCommon(repository) {
