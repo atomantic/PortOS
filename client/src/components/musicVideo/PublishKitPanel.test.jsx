@@ -30,6 +30,12 @@ const built = {
 };
 
 describe('PublishKitPanel (#9281)', () => {
+  it.each([[1280, 720], [1920, 1080]])('shows the measured %i × %i social export beside its download', (width, height) => {
+    render(<PublishKitPanel project={{ id: 'mv-1', publishKit: { ...built, exports: [{ ...built.exports[0], width, height }] } }} publishKit={hook()} />);
+    expandAll();
+    expect(screen.getByText(`X / social up to 1080p (12 Mbps) · ${width} × ${height}`)).toBeTruthy();
+  });
+
   it('builds only once there is a final render', () => {
     const k = hook();
     const { rerender } = render(<PublishKitPanel project={{ id: 'mv-1' }} publishKit={k} />);
@@ -127,7 +133,7 @@ describe('PublishKitPanel (#9281)', () => {
     const k = hook();
     render(<PublishKitPanel project={{ id: 'mv-1', name: 'Example Song', renderHistoryId: 'rh-1', publishKit: built }} publishKit={k} />);
     expandAll();
-    expect(screen.getByText('X / social 1080p (12 Mbps)')).toBeTruthy();
+    expect(screen.getByText('X / social up to 1080p (12 Mbps) · dimensions unknown')).toBeTruthy();
     expect(screen.getByText(/0:00 Opening line/)).toBeTruthy();
     const tags = screen.getByLabelText('Tags (comma-separated)');
     fireEvent.change(tags, { target: { value: 'music, ai video ,claude' } });

@@ -1014,3 +1014,5 @@ export * from './testCacheRetirementProof.js';
 export * from './realityStarterV2.js';
 export * from './universeVisualProfile.js';
 export * from './universeVisualProfileValidation.js';
+
+export * from './musicVideoPublishExports.js';

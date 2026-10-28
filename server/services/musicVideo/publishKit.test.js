@@ -92,6 +92,22 @@ async function renderedProject() {
 }
 
 describe('publishing kit build (#9281)', () => {
+  // Pins measured output metadata and no-upscale/aspect behavior through the actual build.
+  it.skipIf(!ffmpeg).each([[1280, 720], [1920, 1080], [640, 640]])('measures a %i × %i social export without stretching or upscaling', { timeout: 120000 }, async (width, height) => {
+    const { id } = await projects.createProject({ name: 'Synthetic dimensions' });
+    await mkdir(PATHS.videos, { recursive: true });
+    const filename = `dimensions-${id}.mp4`;
+    const made = await runFfmpegProcess({ bin: ffmpeg, args: ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `color=s=${width}x${height}:r=1:d=1`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', join(PATHS.videos, filename)] });
+    expect(made.ok).toBe(true);
+    await saveHistory([{ id: `render-${id}`, filename, durationSec: 1 }]);
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, renderHistoryId: `render-${id}` } }));
+    const { jobId } = await kit.startPublishKitBuild(id);
+    expect((await buildEnded(jobId)).type).toBe('complete');
+    const social = (await projects.getProject(id)).publishKit.exports.find(e => e.kind === 'x-1080p');
+    expect(social).toMatchObject({ width, height, label: 'X / social up to 1080p (12 Mbps)' });
+    expect(await ffmpegService.probeVideoStreamInfo(join(PATHS.videos, social.filename))).toMatchObject({ width, height });
+  });
+
   it('refuses to build before there is a final render', async () => {
     const { id } = await projects.createProject({ name: 'Unrendered' });
     await expect(kit.startPublishKitBuild(id)).rejects.toMatchObject({ status: 409, code: 'NO_FINAL_RENDER' });
@@ -159,6 +175,7 @@ describe('publishing kit build (#9281)', () => {
       const project = await projects.getProject(id);
       expect(project.renderHistoryId).toBe('new-render');
       expect(project.publishKit.master).toEqual({ filename: 'original-master.mp4', renderHistoryId: 'original-render' });
+      expect(project.publishKit.exports.find(e => e.kind === 'x-1080p')).toMatchObject({ width: null, height: null });
     } finally {
       releaseEncode({ ok: true });
       probe.mockRestore();
