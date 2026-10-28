@@ -2537,9 +2537,22 @@ executed-path failures that no static read of one file surfaces.
    scratch root with \`restoreSnapshot\` — dry run first, then execute — and
    verify the manifest: every recorded file present with its recorded hash,
    nothing extra, nothing the current code refuses to read.
+   If the restore refuses legacy database metadata created by this rehearsal,
+   do not report that refusal as a product defect yet. \`NODE_ENV=test\` keeps
+   \`pgFileFacade\` consumers on file storage even with \`MEMORY_BACKEND=postgres\`,
+   so the synthetic records may not have gone through their normal import.
+   Create the helper-made scratch database pair below if needed, then run the
+   existing file-to-DB importer for each relevant synthetic domain (for
+   example, \`server/scripts/migrateUniversesToDB.js\` for universes) against
+   only the source scratch root and its \`portos_rehearsal_\` database. Check the
+   importer's result and verify the synthetic rows in that scratch database.
+   If imports succeed, take a fresh snapshot and repeat the dry run; retain the
+   original refusal as rehearsal evidence. If an importer cannot complete,
+   report that domain-facade coverage as uncovered and include its result.
 3. **Round-trip Postgres.** Postgres is the primary store and its dump and
    restore are where restore defects have been found, so exercise them.
-   Run \`node scripts/rehearsal-scratch-db.js create\` (one JSON line on stdout):
+   Unless step 2 already created the pair, run
+   \`node scripts/rehearsal-scratch-db.js create\` (one JSON line on stdout):
    when \`ok\` is false — no reachable Postgres, or a role that cannot create the
    base schema's extensions — use the file-only fallback below. Otherwise create
    two databases, a source and a target, and drop both with
@@ -2560,7 +2573,9 @@ executed-path failures that no static read of one file surfaces.
      mismatch, is a finding.
 4. **Boot the restored root** the same way and confirm its health endpoint;
    when step 3 ran, boot it with \`MEMORY_BACKEND=postgres\` and
-   \`PGDATABASE=<target>\`, otherwise with \`MEMORY_BACKEND=file\`.
+   \`PGDATABASE=<target>\`. This verifies the primary store and memory
+   backend; the domain facades above remain file-backed under
+   \`NODE_ENV=test\`, so report their PostgreSQL boot coverage as untested.
 
 **File-only fallback.** When no scratch database can be created, run every step
 except 3 with \`MEMORY_BACKEND=file\` and \`NODE_ENV=test\`, and report the

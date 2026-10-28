@@ -221,12 +221,11 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(opening).toMatch(/out of\s+bounds even when it only reads/);
   });
 
-  // v2 (#12906): the rehearsal must reach the primary store's dump and restore
-  // through helper-made scratch databases, and still degrade to an honest
-  // "uncovered" report when none can be made.
-  it('upgrade-rehearsal v2 round-trips Postgres through scratch databases only', () => {
+  // v3 (#13932): Postgres dump coverage does not imply the domain facades
+  // escaped their intentional file-backed test mode.
+  it('upgrade-rehearsal v3 accounts for test-mode file facades', () => {
     const current = DEFAULT_TASK_PROMPTS['upgrade-rehearsal'];
-    expect(PROMPT_VERSIONS['upgrade-rehearsal']).toBe(2);
+    expect(PROMPT_VERSIONS['upgrade-rehearsal']).toBe(3);
     expect(current).toContain('{modeInstructions}');
     for (const marker of [
       'Build a synthetic older install',
@@ -236,6 +235,17 @@ describe('taskPromptDefaults integrity snapshot', () => {
       'restorePostgres',
       'portos_rehearsal_',
       'File-only fallback',
+      '`NODE_ENV=test` keeps',
+      '`pgFileFacade` consumers on file storage',
+      '`MEMORY_BACKEND=postgres`',
+      'If the restore refuses legacy database metadata created by this rehearsal',
+      'file-to-DB importer',
+      'migrateUniversesToDB.js',
+      'only the source scratch root',
+      "importer's result and verify the synthetic rows",
+      'take a fresh snapshot and repeat the dry run',
+      'domain-facade coverage as uncovered',
+      'PostgreSQL boot coverage as untested',
     ]) expect(current, marker).toContain(marker);
     expect(current).toMatch(/under about\s+60 characters/);
     expect(current).toMatch(/as uncovered,\s+quoting the helper/);
