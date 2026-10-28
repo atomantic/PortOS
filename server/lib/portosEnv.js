@@ -21,8 +21,7 @@
  * before/around `npm install`. Two implementations across that boundary is the
  * correct number; four is not.
  *
- * Values containing `$&` / `$`` / `$'` are written via a replacer *function*
- * so `String.replace` does not expand them.
+ * Values are written literally, including String.replace's special $-patterns.
  */
 
 import { readFileSync } from 'fs';
@@ -100,11 +99,10 @@ function appendEnvLines(base, lines) {
 }
 
 /**
- * Set ONE key, replacing the line that already declares it.
+ * Set ONE key, replacing its first active declaration and removing duplicates.
  *
- * The replacement is a FUNCTION, not a string. A value carrying one of
- * String.replace's special $-patterns would otherwise be expanded into the
- * surrounding text instead of written literally.
+ * Match the readers' whitespace-tolerant syntax. Normalizing only this key
+ * makes first- and last-assignment readers agree without changing other keys.
  *
  * @param {string} contents
  * @param {string} key
@@ -113,10 +111,15 @@ function appendEnvLines(base, lines) {
  */
 export function upsertEnvLine(contents, key, value) {
   const text = String(contents || '');
-  const pattern = new RegExp(`^${escapeRegExp(key)}=.*$`, 'm');
-  return pattern.test(text)
-    ? text.replace(pattern, () => `${key}=${value}`)
-    : appendEnvLines(text, [`${key}=${value}`]);
+  const pattern = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=`);
+  let replaced = false;
+  const lines = text.split('\n').flatMap(line => {
+    if (!pattern.test(line)) return [line];
+    if (replaced) return [];
+    replaced = true;
+    return [`${key}=${value}${line.endsWith('\r') ? '\r' : ''}`];
+  });
+  return replaced ? lines.join('\n') : appendEnvLines(text, [`${key}=${value}`]);
 }
 
 /**
@@ -141,9 +144,8 @@ export function readPortosEnvValue(key, envPath) {
 /**
  * Set (or add) a single key in the PortOS `.env` file.
  *
- * Async over `atomicWrite`, with the replacer-function guard for `$`-patterns.
- * If the key already exists, its line is replaced in-place; otherwise it is
- * appended with proper newline handling.
+ * Async over `atomicWrite`. Existing active declarations converge to one line;
+ * a missing key is appended with proper newline handling.
  *
  * @param {string} key - env var name
  * @param {string} value - unquoted value to write

@@ -104,6 +104,15 @@ describe('upsertEnvKey', () => {
     expect(parsed.PGMODE).toBe('file');
   });
 
+  // Pins setup/PM2's last-assignment reader after the writer collapses only
+  // the changed key, preserving comments and unrelated duplicate precedence.
+  it('updates spaced and repeated assignments without touching other declarations', () => {
+    writeFileSync(envPath, '# LLM_BACKEND=comment\r\nOTHER=first\r\n  LLM_BACKEND \t= "old"\r\nOTHER=last\r\nLLM_BACKEND=stale\r\n');
+    upsertEnvKey(envPath, 'LLM_BACKEND', '"new $& $` $\' value"');
+    expect(parseEnvFile(envPath)).toEqual({ LLM_BACKEND: "new $& $` $' value", OTHER: 'last' });
+    expect(readFileSync(envPath, 'utf8')).toBe('# LLM_BACKEND=comment\r\nOTHER=first\r\nLLM_BACKEND="new $& $` $\' value"\r\nOTHER=last\r\n');
+  });
+
   it('upserts LLM_BACKEND correctly', () => {
     upsertEnvKey(envPath, 'LLM_BACKEND', 'ollama');
     upsertEnvKey(envPath, 'LLM_BACKEND', 'lmstudio');
