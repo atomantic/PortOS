@@ -419,14 +419,18 @@ export function acceptLegacyReleaseRecovery(identity, digest) {
  * immutable file stamps and current content are checked again before removal. */
 export async function prepareLegacyReleaseRetirement(release) {
   const outbox = await readOutbox();
+  const entries = Object.values(outbox.publications).filter(entry => {
+    const legacy = legacyPublisherRecovery(entry), target = publisherCandidateTarget(entry);
+    return legacy?.evidence.mode === 'present' && target?.path === release.path && target.branch === release.branch
+      && target.head === release.head && target.checkoutIdentity === release.checkoutIdentity;
+  });
+  const proofs = new Map();
+  if (!entries.length) return proofs;
   const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
   const { inspectLegacyPublisher } = await import('./legacyReleaseRecovery.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
-  const proofs = new Map();
-  for (const entry of Object.values(outbox.publications)) {
-    const legacy = legacyPublisherRecovery(entry), target = publisherCandidateTarget(entry);
-    if (!legacy || legacy.evidence.mode !== 'present' || !target || target.path !== release.path
-      || target.branch !== release.branch || target.head !== release.head || target.checkoutIdentity !== release.checkoutIdentity) continue;
+  for (const entry of entries) {
+    const legacy = legacyPublisherRecovery(entry);
     const proof = await inspectLegacyPublisher(entry, agents);
     if (proof.digest !== legacy.digest || proof.retirement || !await proof.recheck() || !proof.archiveProof) throw new Error('legacy-release-recovery-changed');
     proofs.set(entry.identity, proof.archiveProof);
@@ -438,10 +442,14 @@ export async function prepareLegacyReleaseRetirement(release) {
  * legacy candidate can be unlocked or removed. It grants no removal authority. */
 export async function validateLegacyReleaseRetirement(release, { unlocked = false, archiveProofs = new Map() } = {}) {
   const outbox = await readOutbox();
+  const entries = Object.values(outbox.publications).filter(row => row.registeredAt && !publisherCandidateSeed(row)
+    && effectiveReleaseSynchronization(row)?.status !== 'verified'
+    && (!row.publication.candidateBranch || row.publication.candidateBranch === release.branch));
+  if (!entries.length) return true;
   const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
   const { inspectLegacyPublisher, legacyProcessesSettled } = await import('./legacyReleaseRecovery.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
-  for (const entry of Object.values(outbox.publications).filter(row => row.registeredAt && !publisherCandidateSeed(row) && effectiveReleaseSynchronization(row)?.status !== 'verified')) {
+  for (const entry of entries) {
     if (entry.publication.candidateBranch && entry.publication.candidateBranch !== release.branch) continue;
     const [ownerRepo, targetRepo] = await Promise.all([realpath(entry.owner.workspace).catch(() => null), realpath(release.repoPath).catch(() => null)]);
     if (!targetRepo) return false;

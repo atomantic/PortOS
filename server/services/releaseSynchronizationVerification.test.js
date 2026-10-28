@@ -31,7 +31,7 @@ vi.mock('./cosState.js', () => ({ loadState: async () => ({ agents: {} }), withS
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./codeReview.js', () => ({ getCodeReviewDefaults: async () => ({}), resolveReviewLoopOptions: async () => ({
   reviewers: ['codex'], usernames: ['example-reviewer'], optionalReviewers: [], reviewerApplies: false }) }));
-vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: async () => structuredClone(f.agents) }));
+vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: vi.fn(async () => structuredClone(f.agents)) }));
 vi.mock('./apps.js', () => ({ getAppById: async () => ({ id: 'example-app', repoPath: '/example/repo' }) }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ host: 'github.com', fullName: 'example/repo' }) }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({}) }));
@@ -73,6 +73,7 @@ vi.mock('./github.js', () => ({ execGh: async args => {
 } }));
 
 import { addTask, getTaskById, updateTask } from './cosTaskStore.js';
+import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
 import { ensureReleaseSynchronization, verifyReleaseSynchronizationTask, recoverReleaseSynchronizationHandoffs, retainReleaseSynchronizationReview,
   releaseTaskDispatchDisposition, reviewLegacyReleaseRecovery, acceptLegacyReleaseRecovery, prepareLegacyReleaseRetirement, validateLegacyReleaseRetirement } from './releaseSynchronization.js';
 import { legacyRecoveryDigest } from '../lib/releaseSynchronization.js';
@@ -244,6 +245,14 @@ it('requires the same preserved generation and settled owners again at retiremen
   expect(await validateLegacyReleaseRetirement(release, { archiveProofs })).toBe(false);
   f.legacySettled = true; f.legacyProof.digest = 'f'.repeat(64);
   expect(await validateLegacyReleaseRetirement(release, { archiveProofs })).toBe(false);
+});
+
+it('avoids loading agent history for ordinary retirement with no applicable legacy recovery', async () => {
+  vi.mocked(readBranchCompletionPolicies).mockClear();
+  const release = { repoPath: '/example/repo', path: '/example/other-checkout', branch: 'other', head: 'a'.repeat(40), checkoutIdentity: '1'.repeat(64) };
+  expect(await prepareLegacyReleaseRetirement(release)).toEqual(new Map());
+  expect(await validateLegacyReleaseRetirement(release)).toBe(true);
+  expect(readBranchCompletionPolicies).not.toHaveBeenCalled();
 });
 
 it('scopes a missing publisher workspace by a fresh exact promotion branch', async () => {
