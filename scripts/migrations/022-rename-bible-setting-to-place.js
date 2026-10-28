@@ -47,6 +47,7 @@
 import { readFile, writeFile, unlink, rename, readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
+import { writeJsonAtomic } from './_lib.js';
 
 const md5 = (str) => {
   const normalized = str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -64,10 +65,6 @@ const readJsonOrNull = async (path) => {
   } catch {
     return null;
   }
-};
-
-const writeJson = async (path, data) => {
-  await writeFile(path, `${JSON.stringify(data, null, 2)}\n`);
 };
 
 const fileExists = async (path) => stat(path).then(() => true, (err) => {
@@ -167,7 +164,7 @@ const migrateUniverseState = async (rootDir) => {
     if (changed) touched += 1;
   }
   if (touched > 0) {
-    await writeJson(path, state);
+    await writeJsonAtomic(path, state);
     console.log(`📝 data/universe-builder.json: renamed setting→place on ${touched} universe${touched === 1 ? '' : 's'}`);
   } else {
     console.log(`✅ data/universe-builder.json: already on places shape`);
@@ -190,7 +187,7 @@ const migrateSeriesState = async (rootDir) => {
     }
   }
   if (touched > 0) {
-    await writeJson(path, state);
+    await writeJsonAtomic(path, state);
     console.log(`📝 data/pipeline-series.json: renamed setting→place on ${touched} series record${touched === 1 ? '' : 's'}`);
   } else {
     console.log(`✅ data/pipeline-series.json: already on places shape`);
@@ -210,6 +207,10 @@ const migrateWritersRoomWorks = async (rootDir) => {
     if (!legacyExists) continue;
     const newExists = await fileExists(newPath);
     if (newExists) {
+      const places = await readJsonOrNull(newPath);
+      if (!places || !Array.isArray(places.places)) {
+        throw new Error(`Cannot migrate ${join('data/writers-room/works', entry.name, 'places.json')}: expected readable JSON with a places array; repair or move the invalid destination aside and retry. Both files were left untouched`);
+      }
       // Both files exist — `places.json` is the post-rename truth (a prior
       // partial migration run or hand-edit produced it). Move the legacy
       // `settings.json` aside as `.bak-022` rather than `unlink`-ing it: if
@@ -238,7 +239,7 @@ const migrateWritersRoomWorks = async (rootDir) => {
     }
     parsed.places = parsed.settings;
     delete parsed.settings;
-    await writeJson(newPath, parsed);
+    await writeJsonAtomic(newPath, parsed);
     // Try unlink first (clean removal of the now-redundant legacy file).
     // If unlink fails (Windows file-lock, EACCES, etc.) the residual
     // `settings.json` would otherwise be re-discovered by the next
