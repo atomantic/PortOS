@@ -4,6 +4,19 @@ import { resolve, relative, isAbsolute, join, extname } from 'node:path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { cdpRequest } from '../browserService.js';
 
+// Runs in the page before any document script, with `report` in scope.
+export const NETWORK_FREEZE_SCRIPT = `
+  // WebRTC bypasses HTTP interception. A fresh srcdoc realm does not inherit
+  // this freeze; the preview OS jail is what denies that realm's UDP.
+  for (const key of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport']) {
+    Object.defineProperty(globalThis, key, { configurable: false, writable: false,
+      value: function() { report(key); throw new Error(key + ' is disabled in compositions'); } });
+  }
+  for (const key of ['Worker', 'SharedWorker', 'WebSocket']) {
+    Object.defineProperty(globalThis, key, { configurable: false, writable: false,
+      value: function(url) { report(String(url)); throw new Error(key + ' is disabled in compositions'); } });
+  }`;
+
 const ORIGIN = 'https://composition.invalid';
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.woff': 'font/woff', '.woff2': 'font/woff2', '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav' };
 // Sandboxing removes alternate realms, popups, forms and workers. HTTP assets
@@ -370,17 +383,7 @@ async function connectComposition(assets, {
     await send('Runtime.addBinding', { name: '__portosRefused' });
     await send('Runtime.addBinding', { name: '__portosFailure' });
     if (previewBridge) await send('Runtime.addBinding', { name: '__portosPreview' });
-    const networkFreeze = freezeNetworkConstructors ? `
-      // WebRTC bypasses HTTP interception. A fresh srcdoc realm does not inherit
-      // this freeze; the preview OS jail is what denies that realm's UDP.
-      for (const key of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport']) {
-        Object.defineProperty(globalThis, key, { configurable: false, writable: false,
-          value: function() { report(key); throw new Error(key + ' is disabled in compositions'); } });
-      }
-      for (const key of ['Worker', 'SharedWorker', 'WebSocket']) {
-        Object.defineProperty(globalThis, key, { configurable: false, writable: false,
-          value: function(url) { report(String(url)); throw new Error(key + ' is disabled in compositions'); } });
-      }` : '';
+    const networkFreeze = freezeNetworkConstructors ? NETWORK_FREEZE_SCRIPT : '';
     await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
       const report = globalThis.__portosRefused;
       addEventListener('securitypolicyviolation', event => report(event.blockedURI));
