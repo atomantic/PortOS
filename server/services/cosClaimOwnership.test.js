@@ -93,6 +93,7 @@ describe('updateClaimOwnership', () => {
     expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'release', branch: 'claim/issue-101' }))
       .toEqual({ released: true, branch: 'claim/issue-101' });
     expect(store.state.agents['agent-epicrun'].metadata).toMatchObject({ claimBranches: [], claimReleasedBranches: ['claim/issue-101'] });
+    expect(cosEvents.emit).toHaveBeenCalledWith('claim:ownership-changed', { agentId: 'agent-epicrun', repository: SOURCE });
   });
 
   it('refuses an unknown or finished run without writing', async () => {
@@ -103,6 +104,7 @@ describe('updateClaimOwnership', () => {
     expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch: 'claim/issue-101' }))
       .toEqual({ bound: false, reason: 'owner-not-running' });
     expect(store.state.agents['agent-epicrun'].metadata).toEqual(before.agents['agent-epicrun'].metadata);
+    expect(cosEvents.emit).not.toHaveBeenCalledWith('claim:ownership-changed', expect.anything());
   });
 });
 
@@ -250,7 +252,8 @@ describe('claim ownership queued transaction deadlines', () => {
     expect(await pending).toEqual({ bound: true, branch: 'claim/issue-101' });
     await following;
     expect(store.state.agents['agent-epicrun'].metadata.claimBranches).toEqual(['claim/issue-101']);
-    expect(cosEvents.emit).toHaveBeenCalledOnce();
+    expect(cosEvents.emit).toHaveBeenCalledWith('agent:updated', expect.objectContaining({ id: 'agent-epicrun' }));
+    expect(cosEvents.emit).toHaveBeenCalledWith('claim:ownership-changed', { agentId: 'agent-epicrun', repository: SOURCE });
     const diagnostics = [...console.warn.mock.calls, ...console.log.mock.calls].flat().join(' ');
     expect(diagnostics).not.toMatch(/agent-epicrun|claim\/issue|repos/);
     expect(diagnostics).toMatch(/ownershipQueueMs=\d+ stateQueueMs=\d+ ownerReadMs=\d+ ownershipCheckMs=\d+ persistenceMs=\d+/);
