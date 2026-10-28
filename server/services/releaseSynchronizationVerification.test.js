@@ -7,7 +7,7 @@ import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../lib/m
 
 const f = vi.hoisted(() => ({ agents: [], pr: null, review: null, reviews: [], checks: [], receipts: [],
   present: true, busy: false, unavailable: false, ancestor: true, quality: null, qualityFile: null, failSave: false,
-  missingSyncAncestry: false, retirementUnavailable: false, liveAgents: null, liveTrusted: true, legacyProof: null, legacySettled: true }));
+  missingSyncAncestry: false, retirementUnavailable: false, liveAgents: null, liveTrusted: true, legacyProof: null, legacySettled: true, promotion: null }));
 vi.mock('../lib/fileUtils.js', async original => {
   const actual = await original();
   return makePathsProxy(actual, { dataRoot: lazyTempDataRoot('release-sync-verifier-'), overrides: {
@@ -63,6 +63,7 @@ vi.mock('./github.js', () => ({ execGh: async args => {
   else if (path === 'git/ref/heads/main') result = { object: { type: 'commit', sha: 'e'.repeat(40) } };
   else if (path.startsWith('pulls?')) result = [[f.pr]];
   else if (path === 'pulls/42') result = f.pr;
+  else if (path === 'pulls/12') result = f.promotion;
   else if (path === 'pulls/42/reviews?per_page=100') result = [f.reviews];
   else if (path.startsWith('compare/')) result = { status: f.ancestor
     && !(f.missingSyncAncestry && path === `compare/${f.pr.head.sha}...${'e'.repeat(40)}`) ? 'ahead' : 'diverged', merge_base_commit: { sha: path.slice(8, 48) } };
@@ -89,7 +90,7 @@ let identity, taskId, publication;
 const getReleaseSynchronization = async key => (await readReleaseSynchronizationOutbox()).publications[key];
 beforeEach(async () => {
   await rm(join(PATHS.cos, 'release-synchronization.json'), { force: true });
-  f.legacyProof = null; f.legacySettled = true;
+  f.legacyProof = null; f.legacySettled = true; f.promotion = null;
   f.liveAgents = null;
   f.liveTrusted = true;
   restorePlatform = pinPlatform('darwin');
@@ -241,6 +242,27 @@ it('requires the same preserved generation and settled owners again at retiremen
   f.legacySettled = false;
   expect(await validateLegacyReleaseRetirement(release)).toBe(false);
   f.legacySettled = true; f.legacyProof.digest = 'f'.repeat(64);
+  expect(await validateLegacyReleaseRetirement(release)).toBe(false);
+});
+
+it('scopes a missing publisher workspace by a fresh exact promotion branch', async () => {
+  const id = '7'.repeat(64), source = await addTask({ description: 'Missing publisher workspace', app: 'example-app' });
+  const legacyPublication = { ...publication, identity: id, tag: `v7.7.7-${id}` };
+  delete legacyPublication.candidateBranch;
+  const publisher = { ...f.agents[0], id: 'missing-publisher', taskId: source.id,
+    metadata: { workspacePath: '/missing/repo', releasePublication: legacyPublication } };
+  await ensureReleaseSynchronization(publisher);
+  f.agents.push(publisher);
+  f.promotion = { number: 12, merged: true, merge_commit_sha: legacyPublication.promotionMerge,
+    head: { ref: 'old-candidate', sha: legacyPublication.candidateHead, repo: { full_name: legacyPublication.repository } },
+    base: { ref: 'release', repo: { full_name: legacyPublication.repository } } };
+  const release = { repoPath: '/example/other-repository', path: '/example/other-checkout', branch: 'other-branch', head: 'f'.repeat(40), checkoutIdentity: '1'.repeat(64) };
+  expect(await retainReleaseSynchronizationReview(release)).toBe(true);
+  expect(await validateLegacyReleaseRetirement(release)).toBe(true);
+  expect(await retainReleaseSynchronizationReview({ ...release, branch: 'old-candidate' })).toBe(false);
+  expect(await validateLegacyReleaseRetirement({ ...release, branch: 'old-candidate' })).toBe(false);
+  f.unavailable = true;
+  expect(await retainReleaseSynchronizationReview(release)).toBe(false);
   expect(await validateLegacyReleaseRetirement(release)).toBe(false);
 });
 

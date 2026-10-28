@@ -275,6 +275,23 @@ export function verifyReleaseSynchronizationTask(taskId, { agents = null, respec
   });
 }
 
+/** A vanished workspace cannot be matched by path. A fresh exact promotion PR
+ * can still exclude unrelated branch names; an unavailable PR keeps the hold. */
+async function legacyPromotionBranch(entry, repoPath) {
+  if (entry.publication.candidateBranch) return entry.publication.candidateBranch;
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(entry.publication.repository || '')
+    || !Number.isSafeInteger(entry.publication.promotionPrNumber) || entry.publication.promotionPrNumber < 1) return null;
+  const [{ execGh }, { resolveForgeExecOptions }] = await Promise.all([import('./github.js'), import('./forgeExecOptions.js')]);
+  const options = await resolveForgeExecOptions(repoPath);
+  const pr = JSON.parse(await execGh(['api', '--hostname', 'github.com',
+    `repos/${entry.publication.repository}/pulls/${entry.publication.promotionPrNumber}`], undefined, options));
+  if (pr.number !== entry.publication.promotionPrNumber || pr.merged !== true
+    || pr.head?.sha !== entry.publication.candidateHead || pr.head?.repo?.full_name !== entry.publication.repository
+    || pr.base?.ref !== 'release' || pr.base?.repo?.full_name !== entry.publication.repository
+    || pr.merge_commit_sha !== entry.publication.promotionMerge || typeof pr.head?.ref !== 'string' || !pr.head.ref) return null;
+  return pr.head.ref;
+}
+
 /** Retirement runs this outside its ownership fence. The ordinary retirement
  * transaction still rechecks the exact generation and all removal authority.
  */
@@ -293,7 +310,11 @@ export function retainReleaseSynchronizationReview(release) {
       const normalize = path => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
       const [releaseRepo, ownerRepo] = release.repoPath
         ? await Promise.all([realpath(release.repoPath).catch(() => null), realpath(entry.owner.workspace).catch(() => null)]) : [null, null];
-      const sameRepository = !releaseRepo || !ownerRepo || normalize(releaseRepo) === normalize(ownerRepo);
+      let sameRepository = !releaseRepo || !ownerRepo || normalize(releaseRepo) === normalize(ownerRepo);
+      if (releaseRepo && !ownerRepo && !publisherCandidateSeed(entry)) {
+        const candidate = await legacyPromotionBranch(entry, releaseRepo).catch(() => null);
+        if (candidate && candidate !== release.branch) sameRepository = false;
+      }
       if (sameRepository && !publisherCandidateSeed(entry)
         && (!entry.publication.candidateBranch || entry.publication.candidateBranch === release.branch)) {
         const legacy = legacyPublisherRecovery(entry);
@@ -397,10 +418,16 @@ export async function validateLegacyReleaseRetirement(release, { unlocked = fals
   const { inspectLegacyPublisher, legacyProcessesSettled } = await import('./legacyReleaseRecovery.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
   for (const entry of Object.values(outbox.publications).filter(row => row.registeredAt && !publisherCandidateSeed(row) && effectiveReleaseSynchronization(row)?.status !== 'verified')) {
+    if (entry.publication.candidateBranch && entry.publication.candidateBranch !== release.branch) continue;
     const [ownerRepo, targetRepo] = await Promise.all([realpath(entry.owner.workspace).catch(() => null), realpath(release.repoPath).catch(() => null)]);
-    if (!ownerRepo || !targetRepo) return false;
+    if (!targetRepo) return false;
+    if (!ownerRepo) {
+      const candidate = await legacyPromotionBranch(entry, targetRepo).catch(() => null);
+      if (candidate && candidate !== release.branch) continue;
+      return false;
+    }
     const sameRepository = process.platform === 'win32' ? resolve(ownerRepo).toLowerCase() === resolve(targetRepo).toLowerCase() : resolve(ownerRepo) === resolve(targetRepo);
-    if (!sameRepository || (entry.publication.candidateBranch && entry.publication.candidateBranch !== release.branch)) continue;
+    if (!sameRepository) continue;
     const legacy = legacyPublisherRecovery(entry), target = publisherCandidateTarget(entry);
     if (!legacy || legacy.evidence.mode !== 'present' || !target || target.path !== release.path || target.branch !== release.branch
       || target.head !== release.head || target.checkoutIdentity !== release.checkoutIdentity
