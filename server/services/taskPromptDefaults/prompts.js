@@ -2575,7 +2575,8 @@ executed-path failures that no static read of one file surfaces.
      are machine-local evidence created by the target restore, and media assets
      are a rebuildable index reconstructed from authoritative files, so neither
      table is expected to have matching counts. Do not hide their observed
-     counts or treat these documented differences as data loss.
+     counts or treat these documented differences as data loss. Any dump or
+     restore status other than \`ok\` remains a finding.
 4. **Boot the restored root** the same way and confirm its health endpoint;
    when step 3 ran, boot it with \`MEMORY_BACKEND=postgres\` and
    \`PGDATABASE=<target>\`. This verifies the primary store and memory

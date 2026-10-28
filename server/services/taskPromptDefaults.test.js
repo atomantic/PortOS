@@ -225,7 +225,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // so their observed counts must be reported without requiring parity.
   it('upgrade-rehearsal v4 separates expected local and rebuilt table counts', () => {
     const current = DEFAULT_TASK_PROMPTS['upgrade-rehearsal'];
-    expect(PROMPT_VERSIONS['upgrade-rehearsal']).toBe(4);
+    expect(PROMPT_VERSIONS['upgrade-rehearsal']).toBe(5);
     expect(current).toContain('{modeInstructions}');
     for (const marker of [
       'Build a synthetic older install',
@@ -254,6 +254,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
       'machine-local evidence created by the target restore',
       'rebuildable index reconstructed from authoritative files',
       'Do not hide their observed',
+      'status other than `ok` remains a finding',
     ]) expect(current, marker).toContain(marker);
     expect(current).toMatch(/under about\s+60 characters/);
     expect(current).toMatch(/as uncovered,\s+quoting the helper/);
