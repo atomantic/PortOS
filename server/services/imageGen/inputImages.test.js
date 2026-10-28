@@ -79,14 +79,11 @@ describe('resolveInputImages', () => {
     expect(out.referencePaths).toHaveLength(4);
   });
 
-  it('drops a path that escapes the approved roots instead of forwarding it', () => {
-    const out = resolveInputImages({
-      mode: IMAGE_GEN_MODE.CODEX,
-      initImagePath: '/etc/passwd',
-      referenceImagePaths: ['/etc/hosts'],
-    });
-    expect(out.paths).toEqual([]);
-    expect(out.initPath).toBeNull();
+  it('refuses a missing or disallowed input instead of turning an edit into text-only', () => {
+    expect(() => resolveInputImages({ mode: IMAGE_GEN_MODE.CODEX, initImagePath: '/etc/passwd' }))
+      .toThrow(/input image is unavailable/);
+    expect(() => resolveInputImages({ mode: IMAGE_GEN_MODE.CODEX, referenceImagePaths: ['missing.png'] }))
+      .toThrow(/input image is unavailable/);
   });
 
   it('returns an empty list for a render with no input images', () => {

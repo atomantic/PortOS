@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Pencil } from 'lucide-react';
 import toast from '../ui/Toast';
-import { generateImage } from '../../services/api';
+import { generateImage, previewImagePrompt } from '../../services/api';
+import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
 // Same wording as the music video shot refine (lib/musicVideoShotPrompt.js): the
@@ -18,7 +19,15 @@ export const quickEditPrompt = (instruction) =>
 export default function QuickImageEdit({ item, onDone, generateParams }) {
   const [instruction, setInstruction] = useState('');
   const [busy, setBusy] = useState(false);
-  const canSubmit = instruction.trim() && !busy;
+  const [previewRevision, setPreviewRevision] = useState(0);
+  const request = {
+    prompt: quickEditPrompt(instruction),
+    ...(item.width && item.height ? { width: item.width, height: item.height } : {}),
+    ...(generateParams || {}),
+    referenceImageFiles: [item.filename],
+  };
+  const { preview, error } = useModelInputPreview(previewImagePrompt, { ...request, reviewReference: true }, { enabled: Boolean(instruction.trim()), revision: previewRevision });
+  const canSubmit = instruction.trim() && !busy && Boolean(preview?.reviewedReferenceDigest && preview?.reviewedReferenceImage);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -26,11 +35,13 @@ export default function QuickImageEdit({ item, onDone, generateParams }) {
     setBusy(true);
     // silent: this component toasts the failure itself.
     const result = await generateImage({
-      prompt: quickEditPrompt(instruction),
-      referenceImageFiles: [item.filename],
-      ...(item.width && item.height ? { width: item.width, height: item.height } : {}),
-      ...(generateParams || {}),
-    }, { silent: true }).catch((err) => { toast.error(err.message || 'Edit failed'); return null; });
+      ...request,
+      reviewedReferenceDigest: preview.reviewedReferenceDigest,
+    }, { silent: true }).catch((err) => {
+      toast.error(err.message || 'Edit failed');
+      setPreviewRevision(revision => revision + 1);
+      return null;
+    });
     setBusy(false);
     if (!result) return;
     toast.success(result.mode === IMAGE_GEN_MODE.EXTERNAL ? 'Edit complete' : result.position ? `Edit queued #${result.position}` : 'Edit queued');
@@ -58,6 +69,8 @@ export default function QuickImageEdit({ item, onDone, generateParams }) {
           <Pencil className="w-3.5 h-3.5" /> {busy ? 'Sending…' : 'Edit'}
         </button>
       </div>
+      {preview?.reviewedReferenceImage && <img src={preview.reviewedReferenceImage} alt="Reference for this edit" className="max-h-32 max-w-full object-contain" />}
+      {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
       <p className="text-[10px] leading-snug text-gray-500">
         Sends this image as the reference with your instruction to the default image render, keeping everything else. Creates a new image; the original is kept.
       </p>

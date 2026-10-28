@@ -168,7 +168,7 @@ export const createJobFailureFinalizer = ({
     dispatchTerminalEvent(
       jobId,
       () => broadcastSse(job, { type: 'error', error: reason }),
-      () => events.emit('failed', failedPayload(jobId, reason)),
+      () => events.emit('failed', failedPayload(jobId, reason, slotOwner)),
     );
     closeJobAfterDelay(jobs, jobId);
   };

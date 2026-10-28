@@ -1329,3 +1329,23 @@ private command arguments; they are never included in status projections or forg
 artifacts. `data/cos/process-supervisors/` holds freshly compiled native helpers;
 only the current server process's compiler result is reused. Neither directory is
 a database record store or a new retirement owner.
+
+### Reviewed quick-edit references
+
+A reviewed quick edit captures the displayed reference bytes in `data/image-refs/`
+under a server-generated snapshot identity. Local and cloud jobs keep the renderable prompt and reference in a versioned queue capsule, leaving top-level fields unrenderable to an older queue worker. Its adjacent JSON ownership record
+and the durable media-queue job both carry the job ID, snapshot ID, content
+hash, and filesystem identity. The queue checks this tuple before dispatch;
+adapters refuse a missing or replaced snapshot. The preview's displayed image
+and digest are derived from the same bytes, and admission compares the source
+again before creating the copy. These files are local execution evidence and
+are included in backups; their ownership records and execution settings do not federate. A federated render sends the reviewed image bytes through the existing digest-verified conditioning-asset channel, subject to peer/category controls. Its local routing marker uses version 2 so an older consumer refuses to replay a snapshot without its ownership check; the peer's wire request remains on its negotiated version.
+
+The snapshot is retained while dispatch or provider settlement is uncertain,
+including an interrupted local child handoff. A completed image's sidecar names
+its snapshot as input provenance. The image-reference collector scans gallery
+sidecars and durable queue state before collecting an old snapshot; it requires
+matching ownership and either a never-dispatched reservation or a persisted
+settlement. A durable deletion intent permits an interrupted collection to
+resume. Unreadable, mismatched or replaced records and files are preserved for
+operator recovery rather than adopted or removed.

@@ -60,6 +60,7 @@ import { rejectDegenerateFrame } from './frameGuard.js';
 import { conformImageAspect } from './aspectConform.js';
 import { aspectRatioPhrase } from '../../lib/aspectRatio.js';
 import { resolveInputImages } from './inputImages.js';
+import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { agentInstructionsAddition, carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 
@@ -256,7 +257,7 @@ async function generateImagePrepared({
   codexPath, model, modelIsShippedDefault = false, effort, prompt = '', width, height, negativePrompt,
   initImagePath, initImageStrength, referenceImagePaths = [],
   visualConditioning = null,
-  jobId: providedJobId = null,
+  jobId: providedJobId = null, reviewedReferenceSnapshot = null,
   cleanC2PA = false,
   denoise = false,
 }) {
@@ -354,6 +355,12 @@ async function generateImagePrepared({
   // read `PATHS.tmp`, which has never existed on the object — `ensureDir`
   // received `undefined` and every Codex render died here before spawning.
   const scratchDir = await mkdtemp(join(tmpdir(), 'portos-codex-image-'));
+  try {
+    await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
+  } catch (error) {
+    await removeScratchDirectory(scratchDir);
+    throw error;
+  }
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   try {
     jobs.set(jobId, job);
@@ -552,7 +559,7 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
         dispatchTerminalEvent(
           jobId,
           () => broadcastSse(job, { type: 'complete', result }),
-          () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, path: `/data/images/${filename}`, filename }),
+          () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, inputProcessSettled: true, path: `/data/images/${filename}`, filename }),
         );
         closeJobAfterDelay(jobs, jobId);
       } catch (err) {
@@ -612,7 +619,7 @@ const finalizeJobFailure = createJobFailureFinalizer({
   activeSlots: activeProcs,
   label: 'codex image generation',
   events: imageGenEvents,
-  failedPayload: (jobId, reason) => ({ mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, error: reason }),
+  failedPayload: (jobId, reason, proc) => ({ mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, error: reason, inputProcessSettled: !proc || !proc.pid || typeof proc.exitCode === 'number' || typeof proc.signalCode === 'string' }),
 });
 
 // Returns the absolute path to the newest PNG in the session dir. Codex has

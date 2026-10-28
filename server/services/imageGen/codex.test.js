@@ -186,6 +186,14 @@ describe('codex provider — checkConnection', () => {
 });
 
 describe('codex provider — generateImage', () => {
+  it('refuses unowned reviewed snapshot metadata before spawning', async () => {
+    await mkdir(FAKE_IMAGES_DIR, { recursive: true });
+    await writeFile(join(FAKE_IMAGES_DIR, 'reviewed.png'), 'synthetic image');
+    await expect(codex.generateImage({ prompt: 'edit', referenceImagePaths: ['reviewed.png'], reviewedReferenceSnapshot: { jobId: 'unowned' } }))
+      .rejects.toMatchObject({ code: 'REVIEWED_REFERENCE_CHANGED' });
+    expect(spawnCalls).toHaveLength(0);
+  });
+
   it('sends authored prompt and negative whitespace exactly as supplied', async () => {
     const prompt = '  Keep identity.\nChange only the hair.  ';
     const negativePrompt = '  long hair, changed face  ';
@@ -404,23 +412,10 @@ describe('codex provider — generateImage', () => {
     await flush();
   });
 
-  it('drops initImagePath that escapes the gallery (defense-in-depth)', async () => {
-    await codex.generateImage({
-      prompt: 'cover art',
-      // Absolute outside-gallery path — resolveGalleryImage rejects via basename.
-      initImagePath: '/etc/passwd',
-      initImageStrength: 0.2,
-    });
-    const { args } = spawnCalls[0];
-    expect(args).not.toContain('-i');
-    // No init image → no variadic to terminate, so no `--` is added.
-    expect(args).not.toContain('--');
-    const promptArg = args[args.length - 1];
-    // No edit prefix when the init image is dropped.
-    expect(promptArg).not.toMatch(/edit the attached reference image/i);
-    spawnCalls[0].child.exitCode = 1;
-    spawnCalls[0].child.emit('close', 1, null);
-    await flush();
+  it('refuses an unavailable init image before spawning', async () => {
+    await expect(codex.generateImage({ prompt: 'cover art', initImagePath: '/etc/passwd' }))
+      .rejects.toMatchObject({ code: 'IMAGE_INPUT_UNAVAILABLE' });
+    expect(spawnCalls).toHaveLength(0);
   });
 
   it('omits `-i` and the edit-prefix when no initImagePath is passed', async () => {
@@ -461,7 +456,7 @@ describe('codex provider — image harvest', () => {
     await mkdir(FAKE_IMAGES_DIR, { recursive: true });
     await writeFile(join(FAKE_IMAGES_DIR, 'source.png'), fakePngBytes);
     await writeFile(join(FAKE_IMAGES_DIR, 'reference.png'), fakePngBytes);
-    const job = await codex.generateImage({ prompt: 'a fox', initImagePath: 'source.png', referenceImagePaths: ['reference.png', 'missing.png'] });
+    const job = await codex.generateImage({ prompt: 'a fox', initImagePath: 'source.png', referenceImagePaths: ['reference.png'] });
     const child = spawnCalls[0].child;
 
     // Drive the session id banner on stderr (codex prints it there).

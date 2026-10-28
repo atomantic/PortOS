@@ -39,6 +39,7 @@ import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '
 import { applyFilmLookBake, readFilmLookSource } from '../services/imageGen/filmLookBake.js';
 import { universeVisualProfileSchema } from '../lib/universeVisualProfileValidation.js';
 import { previewImagePrompt } from '../services/imageGen/promptPreview.js';
+import { assertReviewedReference } from '../services/imageGen/reviewedReference.js';
 import { filmLookBakeSchema } from '../lib/filmLookValidation.js';
 import { join, basename } from 'node:path';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
@@ -173,6 +174,7 @@ const generateSchema = z.object({
   // numerically only by local FLUX.2; the cloud CLIs expose no per-reference
   // weight, so they receive the paths alone.
   referenceImageFiles: z.array(galleryImageFilenameSchema('reference image')).max(MAX_REFERENCE_IMAGES).optional(),
+  reviewedReferenceDigest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   referenceStrengths: z.array(z.number().min(0).max(1)).max(MAX_REFERENCE_IMAGES).optional(),
   // Per-render override of the cleaners. When omitted, the route inherits
   // from `settings.imageGen.{mode}.{cleanC2PA,denoise}`. Explicit booleans
@@ -489,6 +491,7 @@ const queuedImageResponse = ({ jobId, position, status, mode, model, mediaProvid
 const promptPreviewSchema = generateSchema.safeExtend({
   uploadedInitImage: z.boolean().optional(),
   uploadedReferenceCount: z.number().int().min(0).max(MAX_REFERENCE_IMAGES).optional(),
+  reviewReference: z.boolean().optional(),
 });
 
 router.post('/prompt-preview', asyncHandler(async (req, res) => {
@@ -509,6 +512,14 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   });
 
   await prepareFableLoomImageParams({ params, mode, settings });
+
+  if (data.reviewedReferenceDigest) {
+    if (params.initImagePath || params.referenceImagePaths?.length !== 1 || (!params.mediaProviderPeerId && mode === IMAGE_GEN_MODE.EXTERNAL)) {
+      throw new ServerError('Reviewed quick edits require one reference on a supported image backend', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
+    }
+    await assertReviewedReference(params.referenceImagePaths[0], data.reviewedReferenceDigest);
+    params.reviewedReferenceDigest = data.reviewedReferenceDigest;
+  }
 
   // Resolve an optional universe-collection target into a job tag the
   // completion hook understands. Done server-side so a base-style probe lands

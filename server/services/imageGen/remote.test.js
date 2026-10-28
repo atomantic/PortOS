@@ -16,6 +16,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
     PATHS: new Proxy(actual.PATHS, {
       get(target, key) {
         if (key === 'images') return tempImageDir;
+        if (key === 'imageRefs') return join(tempImageDir, 'refs');
         return target[key];
       },
     }),
@@ -25,7 +26,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
     // containment behavior is fileUtils' own suite's job; what matters here is
     // that the executor resolves before uploading, and refuses when it cannot.
     resolveImageInputPath: (raw) => {
-      const candidate = join(tempImageDir, basename(raw));
+      const candidate = raw.startsWith(join(tempImageDir, 'refs')) ? raw : join(tempImageDir, basename(raw));
       return existsSync(candidate) ? candidate : null;
     },
   };
@@ -282,6 +283,33 @@ describe('federated image consumer adapter', () => {
         throw new Error(`Unexpected test URL: ${url}`);
       });
     };
+
+    it('uploads the exact job-owned reviewed bytes through the v2 local marker', async () => {
+      writeFileSync(join(tempImageDir, 'init.png'), png);
+      const { stageReviewedReference, markSnapshotState } = await import('./reviewedReference.js');
+      const snapshot = await stageReviewedReference(LOCAL_JOB_ID, join(tempImageDir, 'init.png'), sha256(png));
+      await markSnapshotState(snapshot, 'invoked');
+      const snapshotPath = join(tempImageDir, 'refs', snapshot.filename);
+      respondWith(() => jsonResponse(providerJob('canceled'), 202));
+      const base = params();
+      const terminal = captureTerminal(LOCAL_JOB_ID);
+      await generateImage({ ...base, remoteMedia: { ...base.remoteMedia, wireVersion: 2, reviewedReferenceSnapshot: snapshot,
+        inputAssets: [{ role: 'referenceImages', path: snapshotPath }] } });
+      await terminal;
+      const upload = transport.fetch.mock.calls.find(([url]) => url.endsWith('/assets'));
+      expect(Buffer.from(upload[1].body)).toEqual(png);
+      const submission = transport.fetch.mock.calls.find(([url, options]) => url.endsWith('/jobs') && options.method === 'POST');
+      expect(JSON.parse(submission[1].body).referenceImages).toEqual([{ assetId: ASSET_ID }]);
+      expect(submission[1].body).not.toContain(snapshot.filename);
+    });
+
+    it('refuses a v2 marker without ownership before any peer request', async () => {
+      const base = params();
+      const terminal = captureTerminal(LOCAL_JOB_ID);
+      await generateImage({ ...base, remoteMedia: { ...base.remoteMedia, wireVersion: 2 } });
+      expect((await terminal).event.error).toContain('ownership is missing');
+      expect(transport.fetch).not.toHaveBeenCalled();
+    });
 
     it('uploads the bytes with their digest, then submits the id in their place', async () => {
       respondWith(() => jsonResponse(providerJob('canceled'), 202));

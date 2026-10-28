@@ -173,7 +173,7 @@ export function inputAssetRejection(capability, assets = [], status = null) {
  * @param {(message: string) => void} ctx.emitStatus
  * @returns {(localPath: string) => Promise<string>}
  */
-function createInputAssetStager({ requestJson, emitStatus }) {
+function createInputAssetStager({ requestJson, emitStatus, reviewedReference = null }) {
   const uploads = new Map();
 
   async function uploadInputAsset(localPath, role) {
@@ -198,7 +198,8 @@ function createInputAssetStager({ requestJson, emitStatus }) {
     }
     // Streamed above 512 KB, so the ASK-FIRST path below never buffers a
     // multi-megabyte image just to learn it is already staged.
-    const digest = await sha256File(resolved);
+    const reviewed = reviewedReference?.path === localPath ? reviewedReference : null;
+    const digest = reviewed ? reviewed.digest : await sha256File(resolved);
     // Lazily imported, not statically: the image/video generate routes reach
     // this module, and a static edge to the peer registry would drag it (and
     // its settings/DB dependencies) into every route suite's module graph.
@@ -215,7 +216,7 @@ function createInputAssetStager({ requestJson, emitStatus }) {
       .then((body) => federatedMediaAssetSchema.safeParse(body), () => null);
     if (staged?.success && staged.data.sha256 === digest) return staged.data.assetId;
 
-    const body = await readFile(resolved).catch(() => null);
+    const body = reviewed ? reviewed.bytes : await readFile(resolved).catch(() => null);
     if (!body) {
       throw inputAssetError(
         'A conditioning image for this render is missing or unreadable',

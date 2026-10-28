@@ -29,7 +29,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
     PATHS: new Proxy({}, {
       get(_, key) {
         if (key === 'data') return tempDataDir;
-        if (['uploads', 'videos', 'images', 'loras'].includes(key)) return join(tempDataDir, key);
+        if (['uploads', 'videos', 'images', 'loras', 'imageRefs'].includes(key)) return join(tempDataDir, key);
         return actual.PATHS[key];
       },
     }),
@@ -276,6 +276,117 @@ afterAll(() => {
 });
 
 describe('mediaJobQueue', () => {
+  it.each(['unchanged', 'replaced', 'removed'])('dispatches the admitted reviewed bytes after the source is %s', async (change) => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    stubs.generateVideo.mockResolvedValue({});
+    stubs.generateImage.mockResolvedValue({});
+    const blocker = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'hold the lane' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest } });
+    if (change === 'replaced') writeFileSync(source, 'unreviewed bytes');
+    if (change === 'removed') rmSync(source);
+    videoGenEvents.emit('completed', { generationId: blocker.jobId, filename: 'done.mp4' });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    const request = stubs.generateImage.mock.calls[0][0];
+    expect(request.reviewedReferenceSnapshot.jobId).toBe(job.jobId);
+    expect(readFileSync(request.referenceImagePaths[0], 'utf8')).toBe('reviewed bytes');
+    imageGenEvents.emit('failed', { generationId: job.jobId, error: 'synthetic failure', inputProcessSettled: true });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+  });
+
+  it('replays a durably queued reviewed snapshot after restart', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    mediaJobQueue.quiesceMediaJobQueue();
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest } });
+    const persisted = persistedJobs().find(row => row.id === job.jobId);
+    expect(persisted.params).toMatchObject({ prompt: '', modelId: null, pythonPath: null, referenceImagePaths: [] });
+    expect(persisted.params.reviewedReferenceRequest.prompt).toBe('edit');
+    const original = mediaJobQueue.getJob(job.jobId).params.reviewedReferenceSnapshot;
+    writeFileSync(source, 'replacement');
+    await importFresh();
+    stubs.generateImage.mockResolvedValue({});
+    await mediaJobQueue.initMediaJobQueue();
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    const request = stubs.generateImage.mock.calls[0][0];
+    expect(request.reviewedReferenceSnapshot).toEqual(original);
+    expect(readFileSync(request.referenceImagePaths[0], 'utf8')).toBe('reviewed bytes');
+    imageGenEvents.emit('failed', { generationId: job.jobId, error: 'synthetic', inputProcessSettled: true });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+  });
+
+  it('retains a snapshot when failure arrives without child-settlement proof', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    stubs.generateImage.mockResolvedValue({});
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest } });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    const id = mediaJobQueue.getJob(job.jobId).params.reviewedReferenceSnapshot;
+    imageGenEvents.emit('failed', { generationId: job.jobId, error: 'handoff failed' });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+    await flush();
+    expect(JSON.parse(readFileSync(join(tempDataDir, 'imageRefs', `snapshot-${id.snapshotId}.json`), 'utf8')).state).toBe('invoked');
+    expect(readFileSync(join(tempDataDir, 'imageRefs', id.filename), 'utf8')).toBe('reviewed bytes');
+  });
+
+  it('retains a canceled remote recovery until the peer work is proven settled', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    mediaJobQueue.quiesceMediaJobQueue();
+    const marker = { ...remoteImageMediaParams(), inputAssets: [{ role: 'referenceImages', path: source }] };
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest, remoteMedia: marker } });
+    const retained = mediaJobQueue.getJob(job.jobId);
+    const id = retained.params.reviewedReferenceSnapshot;
+    const { markSnapshotState } = await import('../imageGen/reviewedReference.js');
+    await markSnapshotState(id, 'invoked');
+    retained.params.remoteMedia.reconcile = true;
+    retained.params.remotePeerReservation = true;
+    await mediaJobQueue.cancelJob(job.jobId);
+    expect(JSON.parse(readFileSync(join(tempDataDir, 'imageRefs', `snapshot-${id.snapshotId}.json`), 'utf8')).state).toBe('invoked');
+  });
+
+  it('marks a canceled queued snapshot settled only after its terminal state is durable', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    mediaJobQueue.quiesceMediaJobQueue();
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest } });
+    const id = mediaJobQueue.getJob(job.jobId).params.reviewedReferenceSnapshot;
+    await mediaJobQueue.cancelJob(job.jobId);
+    const manifest = JSON.parse(readFileSync(join(tempDataDir, 'imageRefs', `snapshot-${id.snapshotId}.json`), 'utf8'));
+    expect(manifest.state).toBe('settled');
+    expect(persistedJobs().find(row => row.id === job.jobId).status).toBe('canceled');
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+  });
+
+  it('refuses a replaced snapshot before invoking the provider', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    stubs.generateVideo.mockResolvedValue({});
+    const blocker = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'hold the lane' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest } });
+    const snapshot = mediaJobQueue.getJob(job.jobId).params.reviewedReferenceRequest.referenceImagePaths[0];
+    rmSync(snapshot);
+    writeFileSync(snapshot, 'reviewed bytes');
+    videoGenEvents.emit('completed', { generationId: blocker.jobId, filename: 'done.mp4' });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+    expect(readFileSync(snapshot, 'utf8')).toBe('reviewed bytes');
+  });
+
   it('blocks guide generation and rechecks media policy before delayed provider dispatch', async () => {
     const { getProject } = await import('../musicVideo/projects.js');
     const request = { kind: 'image', params: { prompt: 'Synthetic guide', musicVideo: { projectId: 'mv-example', castAndSets: { key: 'guide' } } } };

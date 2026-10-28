@@ -228,6 +228,25 @@ describe('Image Gen Routes', () => {
     vi.clearAllMocks();
   });
 
+  it('rejects a reference replaced after preview before admitting a quick edit', async () => {
+    await fileUtils.ensureDir(fileUtils.PATHS.images);
+    const path = pathJoin(fileUtils.PATHS.images, 'quick-edit-reviewed.png');
+    await writeFile(path, 'reviewed bytes');
+    const body = { prompt: 'Change the coat', mode: 'codex', referenceImageFiles: ['quick-edit-reviewed.png'] };
+    const settings = { imageGen: { mode: 'codex', codex: { enabled: true } } };
+    getSettings.mockResolvedValueOnce(settings);
+    const preview = await request(app).post('/api/image-gen/prompt-preview').send({ ...body, reviewReference: true });
+    expect(preview.status).toBe(200);
+    expect(preview.body.reviewedReferenceImage).toContain(Buffer.from('reviewed bytes').toString('base64'));
+    await writeFile(path, 'replacement bytes');
+    getSettings.mockResolvedValueOnce(settings);
+    const response = await request(app).post('/api/image-gen/generate').send({ ...body, reviewedReferenceDigest: preview.body.reviewedReferenceDigest });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('REVIEWED_REFERENCE_CHANGED');
+    expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    expect(imageGen.generateImage).not.toHaveBeenCalled();
+  });
+
   describe('GET /api/image-gen/gallery', () => {
     it('preserves legacy arrays and pages/searches the test disk fallback', async () => {
       const items = [
