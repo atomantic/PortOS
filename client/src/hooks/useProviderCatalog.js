@@ -30,9 +30,9 @@ function fetchCatalog() {
   const readGeneration = generation;
   inFlight ||= getProviderCatalog({ silent: true })
     .catch((err) => {
-      console.warn(`⚠️ Provider catalog fetch failed: ${err?.message || err}`);
+      console.log(`ℹ️ Provider catalog unavailable: ${err?.message || err}`);
       if (readGeneration === generation) inFlight = null;
-      return null;
+      throw err;
     });
   return inFlight;
 }
@@ -103,7 +103,7 @@ function listenForProviderChanges() {
  *   harnesses: object[], services: object[], bootstraps: object[], presets: object[],
  *   compatibility: Record<string, string[]>, effortLevels: Record<string, string[]>,
  *   effortLevelsByModel: Record<string, Record<string, string[]>>,
- *   loading: boolean,
+ *   loading: boolean, error: Error|null, retry: () => void,
  *   compatiblePairs: (harnessId: string) => object[],
  *   methodsFor: (harnessId: string) => string[],
  *   modelsFor: (serviceSlug: string) => Array<string|object>,
@@ -113,31 +113,40 @@ function listenForProviderChanges() {
  * }}
  */
 export default function useProviderCatalog(enabled = true) {
-  const [state, setState] = useState({ catalog: null, loaded: false, generation });
+  const [state, setState] = useState({ catalog: null, loaded: false, error: null, generation });
 
   // A revision change must retrigger an already-loading picker too. Merely
   // setting loaded=false leaves its obsolete request as the only active read.
   useEffect(() => {
     listenForProviderChanges();
-    const notify = () => setState((current) => ({ ...current, loaded: false, generation }));
+    const notify = () => setState((current) => ({ ...current, loaded: false, error: null, generation }));
     subscribers.add(notify);
     return () => { subscribers.delete(notify); };
   }, []);
 
   useEffect(() => {
-    if (!enabled || state.loaded) return undefined;
+    if (!enabled) {
+      // A failed attempt settles this opening, but must not poison the next one.
+      if (state.error) setState((current) => ({ ...current, loaded: false, error: null }));
+      return undefined;
+    }
+    if (state.loaded) return undefined;
     let canceled = false;
     const readGeneration = generation;
     fetchCatalog().then((catalog) => {
       if (!canceled && readGeneration === generation) {
-        setState((current) => ({ ...current, catalog: catalog ?? current.catalog, loaded: true }));
+        setState((current) => ({ ...current, catalog, loaded: true, error: null }));
+      }
+    }, (error) => {
+      if (!canceled && readGeneration === generation) {
+        setState((current) => ({ ...current, loaded: true, error }));
       }
     });
     // A cancel (popover closed mid-flight) leaves `loaded` false, so reopening
     // re-reads rather than rendering a result that never arrived — free when
     // the first fetch already succeeded, since the shared cache still has it.
     return () => { canceled = true; };
-  }, [enabled, state.loaded, state.generation]);
+  }, [enabled, state.loaded, state.generation, state.error]);
 
   const catalog = state.catalog || EMPTY_CATALOG;
 
@@ -210,6 +219,8 @@ export default function useProviderCatalog(enabled = true) {
     effortLevels: catalog.effortLevels,
     effortLevelsByModel: catalog.effortLevelsByModel,
     loading: enabled && !state.loaded,
+    error: state.error,
+    retry: invalidateProviderCatalog,
     compatiblePairs,
     methodsFor,
     modelsFor,

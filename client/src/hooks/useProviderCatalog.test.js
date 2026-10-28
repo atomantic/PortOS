@@ -155,6 +155,29 @@ describe('useProviderCatalog', () => {
     expect(created).toEqual({ id: 'pi-tui-nvidia-nim-free' });
   });
 
+  it('exposes failure and retries explicitly without looping automatically', async () => {
+    api.getProviderCatalog.mockRejectedValueOnce(new Error('offline'));
+    const { result } = renderHook(() => useProviderCatalog());
+    await waitFor(() => expect(result.current.error?.message).toBe('offline'));
+    expect(result.current.loading).toBe(false);
+    expect(api.getProviderCatalog).toHaveBeenCalledTimes(1);
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.harnesses).toEqual(CATALOG.harnesses));
+    expect(result.current.error).toBeNull();
+    expect(api.getProviderCatalog).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a failed opening when the same mounted consumer reopens', async () => {
+    api.getProviderCatalog.mockRejectedValueOnce(new Error('offline'));
+    const { result, rerender } = renderHook(({ enabled }) => useProviderCatalog(enabled), { initialProps: { enabled: true } });
+    await waitFor(() => expect(result.current.error).toBeTruthy());
+    rerender({ enabled: false });
+    expect(api.getProviderCatalog).toHaveBeenCalledTimes(1);
+    rerender({ enabled: true });
+    await waitFor(() => expect(result.current.harnesses).toEqual(CATALOG.harnesses));
+    expect(result.current.error).toBeNull();
+  });
+
   it('retries after a failed fetch on the next mount', async () => {
     api.getProviderCatalog.mockRejectedValueOnce(new Error('offline'));
     const first = renderHook(() => useProviderCatalog());
