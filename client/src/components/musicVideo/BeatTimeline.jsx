@@ -35,7 +35,7 @@ function lyricSpans(cues) {
   });
 }
 
-export default function BeatTimeline({ audioAnalysis, scenes, lyricCues, narrativeEvents = [], onSeek, onCommit }) {
+export default function BeatTimeline({ audioAnalysis, scenes, lyricCues, narrativeEvents = [], onCommit }) {
   const narrative = useMemo(() => resolveNarrativeEvents({ audioAnalysis, lyricCues, composition: { narrativeEvents } }, []), [audioAnalysis, lyricCues, narrativeEvents]);
   const eventLane = useMemo(() => {
     const ends = [];
@@ -280,17 +280,15 @@ export default function BeatTimeline({ audioAnalysis, scenes, lyricCues, narrati
               {cue.text}
             </div>
           ))}
-          {eventLane.events.map((event) => <button key={event.id} type="button"
+          {eventLane.events.map((event) => <div key={event.id}
             className="absolute h-5 overflow-hidden rounded border border-port-accent bg-port-card px-1 text-left text-[10px] text-port-text"
             style={{ left: event.left, top: 175 + event.row * 26, width: event.width }}
-            title={`${event.kind}: ${event.narrativeFunction} · ${event.mediumRationale}`}
-            aria-label={`Seek event ${event.name} at frame ${event.startFrame}`} onClick={() => onSeek?.(event.startSec)}>
+            title={`${event.name} at frame ${event.startFrame} · ${event.kind}: ${event.narrativeFunction} · ${event.mediumRationale}`}>
             {event.name} · {event.kind}
-          </button>)}
+          </div>)}
         </div>
       </div>
-      {narrative.events.length > 0 && <p className="text-xs text-port-text-muted">Narrative event lane · click an event to seek its resolved song frame.</p>}
-      {narrative.unresolved.length > 0 && <p role="status" className="text-xs text-port-warning">Rebind {narrative.unresolved.length} unresolved narrative events in Make.</p>}
+      {narrative.unresolved.length > 0 && <p role="status" className="text-xs text-port-warning">Rebind {narrative.unresolved.length} unresolved narrative events in Shots.</p>}
     </div>
   );
 }

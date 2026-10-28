@@ -141,7 +141,9 @@ const approvalStageFor = (tab, project, readiness, proofActive) => (tab === 'pro
   ? (proofReviewInUse(project, readiness, { proofActive }) ? 'proof' : null)
   : APPROVAL_STAGE_BY_TAB[tab] || null);
 // Steps reviewed by watching: the player leads them, with the approval beside it.
-const PLAYER_FIRST_STAGES = new Set(['board', 'produce', 'review']);
+const PLAYER_FIRST_STAGES = new Set(['produce', 'review']);
+// Steps with no player: Assets is a contact sheet, Story and Plan are read and edited rather than watched.
+const NO_DOCK_STAGES = new Set(['assets', 'story', 'board']);
 const STAGE_VIEWS = {
   setup: SetupStage, story: StoryStage, 'cast-sets': CastSetsStage, board: PlanStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
   assets: AssetsStage, cleanup: CleanupStage,
@@ -1685,7 +1687,7 @@ function ProjectWorkspace({
       : { headline: 'Loading status…', tone: 'muted', needsYouStage: null };
 
   const reviewStage = selected ? approvalStageFor(activeStage, selected, productionReview.readiness, productionReview.proof.active) : null;
-  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : (activeStage === 'board' || activeStage === 'produce') ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : 'final' }) : [];
+  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : activeStage === 'produce' ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : 'final' }) : [];
 
   return (
     <>
@@ -1806,8 +1808,7 @@ function ProjectWorkspace({
                 }}
               />
             )}
-            // Assets is a contact sheet: it takes the whole column, no player beside it.
-            dock={activeStage === 'assets' || activeStage === 'story' ? null : withTitleCard(
+            dock={NO_DOCK_STAGES.has(activeStage) ? null : withTitleCard(
               <PreviewDock
                 project={selected}
                 sources={previewSources}

@@ -9,7 +9,8 @@ import StoryboardLinkPanel from '../StoryboardLinkPanel.jsx';
  * Plan: the shot list before any shot is made — planning tools, the
  * treatment (the brief the planner reads, then per-shot
  * direction), the beat timeline and the linked storyboard. Each shot's
- * still, clip and locks are on Shots.
+ * still, clip and locks are on Shots. Plan has no player: it is checked by
+ * reading, and watching happens on Shots.
  */
 export default function PlanStage({ board }) {
   const { project, locked, busy, treatment } = board;
@@ -33,7 +34,7 @@ export default function PlanStage({ board }) {
         {project.audioAnalysis && scenes.length > 0 && (
           <StageSection title="Beat timeline">
           <BeatTimeline audioAnalysis={project.audioAnalysis} scenes={scenes} lyricCues={project.lyricCues} narrativeEvents={project.composition?.narrativeEvents}
-            onSeek={(startSec) => board.seekToScene({ startSec })} onCommit={board.commitSceneTiming} />
+            onCommit={board.commitSceneTiming} />
           </StageSection>
         )}
       </fieldset>

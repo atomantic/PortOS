@@ -75,7 +75,7 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
 }
 
 /**
- * The docked preview card, on every step. `MusicVideoLayout` places it: a
+ * The docked preview card, on every watched step (not Story, Plan or Assets). `MusicVideoLayout` places it: a
  * right-hand column from `xl` up; below it, a folded row above the step that
  * opens into the player. `sources` is `listPreviewSources(…)`; the picked one is the
  * `?play=` param, defaulting to the first (final render, then the live
