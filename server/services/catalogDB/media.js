@@ -14,6 +14,7 @@ import { rowToMedia } from './shared.js';
 import { MAX_CAST_GUIDES, normalizeLibrary } from '../../lib/catalogMediaLibrary.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable } from './identityAccess.js';
 import { toPgJson } from '../../lib/pgJson.js';
+import { catalogEvents } from '../catalogEvents.js';
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 const hasMeaningfulMetadata = (value) => value && typeof value === 'object'
@@ -30,6 +31,10 @@ const lockIngredient = async (client, ingredientId) => {
   await client.query('SELECT id FROM catalog_ingredients WHERE id = catalog_resolve_ingredient_id($1) FOR UPDATE', [ingredientId]);
 };
 const inTransaction = (options, fn) => (options.client ? fn(options.client) : withTransaction(fn));
+// Image attaches file into the record's universe collections
+// (catalogUniverseFiling.js), which reads after a short delay so a caller's
+// enclosing transaction has committed.
+const announceImage = (ingredientId) => catalogEvents.emit('assets-changed', { ingredientId });
 
 export async function attachMedia(ingredientId, mediaKey, kind, options = {}) {
   // Every local portrait entry point shares the replacement transaction,
@@ -39,10 +44,12 @@ export async function attachMedia(ingredientId, mediaKey, kind, options = {}) {
   if (!IMAGE_KINDS.has(kind)) {
     return insertMedia(options.client ? options.client.query.bind(options.client) : query, ingredientId, mediaKey, kind, options);
   }
-  return inTransaction(options, async (client) => {
+  const media = await inTransaction(options, async (client) => {
     await lockIngredient(client, ingredientId);
     return insertMedia(client.query.bind(client), ingredientId, mediaKey, kind, options);
   });
+  announceImage(ingredientId);
+  return media;
 }
 
 // File a generated render exactly once. The live image kinds are re-read under
@@ -57,7 +64,7 @@ export async function attachMedia(ingredientId, mediaKey, kind, options = {}) {
 // render never replaces a newer choice from any writer.
 export async function attachGeneratedMedia(ingredientId, mediaKey, { kind = 'auto', queuedAt = null, ...options } = {}) {
   ingredientId = await assertCatalogIdentityWritable(ingredientId, options);
-  return inTransaction(options, async (client) => {
+  const result = await inTransaction(options, async (client) => {
     await lockIngredient(client, ingredientId);
     const { rows } = await client.query(
       `SELECT * FROM catalog_identity_read_media
@@ -79,6 +86,8 @@ export async function attachGeneratedMedia(ingredientId, mediaKey, { kind = 'aut
       : await insertMedia(client.query.bind(client), ingredientId, mediaKey, target, options);
     return { media, kind: target, attached: true };
   });
+  if (result.attached) announceImage(ingredientId);
+  return result;
 }
 
 async function insertMedia(runQuery, ingredientId, mediaKey, kind, options) {
@@ -131,7 +140,7 @@ export async function detachMedia(ingredientId, mediaKey, kind) {
 // and a failed replacement leaves the previous portrait intact.
 export async function setPortraitMedia(ingredientId, mediaKey, options = {}) {
   ingredientId = await assertCatalogIdentityWritable(ingredientId, options);
-  return inTransaction(options, async (client) => {
+  const media = await inTransaction(options, async (client) => {
     await lockIngredient(client, ingredientId);
     await client.query(
       `UPDATE catalog_ingredient_media
@@ -142,6 +151,8 @@ export async function setPortraitMedia(ingredientId, mediaKey, options = {}) {
     );
     return insertMedia(client.query.bind(client), ingredientId, mediaKey, 'portrait', options);
   });
+  announceImage(ingredientId);
+  return media;
 }
 
 // Live (non-tombstoned) media rows for an ingredient's detail "Media" panel,
