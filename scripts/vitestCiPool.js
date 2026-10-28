@@ -43,6 +43,8 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
   // Real HiDPI WebGL capture shares the same constrained Chromium/GPU budget.
   // Parallel hosted runs timed out in both capture and startup (#13748).
   'routes/catalogGreyboxViewer.browser.test.js',
+  // Poster readout captures real Chrome pixels under the same quiet policy.
+  'services/codeAnimation/poster.realBrowser.test.js',
   // Exact SVG-filter screenshots hit the 30s CI budget alongside parallel tests.
   'lib/filmLook.browser.test.js',
   'lib/filmLookGpu.browser.test.js',
