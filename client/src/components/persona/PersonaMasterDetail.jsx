@@ -8,6 +8,7 @@ import Field from '../ui/FormField';
 import toast from '../ui/Toast';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
+import { countWords } from '../../lib/textUtils';
 
 const byName = (a, b) => (a.name || '').localeCompare(b.name || '');
 
@@ -308,11 +309,9 @@ export default function PersonaMasterDetail({
 
 const NO_SECTIONS = [];
 
-const wordCount = (text) => (text.trim() ? text.trim().split(/\s+/).length : 0);
-
 function PersonaField({ field, value, onChange }) {
   const counter = field.counter
-    ? <span className="block text-[11px] text-gray-500 mt-1 tabular-nums">{wordCount(value)} words · {value.length}/{field.maxLength} characters</span>
+    ? <span className="block text-[11px] text-gray-500 mt-1 tabular-nums">{countWords(value)} words · {value.length}/{field.maxLength} characters</span>
     : null;
   return (
     <Field compact label={field.label} hint={field.hint}>
