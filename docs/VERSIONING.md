@@ -106,9 +106,9 @@ ID in the following example. A release outside PortOS has no agent registration
 and can leave it unset. A missing/refused registration must not be replaced by a
 guessed seed or by adopting an existing checkout. Preserve the candidate and use
 the normal recovery workflow if a run was interrupted before its seed was saved.
-The reservation endpoint cannot transfer an existing checkout to a new publisher
-run; until a lineage-checked transfer is supported, retain the original seed and
-checkout rather than adopting it or cutting a second candidate.
+The reservation action never transfers an existing checkout. A documented
+successor uses the separate recovery action below; a resumed coordinator cannot
+reserve a second candidate.
 
 ```bash
 set -e
@@ -132,6 +132,44 @@ fi
 git worktree lock --reason "Active release candidate $CANDIDATE_BRANCH" "$WORKTREE"
 node scripts/link-worktree-deps.js "$PRIMARY" "$WORKTREE"
 ```
+
+For an interrupted candidate, resume the original task through the service so
+its completed run and active successor have matching task, instance and resume
+lineage. Before touching the candidate, call the successor's endpoint:
+
+```bash
+node scripts/portos-api.js POST "/api/cos/agents/$RELEASE_AGENT_ID/release-candidate" \
+  "{\"action\":\"recover\",\"predecessorAgentId\":\"$PREVIOUS_RELEASE_AGENT_ID\"}"
+```
+
+Continue only on `recovered: true`, using the returned original branch and path.
+Recovery checks the original terminal head, physical Git checkout generation,
+cutoff pin, release base, prepared version, forge promotion and private review
+files under the ownership/retirement fence. It saves a separate transfer receipt
+and an honestly timestamped seed for the successor; it never edits the original
+seed, copies review files, advances a cutoff or changes a tag. A retry retains
+the original transfer. A merged promotion remains merged: verify its existing
+publication instead of opening another PR. Already recorded publication goes
+through the existing synchronization recovery, not candidate transfer.
+
+An unseeded candidate requires an independently captured service receipt from
+the original run with the exact Git pointer and administration identities. A
+creation log, matching branch/path, current inode or absent PID is insufficient.
+Missing/changed evidence yields a held `releaseCandidateRecovery` projection on
+the successor with a reason and safe next step. Preserve uncommitted work and
+the original checkout while resolving it.
+
+**Current recovery limits:** whole-process settlement uses the existing native
+Windows supervision receipt. macOS/Linux have no equivalent durable receipt yet
+and remain held with `candidate-process-proof-unavailable`, including when the
+original PID is absent or no process currently has the checkout as its cwd.
+Historical runs missing from the trusted registry, unseeded candidates without
+contemporaneous physical evidence, and unknown private review receipt versions
+also remain held. V1 review evidence retains unknown inspection provenance; V2
+keeps its actual inspection separate from later completion. Both are validated
+with the shared receipt contract and preserved byte-for-byte, never re-certified
+as a new review. POSIX settlement support remains tracked in #13944; first
+reservation after a pre-reservation interruption is tracked in #14005.
 
 Resolve the previous **published** version tag and its peeled commit from the
 captured release history (not the latest tag on moving `main`). Verify the GitHub

@@ -1,5 +1,6 @@
 /** Shared claim-ownership fence and trusted reader, independent of reconciliation. */
 import { resolve } from 'path';
+import { isDeepStrictEqual } from 'node:util';
 
 // One in-process tail shared by binding and branch-reconcile's retirement, so a
 // bind cannot land between cleanup's ownership re-read and its removal.
@@ -82,6 +83,9 @@ export async function readClaimOwnershipAgents() {
   const snapshot = await readAgentsStateForSafetyCheck().catch(() => null);
   if (snapshot?.trusted !== true || !snapshot.agents || typeof snapshot.agents !== 'object' || Array.isArray(snapshot.agents)) return null;
   const entries = Object.entries(snapshot.agents);
+  const releaseCandidateTransferSchema = entries.some(([, agent]) => agent?.metadata?.releaseCandidateSuccessor
+    || agent?.metadata?.releaseCandidateRecovery?.status === 'transferred')
+    ? (await import('../lib/releasePublication.js')).releaseCandidateTransferSchema : null;
   if (entries.some(([id, agent]) => {
     if (!agent || agent.id !== id || !['running', 'paused', 'completed'].includes(agent.status)) return true;
     if (agent.metadata != null && (typeof agent.metadata !== 'object' || Array.isArray(agent.metadata))) return true;
@@ -89,6 +93,23 @@ export async function readClaimOwnershipAgents() {
     if (candidate != null && (candidate.version !== 1 || agent.metadata?.taskAnalysisType !== 'do-release'
       || agent.metadata?.isWorktree !== false || candidate.startedAt !== agent.startedAt
       || candidate.branch !== `codex/release-${id}` || !Number.isFinite(Date.parse(candidate.reservedAt)))) return true;
+    const recovery = agent.metadata?.releaseCandidateRecovery;
+    const transfer = recovery?.status === 'transferred' ? recovery.transfer : agent.metadata?.releaseCandidateSuccessor;
+    if (recovery && (recovery.version !== 1 || !['held', 'transferred'].includes(recovery.status)
+      || typeof recovery.predecessorAgentId !== 'string')) return true;
+    if (transfer) {
+      if (!releaseCandidateTransferSchema.safeParse(transfer).success || agent.metadata.taskAnalysisType !== 'do-release'
+        || agent.metadata.isWorktree !== false || transfer.source.agentId === transfer.successor.agentId
+        || transfer.source.taskId !== transfer.successor.taskId || transfer.branch !== transfer.lineage.receipt.branch
+        || transfer.path !== transfer.lineage.receipt.path || transfer.settlement.owner.agentId !== transfer.source.agentId
+        || transfer.settlement.owner.taskId !== transfer.source.taskId || transfer.settlement.owner.startedAt !== transfer.source.startedAt) return true;
+      const binding = recovery?.status === 'transferred' ? transfer.successor : transfer.source;
+      if (binding.agentId !== id || binding.taskId !== agent.taskId || binding.startedAt !== agent.startedAt) return true;
+      const predecessor = snapshot.agents[transfer.source.agentId];
+      const successor = snapshot.agents[transfer.successor.agentId];
+      if (predecessor && successor && (!isDeepStrictEqual(predecessor.metadata?.releaseCandidateSuccessor, transfer)
+        || !isDeepStrictEqual(successor.metadata?.releaseCandidateRecovery?.transfer, transfer))) return true;
+    } else if (recovery?.status === 'transferred') return true;
     return ['claimBranches', 'claimReleasedBranches'].some(key => {
       const bindings = agent.metadata?.[key] ?? agent[key];
       return bindings != null && (!Array.isArray(bindings) || bindings.some(branch => typeof branch !== 'string'));

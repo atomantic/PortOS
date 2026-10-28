@@ -1571,6 +1571,15 @@ describe('CI test impact planner', () => {
     expect(winHelper.windows).toBe(true);
   });
 
+  it('runs the native supervised release-recovery service contract on Windows', () => {
+    const source = 'server/services/releaseCandidateRecovery.js';
+    const contract = 'server/services/releaseCandidateRecovery.test.js';
+    const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, contract] });
+    expect(plan.windows).toBe(true);
+    expect(plan.windowsMode).toBe('files');
+    expect(plan.windowsFiles).toContain(contract);
+  });
+
   it.each([
     'server/lib/bufferedSpawn.js',
     'server/lib/windowsGitProcess.protocol.test.js',
