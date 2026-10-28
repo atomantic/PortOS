@@ -283,6 +283,9 @@ test('does not accept caller-supplied release checkout ownership through generic
   await updateAgent('agent-forged', { metadata: forged });
   expect(fixture.disk.agents['agent-forged'].metadata.releaseCandidateLifecycle).toEqual(lifecycle);
   for (const key of Object.keys(forged).filter(key => key !== 'releaseCandidateLifecycle')) expect(fixture.disk.agents['agent-forged'].metadata[key]).toBeUndefined();
+  await updateAgent('agent-forged', { metadata: { taskAnalysisType: 'other' } });
+  await updateAgent('agent-forged', { metadata: { releaseCandidateLifecycle: null } });
+  expect(fixture.disk.agents['agent-forged'].metadata.releaseCandidateLifecycle).toEqual(lifecycle);
 });
 
 test('requires recovery before a resumed publisher can record publication, and rejects a concurrent recovery change', async () => {

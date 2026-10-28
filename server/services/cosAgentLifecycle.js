@@ -108,10 +108,12 @@ export async function readProtectedCleanupOwners({ state = null, index = null, t
 }
 
 export async function registerAgent(agentId, taskId, metadata = {}) {
+  const { releaseCandidateLifecycle: _lifecycle, ...untrustedMetadata } = metadata;
+  metadata = untrustedMetadata;
   metadata = { ...metadata, releasePublication: null };
   if (metadata.taskAnalysisType === 'do-release') {
     // A task's supplied metadata is not a server-observed checkout reservation.
-    const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate, releaseCandidateLifecycle: _lifecycle, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...trusted } = metadata;
+    const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...trusted } = metadata;
     metadata = trusted;
   }
   return withStateLock(async () => {
@@ -176,10 +178,14 @@ export async function updateAgent(agentId, updates) {
       const { releasePublication: _publication, ...metadata } = updates.metadata;
       updates = { ...updates, metadata };
     }
+    if (updates.metadata && Object.hasOwn(updates.metadata, 'releaseCandidateLifecycle')) {
+      const { releaseCandidateLifecycle: _lifecycle, ...metadata } = updates.metadata;
+      updates = { ...updates, metadata };
+    }
     if (current.metadata?.taskAnalysisType === 'do-release' && updates.metadata) {
       // Only the ownership transaction and completion capture write these
       // fields; generic updates cannot manufacture or revoke their evidence.
-      const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate, releaseCandidateLifecycle: _lifecycle, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...metadata } = updates.metadata;
+      const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...metadata } = updates.metadata;
       updates = { ...updates, metadata };
     }
 
