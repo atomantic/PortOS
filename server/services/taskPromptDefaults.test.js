@@ -221,11 +221,11 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(opening).toMatch(/out of\s+bounds even when it only reads/);
   });
 
-  // v3 (#13932): Postgres dump coverage does not imply the domain facades
-  // escaped their intentional file-backed test mode.
-  it('upgrade-rehearsal v3 accounts for test-mode file facades', () => {
+  // v4 (#13933): restore receipts are target-local and media_assets is rebuilt,
+  // so their observed counts must be reported without requiring parity.
+  it('upgrade-rehearsal v4 separates expected local and rebuilt table counts', () => {
     const current = DEFAULT_TASK_PROMPTS['upgrade-rehearsal'];
-    expect(PROMPT_VERSIONS['upgrade-rehearsal']).toBe(3);
+    expect(PROMPT_VERSIONS['upgrade-rehearsal']).toBe(4);
     expect(current).toContain('{modeInstructions}');
     for (const marker of [
       'Build a synthetic older install',
@@ -246,6 +246,14 @@ describe('taskPromptDefaults integrity snapshot', () => {
       'take a fresh snapshot and repeat the dry run',
       'domain-facade coverage as uncovered',
       'PostgreSQL boot coverage as untested',
+      'Report row counts for every table',
+      'Compare application-table counts and the `schema_migrations` ledger',
+      'unexplained differences are findings',
+      '`restore_receipts` and',
+      '`media_assets` counts separately',
+      'machine-local evidence created by the target restore',
+      'rebuildable index reconstructed from authoritative files',
+      'Do not hide their observed',
     ]) expect(current, marker).toContain(marker);
     expect(current).toMatch(/under about\s+60 characters/);
     expect(current).toMatch(/as uncovered,\s+quoting the helper/);

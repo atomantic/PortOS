@@ -2568,9 +2568,14 @@ executed-path failures that no static read of one file surfaces.
      snapshot — dry run first, then execute. A restore replays into whatever
      \`PGDATABASE\` its process holds, so print it and confirm the
      \`portos_rehearsal_\` prefix before each call.
-   - **Compare.** Row counts per table and the \`schema_migrations\` ledger must
-     match between source and target; any other status than \`ok\`, or a
-     mismatch, is a finding.
+   - **Compare.** Report row counts for every table in source and target.
+     Compare application-table counts and the \`schema_migrations\` ledger;
+     unexplained differences are findings. Report \`restore_receipts\` and
+     \`media_assets\` counts separately with an explanation: restore receipts
+     are machine-local evidence created by the target restore, and media assets
+     are a rebuildable index reconstructed from authoritative files, so neither
+     table is expected to have matching counts. Do not hide their observed
+     counts or treat these documented differences as data loss.
 4. **Boot the restored root** the same way and confirm its health endpoint;
    when step 3 ran, boot it with \`MEMORY_BACKEND=postgres\` and
    \`PGDATABASE=<target>\`. This verifies the primary store and memory
