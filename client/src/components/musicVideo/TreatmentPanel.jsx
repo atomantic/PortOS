@@ -72,7 +72,7 @@ export function treatmentSummary(project) {
  * `storyboardApproved` (from the server's readiness) warns that any treatment
  * edit will need the storyboard re-approved (#10141).
  */
-export default function TreatmentPanel({ project, treatment: api, storyboardApproved = false }) {
+export default function TreatmentPanel({ project, treatment: api, storyboardApproved = false, part = 'all' }) {
   const hasScenes = (project.scenes || []).length > 0;
   const t = project.treatment || null;
   const brief = t?.brief || {};
@@ -109,15 +109,15 @@ export default function TreatmentPanel({ project, treatment: api, storyboardAppr
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-port-text-muted">
+      {part !== 'production' && <p className="text-xs text-port-text-muted">
         Optional. The brief steers the shot planner, and a compiled arc adds per-shot direction. A board planned without one is complete.
-      </p>
+      </p>}
       {storyboardApproved && (
         <p role="note" className="rounded border border-port-warning/40 bg-port-warning/5 p-2 text-xs text-port-warning">
           The storyboard is approved. Editing the treatment will need re-approval of the storyboard.
         </p>
       )}
-      <>
+      {part !== 'production' && <>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           <BriefField id={idFor('audience')} label="Audience" value={brief.audience} maxLength={500}
             placeholder="Who this is for — e.g. late-night city pop fans" onCommit={(v) => saveBrief({ audience: v })} />
@@ -140,7 +140,7 @@ export default function TreatmentPanel({ project, treatment: api, storyboardAppr
           <BriefField id={idFor('graphic-language')} label="Graphic language" value={brief.graphicLanguage} maxLength={1000} multiline
             placeholder="HUD, pictograms, counters, and card typography" onCommit={(v) => saveBrief({ graphicLanguage: v })} />
           <BriefField id={idFor('premise')} label="Narrative premise" value={brief.premise} maxLength={2000} multiline
-            placeholder="A story, or a visual arc without a literal plot" onCommit={(v) => saveBrief({ premise: v })} />
+            placeholder="A concise premise; develop the full arc in Concept" onCommit={(v) => saveBrief({ premise: v })} />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <BriefField id={idFor('must')} label="Must have" value={brief.mustHave} maxLength={2000} multiline
               placeholder="Comma-separated aesthetics or motifs" onCommit={(v) => saveBrief({ mustHave: v })} />
@@ -185,13 +185,13 @@ export default function TreatmentPanel({ project, treatment: api, storyboardAppr
         <p className="text-xs text-port-text-muted">
           The planner reads this brief when it plans shots.
         </p>
-      </>
+      </>}
 
-      {!hasScenes && (
+      {part !== 'brief' && !hasScenes && (
         <p className="text-sm text-port-text-muted">Plan the shots to direct them one by one.</p>
       )}
 
-      {hasScenes && (
+      {part !== 'brief' && hasScenes && (
         <>
         <div className="flex flex-wrap items-center gap-2">
           {providers.length > 0 && (

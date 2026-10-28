@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import StoryboardLinkPanel from './StoryboardLinkPanel';
 
-const api = vi.hoisted(() => ({ getStoryboard: vi.fn(), listStoryboards: vi.fn(), makeStoryboardFromMusicVideo: vi.fn(), fitMusicVideoToStoryboard: vi.fn() }));
+const api = vi.hoisted(() => ({ createStoryboard: vi.fn(), getStoryboard: vi.fn(), listStoryboards: vi.fn(), makeStoryboardFromMusicVideo: vi.fn(), fitMusicVideoToStoryboard: vi.fn() }));
 vi.mock('../../services/api', () => api);
 
 const board = {
@@ -20,6 +20,19 @@ beforeEach(() => {
 });
 
 describe('StoryboardLinkPanel', () => {
+  it('keeps fit on Plan and linking on Story', async () => {
+    api.getStoryboard.mockResolvedValue(board);
+    const project = { id: 'mv-1', storyboardId: 'sb-1', scenes: [], audioAnalysis: { durationSec: 10, beats: [], sections: [] } };
+    const view = render(<MemoryRouter><StoryboardLinkPanel project={project} mode="story" onLink={vi.fn()} /></MemoryRouter>);
+    await screen.findByText('Example Story');
+    expect(screen.getByRole('button', { name: /Unlink/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Fit to song/ })).toBeNull();
+    view.rerender(<MemoryRouter><StoryboardLinkPanel project={project} mode="fit" /></MemoryRouter>);
+    expect(screen.queryByRole('button', { name: /Unlink/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /Fit to song/ })).toBeInTheDocument();
+    expect(api.fitMusicVideoToStoryboard).not.toHaveBeenCalled();
+  });
+
   it('links a picked board, or makes one from the video shots', async () => {
     api.listStoryboards.mockResolvedValue([{ id: 'sb-1', name: 'Example Story', panelCount: 1 }]);
     api.makeStoryboardFromMusicVideo.mockResolvedValue({ board: { ...board, id: 'sb-2' } });

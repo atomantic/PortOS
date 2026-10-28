@@ -102,6 +102,11 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   getMusicVideoHandoffBundle: vi.fn(),
   importMusicVideoHandoff: vi.fn(),
   getMusicVideoProject: vi.fn(),
+  getMusicVideoStoryContext: vi.fn(),
+  saveMusicVideoStorySummary: vi.fn(),
+  proposeMusicVideoStory: vi.fn(),
+  applyMusicVideoStory: vi.fn(),
+  applyMusicVideoStoryBeats: vi.fn(),
   updateMusicVideoTreatment: vi.fn(),
   compileMusicVideoTreatment: vi.fn(),
   previewMusicVideoTreatmentApply: vi.fn(),
@@ -366,7 +371,7 @@ const selectProject = async (projectId) => {
 // control is only on screen while its step is open, so tests say which one.
 // Compose is part of Shots now; Plan holds the planning tools. The phone's step bar is the tablist.
 const STAGE_TABS = {
-  setup: /^Song/, 'cast-sets': /^Look/, board: /^Plan/, produce: /^Shots/, compose: /^Shots/, review: /^Final render/, publish: /^Publish/,
+  setup: /^Song/, story: /^Story/, 'cast-sets': /^Look/, board: /^Plan/, produce: /^Shots/, compose: /^Shots/, review: /^Final render/, publish: /^Publish/,
 };
 // Project settings (render style, audio tools, autopilot, files) is a drawer over the step.
 const openSettings = async (tab = 'Project') => {
@@ -1925,7 +1930,7 @@ describe('MusicVideo section layers (#8985)', () => {
 describe('MusicVideo concept & style editor (#3168)', () => {
   it('seeds the fields from the project and persists each on blur', async () => {
     const withConcept = { ...PROJECT_NO_CLIP, concept: { prompt: 'A road trip through neon ruins', style: 'Cyberpunk anime' } };
-    await openProject(withConcept, 'cast-sets');
+    await openProject(withConcept, 'story');
 
     const conceptField = await screen.findByLabelText('Concept');
     const styleField = screen.getByLabelText('Visual style');
@@ -1951,7 +1956,7 @@ describe('MusicVideo concept & style editor (#3168)', () => {
 
   it('does not re-PATCH when a field is focused and blurred without an edit', async () => {
     const withConcept = { ...PROJECT_NO_CLIP, concept: { prompt: 'Unchanged', style: 'Unchanged' } };
-    await openProject(withConcept, 'cast-sets');
+    await openProject(withConcept, 'story');
     const conceptField = await screen.findByLabelText('Concept');
     fireEvent.focus(conceptField);
     fireEvent.blur(conceptField);
@@ -1968,14 +1973,14 @@ describe('MusicVideo concept & style editor (#3168)', () => {
     listMusicVideoProjects.mockResolvedValue([PROJECT_NO_CLIP, projectB]);
     renderMV();
     await selectProject(PROJECT_NO_CLIP.id);
-    // Concept and style are creative direction, on the Look step.
-    await openStage('cast-sets');
+    // Concept and style are creative direction, on the Story step.
+    await openStage('story');
 
     const conceptField = await screen.findByLabelText('Concept');
     fireEvent.change(conceptField, { target: { value: 'A unsaved draft' } });
     // No blur — switch projects while the edit is still pending.
     await selectProject(projectB.id);
-    await openStage('cast-sets');
+    await openStage('story');
 
     await waitFor(() => expect(screen.getByLabelText('Concept')).toHaveValue('B original'));
     fireEvent.blur(screen.getByLabelText('Concept'));
@@ -1988,7 +1993,7 @@ describe('MusicVideo concept & style editor (#3168)', () => {
   });
 
   it('starts empty and enables AI Plan to use them once set', async () => {
-    await openProject(PROJECT_ANALYZED, 'cast-sets');
+    await openProject(PROJECT_ANALYZED, 'story');
     const conceptField = await screen.findByLabelText('Concept');
     expect(conceptField).toHaveValue('');
 
@@ -2880,6 +2885,55 @@ describe('MusicVideo stage tabs (#9243)', () => {
     scroll.mockRestore();
   });
 
+  it('opens Story without a preview and keeps a rough draft across stage navigation', async () => {
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, concept: { prompt: 'Existing direction', style: 'Blue', songStyle: 'Synth' } }]);
+    renderAt('/music-video/mv-1/story');
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    expect(screen.getByLabelText('Concept')).toHaveValue('Existing direction');
+    expect(screen.getByLabelText('Visual style')).toHaveValue('Blue');
+    expect(screen.getByLabelText('Song style')).toHaveValue('Synth');
+    expect(screen.queryByRole('complementary', { name: 'Preview' })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Story in your own words'), { target: { value: 'A rough story draft' } });
+    await openStage('cast-sets');
+    expect(screen.getByLabelText('Concept')).not.toBeVisible();
+    await openStage('story');
+    expect(screen.getByLabelText('Story in your own words')).toHaveValue('A rough story draft');
+    expect(screen.queryByRole('complementary', { name: 'Preview' })).toBeNull();
+  });
+
+  it('keeps failed direction text visible and offers a retry', async () => {
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, concept: { prompt: 'Original direction' } }]);
+    updateMusicVideoProject.mockRejectedValueOnce(new Error('Could not save'));
+    renderAt('/music-video/mv-1/story');
+    const concept = await screen.findByLabelText('Concept');
+    fireEvent.change(concept, { target: { value: 'My unsaved direction' } });
+    fireEvent.blur(concept);
+    const retry = await screen.findByRole('button', { name: 'Retry saving' });
+    expect(concept).toHaveValue('My unsaved direction');
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry saving' })).toBeNull());
+    expect(updateMusicVideoProject).toHaveBeenLastCalledWith('mv-1', { concept: { prompt: 'My unsaved direction' } }, { silent: true });
+  });
+
+  it('saves successive direction edits in order after an earlier request fails', async () => {
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, concept: { prompt: 'Original direction' } }]);
+    let rejectFirst;
+    updateMusicVideoProject.mockImplementationOnce(() => new Promise((_, reject) => { rejectFirst = reject; }));
+    renderAt('/music-video/mv-1/story');
+    const concept = await screen.findByLabelText('Concept');
+    fireEvent.change(concept, { target: { value: 'First edit' } });
+    fireEvent.blur(concept);
+    await waitFor(() => expect(rejectFirst).toBeTypeOf('function'));
+    fireEvent.change(concept, { target: { value: 'Second edit' } });
+    fireEvent.blur(concept);
+    expect(updateMusicVideoProject).toHaveBeenCalledTimes(1);
+    await act(async () => rejectFirst(new Error('First request failed')));
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledTimes(2));
+    expect(updateMusicVideoProject).toHaveBeenLastCalledWith('mv-1', { concept: { prompt: 'Second edit' } }, { silent: true });
+    expect(concept).toHaveValue('Second edit');
+    expect(screen.queryByRole('button', { name: 'Retry saving' })).toBeNull();
+  });
+
   // Uniquely catches the opening title card form leaving the Look step or reappearing on Plan/Shots.
   it('edits the opening title card on the Look step only, right under the preview', async () => {
     listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
@@ -3015,11 +3069,8 @@ describe('MusicVideo stage tabs (#9243)', () => {
         'Change track': (root) => root.queryByLabelText('Change track'),
         'Song content': (root) => root.queryByRole('radio', { name: 'Vocal song' }),
       },
-      'cast-sets': {
-        'Cast & Sets check-in': (root) => root.queryByLabelText('Cast & Sets check-in'),
-        // Creative direction is what the cast and sets are built from.
-        Concept: (root) => root.queryByLabelText('Concept'),
-      },
+      story: { Concept: (root) => root.queryByRole('textbox', { name: 'Concept' }) },
+      'cast-sets': { 'Cast & Sets check-in': (root) => root.queryByLabelText('Cast & Sets check-in') },
       board: { 'AI Plan': (root) => root.queryByRole('button', { name: /AI Plan/ }) },
       // Shots: the scene board, the footage, then the composition over it.
       produce: { 'Add scene': (root) => root.queryByRole('button', { name: /Add scene/ }), 'Shot prompt': (root) => root.queryByLabelText('Shot prompt'),

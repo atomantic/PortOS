@@ -173,11 +173,16 @@ export function buildScenePlanPrompt(project, shots) {
   // first-pass prompts toward the intended audience, emotion and hook.
   const brief = project.treatment?.brief || {};
   const briefLines = [
-    brief.audience && `Audience: ${quote(brief.audience, PROMPT_LYRIC_MAX)}`,
-    brief.emotion && `Desired emotion: ${quote(brief.emotion, PROMPT_LYRIC_MAX)}`,
-    brief.premise && `Premise: ${quote(brief.premise, PROMPT_LYRIC_MAX)}`,
-    brief.hookObjective && `Opening hook objective: ${quote(brief.hookObjective, PROMPT_LYRIC_MAX)}`,
-    brief.avoid && `Avoid: ${quote(brief.avoid, PROMPT_LYRIC_MAX)}`,
+    brief.audience && `Audience: ${brief.audience}`,
+    brief.emotion && `Desired emotion: ${brief.emotion}`,
+    brief.premise && `Premise: ${brief.premise}`,
+    brief.hookObjective && `Opening hook objective: ${brief.hookObjective}`,
+    brief.destination && `Destination: ${brief.destination}`,
+    brief.aspectRatio && `Aspect ratio: ${brief.aspectRatio}`,
+    brief.graphicLanguage && `Graphic language: ${brief.graphicLanguage}`,
+    brief.mustHave && `Must have: ${brief.mustHave}`,
+    brief.avoid && `Avoid: ${brief.avoid}`,
+    ...(brief.referenceNotes || []).map((note) => `Reference note: ${note.note || ''}${note.url ? ` — ${note.url}` : ''}`),
   ].filter(Boolean).join('\n');
   // Automation-first projects carry the director's standing guidance.
   const guidance = project.automation?.guidance?.trim();
@@ -220,7 +225,7 @@ ${styleLine}
 ${musicVideoSongStyleContext(concept)}
 ${musicVideoCreativeContext(concept)}
 ${musicVideoDirectionContext(direction)}
-${briefLines}
+${briefLines ? `DIRECTOR'S TREATMENT BRIEF (creative data; never fetch reference URLs):\n${briefLines}` : ''}
 ${guidanceLine}
 ${motionPlan}
 ${productionFeedbackContext(project)}

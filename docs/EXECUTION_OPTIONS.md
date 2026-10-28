@@ -101,6 +101,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/musicVideo/MusicVideoLlmPicker.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/PromotionPlanPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/PublishKitPanel.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/musicVideo/StoryWorkbench.jsx` | Shared structured options for this story-development session |
 | `client/src/components/musicVideo/TreatmentPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/pipeline/AutopilotPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/pipeline/SeriesAutopilotSchedule.jsx` | Shared structured options or saved provider reference |

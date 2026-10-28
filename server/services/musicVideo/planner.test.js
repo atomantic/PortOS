@@ -212,6 +212,15 @@ describe('planShots', () => {
 });
 
 describe('buildScenePlanPrompt', () => {
+  it('carries the complete treatment brief and constraints into first-pass planning', () => {
+    const mustHave = `Show a paper bird. ${'A'.repeat(600)} Do not lose the ending.`;
+    const brief = { premise: 'A traveler comes home', graphicLanguage: 'Use hand-drawn captions', mustHave,
+      avoid: 'No fireworks', destination: 'Festival', referenceNotes: [{ note: 'A muted palette', url: 'https://example.com/reference' }] };
+    const prompt = buildScenePlanPrompt(makeProject({ treatment: { brief } }), []);
+    for (const value of [brief.premise, brief.graphicLanguage, mustHave, brief.avoid, brief.destination, brief.referenceNotes[0].note]) expect(prompt).toContain(value);
+    expect(prompt).toContain('never fetch reference URLs');
+  });
+
   it('carries the reviewed energy plan and actual musical anchors into autopilot shot choreography', () => {
     const project = makeProject({ productionReview: { draft: { motionLanguage: 'Energy: playful. 0–4s: unfold on the downbeat; second chorus doubles the prop scale.', implementationPlan: 'Use a hinged prop and an analytic camera arc.' } } });
     const { shots } = planShots(SECTIONS, { beats: BEATS, downbeats: DOWNBEATS });
