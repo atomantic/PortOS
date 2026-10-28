@@ -79,6 +79,27 @@ const object = {
 
 const queuedParams = (n = 0) => mocks.enqueueJob.mock.calls[n][0].params;
 
+// Expected records come straight from the builders the render invokes.
+async function expectBackendPreview(preview, params) {
+  const { resolveInputImages } = await import('../services/imageGen/inputImages.js');
+  const inputImages = resolveInputImages(params);
+  let record;
+  if (params.mode === 'local') {
+    const { localSentPrompt } = await import('../services/imageGen/local.js');
+    record = await localSentPrompt({ ...params, model: mocks.getImageModels().find(m => m.id === params.modelId) });
+  } else {
+    const { [params.mode === 'runway' ? 'runwayImageSentPrompt' : params.mode + 'SentPrompt']: builder } = await import(`../services/imageGen/${params.mode}.js`);
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    record = builder({ ...params, inputImages, modelId: params.model,
+      stagingPath: join(tmpdir(), `portos-${params.mode}-<job>`, 'output.png') }).record;
+  }
+  expect(preview).toMatchObject(record);
+  expect(preview.sentNegativePrompt).toBe(record.sentNegativePrompt);
+  expect(preview.promptAdditions).toEqual(record.promptAdditions || []);
+}
+
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.listLiveRefsForIngredient.mockResolvedValue([]);
@@ -92,6 +113,35 @@ beforeEach(() => {
 });
 
 describe('catalog sheet routes', () => {
+  // Pins backend wrappers for catalog sheets, looks and delegated universe sheets.
+  it.each(['codex', 'local', 'grok'])('previews the %s backend record across sheet paths', async mode => {
+    mocks.getSettings.mockResolvedValue({ imageGen: { mode, [mode]: { enabled: true, modelId: 'dev' } } });
+    mocks.getIngredient.mockResolvedValue({ ...character, payload: { ...character.payload,
+      wardrobes: [{ id: 'outfit-1', name: 'Travel', description: 'red coat' }] } });
+    mocks.listMediaForIngredient.mockResolvedValue([{ kind: 'portrait', mediaKey: 'portrait.png' }]);
+    mocks.imageFiles.add('portrait.png');
+    const cases = [{}, { variant: 'look', wardrobeId: 'outfit-1', visualDirection: {
+      style: 'Photography', camera: 'Full body', lighting: 'Soft light', environment: 'Harbor',
+    } }, {}];
+    for (const [index, body] of cases.entries()) {
+      if (index === 2) {
+        mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
+        mocks.getUniverse.mockResolvedValue({ id: 'universe-1', name: 'Example Universe',
+          characters: [{ id: 'char-entry-1', name: character.name, ingredientId: character.id }] });
+      }
+      const preview = await request(app).post(`/api/catalog/ingredients/${character.id}/sheets/preview`).send(body);
+      expect(preview.status).toBe(200);
+      const render = await request(app).post(`/api/catalog/ingredients/${character.id}/sheets`).send(body);
+      expect(render.status).toBe(200);
+      const params = queuedParams(index);
+      await expectBackendPreview(preview.body.preview, params);
+      if (mode !== 'local') {
+        expect(preview.body.preview.sentPrompt).not.toBe(params.prompt);
+        expect(preview.body.preview.promptAdditions.map(a => a.id)).toContain('agent-instructions');
+      }
+    }
+  });
+
   // Proves the images shown before Generate are the same ordered inputs queued,
   // and prevents derived sheets or a different form becoming identity fallback.
   it('previews and queues portrait and canon images once, excluding derived and alternate-form media', async () => {
@@ -135,11 +185,12 @@ describe('catalog sheet routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.preview.referenceImages.map((ref) => ref.status)).toEqual(['included', 'included', 'included', 'limit']);
     expect(res.body.preview.referenceImages.every((ref) => ref.source === 'Render guide')).toBe(true);
-    expect(res.body.preview.sentPrompt).toBe(body.overridePrompt);
-    expect(res.body.preview.promptAdditions).toEqual([]);
+    expect(res.body.preview.sentPrompt).toContain(body.overridePrompt);
+    expect(res.body.preview.promptAdditions.map(a => a.id)).toEqual(['agent-instructions']);
     await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
     expect(queuedParams().referenceImagePaths).toHaveLength(3);
     expect(queuedParams().prompt).toBe(body.overridePrompt);
+    await expectBackendPreview(res.body.preview, queuedParams());
   });
 
   it('keeps same-age alternate costumes and rejected canon images out of canonical sheets', async () => {
@@ -520,8 +571,7 @@ describe('catalog sheet routes', () => {
         expect(params.initImageStrength).toBeGreaterThan(0.4);
         expect(params.height).toBeGreaterThan(params.width);
         expect(params.width).toBe(2048);
-        expect(params.prompt).toBe(sent.sentPrompt);
-        expect(params.promptAdditions).toEqual(sent.promptAdditions);
+        await expectBackendPreview(sent, params);
       });
 
       it('keeps today’s three-view generate with no portrait to edit', async () => {
@@ -600,7 +650,7 @@ describe('catalog sheet routes', () => {
         expect(allowed.status).toBe(200);
         expect(basename(queuedParams().initImagePath)).toBe('portrait.png');
         expect(queuedParams().referenceImagePaths.map((path) => basename(path))).toEqual(['side.png']);
-        expect(queuedParams().prompt).toBe(allowedPreview.body.preview.sentPrompt);
+        await expectBackendPreview(allowedPreview.body.preview, queuedParams());
         const { buildRunwayImageRequest } = await import('../lib/runwayImageModels.js');
         const { width, height, resolution } = queuedParams();
         const wire = buildRunwayImageRequest({ modelId: 'bria_fibo_edit_1_5', prompt: queuedParams().prompt, width, height, resolution,
@@ -622,7 +672,7 @@ describe('catalog sheet routes', () => {
         const params = queuedParams();
         expect(basename(params.initImagePath)).toBe('portrait.png');
         expect(params).toMatchObject({ width: 4096, height: 3072 });
-        expect(params.prompt).toBe(preview.body.preview.sentPrompt);
+        await expectBackendPreview(preview.body.preview, params);
       });
     });
 

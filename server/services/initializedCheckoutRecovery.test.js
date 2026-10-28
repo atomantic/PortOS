@@ -29,6 +29,10 @@ vi.mock('node:fs/promises', async importOriginal => {
       await actual.writeFile(target, 'concurrent-evidence', { flag: 'wx', mode: 0o600 });
     }
     await actual.link(source, target);
+    if (fixture?.interruptPhase && JSON.parse(await actual.readFile(target, 'utf8')).phase === fixture.interruptPhase) {
+      fixture.interruptPhase = null;
+      throw new Error('journal-publication-interrupted');
+    }
     if (fixture?.stopAfterJournalPublication) {
       fixture.stopAfterJournalPublication = false;
       throw new Error('journal-publication-interrupted');
@@ -92,6 +96,7 @@ beforeEach(async () => {
   const native = vi.fn(async input => {
     if (input.command === 'lock') return { assertHeld: () => {}, release: async () => {} };
     if (input.command === 'inspect') {
+      if (fixture.lockState != null && Boolean(input.expectUnlocked) === fixture.lockState) throw new Error('release-lock-changed');
       if (fixture.inspectRefusal) throw new Error(fixture.inspectRefusal);
       if (fixture.ownershipRefusal && input.requireOwnership) throw new Error(fixture.ownershipRefusal);
       return { ...fixture.snapshot };
@@ -183,6 +188,7 @@ beforeEach(async () => {
     retainReleaseSynchronizationReview: vi.fn(async () => true),
     validateLegacyReleaseRetirement: vi.fn(async () => true),
     prepareLegacyReleaseRetirement: vi.fn(async () => new Map()),
+    validateLockedPublisherRetirement: vi.fn(async () => true),
     ownership: vi.fn(async () => ({ ok: true, policy: null })),
     forge: async () => ({ ...fixture.facts }),
     comparison: async (_ctx, _release, _url, _snapshot, policy, forge) => ({
@@ -271,10 +277,145 @@ describe('initialized checkout removal', () => {
     expect(preview.ok).toBe(true);
     expect(preview.review.snapshot.modules).toEqual([{ path: 'lib/slashdo' }]);
     const input = { appId: 'app', release: candidate, review: { prUrl, digest: preview.review.digest } };
-    expect(await fixture.service.retire(input)).toEqual({ ok: false, reason: 'checkout-locked' });
-    expect(fixture.deps.execGit).not.toHaveBeenCalled();
+    expect(await fixture.service.retire(input)).toEqual({ ok: false, reason: 'locked-retirement-evidence-unavailable' });
+    expect(fixture.deps.execGit.mock.calls.some(([args]) => args[0] === 'worktree')).toBe(false);
     expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
     expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
+  });
+
+  it('journals a reviewed locked publisher before unlocking and records its exact retirement', async () => {
+    const path = join(root, 'candidate');
+    await mkdir(path);
+    const candidate = { ...release, path, locked: true, lockReason: 'fixture held' };
+    readRetirementCheckoutIdentity.mockResolvedValue('fixture-identity');
+    fixture.snapshot.modules = [{ path: 'lib/slashdo' }];
+    fixture.snapshot.lockTransitionFingerprint = 'f'.repeat(64);
+    fixture.snapshot.privateGitDir = join(root, 'absent-administration');
+    fixture.deps.execGit.mockImplementation(async args => {
+      if (args[0] === 'worktree' && args[1] === 'remove') await rm(path, { recursive: true });
+      return { exitCode: 0, stdout: '' };
+    });
+    fixture.deps.deleteRef.mockResolvedValue(true);
+    const preview = await fixture.service.review({ appId: 'app', release: candidate, prUrl });
+    const result = await fixture.service.retire({ appId: 'app', release: candidate,
+      review: { prUrl, digest: preview.review.digest } });
+    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(fixture.deps.execGit).toHaveBeenCalledWith(['worktree', 'unlock', path], '/fixture/repo', { ignoreExitCode: true });
+    const files = (await readdir(join(root, result.transactionId))).filter(name => /^\d{6}\.json$/.test(name)).sort();
+    const phases = await Promise.all(files.map(async name => JSON.parse(await readFile(join(root, result.transactionId, name))).phase));
+    expect(phases).toEqual(['locked-intent', 'locked-reserved', 'locked-preserved', 'locked-unlock-intent', 'locked-unlocked',
+      'locked-removal-intent', 'locked-removed', 'locked-branch-intent', 'locked-branch-retired', 'locked-retired']);
+    expect(fixture.cut).toBeNull();
+  });
+
+  it.each(['owner', 'content', 'administration', 'generation', 'lock', 'head', 'publisher', 'post-unlock-content'])(
+    'refuses changed %s without issuing removal or a receipt', async change => {
+      const path = join(root, 'candidate');
+      await mkdir(path);
+      const candidate = { ...release, path, locked: true, lockReason: 'fixture held' };
+      readRetirementCheckoutIdentity.mockResolvedValue('fixture-identity');
+      fixture.snapshot.modules = [{ path: 'lib/slashdo' }];
+      fixture.snapshot.lockTransitionFingerprint = 'f'.repeat(64);
+      fixture.snapshot.privateGitDir = join(root, 'absent-administration');
+      fixture.deps.execGit.mockImplementation(async args => {
+        if (change === 'post-unlock-content' && args[0] === 'worktree' && args[1] === 'unlock') {
+          fixture.snapshot.lockTransitionFingerprint = '9'.repeat(64);
+        }
+        return { exitCode: 0, stdout: '' };
+      });
+      const preview = await fixture.service.review({ appId: 'app', release: candidate, prUrl });
+      if (change === 'owner') fixture.ownershipRefusal = 'active-owner';
+      if (change === 'content') fixture.snapshot.fingerprint = '9'.repeat(64);
+      if (change === 'administration') fixture.snapshot.administrationFingerprint = '9'.repeat(64);
+      if (change === 'generation') readRetirementCheckoutIdentity.mockResolvedValue('other-identity');
+      if (change === 'publisher') fixture.deps.validateLockedPublisherRetirement.mockResolvedValue(false);
+      const changed = change === 'lock' ? { ...candidate, lockReason: 'new lock' }
+        : change === 'head' ? { ...candidate, head: 'b'.repeat(40) } : candidate;
+      const result = await fixture.service.retire({ appId: 'app', release: changed,
+        review: { prUrl, digest: preview.review.digest } });
+      expect(result.ok).toBe(false);
+      expect(fixture.deps.execGit.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(false);
+      expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
+      if (change === 'post-unlock-content') expect(fixture.cut?.owner.id).toBe(result.transactionId);
+    },
+  );
+
+  it.each(['locked-unlock-intent', 'locked-unlocked', 'locked-removal-intent', 'locked-removed', 'locked-branch-retired'])(
+    'holds the exact transaction after interruption at %s and repeated recovery', async phase => {
+      const path = join(root, 'candidate');
+      await mkdir(path);
+      await writeFile(join(path, 'fixture-bytes'), 'private fixture');
+      const candidate = { ...release, path, locked: true, lockReason: 'fixture held' };
+      readRetirementCheckoutIdentity.mockResolvedValue('fixture-identity');
+      fixture.snapshot.modules = [{ path: 'lib/slashdo' }];
+      fixture.snapshot.lockTransitionFingerprint = 'f'.repeat(64);
+      fixture.snapshot.privateGitDir = join(root, 'absent-administration');
+      fixture.lockState = true;
+      fixture.deps.execGit.mockImplementation(async args => {
+        if (args[0] === 'worktree' && args[1] === 'unlock') fixture.lockState = false;
+        if (args[0] === 'worktree' && args[1] === 'lock') fixture.lockState = true;
+        if (args[0] === 'worktree' && args[1] === 'remove') await rm(path, { recursive: true });
+        return { exitCode: args[0] === 'show-ref' ? 1 : 0, stdout: '' };
+      });
+      fixture.deps.deleteRef.mockImplementation(async (_repo, _branch, _head, options) => {
+        await options.beforeMutation?.(); return true;
+      });
+      fixture.deps.getOutcome = async () => ({ retired: [] });
+      const preview = await fixture.service.review({ appId: 'app', release: candidate, prUrl });
+      fixture.interruptPhase = phase;
+      const result = await fixture.service.retire({ appId: 'app', release: candidate,
+        review: { prUrl, digest: preview.review.digest } });
+      expect(result).toMatchObject({ ok: false, reason: 'journal-publication-interrupted', recoveryRequired: true });
+      expect(fixture.cut?.owner.id).toBe(result.transactionId);
+      const discovery = await fixture.service.discover();
+      const row = discovery.transactions.find(value => value.transactionId === result.transactionId);
+      expect(row).toMatchObject({ phase, release: candidate, settled: false });
+      const recovery = await fixture.service.recoverAutomatically({ appId: 'app', transactionId: row.transactionId,
+        journalDigest: row.journalDigest }, { blocked: async () => null });
+      if (['locked-removed', 'locked-branch-retired'].includes(phase)) {
+        expect(recovery).toMatchObject({ ok: true, receiptRecorded: true });
+        expect(fixture.cut).toBeNull();
+      } else {
+        expect(recovery).toMatchObject({ ok: true, restored: true });
+        expect(fixture.lockState).toBe(true);
+        expect(fixture.cut).toBeNull();
+        expect(await readFile(join(path, 'fixture-bytes'), 'utf8')).toBe('private fixture');
+      }
+      expect(fixture.deps.recordRetirement).toHaveBeenCalledTimes(['locked-removed', 'locked-branch-retired'].includes(phase) ? 1 : 0);
+    },
+  );
+
+  it('replays only cut release after a durable exact receipt and is idempotent', async () => {
+    const path = join(root, 'candidate');
+    await mkdir(path);
+    const candidate = { ...release, path, locked: true, lockReason: 'fixture held' };
+    readRetirementCheckoutIdentity.mockResolvedValue('fixture-identity');
+    fixture.snapshot.modules = [{ path: 'lib/slashdo' }];
+    fixture.snapshot.privateGitDir = join(root, 'absent-administration');
+    fixture.snapshot.lockTransitionFingerprint = 'f'.repeat(64);
+    fixture.deps.execGit.mockImplementation(async args => {
+      if (args[0] === 'worktree' && args[1] === 'remove') await rm(path, { recursive: true });
+      return { exitCode: args[0] === 'show-ref' ? 1 : 0, stdout: '' };
+    });
+    fixture.deps.deleteRef.mockResolvedValue(true);
+    let outcome;
+    fixture.deps.recordRetirement.mockImplementation(async (_app, row) => {
+      outcome = { retired: [{ ...row, archiveDir: null }] }; return outcome;
+    });
+    fixture.deps.getOutcome = async () => outcome;
+    const preview = await fixture.service.review({ appId: 'app', release: candidate, prUrl });
+    fixture.interruptPhase = 'locked-retired';
+    const result = await fixture.service.retire({ appId: 'app', release: candidate,
+      review: { prUrl, digest: preview.review.digest } });
+    expect(result).toMatchObject({ ok: false, reason: 'journal-publication-interrupted' });
+    const row = (await fixture.service.discover()).transactions.find(value => value.transactionId === result.transactionId);
+    const input = { appId: 'app', transactionId: row.transactionId, journalDigest: row.journalDigest };
+    const recovery = await fixture.service.recoverAutomatically(input, { blocked: async () => null });
+    expect(recovery.ok, JSON.stringify(recovery)).toBe(true);
+    expect(recovery.receiptRecorded).toBe(true);
+    expect(await fixture.service.recoverAutomatically(input, { blocked: async () => null })).toMatchObject({ ok: true, alreadyComplete: true });
+    expect(fixture.deps.recordRetirement).toHaveBeenCalledTimes(1);
+    expect(fixture.deps.deleteRef).toHaveBeenCalledTimes(1);
   });
 
   it('does not remove an initialized checkout before release synchronization retains its review', async () => {

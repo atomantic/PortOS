@@ -615,7 +615,7 @@ export async function buildSheetRenderParams({
   }
   params = applyImageVisualProfile(params, visualProfile);
   return {
-    params, prompt: params.prompt, negativePrompt: params.negativePrompt, modelId, activeMode,
+    params, settings, prompt: params.prompt, negativePrompt: params.negativePrompt, modelId, activeMode,
     referenceImages: references.images, editBase: references.editBase,
   };
 }
@@ -674,11 +674,11 @@ async function prepareCharacterSheet(universeId, entryId, options) {
 
 /** What a universe character's sheet render would send, without queueing it. */
 export async function previewCharacterReferenceSheet(universeId, entryId, options = {}) {
-  const { params, referenceImages, editBase } = await prepareCharacterSheet(universeId, entryId, options);
+  const { params, settings, referenceImages, editBase } = await prepareCharacterSheet(universeId, entryId, options);
+  const { previewPreparedImagePrompt } = await import('./imageGen/promptPreview.js');
   return {
-    sentPrompt: params.prompt,
-    ...(params.negativePrompt ? { sentNegativePrompt: params.negativePrompt } : {}),
-    promptAdditions: params.promptAdditions || [],
+    promptAdditions: [],
+    ...await previewPreparedImagePrompt({ params, settings }),
     referenceImages,
     ...(editBase ? { editBase } : {}),
   };

@@ -61,8 +61,10 @@ export function legacyPublisherRecovery(entry) {
     || Date.parse(capture.capturedAt) < Date.parse(entry.owner.startedAt) || Date.parse(capture.capturedAt) > Date.parse(recovery.acceptedAt)
     || proof.prUrl !== expectedPr || proof.forge?.prHead !== capture.head || proof.forge?.mergeCommit !== entry.publication.promotionMerge
     || proof.forge?.repository !== `github.com/${entry.publication.repository}` || proof.forge?.prUrl !== expectedPr
-    || proof.review?.version !== 1 || proof.review?.prUrl !== expectedPr || proof.review?.base !== 'release' || proof.review?.branch !== capture.branch
-    || !/^[a-f0-9]{40}$/.test(proof.review?.reviewedHead || '') || !['clean', 'partial'].includes(proof.review?.status)
+    || ![1, 2].includes(proof.review?.version) || proof.review?.prUrl !== expectedPr || proof.review?.base !== 'release' || proof.review?.branch !== capture.branch
+    || !(proof.review?.version === 1 ? /^[a-f0-9]{40}$/.test(proof.review?.reviewedHead || '')
+      : /^[a-f0-9]{40}$/.test(proof.review?.completedHead || '') && ((proof.review?.inspectionProvenance === 'recorded' && /^[a-f0-9]{40}$/.test(proof.review?.reviewedHead || ''))
+        || (proof.review?.inspectionProvenance === 'unavailable' && proof.review?.reviewedHead === null))) || !['clean', 'partial'].includes(proof.review?.status)
     || proof.candidateInspection !== 'unverified'
     || !isAbsolute(proof.archive?.archiveDir || '') || !/^[a-f0-9]{64}$/.test(proof.archive?.evidenceDigest || '')
     || Date.parse(proof.archive?.archivedAt) < Date.parse(capture.capturedAt)
