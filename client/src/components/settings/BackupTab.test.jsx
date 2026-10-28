@@ -985,6 +985,17 @@ describe('BackupTab', () => {
   });
 
   describe('pgBackup conditional rendering', () => {
+    it('shows legacy conversion guidance while preserving the successful dump status', async () => {
+      const message = 'Historical file metadata for universes cannot restore database-primary records. Convert this backup in a disposable offline upgrade install.';
+      getBackupStatus.mockResolvedValue({ status: 'degraded', defaultExcludes: [],
+        pgBackup: { status: 'ok', sizeBytes: 1024, tableCount: 7 },
+        restoreWarning: { domains: ['universes'], message },
+      });
+      await renderTab();
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      expect(screen.getByText(/Last backup degraded/)).toBeInTheDocument();
+      expect(screen.queryByText(/Files were saved but the database dump failed/)).not.toBeInTheDocument();
+    });
     it('shows "No backup run yet" when pgBackup is null', async () => {
       getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: [], pgBackup: null });
       await renderTab();

@@ -105,6 +105,7 @@ export function BackupTab() {
   const [newExclude, setNewExclude] = useState('');
   const [pgBackup, setPgBackup] = useState(null);
   const [backupStatus, setBackupStatus] = useState('never');
+  const [restoreWarning, setRestoreWarning] = useState(null);
   const [snapshots, setSnapshots] = useState([]);
   const [showAllSnapshots, setShowAllSnapshots] = useState(false);
   const [showExclusions, setShowExclusions] = useState(false);
@@ -180,6 +181,7 @@ export function BackupTab() {
         setDefaultExcludes(asArray(status?.defaultExcludes));
         setPgBackup(status?.pgBackup ?? null);
         setBackupStatus(status?.status ?? 'never');
+        setRestoreWarning(status?.restoreWarning ?? null);
         setRestoreRecovery(status?.restoreRecovery?.pending ? status.restoreRecovery : null);
         setSnapshots(Array.isArray(snaps) ? snaps : []);
       })
@@ -217,6 +219,7 @@ export function BackupTab() {
   const [handleRunNow, running] = useBackupRun((result) => {
     setPgBackup(result?.pgBackup ?? null);
     setBackupStatus(result?.status ?? 'ok');
+    setRestoreWarning(result?.restoreWarning ?? null);
     setStatusLoadFailed(false);
     // A completed run establishes health, but does not include the exclusion
     // catalog. Recover that separately before enabling its controls.
@@ -443,12 +446,15 @@ export function BackupTab() {
       )}
       {backupStatus === 'degraded' && (
         <Banner tone="warning" icon={AlertTriangle} title="Last backup degraded" size="md">
-          Files were saved but the database dump failed.{' '}
-          {pgBackup?.reason === 'version_mismatch' ? (
-            <>Your <code>pg_dump</code> is older than the running PostgreSQL server. Install/point at a <code>pg_dump</code> at least as new as the server (for example, <code>brew install postgresql@17</code>), or set <code>PORTOS_PGDUMP</code> to its path.</>
-          ) : (
-            <>Check that <code>pg_dump</code> is installed and PostgreSQL is reachable.</>
-          )}
+          {restoreWarning?.message && <p>{restoreWarning.message}</p>}
+          {pgBackup?.status === 'failed' && <>
+            Files were saved but the database dump failed.{' '}
+            {pgBackup?.reason === 'version_mismatch' ? (
+              <>Your <code>pg_dump</code> is older than the running PostgreSQL server. Install/point at a <code>pg_dump</code> at least as new as the server (for example, <code>brew install postgresql@17</code>), or set <code>PORTOS_PGDUMP</code> to its path.</>
+            ) : (
+              <>Check that <code>pg_dump</code> is installed and PostgreSQL is reachable.</>
+            )}
+          </>}
         </Banner>
       )}
 
